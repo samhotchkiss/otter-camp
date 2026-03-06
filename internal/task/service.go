@@ -77,6 +77,7 @@ var validStatusTransitions = map[string]map[string]struct{}{
 		"cancelled":   {},
 	},
 	"review": {
+		"blocked":     {},
 		"done":        {},
 		"in_progress": {},
 		"cancelled":   {},
@@ -255,6 +256,10 @@ type flowNodeRepository interface {
 	GetByTemplateOrdered(ctx context.Context, flowTemplateID uuid.UUID) ([]repo.FlowNode, error)
 }
 
+type flowTemplateRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowTemplate, error)
+}
+
 type browserHandoffCompleter interface {
 	CompleteHandoffByInboxItem(ctx context.Context, inboxItemID, actedByUserID uuid.UUID, actionDecision string) error
 }
@@ -273,11 +278,12 @@ type Options struct {
 	Queue   mergeQueueRepository
 	Project projectRepository
 
-	Assignments agentProjectAssignmentRepository
-	Agents      agentRepository
-	Users       humanUserRepository
-	Executions  flowExecutionRepository
-	FlowNodes   flowNodeRepository
+	Assignments   agentProjectAssignmentRepository
+	Agents        agentRepository
+	Users         humanUserRepository
+	Executions    flowExecutionRepository
+	FlowNodes     flowNodeRepository
+	FlowTemplates flowTemplateRepository
 
 	EventBus eventPublisher
 	Clock    clock.Clock
@@ -295,11 +301,12 @@ type service struct {
 	queue   mergeQueueRepository
 	project projectRepository
 
-	assignments agentProjectAssignmentRepository
-	agents      agentRepository
-	users       humanUserRepository
-	executions  flowExecutionRepository
-	flowNodes   flowNodeRepository
+	assignments   agentProjectAssignmentRepository
+	agents        agentRepository
+	users         humanUserRepository
+	executions    flowExecutionRepository
+	flowNodes     flowNodeRepository
+	flowTemplates flowTemplateRepository
 
 	eventBus eventPublisher
 	clock    clock.Clock
@@ -376,6 +383,11 @@ func NewService(opts Options) (TaskService, error) {
 		svc.flowNodes = opts.FlowNodes
 	} else {
 		svc.flowNodes = repo.NewFlowNodeRepo(opts.Pool)
+	}
+	if opts.FlowTemplates != nil {
+		svc.flowTemplates = opts.FlowTemplates
+	} else {
+		svc.flowTemplates = repo.NewFlowTemplateRepo(opts.Pool)
 	}
 
 	return svc, nil
@@ -1462,12 +1474,19 @@ func (s *service) validateExecutableFlowTemplate(ctx context.Context, flowTempla
 	if s.flowNodes == nil {
 		return fmt.Errorf("task service flow-template validation requires flow node repository")
 	}
+	if s.flowTemplates == nil {
+		return fmt.Errorf("task service flow-template validation requires flow template repository")
+	}
 
+	template, err := s.flowTemplates.GetByID(ctx, flowTemplateID)
+	if err != nil {
+		return fmt.Errorf("load flow template: %w", err)
+	}
 	nodes, err := s.flowNodes.GetByTemplateOrdered(ctx, flowTemplateID)
 	if err != nil {
 		return fmt.Errorf("load flow template nodes: %w", err)
 	}
-	return flowpolicy.ValidateExecutableFlowNodes(nodes)
+	return flowpolicy.ValidateExecutableFlowTemplate(template.StartNodeID, nodes)
 }
 
 func normalizeJSON(value json.RawMessage) json.RawMessage {

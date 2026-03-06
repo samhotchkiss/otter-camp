@@ -431,10 +431,14 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 		if nodeErr != nil {
 			return nil, nodeErr
 		}
-		if nextNode.RequiresHumanReview {
-			if _, statusErr := s.taskService.TransitionStatus(ctx, taskRecord.ID, "review", toTaskActor(actor)); statusErr != nil {
+		targetStatus := taskWorkStatusForNode(nextNode)
+		if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
+			if _, statusErr := s.taskService.TransitionStatus(ctx, taskRecord.ID, targetStatus, toTaskActor(actor)); statusErr != nil {
 				return nil, statusErr
 			}
+			taskRecord.WorkStatus = targetStatus
+		}
+		if nextNode.RequiresHumanReview {
 			if err := s.createTaskReviewInbox(ctx, taskRecord, nextNode.ID, actor); err != nil {
 				return nil, err
 			}
@@ -461,6 +465,13 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 		return nextExecution, nil
 	}
 	return &completedExecution, nil
+}
+
+func taskWorkStatusForNode(node repo.FlowNode) string {
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") || node.RequiresHumanReview {
+		return "review"
+	}
+	return "in_progress"
 }
 
 func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.ProjectTask, flowNodeID uuid.UUID, actor Actor) error {

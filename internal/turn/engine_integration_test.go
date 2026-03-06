@@ -17,6 +17,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -1680,6 +1681,139 @@ func TestTurnEngineIntegrationReactionFeedbackAdjustsMemoryConfidence(t *testing
 	waitForMemoryConfidence(t, memoryRepo, memoryRow.ID, 0.45)
 }
 
+func TestTurnEngineIntegrationCompletedWorkTurnAdvancesTaskToReview(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:   fixture.pool,
+		Events: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("flow.NewService: %v", err)
+	}
+	if _, err := flowService.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant agent: %v", err)
+	}
+
+	_, turnID := mustCreateCompletedWorkTurn(t, ctx, fixture, taskSession.ID, fixture.agent.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": taskSession.ID.String(), "turn_id": turnID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", updatedTask.WorkStatus)
+	}
+
+	nodeRepo := repo.NewFlowNodeRepo(fixture.pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, *taskRecord.FlowTemplateID)
+	if err != nil {
+		t.Fatalf("GetByTemplateOrdered: %v", err)
+	}
+	if len(nodes) < 2 {
+		t.Fatalf("flow node count = %d, want >= 2", len(nodes))
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[1].ID {
+		t.Fatalf("current_flow_node_id = %v, want review node %s", updatedTask.CurrentFlowNodeID, nodes[1].ID)
+	}
+
+	var flowAdvancedEvents int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'flow.advanced'
+		  AND payload->>'task_id' = $2
+	`, fixture.org.ID, taskRecord.ID.String()).Scan(&flowAdvancedEvents); err != nil {
+		t.Fatalf("count flow.advanced events: %v", err)
+	}
+	if flowAdvancedEvents != 1 {
+		t.Fatalf("flow.advanced events = %d, want 1", flowAdvancedEvents)
+	}
+}
+
+func TestTurnEngineIntegrationDuplicateCompletedWorkSignalDoesNotDuplicateFlowAdvancedEvents(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:   fixture.pool,
+		Events: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("flow.NewService: %v", err)
+	}
+	if _, err := flowService.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant agent: %v", err)
+	}
+
+	_, turnID := mustCreateCompletedWorkTurn(t, ctx, fixture, taskSession.ID, fixture.agent.ID)
+	event := eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": taskSession.ID.String(), "turn_id": turnID.String()}),
+	}
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("first HandleTurnCompletedEvent: %v", err)
+	}
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("second HandleTurnCompletedEvent: %v", err)
+	}
+
+	var flowAdvancedEvents int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'flow.advanced'
+		  AND payload->>'task_id' = $2
+	`, fixture.org.ID, taskRecord.ID.String()).Scan(&flowAdvancedEvents); err != nil {
+		t.Fatalf("count flow.advanced events: %v", err)
+	}
+	if flowAdvancedEvents != 1 {
+		t.Fatalf("flow.advanced events = %d, want 1", flowAdvancedEvents)
+	}
+}
+
 type integrationFixture struct {
 	pool        *pgxpool.Pool
 	org         repo.Organization
@@ -1782,6 +1916,78 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 		dispatcher:  dispatcher,
 		runCanceler: runCanceler,
 	}
+}
+
+func mustCreateCompletedWorkTurn(t *testing.T, ctx context.Context, fixture *integrationFixture, sessionID, agentID uuid.UUID) (uuid.UUID, uuid.UUID) {
+	t.Helper()
+
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  sessionID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "finish the current work and commit the result",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage user: %v", err)
+	}
+
+	turn, err := fixture.chatService.CreateTurn(ctx, sessionID, agentID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chatService.StartTurn(ctx, turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	assistantType := "agent"
+	assistantMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  sessionID,
+		TurnID:     &turn.ID,
+		AuthorType: &assistantType,
+		AuthorID:   &agentID,
+		Role:       "assistant",
+		Content:    "Task complete and ready for review.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage assistant: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, assistantMessage.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus assistant: %v", err)
+	}
+
+	fileResult, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: sessionID,
+		TurnID:    &turn.ID,
+		Role:      "tool_result",
+		Content:   string(mustJSON(t, map[string]any{"tool_name": "file.write", "output": map[string]any{"path": "docs/content-strategy/pillar-taxonomy.md", "byte_size": 128, "created": true}})),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage file tool_result: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, fileResult.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus file tool_result: %v", err)
+	}
+
+	commitResult, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: sessionID,
+		TurnID:    &turn.ID,
+		Role:      "tool_result",
+		Content:   string(mustJSON(t, map[string]any{"tool_name": "git.commit", "output": map[string]any{"sha": "fa05fa0", "short_sha": "fa05fa0", "files_committed": 1}})),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage commit tool_result: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, commitResult.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus commit tool_result: %v", err)
+	}
+
+	if err := fixture.chatService.CompleteTurn(ctx, turn.ID); err != nil {
+		t.Fatalf("CompleteTurn: %v", err)
+	}
+
+	return userMessage.ID, turn.ID
 }
 
 type sessionHistoryAssembler struct {

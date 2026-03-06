@@ -16,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
@@ -703,6 +704,134 @@ func TestHandleTurnCompletedEventSkipsWhenCompletionMessagePresent(t *testing.T)
 
 	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
 		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestHandleTurnCompletedEventAdvancesFlowFromSuccessfulGitCommit(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.flowAdvancer.tasks = taskRepo
+	fixture.engine.flowAdvancer = fixture.flowAdvancer
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Task complete and ready for review.")
+	appendToolResultMessage(t, fixture, turnID, map[string]any{
+		"tool_name": "git.commit",
+		"output": map[string]any{
+			"sha":             "fa05fa0abc123456",
+			"files_committed": 1,
+		},
+	})
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if fixture.flowAdvancer.recordNodeCommitCalls != 1 {
+		t.Fatalf("record node commit calls = %d, want 1", fixture.flowAdvancer.recordNodeCommitCalls)
+	}
+	if fixture.flowAdvancer.lastCommitSHA != "fa05fa0abc123456" {
+		t.Fatalf("last commit sha = %q, want fa05fa0abc123456", fixture.flowAdvancer.lastCommitSHA)
+	}
+	if fixture.flowAdvancer.advanceFlowCalls != 1 {
+		t.Fatalf("advance flow calls = %d, want 1", fixture.flowAdvancer.advanceFlowCalls)
+	}
+	if fixture.flowAdvancer.lastAdvanceActor.Type != "agent" || fixture.flowAdvancer.lastAdvanceActor.ID != agentID {
+		t.Fatalf("advance actor = %+v, want agent %s", fixture.flowAdvancer.lastAdvanceActor, agentID)
+	}
+	updatedTask, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review after successful completion", updatedTask.WorkStatus)
+	}
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestHandleTurnCompletedEventDuplicateCompletionSignalAdvancesExactlyOnce(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.flowAdvancer.tasks = taskRepo
+	fixture.engine.flowAdvancer = fixture.flowAdvancer
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Task complete and ready for review.")
+	appendToolResultMessage(t, fixture, turnID, map[string]any{
+		"tool_name": "git.commit",
+		"output": map[string]any{
+			"sha":             "fa05fa0abc123456",
+			"files_committed": 1,
+		},
+	})
+
+	event := eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), event); err != nil {
+		t.Fatalf("first HandleTurnCompletedEvent: %v", err)
+	}
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), event); err != nil {
+		t.Fatalf("second HandleTurnCompletedEvent: %v", err)
+	}
+
+	if fixture.flowAdvancer.advanceFlowCalls != 1 {
+		t.Fatalf("advance flow calls = %d, want 1", fixture.flowAdvancer.advanceFlowCalls)
+	}
+	if fixture.flowAdvancer.recordNodeCommitCalls != 1 {
+		t.Fatalf("record node commit calls = %d, want 1", fixture.flowAdvancer.recordNodeCommitCalls)
 	}
 }
 
@@ -2161,6 +2290,7 @@ func TestHandleUserMessageBlocksRepeatedToolValidationFailures(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
 	projectID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
 	fixture.session.ScopeType = "project_task"
 	fixture.session.ScopeID = taskID
 	fixture.session.Mode = "async"
@@ -2168,12 +2298,13 @@ func TestHandleUserMessageBlocksRepeatedToolValidationFailures(t *testing.T) {
 	taskRepo := &fakeTaskRepo{
 		items: map[uuid.UUID]repo.ProjectTask{
 			taskID: {
-				ID:             taskID,
-				OrganizationID: fixture.session.OrganizationID,
-				ProjectID:      projectID,
-				Title:          "Write file",
-				WorkStatus:     "in_progress",
-				Metadata:       json.RawMessage(`{"existing":"value"}`),
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				Title:           "Write file",
+				WorkStatus:      "in_progress",
+				AssignedAgentID: &assignedAgentID,
+				Metadata:        json.RawMessage(`{"existing":"value"}`),
 			},
 		},
 	}
@@ -2322,6 +2453,7 @@ type unitFixture struct {
 	invocations   *fakeInvocationRepo
 	model         *fakeModelGateway
 	dispatcher    *fakeDispatcher
+	flowAdvancer  *fakeFlowAdvancer
 	runCanceler   *fakeRunCanceler
 	enqueuer      *fakeEnqueuer
 	assembler     *fakeAssembler
@@ -2381,6 +2513,7 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 	memories := &fakeMemoryRepo{}
 	taskRepo := &fakeTaskRepo{}
 	taskTransitions := &fakeTaskTransitionService{repo: taskRepo}
+	flowAdvancer := &fakeFlowAdvancer{tasks: taskRepo}
 
 	engine, err := NewEngine(Options{
 		Chat:            chatSvc,
@@ -2403,6 +2536,7 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 		TaskTransitions: taskTransitions,
 		Projects:        &fakeProjectRepo{},
 		FlowNodes:       &fakeFlowNodeRepo{},
+		FlowAdvancer:    flowAdvancer,
 		MemorySources:   memSources,
 		Memories:        memories,
 		Now:             func() time.Time { return time.Now().UTC() },
@@ -2423,6 +2557,7 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 		invocations:   invocations,
 		model:         modelGateway,
 		dispatcher:    dispatcher,
+		flowAdvancer:  flowAdvancer,
 		runCanceler:   runCanceler,
 		enqueuer:      enqueuer,
 		assembler:     assembler,
@@ -3284,6 +3419,36 @@ func (f *fakeFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNo
 	return repo.FlowNode{}, repo.ErrNotFound
 }
 
+type fakeFlowAdvancer struct {
+	tasks                 *fakeTaskRepo
+	recordNodeCommitCalls int
+	advanceFlowCalls      int
+	lastCommitSHA         string
+	lastAdvanceActor      flowsvc.Actor
+}
+
+func (f *fakeFlowAdvancer) RecordNodeCommit(_ context.Context, taskID uuid.UUID, commitSHA, _ string) (*repo.FlowNodeExecution, error) {
+	f.recordNodeCommitCalls++
+	f.lastCommitSHA = strings.TrimSpace(commitSHA)
+	commit := f.lastCommitSHA
+	return &repo.FlowNodeExecution{TaskID: taskID, CommitSHA: &commit}, nil
+}
+
+func (f *fakeFlowAdvancer) AdvanceFlow(_ context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+	f.advanceFlowCalls++
+	f.lastAdvanceActor = actor
+	if f.tasks != nil {
+		taskRecord, err := f.tasks.GetByID(context.Background(), taskID)
+		if err == nil {
+			taskRecord.WorkStatus = "review"
+			if _, updateErr := f.tasks.Update(context.Background(), taskRecord); updateErr != nil {
+				return nil, updateErr
+			}
+		}
+	}
+	return &repo.FlowNodeExecution{TaskID: taskID, Status: "completed"}, nil
+}
+
 type fakeAssignmentRepo struct {
 	items map[uuid.UUID]repo.AgentProjectAssignment
 	err   error
@@ -3379,6 +3544,22 @@ func createCompletedTurnWithAssistantMessage(t *testing.T, fixture *unitFixture,
 		Content:    assistantContent,
 	})
 	return turn.ID
+}
+
+func appendToolResultMessage(t *testing.T, fixture *unitFixture, turnID uuid.UUID, payload map[string]any) {
+	t.Helper()
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal tool result: %v", err)
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   string(raw),
+	})
 }
 
 func mustRawJSON(t *testing.T, value any) json.RawMessage {

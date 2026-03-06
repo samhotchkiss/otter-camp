@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
@@ -204,6 +207,84 @@ func TestAdvanceFlowRejectsSelfReview(t *testing.T) {
 	}
 }
 
+func TestAdvanceFlowTransitionsTaskToReviewWhenNextNodeIsReview(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	workNodeID := uuid.New()
+	reviewNodeID := uuid.New()
+	executionID := uuid.New()
+	workerID := uuid.New()
+
+	tasks := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				ProjectID:         projectID,
+				OrganizationID:    uuid.New(),
+				CurrentFlowNodeID: &workNodeID,
+				WorkStatus:        "in_progress",
+			},
+		},
+	}
+	taskCoordinator := &fakeTaskCoordinator{tasks: tasks}
+	executions := &fakeExecutionRepo{
+		active: repo.FlowNodeExecution{
+			ID:         executionID,
+			TaskID:     taskID,
+			FlowNodeID: workNodeID,
+			Status:     "active",
+		},
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{
+					ID:         executionID,
+					TaskID:     taskID,
+					FlowNodeID: workNodeID,
+					Status:     "active",
+				},
+			},
+		},
+	}
+	svc := &service{
+		tasks: tasks,
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				workNodeID:   {ID: workNodeID, NodeType: "work", NextNodeID: &reviewNodeID},
+				reviewNodeID: {ID: reviewNodeID, NodeType: "review"},
+			},
+		},
+		executions:  executions,
+		taskService: taskCoordinator,
+		taskEvents:  &fakeTaskEventRepo{},
+		events:      &fakeEventBus{},
+	}
+
+	nextExecution, err := svc.AdvanceFlow(context.Background(), taskID, Actor{Type: "agent", ID: workerID})
+	if err != nil {
+		t.Fatalf("AdvanceFlow: %v", err)
+	}
+	if len(taskCoordinator.transitions) != 1 {
+		t.Fatalf("transition calls = %d, want 1", len(taskCoordinator.transitions))
+	}
+	if taskCoordinator.transitions[0].status != "review" {
+		t.Fatalf("transition status = %q, want review", taskCoordinator.transitions[0].status)
+	}
+
+	updatedTask, err := tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != reviewNodeID {
+		t.Fatalf("current_flow_node_id = %v, want %s", updatedTask.CurrentFlowNodeID, reviewNodeID)
+	}
+	if nextExecution == nil || nextExecution.FlowNodeID != reviewNodeID {
+		t.Fatalf("next execution = %+v, want active review execution", nextExecution)
+	}
+}
+
 func TestAdvanceFlowRejectsPausedProject(t *testing.T) {
 	taskID := uuid.New()
 	workNodeID := uuid.New()
@@ -309,6 +390,7 @@ type fakeExecutionRepo struct {
 	active              repo.FlowNodeExecution
 	byTask              map[uuid.UUID][]repo.FlowNodeExecution
 	byID                map[uuid.UUID]repo.FlowNodeExecution
+	createCalls         int
 	completeCalls       int
 	rejectCalls         int
 	updateMetadataCalls int
@@ -325,8 +407,21 @@ func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project
 	return repo.Project{}, repo.ErrNotFound
 }
 
-func (f *fakeExecutionRepo) Create(context.Context, repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
-	return repo.FlowNodeExecution{}, nil
+func (f *fakeExecutionRepo) Create(_ context.Context, execution repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
+	f.createCalls++
+	created := execution
+	if created.ID == uuid.Nil {
+		created.ID = uuid.New()
+	}
+	if f.byID == nil {
+		f.byID = map[uuid.UUID]repo.FlowNodeExecution{}
+	}
+	if f.byTask == nil {
+		f.byTask = map[uuid.UUID][]repo.FlowNodeExecution{}
+	}
+	f.byID[created.ID] = created
+	f.byTask[created.TaskID] = append(f.byTask[created.TaskID], created)
+	return created, nil
 }
 func (f *fakeExecutionRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNodeExecution, error) {
 	if item, ok := f.byID[id]; ok {
@@ -460,13 +555,51 @@ func (f *fakeNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, 
 	return item, nil
 }
 
-type fakeTaskCoordinator struct{}
+type taskTransitionCall struct {
+	taskID uuid.UUID
+	status string
+	actor  tasksvc.Actor
+}
 
-func (f *fakeTaskCoordinator) TransitionStatus(context.Context, uuid.UUID, string, tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+type fakeTaskCoordinator struct {
+	tasks       *fakeTaskRepo
+	transitions []taskTransitionCall
+}
+
+func (f *fakeTaskCoordinator) TransitionStatus(_ context.Context, taskID uuid.UUID, status string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+	f.transitions = append(f.transitions, taskTransitionCall{
+		taskID: taskID,
+		status: strings.TrimSpace(status),
+		actor:  actor,
+	})
+	if f.tasks != nil {
+		if taskRecord, ok := f.tasks.items[taskID]; ok {
+			taskRecord.WorkStatus = strings.TrimSpace(status)
+			f.tasks.items[taskID] = taskRecord
+			updated := tasksvc.ProjectTask(taskRecord)
+			return &updated, nil
+		}
+	}
 	return &tasksvc.ProjectTask{}, nil
 }
 func (f *fakeTaskCoordinator) MarkBlocked(context.Context, uuid.UUID, string, tasksvc.Actor) (*tasksvc.ProjectTask, error) {
 	return &tasksvc.ProjectTask{}, nil
+}
+
+type fakeTaskEventRepo struct{}
+
+func (f *fakeTaskEventRepo) Record(context.Context, repo.ProjectTaskEvent) (repo.ProjectTaskEvent, error) {
+	return repo.ProjectTaskEvent{}, nil
+}
+
+type fakeEventBus struct{}
+
+func (f *fakeEventBus) Publish(context.Context, pgx.Tx, eventbus.DomainEvent) error {
+	return nil
+}
+
+func (f *fakeEventBus) Subscribe(string, *uuid.UUID, eventbus.EventHandler) eventbus.Subscription {
+	return eventbus.Subscription{}
 }
 
 func TestCreateSubtaskMissingAgentReturnsErrAgentNotFound(t *testing.T) {

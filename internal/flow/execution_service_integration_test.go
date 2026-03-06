@@ -398,8 +398,9 @@ func TestFlowExecutionServiceDependencyCycleDetection(t *testing.T) {
 	pool := testdb.New(t)
 	fixture := seedFlowIntegrationFixture(t, ctx, pool)
 
-	taskA := seedFlowTask(t, ctx, fixture, "Task A", "in_progress", nil)
-	taskB := seedFlowTask(t, ctx, fixture, "Task B", "in_progress", nil)
+	template, _ := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskA := seedFlowTask(t, ctx, fixture, "Task A", "in_progress", &template.ID)
+	taskB := seedFlowTask(t, ctx, fixture, "Task B", "in_progress", &template.ID)
 
 	if _, err := fixture.service.AddDependency(ctx, AddDependencyRequest{
 		SourceType:    "project_task",
@@ -435,8 +436,9 @@ func TestFlowExecutionServiceOnTaskCancelledMarksDependentsBlocked(t *testing.T)
 	pool := testdb.New(t)
 	fixture := seedFlowIntegrationFixture(t, ctx, pool)
 
-	taskA := seedFlowTask(t, ctx, fixture, "Task A", "in_progress", nil)
-	taskB := seedFlowTask(t, ctx, fixture, "Task B", "in_progress", nil)
+	template, _ := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskA := seedFlowTask(t, ctx, fixture, "Task A", "in_progress", &template.ID)
+	taskB := seedFlowTask(t, ctx, fixture, "Task B", "in_progress", &template.ID)
 
 	if _, err := fixture.service.AddDependency(ctx, AddDependencyRequest{
 		SourceType:    "project_task",
