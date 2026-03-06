@@ -38,6 +38,7 @@ scripts/*
 !scripts/AUTOWORK.md
 !scripts/codex-autowork.sh
 !scripts/autowork-supervisor-watchdog.sh
+!scripts/claude-review-autowork-test.sh
 !scripts/issue-lane.sh
 !scripts/replay-queue-ops-test.sh
 !scripts/install_test.sh
