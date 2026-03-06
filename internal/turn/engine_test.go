@@ -909,7 +909,7 @@ func TestHandleUserMessageTaskScopeRoutesToAssignedAgent(t *testing.T) {
 	}
 }
 
-func TestHandleUserMessageTaskScopeFallsBackToProjectPM(t *testing.T) {
+func TestHandleUserMessageTaskScopeRequiresAssignedAgent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
 	projectID := uuid.New()
@@ -952,17 +952,15 @@ func TestHandleUserMessageTaskScopeFallsBackToProjectPM(t *testing.T) {
 		return ModelResponse{Content: "ok"}, nil
 	}
 
-	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
-		t.Fatalf("HandleUserMessage: %v", err)
+	err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID)
+	if err == nil {
+		t.Fatal("HandleUserMessage error = nil, want missing assigned agent invariant")
 	}
-
-	turnID := fixture.chat.waitForTurnID(t)
-	turn := fixture.chat.turnByID(turnID)
-	if turn == nil {
-		t.Fatal("expected created turn")
+	if !strings.Contains(err.Error(), "internal invariant: task-scoped session is missing assigned agent") {
+		t.Fatalf("HandleUserMessage error = %v, want missing assigned agent invariant", err)
 	}
-	if turn.RespondingID != pmID {
-		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, pmID)
+	if fixture.model.streamCalls != 0 {
+		t.Fatalf("stream calls = %d, want 0", fixture.model.streamCalls)
 	}
 }
 
@@ -1352,10 +1350,9 @@ func TestHandleUserMessageProjectScopeKickoffDoesNotHandoffOnFailedFrankTurn(t *
 	}
 }
 
-func TestHandleUserMessageTaskScopeFallsBackToFrank(t *testing.T) {
+func TestHandleUserMessageTaskScopeMissingTaskBindingReturnsInvariant(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
-	projectID := uuid.New()
 	otherParticipantID := uuid.New()
 	frankID := uuid.New()
 
@@ -1367,16 +1364,7 @@ func TestHandleUserMessageTaskScopeFallsBackToFrank(t *testing.T) {
 		ParticipantType: "agent",
 		ParticipantID:   otherParticipantID,
 	}}
-	fixture.engine.tasks = &fakeTaskRepo{
-		items: map[uuid.UUID]repo.ProjectTask{
-			taskID: {
-				ID:             taskID,
-				OrganizationID: fixture.session.OrganizationID,
-				ProjectID:      projectID,
-			},
-		},
-	}
-	fixture.engine.assignments = &fakeAssignmentRepo{err: repo.ErrNotFound}
+	fixture.engine.tasks = &fakeTaskRepo{err: repo.ErrNotFound}
 	fixture.engine.agents = &fakeAgentRepo{
 		items: map[uuid.UUID]repo.Agent{
 			otherParticipantID: {ID: otherParticipantID, OrganizationID: fixture.session.OrganizationID},
@@ -1394,17 +1382,71 @@ func TestHandleUserMessageTaskScopeFallsBackToFrank(t *testing.T) {
 		return ModelResponse{Content: "ok"}, nil
 	}
 
+	err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID)
+	if err == nil {
+		t.Fatal("HandleUserMessage error = nil, want missing task binding invariant")
+	}
+	if !strings.Contains(err.Error(), "internal invariant: task-scoped session task binding was not found") {
+		t.Fatalf("HandleUserMessage error = %v, want missing task binding invariant", err)
+	}
+	if fixture.model.streamCalls != 0 {
+		t.Fatalf("stream calls = %d, want 0", fixture.model.streamCalls)
+	}
+}
+
+func TestDispatchToolsTaskScopeInjectsBoundProjectAndTaskIDs(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+
+	var dispatched ToolCall
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched = call
+		runID := uuid.New()
+		onRunStarted(runID)
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}, RunID: &runID}, nil
+	}
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(string) error) (ModelResponse, error) {
+		round++
+		if round == 1 {
+			return ModelResponse{
+				ToolCalls: []ModelToolCall{{
+					ID:        "tier2",
+					Name:      "cli.execute",
+					Tier:      "tier2",
+					Arguments: map[string]any{"command": "echo hello"},
+				}},
+			}, nil
+		}
+		return ModelResponse{Content: "done"}, nil
+	}
+
 	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
 		t.Fatalf("HandleUserMessage: %v", err)
 	}
-
-	turnID := fixture.chat.waitForTurnID(t)
-	turn := fixture.chat.turnByID(turnID)
-	if turn == nil {
-		t.Fatal("expected created turn")
+	if got := dispatched.Arguments["project_id"]; got != projectID.String() {
+		t.Fatalf("project_id = %v, want %s", got, projectID)
 	}
-	if turn.RespondingID != frankID {
-		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, frankID)
+	if got := dispatched.Arguments["task_id"]; got != taskID.String() {
+		t.Fatalf("task_id = %v, want %s", got, taskID)
+	}
+	if got := dispatched.Arguments["session_id"]; got != fixture.session.ID.String() {
+		t.Fatalf("session_id = %v, want %s", got, fixture.session.ID)
 	}
 }
 

@@ -23,6 +23,8 @@ var (
 	ErrToolNotSupported = errors.New("tool executor unavailable")
 )
 
+const taskScopeBindingInvariantPrefix = "internal invariant: task-scoped tool execution is missing bound task context"
+
 var (
 	secretRefRegex = regexp.MustCompile(`\bref:([a-zA-Z0-9_]+(?:[-_][a-zA-Z0-9_]+)*)\b`)
 	bearerRegex    = regexp.MustCompile(`(?i)bearer\s+[a-zA-Z0-9\-._~+/]+=*`)
@@ -58,6 +60,14 @@ type brokerRunRepository interface {
 	Get(ctx context.Context, id uuid.UUID) (Run, error)
 }
 
+type brokerSessionRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.ChatSession, error)
+}
+
+type brokerTaskRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+}
+
 type brokerAgentRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
 }
@@ -88,6 +98,8 @@ type ToolBrokerOptions struct {
 	Runs            brokerRunRepository
 	Agents          brokerAgentRepository
 	ToolDefinitions brokerToolDefinitionRepository
+	Sessions        brokerSessionRepository
+	Tasks           brokerTaskRepository
 	EventBus        eventPublisher
 	Policy          CapabilityPolicyService
 	Native          NativeToolExecutor
@@ -102,6 +114,8 @@ type ToolBroker struct {
 	runs            brokerRunRepository
 	agents          brokerAgentRepository
 	toolDefinitions brokerToolDefinitionRepository
+	sessions        brokerSessionRepository
+	tasks           brokerTaskRepository
 	eventBus        eventPublisher
 	policy          CapabilityPolicyService
 	native          NativeToolExecutor
@@ -149,7 +163,25 @@ func NewToolBroker(opts ToolBrokerOptions) (*ToolBroker, error) {
 	} else {
 		broker.toolDefinitions = repo.NewToolDefinitionRepo(opts.Pool)
 	}
+	if opts.Sessions != nil {
+		broker.sessions = opts.Sessions
+	} else if opts.Pool != nil {
+		broker.sessions = repo.NewChatSessionRepo(opts.Pool)
+	}
+	if opts.Tasks != nil {
+		broker.tasks = opts.Tasks
+	} else if opts.Pool != nil {
+		broker.tasks = repo.NewProjectTaskRepo(opts.Pool)
+	}
 	return broker, nil
+}
+
+type executionBinding struct {
+	organizationID uuid.UUID
+	sessionID      *uuid.UUID
+	projectID      *uuid.UUID
+	taskID         *uuid.UUID
+	scopeType      string
 }
 
 func (b *ToolBroker) Dispatch(ctx context.Context, input DispatchInput) (ToolExecution, error) {
@@ -180,7 +212,6 @@ func (b *ToolBroker) Dispatch(ctx context.Context, input DispatchInput) (ToolExe
 	}
 
 	var (
-		projectID *uuid.UUID
 		runRecord *Run
 	)
 	if input.RunID != nil {
@@ -191,8 +222,12 @@ func (b *ToolBroker) Dispatch(ctx context.Context, input DispatchInput) (ToolExe
 		if record.OrganizationID != agent.OrganizationID {
 			return ToolExecution{}, fmt.Errorf("run and agent organization mismatch")
 		}
-		projectID = record.ProjectID
 		runRecord = &record
+	}
+
+	binding, err := b.resolveExecutionBinding(ctx, agent, input, runRecord)
+	if err != nil {
+		return ToolExecution{}, err
 	}
 
 	policyDecision := "allowed"
@@ -203,7 +238,7 @@ func (b *ToolBroker) Dispatch(ctx context.Context, input DispatchInput) (ToolExe
 		if capability == nil {
 			return ToolExecution{}, fmt.Errorf("tier2 tool %q missing required capability", toolName)
 		}
-		decision, evalErr := b.policy.EvaluateCapability(ctx, agent.OrganizationID, projectID, input.AgentID, *capability)
+		decision, evalErr := b.policy.EvaluateCapability(ctx, agent.OrganizationID, binding.projectID, input.AgentID, *capability)
 		if evalErr != nil {
 			return ToolExecution{}, evalErr
 		}
@@ -261,10 +296,12 @@ func (b *ToolBroker) Dispatch(ctx context.Context, input DispatchInput) (ToolExe
 		ToolExecutionID: &execution.ID,
 		RunID:           input.RunID,
 		AgentID:         &input.AgentID,
-		SessionID:       input.SessionID,
+		SessionID:       binding.sessionID,
+		ProjectID:       copyUUIDPointer(binding.projectID),
+		TaskID:          copyUUIDPointer(binding.taskID),
 	})
 
-	output, dispatchErr := b.dispatchToExecutor(execCtx, toolDomain, toolName, input.Input, input, runRecord)
+	output, dispatchErr := b.dispatchToExecutor(execCtx, toolDomain, toolName, input.Input, input, binding)
 	if dispatchErr != nil {
 		status := "failed"
 		if errors.Is(dispatchErr, context.DeadlineExceeded) || errors.Is(dispatchErr, mcp.ErrTimeout) {
@@ -295,7 +332,7 @@ func (b *ToolBroker) Dispatch(ctx context.Context, input DispatchInput) (ToolExe
 	return updated, nil
 }
 
-func (b *ToolBroker) dispatchToExecutor(ctx context.Context, domain, toolName string, input map[string]any, dispatch DispatchInput, runRecord *Run) (map[string]any, error) {
+func (b *ToolBroker) dispatchToExecutor(ctx context.Context, domain, toolName string, input map[string]any, dispatch DispatchInput, binding executionBinding) (map[string]any, error) {
 	safeInput := cloneMap(input)
 	switch domain {
 	case "native":
@@ -306,20 +343,30 @@ func (b *ToolBroker) dispatchToExecutor(ctx context.Context, domain, toolName st
 		// CLI executor, which requires run_id/task_id/project_id/agent_id injected.
 		// Without this, cli.execute always fails with "run_id is required".
 		if toolName == "cli.execute" || toolName == "cli_execute" {
-			safeInput = injectCLIExecutionContext(ctx, safeInput, dispatch, runRecord)
+			safeInput, err := injectCLIExecutionContext(ctx, safeInput, dispatch, binding)
+			if err != nil {
+				return nil, err
+			}
+			return b.native.Execute(ctx, toolName, safeInput)
 		}
 		return b.native.Execute(ctx, toolName, safeInput)
 	case "cli":
 		if b.cli == nil {
 			return nil, ErrToolNotSupported
 		}
-		safeInput = injectCLIExecutionContext(ctx, safeInput, dispatch, runRecord)
+		safeInput, err := injectCLIExecutionContext(ctx, safeInput, dispatch, binding)
+		if err != nil {
+			return nil, err
+		}
 		return b.cli.Execute(ctx, safeInput)
 	case "browser":
 		if b.browser == nil {
 			return nil, ErrToolNotSupported
 		}
-		safeInput = injectBrowserExecutionContext(safeInput, toolName, dispatch, runRecord)
+		safeInput, err := injectBrowserExecutionContext(safeInput, toolName, dispatch, binding)
+		if err != nil {
+			return nil, err
+		}
 		return b.browser.Execute(ctx, safeInput)
 	case "mcp":
 		if b.mcp == nil {
@@ -335,7 +382,7 @@ func (b *ToolBroker) dispatchToExecutor(ctx context.Context, domain, toolName st
 	}
 }
 
-func injectCLIExecutionContext(ctx context.Context, input map[string]any, dispatch DispatchInput, runRecord *Run) map[string]any {
+func injectCLIExecutionContext(ctx context.Context, input map[string]any, dispatch DispatchInput, binding executionBinding) (map[string]any, error) {
 	if input == nil {
 		input = map[string]any{}
 	}
@@ -359,27 +406,21 @@ func injectCLIExecutionContext(ctx context.Context, input map[string]any, dispat
 			input["agent_id"] = dispatch.AgentID.String()
 		}
 	}
-	if runRecord != nil {
-		if runRecord.ProjectID != nil {
-			if _, ok := input["project_id"]; !ok {
-				input["project_id"] = runRecord.ProjectID.String()
-			}
-		}
-		if runRecord.TaskID != nil {
-			if _, ok := input["task_id"]; !ok {
-				input["task_id"] = runRecord.TaskID.String()
-			}
-		}
+	if err := applyBoundUUID(input, "project_id", binding.projectID); err != nil {
+		return nil, err
+	}
+	if err := applyBoundUUID(input, "task_id", binding.taskID); err != nil {
+		return nil, err
 	}
 	if execCtx := mcp.ExecutionContextFromContext(ctx); execCtx.OrganizationID != uuid.Nil {
 		if _, ok := input["organization_id"]; !ok {
 			input["organization_id"] = execCtx.OrganizationID.String()
 		}
 	}
-	return input
+	return input, nil
 }
 
-func injectBrowserExecutionContext(input map[string]any, toolName string, dispatch DispatchInput, runRecord *Run) map[string]any {
+func injectBrowserExecutionContext(input map[string]any, toolName string, dispatch DispatchInput, binding executionBinding) (map[string]any, error) {
 	if input == nil {
 		input = map[string]any{}
 	}
@@ -412,25 +453,153 @@ func injectBrowserExecutionContext(input map[string]any, toolName string, dispat
 			input["agent_id"] = dispatch.AgentID.String()
 		}
 	}
-	if runRecord != nil {
-		if runRecord.ProjectID != nil {
-			if _, ok := input["project_id"]; !ok {
-				input["project_id"] = runRecord.ProjectID.String()
-			}
-		}
-		if runRecord.TaskID != nil {
-			if _, ok := input["task_id"]; !ok {
-				input["task_id"] = runRecord.TaskID.String()
-			}
-		}
+	if err := applyBoundUUID(input, "project_id", binding.projectID); err != nil {
+		return nil, err
 	}
-	return input
+	if err := applyBoundUUID(input, "task_id", binding.taskID); err != nil {
+		return nil, err
+	}
+	return input, nil
 }
 
 func browserActionTypeForToolName(toolName string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(toolName))
 	trimmed = strings.TrimPrefix(trimmed, "browser.")
 	return strings.TrimSpace(trimmed)
+}
+
+func (b *ToolBroker) resolveExecutionBinding(ctx context.Context, agent repo.Agent, dispatch DispatchInput, runRecord *Run) (executionBinding, error) {
+	binding := executionBinding{
+		organizationID: agent.OrganizationID,
+		sessionID:      copyUUIDPointer(dispatch.SessionID),
+	}
+	if runRecord != nil {
+		binding.projectID = copyUUIDPointer(runRecord.ProjectID)
+		binding.taskID = copyUUIDPointer(runRecord.TaskID)
+		if binding.sessionID == nil {
+			binding.sessionID = copyUUIDPointer(runRecord.SessionID)
+		}
+	}
+	if binding.taskID != nil && binding.projectID == nil {
+		projectID, err := b.resolveTaskProjectID(ctx, agent.OrganizationID, *binding.taskID)
+		if err != nil {
+			return executionBinding{}, err
+		}
+		binding.projectID = &projectID
+	}
+	if binding.sessionID == nil || *binding.sessionID == uuid.Nil || b.sessions == nil {
+		return binding, nil
+	}
+
+	session, err := b.sessions.GetByID(ctx, *binding.sessionID)
+	if err != nil {
+		return executionBinding{}, err
+	}
+	if session.OrganizationID != agent.OrganizationID {
+		return executionBinding{}, fmt.Errorf("session and agent organization mismatch")
+	}
+
+	binding.scopeType = strings.ToLower(strings.TrimSpace(session.ScopeType))
+	switch binding.scopeType {
+	case "project":
+		projectID := session.ScopeID
+		if binding.projectID == nil {
+			binding.projectID = &projectID
+		}
+	case "project_task":
+		if session.ScopeID == uuid.Nil {
+			return executionBinding{}, taskScopeBindingInvariantError("session is missing task_id")
+		}
+		if binding.taskID != nil && *binding.taskID != session.ScopeID {
+			return executionBinding{}, taskScopeBindingInvariantError("session task binding does not match run binding")
+		}
+		taskID := session.ScopeID
+		projectID, err := b.resolveTaskProjectID(ctx, agent.OrganizationID, taskID)
+		if err != nil {
+			return executionBinding{}, err
+		}
+		if binding.projectID != nil && *binding.projectID != projectID {
+			return executionBinding{}, taskScopeBindingInvariantError("session project binding does not match run binding")
+		}
+		binding.taskID = &taskID
+		binding.projectID = &projectID
+	}
+
+	return binding, nil
+}
+
+func (b *ToolBroker) resolveTaskProjectID(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {
+	if taskID == uuid.Nil {
+		return uuid.Nil, taskScopeBindingInvariantError("task_id is empty")
+	}
+	if b.tasks == nil {
+		return uuid.Nil, taskScopeBindingInvariantError("task repository unavailable")
+	}
+	taskRecord, err := b.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return uuid.Nil, taskScopeBindingInvariantError("task record not found")
+		}
+		return uuid.Nil, err
+	}
+	if taskRecord.OrganizationID != uuid.Nil && taskRecord.OrganizationID != organizationID {
+		return uuid.Nil, taskScopeBindingInvariantError("task organization mismatch")
+	}
+	if taskRecord.ProjectID == uuid.Nil {
+		return uuid.Nil, taskScopeBindingInvariantError("project_id is missing for task")
+	}
+	return taskRecord.ProjectID, nil
+}
+
+func applyBoundUUID(input map[string]any, key string, expected *uuid.UUID) error {
+	if expected == nil || *expected == uuid.Nil {
+		return nil
+	}
+	if existing, ok := input[key]; ok && existing != nil {
+		parsed, err := parseUUIDValue(existing)
+		if err != nil {
+			return taskScopeBindingInvariantError(fmt.Sprintf("invalid %s override", strings.TrimSpace(key)))
+		}
+		if parsed != *expected {
+			return taskScopeBindingInvariantError(fmt.Sprintf("%s does not match bound session context", strings.TrimSpace(key)))
+		}
+		return nil
+	}
+	input[key] = expected.String()
+	return nil
+}
+
+func parseUUIDValue(value any) (uuid.UUID, error) {
+	switch typed := value.(type) {
+	case uuid.UUID:
+		if typed == uuid.Nil {
+			return uuid.Nil, fmt.Errorf("uuid is nil")
+		}
+		return typed, nil
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return uuid.Nil, fmt.Errorf("uuid string is empty")
+		}
+		return uuid.Parse(trimmed)
+	default:
+		return uuid.Nil, fmt.Errorf("unsupported uuid type %T", value)
+	}
+}
+
+func taskScopeBindingInvariantError(detail string) error {
+	if trimmed := strings.TrimSpace(detail); trimmed != "" {
+		return fmt.Errorf("%s: %s", taskScopeBindingInvariantPrefix, trimmed)
+	}
+	return fmt.Errorf("%s", taskScopeBindingInvariantPrefix)
+}
+
+func copyUUIDPointer(id *uuid.UUID) *uuid.UUID {
+	if id == nil || *id == uuid.Nil {
+		return nil
+	}
+	value := *id
+	return &value
 }
 
 func (b *ToolBroker) createDeniedExecution(ctx context.Context, input DispatchInput, toolName, toolTier, toolDomain string, capability *string, payload, metadata json.RawMessage, reason string) (ToolExecution, error) {

@@ -1453,6 +1453,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		return false, nil
 	}
 
+	binding, err := e.resolveToolExecutionBinding(ctx, rt.session)
+	if err != nil {
+		return false, err
+	}
+
 	// Build reverse map: sanitized API name → original tool name, and tier lookup.
 	apiNameToOriginal := make(map[string]string, len(rt.toolSet))
 	apiNameToTier := make(map[string]string, len(rt.toolSet))
@@ -1493,14 +1498,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if _, exists := arguments["agent_id"]; !exists {
 			arguments["agent_id"] = rt.agent.ID.String()
 		}
-		if projectID := resolveProjectID(ctx, rt.session, e.tasks); projectID != nil {
+		if binding.projectID != nil {
 			if _, exists := arguments["project_id"]; !exists {
-				arguments["project_id"] = projectID.String()
+				arguments["project_id"] = binding.projectID.String()
 			}
 		}
-		if taskID := resolveTaskID(rt.session); taskID != nil {
+		if binding.taskID != nil {
 			if _, exists := arguments["task_id"]; !exists {
-				arguments["task_id"] = taskID.String()
+				arguments["task_id"] = binding.taskID.String()
 			}
 		}
 		if strings.EqualFold(name, "project.create") && rt.projectIdentity != nil {
@@ -2092,7 +2097,14 @@ func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session 
 	}
 	scopeType := strings.TrimSpace(session.ScopeType)
 	if strings.EqualFold(scopeType, "project_task") {
-		if agentID, err := e.resolveTaskScopeAgent(ctx, session.OrganizationID, session.ScopeID); err == nil && agentID != uuid.Nil {
+		agentID, err := e.resolveTaskScopeAgent(ctx, session.OrganizationID, session.ScopeID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if agentID != uuid.Nil {
+			if err := e.ensureAgentParticipant(ctx, session.ID, agentID); err != nil {
+				return uuid.Nil, err
+			}
 			return agentID, nil
 		}
 	}
@@ -2145,22 +2157,26 @@ func (e *TurnEngine) ensureAgentParticipant(ctx context.Context, sessionID, agen
 }
 
 func (e *TurnEngine) resolveTaskScopeAgent(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {
-	if e.tasks != nil && taskID != uuid.Nil {
-		if taskRecord, err := e.tasks.GetByID(ctx, taskID); err == nil {
-			if taskRecord.OrganizationID != uuid.Nil && taskRecord.OrganizationID != organizationID {
-				return uuid.Nil, repo.ErrNotFound
-			}
-			if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
-				return *taskRecord.AssignedAgentID, nil
-			}
-			if e.assignments != nil {
-				if pm, pmErr := e.assignments.GetPM(ctx, taskRecord.ProjectID); pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
-					return pm.AgentID, nil
-				}
-			}
-		}
+	if e.tasks == nil {
+		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing task repository")
 	}
-	return e.resolveFrankStarterID(ctx, organizationID)
+	if taskID == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing task_id")
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session task binding was not found")
+		}
+		return uuid.Nil, err
+	}
+	if taskRecord.OrganizationID != uuid.Nil && taskRecord.OrganizationID != organizationID {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing assigned agent")
+	}
+	return *taskRecord.AssignedAgentID, nil
 }
 
 func (e *TurnEngine) resolveFrankStarterID(ctx context.Context, organizationID uuid.UUID) (uuid.UUID, error) {
@@ -2939,6 +2955,51 @@ func resolveTaskID(session *chat.ChatSession) *uuid.UUID {
 	}
 	id := session.ScopeID
 	return &id
+}
+
+type toolExecutionBinding struct {
+	projectID *uuid.UUID
+	taskID    *uuid.UUID
+}
+
+func (e *TurnEngine) resolveToolExecutionBinding(ctx context.Context, session *chat.ChatSession) (toolExecutionBinding, error) {
+	if session == nil {
+		return toolExecutionBinding{}, nil
+	}
+	scopeType := strings.ToLower(strings.TrimSpace(session.ScopeType))
+	switch scopeType {
+	case "project":
+		if session.ScopeID == uuid.Nil {
+			return toolExecutionBinding{}, fmt.Errorf("internal invariant: project-scoped session is missing project_id")
+		}
+		projectID := session.ScopeID
+		return toolExecutionBinding{projectID: &projectID}, nil
+	case "project_task":
+		if session.ScopeID == uuid.Nil {
+			return toolExecutionBinding{}, fmt.Errorf("internal invariant: task-scoped tool execution is missing bound task context: session is missing task_id")
+		}
+		if e.tasks == nil {
+			return toolExecutionBinding{}, fmt.Errorf("internal invariant: task-scoped tool execution is missing bound task context: task repository unavailable")
+		}
+		taskRecord, err := e.tasks.GetByID(ctx, session.ScopeID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return toolExecutionBinding{}, fmt.Errorf("internal invariant: task-scoped tool execution is missing bound task context: task record not found")
+			}
+			return toolExecutionBinding{}, err
+		}
+		if taskRecord.OrganizationID != uuid.Nil && taskRecord.OrganizationID != session.OrganizationID {
+			return toolExecutionBinding{}, fmt.Errorf("internal invariant: task-scoped tool execution is missing bound task context: task organization mismatch")
+		}
+		if taskRecord.ProjectID == uuid.Nil {
+			return toolExecutionBinding{}, fmt.Errorf("internal invariant: task-scoped tool execution is missing bound task context: project_id is missing for task")
+		}
+		taskID := session.ScopeID
+		projectID := taskRecord.ProjectID
+		return toolExecutionBinding{projectID: &projectID, taskID: &taskID}, nil
+	default:
+		return toolExecutionBinding{}, nil
+	}
 }
 
 func isTransientModelError(err error) bool {

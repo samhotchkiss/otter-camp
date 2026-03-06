@@ -503,15 +503,17 @@ func (e *NativeToolExecutor) resolveScope(ctx context.Context) (workspaceScope, 
 		organizationID: execCtx.OrganizationID,
 		agentID:        execCtx.AgentID,
 		sessionID:      execCtx.SessionID,
+		projectID:      copyScopeUUID(execCtx.ProjectID),
+		taskID:         copyScopeUUID(execCtx.TaskID),
 	}
 	if execCtx.SessionID == nil || *execCtx.SessionID == uuid.Nil || e.chatSessions == nil {
-		return scope, nil
+		return e.finalizeTaskScope(ctx, scope)
 	}
 
 	session, err := e.chatSessions.GetByID(ctx, *execCtx.SessionID)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
-			return scope, nil
+			return e.finalizeTaskScope(ctx, scope)
 		}
 		return workspaceScope{}, err
 	}
@@ -522,18 +524,20 @@ func (e *NativeToolExecutor) resolveScope(ctx context.Context) (workspaceScope, 
 	scopeType := strings.TrimSpace(strings.ToLower(session.ScopeType))
 	switch scopeType {
 	case "project":
-		scope.projectID = &session.ScopeID
-	case "project_task":
-		scope.taskID = &session.ScopeID
-		if e.tasks != nil {
-			taskRecord, taskErr := e.tasks.GetByID(ctx, session.ScopeID)
-			if taskErr == nil {
-				scope.projectID = &taskRecord.ProjectID
-			}
+		if scope.projectID != nil && *scope.projectID != session.ScopeID {
+			return workspaceScope{}, taskScopeResolutionError("session project binding mismatch")
 		}
+		projectID := session.ScopeID
+		scope.projectID = &projectID
+	case "project_task":
+		if scope.taskID != nil && *scope.taskID != session.ScopeID {
+			return workspaceScope{}, taskScopeResolutionError("session task binding mismatch")
+		}
+		taskID := session.ScopeID
+		scope.taskID = &taskID
 	}
 
-	return scope, nil
+	return e.finalizeTaskScope(ctx, scope)
 }
 
 func (e *NativeToolExecutor) workspaceForContext(ctx context.Context) (SessionWorkDir, workspaceScope, error) {
@@ -608,6 +612,50 @@ func (e *NativeToolExecutor) resolveWorkspaceSlugs(ctx context.Context, scope wo
 	}
 
 	return orgSlug, projectSlug, nil
+}
+
+func (e *NativeToolExecutor) finalizeTaskScope(ctx context.Context, scope workspaceScope) (workspaceScope, error) {
+	if scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return scope, nil
+	}
+	if e.tasks == nil {
+		return workspaceScope{}, taskScopeResolutionError("task repository unavailable")
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return workspaceScope{}, taskScopeResolutionError("task record not found")
+		}
+		return workspaceScope{}, err
+	}
+	if taskRecord.OrganizationID != uuid.Nil && taskRecord.OrganizationID != scope.organizationID {
+		return workspaceScope{}, taskScopeResolutionError("task organization mismatch")
+	}
+	if taskRecord.ProjectID == uuid.Nil {
+		return workspaceScope{}, taskScopeResolutionError("project binding missing")
+	}
+	if scope.projectID != nil && *scope.projectID != taskRecord.ProjectID {
+		return workspaceScope{}, taskScopeResolutionError("project binding mismatch")
+	}
+	projectID := taskRecord.ProjectID
+	scope.projectID = &projectID
+	return scope, nil
+}
+
+func taskScopeResolutionError(detail string) error {
+	trimmed := strings.TrimSpace(detail)
+	if trimmed == "" {
+		return fmt.Errorf("internal invariant: task-scoped execution is missing bound task context")
+	}
+	return fmt.Errorf("internal invariant: task-scoped execution is missing bound task context: %s", trimmed)
+}
+
+func copyScopeUUID(id *uuid.UUID) *uuid.UUID {
+	if id == nil || *id == uuid.Nil {
+		return nil
+	}
+	value := *id
+	return &value
 }
 
 func (e *NativeToolExecutor) resolveInputPath(ctx context.Context, input map[string]any, key string) (SessionWorkDir, workspaceScope, string, error) {
