@@ -26,6 +26,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
 
@@ -387,26 +388,28 @@ type projectIdentity struct {
 }
 
 type toolValidationFailure struct {
-	ToolName      string
-	FailureClass  string
-	FailureCode   string
-	FailureReason string
-	Fingerprint   string
+	ToolName           string
+	FailureClass       string
+	FailureCode        string
+	FailureReason      string
+	Fingerprint        string
+	AttemptFingerprint string
 }
 
 type taskValidationGuardState struct {
-	InitialMessageID string `json:"initial_message_id"`
-	Fingerprint      string `json:"fingerprint"`
-	ToolName         string `json:"tool_name"`
-	FailureClass     string `json:"failure_class"`
-	FailureCode      string `json:"failure_code"`
-	FailureReason    string `json:"failure_reason"`
-	Count            int    `json:"count"`
-	BlockThreshold   int    `json:"block_threshold"`
-	Blocked          bool   `json:"blocked"`
-	FirstSeenAt      string `json:"first_seen_at,omitempty"`
-	LastSeenAt       string `json:"last_seen_at,omitempty"`
-	LastTurnID       string `json:"last_turn_id,omitempty"`
+	InitialMessageID   string `json:"initial_message_id"`
+	Fingerprint        string `json:"fingerprint"`
+	AttemptFingerprint string `json:"attempt_fingerprint,omitempty"`
+	ToolName           string `json:"tool_name"`
+	FailureClass       string `json:"failure_class"`
+	FailureCode        string `json:"failure_code"`
+	FailureReason      string `json:"failure_reason"`
+	Count              int    `json:"count"`
+	BlockThreshold     int    `json:"block_threshold"`
+	Blocked            bool   `json:"blocked"`
+	FirstSeenAt        string `json:"first_seen_at,omitempty"`
+	LastSeenAt         string `json:"last_seen_at,omitempty"`
+	LastTurnID         string `json:"last_turn_id,omitempty"`
 }
 
 func NewEngine(opts Options) (*TurnEngine, error) {
@@ -1238,6 +1241,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			}
 			return nil
 		}
+		response.ToolCalls = normalizeModelToolCalls(response.ToolCalls)
 
 		// Persist tool_calls in the assistant message metadata so the prompt
 		// assembler can include them in the conversation history on the next
@@ -1610,7 +1614,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 				tier = strings.ToLower(t)
 			}
 		}
-		arguments := cloneMap(call.Arguments)
+		arguments := toolargs.Normalize(name, cloneMap(call.Arguments))
 		arguments["organization_id"] = rt.session.OrganizationID.String()
 		if _, exists := arguments["session_id"]; !exists {
 			arguments["session_id"] = rt.session.ID.String()
@@ -1855,6 +1859,9 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 		if !ok || current.Blocked || current.Count == 0 || current.InitialMessageID != rt.initialMessageID.String() {
 			return false, nil
 		}
+		if len(calls) > 0 && current.AttemptFingerprint != "" && !toolCallsContainAttemptFingerprint(calls, current.AttemptFingerprint) {
+			return false, nil
+		}
 		cleared, clearErr := clearTaskValidationGuardMetadata(taskRecord.Metadata)
 		if clearErr != nil {
 			return false, clearErr
@@ -1936,6 +1943,18 @@ func collectToolValidationFailures(calls []ToolCall, results []ToolResult) []too
 	return failures
 }
 
+func toolCallsContainAttemptFingerprint(calls []ToolCall, attemptFingerprint string) bool {
+	if strings.TrimSpace(attemptFingerprint) == "" {
+		return true
+	}
+	for _, call := range calls {
+		if toolargs.AttemptFingerprint(call.Name, call.Arguments) == attemptFingerprint {
+			return true
+		}
+	}
+	return false
+}
+
 func classifyToolValidationFailure(call ToolCall, result ToolResult) (toolValidationFailure, bool) {
 	toolName := strings.TrimSpace(call.Name)
 	if toolName == "" {
@@ -1944,29 +1963,30 @@ func classifyToolValidationFailure(call ToolCall, result ToolResult) (toolValida
 	if toolName == "" {
 		return toolValidationFailure{}, false
 	}
+	attemptFingerprint := toolargs.AttemptFingerprint(toolName, call.Arguments)
 
 	if hasRawToolArguments(call) {
 		reason := "malformed _raw arguments"
 		if code := strings.TrimSpace(toolResultErrorCode(result)); code != "" {
 			reason = fmt.Sprintf("malformed _raw arguments (%s)", code)
 		}
-		return buildToolValidationFailure(toolName, "malformed_arguments_raw", reason), true
+		return buildToolValidationFailure(toolName, "malformed_arguments_raw", reason, attemptFingerprint), true
 	}
 
 	if code := normalizeValidationFailureCode(toolResultErrorCode(result)); isToolValidationCode(code) {
-		return buildToolValidationFailure(toolName, code, strings.TrimSpace(toolResultErrorCode(result))), true
+		return buildToolValidationFailure(toolName, code, strings.TrimSpace(toolResultErrorCode(result)), attemptFingerprint), true
 	}
 
 	if reason := strings.TrimSpace(stripToolFailurePrefix(result.Error, toolName)); reason != "" {
 		if code := normalizeValidationFailureCode(reason); isToolValidationCode(code) {
-			return buildToolValidationFailure(toolName, code, reason), true
+			return buildToolValidationFailure(toolName, code, reason, attemptFingerprint), true
 		}
 	}
 
 	return toolValidationFailure{}, false
 }
 
-func buildToolValidationFailure(toolName, failureCode, failureReason string) toolValidationFailure {
+func buildToolValidationFailure(toolName, failureCode, failureReason, attemptFingerprint string) toolValidationFailure {
 	code := normalizeValidationFailureCode(failureCode)
 	if code == "" {
 		code = "validation_failure"
@@ -1977,11 +1997,12 @@ func buildToolValidationFailure(toolName, failureCode, failureReason string) too
 	}
 	toolName = strings.TrimSpace(toolName)
 	return toolValidationFailure{
-		ToolName:      toolName,
-		FailureClass:  "tool_validation",
-		FailureCode:   code,
-		FailureReason: reason,
-		Fingerprint:   strings.ToLower(strings.TrimSpace(toolName)) + ":" + code,
+		ToolName:           toolName,
+		FailureClass:       "tool_validation",
+		FailureCode:        code,
+		FailureReason:      reason,
+		Fingerprint:        strings.ToLower(strings.TrimSpace(toolName)) + ":" + code,
+		AttemptFingerprint: strings.TrimSpace(attemptFingerprint),
 	}
 }
 
@@ -2147,18 +2168,19 @@ func clearTaskValidationGuardMetadata(metadata json.RawMessage) (json.RawMessage
 func nextTaskValidationGuardState(current taskValidationGuardState, initialMessageID, turnID uuid.UUID, failure toolValidationFailure, now time.Time) (taskValidationGuardState, bool) {
 	nowValue := now.UTC().Format(time.RFC3339Nano)
 	next := taskValidationGuardState{
-		InitialMessageID: initialMessageID.String(),
-		Fingerprint:      failure.Fingerprint,
-		ToolName:         failure.ToolName,
-		FailureClass:     failure.FailureClass,
-		FailureCode:      failure.FailureCode,
-		FailureReason:    failure.FailureReason,
-		Count:            1,
-		BlockThreshold:   validationLoopBlockThreshold,
-		Blocked:          false,
-		FirstSeenAt:      nowValue,
-		LastSeenAt:       nowValue,
-		LastTurnID:       turnID.String(),
+		InitialMessageID:   initialMessageID.String(),
+		Fingerprint:        failure.Fingerprint,
+		AttemptFingerprint: failure.AttemptFingerprint,
+		ToolName:           failure.ToolName,
+		FailureClass:       failure.FailureClass,
+		FailureCode:        failure.FailureCode,
+		FailureReason:      failure.FailureReason,
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        nowValue,
+		LastSeenAt:         nowValue,
+		LastTurnID:         turnID.String(),
 	}
 	if current.InitialMessageID == next.InitialMessageID && current.Fingerprint == next.Fingerprint && current.Count > 0 {
 		next.Count = current.Count + 1
@@ -3926,6 +3948,19 @@ func cloneMap(input map[string]any) map[string]any {
 		copied[key] = value
 	}
 	return copied
+}
+
+func normalizeModelToolCalls(calls []ModelToolCall) []ModelToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	normalized := make([]ModelToolCall, 0, len(calls))
+	for _, call := range calls {
+		callCopy := call
+		callCopy.Arguments = toolargs.Normalize(call.Name, cloneMap(call.Arguments))
+		normalized = append(normalized, callCopy)
+	}
+	return normalized
 }
 
 // buildToolCallMetadata serializes tool calls into JSONB metadata for the

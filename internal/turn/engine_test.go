@@ -2363,11 +2363,14 @@ func TestHandleUserMessageBlocksRepeatedToolValidationFailures(t *testing.T) {
 	if guard.FailureClass != "tool_validation" {
 		t.Fatalf("guard failure_class = %q, want tool_validation", guard.FailureClass)
 	}
-	if guard.FailureCode != "malformed_arguments_raw" {
-		t.Fatalf("guard failure_code = %q, want malformed_arguments_raw", guard.FailureCode)
+	if guard.FailureCode != "path_required" {
+		t.Fatalf("guard failure_code = %q, want path_required", guard.FailureCode)
 	}
 	if !strings.Contains(guard.FailureReason, "path_required") {
 		t.Fatalf("guard failure_reason = %q, want contains path_required", guard.FailureReason)
+	}
+	if strings.TrimSpace(guard.AttemptFingerprint) == "" {
+		t.Fatal("expected attempt fingerprint on validation guard")
 	}
 	if len(blocker.calls) != 1 {
 		t.Fatalf("blocker calls = %d, want 1", len(blocker.calls))
@@ -2394,17 +2397,18 @@ func TestHandleUserMessageSkipsBlockedValidationLoop(t *testing.T) {
 	fixture.session.Mode = "async"
 
 	guard := taskValidationGuardState{
-		InitialMessageID: fixture.userMessageID.String(),
-		Fingerprint:      "file.write:malformed_arguments_raw",
-		ToolName:         "file.write",
-		FailureClass:     "tool_validation",
-		FailureCode:      "malformed_arguments_raw",
-		FailureReason:    "malformed _raw arguments (path_required)",
-		Count:            validationLoopBlockThreshold,
-		BlockThreshold:   validationLoopBlockThreshold,
-		Blocked:          true,
-		FirstSeenAt:      time.Now().UTC().Format(time.RFC3339Nano),
-		LastSeenAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.write:path_required",
+		AttemptFingerprint: "file.write:attempt",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "path_required",
+		FailureReason:      "path_required",
+		Count:              validationLoopBlockThreshold,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            true,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), guard)
 	if err != nil {

@@ -47,6 +47,24 @@ func TestFileWriteAtomicLeavesNoTempFile(t *testing.T) {
 	}
 }
 
+func TestFileWriteMalformedRawMissingPathReturnsActionableError(t *testing.T) {
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+
+	out, err := executor.Execute(testExecCtx(), "file.write", map[string]any{
+		"_raw": `{"content":"hello"}`,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "path_required" {
+		t.Fatalf("error = %v, want path_required", out["error"])
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "non-empty path") {
+		t.Fatalf("message = %q, want actionable path guidance", message)
+	}
+}
+
 func TestFileEditAmbiguousMatchDoesNotModifyFile(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "dup.txt")

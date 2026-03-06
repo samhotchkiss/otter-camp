@@ -28,6 +28,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
+	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 )
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
@@ -374,28 +375,32 @@ func deterministicMemoryEmbedding(value string) []float32 {
 }
 
 func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[string]any) (map[string]any, error) {
-	wd, scope, resolved, err := e.resolveInputPath(ctx, input, "path")
+	normalizedInput := toolargs.Normalize("file.write", input)
+	wd, scope, resolved, err := e.resolveInputPath(ctx, normalizedInput, "path")
 	if err != nil {
 		if errors.Is(err, ErrPathTraversal) {
 			return map[string]any{"error": "path_traversal"}, nil
 		}
 		return nil, err
 	}
-	pathInput, ok := readString(input, "path")
+	pathInput, ok := readString(normalizedInput, "path")
 	if !ok || pathInput == "" {
-		return map[string]any{"error": "path_required"}, nil
+		return map[string]any{
+			"error":   "path_required",
+			"message": "file.write requires a non-empty path. Provide a workspace-relative file path in `path`.",
+		}, nil
 	}
-	createDirs := readBool(input, "create_dirs", false)
+	createDirs := readBool(normalizedInput, "create_dirs", false)
 	if createDirs {
 		if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
 			return nil, err
 		}
 	}
 
-	content, _ := readString(input, "content")
+	content, _ := readString(normalizedInput, "content")
 	encoding := "utf8"
 	payload := []byte(content)
-	if rawEncoding, ok := readString(input, "encoding"); ok && strings.EqualFold(rawEncoding, "base64") {
+	if rawEncoding, ok := readString(normalizedInput, "encoding"); ok && strings.EqualFold(rawEncoding, "base64") {
 		encoding = "base64"
 		decoded, decodeErr := base64.StdEncoding.DecodeString(content)
 		if decodeErr != nil {

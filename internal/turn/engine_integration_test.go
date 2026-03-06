@@ -926,11 +926,14 @@ func TestTurnEngineIntegrationRepeatedMalformedFileWritePayloadBlocksTask(t *tes
 	if guard.FailureClass != "tool_validation" {
 		t.Fatalf("guard failure_class = %q, want tool_validation", guard.FailureClass)
 	}
-	if guard.FailureCode != "malformed_arguments_raw" {
-		t.Fatalf("guard failure_code = %q, want malformed_arguments_raw", guard.FailureCode)
+	if guard.FailureCode != "path_required" {
+		t.Fatalf("guard failure_code = %q, want path_required", guard.FailureCode)
 	}
 	if !strings.Contains(guard.FailureReason, "path_required") {
 		t.Fatalf("guard failure_reason = %q, want contains path_required", guard.FailureReason)
+	}
+	if strings.TrimSpace(guard.AttemptFingerprint) == "" {
+		t.Fatal("expected attempt fingerprint on validation guard")
 	}
 
 	projectTasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
@@ -957,6 +960,281 @@ func TestTurnEngineIntegrationRepeatedMalformedFileWritePayloadBlocksTask(t *tes
 	}
 }
 
+func TestTurnEngineIntegrationFileWriteRecoverRawArgumentsAcrossRepeatedWrites(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant Frank: %v", err)
+	}
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "write the task files",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{
+					ID:   "write-1",
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"_raw": `{"path":"templates/index.html","content":"<html>alpha</html>","create_dirs":true`,
+					},
+				},
+				{
+					ID:   "write-2",
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"_raw": `{"path":"templates/styles.css","content":"body { color: blue; }","create_dirs":true`,
+					},
+				},
+				{
+					ID:   "write-3",
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"_raw": `{"path":"README.md","content":"launch notes"`,
+					},
+				},
+			}}, nil
+		}
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	expectedPaths := []string{"templates/index.html", "templates/styles.css", "README.md"}
+	expectedContents := []string{"<html>alpha</html>", "body { color: blue; }", "launch notes"}
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		if dispatched >= len(expectedPaths) {
+			t.Fatalf("unexpected extra file.write dispatch: %+v", call)
+		}
+		if _, exists := call.Arguments["_raw"]; exists {
+			t.Fatalf("expected normalized arguments without _raw: %+v", call.Arguments)
+		}
+		path, _ := call.Arguments["path"].(string)
+		content, _ := call.Arguments["content"].(string)
+		if path != expectedPaths[dispatched] {
+			t.Fatalf("dispatch %d path = %q, want %q", dispatched, path, expectedPaths[dispatched])
+		}
+		if content != expectedContents[dispatched] {
+			t.Fatalf("dispatch %d content = %q, want %q", dispatched, content, expectedContents[dispatched])
+		}
+		dispatched++
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      path,
+				"byte_size": len(content),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+	if dispatched != 3 {
+		t.Fatalf("dispatched writes = %d, want 3", dispatched)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok && guard.Count > 0 {
+		t.Fatalf("unexpected validation guard after successful writes: %+v", guard)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"path_required"`) {
+			t.Fatalf("unexpected path_required tool_result: %s", item.Content)
+		}
+	}
+}
+
+func TestTurnEngineIntegrationFileWriteMissingPathRetryDoesNotResetAcrossAdjacentSuccessfulWrites(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant Frank: %v", err)
+	}
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "write everything for the task",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	missingRaw := map[string]any{"_raw": `{"content":"hello"}`}
+	validCalls := []map[string]any{
+		{"_raw": `{"path":"docs/alpha.txt","content":"alpha","create_dirs":true`},
+		{"_raw": `{"path":"docs/beta.txt","content":"beta","create_dirs":true`},
+	}
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "missing-1", Name: "file.write", Tier: "tier2", Arguments: missingRaw}}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "good-1", Name: "file.write", Tier: "tier2", Arguments: validCalls[0]}}}, nil
+		case 3:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "missing-2", Name: "file.write", Tier: "tier2", Arguments: missingRaw}}}, nil
+		case 4:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "good-2", Name: "file.write", Tier: "tier2", Arguments: validCalls[1]}}}, nil
+		default:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "missing-3", Name: "file.write", Tier: "tier2", Arguments: missingRaw}}}, nil
+		}
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		if _, exists := call.Arguments["_raw"]; exists {
+			t.Fatalf("expected normalized arguments without _raw: %+v", call.Arguments)
+		}
+		path, _ := call.Arguments["path"].(string)
+		if strings.TrimSpace(path) == "" {
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"error":   "path_required",
+					"message": "file.write requires a non-empty path. Provide a workspace-relative file path in `path`.",
+				},
+				RunID: &runID,
+			}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      path,
+				"byte_size": 5,
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if modelCalls != 5 {
+		t.Fatalf("model calls = %d, want 5 before validation blocker stops retries", modelCalls)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+	guard, ok := parseTaskValidationGuard(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if !guard.Blocked {
+		t.Fatal("expected blocked validation guard")
+	}
+	if guard.Count != validationLoopBlockThreshold {
+		t.Fatalf("guard count = %d, want %d", guard.Count, validationLoopBlockThreshold)
+	}
+	if guard.FailureCode != "path_required" {
+		t.Fatalf("guard failure_code = %q, want path_required", guard.FailureCode)
+	}
+	if strings.TrimSpace(guard.AttemptFingerprint) == "" {
+		t.Fatal("expected attempt fingerprint on validation guard")
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var pathRequiredResults int
+	var successfulWrites int
+	var blockerMessages int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"path_required"`) {
+			pathRequiredResults++
+		}
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"docs/`) {
+			successfulWrites++
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			blockerMessages++
+		}
+	}
+	if pathRequiredResults != 3 {
+		t.Fatalf("path_required tool_results = %d, want 3", pathRequiredResults)
+	}
+	if successfulWrites != 2 {
+		t.Fatalf("successful write tool_results = %d, want 2", successfulWrites)
+	}
+	if blockerMessages != 1 {
+		t.Fatalf("validation blocker system messages = %d, want 1", blockerMessages)
+	}
+}
+
 func TestTurnEngineIntegrationValidationLoopBlockSuppressesFreshWork(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -964,17 +1242,18 @@ func TestTurnEngineIntegrationValidationLoopBlockSuppressesFreshWork(t *testing.
 	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
 	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
 	guardMetadata, err := mergeTaskValidationGuardMetadata(nil, taskValidationGuardState{
-		InitialMessageID: uuid.NewString(),
-		Fingerprint:      "file.write:malformed_arguments_raw",
-		ToolName:         "file.write",
-		FailureClass:     "tool_validation",
-		FailureCode:      "malformed_arguments_raw",
-		FailureReason:    "malformed _raw arguments (path_required)",
-		Count:            validationLoopBlockThreshold,
-		BlockThreshold:   validationLoopBlockThreshold,
-		Blocked:          true,
-		FirstSeenAt:      time.Now().UTC().Format(time.RFC3339Nano),
-		LastSeenAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		InitialMessageID:   uuid.NewString(),
+		Fingerprint:        "file.write:path_required",
+		AttemptFingerprint: "file.write:attempt",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "path_required",
+		FailureReason:      "path_required",
+		Count:              validationLoopBlockThreshold,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            true,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
