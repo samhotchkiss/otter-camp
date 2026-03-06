@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/planningasset"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
@@ -90,6 +91,17 @@ type projectRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
 }
 
+type projectEnvironmentRepository interface {
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error)
+}
+
+type planningArtifactRepository interface {
+	UpsertVersion(ctx context.Context, artifact repo.PlanningArtifactUpsert) (repo.PlanningArtifact, bool, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.PlanningArtifact, error)
+	ListBySourceTask(ctx context.Context, taskID uuid.UUID) ([]repo.PlanningArtifact, error)
+	ListVersions(ctx context.Context, artifactID uuid.UUID) ([]repo.PlanningArtifactVersion, error)
+}
+
 type projectSubtaskRepository interface {
 	Create(ctx context.Context, subtask repo.ProjectSubtask) (repo.ProjectSubtask, error)
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectSubtask, error)
@@ -134,20 +146,22 @@ type flowSessionBridge interface {
 type Options struct {
 	Pool *pgxpool.Pool
 
-	FlowTemplates flowTemplateRepository
-	FlowNodes     flowNodeRepository
-	Executions    flowNodeExecutionRepository
-	Tasks         projectTaskRepository
-	Projects      projectRepository
-	Subtasks      projectSubtaskRepository
-	Dependencies  projectTaskDependencyRepository
-	Inbox         inboxRepository
-	TaskEvents    taskEventRepository
-	TasksService  taskCoordinator
-	Events        eventBus
-	Agents        subtaskAgentRepository
-	Users         subtaskUserRepository
-	SessionBridge flowSessionBridge
+	FlowTemplates  flowTemplateRepository
+	FlowNodes      flowNodeRepository
+	Executions     flowNodeExecutionRepository
+	Tasks          projectTaskRepository
+	Projects       projectRepository
+	Subtasks       projectSubtaskRepository
+	Dependencies   projectTaskDependencyRepository
+	Inbox          inboxRepository
+	TaskEvents     taskEventRepository
+	TasksService   taskCoordinator
+	Events         eventBus
+	Agents         subtaskAgentRepository
+	Users          subtaskUserRepository
+	SessionBridge  flowSessionBridge
+	Environments   projectEnvironmentRepository
+	PlanningAssets planningArtifactRepository
 }
 
 type FlowExecutionService interface {
@@ -167,20 +181,22 @@ type FlowExecutionService interface {
 }
 
 type service struct {
-	flowTemplates flowTemplateRepository
-	flowNodes     flowNodeRepository
-	executions    flowNodeExecutionRepository
-	tasks         projectTaskRepository
-	projects      projectRepository
-	subtasks      projectSubtaskRepository
-	dependencies  projectTaskDependencyRepository
-	inbox         inboxRepository
-	taskEvents    taskEventRepository
-	taskService   taskCoordinator
-	events        eventBus
-	agents        subtaskAgentRepository
-	users         subtaskUserRepository
-	sessionBridge flowSessionBridge
+	flowTemplates  flowTemplateRepository
+	flowNodes      flowNodeRepository
+	executions     flowNodeExecutionRepository
+	tasks          projectTaskRepository
+	projects       projectRepository
+	subtasks       projectSubtaskRepository
+	dependencies   projectTaskDependencyRepository
+	inbox          inboxRepository
+	taskEvents     taskEventRepository
+	taskService    taskCoordinator
+	events         eventBus
+	agents         subtaskAgentRepository
+	users          subtaskUserRepository
+	sessionBridge  flowSessionBridge
+	environments   projectEnvironmentRepository
+	planningAssets planningArtifactRepository
 }
 
 type taskReviewFlowAdapter struct {
@@ -233,6 +249,16 @@ func NewService(opts Options) (FlowExecutionService, error) {
 		svc.projects = opts.Projects
 	} else {
 		svc.projects = repo.NewProjectRepo(opts.Pool)
+	}
+	if opts.Environments != nil {
+		svc.environments = opts.Environments
+	} else {
+		svc.environments = repo.NewProjectEnvironmentRepo(opts.Pool)
+	}
+	if opts.PlanningAssets != nil {
+		svc.planningAssets = opts.PlanningAssets
+	} else {
+		svc.planningAssets = repo.NewPlanningArtifactRepo(opts.Pool)
 	}
 	if opts.Subtasks != nil {
 		svc.subtasks = opts.Subtasks
@@ -352,7 +378,7 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 			return nil, err
 		}
 
-		if err := s.createTaskReviewInbox(ctx, taskRecord, currentNode.ID); err != nil {
+		if err := s.createTaskReviewInbox(ctx, taskRecord, currentNode.ID, actor); err != nil {
 			return nil, err
 		}
 		return &activeExecution, nil
@@ -409,7 +435,7 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 			if _, statusErr := s.taskService.TransitionStatus(ctx, taskRecord.ID, "review", toTaskActor(actor)); statusErr != nil {
 				return nil, statusErr
 			}
-			if err := s.createTaskReviewInbox(ctx, taskRecord, nextNode.ID); err != nil {
+			if err := s.createTaskReviewInbox(ctx, taskRecord, nextNode.ID, actor); err != nil {
 				return nil, err
 			}
 		}
@@ -437,7 +463,7 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 	return &completedExecution, nil
 }
 
-func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.ProjectTask, flowNodeID uuid.UUID) error {
+func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.ProjectTask, flowNodeID uuid.UUID, actor Actor) error {
 	title := "Task review required"
 	body := "Flow advancement paused pending human review."
 	payload, _ := json.Marshal(map[string]any{
@@ -446,76 +472,82 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 	})
 	if plan, ok := taskplan.Parse(taskRecord.Metadata); ok {
 		report := taskplan.Evaluate(plan)
-		if !(plan.RequiresReviewAndRefinement() || report.Enforced) {
-			goto createInboxItem
-		}
-		artifactTitles := make([]string, 0, len(plan.Artifacts))
-		for _, artifact := range plan.Artifacts {
-			if strings.TrimSpace(artifact.Title) != "" {
-				artifactTitles = append(artifactTitles, artifact.Title)
+		if plan.RequiresReviewAndRefinement() || report.Enforced {
+			if s.planningAssets != nil && s.environments != nil {
+				syncedPlan, syncErr := planningasset.New(planningasset.Options{
+					Artifacts:    s.planningAssets,
+					Environments: s.environments,
+				}).SyncTask(ctx, taskRecord, planningasset.Actor{Type: actor.Type, ID: actorUUIDPtr(actor)})
+				if syncErr != nil {
+					return syncErr
+				}
+				if syncedPlan.HasSelection() {
+					plan = syncedPlan
+					report = taskplan.Evaluate(plan)
+				}
 			}
+			artifactSummaries := reviewArtifactSummaries(plan.Artifacts)
+			if plan.RequiresReviewAndRefinement() {
+				title = "Review options and recommendation"
+			} else {
+				title = "Review planning artifacts and rubric"
+			}
+			bodyLines := []string{
+				"Flow advancement paused pending human review.",
+			}
+			if strings.TrimSpace(plan.ReviewPacket.Summary) != "" {
+				bodyLines[0] = plan.ReviewPacket.Summary
+			}
+			bodyLines = append(bodyLines,
+				"",
+				fmt.Sprintf("Playbook: %s", plan.Playbook),
+				fmt.Sprintf("Planning context: work_type=%s, stage=%s, evidence=%s, risk=%s", plan.WorkType, plan.ProjectStage, plan.EvidenceMaturity, plan.RiskLevel),
+				fmt.Sprintf("Planning process: %s", report.ProcessStatus),
+				fmt.Sprintf("Planned stages: %s", strings.Join(plan.PlannedStages, " -> ")),
+				fmt.Sprintf("Planned artifacts: %s", strings.Join(artifactSummaries, ", ")),
+			)
+			if len(report.ReviewChecklist) > 0 {
+				bodyLines = append(bodyLines, fmt.Sprintf("Review checklist: %s", strings.Join(report.ReviewChecklist, " | ")))
+			}
+			if len(report.MissingRequirements()) > 0 {
+				bodyLines = append(bodyLines, fmt.Sprintf("Missing contract items: %s", strings.Join(report.MissingRequirements(), " | ")))
+			}
+			if plan.Override != nil && strings.TrimSpace(plan.Override.Reason) != "" {
+				bodyLines = append(bodyLines, fmt.Sprintf("Override reason: %s", plan.Override.Reason))
+			}
+			if len(plan.ReviewPacket.Sections) > 0 {
+				bodyLines = append(bodyLines, fmt.Sprintf("Review packet sections: %s", strings.Join(plan.ReviewPacket.Sections, ", ")))
+			}
+			if len(plan.FollowOnSuggestions) > 0 {
+				bodyLines = append(bodyLines, fmt.Sprintf("Suggested next steps: %s", strings.Join(plan.FollowOnSuggestions, " | ")))
+			}
+			body = strings.Join(bodyLines, "\n")
+			payload, _ = json.Marshal(map[string]any{
+				"task_id":      taskRecord.ID,
+				"flow_node_id": flowNodeID,
+				"playbook":     plan.Playbook,
+				"context": map[string]any{
+					"work_type":         plan.WorkType,
+					"project_stage":     plan.ProjectStage,
+					"evidence_maturity": plan.EvidenceMaturity,
+					"risk_level":        plan.RiskLevel,
+				},
+				"planned_stages":        plan.PlannedStages,
+				"artifacts":             reviewArtifactPayload(plan.Artifacts),
+				"artifact_contract":     report.ArtifactContract,
+				"artifact_evidence":     plan.ArtifactEvidence,
+				"follow_on_suggestions": plan.FollowOnSuggestions,
+				"review_checklist":      report.ReviewChecklist,
+				"process_status":        report.ProcessStatus,
+				"missing_requirements":  report.MissingRequirements(),
+				"review_packet": map[string]any{
+					"summary":  plan.ReviewPacket.Summary,
+					"sections": plan.ReviewPacket.Sections,
+				},
+				"override": plan.Override,
+			})
 		}
-		if plan.RequiresReviewAndRefinement() {
-			title = "Review options and recommendation"
-		} else {
-			title = "Review planning artifacts and rubric"
-		}
-		bodyLines := []string{
-			"Flow advancement paused pending human review.",
-		}
-		if strings.TrimSpace(plan.ReviewPacket.Summary) != "" {
-			bodyLines[0] = plan.ReviewPacket.Summary
-		}
-		bodyLines = append(bodyLines,
-			"",
-			fmt.Sprintf("Playbook: %s", plan.Playbook),
-			fmt.Sprintf("Planning context: work_type=%s, stage=%s, evidence=%s, risk=%s", plan.WorkType, plan.ProjectStage, plan.EvidenceMaturity, plan.RiskLevel),
-			fmt.Sprintf("Planning process: %s", report.ProcessStatus),
-			fmt.Sprintf("Planned stages: %s", strings.Join(plan.PlannedStages, " -> ")),
-			fmt.Sprintf("Planned artifacts: %s", strings.Join(artifactTitles, ", ")),
-		)
-		if len(report.ReviewChecklist) > 0 {
-			bodyLines = append(bodyLines, fmt.Sprintf("Review checklist: %s", strings.Join(report.ReviewChecklist, " | ")))
-		}
-		if len(report.MissingRequirements()) > 0 {
-			bodyLines = append(bodyLines, fmt.Sprintf("Missing contract items: %s", strings.Join(report.MissingRequirements(), " | ")))
-		}
-		if plan.Override != nil && strings.TrimSpace(plan.Override.Reason) != "" {
-			bodyLines = append(bodyLines, fmt.Sprintf("Override reason: %s", plan.Override.Reason))
-		}
-		if len(plan.ReviewPacket.Sections) > 0 {
-			bodyLines = append(bodyLines, fmt.Sprintf("Review packet sections: %s", strings.Join(plan.ReviewPacket.Sections, ", ")))
-		}
-		if len(plan.FollowOnSuggestions) > 0 {
-			bodyLines = append(bodyLines, fmt.Sprintf("Suggested next steps: %s", strings.Join(plan.FollowOnSuggestions, " | ")))
-		}
-		body = strings.Join(bodyLines, "\n")
-		payload, _ = json.Marshal(map[string]any{
-			"task_id":      taskRecord.ID,
-			"flow_node_id": flowNodeID,
-			"playbook":     plan.Playbook,
-			"context": map[string]any{
-				"work_type":         plan.WorkType,
-				"project_stage":     plan.ProjectStage,
-				"evidence_maturity": plan.EvidenceMaturity,
-				"risk_level":        plan.RiskLevel,
-			},
-			"planned_stages":        plan.PlannedStages,
-			"artifacts":             plan.Artifacts,
-			"artifact_contract":     report.ArtifactContract,
-			"artifact_evidence":     plan.ArtifactEvidence,
-			"follow_on_suggestions": plan.FollowOnSuggestions,
-			"review_checklist":      report.ReviewChecklist,
-			"process_status":        report.ProcessStatus,
-			"missing_requirements":  report.MissingRequirements(),
-			"review_packet": map[string]any{
-				"summary":  plan.ReviewPacket.Summary,
-				"sections": plan.ReviewPacket.Sections,
-			},
-			"override": plan.Override,
-		})
 	}
-createInboxItem:
 	created, err := s.inbox.Create(ctx, repo.InboxItem{
 		OrganizationID:  taskRecord.OrganizationID,
 		ItemType:        "task_review",
@@ -534,6 +566,60 @@ createInboxItem:
 		"item_type":     created.ItemType,
 	})
 	return nil
+}
+
+func actorUUIDPtr(actor Actor) *uuid.UUID {
+	if actor.ID == uuid.Nil {
+		return nil
+	}
+	id := actor.ID
+	return &id
+}
+
+func reviewArtifactSummaries(artifacts []taskplan.PlannedArtifact) []string {
+	out := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		label := strings.TrimSpace(artifact.Title)
+		if label == "" {
+			label = strings.TrimSpace(artifact.Slug)
+		}
+		if label == "" {
+			continue
+		}
+		if artifact.Version > 0 {
+			label = fmt.Sprintf("%s (v%d)", label, artifact.Version)
+		}
+		if strings.TrimSpace(artifact.RepoPath) != "" {
+			label += " @ " + strings.TrimSpace(artifact.RepoPath)
+		}
+		out = append(out, label)
+	}
+	return out
+}
+
+func reviewArtifactPayload(artifacts []taskplan.PlannedArtifact) []map[string]any {
+	out := make([]map[string]any, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		item := map[string]any{
+			"slug":  artifact.Slug,
+			"title": artifact.Title,
+			"kind":  artifact.Kind,
+		}
+		if artifact.ArtifactID != "" {
+			item["artifact_id"] = artifact.ArtifactID
+		}
+		if artifact.RepoPath != "" {
+			item["repo_path"] = artifact.RepoPath
+		}
+		if artifact.Version > 0 {
+			item["version"] = artifact.Version
+		}
+		if artifact.ContentSHA256 != "" {
+			item["content_sha256"] = artifact.ContentSHA256
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error) {

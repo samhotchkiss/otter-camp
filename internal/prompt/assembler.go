@@ -19,9 +19,11 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
+	"github.com/samhotchkiss/otter-camp/internal/planningasset"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
 
@@ -142,6 +144,11 @@ type taskDependencyRepository interface {
 	ListOutbound(ctx context.Context, sourceType string, sourceID uuid.UUID) ([]repo.ProjectTaskDependency, error)
 }
 
+type planningArtifactRepository interface {
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.PlanningArtifact, error)
+	ListBySourceTask(ctx context.Context, taskID uuid.UUID) ([]repo.PlanningArtifact, error)
+}
+
 type agentRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
 }
@@ -203,6 +210,7 @@ type AssemblerOptions struct {
 	FlowNodeSkills  flowNodeSkillRepository
 	Subtasks        subtaskRepository
 	Dependencies    taskDependencyRepository
+	PlanningAssets  planningArtifactRepository
 	Agents          agentRepository
 	AgentSkills     agentSkillAttachmentRepository
 	Skills          skillRepository
@@ -239,6 +247,7 @@ type PromptAssembler struct {
 	flowNodeSkills flowNodeSkillRepository
 	subtasks       subtaskRepository
 	dependencies   taskDependencyRepository
+	planningAssets planningArtifactRepository
 	agents         agentRepository
 	agentSkills    agentSkillAttachmentRepository
 	skills         skillRepository
@@ -319,6 +328,7 @@ func NewPromptAssembler(opts AssemblerOptions) (*PromptAssembler, error) {
 		flowNodeSkills:      opts.FlowNodeSkills,
 		subtasks:            opts.Subtasks,
 		dependencies:        opts.Dependencies,
+		planningAssets:      opts.PlanningAssets,
 		agents:              opts.Agents,
 		agentSkills:         opts.AgentSkills,
 		skills:              opts.Skills,
@@ -391,6 +401,9 @@ func NewPromptAssembler(opts AssemblerOptions) (*PromptAssembler, error) {
 	}
 	if a.dependencies == nil {
 		a.dependencies = repo.NewProjectTaskDependencyRepo(opts.Pool)
+	}
+	if a.planningAssets == nil && opts.Pool != nil {
+		a.planningAssets = repo.NewPlanningArtifactRepo(opts.Pool)
 	}
 	if a.agents == nil {
 		a.agents = repo.NewAgentRepo(opts.Pool)
@@ -690,6 +703,12 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 		if flowTemplate != "" {
 			lines = append(lines, "Flow template: "+flowTemplate)
 		}
+		if artifacts := a.loadProjectPlanningArtifacts(ctx, session.ScopeID); len(artifacts) > 0 {
+			lines = append(lines, "Planning Artifacts:")
+			for _, artifact := range artifacts {
+				lines = append(lines, "- "+formatContextPlanningArtifact(artifact))
+			}
+		}
 	case "project_task":
 		lines = append(lines, "[Task Context]")
 		if taskCtx == nil {
@@ -713,6 +732,12 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 		}
 		if strings.TrimSpace(taskCtx.taskDescription) != "" {
 			lines = append(lines, "Description: "+strings.TrimSpace(taskCtx.taskDescription))
+		}
+		if len(taskCtx.planningArtifacts) > 0 {
+			lines = append(lines, "Relevant Planning Artifacts:")
+			for _, artifact := range taskCtx.planningArtifacts {
+				lines = append(lines, "- "+formatContextPlanningArtifact(artifact))
+			}
 		}
 		if len(taskCtx.acceptanceCriteria) > 0 {
 			lines = append(lines, "Acceptance Criteria:")
@@ -823,6 +848,7 @@ type projectTaskContext struct {
 	taskNumber         int
 	taskStatus         string
 	taskDescription    string
+	planningArtifacts  []taskplan.PlannedArtifact
 	acceptanceCriteria []string
 	currentFlowStep    string
 	currentFlowStatus  string
@@ -850,6 +876,7 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 		taskNumber:         taskRecord.TaskNumber,
 		taskStatus:         strings.TrimSpace(taskRecord.WorkStatus),
 		taskDescription:    taskDescription,
+		planningArtifacts:  a.loadTaskPlanningArtifacts(ctx, taskRecord),
 		acceptanceCriteria: parseTaskAcceptanceCriteria(taskRecord.Metadata),
 		flowNodeID:         taskRecord.CurrentFlowNodeID,
 		completedFlowSteps: make([]string, 0),
@@ -959,6 +986,61 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 	}
 
 	return out, nil
+}
+
+func (a *PromptAssembler) loadProjectPlanningArtifacts(ctx context.Context, projectID uuid.UUID) []taskplan.PlannedArtifact {
+	if a.planningAssets == nil {
+		return nil
+	}
+	records, err := a.planningAssets.ListByProject(ctx, projectID)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	artifacts := planningasset.PlannedArtifactsFromRecords(records)
+	if len(artifacts) > 4 {
+		return append([]taskplan.PlannedArtifact(nil), artifacts[:4]...)
+	}
+	return artifacts
+}
+
+func (a *PromptAssembler) loadTaskPlanningArtifacts(ctx context.Context, taskRecord repo.ProjectTask) []taskplan.PlannedArtifact {
+	if a.planningAssets != nil {
+		if taskArtifacts, err := a.planningAssets.ListBySourceTask(ctx, taskRecord.ID); err == nil && len(taskArtifacts) > 0 {
+			return planningasset.PlannedArtifactsFromRecords(taskArtifacts)
+		}
+		if projectArtifacts, err := a.planningAssets.ListByProject(ctx, taskRecord.ProjectID); err == nil && len(projectArtifacts) > 0 {
+			artifacts := planningasset.PlannedArtifactsFromRecords(projectArtifacts)
+			if len(artifacts) > 4 {
+				return append([]taskplan.PlannedArtifact(nil), artifacts[:4]...)
+			}
+			return artifacts
+		}
+	}
+	if plan, ok := taskplan.Parse(taskRecord.Metadata); ok {
+		return append([]taskplan.PlannedArtifact(nil), plan.Artifacts...)
+	}
+	return nil
+}
+
+func formatContextPlanningArtifact(artifact taskplan.PlannedArtifact) string {
+	label := strings.TrimSpace(artifact.Title)
+	if label == "" {
+		label = strings.TrimSpace(artifact.Slug)
+	}
+	if label == "" {
+		label = "planning artifact"
+	}
+	parts := []string{label}
+	if strings.TrimSpace(artifact.Kind) != "" {
+		parts = append(parts, "["+strings.TrimSpace(artifact.Kind)+"]")
+	}
+	if artifact.Version > 0 {
+		parts = append(parts, fmt.Sprintf("v%d", artifact.Version))
+	}
+	if strings.TrimSpace(artifact.RepoPath) != "" {
+		parts = append(parts, "@ "+strings.TrimSpace(artifact.RepoPath))
+	}
+	return strings.Join(parts, " ")
 }
 
 func flowStepLabel(node repo.FlowNode) string {

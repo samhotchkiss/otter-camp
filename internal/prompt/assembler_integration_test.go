@@ -14,7 +14,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/planningasset"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
@@ -352,6 +354,93 @@ func TestPromptAssemblerIntegrationTaskContextUsesDecomposedPrimaryDeliverable(t
 	}
 	if strings.Contains(assembled.SystemPrompt, "Rebuild taxonomy alignment for tags and categories.") {
 		t.Fatalf("prompt includes unrelated decomposed workstream context: %s", assembled.SystemPrompt)
+	}
+}
+
+func TestPromptAssemblerIntegrationTaskScopeIncludesLinkedProjectPlanningArtifacts(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org := createPromptOrg(t, ctx, pool)
+	project := createPromptProject(t, ctx, pool, org.ID)
+	agent := createPromptAgent(t, ctx, pool, org.ID, "task agent")
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     ptrString(repoRoot),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	description := "Write the PRD, implementation plan, acceptance criteria, and dependency log for the billing migration."
+	planningTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "PRD for billing migration",
+		Description:    ptrString(description),
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		CreatedByID:    ptrUUID(uuid.Nil),
+		Metadata:       taskplan.ApplyMetadata(json.RawMessage(`{}`), taskplan.Analyze("PRD for billing migration", &description)),
+	})
+	if err != nil {
+		t.Fatalf("create planning task: %v", err)
+	}
+
+	syncedPlan, err := planningasset.New(planningasset.Options{
+		Artifacts:    repo.NewPlanningArtifactRepo(pool),
+		Environments: repo.NewProjectEnvironmentRepo(pool),
+	}).SyncTask(ctx, planningTask, planningasset.Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("SyncTask: %v", err)
+	}
+	if len(syncedPlan.Artifacts) == 0 {
+		t.Fatalf("synced artifacts = %#v, want non-empty", syncedPlan.Artifacts)
+	}
+
+	downstreamTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Implement billing migration",
+		Description:    ptrString("Implement the approved billing migration."),
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		CreatedByID:    ptrUUID(uuid.Nil),
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create downstream task: %v", err)
+	}
+
+	session := createPromptSession(t, ctx, pool, org.ID, "project_task", downstreamTask.ID)
+	seedPromptMessages(t, ctx, pool, session.ID, 1)
+
+	assembler, err := NewPromptAssembler(AssemblerOptions{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	assembled, err := assembler.Assemble(ctx, AssemblyInput{SessionID: session.ID, AgentID: agent.ID})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+
+	firstArtifact := syncedPlan.Artifacts[0]
+	expectedLine := firstArtifact.Title + " [" + firstArtifact.Kind + "] v1 @ " + firstArtifact.RepoPath
+	if !strings.Contains(assembled.SystemPrompt, "Relevant Planning Artifacts:") || !strings.Contains(assembled.SystemPrompt, expectedLine) {
+		t.Fatalf("prompt missing linked planning artifact line:\n%s", assembled.SystemPrompt)
+	}
+
+	artifactPath := filepath.Join(repoRoot, filepath.FromSlash(firstArtifact.RepoPath))
+	content, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatalf("read linked planning artifact: %v", err)
+	}
+	if !strings.Contains(string(content), "Playbook: execution_spec") {
+		t.Fatalf("artifact content missing expected playbook marker:\n%s", string(content))
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
 
@@ -87,7 +88,7 @@ func TestPromptAssemblerOmitsTaskContextForOrgScope(t *testing.T) {
 
 func TestPromptAssemblerTaskContextBlockFormat(t *testing.T) {
 	assembled := assembleTaskContextPrompt(t)
-	expectedBlock := strings.Join([]string{
+	expectedLines := []string{
 		"[Task Context]",
 		"Task: OC-5: Build OtterCamp sales landing page",
 		"Project: Landing Site",
@@ -107,9 +108,114 @@ func TestPromptAssemblerTaskContextBlockFormat(t *testing.T) {
 		"- [pending] Add pricing table",
 		"Dependencies:",
 		"- OC-4: Finalize copy deck",
-	}, "\n")
-	if !strings.Contains(assembled.SystemPrompt, expectedBlock) {
-		t.Fatalf("task context block format mismatch.\nwant block:\n%s\n\ngot system prompt:\n%s", expectedBlock, assembled.SystemPrompt)
+	}
+	offset := 0
+	for _, want := range expectedLines {
+		next := strings.Index(assembled.SystemPrompt[offset:], want)
+		if next < 0 {
+			t.Fatalf("task context block missing %q after offset %d.\nprompt:\n%s", want, offset, assembled.SystemPrompt)
+		}
+		offset += next + len(want)
+	}
+}
+
+func TestPromptAssemblerProjectContextIncludesLinkedPlanningArtifacts(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session:  repo.ChatSession{ID: uuid.New(), OrganizationID: orgID, ScopeType: "project", ScopeID: projectID, Mode: "sync"},
+		agent:    repo.Agent{ID: uuid.New(), OrganizationID: orgID, SystemPrompt: "Agent"},
+		messages: []repo.ChatMessage{{SequenceNumber: 1, Role: "user", Content: "context"}},
+	})
+	assembler.projects = &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {ID: projectID, OrganizationID: orgID, DisplayName: "Landing Site", Description: "Marketing website refresh"},
+		},
+	}
+	assembler.planningAssets = &fakePlanningArtifactRepo{
+		byProject: map[uuid.UUID][]repo.PlanningArtifact{
+			projectID: {
+				{
+					ID:             uuid.New(),
+					OrganizationID: orgID,
+					ProjectID:      projectID,
+					ArtifactKind:   taskplan.ArtifactKindPRDSpec,
+					ArtifactSlug:   "prd",
+					Title:          "PRD / requirements spec",
+					RepoPath:       "planning/prd-spec/oc-7-prd.md",
+					CurrentVersion: 2,
+				},
+			},
+		},
+	}
+
+	assembled, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID: assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:   assembler.agents.(*fakeAgentRepo).agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("Assemble error = %v", err)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Planning Artifacts:\n- PRD / requirements spec [prd_spec] v2 @ planning/prd-spec/oc-7-prd.md") {
+		t.Fatalf("system prompt missing linked planning artifact:\n%s", assembled.SystemPrompt)
+	}
+}
+
+func TestPromptAssemblerTaskContextIncludesLinkedPlanningArtifacts(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session:  repo.ChatSession{ID: uuid.New(), OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID, Mode: "sync"},
+		agent:    repo.Agent{ID: uuid.New(), OrganizationID: orgID, SystemPrompt: "Agent"},
+		messages: []repo.ChatMessage{{SequenceNumber: 1, Role: "user", Content: "context"}},
+	})
+	assembler.projects = &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {ID: projectID, OrganizationID: orgID, DisplayName: "Billing Platform"},
+		},
+	}
+	assembler.tasks = &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     12,
+				Title:          "Implement billing migration",
+				Description:    strPtr("Ship the approved billing migration safely."),
+				WorkStatus:     "draft",
+				Metadata:       json.RawMessage(`{}`),
+			},
+		},
+	}
+	assembler.planningAssets = &fakePlanningArtifactRepo{
+		byTask: map[uuid.UUID][]repo.PlanningArtifact{
+			taskID: {
+				{
+					ID:             uuid.New(),
+					OrganizationID: orgID,
+					ProjectID:      projectID,
+					SourceTaskID:   taskID,
+					ArtifactKind:   taskplan.ArtifactKindPRDSpec,
+					ArtifactSlug:   "prd",
+					Title:          "PRD / requirements spec",
+					RepoPath:       "planning/prd-spec/oc-11-prd.md",
+					CurrentVersion: 3,
+				},
+			},
+		},
+	}
+
+	assembled, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID: assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:   assembler.agents.(*fakeAgentRepo).agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("Assemble error = %v", err)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Relevant Planning Artifacts:\n- PRD / requirements spec [prd_spec] v3 @ planning/prd-spec/oc-11-prd.md") {
+		t.Fatalf("system prompt missing task-linked planning artifact:\n%s", assembled.SystemPrompt)
 	}
 }
 
@@ -268,14 +374,18 @@ func TestReduceToolsToBudgetDropsDeprioritizedBeforePrioritizedAndKeepsCore(t *t
 func TestPromptAssemblerReturnsErrContextCompressedWhenOnlySummariesOverflow(t *testing.T) {
 	orgID := uuid.New()
 	assembler := mustUnitAssembler(t, unitAssemblerConfig{
-		session:             repo.ChatSession{ID: uuid.New(), OrganizationID: orgID, ScopeType: "organization", ScopeID: orgID, Mode: "sync"},
-		agent:               repo.Agent{ID: uuid.New(), OrganizationID: orgID, SystemPrompt: "Agent"},
-		messages:            []repo.ChatMessage{},
-		summaries:           []repo.ChatSummary{{FromSequence: 1, ToSequence: 100, SummaryText: strings.Repeat("summary ", 200)}},
-		defaultLayer6Budget: 20,
+		session:      repo.ChatSession{ID: uuid.New(), OrganizationID: orgID, ScopeType: "organization", ScopeID: orgID, Mode: "sync"},
+		agent:        repo.Agent{ID: uuid.New(), OrganizationID: orgID, SystemPrompt: "Agent"},
+		messages:     []repo.ChatMessage{},
+		summaries:    []repo.ChatSummary{{FromSequence: 1, ToSequence: 100, SummaryText: strings.Repeat("summary ", 1400)}},
+		modelProfile: repo.ModelProfile{LogicalProfileID: "main", ContextWindowTokens: 256},
 	})
 
-	_, err := assembler.Assemble(context.Background(), AssemblyInput{SessionID: assembler.sessions.(*fakeSessionRepo).session.ID, AgentID: assembler.agents.(*fakeAgentRepo).agent.ID})
+	_, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID:      assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:        assembler.agents.(*fakeAgentRepo).agent.ID,
+		ModelProfileID: "main",
+	})
 	if !errors.Is(err, ErrContextCompressed) {
 		t.Fatalf("Assemble error = %v, want ErrContextCompressed", err)
 	}
@@ -662,6 +772,25 @@ func (f *fakeDependencyRepo) ListOutbound(_ context.Context, sourceType string, 
 		return append([]repo.ProjectTaskDependency(nil), rows...), nil
 	}
 	return []repo.ProjectTaskDependency{}, nil
+}
+
+type fakePlanningArtifactRepo struct {
+	byProject map[uuid.UUID][]repo.PlanningArtifact
+	byTask    map[uuid.UUID][]repo.PlanningArtifact
+}
+
+func (f *fakePlanningArtifactRepo) ListByProject(_ context.Context, projectID uuid.UUID) ([]repo.PlanningArtifact, error) {
+	if rows, ok := f.byProject[projectID]; ok {
+		return append([]repo.PlanningArtifact(nil), rows...), nil
+	}
+	return nil, nil
+}
+
+func (f *fakePlanningArtifactRepo) ListBySourceTask(_ context.Context, taskID uuid.UUID) ([]repo.PlanningArtifact, error) {
+	if rows, ok := f.byTask[taskID]; ok {
+		return append([]repo.PlanningArtifact(nil), rows...), nil
+	}
+	return nil, nil
 }
 
 type fakeModelProfileRepo struct{ profile repo.ModelProfile }

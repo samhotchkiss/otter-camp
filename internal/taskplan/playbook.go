@@ -13,6 +13,16 @@ const (
 )
 
 const (
+	ArtifactKindDiscoveryPlan              = "discovery_plan"
+	ArtifactKindStrategyArtifact           = "strategy_artifact"
+	ArtifactKindPRDSpec                    = "prd_spec"
+	ArtifactKindBacklogStoryPack           = "backlog_story_pack"
+	ArtifactKindPreMortemReadinessArtifact = "pre_mortem_readiness_artifact"
+	ArtifactKindMetricsFramework           = "metrics_framework"
+	ArtifactKindGTMLaunchPlan              = "gtm_launch_plan"
+)
+
+const (
 	StageConcept    = "concept"
 	StageValidation = "validation"
 	StageDefinition = "definition"
@@ -39,8 +49,13 @@ const (
 )
 
 type PlannedArtifact struct {
-	Slug  string `json:"slug"`
-	Title string `json:"title"`
+	Slug          string `json:"slug"`
+	Title         string `json:"title"`
+	Kind          string `json:"kind,omitempty"`
+	ArtifactID    string `json:"artifact_id,omitempty"`
+	RepoPath      string `json:"repo_path,omitempty"`
+	Version       int    `json:"version,omitempty"`
+	ContentSHA256 string `json:"content_sha256,omitempty"`
 }
 
 var (
@@ -422,60 +437,98 @@ func selectPlaybook(text, workType, projectStage, evidenceMaturity, riskLevel st
 }
 
 func playbookArtifacts(playbook string) []PlannedArtifact {
+	kind := DefaultArtifactKindForPlaybook(playbook)
 	switch playbook {
 	case PlaybookDiscovery:
 		return []PlannedArtifact{
-			{Slug: "problem-brief", Title: "Problem brief"},
-			{Slug: "research-plan", Title: "Research plan"},
-			{Slug: "assumption-log", Title: "Assumption log"},
-			{Slug: "validation-plan", Title: "Validation plan"},
+			{Slug: "problem-brief", Title: "Problem brief", Kind: kind},
+			{Slug: "research-plan", Title: "Research plan", Kind: kind},
+			{Slug: "assumption-log", Title: "Assumption log", Kind: kind},
+			{Slug: "validation-plan", Title: "Validation plan", Kind: kind},
 		}
 	case PlaybookStrategy:
 		return []PlannedArtifact{
-			{Slug: "strategy-brief", Title: "Strategy brief"},
-			{Slug: "tradeoff-matrix", Title: "Tradeoff matrix"},
-			{Slug: "decision-log", Title: "Decision log"},
-			{Slug: "success-narrative", Title: "Success narrative"},
+			{Slug: "strategy-brief", Title: "Strategy brief", Kind: kind},
+			{Slug: "tradeoff-matrix", Title: "Tradeoff matrix", Kind: kind},
+			{Slug: "decision-log", Title: "Decision log", Kind: kind},
+			{Slug: "success-narrative", Title: "Success narrative", Kind: kind},
 		}
 	case PlaybookExecutionSpec:
 		return []PlannedArtifact{
-			{Slug: "prd", Title: "PRD / requirements spec"},
-			{Slug: "implementation-plan", Title: "Implementation plan"},
-			{Slug: "acceptance-criteria", Title: "Acceptance criteria"},
-			{Slug: "dependency-log", Title: "Dependency log"},
+			{Slug: "prd", Title: "PRD / requirements spec", Kind: kind},
+			{Slug: "implementation-plan", Title: "Implementation plan", Kind: kind},
+			{Slug: "acceptance-criteria", Title: "Acceptance criteria", Kind: kind},
+			{Slug: "dependency-log", Title: "Dependency log", Kind: kind},
 		}
 	case PlaybookBacklogDecomposition:
 		return []PlannedArtifact{
-			{Slug: "epic-breakdown", Title: "Epic breakdown"},
-			{Slug: "story-cards", Title: "Story cards"},
-			{Slug: "sequencing-plan", Title: "Sequencing plan"},
-			{Slug: "definition-of-done", Title: "Definition of done"},
+			{Slug: "epic-breakdown", Title: "Epic breakdown", Kind: kind},
+			{Slug: "story-cards", Title: "Story cards", Kind: kind},
+			{Slug: "sequencing-plan", Title: "Sequencing plan", Kind: kind},
+			{Slug: "definition-of-done", Title: "Definition of done", Kind: kind},
 		}
 	case PlaybookRiskReadiness:
 		return []PlannedArtifact{
-			{Slug: "risk-register", Title: "Risk register"},
-			{Slug: "premortem", Title: "Pre-mortem"},
-			{Slug: "mitigation-plan", Title: "Mitigation plan"},
-			{Slug: "readiness-checklist", Title: "Readiness checklist"},
+			{Slug: "risk-register", Title: "Risk register", Kind: kind},
+			{Slug: "premortem", Title: "Pre-mortem", Kind: kind},
+			{Slug: "mitigation-plan", Title: "Mitigation plan", Kind: kind},
+			{Slug: "readiness-checklist", Title: "Readiness checklist", Kind: kind},
 		}
 	case PlaybookMetrics:
 		return []PlannedArtifact{
-			{Slug: "metric-tree", Title: "Metric tree"},
-			{Slug: "instrumentation-plan", Title: "Instrumentation plan"},
-			{Slug: "dashboard-spec", Title: "Dashboard spec"},
-			{Slug: "review-cadence", Title: "Metric review cadence"},
+			{Slug: "metric-tree", Title: "Metric tree", Kind: kind},
+			{Slug: "instrumentation-plan", Title: "Instrumentation plan", Kind: kind},
+			{Slug: "dashboard-spec", Title: "Dashboard spec", Kind: kind},
+			{Slug: "review-cadence", Title: "Metric review cadence", Kind: kind},
 		}
 	case PlaybookGTMLaunch:
 		return []PlannedArtifact{
-			{Slug: "launch-brief", Title: "Launch brief"},
-			{Slug: "audience-messaging", Title: "Audience and messaging brief"},
-			{Slug: "channel-plan", Title: "Channel plan"},
-			{Slug: "launch-checklist", Title: "Launch checklist"},
+			{Slug: "launch-brief", Title: "Launch brief", Kind: kind},
+			{Slug: "audience-messaging", Title: "Audience and messaging brief", Kind: kind},
+			{Slug: "channel-plan", Title: "Channel plan", Kind: kind},
+			{Slug: "launch-checklist", Title: "Launch checklist", Kind: kind},
 		}
 	default:
 		return []PlannedArtifact{
-			{Slug: "implementation-plan", Title: "Implementation plan"},
+			{Slug: "implementation-plan", Title: "Implementation plan", Kind: kind},
 		}
+	}
+}
+
+func DefaultArtifactKindForPlaybook(playbook string) string {
+	switch playbook {
+	case PlaybookDiscovery:
+		return ArtifactKindDiscoveryPlan
+	case PlaybookStrategy:
+		return ArtifactKindStrategyArtifact
+	case PlaybookExecutionSpec:
+		return ArtifactKindPRDSpec
+	case PlaybookBacklogDecomposition:
+		return ArtifactKindBacklogStoryPack
+	case PlaybookRiskReadiness:
+		return ArtifactKindPreMortemReadinessArtifact
+	case PlaybookMetrics:
+		return ArtifactKindMetricsFramework
+	case PlaybookGTMLaunch:
+		return ArtifactKindGTMLaunchPlan
+	default:
+		return ArtifactKindPRDSpec
+	}
+}
+
+func NormalizeArtifactKind(value string) string {
+	trimmed := strings.TrimSpace(value)
+	switch trimmed {
+	case ArtifactKindDiscoveryPlan,
+		ArtifactKindStrategyArtifact,
+		ArtifactKindPRDSpec,
+		ArtifactKindBacklogStoryPack,
+		ArtifactKindPreMortemReadinessArtifact,
+		ArtifactKindMetricsFramework,
+		ArtifactKindGTMLaunchPlan:
+		return trimmed
+	default:
+		return ""
 	}
 }
 
