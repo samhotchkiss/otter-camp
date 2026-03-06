@@ -339,6 +339,101 @@ func TestProjectServiceDeleteRemovesProjectAndTaskScopedChatSessions(t *testing.
 	}
 }
 
+func TestProjectServiceArchiveClosesProjectAndTaskScopedChatSessions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	projectRepo := repo.NewProjectRepo(pool)
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	messageRepo := repo.NewChatMessageRepo(pool)
+
+	orgID, projectID := seedProject(t, ctx, pool)
+	taskID := seedProjectTask(t, ctx, pool, orgID, projectID, 1, "done")
+
+	projectSessionID := seedScopedChatSession(t, ctx, pool, orgID, "project", projectID)
+	taskSessionID := seedScopedChatSession(t, ctx, pool, orgID, "project_task", taskID)
+	orgSessionID := seedScopedChatSession(t, ctx, pool, orgID, "organization", orgID)
+
+	seedScopedChatMessage(t, ctx, pool, projectSessionID, "project transcript")
+	seedScopedChatMessage(t, ctx, pool, taskSessionID, "task transcript")
+
+	archived, err := svc.Archive(ctx, orgID, projectID)
+	if err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	if archived.Status != "archived" {
+		t.Fatalf("archive status = %q, want archived", archived.Status)
+	}
+
+	storedProject, err := projectRepo.GetByID(ctx, projectID)
+	if err != nil {
+		t.Fatalf("GetByID project: %v", err)
+	}
+	if storedProject.Status != "archived" {
+		t.Fatalf("stored project status = %q, want archived", storedProject.Status)
+	}
+
+	projectSession, err := sessionRepo.GetByID(ctx, projectSessionID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	if projectSession.Status != "closed" || projectSession.ClosedAt == nil {
+		t.Fatalf("project session = %+v, want status=closed with closed_at", projectSession)
+	}
+
+	taskSession, err := sessionRepo.GetByID(ctx, taskSessionID)
+	if err != nil {
+		t.Fatalf("GetByID task session: %v", err)
+	}
+	if taskSession.Status != "closed" || taskSession.ClosedAt == nil {
+		t.Fatalf("task session = %+v, want status=closed with closed_at", taskSession)
+	}
+
+	orgSession, err := sessionRepo.GetByID(ctx, orgSessionID)
+	if err != nil {
+		t.Fatalf("GetByID organization session: %v", err)
+	}
+	if orgSession.Status != "active" {
+		t.Fatalf("organization session status = %q, want active", orgSession.Status)
+	}
+
+	projectMessages, err := messageRepo.ListBySession(ctx, projectSessionID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	if len(projectMessages) != 1 || projectMessages[0].Content != "project transcript" {
+		t.Fatalf("project messages = %+v, want preserved transcript", projectMessages)
+	}
+
+	taskMessages, err := messageRepo.ListBySession(ctx, taskSessionID)
+	if err != nil {
+		t.Fatalf("ListBySession task messages: %v", err)
+	}
+	if len(taskMessages) != 1 || taskMessages[0].Content != "task transcript" {
+		t.Fatalf("task messages = %+v, want preserved transcript", taskMessages)
+	}
+
+	var activeScopedCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE status = 'active'
+		  AND (
+			(scope_type = 'project' AND scope_id = $1)
+			OR (scope_type = 'project_task' AND scope_id IN (
+				SELECT id
+				FROM project_task
+				WHERE project_id = $1
+			))
+		  )
+	`, projectID).Scan(&activeScopedCount); err != nil {
+		t.Fatalf("count active scoped sessions: %v", err)
+	}
+	if activeScopedCount != 0 {
+		t.Fatalf("active scoped sessions = %d, want 0", activeScopedCount)
+	}
+}
+
 func seedStarterAgent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, displayName, agentType string) uuid.UUID {
 	t.Helper()
 	created, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
@@ -746,6 +841,22 @@ func seedScopedChatSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 		t.Fatalf("create %s chat session: %v", scopeType, err)
 	}
 	return session.ID
+}
+
+func seedScopedChatMessage(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sessionID uuid.UUID, content string) uuid.UUID {
+	t.Helper()
+
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: sessionID,
+		Role:      "user",
+		Content:   content,
+		Status:    "final",
+		Metadata:  json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create scoped chat message: %v", err)
+	}
+	return message.ID
 }
 
 func ensureProjectTaskTable(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
