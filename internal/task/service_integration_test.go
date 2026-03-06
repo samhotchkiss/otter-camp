@@ -104,6 +104,55 @@ func TestTaskServiceIntegrationStatusLifecycleAndEvents(t *testing.T) {
 	}
 }
 
+func TestTaskServiceIntegrationRejectsQueueWhenOutstandingProjectGateExistsEX256(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	gateTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Bootstrap governance gate",
+		WorkStatus:     "draft",
+		BlocksScope:    "all",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{"bootstrap_gate":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create gate task: %v", err)
+	}
+
+	regularTask, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Regular queued task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask regular: %v", err)
+	}
+
+	_, err = svc.TransitionStatus(ctx, regularTask.ID, "queued", Actor{Type: "system"})
+	if !errors.Is(err, ErrProjectGateBlockingQueue) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrProjectGateBlockingQueue", err)
+	}
+	if !strings.Contains(err.Error(), gateTask.Title) {
+		t.Fatalf("error = %q, want gate title context", err.Error())
+	}
+
+	stored, err := taskRepo.GetByID(ctx, regularTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID regular task: %v", err)
+	}
+	if stored.WorkStatus != "draft" {
+		t.Fatalf("regular task work_status = %q, want draft after blocked queue attempt", stored.WorkStatus)
+	}
+}
+
 func TestTaskServiceIntegrationHumanApprovalGate(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

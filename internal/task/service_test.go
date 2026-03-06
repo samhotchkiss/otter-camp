@@ -270,6 +270,92 @@ func TestTransitionStatusDraftToQueuedWithFlowTemplateSucceeds(t *testing.T) {
 	}
 }
 
+func TestTransitionStatusDraftToQueuedBlockedByOutstandingProjectGateEX256(t *testing.T) {
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	gateTaskID := uuid.New()
+	regularTaskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			gateTaskID: {
+				ID:             gateTaskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     1,
+				Title:          "Bootstrap governance gate",
+				WorkStatus:     "draft",
+				BlocksScope:    "all",
+				FlowTemplateID: &flowTemplateID,
+				CreatedByType:  "system",
+			},
+			regularTaskID: {
+				ID:             regularTaskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     2,
+				Title:          "Regular task",
+				WorkStatus:     "draft",
+				BlocksScope:    "none",
+				FlowTemplateID: &flowTemplateID,
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: validExecutableTemplateNodes(flowTemplateID),
+	}
+	_, err := svc.TransitionStatus(context.Background(), regularTaskID, "queued", Actor{Type: "system"})
+	if !errors.Is(err, ErrProjectGateBlockingQueue) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrProjectGateBlockingQueue", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "Bootstrap governance gate") {
+		t.Fatalf("error = %q, want gate title context", got)
+	}
+
+	stored, getErr := taskRepo.GetByID(context.Background(), regularTaskID)
+	if getErr != nil {
+		t.Fatalf("GetByID regular task: %v", getErr)
+	}
+	if stored.WorkStatus != "draft" {
+		t.Fatalf("work_status = %q, want draft after blocked queue attempt", stored.WorkStatus)
+	}
+}
+
+func TestTransitionStatusDraftToQueuedAllowsOutstandingGateTaskEX256(t *testing.T) {
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	gateTaskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			gateTaskID: {
+				ID:             gateTaskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     1,
+				Title:          "Bootstrap governance gate",
+				WorkStatus:     "draft",
+				BlocksScope:    "all",
+				FlowTemplateID: &flowTemplateID,
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: validExecutableTemplateNodes(flowTemplateID),
+	}
+	updated, err := svc.TransitionStatus(context.Background(), gateTaskID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued gate: %v", err)
+	}
+	if updated.WorkStatus != "queued" {
+		t.Fatalf("work_status = %q, want queued", updated.WorkStatus)
+	}
+}
+
 func TestTransitionStatusDraftToQueuedWithFlowTemplateRequiresPMWhenProjectConfigured(t *testing.T) {
 	taskID := uuid.New()
 	projectID := uuid.New()
@@ -1074,6 +1160,30 @@ func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTas
 		return repo.ProjectTask{}, repo.ErrNotFound
 	}
 	return task, nil
+}
+
+func (f *fakeTaskRepo) ListByProject(_ context.Context, projectID uuid.UUID, statuses ...string) ([]repo.ProjectTask, error) {
+	items := make([]repo.ProjectTask, 0)
+	allowed := make(map[string]struct{}, len(statuses))
+	for _, status := range statuses {
+		normalized := strings.ToLower(strings.TrimSpace(status))
+		if normalized == "" {
+			continue
+		}
+		allowed[normalized] = struct{}{}
+	}
+	for _, task := range f.tasks {
+		if task.ProjectID != projectID {
+			continue
+		}
+		if len(allowed) > 0 {
+			if _, ok := allowed[strings.ToLower(strings.TrimSpace(task.WorkStatus))]; !ok {
+				continue
+			}
+		}
+		items = append(items, task)
+	}
+	return items, nil
 }
 
 func (f *fakeTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.ProjectTask, error) {

@@ -5,6 +5,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -204,7 +205,7 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 	}
 }
 
-func TestTaskQueueProcessorIntegrationQueuedNonGateTaskWaitsForOutstandingGate(t *testing.T) {
+func TestTaskQueueProcessorIntegrationQueueRejectsNonGateTaskWhileOutstandingGateExistsEX256(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
 	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
@@ -248,17 +249,15 @@ func TestTaskQueueProcessorIntegrationQueuedNonGateTaskWaitsForOutstandingGate(t
 		return gate.WorkStatus == "in_progress", nil
 	})
 
-	if _, err := fx.tasks.TransitionStatus(ctx, regularTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
-		t.Fatalf("TransitionStatus regular queued: %v", err)
+	if _, err := fx.tasks.TransitionStatus(ctx, regularTask.ID, "queued", tasksvc.Actor{Type: "system"}); !errors.Is(err, tasksvc.ErrProjectGateBlockingQueue) {
+		t.Fatalf("TransitionStatus regular queued err = %v, want ErrProjectGateBlockingQueue", err)
 	}
-
-	time.Sleep(750 * time.Millisecond)
 	regularAfter, err := taskRepo.GetByID(ctx, regularTask.ID)
 	if err != nil {
 		t.Fatalf("GetByID regular: %v", err)
 	}
-	if regularAfter.WorkStatus != "queued" {
-		t.Fatalf("regular task work_status = %q, want queued while gate is outstanding", regularAfter.WorkStatus)
+	if regularAfter.WorkStatus != "draft" {
+		t.Fatalf("regular task work_status = %q, want draft while gate is outstanding", regularAfter.WorkStatus)
 	}
 }
 
@@ -305,20 +304,12 @@ func TestTaskQueueProcessorIntegrationCompletingGateStartsNextQueuedTask(t *test
 		return gate.WorkStatus == "in_progress", nil
 	})
 
-	if _, err := fx.tasks.TransitionStatus(ctx, regularTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
-		t.Fatalf("TransitionStatus regular queued: %v", err)
-	}
-	time.Sleep(250 * time.Millisecond)
-	regularBefore, err := taskRepo.GetByID(ctx, regularTask.ID)
-	if err != nil {
-		t.Fatalf("GetByID regular before gate done: %v", err)
-	}
-	if regularBefore.WorkStatus != "queued" {
-		t.Fatalf("regular task work_status before gate completion = %q, want queued", regularBefore.WorkStatus)
-	}
-
 	if _, err := fx.tasks.TransitionStatus(ctx, gateTask.ID, "done", tasksvc.Actor{Type: "system", AllowDoneBypass: true}); err != nil {
 		t.Fatalf("TransitionStatus gate done: %v", err)
+	}
+
+	if _, err := fx.tasks.TransitionStatus(ctx, regularTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus regular queued after gate done: %v", err)
 	}
 
 	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
@@ -2020,6 +2011,20 @@ func seedTaskQueueFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
 		t.Fatalf("update review flow edge: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create review flow node: %v", err)
+	}
+	startNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, startNode); err != nil {
+		t.Fatalf("update start flow node next edge: %v", err)
 	}
 	template.StartNodeID = &startNode.ID
 	if _, err := templateRepo.Update(ctx, template); err != nil {
