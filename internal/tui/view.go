@@ -844,10 +844,8 @@ func (m Model) renderMainPanel(innerW, innerH int, focused bool, layout layoutSt
 		}
 	case ViewProject:
 		// Show selected project name in title for orientation
-		if m.workspace.selectedProject != nil && m.workspace.selectedProject.DisplayName != "" {
-			titleText = truncate(strings.ToUpper(m.workspace.selectedProject.DisplayName), cw-2)
-		} else if nodeID := "project-" + m.workspace.selectedProjectID; m.workspace.nodes[nodeID] != nil {
-			titleText = truncate(strings.ToUpper(m.workspace.nodes[nodeID].Label), cw-2)
+		if projectLabel := strings.TrimSpace(m.workspace.projectDisplayName(m.workspace.selectedProjectID)); projectLabel != "" {
+			titleText = truncate(strings.ToUpper(projectLabel), cw-2)
 		}
 	case ViewTask:
 		// Show "OC-N: Title" in panel header for orientation
@@ -982,8 +980,8 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 	lines = append(lines, "")
 	boardTitle := "Task Board"
 	if m.workspace.selectedProjectID != "" {
-		if projNode := m.workspace.nodes["project-"+m.workspace.selectedProjectID]; projNode != nil {
-			boardTitle = projNode.Label + " — Task Board"
+		if projectLabel := strings.TrimSpace(m.workspace.projectDisplayName(m.workspace.selectedProjectID)); projectLabel != "" {
+			boardTitle = projectLabel + " — Task Board"
 		}
 	}
 	lines = append(lines, styleLabel.Render(boardTitle))
@@ -1420,7 +1418,10 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 	proj := m.workspace.selectedProject
 
 	// Title row: project name left, delivery mode right
-	titleText := node.Label
+	titleText := strings.TrimSpace(m.workspace.projectDisplayName(m.workspace.selectedProjectID))
+	if titleText == "" {
+		titleText = node.Label
+	}
 	if proj != nil && strings.TrimSpace(proj.DeliveryMode) != "" {
 		pad := width - len(titleText) - len(proj.DeliveryMode)
 		if pad > 1 {
@@ -2841,10 +2842,8 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 		if isTaskPane {
 			projectName = m.taskPaneProjectName(m.activeTaskRecord())
 		}
-		if projectName == "" && m.workspace.selectedProject != nil && m.workspace.selectedProject.DisplayName != "" {
-			projectName = m.workspace.selectedProject.DisplayName
-		} else if node := m.workspace.nodes["project-"+m.workspace.selectedProjectID]; node != nil {
-			projectName = node.Label
+		if projectName == "" {
+			projectName = m.workspace.projectDisplayName(m.workspace.selectedProjectID)
 		}
 		if projectName != "" {
 			sessionLabel = sessionLabel + " › " + projectName

@@ -109,6 +109,7 @@ The sidebar mirrors the session sidebar from the web UI spec — the operator's 
 ### Behaviors
 
 - Sessions grouped by scope: org at top, then projects with their task sessions nested.
+- Project labels shown in the sidebar, project view header, dashboard task-board header, and task context must use one shared resolver: `project.display_name` first, then `project.slug`, then a stable generic fallback such as "Untitled project". Raw `Project <id-fragment>` placeholders must not be shown to the operator.
 - **Unread indicator** (`*`) on sessions with unseen messages. Bubbles up: if any task in a project has unread, the project entry shows `*` too.
 - Selecting a session (Enter) switches the chat pane to that session. Main content does not change.
 - j/k navigates up/down the list. Enter selects. Folding/unfolding project groups with l/h (expand/collapse).

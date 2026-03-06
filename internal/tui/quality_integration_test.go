@@ -169,6 +169,69 @@ func TestConnectionConnectedLoadsActiveProjectsIntoSidebarEX244(t *testing.T) {
 	}
 }
 
+func TestSidebarAndDashboardUseProjectDisplayNameWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjects: func(context.Context) ([]SidebarProjectItem, error) {
+			return []SidebarProjectItem{{ID: "proj-display", Slug: "display-slug", DisplayName: "Display Project"}}, nil
+		},
+		LoadProjectDetail: func(_ context.Context, projectID string) (*ProjectDetail, error) {
+			if projectID != "proj-display" {
+				t.Fatalf("LoadProjectDetail projectID = %q, want proj-display", projectID)
+			}
+			return &ProjectDetail{ID: projectID, Slug: "display-slug", DisplayName: "Display Project"}, nil
+		},
+	})
+
+	model = connectAndLoadSidebar(t, model)
+	model.workspace.selectedProjectID = "proj-display"
+	model = pressRealtimeMsg(model, loadProjectDetailCmd("proj-display", model.runtimeHints)())
+
+	gotProjects := model.workspace.existingProjects()
+	if len(gotProjects) != 1 || gotProjects[0].DisplayName != "Display Project" {
+		t.Fatalf("projects after detail load = %+v, want display name label", gotProjects)
+	}
+
+	rendered := strings.Join(model.renderDashboardView(130, 30), "\n")
+	if !strings.Contains(rendered, "Display Project — Task Board") {
+		t.Fatalf("dashboard header missing resolved display name:\n%s", rendered)
+	}
+}
+
+func TestSidebarAndDashboardUseProjectSlugWhenDisplayNameMissing(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjects: func(context.Context) ([]SidebarProjectItem, error) {
+			return []SidebarProjectItem{{ID: "proj-slug", Slug: "slug-only-project"}}, nil
+		},
+		LoadProjectDetail: func(_ context.Context, projectID string) (*ProjectDetail, error) {
+			if projectID != "proj-slug" {
+				t.Fatalf("LoadProjectDetail projectID = %q, want proj-slug", projectID)
+			}
+			return &ProjectDetail{ID: projectID, Slug: "slug-only-project"}, nil
+		},
+	})
+
+	model = connectAndLoadSidebar(t, model)
+	model.workspace.selectedProjectID = "proj-slug"
+	model = pressRealtimeMsg(model, loadProjectDetailCmd("proj-slug", model.runtimeHints)())
+
+	gotProjects := model.workspace.existingProjects()
+	if len(gotProjects) != 1 || gotProjects[0].DisplayName != "slug-only-project" {
+		t.Fatalf("projects after detail load = %+v, want slug label", gotProjects)
+	}
+
+	rendered := strings.Join(model.renderDashboardView(130, 30), "\n")
+	if !strings.Contains(rendered, "slug-only-project — Task Board") {
+		t.Fatalf("dashboard header missing slug fallback:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Project proj-sl") {
+		t.Fatalf("dashboard header leaked raw project-id fragment:\n%s", rendered)
+	}
+}
+
 func TestFreshStartupMatchesRunningClientProjectListEX244(t *testing.T) {
 	t.Parallel()
 
