@@ -80,7 +80,9 @@ func runTUICommand(args []string) int {
 
 	runtimeHints := tuiapp.DetectRuntimeHints(os.Getenv)
 	runtimeHints.FirstRun = !stateExists
-	runtimeHints.BinaryStale = strings.TrimSpace(versionpkg.CachedStartupFreshnessWarning()) != ""
+	freshness := versionpkg.CachedStartupFreshness()
+	runtimeHints.BinaryStale = freshness.Stale
+	runtimeHints.BinaryMetadataWarning = freshness.MetadataOnly()
 
 	// Use a pointer so the SendChatMessage closure can reference program after it's created.
 	var program *tea.Program

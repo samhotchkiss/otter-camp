@@ -193,6 +193,7 @@ type TaskDetailItem struct {
 type RuntimeHints struct {
 	ModifierReliabilityUncertain bool
 	BinaryStale                  bool
+	BinaryMetadataWarning        bool
 	FirstRun                     bool
 	Clock                        func() time.Time
 	ColdOpenDuration             time.Duration
