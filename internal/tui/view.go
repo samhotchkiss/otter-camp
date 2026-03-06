@@ -2844,17 +2844,8 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 }
 
 func (m Model) renderTaskPaneTabs(width int) string {
-	tabs := []struct {
-		tab   taskPaneTab
-		label string
-	}{
-		{taskPaneTabJournal, "Journal"},
-		{taskPaneTabEvents, "Events"},
-		{taskPaneTabDiscussion, "Discussion"},
-		{taskPaneTabTrace, "Trace"},
-	}
-	parts := make([]string, 0, len(tabs)+1)
-	for _, item := range tabs {
+	parts := make([]string, 0, len(taskPaneTabs)+1)
+	for _, item := range taskPaneTabs {
 		label := " " + item.label + " "
 		if item.tab == m.taskPaneTab {
 			parts = append(parts, styleActive.Render("["+label+"]"))
@@ -2882,10 +2873,14 @@ func (m Model) renderTaskSurface(width int) []string {
 	case taskPaneTabEvents:
 		return m.renderTaskEventMessages(width)
 	case taskPaneTabTrace:
-		return m.renderChatMessages(width)
+		return m.renderTaskTraceMessages(width)
 	default:
 		return m.renderChatMessages(width)
 	}
+}
+
+type chatRenderOptions struct {
+	fullToolResults bool
 }
 
 func (m Model) renderTaskJournalMessages(width int) []string {
@@ -3088,7 +3083,15 @@ func renderScopeIndicator(active ChatScope, compact bool) string {
 	return strings.Join(parts, " ")
 }
 
+func (m Model) renderTaskTraceMessages(width int) []string {
+	return m.renderChatMessagesWithOptions(width, chatRenderOptions{fullToolResults: true})
+}
+
 func (m Model) renderChatMessages(width int) []string {
+	return m.renderChatMessagesWithOptions(width, chatRenderOptions{})
+}
+
+func (m Model) renderChatMessagesWithOptions(width int, opts chatRenderOptions) []string {
 	if len(m.chatMessages) == 0 {
 		center := func(s string) string {
 			return lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Foreground(colSubtle).Render(s)
@@ -3227,12 +3230,14 @@ func (m Model) renderChatMessages(width int) []string {
 					lines = append(lines, styleSubtle.Render("    (no result yet)"))
 					continue
 				}
-				const maxToolResultRunes = 400
-				runes := []rune(result)
 				truncated := false
-				if len(runes) > maxToolResultRunes {
-					result = string(runes[:maxToolResultRunes])
-					truncated = true
+				if !opts.fullToolResults {
+					const maxToolResultRunes = 400
+					runes := []rune(result)
+					if len(runes) > maxToolResultRunes {
+						result = string(runes[:maxToolResultRunes])
+						truncated = true
+					}
 				}
 				for _, rawLine := range strings.Split(result, "\n") {
 					for _, wrapped := range wrapText(rawLine, maxInt(8, width-4)) {
@@ -3242,6 +3247,7 @@ func (m Model) renderChatMessages(width int) []string {
 				if truncated {
 					// EX-097/EX-197: show how much was cut so users know full output exists.
 					full := len([]rune(strings.TrimSpace(tc.Result)))
+					const maxToolResultRunes = 400
 					lines = append(lines, styleMuted.Render(fmt.Sprintf("    … (%d of %d chars shown)", maxToolResultRunes, full)))
 				}
 			}

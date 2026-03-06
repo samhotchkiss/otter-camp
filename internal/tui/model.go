@@ -189,6 +189,24 @@ const (
 	taskPaneTabTrace      taskPaneTab = "trace"
 )
 
+type taskPaneTabDescriptor struct {
+	tab   taskPaneTab
+	label string
+}
+
+var taskPaneTabs = []taskPaneTabDescriptor{
+	{tab: taskPaneTabJournal, label: "Journal"},
+	{tab: taskPaneTabEvents, label: "Events"},
+	{tab: taskPaneTabDiscussion, label: "Discussion"},
+	{tab: taskPaneTabTrace, label: "Trace"},
+}
+
+type taskPaneTabHitBox struct {
+	tab   taskPaneTab
+	start int
+	end   int
+}
+
 type taskPaneMode string
 
 const (
@@ -1250,8 +1268,10 @@ func (m Model) updateMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	}
 
 	if target != m.focus {
-		m.focus = target
+		m.setFocus(target)
 		m.statusMessage = ""
+	} else if target == ChatPanel && m.taskPaneEnabled() {
+		m.setFocus(ChatPanel)
 	}
 
 	// Y coordinate within the panel content area (subtract top border).
@@ -1268,6 +1288,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	case ChatPanel:
 		if contentY == 0 {
 			return m.mouseClickChatHeader(msg.X, layout)
+		}
+		if m.taskPaneEnabled() && contentY == 2 {
+			return m.mouseClickTaskPaneTabs(msg.X, layout)
 		}
 	}
 	return m, nil
@@ -1534,19 +1557,8 @@ func (m Model) mouseClickProject(contentY int) (Model, tea.Cmd) {
 // mouseClickChatHeader maps a click on the chat header to a scope toggle.
 // The header renders: session_label  ·  [task] [project] [org]
 func (m Model) mouseClickChatHeader(absX int, layout layoutState) (Model, tea.Cmd) {
-	chatPanelStart := 0
-	if layout.visible[0] {
-		chatPanelStart += layout.widths[0] + 1
-	}
-	if layout.visible[1] {
-		chatPanelStart += layout.widths[1] + 1
-	}
-	localX := absX - chatPanelStart - 2 // -1 border, -1 padding
-
-	cw := layout.widths[2] - 4
-	if cw < 4 {
-		cw = 4
-	}
+	localX := chatPanelLocalX(absX, layout)
+	cw := chatPanelContentWidth(layout)
 
 	// Determine thinking badge width (same condition as renderChatPanel).
 	isThinking := m.activeTurn && (m.activeTurnSessionID == "" ||
@@ -1597,6 +1609,83 @@ func (m Model) mouseClickChatHeader(absX int, layout layoutState) (Model, tea.Cm
 
 	cmd := m.switchScope(newScope)
 	return m, cmd
+}
+
+func (m Model) mouseClickTaskPaneTabs(absX int, layout layoutState) (Model, tea.Cmd) {
+	if !m.taskPaneEnabled() {
+		return m, nil
+	}
+	tab, ok := taskPaneTabAt(chatPanelLocalX(absX, layout), chatPanelContentWidth(layout))
+	if !ok {
+		return m, nil
+	}
+	task := m.activeTaskRecord()
+	if task == nil {
+		return m, nil
+	}
+	scope := m.activeScope
+	if tab != taskPaneTabDiscussion {
+		scope = ScopeTask
+	}
+	return m, m.applyTaskPaneSelection(task, scope, tab, false)
+}
+
+func chatPanelLocalX(absX int, layout layoutState) int {
+	chatPanelStart := 0
+	if layout.visible[0] {
+		chatPanelStart += layout.widths[0] + 1
+	}
+	if layout.visible[1] {
+		chatPanelStart += layout.widths[1] + 1
+	}
+	return absX - chatPanelStart - 2 // -1 border, -1 padding
+}
+
+func chatPanelContentWidth(layout layoutState) int {
+	cw := layout.widths[2] - 4
+	if cw < 4 {
+		cw = 4
+	}
+	return cw
+}
+
+func taskPaneTabHitBoxes(width int) []taskPaneTabHitBox {
+	if width <= 0 {
+		return nil
+	}
+	hits := make([]taskPaneTabHitBox, 0, len(taskPaneTabs))
+	cursor := 0
+	for i, item := range taskPaneTabs {
+		tokenWidth := len([]rune("[ " + item.label + " ]"))
+		if cursor < width {
+			end := cursor + tokenWidth
+			if end > width {
+				end = width
+			}
+			hits = append(hits, taskPaneTabHitBox{
+				tab:   item.tab,
+				start: cursor,
+				end:   end,
+			})
+		}
+		cursor += tokenWidth
+		if i < len(taskPaneTabs)-1 {
+			cursor++
+		}
+	}
+	return hits
+}
+
+func taskPaneTabAt(localX, width int) (taskPaneTab, bool) {
+	if localX < 0 {
+		return "", false
+	}
+	for _, hit := range taskPaneTabHitBoxes(width) {
+		if localX >= hit.start && localX < hit.end {
+			return hit.tab, true
+		}
+	}
+	return "", false
 }
 
 func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
