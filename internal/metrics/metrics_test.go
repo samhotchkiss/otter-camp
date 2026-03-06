@@ -35,6 +35,7 @@ func TestMetricsHandlerExposesRequiredMetricFamilies(t *testing.T) {
 	SetMemoryItemsTotal("candidate", 8)
 	RecordAgentTurn("started")
 	RecordAgentTurn("completed")
+	RecordAgentTurnDispatchSuppressed("duplicate_enqueue")
 
 	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	metricsRec := httptest.NewRecorder()
@@ -53,6 +54,7 @@ func TestMetricsHandlerExposesRequiredMetricFamilies(t *testing.T) {
 		`ottercamp_memory_items_total{status="candidate"} 8`,
 		`ottercamp_agent_turns_total{status="started"} 1`,
 		`ottercamp_agent_turns_total{status="completed"} 1`,
+		`ottercamp_agent_turn_dispatch_suppressed_total{reason="duplicate_enqueue"} 1`,
 	}
 	for _, line := range required {
 		if !strings.Contains(body, line) {
@@ -187,6 +189,7 @@ func resetMetricsForTests() {
 	JobQueueDepth.Reset()
 	MemoryItemsTotal.Reset()
 	AgentTurnsTotal.Reset()
+	AgentTurnDispatchSuppressedTotal.Reset()
 }
 
 func queryFromRows(rows metricsRows, queryErr error) metricsQueryFunc {

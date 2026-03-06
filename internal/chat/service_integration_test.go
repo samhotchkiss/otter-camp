@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -354,6 +355,110 @@ func TestChatServiceIntegrationCancelTurnSetsCompletedAt(t *testing.T) {
 	}
 	if completedAt == nil {
 		t.Fatal("completed_at is NULL, want non-NULL")
+	}
+}
+
+func TestChatServiceIntegrationCancelTurnDrainsLogicalMessageDispatches(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	agent := seedChatServiceAgent(t, ctx, pool, org.ID)
+	user := seedChatServiceUser(t, ctx, pool, org.ID, "cancel-logical", "member")
+
+	svc := newIntegrationService(t, pool, nil)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+	authorType := "human_user"
+	message, err := svc.AppendMessage(ctx, AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &user.ID,
+		Role:       "user",
+		Content:    "cancel this work",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	turnRepo := repo.NewChatTurnRepo(pool)
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	startedAt := time.Now().UTC()
+	activeCycleID := uuid.New()
+	retryCycleID := uuid.New()
+	active, err := turnRepo.Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		CycleID:          &activeCycleID,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "in_progress",
+		StartedAt:        &startedAt,
+		TriggerMessageID: &message.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create active turn: %v", err)
+	}
+	if _, err := turnRepo.Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       2,
+		CycleID:          &retryCycleID,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "pending",
+		TriggerMessageID: &message.ID,
+		RetryCount:       1,
+	}); err != nil {
+		t.Fatalf("create retry turn: %v", err)
+	}
+	if _, err := sessionRepo.UpdateCurrentTurn(ctx, session.ID, &active.ID); err != nil {
+		t.Fatalf("update current turn: %v", err)
+	}
+
+	worker := jobqueue.New(pool, nil, jobqueue.Config{})
+	if _, err := worker.Enqueue(ctx, nil, "agent_turn", 70, map[string]any{
+		"session_id":  session.ID,
+		"message_id":  message.ID,
+		"retry_count": 1,
+	}, nil); err != nil {
+		t.Fatalf("enqueue retry job: %v", err)
+	}
+
+	if err := svc.CancelTurn(ctx, active.ID, "integration-test"); err != nil {
+		t.Fatalf("CancelTurn: %v", err)
+	}
+
+	turns, err := turnRepo.ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 2 {
+		t.Fatalf("turn count = %d, want 2", len(turns))
+	}
+	for _, turn := range turns {
+		if turn.Status != "cancelled" {
+			t.Fatalf("turn %s status = %s, want cancelled", turn.ID, turn.Status)
+		}
+	}
+
+	updatedMessage, err := repo.NewChatMessageRepo(pool).GetByID(ctx, message.ID)
+	if err != nil {
+		t.Fatalf("GetByID message: %v", err)
+	}
+	if !AgentTurnDispatchCancelled(updatedMessage.Metadata) {
+		t.Fatalf("expected cancelled dispatch metadata, got %s", string(updatedMessage.Metadata))
+	}
+
+	var activeJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE group_key = $1
+		  AND status IN ('pending', 'claimed')
+	`, jobqueue.AgentTurnGroupKey(session.ID, message.ID)).Scan(&activeJobs); err != nil {
+		t.Fatalf("count active queued jobs: %v", err)
+	}
+	if activeJobs != 0 {
+		t.Fatalf("active queued jobs = %d, want 0", activeJobs)
 	}
 }
 

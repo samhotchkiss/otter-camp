@@ -53,6 +53,10 @@ var (
 		Name: "ottercamp_agent_turns_total",
 		Help: "Total agent turns by status.",
 	}, []string{"status"})
+	AgentTurnDispatchSuppressedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ottercamp_agent_turn_dispatch_suppressed_total",
+		Help: "Total suppressed agent turn dispatch attempts by reason.",
+	}, []string{"reason"})
 )
 
 func Register() {
@@ -64,6 +68,7 @@ func Register() {
 			JobQueueDepth,
 			MemoryItemsTotal,
 			AgentTurnsTotal,
+			AgentTurnDispatchSuppressedTotal,
 		)
 	})
 }
@@ -136,6 +141,11 @@ func RecordModelTokens(provider, model string, inputTokens, outputTokens, cacheR
 func RecordAgentTurn(status string) {
 	Register()
 	AgentTurnsTotal.WithLabelValues(normalizeLabel(status, "unknown")).Inc()
+}
+
+func RecordAgentTurnDispatchSuppressed(reason string) {
+	Register()
+	AgentTurnDispatchSuppressedTotal.WithLabelValues(normalizeLabel(reason, "unknown")).Inc()
 }
 
 func SetJobQueueDepth(jobType, status string, count float64) {

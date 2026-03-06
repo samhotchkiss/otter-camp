@@ -507,8 +507,8 @@ func TestTurnEngineIntegrationAsyncExecutionSessionDuplicateDeliveryDoesNotCreat
 	}
 
 	jobs := loadAgentTurnJobsForMessage(t, ctx, fixture.pool, taskSession.ID, userMessage.ID)
-	if len(jobs) != 2 {
-		t.Fatalf("agent_turn jobs = %d, want 2 duplicate deliveries", len(jobs))
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1 active dispatch", len(jobs))
 	}
 	for i, job := range jobs {
 		if err := fixture.engine.HandleTurnJob(ctx, job); err != nil {
@@ -530,6 +530,123 @@ func TestTurnEngineIntegrationAsyncExecutionSessionDuplicateDeliveryDoesNotCreat
 	}
 	if got := countAssistantFinalMessages(messages); got != 1 {
 		t.Fatalf("assistant final messages = %d, want 1", got)
+	}
+}
+
+func TestTurnEngineIntegrationCancelledMessageSuppressesLateClaimedRetryJob(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	session, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "organization",
+		ScopeID:        fixture.org.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession async: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, session.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant: %v", err)
+	}
+
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "cancel the queued retry",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	turnRepo := repo.NewChatTurnRepo(fixture.pool)
+	sessionRepo := repo.NewChatSessionRepo(fixture.pool)
+	startedAt := time.Now().UTC()
+	activeCycleID := uuid.New()
+	activeTurn, err := turnRepo.Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		CycleID:          &activeCycleID,
+		RespondingType:   "agent",
+		RespondingID:     fixture.agent.ID,
+		Status:           "in_progress",
+		StartedAt:        &startedAt,
+		TriggerMessageID: &userMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create active turn: %v", err)
+	}
+	if _, err := sessionRepo.UpdateCurrentTurn(ctx, session.ID, &activeTurn.ID); err != nil {
+		t.Fatalf("UpdateCurrentTurn: %v", err)
+	}
+
+	worker := jobqueue.New(fixture.pool, nil, jobqueue.Config{})
+	jobID, err := worker.Enqueue(ctx, nil, AgentTurnJobType, 70, AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  userMessage.ID,
+		RetryCount: 1,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueue retry: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'integration-worker',
+		    claimed_at = now()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("mark retry job claimed: %v", err)
+	}
+
+	var payload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&payload); err != nil {
+		t.Fatalf("load claimed job payload: %v", err)
+	}
+	claimedJob := jobqueue.Job{
+		ID:      jobID,
+		JobType: AgentTurnJobType,
+		Payload: payload,
+		Status:  "claimed",
+	}
+
+	if err := fixture.chatService.CancelTurn(ctx, activeTurn.ID, "integration-test"); err != nil {
+		t.Fatalf("CancelTurn: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(ctx, claimedJob); err != nil {
+		t.Fatalf("HandleTurnJob claimed retry: %v", err)
+	}
+
+	turns, err := turnRepo.ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1", len(turns))
+	}
+	if turns[0].Status != "cancelled" {
+		t.Fatalf("turn status = %s, want cancelled", turns[0].Status)
+	}
+
+	var activeJobs int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE group_key = $1
+		  AND status IN ('pending', 'claimed')
+	`, jobqueue.AgentTurnGroupKey(session.ID, userMessage.ID)).Scan(&activeJobs); err != nil {
+		t.Fatalf("count active jobs: %v", err)
+	}
+	if activeJobs != 0 {
+		t.Fatalf("active jobs = %d, want 0", activeJobs)
 	}
 }
 

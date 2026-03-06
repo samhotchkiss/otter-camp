@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
+	"github.com/samhotchkiss/otter-camp/internal/metrics"
 )
 
 const (
@@ -41,6 +42,12 @@ type JobWorker interface {
 }
 
 type JobHandler func(ctx context.Context, job Job) error
+
+type agentTurnKeyPayload struct {
+	SessionID  uuid.UUID `json:"session_id"`
+	MessageID  uuid.UUID `json:"message_id"`
+	RetryCount int       `json:"retry_count"`
+}
 
 type Job struct {
 	ID          uuid.UUID
@@ -235,6 +242,23 @@ func (w *Worker) Register(jobType string, handler JobHandler) {
 	w.handlersMu.Unlock()
 }
 
+func AgentTurnAttemptKey(sessionID, messageID uuid.UUID, retryCount int) string {
+	if sessionID == uuid.Nil || messageID == uuid.Nil {
+		return ""
+	}
+	if retryCount < 0 {
+		retryCount = 0
+	}
+	return fmt.Sprintf("%s:%s:%s:%d", agentTurnJobType, sessionID, messageID, retryCount)
+}
+
+func AgentTurnGroupKey(sessionID, messageID uuid.UUID) string {
+	if sessionID == uuid.Nil || messageID == uuid.Nil {
+		return ""
+	}
+	return fmt.Sprintf("%s:%s:%s", agentTurnJobType, sessionID, messageID)
+}
+
 func (w *Worker) Enqueue(ctx context.Context, tx pgx.Tx, jobType string, priority int, payload any, runAfter *time.Time) (uuid.UUID, error) {
 	if strings.TrimSpace(jobType) == "" {
 		return uuid.Nil, fmt.Errorf("job_type is required")
@@ -275,6 +299,40 @@ func (w *Worker) Enqueue(ctx context.Context, tx pgx.Tx, jobType string, priorit
 	}
 
 	return jobID, nil
+}
+
+func (w *Worker) CancelGroup(ctx context.Context, tx pgx.Tx, groupKey, reason string) (int64, error) {
+	groupKey = strings.TrimSpace(groupKey)
+	if groupKey == "" {
+		return 0, nil
+	}
+
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "cancelled queued agent_turn dispatch"
+	}
+
+	var executor queryExecutor
+	if tx != nil {
+		executor = tx
+	} else {
+		executor = w.pool
+	}
+
+	tag, err := executor.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    last_error = $2,
+		    updated_at = now()
+		WHERE group_key = $1
+		  AND status IN ('pending', 'claimed')
+	`, groupKey, reason)
+	if err != nil {
+		return 0, fmt.Errorf("cancel queued job group: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // PurgeStaleAgentTurnJobs dead-letters pending agent_turn jobs whose sessions
@@ -505,14 +563,37 @@ func (w *Worker) enqueueWithExecutor(
 	payload json.RawMessage,
 	runAfter time.Time,
 ) (uuid.UUID, error) {
-	var id uuid.UUID
+	dedupeKey, groupKey := deriveJobKeys(strings.TrimSpace(jobType), payload)
+	var (
+		id        uuid.UUID
+		createdAt time.Time
+		updatedAt time.Time
+	)
 	err := executor.QueryRow(ctx, `
-		INSERT INTO job_queue (job_type, priority, payload, run_after)
-		VALUES ($1, $2, $3::jsonb, $4)
-		RETURNING id
-	`, jobType, priority, payload, runAfter).Scan(&id)
+		INSERT INTO job_queue (job_type, priority, payload, run_after, dedupe_key, group_key)
+		VALUES ($1, $2, $3::jsonb, $4, NULLIF($5, ''), NULLIF($6, ''))
+		ON CONFLICT (dedupe_key)
+		WHERE dedupe_key IS NOT NULL
+		  AND status IN ('pending', 'claimed')
+		DO UPDATE
+		SET priority = GREATEST(job_queue.priority, EXCLUDED.priority),
+		    run_after = LEAST(job_queue.run_after, EXCLUDED.run_after),
+		    updated_at = now()
+		RETURNING id, created_at, updated_at
+	`, jobType, priority, payload, runAfter, dedupeKey, groupKey).Scan(&id, &createdAt, &updatedAt)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("insert job: %w", err)
+	}
+
+	if dedupeKey != "" && !createdAt.Equal(updatedAt) {
+		w.logger.Info(
+			"job queue: suppressed duplicate active dispatch",
+			"job_id", id,
+			"job_type", jobType,
+			"dedupe_key", dedupeKey,
+			"group_key", groupKey,
+		)
+		metrics.RecordAgentTurnDispatchSuppressed("duplicate_enqueue")
 	}
 
 	if _, err := executor.Exec(ctx, `SELECT pg_notify($1, $2)`, jobEnqueuedChannel, id.String()); err != nil {
@@ -520,6 +601,17 @@ func (w *Worker) enqueueWithExecutor(
 	}
 
 	return id, nil
+}
+
+func deriveJobKeys(jobType string, payload json.RawMessage) (string, string) {
+	if strings.TrimSpace(jobType) != agentTurnJobType {
+		return "", ""
+	}
+	var parsed agentTurnKeyPayload
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return "", ""
+	}
+	return AgentTurnAttemptKey(parsed.SessionID, parsed.MessageID, parsed.RetryCount), AgentTurnGroupKey(parsed.SessionID, parsed.MessageID)
 }
 
 func (w *Worker) listenForEnqueue(ctx context.Context, wake chan<- struct{}) {

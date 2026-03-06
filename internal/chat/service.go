@@ -160,6 +160,7 @@ type chatMessageRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error)
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatMessage, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorMessage string) (repo.ChatMessage, error)
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ChatMessage, error)
 	UpdateContent(ctx context.Context, id uuid.UUID, content string) (repo.ChatMessage, error)
 	Redact(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error)
 }
@@ -203,6 +204,7 @@ type eventPublisher interface {
 
 type jobEnqueuer interface {
 	Enqueue(ctx context.Context, tx pgx.Tx, jobType string, priority int, payload any, runAfter *time.Time) (uuid.UUID, error)
+	CancelGroup(ctx context.Context, tx pgx.Tx, groupKey, reason string) (int64, error)
 }
 
 type Options struct {
@@ -1205,22 +1207,64 @@ func (s *service) CancelTurn(ctx context.Context, turnID uuid.UUID, reason strin
 	}
 
 	now := s.clock.Now().UTC()
-	if _, err := s.turns.SetCancelled(ctx, turn.ID, now, now); err != nil {
-		return err
-	}
-	metrics.RecordAgentTurn("cancelled")
-	_, _ = s.sessions.UpdateCurrentTurn(ctx, turn.SessionID, nil)
-
 	session, err := s.GetSession(ctx, turn.SessionID)
 	if err != nil {
 		return err
 	}
+
+	turnsToCancel := []repo.ChatTurn{repo.ChatTurn(*turn)}
+	if turn.TriggerMessageID != nil && *turn.TriggerMessageID != uuid.Nil {
+		if err := s.markMessageDispatchCancelled(ctx, *turn.TriggerMessageID, reason, now); err != nil {
+			return err
+		}
+		sessionTurns, err := s.turns.ListBySession(ctx, turn.SessionID)
+		if err != nil {
+			return err
+		}
+		turnsToCancel = collectMessageTurnCancellations(sessionTurns, *turn.TriggerMessageID)
+		if len(turnsToCancel) == 0 {
+			turnsToCancel = []repo.ChatTurn{repo.ChatTurn(*turn)}
+		}
+		if s.enqueuer != nil {
+			if _, err := s.enqueuer.CancelGroup(ctx, nil, jobqueue.AgentTurnGroupKey(turn.SessionID, *turn.TriggerMessageID), "chat turn cancelled: "+strings.TrimSpace(reason)); err != nil {
+				return err
+			}
+		}
+	}
+
+	cancelledTurns := make([]repo.ChatTurn, 0, len(turnsToCancel))
+	for _, candidate := range turnsToCancel {
+		if isTerminalTurnStatus(candidate.Status) {
+			continue
+		}
+		cancelled, err := s.turns.SetCancelled(ctx, candidate.ID, now, now)
+		if err != nil {
+			return err
+		}
+		metrics.RecordAgentTurn("cancelled")
+		cancelledTurns = append(cancelledTurns, cancelled)
+	}
+	if len(cancelledTurns) == 0 {
+		return ErrInvalidStatusTransition
+	}
+
+	_, _ = s.sessions.UpdateCurrentTurn(ctx, turn.SessionID, nil)
 	actorType, actorID := actorFromContext(ctx)
-	return s.publishEvent(ctx, session.OrganizationID, "chat.turn.cancelled", actorType, actorID, map[string]any{
-		"session_id": session.ID,
-		"turn_id":    turn.ID,
-		"reason":     strings.TrimSpace(reason),
-	})
+	for _, cancelled := range cancelledTurns {
+		payload := map[string]any{
+			"session_id":  session.ID,
+			"turn_id":     cancelled.ID,
+			"reason":      strings.TrimSpace(reason),
+			"retry_count": cancelled.RetryCount,
+		}
+		if cancelled.TriggerMessageID != nil && *cancelled.TriggerMessageID != uuid.Nil {
+			payload["trigger_message_id"] = *cancelled.TriggerMessageID
+		}
+		if err := s.publishEvent(ctx, session.OrganizationID, "chat.turn.cancelled", actorType, actorID, payload); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *service) FailTurn(ctx context.Context, turnID uuid.UUID, errorMsg string) error {
@@ -1801,6 +1845,48 @@ func normalizeTurnStatus(value string) string {
 	default:
 		return ""
 	}
+}
+
+func isTerminalTurnStatus(status string) bool {
+	switch normalizeTurnStatus(status) {
+	case "completed", "cancelled", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func collectMessageTurnCancellations(turns []repo.ChatTurn, triggerMessageID uuid.UUID) []repo.ChatTurn {
+	matches := make([]repo.ChatTurn, 0, len(turns))
+	for _, turn := range turns {
+		if turn.TriggerMessageID == nil || *turn.TriggerMessageID != triggerMessageID {
+			continue
+		}
+		matches = append(matches, turn)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].TurnNumber == matches[j].TurnNumber {
+			return matches[i].RetryCount < matches[j].RetryCount
+		}
+		return matches[i].TurnNumber < matches[j].TurnNumber
+	})
+	return matches
+}
+
+func (s *service) markMessageDispatchCancelled(ctx context.Context, messageID uuid.UUID, reason string, now time.Time) error {
+	message, err := s.messages.GetByID(ctx, messageID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	merged, err := MergeAgentTurnDispatchCancelledMetadata(message.Metadata, reason, now)
+	if err != nil {
+		return err
+	}
+	_, err = s.messages.UpdateMetadata(ctx, message.ID, merged)
+	return err
 }
 
 func isMessageTransitionAllowed(fromStatus, toStatus string) bool {

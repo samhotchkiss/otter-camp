@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -445,6 +446,107 @@ func TestCancelTurnSetsCompletedAt(t *testing.T) {
 	}
 	if !gotCompletedAt.Equal(gotCancelRequestedAt) {
 		t.Fatalf("completed_at %s, want equal to cancel_requested_at %s", gotCompletedAt, gotCancelRequestedAt)
+	}
+}
+
+func TestCancelTurnCancelsLogicalMessageGroupAndDrainsQueuedDispatches(t *testing.T) {
+	sessionID := uuid.New()
+	orgID := uuid.New()
+	messageID := uuid.New()
+	activeTurnID := uuid.New()
+	retryTurnID := uuid.New()
+	otherTurnID := uuid.New()
+
+	cancelled := make(map[uuid.UUID]int)
+	bus := &fakeEventBus{}
+	enqueuer := &fakeEnqueuer{}
+	svc := newUnitService(t, unitDeps{
+		events:   bus,
+		enqueuer: enqueuer,
+		sessions: &fakeSessionRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				if id != sessionID {
+					t.Fatalf("unexpected session id %s", id)
+				}
+				return repo.ChatSession{ID: sessionID, OrganizationID: orgID, Status: "active"}, nil
+			},
+			updateCurrentTurnFn: func(_ context.Context, id uuid.UUID, _ *uuid.UUID) (repo.ChatSession, error) {
+				return repo.ChatSession{ID: id, OrganizationID: orgID, Status: "active"}, nil
+			},
+		},
+		messages: &fakeMessageRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatMessage, error) {
+				if id != messageID {
+					t.Fatalf("unexpected message id %s", id)
+				}
+				return repo.ChatMessage{ID: messageID, SessionID: sessionID, Role: "user", Metadata: json.RawMessage(`{"source":"test"}`)}, nil
+			},
+			updateMetadataFn: func(_ context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ChatMessage, error) {
+				if id != messageID {
+					t.Fatalf("unexpected metadata message id %s", id)
+				}
+				if !AgentTurnDispatchCancelled(metadata) {
+					t.Fatalf("expected cancelled dispatch metadata, got %s", string(metadata))
+				}
+				return repo.ChatMessage{ID: id, Metadata: metadata}, nil
+			},
+		},
+		turns: &fakeTurnRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatTurn, error) {
+				if id != activeTurnID {
+					t.Fatalf("unexpected turn id %s", id)
+				}
+				return repo.ChatTurn{ID: activeTurnID, SessionID: sessionID, Status: "in_progress", TurnNumber: 1, RetryCount: 0, TriggerMessageID: &messageID}, nil
+			},
+			listBySessionFn: func(_ context.Context, id uuid.UUID) ([]repo.ChatTurn, error) {
+				if id != sessionID {
+					t.Fatalf("unexpected session id %s", id)
+				}
+				return []repo.ChatTurn{
+					{ID: activeTurnID, SessionID: sessionID, Status: "in_progress", TurnNumber: 1, RetryCount: 0, TriggerMessageID: &messageID},
+					{ID: retryTurnID, SessionID: sessionID, Status: "pending", TurnNumber: 2, RetryCount: 1, TriggerMessageID: &messageID},
+					{ID: otherTurnID, SessionID: sessionID, Status: "in_progress", TurnNumber: 3},
+				}, nil
+			},
+			setCancelledFn: func(_ context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time) (repo.ChatTurn, error) {
+				cancelled[id]++
+				return repo.ChatTurn{ID: id, SessionID: sessionID, Status: "cancelled", CancelRequestedAt: &cancelRequestedAt, CompletedAt: &completedAt}, nil
+			},
+		},
+	})
+	enqueuer.cancelGroupFn = func(_ context.Context, _ pgx.Tx, groupKey, reason string) (int64, error) {
+		wantKey := jobqueue.AgentTurnGroupKey(sessionID, messageID)
+		if groupKey != wantKey {
+			t.Fatalf("group key = %q, want %q", groupKey, wantKey)
+		}
+		if reason == "" {
+			t.Fatal("expected cancel group reason")
+		}
+		return 2, nil
+	}
+
+	if err := svc.CancelTurn(context.Background(), activeTurnID, "unit-test"); err != nil {
+		t.Fatalf("CancelTurn: %v", err)
+	}
+	if cancelled[activeTurnID] != 1 {
+		t.Fatalf("active turn cancel calls = %d, want 1", cancelled[activeTurnID])
+	}
+	if cancelled[retryTurnID] != 1 {
+		t.Fatalf("retry turn cancel calls = %d, want 1", cancelled[retryTurnID])
+	}
+	if cancelled[otherTurnID] != 0 {
+		t.Fatalf("unrelated turn cancel calls = %d, want 0", cancelled[otherTurnID])
+	}
+
+	cancelledEvents := 0
+	for _, event := range bus.events {
+		if event.EventType != "chat.turn.cancelled" {
+			continue
+		}
+		cancelledEvents++
+	}
+	if cancelledEvents != 2 {
+		t.Fatalf("cancelled events = %d, want 2", cancelledEvents)
 	}
 }
 
@@ -902,11 +1004,12 @@ func (f *fakeProjectRepo) GetByID(ctx context.Context, id uuid.UUID) (repo.Proje
 }
 
 type fakeMessageRepo struct {
-	getByIDFn       func(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error)
-	listBySessionFn func(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatMessage, error)
-	updateStatusFn  func(ctx context.Context, id uuid.UUID, status string, errorMessage string) (repo.ChatMessage, error)
-	updateContentFn func(ctx context.Context, id uuid.UUID, content string) (repo.ChatMessage, error)
-	redactFn        func(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error)
+	getByIDFn        func(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error)
+	listBySessionFn  func(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatMessage, error)
+	updateStatusFn   func(ctx context.Context, id uuid.UUID, status string, errorMessage string) (repo.ChatMessage, error)
+	updateMetadataFn func(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ChatMessage, error)
+	updateContentFn  func(ctx context.Context, id uuid.UUID, content string) (repo.ChatMessage, error)
+	redactFn         func(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error)
 }
 
 func (f *fakeMessageRepo) GetByID(ctx context.Context, id uuid.UUID) (repo.ChatMessage, error) {
@@ -929,6 +1032,13 @@ func (f *fakeMessageRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status
 	}
 	errCopy := errorMessage
 	return repo.ChatMessage{ID: id, Status: status, ErrorMessage: &errCopy}, nil
+}
+
+func (f *fakeMessageRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ChatMessage, error) {
+	if f.updateMetadataFn != nil {
+		return f.updateMetadataFn(ctx, id, metadata)
+	}
+	return repo.ChatMessage{ID: id, Metadata: metadata}, nil
 }
 
 func (f *fakeMessageRepo) UpdateContent(ctx context.Context, id uuid.UUID, content string) (repo.ChatMessage, error) {
@@ -1085,7 +1195,8 @@ func (f *fakeEventBus) Publish(_ context.Context, _ pgx.Tx, event eventbus.Domai
 }
 
 type fakeEnqueuer struct {
-	calls []enqueuedJob
+	calls         []enqueuedJob
+	cancelGroupFn func(ctx context.Context, tx pgx.Tx, groupKey, reason string) (int64, error)
 }
 
 type enqueuedJob struct {
@@ -1107,6 +1218,13 @@ func (f *fakeEnqueuer) Enqueue(_ context.Context, _ pgx.Tx, jobType string, prio
 	}
 	f.calls = append(f.calls, call)
 	return uuid.New(), nil
+}
+
+func (f *fakeEnqueuer) CancelGroup(ctx context.Context, tx pgx.Tx, groupKey, reason string) (int64, error) {
+	if f.cancelGroupFn != nil {
+		return f.cancelGroupFn(ctx, tx, groupKey, reason)
+	}
+	return 0, nil
 }
 
 type staticClock struct {
