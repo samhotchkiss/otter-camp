@@ -69,6 +69,49 @@ func TestAgentAssignmentHTTPPMFlow(t *testing.T) {
 	}
 }
 
+func TestAgentAssignmentHTTPAutoActivatesDraftStaffPMEX255(t *testing.T) {
+	testServer, org, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	project := seedAssignmentProject(t, testServer.Pool, org.ID)
+
+	createResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents", map[string]any{
+		"display_name":  "Auto PM " + uuid.NewString()[:8],
+		"agent_class":   "staff",
+		"agent_type":    "pm",
+		"system_prompt": "You are a project manager.",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d body=%s", createResp.StatusCode, http.StatusCreated, string(createResp.Body))
+	}
+	agentID := jsonPathString(t, createResp.Body, "data", "id")
+	if got := jsonPathString(t, createResp.Body, "data", "lifecycle_status"); got != "draft" {
+		t.Fatalf("create lifecycle_status = %q, want draft body=%s", got, string(createResp.Body))
+	}
+
+	assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents/"+agentID+"/project-assignments", map[string]any{
+		"project_id": project.ID.String(),
+		"role":       "pm",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if assignResp.StatusCode != http.StatusOK {
+		t.Fatalf("assign status = %d, want %d body=%s", assignResp.StatusCode, http.StatusOK, string(assignResp.Body))
+	}
+	if got := jsonPathString(t, assignResp.Body, "data", "role"); got != "project_manager" {
+		t.Fatalf("assigned role = %q, want project_manager body=%s", got, string(assignResp.Body))
+	}
+
+	agentResp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/agents/"+agentID, nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if agentResp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent status = %d, want %d body=%s", agentResp.StatusCode, http.StatusOK, string(agentResp.Body))
+	}
+	if got := jsonPathString(t, agentResp.Body, "data", "lifecycle_status"); got != "active" {
+		t.Fatalf("agent lifecycle_status = %q, want active body=%s", got, string(agentResp.Body))
+	}
+}
+
 func TestAgentAssignmentHTTPRejectsStarterTrioProjectRoles(t *testing.T) {
 	testServer, org, adminUser, _ := newAgentTestServer(t)
 	defer testServer.Close()
@@ -149,6 +192,49 @@ func TestProjectAgentsHTTPAssignmentLifecycle(t *testing.T) {
 	}
 }
 
+func TestProjectAgentsHTTPAutoActivatesDraftStaffPMEX255(t *testing.T) {
+	testServer, org, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	project := seedAssignmentProject(t, testServer.Pool, org.ID)
+
+	createResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents", map[string]any{
+		"display_name":  "Project Route PM " + uuid.NewString()[:8],
+		"agent_class":   "staff",
+		"agent_type":    "pm",
+		"system_prompt": "You are a project manager.",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d body=%s", createResp.StatusCode, http.StatusCreated, string(createResp.Body))
+	}
+	agentID := jsonPathString(t, createResp.Body, "data", "id")
+	if got := jsonPathString(t, createResp.Body, "data", "lifecycle_status"); got != "draft" {
+		t.Fatalf("create lifecycle_status = %q, want draft body=%s", got, string(createResp.Body))
+	}
+
+	assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/agents", map[string]any{
+		"agent_id": agentID,
+		"role":     "project_manager",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if assignResp.StatusCode != http.StatusOK {
+		t.Fatalf("assign status = %d, want %d body=%s", assignResp.StatusCode, http.StatusOK, string(assignResp.Body))
+	}
+	if got := jsonPathString(t, assignResp.Body, "data", "role"); got != "project_manager" {
+		t.Fatalf("assigned role = %q, want project_manager body=%s", got, string(assignResp.Body))
+	}
+
+	agentResp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/agents/"+agentID, nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if agentResp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent status = %d, want %d body=%s", agentResp.StatusCode, http.StatusOK, string(agentResp.Body))
+	}
+	if got := jsonPathString(t, agentResp.Body, "data", "lifecycle_status"); got != "active" {
+		t.Fatalf("agent lifecycle_status = %q, want active body=%s", got, string(agentResp.Body))
+	}
+}
+
 func TestProjectAgentsHTTPRejectsStarterTrioProjectRoles(t *testing.T) {
 	testServer, org, adminUser, _ := newAgentTestServer(t)
 	defer testServer.Close()
@@ -171,6 +257,36 @@ func TestProjectAgentsHTTPRejectsStarterTrioProjectRoles(t *testing.T) {
 		if got := jsonPathString(t, assignResp.Body, "error", "message"); got != agentsvc.ErrAssignmentStarterTrioRole.Error() {
 			t.Fatalf("%s error.message = %q body=%s", role, got, string(assignResp.Body))
 		}
+	}
+}
+
+func TestAgentAssignmentHTTPRejectsTempProjectManagerEX255(t *testing.T) {
+	testServer, org, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	project := seedAssignmentProject(t, testServer.Pool, org.ID)
+
+	createResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents", map[string]any{
+		"display_name":    "Temp PM " + uuid.NewString()[:8],
+		"agent_class":     "temp",
+		"agent_type":      "pm",
+		"temp_project_id": project.ID.String(),
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d body=%s", createResp.StatusCode, http.StatusCreated, string(createResp.Body))
+	}
+	agentID := jsonPathString(t, createResp.Body, "data", "id")
+
+	assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents/"+agentID+"/project-assignments", map[string]any{
+		"project_id": project.ID.String(),
+		"role":       "pm",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if assignResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("assign status = %d, want %d body=%s", assignResp.StatusCode, http.StatusUnprocessableEntity, string(assignResp.Body))
+	}
+	if got := jsonPathString(t, assignResp.Body, "error", "message"); got != agentsvc.ErrAssignmentPMRequiresStaff.Error() {
+		t.Fatalf("error.message = %q, want %q body=%s", got, agentsvc.ErrAssignmentPMRequiresStaff.Error(), string(assignResp.Body))
 	}
 }
 
