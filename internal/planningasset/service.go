@@ -363,6 +363,8 @@ func formatSectionHeading(value string) string {
 	switch strings.TrimSpace(strings.ToLower(value)) {
 	case "go/no-go checklist":
 		return "Go / No-Go Checklist"
+	case "icp":
+		return "ICP"
 	}
 
 	normalized := strings.ReplaceAll(strings.TrimSpace(value), "-", " ")
@@ -385,6 +387,12 @@ func scaffoldPrompt(section string) string {
 		return "State the concrete outcomes this spec must achieve."
 	case "target segments":
 		return "Name the primary segments, users, or buyers this work serves."
+	case "beachhead segment":
+		return "Name the first segment the launch is built to win decisively."
+	case "icp":
+		return "Define the ideal customer profile in enough detail to guide targeting and messaging."
+	case "launch scope":
+		return "State what this launch includes, excludes, and which release surface it covers."
 	case "not serving":
 		return "List the excluded segments, use cases, or requests and why they stay out of scope."
 	case "core capabilities":
@@ -399,6 +407,16 @@ func scaffoldPrompt(section string) string {
 		return "Explain why this choice wins now."
 	case "owner", "owners":
 		return "Name the directly accountable owner or owners."
+	case "north star":
+		return "Define the single metric this initiative is ultimately trying to move."
+	case "input metrics":
+		return "Define the controllable leading metrics that should move the north star."
+	case "health metrics":
+		return "Capture the quality, reliability, or retention metrics that keep growth from hiding damage."
+	case "counter metrics":
+		return "List the guardrail metrics that must not degrade while the north star improves."
+	case "positioning":
+		return "State the positioning the market should remember after the launch."
 	case "key metrics":
 		return "Define the leading and lagging metrics that will show this is working."
 	case "defensibility":
@@ -441,8 +459,38 @@ func scaffoldPrompt(section string) string {
 		return "Call out important edge conditions and failure modes."
 	case "verification":
 		return "Describe how this will be tested or verified."
+	case "proof":
+		return "List the proof points, evidence, or product truths that make the messaging credible."
+	case "events":
+		return "List the events, properties, or telemetry needed to measure the framework."
+	case "qa":
+		return "Describe how the team will verify the instrumentation and reporting before relying on it."
+	case "views":
+		return "Describe the dashboard views or scorecards each operating audience needs."
+	case "slices":
+		return "Call out the cuts, segments, or cohorts the dashboard must support."
+	case "alerts":
+		return "Define the thresholds or alerts that should trigger review or action."
+	case "schedule":
+		return "Set the operating review cadence and when the team will look at the metrics."
+	case "thresholds":
+		return "Record the ranges or targets that define healthy, concerning, and critical movement."
+	case "messaging":
+		return "Write the core launch messages and how they differ by audience or channel."
 	case "dependencies":
 		return "List upstream or downstream dependencies and external commitments."
+	case "channel strategy":
+		return "Describe the channel mix, role of each channel, and why it fits the target segment."
+	case "launch timeline":
+		return "Lay out the launch sequence, milestones, and timing owners will manage against."
+	case "readiness":
+		return "List the readiness checks that must be satisfied before the team launches."
+	case "approvals":
+		return "Record the approvals or sign-offs required before launch."
+	case "contingency":
+		return "Describe what the team will do if launch assumptions fail or timing slips."
+	case "expansion plan":
+		return "Explain how the team will expand after the beachhead segment if launch signals are strong."
 	case "mitigations":
 		return "Describe how each material dependency or delivery risk will be managed."
 	case "dates":

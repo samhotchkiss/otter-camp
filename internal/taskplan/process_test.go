@@ -127,6 +127,92 @@ func TestCompletionReportRejectsSpecWithoutNonGoalsMetricsAndPhasing(t *testing.
 	}
 }
 
+func TestCompletionReportRejectsMetricsWithoutInputHealthAndCadence(t *testing.T) {
+	description := "Define the north-star metric, input metrics, health metrics, dashboard spec, and weekly review cadence for activation."
+	plan := Analyze("Metric tree and instrumentation plan", &description)
+	metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	metadata, _, _, err := ApplyProcessUpdate(metadata, ProcessUpdate{
+		Artifacts: []ArtifactEvidence{
+			{
+				Slug:     "metric-tree",
+				Summary:  "Metric framework for activation.",
+				Sections: []string{"north star", "counter metrics"},
+			},
+			{
+				Slug:     "instrumentation-plan",
+				Summary:  "Telemetry events and ownership.",
+				Sections: []string{"events", "owners", "qa"},
+			},
+			{
+				Slug:     "dashboard-spec",
+				Summary:  "Views and alerts for the activation dashboard.",
+				Sections: []string{"views", "slices", "alerts"},
+			},
+			{
+				Slug:     "review-cadence",
+				Summary:  "Weekly operating review schedule.",
+				Sections: []string{"schedule", "owners", "thresholds"},
+			},
+		},
+		HasArtifactChanges: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+
+	_, err = CompletionReport(metadata)
+	if !errors.Is(err, ErrPlanningArtifactContractIncomplete) {
+		t.Fatalf("CompletionReport err = %v, want ErrPlanningArtifactContractIncomplete", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "input metrics") || !strings.Contains(err.Error(), "health metrics") {
+		t.Fatalf("CompletionReport error = %v, want missing metrics framework sections", err)
+	}
+}
+
+func TestCompletionReportRejectsGTMWithoutBeachheadICPAndExpansionPlan(t *testing.T) {
+	description := "Create the GTM launch plan with beachhead segment, ICP, positioning, messaging, channel strategy, launch timeline, success metrics, and expansion plan."
+	plan := Analyze("Go-to-market launch plan", &description)
+	metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	metadata, _, _, err := ApplyProcessUpdate(metadata, ProcessUpdate{
+		Artifacts: []ArtifactEvidence{
+			{
+				Slug:     "launch-brief",
+				Summary:  "Launch scope and success model.",
+				Sections: []string{"launch scope", "success metrics"},
+			},
+			{
+				Slug:     "audience-messaging",
+				Summary:  "Positioning and proof for the launch.",
+				Sections: []string{"positioning", "messaging", "proof"},
+			},
+			{
+				Slug:     "channel-plan",
+				Summary:  "Channel strategy and timing.",
+				Sections: []string{"channel strategy", "owners", "launch timeline"},
+			},
+			{
+				Slug:     "launch-checklist",
+				Summary:  "Readiness and approvals for launch.",
+				Sections: []string{"readiness", "approvals", "contingency"},
+			},
+		},
+		HasArtifactChanges: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+
+	_, err = CompletionReport(metadata)
+	if !errors.Is(err, ErrPlanningArtifactContractIncomplete) {
+		t.Fatalf("CompletionReport err = %v, want ErrPlanningArtifactContractIncomplete", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "beachhead segment") || !strings.Contains(err.Error(), "icp") || !strings.Contains(err.Error(), "expansion plan") {
+		t.Fatalf("CompletionReport error = %v, want missing GTM operating sections", err)
+	}
+}
+
 func TestCompletionReportRejectsIncompleteRiskReadinessArtifacts(t *testing.T) {
 	description := "Build the pre-mortem, risk register, mitigation plan, and readiness checklist for the regulated rollout."
 	plan := Analyze("Launch readiness pre-mortem", &description)

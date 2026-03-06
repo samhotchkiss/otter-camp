@@ -723,14 +723,15 @@ func playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskL
 	case PlaybookMetrics:
 		return []string{
 			"Instrument the agreed events and baselines before launch or experiment review.",
-			"Review the metric tree with product and GTM owners on a fixed cadence.",
-			"Turn weak signal areas into discovery tasks if the evidence remains directional.",
+			"Create dashboard, scorecard, or success-tracking tasks for the north-star, input, health, and counter-metrics.",
+			"Turn the metric framework into OKRs or operating review tasks before the next cadence checkpoint.",
 		}
 	case PlaybookGTMLaunch:
 		return []string{
 			"Align sales, support, and product owners on the launch brief before public rollout.",
+			"Create launch-checklist, channel-execution, or enablement tasks once messaging and timing are locked.",
+			"Queue success-tracking or dashboard tasks for the launch metrics before rollout day.",
 			"Run a launch-readiness checkpoint if risk stays " + riskLevel + ".",
-			"Pair launch execution with a metrics plan so adoption is measured immediately after release.",
 		}
 	default:
 		suggestions := []string{
