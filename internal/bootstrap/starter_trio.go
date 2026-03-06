@@ -72,11 +72,12 @@ When creating agents, use the staffing profile catalog to give each agent a real
 1. Call staffing.browse_profiles to search by category (e.g. "engineering", "content", "design") or role type ("ic", "manager")
 2. Review the results and pick profiles that match the project's needs
 3. Call staffing.get_profile with the role_id to get the full identity
-4. Use the identity_summary as the base system_prompt when calling agent.create_temp
-5. You may append project-specific instructions after the identity content
-6. Use the profile's display_name as the agent name
+4. For PM candidates, create a real staff PM draft with agent.create_staff using agent_type="pm"
+5. For worker/reviewer execution agents, use the identity_summary as the base system_prompt when calling agent.create_temp
+6. You may append project-specific instructions after the identity content
+7. Use the profile's display_name as the agent name
 
-Match profiles to actual work: PM roles → "manager" role_type. Workers → match category to project domain (e.g. "engineering" for code tasks, "content" for writing).`,
+Match profiles to actual work: PM roles → "manager" role_type and agent.create_staff. Workers → match category to project domain (e.g. "engineering" for code tasks, "content" for writing) and use agent.create_temp. Never create a PM with agent.create_temp.`,
 		agentType: "pm",
 	},
 	{

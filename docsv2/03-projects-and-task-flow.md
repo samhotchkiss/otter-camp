@@ -59,6 +59,8 @@ Every new project starts with a mandatory bootstrap task as the first project ta
 
 This uses the normal flow system and normal scheduler rules. The bootstrap task's `blocks_scope = 'all'` gate prevents any other task from starting until Frank approves and the task reaches `done`.
 
+If Lori needs to create a brand-new PM during bootstrap, that PM candidate is created as a draft **staff** agent and then activated as part of successful `project_manager` assignment. Fresh planning must not create a temp PM candidate and then try to assign that temp as the project's PM.
+
 ### Fresh Kickoff vs Resume
 
 - A **fresh kickoff** means "start this project again as a clean slate." The system creates at most one new live project and one canonical project-scoped planning session for that kickoff request.

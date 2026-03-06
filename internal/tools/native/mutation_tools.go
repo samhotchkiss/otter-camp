@@ -41,6 +41,7 @@ const (
 	memoryRecordDefaultConfidence = 0.85
 	memoryRecordDefaultUtility    = 0.7
 	reviewPolicyErrorMessage      = "review_policy must include mode: human_review_required, human_review_preferred, or delegated_authority"
+	staffPMCreationMessage        = "project manager assignments require a staff agent; create the PM with agent.create_staff (agent_type=\"pm\") or pick an existing staff PM before assigning"
 )
 
 type executionActor struct {
@@ -2755,6 +2756,10 @@ func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input
 	if role == "" {
 		return map[string]any{"error": "invalid_role"}, nil
 	}
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	agentRecord, err := e.agents.GetByID(ctx, agentID)
 	if err != nil {
@@ -2762,6 +2767,13 @@ func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input
 			return map[string]any{"error": "not_found"}, nil
 		}
 		return nil, err
+	}
+	agentRecord, validationResult, err := e.ensureAssignableProjectAgent(ctx, scope.organizationID, agentRecord, role)
+	if err != nil {
+		return nil, err
+	}
+	if validationResult != nil {
+		return validationResult, nil
 	}
 	if err := agentsvc.ValidateProjectAssignmentTarget(agentRecord, role); err != nil {
 		if errors.Is(err, agentsvc.ErrAssignmentStarterTrioRole) {
@@ -2771,7 +2783,10 @@ func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input
 			}, nil
 		}
 		if errors.Is(err, agentsvc.ErrAssignmentPMRequiresStaff) {
-			return map[string]any{"error": "project_manager_requires_staff_agent"}, nil
+			return map[string]any{
+				"error":   "project_manager_requires_staff_agent",
+				"message": staffPMCreationMessage,
+			}, nil
 		}
 		return nil, err
 	}
@@ -2804,6 +2819,91 @@ func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input
 			"assigned_by_type": assignment.AssignedByType,
 			"assigned_by_id":   assignment.AssignedByID,
 			"assigned_at":      toRFC3339(&assignment.AssignedAt),
+		},
+	}, nil
+}
+
+func (e *NativeToolExecutor) ensureAssignableProjectAgent(ctx context.Context, orgID uuid.UUID, agentRecord repo.Agent, role string) (repo.Agent, map[string]any, error) {
+	if !strings.EqualFold(strings.TrimSpace(role), "project_manager") {
+		return agentRecord, nil, nil
+	}
+	if errors.Is(agentsvc.ValidateProjectAssignmentTarget(agentRecord, role), agentsvc.ErrAssignmentPMRequiresStaff) {
+		return repo.Agent{}, map[string]any{
+			"error":   "project_manager_requires_staff_agent",
+			"message": staffPMCreationMessage,
+		}, nil
+	}
+	if agentRecord.IsStarterTrio {
+		return agentRecord, nil, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(agentRecord.LifecycleStatus), "draft") {
+		return agentRecord, nil, nil
+	}
+	if e.agentService == nil {
+		return agentRecord, nil, nil
+	}
+	if err := e.agentService.Unpause(ctx, orgID, agentRecord.ID); err != nil {
+		return repo.Agent{}, nil, err
+	}
+	updated, err := e.agents.GetByID(ctx, agentRecord.ID)
+	if err != nil {
+		return repo.Agent{}, nil, err
+	}
+	return updated, nil, nil
+}
+
+func (e *NativeToolExecutor) handleAgentCreateStaff(ctx context.Context, input map[string]any) (map[string]any, error) {
+	if e.agentService == nil {
+		return map[string]any{"error": "agent_service_unavailable"}, nil
+	}
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	name, ok := readString(input, "name")
+	if !ok || strings.TrimSpace(name) == "" {
+		return map[string]any{"error": "name_required"}, nil
+	}
+	agentType, ok := readString(input, "agent_type")
+	if !ok || strings.TrimSpace(agentType) == "" {
+		return map[string]any{"error": "agent_type_required"}, nil
+	}
+	agentType = strings.ToLower(strings.TrimSpace(agentType))
+	if !isAllowedNativeAgentType(agentType) {
+		return map[string]any{
+			"error":   "invalid_agent_type",
+			"message": "agent_type must be one of pm, worker, reviewer, general",
+		}, nil
+	}
+	systemPrompt, ok := readString(input, "system_prompt")
+	if !ok || strings.TrimSpace(systemPrompt) == "" {
+		return map[string]any{"error": "system_prompt_required"}, nil
+	}
+	operatorInstructions, _ := readString(input, "operator_instructions")
+	actor := actorFromContext(ctx)
+	created, err := e.agentService.Create(ctx, agentsvc.CreateAgentRequest{
+		OrganizationID:       scope.organizationID,
+		DisplayName:          strings.TrimSpace(name),
+		SystemPrompt:         systemPrompt,
+		OperatorInstructions: operatorInstructions,
+		AgentType:            agentType,
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org", "assigned_projects", "current_task"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        actor.createdByType,
+		CreatedByID:          actor.createdByID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"agent": map[string]any{
+			"id":               created.ID,
+			"name":             created.DisplayName,
+			"agent_class":      created.AgentClass,
+			"agent_type":       created.AgentType,
+			"lifecycle_status": created.LifecycleStatus,
 		},
 	}, nil
 }
@@ -2862,6 +2962,15 @@ func (e *NativeToolExecutor) handleAgentCreateTemp(ctx context.Context, input ma
 			"lifecycle_status": created.LifecycleStatus,
 		},
 	}, nil
+}
+
+func isAllowedNativeAgentType(agentType string) bool {
+	switch strings.ToLower(strings.TrimSpace(agentType)) {
+	case "pm", "worker", "reviewer", "general":
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *NativeToolExecutor) handleAgentUpdate(ctx context.Context, input map[string]any) (map[string]any, error) {

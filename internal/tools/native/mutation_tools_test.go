@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2528,6 +2529,59 @@ func (f *fakeAgentRepo) Update(_ context.Context, agent repo.Agent) (repo.Agent,
 	return agent, nil
 }
 
+type fakeAgentService struct {
+	repo       *fakeAgentRepo
+	created    []agentsvc.CreateAgentRequest
+	createErr  error
+	unpauseErr error
+}
+
+func (f *fakeAgentService) Create(ctx context.Context, req agentsvc.CreateAgentRequest) (*agentsvc.Agent, error) {
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	if f.repo == nil {
+		f.repo = &fakeAgentRepo{}
+	}
+	created, err := f.repo.Create(ctx, repo.Agent{
+		OrganizationID:       req.OrganizationID,
+		DisplayName:          req.DisplayName,
+		AgentClass:           "staff",
+		LifecycleStatus:      "draft",
+		SystemPrompt:         req.SystemPrompt,
+		OperatorInstructions: req.OperatorInstructions,
+		AgentType:            req.AgentType,
+		PrivateMemory:        req.PrivateMemory,
+		MemoryReadScopes:     req.MemoryReadScopes,
+		ToolAllowList:        req.ToolAllowList,
+		ToolDenyList:         req.ToolDenyList,
+		CreatedByType:        req.CreatedByType,
+		CreatedByID:          req.CreatedByID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	f.created = append(f.created, req)
+	result := agentsvc.Agent(created)
+	return &result, nil
+}
+
+func (f *fakeAgentService) Unpause(ctx context.Context, _ uuid.UUID, agentID uuid.UUID) error {
+	if f.unpauseErr != nil {
+		return f.unpauseErr
+	}
+	if f.repo == nil {
+		return repo.ErrNotFound
+	}
+	current, err := f.repo.GetByID(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	current.LifecycleStatus = "active"
+	_, err = f.repo.Update(ctx, current)
+	return err
+}
+
 type fakeChatSessionRepo struct {
 	lastCreated repo.ChatSession
 	sessions    []repo.ChatSession
@@ -2890,6 +2944,45 @@ func TestAgentAssignProjectCreatesAssignment(t *testing.T) {
 	}
 }
 
+func TestAgentCreateStaffCreatesDraftCandidate(t *testing.T) {
+	agents := &fakeAgentRepo{}
+	service := &fakeAgentService{repo: agents}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		AgentService:  service,
+	})
+	executor.agents = agents
+
+	out, err := executor.Execute(testExecCtx(), "agent.create_staff", map[string]any{
+		"name":          "Emiliano",
+		"agent_type":    "pm",
+		"system_prompt": "You are a project manager.",
+	})
+	if err != nil {
+		t.Fatalf("agent.create_staff: %v", err)
+	}
+
+	agentOut, ok := out["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent output = %T, want map[string]any", out["agent"])
+	}
+	if agentOut["agent_class"] != "staff" {
+		t.Fatalf("agent_class = %v, want staff", agentOut["agent_class"])
+	}
+	if agentOut["agent_type"] != "pm" {
+		t.Fatalf("agent_type = %v, want pm", agentOut["agent_type"])
+	}
+	if agentOut["lifecycle_status"] != "draft" {
+		t.Fatalf("lifecycle_status = %v, want draft", agentOut["lifecycle_status"])
+	}
+	if len(service.created) != 1 {
+		t.Fatalf("created requests = %d, want 1", len(service.created))
+	}
+	if got := service.created[0].MemoryReadScopes; !reflect.DeepEqual(got, []string{"org", "assigned_projects", "current_task"}) {
+		t.Fatalf("memory_read_scopes = %#v, want default staff scopes", got)
+	}
+}
+
 func TestAgentAssignProjectRejectsStarterTrioProjectRoles(t *testing.T) {
 	for _, role := range []string{"pm", "worker", "reviewer", "observer"} {
 		role := role
@@ -2927,6 +3020,44 @@ func TestAgentAssignProjectRejectsStarterTrioProjectRoles(t *testing.T) {
 	}
 }
 
+func TestAgentAssignProjectActivatesDraftStaffProjectManagerCandidate(t *testing.T) {
+	assigneeID := uuid.New()
+	projectID := uuid.New()
+	assignments := &fakeAssignmentRepo{}
+	agents := &fakeAgentRepo{
+		agents: map[uuid.UUID]repo.Agent{
+			assigneeID: {ID: assigneeID, AgentClass: "staff", LifecycleStatus: "draft", IsStarterTrio: false},
+		},
+	}
+	service := &fakeAgentService{repo: agents}
+
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		AgentService:  service,
+	})
+	executor.assignments = assignments
+	executor.agents = agents
+
+	out, err := executor.Execute(testExecCtx(), "agent.assign_project", map[string]any{
+		"agent_id":   assigneeID.String(),
+		"project_id": projectID.String(),
+		"role":       "project_manager",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project: %v", err)
+	}
+	if _, ok := out["assignment"].(map[string]any); !ok {
+		t.Fatalf("assignment output = %T, want map[string]any", out["assignment"])
+	}
+	updated, err := agents.GetByID(context.Background(), assigneeID)
+	if err != nil {
+		t.Fatalf("GetByID activated candidate: %v", err)
+	}
+	if updated.LifecycleStatus != "active" {
+		t.Fatalf("lifecycle_status after assignment = %q, want active", updated.LifecycleStatus)
+	}
+}
+
 func TestAgentAssignProjectRejectsProjectManagerRoleForTempAgent(t *testing.T) {
 	assigneeID := uuid.New()
 	assignments := &fakeAssignmentRepo{}
@@ -2950,6 +3081,9 @@ func TestAgentAssignProjectRejectsProjectManagerRoleForTempAgent(t *testing.T) {
 	}
 	if out["error"] != "project_manager_requires_staff_agent" {
 		t.Fatalf("error = %v, want project_manager_requires_staff_agent", out["error"])
+	}
+	if out["message"] != staffPMCreationMessage {
+		t.Fatalf("message = %v, want %q", out["message"], staffPMCreationMessage)
 	}
 	if len(assignments.assignments) != 0 {
 		t.Fatalf("assignment repo entries = %d, want 0", len(assignments.assignments))
