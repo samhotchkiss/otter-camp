@@ -27,8 +27,8 @@ type layoutState struct {
 }
 
 const (
-	minPanelProportion      = 0.10
-	maxPanelProportion      = 0.70
+	minPanelProportion       = 0.10
+	maxPanelProportion       = 0.70
 	panelProportionTolerance = 0.02
 )
 
@@ -99,7 +99,7 @@ func computeLayout(width, height int, focus Panel, sidebarVisible bool, proporti
 		if useCustom {
 			weights = proportions
 		} else if w < 120 {
-			weights = [3]float64{0.12, 0.50, 0.38}
+			weights = [3]float64{0.20, 0.46, 0.34}
 		} else {
 			weights = [3]float64{0.18, 0.46, 0.36}
 		}
@@ -283,18 +283,18 @@ func partitionWidths(total int, weights [3]float64, visible [3]bool) [3]int {
 func hiddenPaneHints(visible [3]bool) string {
 	hints := make([]string, 0, 3)
 	if !visible[SidebarPanel] {
-		hints = append(hints, "sidebar hidden (1 or :focus sidebar)")
+		hints = append(hints, "1 sidebar")
 	}
 	if !visible[MainPanel] {
-		hints = append(hints, "main hidden (2 or :focus main)")
+		hints = append(hints, "2 main")
 	}
 	if !visible[ChatPanel] {
-		hints = append(hints, "chat hidden (3 or :focus chat)")
+		hints = append(hints, "3 chat")
 	}
 	if len(hints) == 0 {
 		return ""
 	}
-	return "Hidden panes: " + strings.Join(hints, "; ")
+	return "Show: " + strings.Join(hints, " · ")
 }
 
 func renderPanelHeader(name string, focused bool, width int, visible bool) string {

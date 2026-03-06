@@ -27,8 +27,7 @@
 │                                                    ││                                  │
 │                                                    ││                                  │
 ╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/dashboard  ·  rv9999  ·  snapshot  ·  Hidden panes:      
- sidebar hidden (1 or :focus sidebar)                                                     
+ ○  disconnected  ·  Show: 1 sidebar  ·  S/dashboard  ·  Frank  ·  snapshot  ·  rv9999    
 Help: i inbox · n next unread · Tab navigate · : commands · ? help
 
 ### S chat
@@ -60,8 +59,7 @@ Help: i inbox · n next unread · Tab navigate · : commands · ? help
 │                                                    ││                                  │
 │                                                    ││                                  │
 ╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/dashboard  ·  rv9999  ·  snapshot  ·  Hidden panes:      
- sidebar hidden (1 or :focus sidebar)                                                     
+ ○  disconnected  ·  Show: 1 sidebar  ·  S/dashboard  ·  Frank  ·  snapshot  ·  rv9999    
 Help: i inbox · n next unread · Tab navigate · : commands · ? help
 
 ### S inbox
@@ -93,8 +91,7 @@ Help: i inbox · n next unread · Tab navigate · : commands · ? help
 │                                                    ││                                  │
 │                                                    ││                                  │
 ╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/dashboard  ·  rv9999  ·  snapshot  ·  Hidden panes:      
- sidebar hidden (1 or :focus sidebar)                                                     
+ ○  disconnected  ·  Show: 1 sidebar  ·  S/dashboard  ·  Frank  ·  snapshot  ·  rv9999    
 Help: i inbox · n next unread · Tab navigate · : commands · ? help
 
 ### S board-sidebar-focus
@@ -126,6 +123,5 @@ Help: i inbox · n next unread · Tab navigate · : commands · ? help
 │                              ││                                                        │
 │                              ││                                                        │
 ╰──────────────────────────────╯╰────────────────────────────────────────────────────────╯
- ○  disconnected  ·  Frank  ·  S/sidebar  ·  rv9999  ·  snapshot  ·  Hidden panes: main   
- hidden (2 or :focus main)                                                                
+ ○  disconnected  ·  Show: 2 main  ·  S/sidebar  ·  Frank  ·  snapshot  ·  rv9999         
 Help: j/k navigate · Space expand · Enter select · n next unread · i inbox · d dashboard …

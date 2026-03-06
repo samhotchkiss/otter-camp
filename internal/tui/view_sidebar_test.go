@@ -81,23 +81,31 @@ func TestSidebarPanelShowsChatSessionCount(t *testing.T) {
 	}
 }
 
-func TestSidebarPanelUsesIconOnlyModeAtMediumNarrowWidths(t *testing.T) {
+func TestSidebarPanelKeepsCompactLabelsReadableAtTabletWidthEX253(t *testing.T) {
 	model := NewModel(DefaultState())
-	updated, _ := model.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
+	model.workspace.rebuildSidebar(
+		"",
+		[]SidebarChatItem{{SessionID: "s1", DisplayName: "Frank / General"}},
+		[]SidebarProjectItem{{ID: "p1", DisplayName: "Product Rebuild"}},
+	)
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 34})
 	model = updated.(Model)
 	model.setFocus(SidebarPanel)
 
-	panel := model.renderSidebarPanel(56, 12, true)
-	// In icon-only mode full labels should be replaced with compact tokens.
-	if strings.Contains(panel, "Frank / General") {
-		t.Fatalf("sidebar should not render full session labels in icon-only mode: %q", panel)
+	layout := model.CurrentLayout()
+	panel := model.renderSidebarPanel(layout.widths[SidebarPanel]-2, 12, true)
+	if !strings.Contains(panel, "INBOX") {
+		t.Fatalf("sidebar should keep INBOX readable at tablet width: %q", panel)
 	}
-	// INBOX → "IN", CHATS → "CH"
-	if !strings.Contains(panel, "IN") {
-		t.Fatalf("sidebar icon-only mode missing 'IN' compact token for INBOX: %q", panel)
+	if !strings.Contains(panel, "CHATS") {
+		t.Fatalf("sidebar should keep CHATS readable at tablet width: %q", panel)
 	}
-	if !strings.Contains(panel, "CH") {
-		t.Fatalf("sidebar icon-only mode missing 'CH' compact token for CHATS header: %q", panel)
+	if !strings.Contains(panel, "Frank") {
+		t.Fatalf("sidebar should keep session labels readable at tablet width: %q", panel)
+	}
+	if strings.Contains(panel, "PRJ") || strings.Contains(panel, "GEN") {
+		t.Fatalf("sidebar should avoid opaque compact tokens at tablet width: %q", panel)
 	}
 }
 
@@ -147,4 +155,3 @@ func TestSidebarScrollsToKeepCursorVisible(t *testing.T) {
 		t.Errorf("EX-195: expected '↑ N above' scroll indicator in sidebar:\n%s", panel)
 	}
 }
-

@@ -360,13 +360,7 @@ func (m Model) viewForShell(shell string) string {
 	sections = append(sections, prefix+m.renderHelpLine(helpWidth))
 
 	if m.tourActive {
-		// EX-108: promote ?·help so first-run users discover the full keybinding
-		// reference immediately. Dot-separated to match existing hint style.
-		tour := styleMuted.Render("Tour: ") +
-			styleSubtle.Render("1·sidebar  2·main  3·chat") +
-			styleMuted.Render("  ·  ") +
-			styleSubtle.Render("i·inbox  ?·help  :tour dismiss")
-		sections = append(sections, prefix+tour)
+		sections = append(sections, prefix+m.renderTourLine(helpWidth))
 	}
 
 	return strings.Join(sections, "\n")
@@ -775,8 +769,8 @@ func (m Model) renderSearchBar(panel Panel, width int) string {
 }
 
 func (m Model) sidebarIconOnlyMode() bool {
-	width, _ := normalizeDimensions(m.width, m.height)
-	return width >= 100 && width < 120
+	layout := m.CurrentLayout()
+	return layout.visible[SidebarPanel] && layout.widths[SidebarPanel] <= 14
 }
 
 func compactSidebarLabel(node *sidebarNode) string {
@@ -785,25 +779,33 @@ func compactSidebarLabel(node *sidebarNode) string {
 	}
 	switch node.Kind {
 	case sidebarKindInbox:
-		return "IN"
+		return "Inbox"
 	case sidebarKindHeader:
-		if len(node.Label) >= 2 {
-			return strings.ToUpper(node.Label[:2])
-		}
-		return strings.ToUpper(node.Label)
+		return compactSidebarText(node.Label, "Section")
 	case sidebarKindProject:
-		return "PRJ"
+		return compactSidebarText(node.Label, "Project")
 	case sidebarKindTask:
-		return "TSK"
+		return compactSidebarText(node.Label, "Task")
 	}
-	if node.TaskID != "" {
-		suffix := strings.TrimPrefix(strings.ToLower(node.TaskID), "task-")
-		if suffix == "" {
-			suffix = "?"
-		}
-		return "T" + suffix
+	return compactSidebarText(node.Label, "Session")
+}
+
+func compactSidebarText(label, fallback string) string {
+	trimmed := strings.TrimSpace(label)
+	if trimmed == "" {
+		return fallback
 	}
-	return "GEN"
+	parts := strings.FieldsFunc(trimmed, func(r rune) bool {
+		return r == '/' || r == '|' || r == '·'
+	})
+	if len(parts) == 0 {
+		return trimmed
+	}
+	candidate := strings.TrimSpace(parts[0])
+	if candidate == "" {
+		return fallback
+	}
+	return candidate
 }
 
 // ── Main panel ──────────────────────────────────────────────────────────────
@@ -3617,23 +3619,34 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 		}
 	}
 
-	status := ""
-	if m.statusMessage != "" {
-		// EX-141: raised from 60 to 80 to accommodate warning messages (⚠ prefix)
-		// and the worker-offline message (~67 chars) without truncation. Still safe
-		// on terminals as narrow as ~90 columns since the status bar has room after
-		// the connection dot, scope label, and size indicator.
-		status = styleMuted.Render("  ·  ") + styleSubtle.Render(truncate(m.statusMessage, 80))
-	}
-
-	// EX-043: show ◌ in status bar when agent turn is active
 	sessionDisplay := session
 	if m.activeTurn {
 		sessionDisplay += " " + styleReconnecting.Render("◌")
 	}
-	bar := dot + "  " + connStyle.Render(connText) +
-		styleMuted.Render("  ·  ") + styleMuted.Render(sessionDisplay) +
-		styleMuted.Render("  ·  ") + styleSubtle.Render(sizeStr+"/"+focusStr)
+
+	separator := styleMuted.Render("  ·  ")
+	segments := []statusBarSegment{
+		{text: dot + "  " + connStyle.Render(connText), priority: 0},
+	}
+	if layout.hiddenHints != "" {
+		segments = append(segments, statusBarSegment{text: styleSubtle.Render(layout.hiddenHints), priority: 0})
+	}
+	segments = append(segments, statusBarSegment{text: styleSubtle.Render(sizeStr + "/" + focusStr), priority: 0})
+	if sessionDisplay != "" {
+		segments = append(segments, statusBarSegment{text: styleMuted.Render(sessionDisplay), priority: 1})
+	}
+	if m.statusMessage != "" {
+		segments = append(segments, statusBarSegment{
+			text:     styleSubtle.Render(truncate(m.statusMessage, 80)),
+			priority: 2,
+		})
+	}
+	if m.workspace.inboxCount > 0 && m.workspace.mainView != ViewInbox {
+		segments = append(segments, statusBarSegment{
+			text:     lipgloss.NewStyle().Foreground(colWarning).Render(fmt.Sprintf("✉ %d", m.workspace.inboxCount)),
+			priority: 2,
+		})
+	}
 	if rv := strings.TrimSpace(versionpkg.RepoVersion); rv != "" {
 		rvLabel := "rv" + rv
 		rvStyle := styleSubtle
@@ -3641,42 +3654,79 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 			rvLabel += "!"
 			rvStyle = styleDisconnected
 		}
-		bar += styleMuted.Render("  ·  ") + rvStyle.Render(rvLabel)
+		segments = append(segments, statusBarSegment{text: rvStyle.Render(rvLabel), priority: 3})
 	}
 	if breadcrumb != "" {
-		bar += styleMuted.Render("  ·  ") + styleSubtle.Render(breadcrumb)
+		segments = append(segments, statusBarSegment{text: styleSubtle.Render(breadcrumb), priority: 3})
 	}
-	bar += status
-
-	// EX-101: inbox badge — alert users to pending inbox items even when the
-	// sidebar is collapsed (narrow screens) and the inbox count isn't visible.
-	if m.workspace.inboxCount > 0 && m.workspace.mainView != ViewInbox {
-		bar += styleMuted.Render("  ·  ") +
-			lipgloss.NewStyle().Foreground(colWarning).Render(fmt.Sprintf("✉ %d", m.workspace.inboxCount))
-	}
-
 	if m.firstRun {
-		poL := ""
 		if m.proofRealtime {
-			poL += "  " + styleConnected.Render("✓ realtime")
+			segments = append(segments, statusBarSegment{text: styleConnected.Render("✓ realtime"), priority: 4})
 		}
 		if m.proofReplay {
-			poL += "  " + styleConnected.Render("✓ replay")
-		}
-		if poL != "" {
-			bar += poL
+			segments = append(segments, statusBarSegment{text: styleConnected.Render("✓ replay"), priority: 4})
 		}
 	}
 
-	if layout.hiddenHints != "" {
-		bar += styleMuted.Render("  ·  ") + styleSubtle.Render(layout.hiddenHints)
-	}
+	bar := fitStatusBarSegments(segments, separator, maxInt(1, layout.contentSize-2))
 
 	return lipgloss.NewStyle().
 		Background(colStatusBg).
 		Width(layout.contentSize).
 		Padding(0, 1).
 		Render(bar)
+}
+
+type statusBarSegment struct {
+	text     string
+	priority int
+}
+
+func fitStatusBarSegments(segments []statusBarSegment, separator string, width int) string {
+	filtered := make([]statusBarSegment, 0, len(segments))
+	for _, segment := range segments {
+		if strings.TrimSpace(segment.text) == "" {
+			continue
+		}
+		filtered = append(filtered, segment)
+	}
+	if len(filtered) == 0 || width <= 0 {
+		return ""
+	}
+
+	for {
+		bar := joinStatusBarSegments(filtered, separator)
+		if lipgloss.Width(bar) <= width {
+			return bar
+		}
+
+		dropIdx := -1
+		dropPriority := -1
+		for idx := len(filtered) - 1; idx >= 0; idx-- {
+			if filtered[idx].priority > dropPriority {
+				dropPriority = filtered[idx].priority
+				dropIdx = idx
+			}
+		}
+		if dropIdx == -1 || dropPriority == 0 || len(filtered) == 1 {
+			return ansitrunc.String(bar, uint(width))
+		}
+		filtered = append(filtered[:dropIdx], filtered[dropIdx+1:]...)
+	}
+}
+
+func joinStatusBarSegments(segments []statusBarSegment, separator string) string {
+	if len(segments) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if strings.TrimSpace(segment.text) == "" {
+			continue
+		}
+		parts = append(parts, segment.text)
+	}
+	return strings.Join(parts, separator)
 }
 
 // ── Help line ────────────────────────────────────────────────────────────────
@@ -3690,6 +3740,17 @@ func (m Model) renderHelpLine(width int) string {
 		return styleMuted.Render(help)
 	}
 	return styleMuted.Render(truncate(help, maxInt(1, width)))
+}
+
+func (m Model) renderTourLine(width int) string {
+	tour := styleMuted.Render("Tour: ") +
+		styleSubtle.Render("1·sidebar  2·main  3·chat") +
+		styleMuted.Render("  ·  ") +
+		styleSubtle.Render("i·inbox  ?·help  :tour dismiss")
+	if width <= 0 || lipgloss.Width(tour) <= width {
+		return tour
+	}
+	return ansitrunc.String(tour, uint(width))
 }
 
 // ── Degraded banner ──────────────────────────────────────────────────────────
