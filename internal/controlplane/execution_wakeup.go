@@ -86,6 +86,11 @@ func (s *runService) CreateExecutionWakeup(ctx context.Context, input executionW
 		return executionWakeupResult{}, err
 	}
 	if stale {
+		if activeRun != nil && activeRun.ID != uuid.Nil {
+			if err := s.syncRuntimeStateStale(ctx, state, *activeRun, "stale_owner"); err != nil {
+				return executionWakeupResult{}, err
+			}
+		}
 		if err := s.clearActiveWakeupState(ctx, state, activeRun); err != nil {
 			return executionWakeupResult{}, err
 		}
@@ -94,6 +99,13 @@ func (s *runService) CreateExecutionWakeup(ctx context.Context, input executionW
 
 	if activeRun != nil {
 		if sameExecutionOwner(activeRun, input.PrincipalType, input.PrincipalID) {
+			now := s.clock.Now().UTC()
+			if _, err := s.runtime.SetActive(ctx, state.ID, activeRun.ID, activeRun.PrincipalType, principalIDPointer(activeRun.PrincipalType, activeRun.PrincipalID), now, now); err != nil {
+				return executionWakeupResult{}, err
+			}
+			if err := s.syncRuntimeProgress(ctx, state, *activeRun, "wakeup_coalesced"); err != nil {
+				return executionWakeupResult{}, err
+			}
 			if err := s.recordWakeupEvent(ctx, *activeRun, "wakeup_coalesced", map[string]any{
 				"scope_type":  scope.Type,
 				"scope_id":    scope.ID.String(),
@@ -107,6 +119,9 @@ func (s *runService) CreateExecutionWakeup(ctx context.Context, input executionW
 
 		deferred, err := s.ensureDeferredWakeup(ctx, input, scope, activeRun.ID)
 		if err != nil {
+			return executionWakeupResult{}, err
+		}
+		if err := s.syncRuntimeStateDeferred(ctx, state, *activeRun, deferred, strings.TrimSpace(input.WakeupSource)+":"+strings.TrimSpace(input.WakeupKind)); err != nil {
 			return executionWakeupResult{}, err
 		}
 		if err := s.recordWakeupEvent(ctx, deferred, "wakeup_deferred", map[string]any{
@@ -155,12 +170,27 @@ func (s *runService) ReleaseExecutionOwner(ctx context.Context, taskID, sessionI
 	if err != nil {
 		return executionWakeupResult{}, err
 	}
-	if _, err := s.runtime.ClearActive(ctx, state.ID); err != nil && !errors.Is(err, ErrNotFound) {
+	var releasedRun Run
+	if state.ActiveRunID != nil && *state.ActiveRunID != uuid.Nil {
+		if runRecord, getErr := s.runs.Get(ctx, *state.ActiveRunID); getErr == nil {
+			releasedRun = runRecord
+		}
+	}
+	updatedState, err := s.runtime.ClearActive(ctx, state.ID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return executionWakeupResult{}, err
+	}
+	if updatedState.ID != uuid.Nil {
+		state = updatedState
 	}
 
 	deferred, found, err := s.findDeferredWakeup(ctx, state.OrganizationID, scope, "", nil)
 	if err != nil || !found {
+		if releasedRun.ID != uuid.Nil {
+			if syncErr := s.syncRuntimeStateResumable(ctx, state, releasedRun, strings.TrimSpace(reason), strings.TrimSpace(reason), ""); syncErr != nil {
+				return executionWakeupResult{}, syncErr
+			}
+		}
 		return executionWakeupResult{}, err
 	}
 	promoted, err := s.promoteDeferredWakeup(ctx, state, deferred, strings.TrimSpace(reason))
@@ -199,6 +229,9 @@ func (s *runService) startFreshWakeup(ctx context.Context, state RuntimeState, i
 	if err == nil {
 		runRecord = updated
 	}
+	if err := s.syncRuntimeStateActive(ctx, state, runRecord, "wakeup_started"); err != nil {
+		return Run{}, err
+	}
 	return runRecord, nil
 }
 
@@ -235,6 +268,9 @@ func (s *runService) promoteDeferredWakeup(ctx context.Context, state RuntimeSta
 	updated, err := s.GetRun(ctx, deferred.ID)
 	if err == nil {
 		deferred = updated
+	}
+	if err := s.syncRuntimeStateActive(ctx, state, deferred, "wakeup_promoted"); err != nil {
+		return Run{}, err
 	}
 	if err := s.recordWakeupEvent(ctx, deferred, "wakeup_promoted", map[string]any{
 		"scope_type":  state.ScopeType,

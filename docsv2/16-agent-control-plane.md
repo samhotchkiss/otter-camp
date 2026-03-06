@@ -5,7 +5,7 @@ This spec defines the Agent Control Plane, the single trusted execution layer th
 
 The capability model uses a hierarchical dot-separated namespace (`domain.resource.action`, e.g. `system.cli.execute`, `project.task.create`) with wildcard support. Agents receive generous capabilities from templates: reader (read-only), worker (project mutations + file I/O + CLI + browser + memory), deployer (worker + external comms), and admin (all). The default experience is permissive — agents are empowered to do their jobs. Admins add `deny` rules when they want restrictions. Policies compose across five layers — instance safety (hardcoded, highest priority), organization, project, agent profile, and request-specific overrides (can only restrict, never expand) — using a most-restrictive-wins principle. Policy evaluation is binary: `allow` (execute immediately) or `deny` (reject).
 
-The execution model is captured in an 8-table schema anchored by the `run` entity. A Run represents one end-to-end action with principal identity, capability, policy decision, and result. Runs decompose into RunSteps (sequential stages), RunAttempts (retry envelopes preserving failure history), ToolExecutions (per-tool-call records with policy decisions), RunArtifacts (files, screenshots, logs in object storage), and RunEvents (append-only timeline for replay, debugging, and health monitoring via heartbeats). `runtime_state` stores the current execution owner for each task/session boundary so same-owner wakeups can be coalesced and different-owner wakeups can be deferred without overlapping work. Model invocations are tracked in the `model_invocation` table defined in doc 07, which carries control plane FKs (`run_id`, `run_step_id`, `run_attempt_id`) for cross-referencing. Runs bind to tasks and flow nodes for observability, enabling per-task and per-flow-node token breakdowns. The remaining table is `capability_policy` (declarative policy rules with binary outcomes). Reliability is handled through idempotency keys, optimistic concurrency, explicit retry attempts, dead letter handling, a background supervisor for stuck/orphaned task detection, explicit single-owner wakeup handoff, and soft/hard budget enforcement expressed in tokens (soft budget = notify admin, hard budget = deny).
+The execution model is captured in an 8-table schema anchored by the `run` entity. A Run represents one end-to-end action with principal identity, capability, policy decision, and result. Runs decompose into RunSteps (sequential stages), RunAttempts (retry envelopes preserving failure history), ToolExecutions (per-tool-call records with policy decisions), RunArtifacts (files, screenshots, logs in object storage), and RunEvents (append-only timeline for replay, debugging, and health monitoring via heartbeats). `runtime_state` stores the current execution owner for each task/session boundary and the authoritative resume contract for that boundary: bound task/session/flow ids, latest progress heartbeat, pending deferred wakeup info, failure disposition, and retirement status. Same-owner wakeups can be coalesced and different-owner wakeups can be deferred without overlapping work, and recovery reads this record first instead of reconstructing from scattered rows. Model invocations are tracked in the `model_invocation` table defined in doc 07, which carries control plane FKs (`run_id`, `run_step_id`, `run_attempt_id`) for cross-referencing. Runs bind to tasks and flow nodes for observability, enabling per-task and per-flow-node token breakdowns. The remaining table is `capability_policy` (declarative policy rules with binary outcomes). Reliability is handled through idempotency keys, optimistic concurrency, explicit retry attempts, dead letter handling, a background supervisor for stuck/orphaned task detection, explicit single-owner wakeup handoff, runtime-state retirement on archive/cancel/completion, and soft/hard budget enforcement expressed in tokens (soft budget = notify admin, hard budget = deny).
 
 ---
 
@@ -175,11 +175,12 @@ Because runs link to tasks and flow nodes, you can answer:
 Task and async-session execution uses a single-owner contract:
 
 - Each task/session execution boundary has at most one active owner at a time.
-- `runtime_state` stores the active run, active principal, lock acquisition time, and last wakeup timestamp for that boundary.
+- `runtime_state` stores the active run, active principal, lock acquisition time, last wakeup timestamp, and metadata contract needed to resume that boundary safely.
 - A wakeup from the same principal is coalesced onto the active run and logged as `wakeup_coalesced`.
 - A wakeup from a different principal creates or reuses a deferred run and is logged as `wakeup_deferred`.
 - When the active owner exits cleanly or is declared stale, the oldest deferred wakeup is promoted, logged as `wakeup_promoted`, and becomes the new active owner.
 - If the stored active run is already terminal, missing, or heartbeat-stale, the control plane clears ownership, fails the abandoned run with a stale-handoff reason, and promotes deferred work once.
+- When no owner is active, `runtime_state` still remains as a resumable contract until task completion/archive/cancel retires it. Recovery uses this record before it looks at session rows, queue rows, or stale run timestamps.
 
 This prevents overlapping reviewer/worker turns, duplicate queue wakeups, and recovery races on the same task.
 
@@ -1078,7 +1079,7 @@ create table runtime_state (
 create index on runtime_state (organization_id, scope_type, scope_id);
 ```
 
-`runtime_state` is not the historical record; it is the mutable coordination row that tells the broker who currently owns execution for a task/session boundary. Historical wakeup decisions live in `run_event` and deferred work lives in ordinary `run` rows.
+`runtime_state` is not the historical record; it is the mutable coordination row that tells the broker who currently owns execution for a task/session boundary and how to resume it safely when there is no active owner. The `metadata` contract carries the bound task/session/flow execution ids, provider/runtime session identifiers when relevant, last progress timestamp/event, deferred wakeup details, failure disposition (`resumable` vs `terminal`), and retirement reason/time. Historical wakeup decisions live in `run_event` and deferred work lives in ordinary `run` rows.
 
 ### capability_policy
 
@@ -1120,7 +1121,7 @@ create index on capability_policy (capability_pattern);
 - `run` is the anchor entity. Everything else links back to it.
 - `tool_execution` records tier 2 tool calls (control plane path). Tier 1 tool calls (chat-layer reads) are recorded only as chat messages. A complete activity view requires joining both.
 - `capability_policy` stores declarative rules with binary outcomes (`allow`, `deny`). The Policy API evaluates them. There are no runtime overrides or session-scoped grants.
-- `runtime_state` is the mutable single-owner coordinator for task/session execution boundaries. It is intentionally tiny: one row per boundary, current owner only.
+- `runtime_state` is the mutable single-owner coordinator for task/session execution boundaries. It stays authoritative even when no owner is active by preserving the resume contract until the task/project lifecycle retires it.
 - `run_event` is append-only and serves as both the execution timeline (for replay) and the health monitoring data source (heartbeats). Heartbeat events are purged after run completion to keep the table manageable. The `actor_type` check includes `supervisor` as a doc 16-specific extension of the principal convention, and wakeup lifecycle events (`wakeup_coalesced`, `wakeup_deferred`, `wakeup_promoted`) make merge/defer decisions auditable.
 - Token count fields on `run`, `run_step`, and `run_attempt` are denormalized rollups from `model_invocation` (doc 07). They are updated asynchronously (not in the hot path) and may be slightly stale.
 

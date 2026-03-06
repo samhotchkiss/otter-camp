@@ -958,6 +958,8 @@ type fakeTaskQueueRunStarter struct {
 	confirmCancelledCalls   []uuid.UUID
 	listRunsByTaskCalls     []listRunsByTaskCall
 	releaseExecutionCalls   []releaseExecutionCall
+	retireRuntimeTaskCalls  []retireRuntimeTaskCall
+	retireRuntimeProjCalls  []retireRuntimeProjectCall
 	createRunInputs         []CreateRunInput
 	dedupeByIdempotency     bool
 	idempotentRuns          map[string]Run
@@ -979,6 +981,16 @@ type listRunsByTaskCall struct {
 type releaseExecutionCall struct {
 	taskID    uuid.UUID
 	sessionID uuid.UUID
+	reason    string
+}
+
+type retireRuntimeTaskCall struct {
+	taskID uuid.UUID
+	reason string
+}
+
+type retireRuntimeProjectCall struct {
+	projectID uuid.UUID
 	reason    string
 }
 
@@ -1124,6 +1136,22 @@ func (f *fakeTaskQueueRunStarter) ReleaseExecutionOwner(_ context.Context, taskI
 		reason:    reason,
 	})
 	return executionWakeupResult{}, nil
+}
+
+func (f *fakeTaskQueueRunStarter) RetireRuntimeStateForTask(_ context.Context, taskID uuid.UUID, reason string) error {
+	f.retireRuntimeTaskCalls = append(f.retireRuntimeTaskCalls, retireRuntimeTaskCall{
+		taskID: taskID,
+		reason: reason,
+	})
+	return nil
+}
+
+func (f *fakeTaskQueueRunStarter) RetireRuntimeStateForProject(_ context.Context, projectID uuid.UUID, reason string) error {
+	f.retireRuntimeProjCalls = append(f.retireRuntimeProjCalls, retireRuntimeProjectCall{
+		projectID: projectID,
+		reason:    reason,
+	})
+	return nil
 }
 
 type fakeTaskQueueFlowExecutionRepository struct {

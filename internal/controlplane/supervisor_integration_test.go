@@ -248,6 +248,124 @@ func TestSupervisor_StaleCreatedRun_CancelledAndLogged(t *testing.T) {
 	}
 }
 
+func TestSupervisor_RecoveryUsesRuntimeStateToAvoidDuplicateResume(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord, taskRecord := seedRunProjectTaskWithPM(t, ctx, pool, org.ID)
+	flowNodeID := seedSupervisorFlowNode(t, ctx, pool, org.ID, projectRecord.ID)
+
+	now := time.Date(2026, 2, 26, 19, 0, 0, 0, time.UTC)
+	fakeClock := clock.NewFake(now)
+	runService := newRunServiceIntegrationWithClock(t, pool, fakeClock)
+	wakeSvc := runService.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+
+	workerID := uuid.New()
+	reviewerID := uuid.New()
+
+	started, err := wakeSvc.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: org.ID,
+			ProjectID:      &projectRecord.ID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     &flowNodeID,
+			PrincipalType:  "agent",
+			PrincipalID:    workerID,
+			TriggerType:    "scheduler",
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup started: %v", err)
+	}
+
+	deferred, err := wakeSvc.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: org.ID,
+			ProjectID:      &projectRecord.ID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     &flowNodeID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup deferred: %v", err)
+	}
+	if deferred.Decision != executionWakeupDeferred {
+		t.Fatalf("deferred decision = %q, want %q", deferred.Decision, executionWakeupDeferred)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE run SET updated_at = $2 WHERE id = $1`, started.Run.ID, now.Add(-10*time.Minute)); err != nil {
+		t.Fatalf("backdate started run updated_at: %v", err)
+	}
+
+	promoted, err := wakeSvc.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: org.ID,
+			ProjectID:      &projectRecord.ID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     &flowNodeID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup promote: %v", err)
+	}
+	if promoted.Decision != executionWakeupPromoted {
+		t.Fatalf("promoted decision = %q, want %q", promoted.Decision, executionWakeupPromoted)
+	}
+
+	state, err := NewRuntimeStateRepository(pool).GetByScope(ctx, "task", taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	if state.ActiveRunID == nil || *state.ActiveRunID != promoted.Run.ID {
+		t.Fatalf("runtime active_run_id = %v, want %s", state.ActiveRunID, promoted.Run.ID)
+	}
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:       pool,
+		RunService: runService,
+		EventBus:   eventbus.New(pool, newDiscardLogger(), eventbus.Config{}),
+		Clock:      fakeClock,
+		Logger:     newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.recoverRun(ctx, started.Run, "heartbeat silence exceeded"); err != nil {
+		t.Fatalf("recoverRun: %v", err)
+	}
+
+	var recoveryCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM run
+		WHERE organization_id = $1
+		  AND trigger_type = 'supervisor'
+		  AND metadata->>'supervisor_recovery_from' = $2
+	`, org.ID, started.Run.ID.String()).Scan(&recoveryCount); err != nil {
+		t.Fatalf("count supervisor recovery runs: %v", err)
+	}
+	if recoveryCount != 0 {
+		t.Fatalf("supervisor recovery run count = %d, want 0", recoveryCount)
+	}
+}
+
 func TestSupervisor_MaxRecoveryAttempts(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
