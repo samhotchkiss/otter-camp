@@ -55,8 +55,17 @@ type assignmentRepository interface {
 	GetByAgentAndProject(ctx context.Context, agentID, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
 }
 
+type agentRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
+}
+
+type humanUserRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.HumanUser, error)
+}
+
 type flowNodeRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowNode, error)
+	ListByTemplate(ctx context.Context, flowTemplateID uuid.UUID) ([]repo.FlowNode, error)
 }
 
 type flowExecutionRepository interface {
@@ -137,6 +146,8 @@ func NewTaskRouteRegistrar(taskService tasksvc.TaskService, flowService flowsvc.
 		h.tasks = repo.NewProjectTaskRepo(pool)
 		h.projects = repo.NewProjectRepo(pool)
 		h.assignments = repo.NewAgentProjectAssignmentRepo(pool)
+		h.agents = repo.NewAgentRepo(pool)
+		h.users = repo.NewHumanUserRepo(pool)
 		h.flowNodes = repo.NewFlowNodeRepo(pool)
 		h.executions = repo.NewFlowNodeExecutionRepo(pool)
 		h.subtasks = repo.NewProjectSubtaskRepo(pool)
@@ -207,6 +218,8 @@ type taskHandlers struct {
 	tasks        projectTaskRepository
 	projects     projectRepository
 	assignments  assignmentRepository
+	agents       agentRepository
+	users        humanUserRepository
 	flowNodes    flowNodeRepository
 	executions   flowExecutionRepository
 	subtasks     projectSubtaskRepository
@@ -1095,51 +1108,13 @@ func (h taskHandlers) getTaskFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var currentNode *flowNodeResponse
-	var currentExecution *flowNodeExecutionResponse
-	if taskRecord.CurrentFlowNodeID != nil && h.flowNodes != nil {
-		node, err := h.flowNodes.GetByID(r.Context(), *taskRecord.CurrentFlowNodeID)
-		if err == nil {
-			nodeResp := toFlowNodeResponse(&node)
-			currentNode = &nodeResp
-		}
-		if err == nil {
-			exec, getErr := h.executions.GetActive(r.Context(), taskRecord.ID, node.ID)
-			if getErr == nil {
-				execResp := toFlowNodeExecutionResponse(exec)
-				currentExecution = &execResp
-			}
-		}
-	}
-
-	executions, err := h.executions.ListByTask(r.Context(), taskRecord.ID)
-	if err != nil {
-		h.respondTaskError(responder, w, err)
+	response, buildErr := h.buildTaskFlowResponse(r.Context(), taskRecord)
+	if buildErr != nil {
+		h.respondTaskError(responder, w, buildErr)
 		return
 	}
-	executionResponse := make([]flowNodeExecutionResponse, 0, len(executions))
-	for _, execution := range executions {
-		executionResponse = append(executionResponse, toFlowNodeExecutionResponse(execution))
-	}
 
-	subtasks, err := h.listAllTaskSubtasks(r.Context(), taskRecord.ID)
-	if err != nil {
-		h.respondTaskError(responder, w, err)
-		return
-	}
-	subtaskResponse := make([]subtaskResponse, 0, len(subtasks))
-	for _, subtask := range subtasks {
-		subtaskResponse = append(subtaskResponse, toSubtaskResponse(subtask))
-	}
-
-	responder.JSON(w, http.StatusOK, map[string]any{
-		"task_id":           taskRecord.ID,
-		"flow_template_id":  taskRecord.FlowTemplateID,
-		"current_node":      currentNode,
-		"current_execution": currentExecution,
-		"executions":        executionResponse,
-		"subtasks":          subtaskResponse,
-	})
+	responder.JSON(w, http.StatusOK, response)
 }
 
 func (h taskHandlers) listTaskSubtasks(w http.ResponseWriter, r *http.Request) {

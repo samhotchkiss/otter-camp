@@ -833,6 +833,12 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 		Priority:            d.Priority,
 		RequiresHumanReview: d.RequiresHumanReview,
 	}
+	stringValue := func(value *string) string {
+		if value == nil {
+			return ""
+		}
+		return strings.TrimSpace(*value)
+	}
 	if d.BranchName != nil {
 		item.BranchName = *d.BranchName
 	}
@@ -850,6 +856,8 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 		}
 	}
 
+	flowActiveExecutionID := ""
+	flowRecentExecutionID := ""
 	var flowResp struct {
 		Data struct {
 			CurrentNode *struct {
@@ -857,13 +865,75 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 				DisplayName string `json:"display_name"`
 				NodeType    string `json:"node_type"`
 			} `json:"current_node"`
+			CurrentExecution *struct {
+				ID        string  `json:"id"`
+				SessionID *string `json:"session_id"`
+			} `json:"current_execution"`
+			Nodes []struct {
+				ID                string  `json:"id"`
+				DisplayName       string  `json:"display_name"`
+				NodeType          string  `json:"node_type"`
+				Position          int     `json:"position"`
+				ActorType         *string `json:"actor_type"`
+				ActorLabel        string  `json:"actor_label"`
+				State             string  `json:"state"`
+				IsCurrent         bool    `json:"is_current"`
+				NextNodeID        *string `json:"next_node_id"`
+				RejectNodeID      *string `json:"reject_node_id"`
+				VisitCount        int     `json:"visit_count"`
+				CompletedVisits   int     `json:"completed_visits"`
+				RejectedVisits    int     `json:"rejected_visits"`
+				LatestExecutionID *string `json:"latest_execution_id"`
+				LatestSessionID   *string `json:"latest_session_id"`
+				SubtaskCounts     struct {
+					Total      int `json:"total"`
+					Done       int `json:"done"`
+					InProgress int `json:"in_progress"`
+					Pending    int `json:"pending"`
+					Blocked    int `json:"blocked"`
+					Cancelled  int `json:"cancelled"`
+				} `json:"subtask_counts"`
+				Executions []struct {
+					ID            string     `json:"id"`
+					FlowNodeID    string     `json:"flow_node_id"`
+					VisitNumber   int        `json:"visit_number"`
+					Status        string     `json:"status"`
+					State         string     `json:"state"`
+					SessionID     *string    `json:"session_id"`
+					StartedAt     time.Time  `json:"started_at"`
+					CompletedAt   *time.Time `json:"completed_at"`
+					SubtaskCounts struct {
+						Total      int `json:"total"`
+						Done       int `json:"done"`
+						InProgress int `json:"in_progress"`
+						Pending    int `json:"pending"`
+						Blocked    int `json:"blocked"`
+						Cancelled  int `json:"cancelled"`
+					} `json:"subtask_counts"`
+					Subtasks []struct {
+						Title      string `json:"title"`
+						WorkStatus string `json:"work_status"`
+					} `json:"subtasks"`
+				} `json:"executions"`
+			} `json:"nodes"`
+			Edges []struct {
+				FromNodeID string `json:"from_node_id"`
+				ToNodeID   string `json:"to_node_id"`
+				Kind       string `json:"kind"`
+				IsBackEdge bool   `json:"is_back_edge"`
+			} `json:"edges"`
 			Executions []struct {
-				FlowNodeID string `json:"flow_node_id"`
-				Status     string `json:"status"`
+				ID          string     `json:"id"`
+				FlowNodeID  string     `json:"flow_node_id"`
+				Status      string     `json:"status"`
+				SessionID   *string    `json:"session_id"`
+				StartedAt   time.Time  `json:"started_at"`
+				CompletedAt *time.Time `json:"completed_at"`
 			} `json:"executions"`
 			Subtasks []struct {
-				Title  string `json:"title"`
-				Status string `json:"status"`
+				Title      string `json:"title"`
+				Status     string `json:"status"`
+				WorkStatus string `json:"work_status"`
 			} `json:"subtasks"`
 		} `json:"data"`
 	}
@@ -871,26 +941,103 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 	if apiClient.request(ctx, "GET", flowPath, nil, &flowResp) == nil {
 		f := flowResp.Data
 		if f.CurrentNode != nil {
-			execMap := map[string]string{}
-			for _, ex := range f.Executions {
-				execMap[ex.FlowNodeID] = ex.Status
-			}
-			step := tuiapp.FlowStep{
-				Name:     f.CurrentNode.DisplayName,
-				NodeType: f.CurrentNode.NodeType,
-			}
-			if status, ok := execMap[f.CurrentNode.ID]; ok {
-				step.Status = status
-			} else {
-				step.Status = "pending"
-			}
-			item.FlowSteps = append(item.FlowSteps, step)
+			item.FlowCurrentNodeID = f.CurrentNode.ID
+			item.FlowNodeName = f.CurrentNode.DisplayName
 		}
-		for _, st := range f.Subtasks {
-			item.SubtaskItems = append(item.SubtaskItems, tuiapp.SubtaskItem{
-				Title:  st.Title,
-				Status: st.Status,
+		if f.CurrentExecution != nil {
+			flowActiveExecutionID = stringValue(f.CurrentExecution.SessionID)
+		}
+		for _, edge := range f.Edges {
+			item.FlowEdges = append(item.FlowEdges, tuiapp.TaskFlowEdge{
+				FromNodeID: edge.FromNodeID,
+				ToNodeID:   edge.ToNodeID,
+				Kind:       edge.Kind,
+				IsBackEdge: edge.IsBackEdge,
 			})
+		}
+		for _, node := range f.Nodes {
+			flowNode := tuiapp.TaskFlowNode{
+				ID:                node.ID,
+				Name:              node.DisplayName,
+				NodeType:          node.NodeType,
+				Position:          node.Position,
+				ActorType:         stringValue(node.ActorType),
+				ActorLabel:        node.ActorLabel,
+				State:             node.State,
+				IsCurrent:         node.IsCurrent,
+				NextNodeID:        stringValue(node.NextNodeID),
+				RejectNodeID:      stringValue(node.RejectNodeID),
+				VisitCount:        node.VisitCount,
+				CompletedVisits:   node.CompletedVisits,
+				RejectedVisits:    node.RejectedVisits,
+				SessionID:         stringValue(node.LatestSessionID),
+				LatestExecutionID: stringValue(node.LatestExecutionID),
+				SubtaskCounts: tuiapp.TaskSubtaskCounts{
+					Total:      node.SubtaskCounts.Total,
+					Done:       node.SubtaskCounts.Done,
+					InProgress: node.SubtaskCounts.InProgress,
+					Pending:    node.SubtaskCounts.Pending,
+					Blocked:    node.SubtaskCounts.Blocked,
+					Cancelled:  node.SubtaskCounts.Cancelled,
+				},
+			}
+			for _, execution := range node.Executions {
+				flowExecution := tuiapp.TaskFlowExecution{
+					ID:          execution.ID,
+					FlowNodeID:  execution.FlowNodeID,
+					VisitNumber: execution.VisitNumber,
+					Status:      execution.Status,
+					State:       execution.State,
+					SessionID:   stringValue(execution.SessionID),
+					StartedAt:   execution.StartedAt,
+					CompletedAt: execution.CompletedAt,
+					SubtaskCounts: tuiapp.TaskSubtaskCounts{
+						Total:      execution.SubtaskCounts.Total,
+						Done:       execution.SubtaskCounts.Done,
+						InProgress: execution.SubtaskCounts.InProgress,
+						Pending:    execution.SubtaskCounts.Pending,
+						Blocked:    execution.SubtaskCounts.Blocked,
+						Cancelled:  execution.SubtaskCounts.Cancelled,
+					},
+				}
+				for _, subtask := range execution.Subtasks {
+					flowExecution.Subtasks = append(flowExecution.Subtasks, tuiapp.SubtaskItem{
+						Title:  subtask.Title,
+						Status: subtask.WorkStatus,
+					})
+				}
+				flowNode.Executions = append(flowNode.Executions, flowExecution)
+			}
+			if node.IsCurrent && len(flowNode.Executions) > 0 {
+				item.SubtaskItems = append([]tuiapp.SubtaskItem(nil), flowNode.Executions[len(flowNode.Executions)-1].Subtasks...)
+			}
+			item.FlowNodes = append(item.FlowNodes, flowNode)
+			item.FlowSteps = append(item.FlowSteps, tuiapp.FlowStep{
+				Name:     node.DisplayName,
+				NodeType: node.NodeType,
+				Status:   node.State,
+			})
+		}
+		if len(item.SubtaskItems) == 0 {
+			for _, st := range f.Subtasks {
+				status := strings.TrimSpace(st.Status)
+				if status == "" {
+					status = strings.TrimSpace(st.WorkStatus)
+				}
+				item.SubtaskItems = append(item.SubtaskItems, tuiapp.SubtaskItem{
+					Title:  st.Title,
+					Status: status,
+				})
+			}
+		}
+		for i := len(f.Executions) - 1; i >= 0; i-- {
+			if sid := stringValue(f.Executions[i].SessionID); sid != "" {
+				flowRecentExecutionID = sid
+				break
+			}
+		}
+		if flowActiveExecutionID == "" {
+			flowActiveExecutionID = flowRecentExecutionID
 		}
 	}
 
@@ -911,10 +1058,11 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 
 	var eventsResp struct {
 		Data []struct {
-			EventType string         `json:"event_type"`
-			ActorType string         `json:"actor_type"`
-			Payload   map[string]any `json:"payload"`
-			CreatedAt time.Time      `json:"created_at"`
+			EventType  string         `json:"event_type"`
+			ActorType  string         `json:"actor_type"`
+			FlowNodeID *string        `json:"flow_node_id"`
+			Payload    map[string]any `json:"payload"`
+			CreatedAt  time.Time      `json:"created_at"`
 		} `json:"data"`
 	}
 	eventsPath := "/v1/tasks/" + url.PathEscape(taskID) + "/events?limit=50"
@@ -922,10 +1070,11 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 		for i := len(eventsResp.Data) - 1; i >= 0; i-- {
 			ev := eventsResp.Data[i]
 			item.Events = append(item.Events, tuiapp.TaskEvent{
-				EventType: ev.EventType,
-				ActorType: ev.ActorType,
-				Payload:   ev.Payload,
-				CreatedAt: ev.CreatedAt,
+				EventType:  ev.EventType,
+				ActorType:  ev.ActorType,
+				FlowNodeID: stringValue(ev.FlowNodeID),
+				Payload:    ev.Payload,
+				CreatedAt:  ev.CreatedAt,
 			})
 		}
 	}
@@ -937,6 +1086,20 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 	})
 	if err == nil {
 		populateTUITaskDetailSessions(item, sessions.Data)
+	}
+	if item.ActiveExecutionID == "" {
+		item.ActiveExecutionID = flowActiveExecutionID
+	}
+	if item.RecentExecutionID == "" {
+		item.RecentExecutionID = flowRecentExecutionID
+	}
+	if item.SessionID == "" {
+		switch {
+		case item.ActiveExecutionID != "":
+			item.SessionID = item.ActiveExecutionID
+		case item.RecentExecutionID != "":
+			item.SessionID = item.RecentExecutionID
+		}
 	}
 
 	return item, nil

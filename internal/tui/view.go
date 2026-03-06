@@ -1821,7 +1821,10 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  ⚠  Human review required"))
 	}
 	// Flow pipeline visualization
-	if len(task.FlowSteps) > 0 {
+	if len(task.FlowNodes) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, renderTaskFlowSection(width, task)...)
+	} else if len(task.FlowSteps) > 0 {
 		lines = append(lines, "")
 		lines = append(lines, divider(width, "Flow"))
 		var pipeline []string
@@ -1876,8 +1879,10 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 		}
 	}
 
-	// Show structured subtasks from flow data (with status)
-	if len(task.SubtaskItems) > 0 {
+	// Show structured subtasks from flow data (with status) when the richer
+	// flow topology is unavailable. The richer flow view renders node-scoped
+	// subtasks inline with the selected node detail.
+	if len(task.FlowNodes) == 0 && len(task.SubtaskItems) > 0 {
 		lines = append(lines, "")
 		lines = append(lines, divider(width, "Subtasks"))
 		for i, st := range task.SubtaskItems {
@@ -1900,7 +1905,7 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 			}
 			lines = append(lines, style.Render(fmt.Sprintf("  %s %s", icon, truncate(label, width-6))))
 		}
-	} else if len(task.Subtasks) > 0 {
+	} else if len(task.FlowNodes) == 0 && len(task.Subtasks) > 0 {
 		// Fallback: plain string subtasks
 		lines = append(lines, "")
 		lines = append(lines, divider(width, "Subtasks"))
@@ -1978,14 +1983,19 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	}
 	// Build hint parts using "  ·  " separator (consistent with project view).
 	var hintParts []string
+	selectedNode := task.selectedFlowNode()
 	if sessionID != "" {
-		switch task.Status {
-		case "in_progress":
-			hintParts = append(hintParts, "Enter·resume session")
-		case "done", "approved":
-			hintParts = append(hintParts, "Enter·view session log")
-		default:
-			hintParts = append(hintParts, "Enter·open session")
+		if selectedNode != nil && selectedNode.ID != "" && selectedNode.ID != task.FlowCurrentNodeID {
+			hintParts = append(hintParts, "Enter·open selected journal")
+		} else {
+			switch task.Status {
+			case "in_progress":
+				hintParts = append(hintParts, "Enter·resume session")
+			case "done", "approved":
+				hintParts = append(hintParts, "Enter·view session log")
+			default:
+				hintParts = append(hintParts, "Enter·open session")
+			}
 		}
 	}
 	// Esc destination depends on whether there is a project context.

@@ -91,6 +91,10 @@ type taskRecord struct {
 	History             []string
 	Events              []TaskEvent
 	BranchName          string
+	FlowCurrentNodeID   string
+	FlowNodes           []TaskFlowNode
+	FlowEdges           []TaskFlowEdge
+	SelectedFlowNodeID  string
 	FlowSteps           []FlowStep
 	SubtaskItems        []SubtaskItem
 	Dependencies        []TaskDependency
