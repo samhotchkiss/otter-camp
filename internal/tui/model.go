@@ -1067,6 +1067,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rec.PlanningRiskLevel = typed.Detail.PlanningRiskLevel
 		rec.PlanningArtifacts = append([]TaskPlanningArtifact(nil), typed.Detail.PlanningArtifacts...)
 		rec.PlanningFollowOns = append([]string(nil), typed.Detail.PlanningFollowOns...)
+		rec.PlanningProcessStatus = typed.Detail.PlanningProcessStatus
+		rec.PlanningChecklist = append([]string(nil), typed.Detail.PlanningChecklist...)
+		rec.PlanningMissing = append([]string(nil), typed.Detail.PlanningMissing...)
+		rec.PlanningOverrideReason = typed.Detail.PlanningOverrideReason
 		rec.RequiresHumanReview = typed.Detail.RequiresHumanReview
 		rec.BranchName = typed.Detail.BranchName
 		rec.FlowSteps = typed.Detail.FlowSteps
@@ -1088,7 +1092,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "status.changed":
 					from, _ := ev.Payload["from_status"].(string)
 					to, _ := ev.Payload["to_status"].(string)
+					planningStatus, _ := ev.Payload["planning_process_status"].(string)
+					overrideReason, _ := ev.Payload["planning_override_reason"].(string)
 					line = fmt.Sprintf("%s  %s → %s (%s)", ts, from, to, actor)
+					if strings.TrimSpace(planningStatus) != "" {
+						line += fmt.Sprintf(" · planning %s", planningStatus)
+						if strings.TrimSpace(overrideReason) != "" {
+							line += ": " + overrideReason
+						}
+					}
 				case "flow.advanced":
 					target := rec.flowNodeName(ev.FlowNodeID)
 					if target == "" {

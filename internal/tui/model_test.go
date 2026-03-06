@@ -1112,6 +1112,10 @@ func TestTaskDetailViewShowsExtendedFieldsAndFullEventLog(t *testing.T) {
 		PlanningRiskLevel:        "high",
 		PlanningArtifacts:        []TaskPlanningArtifact{{Slug: "launch-brief", Title: "Launch brief"}},
 		PlanningFollowOns:        []string{"Align sales, support, and product owners on the launch brief before public rollout."},
+		PlanningProcessStatus:    "overridden",
+		PlanningChecklist:        []string{"Verify the launch brief defines scope, audience, and timing for the rollout."},
+		PlanningMissing:          []string{"Launch brief missing sections: timing"},
+		PlanningOverrideReason:   "Channel owners are still finalizing timing.",
 	}
 	model.workspace.tasks["task-1"].History = []string{
 		"created",
@@ -1130,7 +1134,11 @@ func TestTaskDetailViewShowsExtendedFieldsAndFullEventLog(t *testing.T) {
 		"Acceptance Criteria",
 		"Planning",
 		"Playbook: gtm launch",
+		"Process: overridden",
+		"Channel owners are still finalizing timing.",
 		"Launch brief",
+		"Review rubric",
+		"Missing contract items",
 		"Align sales, support, and product owners",
 		"Subtasks",
 		"created",

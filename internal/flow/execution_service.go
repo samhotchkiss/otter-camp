@@ -444,27 +444,52 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 		"task_id":      taskRecord.ID,
 		"flow_node_id": flowNodeID,
 	})
-	if plan, ok := taskplan.Parse(taskRecord.Metadata); ok && plan.RequiresReviewAndRefinement() {
+	if plan, ok := taskplan.Parse(taskRecord.Metadata); ok {
+		report := taskplan.Evaluate(plan)
+		if !(plan.RequiresReviewAndRefinement() || report.Enforced) {
+			goto createInboxItem
+		}
 		artifactTitles := make([]string, 0, len(plan.Artifacts))
 		for _, artifact := range plan.Artifacts {
 			if strings.TrimSpace(artifact.Title) != "" {
 				artifactTitles = append(artifactTitles, artifact.Title)
 			}
 		}
-		title = "Review options and recommendation"
-		body = fmt.Sprintf(
-			"%s\n\nPlaybook: %s\nPlanning context: work_type=%s, stage=%s, evidence=%s, risk=%s\nPlanned stages: %s\nPlanned artifacts: %s\nReview packet sections: %s\nSuggested next steps: %s",
-			plan.ReviewPacket.Summary,
-			plan.Playbook,
-			plan.WorkType,
-			plan.ProjectStage,
-			plan.EvidenceMaturity,
-			plan.RiskLevel,
-			strings.Join(plan.PlannedStages, " -> "),
-			strings.Join(artifactTitles, ", "),
-			strings.Join(plan.ReviewPacket.Sections, ", "),
-			strings.Join(plan.FollowOnSuggestions, " | "),
+		if plan.RequiresReviewAndRefinement() {
+			title = "Review options and recommendation"
+		} else {
+			title = "Review planning artifacts and rubric"
+		}
+		bodyLines := []string{
+			"Flow advancement paused pending human review.",
+		}
+		if strings.TrimSpace(plan.ReviewPacket.Summary) != "" {
+			bodyLines[0] = plan.ReviewPacket.Summary
+		}
+		bodyLines = append(bodyLines,
+			"",
+			fmt.Sprintf("Playbook: %s", plan.Playbook),
+			fmt.Sprintf("Planning context: work_type=%s, stage=%s, evidence=%s, risk=%s", plan.WorkType, plan.ProjectStage, plan.EvidenceMaturity, plan.RiskLevel),
+			fmt.Sprintf("Planning process: %s", report.ProcessStatus),
+			fmt.Sprintf("Planned stages: %s", strings.Join(plan.PlannedStages, " -> ")),
+			fmt.Sprintf("Planned artifacts: %s", strings.Join(artifactTitles, ", ")),
 		)
+		if len(report.ReviewChecklist) > 0 {
+			bodyLines = append(bodyLines, fmt.Sprintf("Review checklist: %s", strings.Join(report.ReviewChecklist, " | ")))
+		}
+		if len(report.MissingRequirements()) > 0 {
+			bodyLines = append(bodyLines, fmt.Sprintf("Missing contract items: %s", strings.Join(report.MissingRequirements(), " | ")))
+		}
+		if plan.Override != nil && strings.TrimSpace(plan.Override.Reason) != "" {
+			bodyLines = append(bodyLines, fmt.Sprintf("Override reason: %s", plan.Override.Reason))
+		}
+		if len(plan.ReviewPacket.Sections) > 0 {
+			bodyLines = append(bodyLines, fmt.Sprintf("Review packet sections: %s", strings.Join(plan.ReviewPacket.Sections, ", ")))
+		}
+		if len(plan.FollowOnSuggestions) > 0 {
+			bodyLines = append(bodyLines, fmt.Sprintf("Suggested next steps: %s", strings.Join(plan.FollowOnSuggestions, " | ")))
+		}
+		body = strings.Join(bodyLines, "\n")
 		payload, _ = json.Marshal(map[string]any{
 			"task_id":      taskRecord.ID,
 			"flow_node_id": flowNodeID,
@@ -477,13 +502,20 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 			},
 			"planned_stages":        plan.PlannedStages,
 			"artifacts":             plan.Artifacts,
+			"artifact_contract":     report.ArtifactContract,
+			"artifact_evidence":     plan.ArtifactEvidence,
 			"follow_on_suggestions": plan.FollowOnSuggestions,
+			"review_checklist":      report.ReviewChecklist,
+			"process_status":        report.ProcessStatus,
+			"missing_requirements":  report.MissingRequirements(),
 			"review_packet": map[string]any{
 				"summary":  plan.ReviewPacket.Summary,
 				"sections": plan.ReviewPacket.Sections,
 			},
+			"override": plan.Override,
 		})
 	}
+createInboxItem:
 	created, err := s.inbox.Create(ctx, repo.InboxItem{
 		OrganizationID:  taskRecord.OrganizationID,
 		ItemType:        "task_review",

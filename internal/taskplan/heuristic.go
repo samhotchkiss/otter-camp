@@ -96,23 +96,26 @@ type ReviewPacket struct {
 }
 
 type Plan struct {
-	Mode                string            `json:"mode"`
-	Playbook            string            `json:"playbook,omitempty"`
-	WorkType            string            `json:"work_type,omitempty"`
-	ProjectStage        string            `json:"project_stage,omitempty"`
-	EvidenceMaturity    string            `json:"evidence_maturity,omitempty"`
-	RiskLevel           string            `json:"risk_level,omitempty"`
-	Subjective          bool              `json:"subjective"`
-	Comparative         bool              `json:"comparative"`
-	MultiOption         bool              `json:"multi_option"`
-	ReviewPolicyMode    string            `json:"review_policy_mode,omitempty"`
-	Guardrails          []string          `json:"guardrails,omitempty"`
-	SummaryCadence      string            `json:"summary_cadence,omitempty"`
-	PlannedStages       []string          `json:"planned_stages,omitempty"`
-	DefaultTemplateSlug string            `json:"default_template_slug,omitempty"`
-	Artifacts           []PlannedArtifact `json:"artifacts,omitempty"`
-	FollowOnSuggestions []string          `json:"follow_on_suggestions,omitempty"`
-	ReviewPacket        ReviewPacket      `json:"review_packet,omitempty"`
+	Mode                string             `json:"mode"`
+	Playbook            string             `json:"playbook,omitempty"`
+	WorkType            string             `json:"work_type,omitempty"`
+	ProjectStage        string             `json:"project_stage,omitempty"`
+	EvidenceMaturity    string             `json:"evidence_maturity,omitempty"`
+	RiskLevel           string             `json:"risk_level,omitempty"`
+	ProcessEnforced     bool               `json:"process_enforced,omitempty"`
+	Subjective          bool               `json:"subjective"`
+	Comparative         bool               `json:"comparative"`
+	MultiOption         bool               `json:"multi_option"`
+	ReviewPolicyMode    string             `json:"review_policy_mode,omitempty"`
+	Guardrails          []string           `json:"guardrails,omitempty"`
+	SummaryCadence      string             `json:"summary_cadence,omitempty"`
+	PlannedStages       []string           `json:"planned_stages,omitempty"`
+	DefaultTemplateSlug string             `json:"default_template_slug,omitempty"`
+	Artifacts           []PlannedArtifact  `json:"artifacts,omitempty"`
+	ArtifactEvidence    []ArtifactEvidence `json:"artifact_evidence,omitempty"`
+	FollowOnSuggestions []string           `json:"follow_on_suggestions,omitempty"`
+	ReviewPacket        ReviewPacket       `json:"review_packet,omitempty"`
+	Override            *PlanningOverride  `json:"override,omitempty"`
 }
 
 func (p Plan) RequiresReviewAndRefinement() bool {
@@ -147,6 +150,7 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 		ProjectStage:        projectStage,
 		EvidenceMaturity:    evidenceMaturity,
 		RiskLevel:           riskLevel,
+		ProcessEnforced:     playbookRequiresContract(playbook, text),
 		Subjective:          subjective,
 		Comparative:         comparative,
 		MultiOption:         multiOption,
@@ -217,28 +221,35 @@ func ApplyMetadata(existing json.RawMessage, plan Plan) json.RawMessage {
 		payload = map[string]any{}
 	}
 
-	payload[metadataKeyPlanning] = map[string]any{
-		"mode":                  plan.Mode,
-		"playbook":              plan.Playbook,
-		"work_type":             plan.WorkType,
-		"project_stage":         plan.ProjectStage,
-		"evidence_maturity":     plan.EvidenceMaturity,
-		"risk_level":            plan.RiskLevel,
-		"subjective":            plan.Subjective,
-		"comparative":           plan.Comparative,
-		"multi_option":          plan.MultiOption,
-		"review_policy_mode":    plan.ReviewPolicyMode,
-		"guardrails":            append([]string(nil), plan.Guardrails...),
-		"summary_cadence":       plan.SummaryCadence,
-		"planned_stages":        append([]string(nil), plan.PlannedStages...),
-		"default_template_slug": plan.DefaultTemplateSlug,
-		"artifacts":             append([]PlannedArtifact(nil), plan.Artifacts...),
-		"follow_on_suggestions": append([]string(nil), plan.FollowOnSuggestions...),
-		"review_packet": map[string]any{
-			"summary":  plan.ReviewPacket.Summary,
-			"sections": append([]string(nil), plan.ReviewPacket.Sections...),
-		},
+	planningPayload := map[string]any{}
+	if existingPlanning, ok := payload[metadataKeyPlanning].(map[string]any); ok {
+		for key, value := range existingPlanning {
+			planningPayload[key] = value
+		}
 	}
+
+	planningPayload["mode"] = plan.Mode
+	planningPayload["playbook"] = plan.Playbook
+	planningPayload["work_type"] = plan.WorkType
+	planningPayload["project_stage"] = plan.ProjectStage
+	planningPayload["evidence_maturity"] = plan.EvidenceMaturity
+	planningPayload["risk_level"] = plan.RiskLevel
+	planningPayload["process_enforced"] = plan.ProcessEnforced
+	planningPayload["subjective"] = plan.Subjective
+	planningPayload["comparative"] = plan.Comparative
+	planningPayload["multi_option"] = plan.MultiOption
+	planningPayload["review_policy_mode"] = plan.ReviewPolicyMode
+	planningPayload["guardrails"] = append([]string(nil), plan.Guardrails...)
+	planningPayload["summary_cadence"] = plan.SummaryCadence
+	planningPayload["planned_stages"] = append([]string(nil), plan.PlannedStages...)
+	planningPayload["default_template_slug"] = plan.DefaultTemplateSlug
+	planningPayload["artifacts"] = append([]PlannedArtifact(nil), plan.Artifacts...)
+	planningPayload["follow_on_suggestions"] = append([]string(nil), plan.FollowOnSuggestions...)
+	planningPayload["review_packet"] = map[string]any{
+		"summary":  plan.ReviewPacket.Summary,
+		"sections": append([]string(nil), plan.ReviewPacket.Sections...),
+	}
+	payload[metadataKeyPlanning] = planningPayload
 
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -276,6 +287,7 @@ func Parse(metadata json.RawMessage) (Plan, bool) {
 		ProjectStage:        strings.TrimSpace(readString(rawPlanning["project_stage"])),
 		EvidenceMaturity:    strings.TrimSpace(readString(rawPlanning["evidence_maturity"])),
 		RiskLevel:           strings.TrimSpace(readString(rawPlanning["risk_level"])),
+		ProcessEnforced:     readBool(rawPlanning["process_enforced"]),
 		Subjective:          readBool(rawPlanning["subjective"]),
 		Comparative:         readBool(rawPlanning["comparative"]),
 		MultiOption:         readBool(rawPlanning["multi_option"]),
@@ -285,7 +297,9 @@ func Parse(metadata json.RawMessage) (Plan, bool) {
 		DefaultTemplateSlug: strings.TrimSpace(readString(rawPlanning["default_template_slug"])),
 		PlannedStages:       readStringSlice(rawPlanning["planned_stages"]),
 		Artifacts:           readPlannedArtifacts(rawPlanning["artifacts"]),
+		ArtifactEvidence:    readArtifactEvidence(rawPlanning["artifact_evidence"]),
 		FollowOnSuggestions: readStringSlice(rawPlanning["follow_on_suggestions"]),
+		Override:            readPlanningOverride(rawPlanning["override"]),
 	}
 
 	if rawPacket, ok := rawPlanning["review_packet"].(map[string]any); ok {

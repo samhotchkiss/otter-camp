@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -146,6 +147,142 @@ func reviewPolicyResponse(policy taskplan.ReviewPolicy) map[string]any {
 		out["source"] = policy.Source
 	}
 	return out
+}
+
+type planningProcessInputResult struct {
+	applied bool
+	plan    taskplan.Plan
+	report  taskplan.ValidationReport
+}
+
+func readPlanningArtifactsInput(input map[string]any) ([]taskplan.ArtifactEvidence, bool, error) {
+	if input == nil {
+		return nil, false, nil
+	}
+	raw, ok := input["planning_artifacts"]
+	if !ok {
+		return nil, false, nil
+	}
+	if raw == nil {
+		return nil, true, nil
+	}
+
+	parseItem := func(item map[string]any) taskplan.ArtifactEvidence {
+		slug := readStringValue(item["slug"])
+		title := readStringValue(item["title"])
+		if slug == "" && title != "" {
+			slug = normalizeSlug(title)
+		}
+		return taskplan.ArtifactEvidence{
+			Slug:      slug,
+			Title:     title,
+			Summary:   readStringValue(item["summary"]),
+			Sections:  readStringSliceValue(item["sections"]),
+			AssetRefs: readStringSliceValue(item["asset_refs"]),
+			Notes:     readStringValue(item["notes"]),
+		}
+	}
+
+	switch typed := raw.(type) {
+	case []map[string]any:
+		out := make([]taskplan.ArtifactEvidence, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, parseItem(item))
+		}
+		return out, true, nil
+	case []any:
+		out := make([]taskplan.ArtifactEvidence, 0, len(typed))
+		for _, rawItem := range typed {
+			item, ok := rawItem.(map[string]any)
+			if !ok {
+				return nil, false, errors.New("planning_artifacts items must be objects")
+			}
+			out = append(out, parseItem(item))
+		}
+		return out, true, nil
+	default:
+		return nil, false, errors.New("planning_artifacts must be an array")
+	}
+}
+
+func readStringSliceValue(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if trimmed := strings.TrimSpace(fmt.Sprintf("%v", item)); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func readStringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String())
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", value))
+	}
+}
+
+func applyPlanningProcessInput(existing json.RawMessage, input map[string]any, actor executionActor) (json.RawMessage, planningProcessInputResult, error) {
+	artifacts, hasArtifacts, err := readPlanningArtifactsInput(input)
+	if err != nil {
+		return nil, planningProcessInputResult{}, err
+	}
+
+	rawOverride, hasOverride := input["planning_override_reason"]
+	var overrideReason *string
+	if hasOverride {
+		if rawOverride == nil {
+			empty := ""
+			overrideReason = &empty
+		} else {
+			value, ok := readString(input, "planning_override_reason")
+			if !ok {
+				return nil, planningProcessInputResult{}, errors.New("planning_override_reason must be a string")
+			}
+			overrideReason = &value
+		}
+	}
+
+	if !hasArtifacts && !hasOverride {
+		return existing, planningProcessInputResult{}, nil
+	}
+
+	metadata, plan, report, err := taskplan.ApplyProcessUpdate(existing, taskplan.ProcessUpdate{
+		Artifacts:          artifacts,
+		HasArtifactChanges: hasArtifacts,
+		OverrideReason:     overrideReason,
+		ActorType:          actor.principalType,
+		ActorID:            actor.principalID,
+		RecordedAt:         time.Now().UTC(),
+	})
+	if err != nil {
+		return nil, planningProcessInputResult{}, err
+	}
+	return metadata, planningProcessInputResult{
+		applied: true,
+		plan:    plan,
+		report:  report,
+	}, nil
 }
 
 func decodePathStrings(ctx context.Context, wd SessionWorkDir, baseDir string, rawPaths []string) ([]string, error) {
@@ -788,6 +925,15 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		return nil, err
 	}
 	actor := actorFromContext(ctx)
+	if metadataWithProcess, processUpdate, processErr := applyPlanningProcessInput(enrichedMetadata, input, actor); processErr != nil {
+		if errors.Is(processErr, taskplan.ErrPlanningStateRequired) || errors.Is(processErr, taskplan.ErrPlanningOverrideNotNeeded) {
+			return map[string]any{"error": processErr.Error()}, nil
+		}
+		return nil, processErr
+	} else if processUpdate.applied {
+		enrichedMetadata = metadataWithProcess
+		planning = processUpdate.plan
+	}
 	created, err := e.tasks.Create(ctx, repo.ProjectTask{
 		OrganizationID:      scope.organizationID,
 		ProjectID:           projectID,
@@ -869,6 +1015,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	statusChanged := false
 	decomposition := queueDecompositionResult{}
 	planning := taskplan.Plan{}
+	actor := actorFromContext(ctx)
 	if status, ok := readString(input, "work_status"); ok && status != "" {
 		if current.FlowTemplateID == nil &&
 			strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
@@ -889,6 +1036,15 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			if resolvedFlowTemplateID != nil {
 				current.FlowTemplateID = resolvedFlowTemplateID
 			}
+		}
+		if metadataWithProcess, processUpdate, processErr := applyPlanningProcessInput(current.Metadata, input, actor); processErr != nil {
+			if errors.Is(processErr, taskplan.ErrPlanningStateRequired) || errors.Is(processErr, taskplan.ErrPlanningOverrideNotNeeded) {
+				return map[string]any{"error": processErr.Error()}, nil
+			}
+			return nil, processErr
+		} else if processUpdate.applied {
+			current.Metadata = metadataWithProcess
+			planning = processUpdate.plan
 		}
 		if taskStatusRequiresFlowTemplate(status) && current.FlowTemplateID == nil {
 			return map[string]any{"error": "task requires a flow template before it can be queued"}, nil
@@ -916,14 +1072,22 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			return map[string]any{"error": "project has no active PM assignment"}, nil
 		}
 		if strings.EqualFold(strings.TrimSpace(status), "done") {
-			if err := e.validateTaskDoneTransition(ctx, current); err != nil {
-				return map[string]any{"error": err.Error()}, nil
+			if _, validationErr := e.validateTaskDoneTransition(ctx, current); validationErr != nil {
+				return map[string]any{"error": validationErr.Error()}, nil
 			}
 		}
 		if !strings.EqualFold(previousStatus, strings.TrimSpace(status)) {
 			statusChanged = true
 		}
 		current.WorkStatus = status
+	} else if metadataWithProcess, processUpdate, processErr := applyPlanningProcessInput(current.Metadata, input, actor); processErr != nil {
+		if errors.Is(processErr, taskplan.ErrPlanningStateRequired) || errors.Is(processErr, taskplan.ErrPlanningOverrideNotNeeded) {
+			return map[string]any{"error": processErr.Error()}, nil
+		}
+		return nil, processErr
+	} else if processUpdate.applied {
+		current.Metadata = metadataWithProcess
+		planning = processUpdate.plan
 	}
 	updated, err := e.tasks.Update(ctx, current)
 	if err != nil {
@@ -932,7 +1096,15 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	if statusChanged {
 		eventTask := current
 		eventTask.WorkStatus = previousStatus
-		if err := e.publishTaskStatusEvents(ctx, nil, eventTask, strings.TrimSpace(updated.WorkStatus)); err != nil {
+		var extraStatusPayload map[string]any
+		if strings.EqualFold(strings.TrimSpace(updated.WorkStatus), "done") {
+			if report, reportErr := taskplan.CompletionReport(updated.Metadata); reportErr != nil {
+				return nil, reportErr
+			} else {
+				extraStatusPayload = report.Payload()
+			}
+		}
+		if err := e.publishTaskStatusEvents(ctx, nil, eventTask, strings.TrimSpace(updated.WorkStatus), extraStatusPayload); err != nil {
 			return nil, err
 		}
 	}
@@ -995,39 +1167,39 @@ func (e *NativeToolExecutor) projectHasActivePM(ctx context.Context, projectID u
 	return false
 }
 
-func (e *NativeToolExecutor) validateTaskDoneTransition(ctx context.Context, taskRecord repo.ProjectTask) error {
+func (e *NativeToolExecutor) validateTaskDoneTransition(ctx context.Context, taskRecord repo.ProjectTask) (taskplan.ValidationReport, error) {
 	if taskRecord.FlowTemplateID == nil || taskRecord.CurrentFlowNodeID == nil {
-		return errors.New(taskDoneTerminalNodeMessage)
+		return taskplan.ValidationReport{}, errors.New(taskDoneTerminalNodeMessage)
 	}
 	if e.flowNodes == nil || e.flowExecs == nil {
-		return errors.New(taskDoneTerminalNodeMessage)
+		return taskplan.ValidationReport{}, errors.New(taskDoneTerminalNodeMessage)
 	}
 	node, err := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
-			return errors.New(taskDoneTerminalNodeMessage)
+			return taskplan.ValidationReport{}, errors.New(taskDoneTerminalNodeMessage)
 		}
-		return err
+		return taskplan.ValidationReport{}, err
 	}
 	if node.NextNodeID != nil {
-		return errors.New(taskDoneTerminalNodeMessage)
+		return taskplan.ValidationReport{}, errors.New(taskDoneTerminalNodeMessage)
 	}
 	executions, err := e.flowExecs.ListByTask(ctx, taskRecord.ID)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
-			return errors.New(taskDoneTerminalNodeMessage)
+			return taskplan.ValidationReport{}, errors.New(taskDoneTerminalNodeMessage)
 		}
-		return err
+		return taskplan.ValidationReport{}, err
 	}
 	for _, execution := range executions {
 		if execution.FlowNodeID != node.ID {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(execution.Status), "completed") {
-			return nil
+			return taskplan.CompletionReport(taskRecord.Metadata)
 		}
 	}
-	return errors.New(taskDoneTerminalNodeMessage)
+	return taskplan.ValidationReport{}, errors.New(taskDoneTerminalNodeMessage)
 }
 
 func (e *NativeToolExecutor) validateExecutableFlowTemplate(ctx context.Context, flowTemplateID uuid.UUID) error {
@@ -1121,6 +1293,7 @@ func (e *NativeToolExecutor) resolveSystemFlowTemplate(ctx context.Context, orga
 }
 
 func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
+	report := taskplan.Evaluate(plan)
 	response := map[string]any{
 		"mode":     plan.Mode,
 		"playbook": plan.Playbook,
@@ -1131,14 +1304,25 @@ func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
 			"risk_level":        plan.RiskLevel,
 		},
 		"review_policy":         reviewPolicyResponse(taskplan.ReviewPolicy{Mode: plan.ReviewPolicyMode, Guardrails: plan.Guardrails, SummaryCadence: plan.SummaryCadence}),
+		"process_enforced":      plan.ProcessEnforced,
 		"planned_stages":        append([]string(nil), plan.PlannedStages...),
 		"artifacts":             planningArtifactResponse(plan.Artifacts),
+		"artifact_contract":     planningArtifactContractResponse(nil),
+		"artifact_evidence":     planningArtifactEvidenceResponse(plan.ArtifactEvidence),
 		"follow_on_suggestions": append([]string(nil), plan.FollowOnSuggestions...),
+		"review_checklist":      []string{},
+		"process_status":        report.ProcessStatus,
+		"missing_requirements":  report.MissingRequirements(),
 		"review_packet": map[string]any{
 			"summary":  plan.ReviewPacket.Summary,
 			"sections": append([]string(nil), plan.ReviewPacket.Sections...),
 		},
 		"default_template_slug": plan.DefaultTemplateSlug,
+		"override":              planningOverrideResponse(plan.Override),
+	}
+	if report.Enforced {
+		response["artifact_contract"] = planningArtifactContractResponse(report.ArtifactContract)
+		response["review_checklist"] = append([]string(nil), report.ReviewChecklist...)
 	}
 	if plan.SummaryCadence != "" {
 		response["summary_cadence"] = plan.SummaryCadence
@@ -1155,6 +1339,55 @@ func planningArtifactResponse(artifacts []taskplan.PlannedArtifact) []map[string
 		})
 	}
 	return out
+}
+
+func planningArtifactContractResponse(contracts []taskplan.ArtifactContract) []map[string]any {
+	out := make([]map[string]any, 0, len(contracts))
+	for _, contract := range contracts {
+		out = append(out, map[string]any{
+			"slug":              contract.Slug,
+			"title":             contract.Title,
+			"required_sections": append([]string(nil), contract.RequiredSections...),
+		})
+	}
+	return out
+}
+
+func planningArtifactEvidenceResponse(artifacts []taskplan.ArtifactEvidence) []map[string]any {
+	out := make([]map[string]any, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		item := map[string]any{
+			"slug":  artifact.Slug,
+			"title": artifact.Title,
+		}
+		if artifact.Summary != "" {
+			item["summary"] = artifact.Summary
+		}
+		if len(artifact.Sections) > 0 {
+			item["sections"] = append([]string(nil), artifact.Sections...)
+		}
+		if len(artifact.AssetRefs) > 0 {
+			item["asset_refs"] = append([]string(nil), artifact.AssetRefs...)
+		}
+		if artifact.Notes != "" {
+			item["notes"] = artifact.Notes
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func planningOverrideResponse(override *taskplan.PlanningOverride) map[string]any {
+	if override == nil || strings.TrimSpace(override.Reason) == "" {
+		return nil
+	}
+	return map[string]any{
+		"reason":               override.Reason,
+		"skipped_requirements": append([]string(nil), override.SkippedRequirements...),
+		"recorded_at":          override.RecordedAt,
+		"recorded_by_type":     override.RecordedByType,
+		"recorded_by_id":       override.RecordedByID,
+	}
 }
 
 func uuidStringSlice(ids []uuid.UUID) []string {
@@ -1408,7 +1641,7 @@ func (e *NativeToolExecutor) completeFlowTask(ctx context.Context, taskID uuid.U
 	if _, err := e.tasks.UpdateStatus(ctx, taskID, targetStatus); err != nil {
 		return nil, err
 	}
-	if err := e.publishTaskStatusEvents(ctx, nil, current, targetStatus); err != nil {
+	if err := e.publishTaskStatusEvents(ctx, nil, current, targetStatus, nil); err != nil {
 		return nil, err
 	}
 
@@ -1452,7 +1685,7 @@ func (e *NativeToolExecutor) completeFlowTaskTx(ctx context.Context, taskID uuid
 		return nil, repo.ErrNotFound
 	}
 
-	if err := e.publishTaskStatusEvents(ctx, tx, current, targetStatus); err != nil {
+	if err := e.publishTaskStatusEvents(ctx, tx, current, targetStatus, nil); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1494,7 +1727,7 @@ func (e *NativeToolExecutor) getTaskForTerminalAdvanceTx(ctx context.Context, tx
 	return task, nil
 }
 
-func (e *NativeToolExecutor) publishTaskStatusEvents(ctx context.Context, tx pgx.Tx, task repo.ProjectTask, targetStatus string) error {
+func (e *NativeToolExecutor) publishTaskStatusEvents(ctx context.Context, tx pgx.Tx, task repo.ProjectTask, targetStatus string, extraPayload map[string]any) error {
 	if e.events == nil {
 		return nil
 	}
@@ -1505,6 +1738,9 @@ func (e *NativeToolExecutor) publishTaskStatusEvents(ctx context.Context, tx pgx
 		"to_status":   strings.TrimSpace(targetStatus),
 		"task_id":     task.ID,
 		"project_id":  task.ProjectID,
+	}
+	for key, value := range extraPayload {
+		payload[key] = value
 	}
 	encodedPayload, err := json.Marshal(payload)
 	if err != nil {

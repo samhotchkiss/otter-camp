@@ -26,6 +26,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
 const maxTaskTitleLength = 500
@@ -2790,6 +2791,10 @@ func mapTaskError(err error) (int, string, string) {
 		return http.StatusForbidden, api.ErrCodeForbidden, "forbidden"
 	case errors.Is(err, tasksvc.ErrBrowserHandoffUnavailable):
 		return http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "browser handoff service unavailable"
+	case errors.Is(err, taskplan.ErrPlanningArtifactContractIncomplete),
+		errors.Is(err, taskplan.ErrPlanningOverrideNotNeeded),
+		errors.Is(err, taskplan.ErrPlanningStateRequired):
+		return http.StatusUnprocessableEntity, api.ErrCodeValidation, err.Error()
 	case errors.Is(err, tasksvc.ErrUnknownInboxAction),
 		errors.Is(err, tasksvc.ErrUnknownInboxItemType),
 		errors.Is(err, tasksvc.ErrInboxItemTypeInvalid),
