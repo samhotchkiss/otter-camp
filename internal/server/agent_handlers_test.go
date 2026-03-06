@@ -360,6 +360,158 @@ func TestCreateAgentProjectAssignmentRejectsInvalidRoleBeforeServiceCall(t *test
 	}
 }
 
+func TestCreateAgentProjectAssignmentActivatesDraftStaffPMBeforeAssignEX255(t *testing.T) {
+	orgID := uuid.New()
+	agentID := uuid.New()
+	projectID := uuid.New()
+	callOrder := make([]string, 0, 2)
+	agentRecord := repo.Agent{
+		ID:              agentID,
+		OrganizationID:  orgID,
+		AgentClass:      "staff",
+		AgentType:       "pm",
+		LifecycleStatus: "draft",
+	}
+	agents := &fakeAgentLookupRepo{
+		getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+			if id != agentID {
+				return repo.Agent{}, repo.ErrNotFound
+			}
+			return agentRecord, nil
+		},
+	}
+	projects := &fakeProjectLookupRepo{
+		getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Project, error) {
+			return repo.Project{ID: id, OrganizationID: orgID, Slug: "proj"}, nil
+		},
+	}
+	service := &fakeAgentService{
+		unpauseFn: func(_ context.Context, gotOrgID, gotAgentID uuid.UUID) error {
+			if gotOrgID != orgID || gotAgentID != agentID {
+				t.Fatalf("unpause called with org=%s agent=%s", gotOrgID, gotAgentID)
+			}
+			callOrder = append(callOrder, "unpause")
+			agentRecord.LifecycleStatus = "active"
+			return nil
+		},
+	}
+	assignments := &fakeAssignmentService{
+		assignToProjectFn: func(_ context.Context, gotAgentID, gotProjectID uuid.UUID, role string, _ agent.AssignmentActor) (*repo.AgentProjectAssignment, error) {
+			callOrder = append(callOrder, "assign")
+			if agentRecord.LifecycleStatus != "active" {
+				t.Fatalf("assignment saw lifecycle_status = %q, want active", agentRecord.LifecycleStatus)
+			}
+			if gotAgentID != agentID || gotProjectID != projectID {
+				t.Fatalf("assign called with agent=%s project=%s", gotAgentID, gotProjectID)
+			}
+			if role != "project_manager" {
+				t.Fatalf("role = %q, want project_manager", role)
+			}
+			return &repo.AgentProjectAssignment{
+				ID:         uuid.New(),
+				AgentID:    gotAgentID,
+				ProjectID:  gotProjectID,
+				Role:       role,
+				IsActive:   true,
+				AssignedAt: timeNowUTC(),
+			}, nil
+		},
+	}
+	h := newAgentHandlersWithAssignments(service, nil, assignments, agents, projects, nil, nil, nil, nil)
+
+	req := newAssignmentRequest(t, http.MethodPost, "/v1/agents/"+agentID.String()+"/project-assignments", map[string]any{
+		"project_id": projectID.String(),
+		"role":       "pm",
+	}, orgID, "admin")
+	req = withRouteParams(req, map[string]string{"id": agentID.String()})
+	rr := httptest.NewRecorder()
+
+	h.createAgentProjectAssignment(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := strings.Join(callOrder, ","); got != "unpause,assign" {
+		t.Fatalf("call order = %q, want unpause,assign", got)
+	}
+}
+
+func TestCreateProjectAgentActivatesDraftStaffPMBeforeAssignEX255(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	agentID := uuid.New()
+	callOrder := make([]string, 0, 2)
+	agentRecord := repo.Agent{
+		ID:              agentID,
+		OrganizationID:  orgID,
+		AgentClass:      "staff",
+		AgentType:       "pm",
+		LifecycleStatus: "draft",
+	}
+	agents := &fakeAgentLookupRepo{
+		getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+			if id != agentID {
+				return repo.Agent{}, repo.ErrNotFound
+			}
+			return agentRecord, nil
+		},
+	}
+	projects := &fakeProjectLookupRepo{
+		getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Project, error) {
+			return repo.Project{ID: id, OrganizationID: orgID, Slug: "proj"}, nil
+		},
+	}
+	service := &fakeAgentService{
+		unpauseFn: func(_ context.Context, gotOrgID, gotAgentID uuid.UUID) error {
+			if gotOrgID != orgID || gotAgentID != agentID {
+				t.Fatalf("unpause called with org=%s agent=%s", gotOrgID, gotAgentID)
+			}
+			callOrder = append(callOrder, "unpause")
+			agentRecord.LifecycleStatus = "active"
+			return nil
+		},
+	}
+	assignments := &fakeAssignmentService{
+		assignToProjectFn: func(_ context.Context, gotAgentID, gotProjectID uuid.UUID, role string, _ agent.AssignmentActor) (*repo.AgentProjectAssignment, error) {
+			callOrder = append(callOrder, "assign")
+			if agentRecord.LifecycleStatus != "active" {
+				t.Fatalf("assignment saw lifecycle_status = %q, want active", agentRecord.LifecycleStatus)
+			}
+			if gotAgentID != agentID || gotProjectID != projectID {
+				t.Fatalf("assign called with agent=%s project=%s", gotAgentID, gotProjectID)
+			}
+			if role != "project_manager" {
+				t.Fatalf("role = %q, want project_manager", role)
+			}
+			return &repo.AgentProjectAssignment{
+				ID:         uuid.New(),
+				AgentID:    gotAgentID,
+				ProjectID:  gotProjectID,
+				Role:       role,
+				IsActive:   true,
+				AssignedAt: timeNowUTC(),
+			}, nil
+		},
+	}
+	h := newAgentHandlersWithAssignments(service, nil, assignments, agents, projects, nil, nil, nil, nil)
+
+	req := newAssignmentRequest(t, http.MethodPost, "/v1/projects/"+projectID.String()+"/agents", map[string]any{
+		"agent_id": agentID.String(),
+		"role":     "project_manager",
+	}, orgID, "admin")
+	req = withRouteParams(req, map[string]string{"id": projectID.String()})
+	rr := httptest.NewRecorder()
+
+	h.createProjectAgent(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := strings.Join(callOrder, ","); got != "unpause,assign" {
+		t.Fatalf("call order = %q, want unpause,assign", got)
+	}
+}
+
 func TestAttachAgentSkillPriorityValidation(t *testing.T) {
 	orgID := uuid.New()
 	agentID := uuid.New()

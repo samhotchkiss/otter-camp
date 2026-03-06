@@ -1197,6 +1197,12 @@ func (h agentHandlers) createAgentProjectAssignment(w http.ResponseWriter, r *ht
 		responder.Error(w, status, code, message)
 		return
 	}
+	agentRecord, err = h.ensureAssignableProjectAgent(r.Context(), principal.OrganizationID, agentRecord, role)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
 	if !strings.EqualFold(strings.TrimSpace(agentRecord.LifecycleStatus), "active") {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "agent lifecycle_status must be active")
 		return
@@ -1403,6 +1409,12 @@ func (h agentHandlers) createProjectAgent(w http.ResponseWriter, r *http.Request
 		responder.Error(w, status, code, message)
 		return
 	}
+	agentRecord, err = h.ensureAssignableProjectAgent(r.Context(), principal.OrganizationID, agentRecord, role)
+	if err != nil {
+		status, code, message := mapAssignmentError(err)
+		responder.Error(w, status, code, message)
+		return
+	}
 	if !strings.EqualFold(strings.TrimSpace(agentRecord.LifecycleStatus), "active") {
 		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "agent lifecycle_status must be active")
 		return
@@ -1425,6 +1437,28 @@ func (h agentHandlers) createProjectAgent(w http.ResponseWriter, r *http.Request
 	}
 
 	responder.JSON(w, http.StatusOK, toProjectAssignmentResponse(assigned))
+}
+
+func (h agentHandlers) ensureAssignableProjectAgent(ctx context.Context, orgID uuid.UUID, agentRecord repo.Agent, role string) (repo.Agent, error) {
+	if h.service == nil {
+		return agentRecord, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(role), "project_manager") {
+		return agentRecord, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(agentRecord.AgentClass), "staff") {
+		return agentRecord, nil
+	}
+	if agentRecord.IsStarterTrio || !strings.EqualFold(strings.TrimSpace(agentRecord.LifecycleStatus), "draft") {
+		return agentRecord, nil
+	}
+
+	// Staffing creates real PM candidates as draft staff agents. Promote that
+	// supported draft->active transition before enforcing assignment rules.
+	if err := h.service.Unpause(ctx, orgID, agentRecord.ID); err != nil {
+		return repo.Agent{}, err
+	}
+	return h.getScopedAgent(ctx, orgID, agentRecord.ID)
 }
 
 func (h agentHandlers) deleteProjectAgent(w http.ResponseWriter, r *http.Request) {
