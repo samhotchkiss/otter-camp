@@ -181,6 +181,7 @@ Task and async-session execution uses a single-owner contract:
 - When the active owner exits cleanly or is declared stale, the oldest deferred wakeup is promoted, logged as `wakeup_promoted`, and becomes the new active owner.
 - If the stored active run is already terminal, missing, or heartbeat-stale, the control plane clears ownership, fails the abandoned run with a stale-handoff reason, and promotes deferred work once.
 - When no owner is active, `runtime_state` still remains as a resumable contract until task completion/archive/cancel retires it. Recovery uses this record before it looks at session rows, queue rows, or stale run timestamps.
+- Task-bound wakeups must resume on the task's `project_task` async session. A project-scoped session may coordinate about the task, but it is not the execution container for that task's run history.
 
 This prevents overlapping reviewer/worker turns, duplicate queue wakeups, and recovery races on the same task.
 

@@ -300,3 +300,7 @@ func (s *stubChatSessionRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Cha
 func (s *stubChatSessionRepo) ListByOrg(context.Context, uuid.UUID) ([]repo.ChatSession, error) {
 	return nil, nil
 }
+
+func (s *stubChatSessionRepo) Close(context.Context, uuid.UUID) (repo.ChatSession, error) {
+	return repo.ChatSession{}, repo.ErrNotFound
+}

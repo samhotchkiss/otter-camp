@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -2470,6 +2471,18 @@ func (f *fakeChatSessionRepo) ListByOrg(_ context.Context, organizationID uuid.U
 		}
 	}
 	return items, nil
+}
+func (f *fakeChatSessionRepo) Close(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+	for i := range f.sessions {
+		if f.sessions[i].ID != id {
+			continue
+		}
+		f.sessions[i].Status = "closed"
+		now := time.Now().UTC()
+		f.sessions[i].ClosedAt = &now
+		return f.sessions[i], nil
+	}
+	return repo.ChatSession{}, repo.ErrNotFound
 }
 
 type fakeParticipantRepo struct {

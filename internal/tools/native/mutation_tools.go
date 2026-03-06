@@ -1545,7 +1545,7 @@ func shouldReuseScopedSession(scopeType, mode string) bool {
 	case "project":
 		return true
 	case "project_task":
-		return strings.EqualFold(strings.TrimSpace(mode), "sync")
+		return strings.EqualFold(strings.TrimSpace(mode), "sync") || strings.EqualFold(strings.TrimSpace(mode), "async")
 	default:
 		return false
 	}
@@ -1559,6 +1559,28 @@ func chatSessionCanonicalLess(left, right repo.ChatSession) bool {
 		return left.ID.String() < right.ID.String()
 	}
 	return normalizeComparableText(derefString(left.Title)) < normalizeComparableText(derefString(right.Title))
+}
+
+func isBlankTaskAsyncSession(session repo.ChatSession) bool {
+	return session.CurrentTurnID == nil &&
+		session.TurnCount == 0 &&
+		session.MessageCount == 0 &&
+		session.LastMessageAt == nil
+}
+
+func taskAsyncSessionMoreRecent(left, right repo.ChatSession) bool {
+	switch {
+	case left.LastMessageAt != nil && right.LastMessageAt != nil && !left.LastMessageAt.Equal(*right.LastMessageAt):
+		return left.LastMessageAt.After(*right.LastMessageAt)
+	case left.LastMessageAt != nil && right.LastMessageAt == nil:
+		return true
+	case left.LastMessageAt == nil && right.LastMessageAt != nil:
+		return false
+	case !left.CreatedAt.IsZero() && !right.CreatedAt.IsZero() && !left.CreatedAt.Equal(right.CreatedAt):
+		return left.CreatedAt.After(right.CreatedAt)
+	default:
+		return left.ID.String() > right.ID.String()
+	}
 }
 
 func taskCanonicalLess(left, right repo.ProjectTask) bool {
@@ -1701,6 +1723,10 @@ func (e *NativeToolExecutor) findReusableScopedSession(ctx context.Context, orga
 
 	normalizedScopeType := strings.ToLower(strings.TrimSpace(scopeType))
 	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
+	if normalizedScopeType == "project_task" && normalizedMode == "async" {
+		return e.findCurrentTaskExecutionSession(ctx, organizationID, scopeID, sessions)
+	}
+
 	var reusable *repo.ChatSession
 	for i := range sessions {
 		session := sessions[i]
@@ -1722,6 +1748,68 @@ func (e *NativeToolExecutor) findReusableScopedSession(ctx context.Context, orga
 		}
 	}
 	return reusable, nil
+}
+
+func (e *NativeToolExecutor) findCurrentTaskExecutionSession(ctx context.Context, organizationID, taskID uuid.UUID, sessions []repo.ChatSession) (*repo.ChatSession, error) {
+	var (
+		newestBlank    *repo.ChatSession
+		latestNonBlank *repo.ChatSession
+		duplicates     []repo.ChatSession
+	)
+	for i := range sessions {
+		session := sessions[i]
+		if session.OrganizationID != organizationID || session.ScopeID != taskID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+			continue
+		}
+		if isBlankTaskAsyncSession(session) {
+			if newestBlank == nil || taskAsyncSessionMoreRecent(session, *newestBlank) {
+				if newestBlank != nil {
+					duplicates = append(duplicates, *newestBlank)
+				}
+				candidate := session
+				newestBlank = &candidate
+				continue
+			}
+			duplicates = append(duplicates, session)
+			continue
+		}
+		if latestNonBlank == nil || taskAsyncSessionMoreRecent(session, *latestNonBlank) {
+			candidate := session
+			latestNonBlank = &candidate
+		}
+	}
+
+	if err := e.closeScopedSessionDuplicates(ctx, duplicates); err != nil {
+		return nil, err
+	}
+	if newestBlank != nil && (latestNonBlank == nil || taskAsyncSessionMoreRecent(*newestBlank, *latestNonBlank)) {
+		return newestBlank, nil
+	}
+	if latestNonBlank != nil {
+		return latestNonBlank, nil
+	}
+	return newestBlank, nil
+}
+
+func (e *NativeToolExecutor) closeScopedSessionDuplicates(ctx context.Context, sessions []repo.ChatSession) error {
+	if e.chatSessions == nil {
+		return nil
+	}
+	for _, session := range sessions {
+		if _, err := e.chatSessions.Close(ctx, session.ID); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *NativeToolExecutor) findReusableProjectScopedTask(ctx context.Context, desired repo.ProjectTask) (repo.ProjectTask, bool, error) {
@@ -2815,6 +2903,7 @@ func (e *NativeToolExecutor) handleSessionCreate(ctx context.Context, input map[
 	if !ok || mode == "" {
 		mode = "async"
 	}
+	scopeType, scopeID = resolveTaskBoundExecutionScope(scope, scopeType, scopeID, mode)
 	title, _ := readString(input, "title")
 	var titlePtr *string
 	if title != "" {
@@ -2853,15 +2942,36 @@ func (e *NativeToolExecutor) handleSessionCreate(ctx context.Context, input map[
 
 	result := map[string]any{
 		"session": map[string]any{
-			"id":     created.ID,
-			"status": created.Status,
-			"mode":   created.Mode,
+			"id":         created.ID,
+			"status":     created.Status,
+			"mode":       created.Mode,
+			"scope_type": created.ScopeType,
+			"scope_id":   created.ScopeID,
 		},
 	}
 	if len(participants) > 0 {
 		result["auto_participants"] = participants
 	}
 	return result, nil
+}
+
+func resolveTaskBoundExecutionScope(scope workspaceScope, requestedScopeType string, requestedScopeID uuid.UUID, mode string) (string, uuid.UUID) {
+	if !strings.EqualFold(strings.TrimSpace(mode), "async") {
+		return requestedScopeType, requestedScopeID
+	}
+	if !strings.EqualFold(strings.TrimSpace(requestedScopeType), "project") {
+		return requestedScopeType, requestedScopeID
+	}
+	if scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return requestedScopeType, requestedScopeID
+	}
+	if scope.projectID == nil || *scope.projectID == uuid.Nil {
+		return requestedScopeType, requestedScopeID
+	}
+	if requestedScopeID != *scope.projectID {
+		return requestedScopeType, requestedScopeID
+	}
+	return "project_task", *scope.taskID
 }
 
 // autoAddProjectParticipants looks up agents assigned to the project and adds

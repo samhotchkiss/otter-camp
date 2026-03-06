@@ -51,6 +51,7 @@ type chatSessionReader interface {
 	Create(ctx context.Context, session repo.ChatSession) (repo.ChatSession, error)
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ChatSession, error)
 	ListByOrg(ctx context.Context, organizationID uuid.UUID) ([]repo.ChatSession, error)
+	Close(ctx context.Context, id uuid.UUID) (repo.ChatSession, error)
 }
 
 type organizationReader interface {

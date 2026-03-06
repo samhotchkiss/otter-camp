@@ -2408,6 +2408,118 @@ func TestIntegrationSessionCreateProjectScopeReusesExistingSession(t *testing.T)
 	}
 }
 
+func TestIntegrationSessionCreateTaskBoundAsyncWorkUsesTaskSession(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		WorkStatus: "draft",
+	})
+
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	messageRepo := repo.NewChatMessageRepo(pool)
+	projectSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"native-task-binding-test","kind":"project"}`),
+	})
+	if err != nil {
+		t.Fatalf("create project async session: %v", err)
+	}
+	taskSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"native-task-binding-test","kind":"task"}`),
+	})
+	if err != nil {
+		t.Fatalf("create task async session: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	execCtx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agent.ID,
+		SessionID:      &projectSession.ID,
+		ProjectID:      &project.ID,
+		TaskID:         &task.ID,
+	})
+
+	out, err := executor.Execute(execCtx, "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "WS1: Landing Page - Execution",
+	})
+	if err != nil {
+		t.Fatalf("session.create in task-bound project context: %v", err)
+	}
+	session := out["session"].(map[string]any)
+	if got := mustUUIDValue(t, session["id"]); got != taskSession.ID {
+		t.Fatalf("session id = %s, want task session %s", got, taskSession.ID)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", session["scope_type"])); got != "project_task" {
+		t.Fatalf("session scope_type = %q, want project_task", got)
+	}
+	if got := mustUUIDValue(t, session["scope_id"]); got != task.ID {
+		t.Fatalf("session scope_id = %s, want task %s", got, task.ID)
+	}
+
+	if _, err := executor.Execute(execCtx, "message.send", map[string]any{
+		"session_id": taskSession.ID.String(),
+		"role":       "user",
+		"content":    "resume execution for this task only",
+	}); err != nil {
+		t.Fatalf("message.send to bound task session: %v", err)
+	}
+
+	taskMessages, err := messageRepo.ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession task messages: %v", err)
+	}
+	if len(taskMessages) != 1 {
+		t.Fatalf("task session messages = %d, want 1", len(taskMessages))
+	}
+	if taskMessages[0].SessionID != taskSession.ID {
+		t.Fatalf("task message session_id = %s, want %s", taskMessages[0].SessionID, taskSession.ID)
+	}
+
+	projectMessages, err := messageRepo.ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	if len(projectMessages) != 0 {
+		t.Fatalf("project session messages = %d, want 0", len(projectMessages))
+	}
+
+	var taskSessionCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE organization_id = $1
+		  AND scope_type = 'project_task'
+		  AND scope_id = $2
+		  AND mode = 'async'
+		  AND status = 'active'
+	`, orgID, task.ID).Scan(&taskSessionCount); err != nil {
+		t.Fatalf("count active task async sessions: %v", err)
+	}
+	if taskSessionCount != 1 {
+		t.Fatalf("active task async sessions = %d, want 1", taskSessionCount)
+	}
+}
+
 func TestIntegrationProjectSessionTaskPlanningIsIdempotent(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

@@ -923,6 +923,26 @@ func TestTaskQueueProcessorIntegrationInProgressAssignedAgentTaskCreatesTaskSess
 	if !foundAgentResponder {
 		t.Fatal("expected active responder agent participant on task session")
 	}
+
+	projectMessages, err := messageRepo.ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project session messages: %v", err)
+	}
+	for _, message := range projectMessages {
+		if message.Role == "assistant" && message.Status == "final" {
+			t.Fatalf("project-scoped session captured assistant task work: %+v", message)
+		}
+		if message.Role != "user" || len(message.Metadata) == 0 {
+			continue
+		}
+		var metadata map[string]any
+		if unmarshalErr := json.Unmarshal(message.Metadata, &metadata); unmarshalErr != nil {
+			continue
+		}
+		if metadata["source"] == "task_queue_processor" {
+			t.Fatalf("project-scoped session captured task_queue_processor kickoff: %+v", message)
+		}
+	}
 }
 
 func TestTaskQueueProcessorIntegrationRepeatedInProgressEventsReuseTaskSession(t *testing.T) {
