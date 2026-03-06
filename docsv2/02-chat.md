@@ -108,7 +108,7 @@ Each scope has exactly one human-facing session. No ambiguity about "which sessi
 - **Project**: one persistent session per project. PM's home base for that project. Triage, oversight, quick questions.
 - **Task**: one persistent sync session per task. Where the human discusses the work — requirements, feedback, review. Spans the full task lifecycle.
 
-In addition, **per-node async sessions** are created automatically when a flow node begins execution. These are the agent's workspace — where autonomous work happens. They are NOT human-facing chat. They are execution traces (work logs) viewable from the task detail view. They close when the flow node completes.
+In addition, **per-node async sessions** are created automatically when a flow node begins execution. These are the agent's workspace — where autonomous work happens. They are NOT human-facing chat. They are execution traces (work logs) viewable from the task detail view. They close when the flow node completes. If the runtime is executing work for a specific task, it must bind that async work to a `project_task` session for that task — never to a project-scoped surrogate session.
 
 ### Session Titles
 
@@ -129,6 +129,8 @@ Discoverability beyond the sidebar is handled by the command bar (Superhuman-sty
 - Each task has one persistent sync session (the discussion session) plus zero or more per-node async sessions (work logs).
 - Each project has one persistent session.
 - Each org has one persistent session ("General").
+- Task work, review, and retry transcripts belong on task-scoped async sessions. Project-scoped sessions are for PM oversight/triage, not for storing task execution history.
+- If retries accidentally create multiple blank async task sessions for the same task, the runtime reuses the current task-scoped execution session and closes the extra blank duplicates.
 - UI clients must preserve the task discussion binding when the operator opens a task from its existing sidebar task chat. If a task detail payload omits `discussion_session_id`, the client falls back to the already-known task-scoped sync session instead of inventing an empty state.
 - Empty-state copy claiming a task has no discussion session is only valid when neither task detail data nor prior task-scoped session context can resolve a sync discussion session.
 

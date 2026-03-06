@@ -207,6 +207,87 @@ func TestSession_Create_TaskScope(t *testing.T) {
 	}
 }
 
+func TestSession_Create_TaskScopeAsyncClosesDuplicateBlankSessions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	svc := newIntegrationService(t, pool, nil)
+	sessionRepo := repo.NewChatSessionRepo(pool)
+
+	execution := seedChatServiceFlowNodeExecution(t, ctx, pool, org.ID)
+	first, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        execution.TaskID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"chat-session-test","attempt":1}`),
+	})
+	if err != nil {
+		t.Fatalf("create first duplicate blank task session: %v", err)
+	}
+	second, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        execution.TaskID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"chat-session-test","attempt":2}`),
+	})
+	if err != nil {
+		t.Fatalf("create second duplicate blank task session: %v", err)
+	}
+
+	reused, err := svc.CreateSession(ctx, CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        execution.TaskID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession async task scope: %v", err)
+	}
+	if reused.ID != second.ID {
+		t.Fatalf("reused session id = %s, want newest blank %s", reused.ID, second.ID)
+	}
+
+	firstStored, err := sessionRepo.GetByID(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("GetByID first duplicate: %v", err)
+	}
+	if firstStored.Status != "closed" || firstStored.ClosedAt == nil {
+		t.Fatalf("first duplicate session = %+v, want closed with closed_at", firstStored)
+	}
+
+	secondStored, err := sessionRepo.GetByID(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("GetByID canonical blank: %v", err)
+	}
+	if secondStored.Status != "active" {
+		t.Fatalf("canonical blank session status = %q, want active", secondStored.Status)
+	}
+
+	var activeCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE organization_id = $1
+		  AND scope_type = 'project_task'
+		  AND scope_id = $2
+		  AND mode = 'async'
+		  AND status = 'active'
+	`, org.ID, execution.TaskID).Scan(&activeCount); err != nil {
+		t.Fatalf("count active async task sessions: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("active async task sessions = %d, want 1", activeCount)
+	}
+}
+
 func TestSession_PerNodeAsync_AutoCreated(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

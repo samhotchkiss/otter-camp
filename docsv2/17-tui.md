@@ -372,6 +372,7 @@ Progressive disclosure: board card -> task detail -> work log.
 - Scrollable. Sections are collapsible with keybindings.
 - Tab to switch focus to the chat pane for discussing the task.
 - In task detail, the right-pane `Discussion` tab must stay bound to the task's real sync discussion session while the operator cycles tabs/scopes. The `No task discussion session.` placeholder appears only when no discussion session can actually be resolved for that task.
+- In task detail, the right-pane `Journal`/work-log view must resolve the task's real task-scoped execution session. A same-project PM/project session is never a valid substitute for that task history.
 
 ### Inbox
 

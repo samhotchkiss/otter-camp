@@ -416,6 +416,15 @@ func (s *service) CreateSession(ctx context.Context, input CreateSessionInput) (
 			return nil, err
 		}
 	}
+	if scopeType == "project_task" && mode == "async" {
+		reusable, err := s.reuseBlankTaskAsyncSession(ctx, orgID, input.ScopeID)
+		if err != nil {
+			return nil, err
+		}
+		if reusable != nil {
+			return reusable, nil
+		}
+	}
 
 	createdByType := "system"
 	createdByID := uuid.Nil
@@ -449,6 +458,68 @@ func (s *service) CreateSession(ctx context.Context, input CreateSessionInput) (
 	}
 
 	return &session, nil
+}
+
+func (s *service) reuseBlankTaskAsyncSession(ctx context.Context, organizationID, taskID uuid.UUID) (*ChatSession, error) {
+	sessions, err := s.sessions.ListByOrg(ctx, organizationID)
+	if err != nil {
+		return nil, err
+	}
+
+	blanks := make([]repo.ChatSession, 0, 2)
+	for _, session := range sessions {
+		if session.OrganizationID != organizationID || session.ScopeID != taskID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+			continue
+		}
+		if !isBlankTaskAsyncSession(session) {
+			continue
+		}
+		blanks = append(blanks, session)
+	}
+	if len(blanks) == 0 {
+		return nil, nil
+	}
+	sort.Slice(blanks, func(i, j int) bool {
+		return taskAsyncSessionMoreRecent(blanks[i], blanks[j])
+	})
+	for _, duplicate := range blanks[1:] {
+		if _, err := s.sessions.Close(ctx, duplicate.ID); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return nil, err
+		}
+	}
+	reusable := ChatSession(blanks[0])
+	return &reusable, nil
+}
+
+func isBlankTaskAsyncSession(session repo.ChatSession) bool {
+	return session.CurrentTurnID == nil &&
+		session.TurnCount == 0 &&
+		session.MessageCount == 0 &&
+		session.LastMessageAt == nil
+}
+
+func taskAsyncSessionMoreRecent(left, right repo.ChatSession) bool {
+	switch {
+	case left.LastMessageAt != nil && right.LastMessageAt != nil && !left.LastMessageAt.Equal(*right.LastMessageAt):
+		return left.LastMessageAt.After(*right.LastMessageAt)
+	case left.LastMessageAt != nil && right.LastMessageAt == nil:
+		return true
+	case left.LastMessageAt == nil && right.LastMessageAt != nil:
+		return false
+	case !left.CreatedAt.IsZero() && !right.CreatedAt.IsZero() && !left.CreatedAt.Equal(right.CreatedAt):
+		return left.CreatedAt.After(right.CreatedAt)
+	default:
+		return left.ID.String() > right.ID.String()
+	}
 }
 
 func (s *service) GetSession(ctx context.Context, id uuid.UUID) (*ChatSession, error) {

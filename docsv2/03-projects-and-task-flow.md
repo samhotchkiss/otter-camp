@@ -318,6 +318,7 @@ When an agent discovers an issue that prevents progress — a cross-task conflic
 - The agent's task transitions to `blocked` because it has an unresolved dependency.
 - The new task is assigned to the project manager by default.
 - The PM triages in a project-scoped session: they may resolve it themselves, escalate, or break it into further tasks.
+- That PM triage session is not the task's work log. The task's execution/review transcript stays on task-scoped async sessions so the operator sees the real task history in task detail.
 - When the blocking task reaches `done`, the original task's dependency is satisfied and it can resume.
 
 ### Escalation Path
