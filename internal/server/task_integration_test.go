@@ -133,6 +133,45 @@ func TestTaskHTTPQueueRequiresFlowTemplate(t *testing.T) {
 	}
 }
 
+func TestTaskHTTPQueueRejectsOutstandingProjectGateEX256(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-gate-queue", false)
+	seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	gateTask, templateID, _, _ := seedFlowTask(t, testServer.Pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	gateTask.Title = "Bootstrap governance gate"
+	gateTask.BlocksScope = "all"
+	if _, err := taskRepo.Update(context.Background(), gateTask); err != nil {
+		t.Fatalf("update gate task: %v", err)
+	}
+
+	regularTask, err := taskRepo.Create(context.Background(), repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Regular queued task",
+		WorkStatus:     "draft",
+		FlowTemplateID: &templateID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &adminUser.ID,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create regular task: %v", err)
+	}
+
+	queued := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+regularTask.ID.String()+"/queue", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if queued.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("queue task status = %d, want %d body=%s", queued.StatusCode, http.StatusUnprocessableEntity, string(queued.Body))
+	}
+	if got := jsonPathString(t, queued.Body, "error", "message"); !strings.Contains(got, "Bootstrap governance gate") {
+		t.Fatalf("queue error message = %q, want gate context body=%s", got, string(queued.Body))
+	}
+}
+
 func TestTaskHTTPPatchPriorityRoundTrip(t *testing.T) {
 	testServer, org, adminUser, _ := newTaskTestServer(t)
 	defer testServer.Close()

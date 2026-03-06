@@ -41,6 +41,7 @@ var (
 	ErrRequiresHumanApproval      = errors.New("task requires human approval before queueing")
 	ErrFlowTemplateRequired       = errors.New("task requires a flow template before it can be queued")
 	ErrFlowTemplateReviewRequired = errors.New("flow template must define a work -> review -> completion path")
+	ErrProjectGateBlockingQueue   = errors.New("task is blocked by an outstanding project gate and cannot be queued yet")
 	ErrInvalidBlocksScope         = errors.New("blocks_scope must be one of: none, all")
 	ErrDoneRequiresTerminalFlow   = errors.New("task can only be marked done when its flow reaches a terminal node")
 	ErrTransitionTargetRequired   = errors.New("target status is required")
@@ -130,6 +131,27 @@ func (e ErrInProgressRequiresActiveFlow) Is(target error) bool {
 	return target == ErrActiveFlowRequired
 }
 
+type ErrQueueBlockedByProjectGate struct {
+	GateTaskID     uuid.UUID
+	GateTaskNumber int
+	GateTaskTitle  string
+}
+
+func (e ErrQueueBlockedByProjectGate) Error() string {
+	switch {
+	case e.GateTaskNumber > 0 && strings.TrimSpace(e.GateTaskTitle) != "":
+		return fmt.Sprintf("task is blocked by outstanding project gate task %d (%s) and cannot be queued yet", e.GateTaskNumber, strings.TrimSpace(e.GateTaskTitle))
+	case e.GateTaskNumber > 0:
+		return fmt.Sprintf("task is blocked by outstanding project gate task %d and cannot be queued yet", e.GateTaskNumber)
+	default:
+		return ErrProjectGateBlockingQueue.Error()
+	}
+}
+
+func (e ErrQueueBlockedByProjectGate) Is(target error) bool {
+	return target == ErrProjectGateBlockingQueue
+}
+
 type ProjectTask = repo.ProjectTask
 type ProjectTaskEvent = repo.ProjectTaskEvent
 type InboxItem = repo.InboxItem
@@ -179,6 +201,7 @@ type TaskService interface {
 type taskRepository interface {
 	Create(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID, statuses ...string) ([]repo.ProjectTask, error)
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
@@ -462,6 +485,11 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
 		return nil, ErrRequiresHumanApproval
 	}
+	if target == "queued" {
+		if err := s.ensureQueueEligible(ctx, taskRecord); err != nil {
+			return nil, err
+		}
+	}
 	if statusRequiresFlowTemplate(target) && taskRecord.FlowTemplateID == nil {
 		return nil, ErrFlowTemplateRequired
 	}
@@ -638,6 +666,44 @@ func (s *service) projectRequiresPMBeforeQueue(ctx context.Context, projectID uu
 		return false, err
 	}
 	return projectRequiresPMBeforeQueueSetting(projectRecord.Settings), nil
+}
+
+func (s *service) ensureQueueEligible(ctx context.Context, taskRecord repo.ProjectTask) error {
+	gateTask, err := s.lowestOutstandingProjectGate(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return err
+	}
+	if gateTask == nil || gateTask.ID == taskRecord.ID {
+		return nil
+	}
+	return ErrQueueBlockedByProjectGate{
+		GateTaskID:     gateTask.ID,
+		GateTaskNumber: gateTask.TaskNumber,
+		GateTaskTitle:  gateTask.Title,
+	}
+}
+
+func (s *service) lowestOutstandingProjectGate(ctx context.Context, projectID uuid.UUID) (*repo.ProjectTask, error) {
+	projectTasks, err := s.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	var selected *repo.ProjectTask
+	for _, taskRecord := range projectTasks {
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.BlocksScope), "all") {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
+		if status == "done" || status == "cancelled" {
+			continue
+		}
+		if selected == nil || taskRecord.TaskNumber < selected.TaskNumber {
+			clone := taskRecord
+			selected = &clone
+		}
+	}
+	return selected, nil
 }
 
 func projectRequiresPMBeforeQueueSetting(settings json.RawMessage) bool {

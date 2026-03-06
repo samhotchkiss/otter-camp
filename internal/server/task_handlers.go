@@ -2823,6 +2823,7 @@ func mapTaskError(err error) (int, string, string) {
 		errors.Is(err, tasksvc.ErrTransitionTargetRequired),
 		errors.Is(err, tasksvc.ErrFlowTemplateRequired),
 		errors.Is(err, tasksvc.ErrFlowTemplateReviewRequired),
+		errors.Is(err, tasksvc.ErrProjectGateBlockingQueue),
 		errors.Is(err, tasksvc.ErrInvalidBlocksScope),
 		errors.Is(err, tasksvc.ErrPMNotAssigned),
 		errors.Is(err, tasksvc.ErrActiveFlowRequired),
