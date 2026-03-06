@@ -154,10 +154,10 @@ type RunService interface {
 type RunServiceOptions struct {
 	Pool *pgxpool.Pool
 
-	Runs     runRepository
-	RunSteps runStepRepository
-	Attempts runAttemptRepository
-	RunEvent runEventRepository
+	Runs          runRepository
+	RunSteps      runStepRepository
+	Attempts      runAttemptRepository
+	RunEvent      runEventRepository
 	RuntimeStates runtimeStateRepository
 
 	TaskEvents  taskEventRecorder
@@ -435,6 +435,13 @@ func (s *runService) StartRun(ctx context.Context, runID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
+	if state, found, stateErr := s.runtimeStateForRun(ctx, updated); stateErr != nil {
+		return stateErr
+	} else if found {
+		if syncErr := s.syncRuntimeStateActive(ctx, state, updated, "run_started"); syncErr != nil {
+			return syncErr
+		}
+	}
 	if _, err := s.appendRunEvent(ctx, updated.ID, nil, nil, "run_started", "system", nil, nil); err != nil {
 		return err
 	}
@@ -447,6 +454,13 @@ func (s *runService) CompleteRun(ctx context.Context, runID uuid.UUID, output js
 	updated, err := s.transitionRun(ctx, runID, map[string]struct{}{"in_progress": {}}, "completed", nil, nil)
 	if err != nil {
 		return err
+	}
+	if state, found, stateErr := s.runtimeStateForRun(ctx, updated); stateErr != nil {
+		return stateErr
+	} else if found {
+		if syncErr := s.syncRuntimeProgress(ctx, state, updated, "run_completed"); syncErr != nil {
+			return syncErr
+		}
 	}
 	var payload map[string]any
 	if len(output) > 0 {
@@ -483,6 +497,25 @@ func (s *runService) FailRun(ctx context.Context, runID uuid.UUID, reason, failu
 	updated, err := s.transitionRun(ctx, runID, map[string]struct{}{"in_progress": {}, "paused": {}}, targetStatus, reasonPtr, &classCopy)
 	if err != nil {
 		return err
+	}
+	if state, found, stateErr := s.runtimeStateForRun(ctx, updated); stateErr != nil {
+		return stateErr
+	} else if found {
+		if state.ActiveRunID != nil && *state.ActiveRunID == updated.ID {
+			if _, clearErr := s.runtime.ClearActive(ctx, state.ID); clearErr != nil && !errors.Is(clearErr, ErrNotFound) {
+				return clearErr
+			}
+		}
+		switch normalizeFailureClass(failureClass) {
+		case "permanent":
+			if syncErr := s.syncRuntimeStateTerminal(ctx, state, updated, eventType, reason, failureClass); syncErr != nil {
+				return syncErr
+			}
+		default:
+			if syncErr := s.syncRuntimeStateResumable(ctx, state, updated, eventType, reason, failureClass); syncErr != nil {
+				return syncErr
+			}
+		}
 	}
 
 	payload := map[string]any{
@@ -532,6 +565,13 @@ func (s *runService) RequestCancel(ctx context.Context, runID uuid.UUID, request
 		if transitionErr != nil {
 			return transitionErr
 		}
+		if state, found, stateErr := s.runtimeStateForRun(ctx, updated); stateErr != nil {
+			return stateErr
+		} else if found {
+			if syncErr := s.syncRuntimeStateTerminal(ctx, state, updated, "run_cancelled", "run_cancelled", "permanent"); syncErr != nil {
+				return syncErr
+			}
+		}
 		if _, appendErr := s.appendRunEvent(ctx, updated.ID, nil, nil, "run_cancelled", requestActorType, requestActorID, payload); appendErr != nil {
 			return appendErr
 		}
@@ -559,6 +599,18 @@ func (s *runService) ConfirmCancelled(ctx context.Context, runID uuid.UUID) erro
 	if err != nil {
 		return err
 	}
+	if state, found, stateErr := s.runtimeStateForRun(ctx, updated); stateErr != nil {
+		return stateErr
+	} else if found {
+		if state.ActiveRunID != nil && *state.ActiveRunID == updated.ID {
+			if _, clearErr := s.runtime.ClearActive(ctx, state.ID); clearErr != nil && !errors.Is(clearErr, ErrNotFound) {
+				return clearErr
+			}
+		}
+		if syncErr := s.syncRuntimeStateTerminal(ctx, state, updated, "run_cancelled", "run_cancelled", "permanent"); syncErr != nil {
+			return syncErr
+		}
+	}
 	if _, err := s.appendRunEvent(ctx, updated.ID, nil, nil, "run_cancelled", "system", nil, nil); err != nil {
 		return err
 	}
@@ -584,6 +636,17 @@ func (s *runService) ResumeRun(ctx context.Context, runID uuid.UUID) error {
 	updated, err := s.transitionRun(ctx, runID, map[string]struct{}{"paused": {}}, "in_progress", nil, nil)
 	if err != nil {
 		return err
+	}
+	if state, found, stateErr := s.runtimeStateForRun(ctx, updated); stateErr != nil {
+		return stateErr
+	} else if found {
+		now := s.clock.Now().UTC()
+		if _, setErr := s.runtime.SetActive(ctx, state.ID, updated.ID, updated.PrincipalType, principalIDPointer(updated.PrincipalType, updated.PrincipalID), now, now); setErr != nil && !errors.Is(setErr, ErrNotFound) {
+			return setErr
+		}
+		if syncErr := s.syncRuntimeStateActive(ctx, state, updated, "run_resumed"); syncErr != nil {
+			return syncErr
+		}
 	}
 	if _, err := s.appendRunEvent(ctx, updated.ID, nil, nil, "run_started", "system", nil, map[string]any{"resumed": true}); err != nil {
 		return err
@@ -672,6 +735,17 @@ func (s *runService) DeadLetter(ctx context.Context, runID uuid.UUID) error {
 func (s *runService) EmitHeartbeat(ctx context.Context, runID uuid.UUID, runAttemptID *uuid.UUID) error {
 	if runID == uuid.Nil {
 		return ErrRunIDRequired
+	}
+	if runRecord, err := s.runs.Get(ctx, runID); err == nil {
+		if state, found, stateErr := s.runtimeStateForRun(ctx, runRecord); stateErr != nil {
+			return stateErr
+		} else if found {
+			if syncErr := s.syncRuntimeProgress(ctx, state, runRecord, "heartbeat"); syncErr != nil {
+				return syncErr
+			}
+		}
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
 	}
 	_, err := s.appendRunEvent(ctx, runID, nil, runAttemptID, "heartbeat", "system", nil, map[string]any{
 		"ts": s.clock.Now().UTC().Format(time.RFC3339Nano),

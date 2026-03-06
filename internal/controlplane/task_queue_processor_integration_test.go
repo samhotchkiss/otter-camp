@@ -1869,6 +1869,14 @@ func TestTaskQueueProcessorIntegrationDifferentOwnerWakeupDefersUntilTurnExit(t 
 	if reviewRun.Status != "created" {
 		t.Fatalf("review run status = %q, want created while worker is active", reviewRun.Status)
 	}
+	state := loadTaskRuntimeState(t, ctx, fx.pool, created.ID)
+	contract := state.Contract()
+	if contract.Status != "active" {
+		t.Fatalf("runtime status before release = %q, want active", contract.Status)
+	}
+	if contract.DeferredRunID == nil || *contract.DeferredRunID != reviewRun.ID {
+		t.Fatalf("runtime deferred_run_id = %v, want %s", contract.DeferredRunID, reviewRun.ID)
+	}
 
 	payload, err := json.Marshal(map[string]any{
 		"session_id": workExecution.SessionID.String(),
@@ -1915,6 +1923,14 @@ func TestTaskQueueProcessorIntegrationDifferentOwnerWakeupDefersUntilTurnExit(t 
 	}
 	if updatedWorkRun.Status != "in_progress" {
 		t.Fatalf("worker run status = %q, want in_progress tracking state", updatedWorkRun.Status)
+	}
+	state = loadTaskRuntimeState(t, ctx, fx.pool, created.ID)
+	contract = state.Contract()
+	if contract.Status != "active" {
+		t.Fatalf("runtime status after release = %q, want active", contract.Status)
+	}
+	if contract.LastProgressEvent != "wakeup_promoted" {
+		t.Fatalf("runtime last_progress_event = %q, want wakeup_promoted", contract.LastProgressEvent)
 	}
 }
 
@@ -2205,6 +2221,114 @@ func TestTaskQueueProcessorIntegrationStaleOwnerPromotesDeferredWakeupOnce(t *te
 	if updatedWorkerRun.Status != "failed" {
 		t.Fatalf("stale worker run status = %q, want failed", updatedWorkerRun.Status)
 	}
+	state := loadTaskRuntimeState(t, ctx, fx.pool, created.ID)
+	contract := state.Contract()
+	if contract.Status != "active" {
+		t.Fatalf("runtime status = %q, want active", contract.Status)
+	}
+	if contract.LastProgressEvent != "wakeup_promoted" {
+		t.Fatalf("runtime last_progress_event = %q, want wakeup_promoted", contract.LastProgressEvent)
+	}
+}
+
+func TestTaskQueueProcessorIntegrationProjectArchiveRetiresRuntimeStateAndBlocksResume(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     fx.pool,
+		EventBus: fx.bus,
+	})
+	if err != nil {
+		t.Fatalf("New run service: %v", err)
+	}
+	wakeSvc := runService.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Archive retires runtime state",
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	started, err := wakeSvc.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: fx.org.ID,
+			ProjectID:      &fx.project.ID,
+			TaskID:         &created.ID,
+			PrincipalType:  "agent",
+			PrincipalID:    fx.agent.ID,
+			TriggerType:    "scheduler",
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "assigned_task",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup: %v", err)
+	}
+
+	projectService, err := projectsvc.NewService(projectsvc.Options{
+		Pool:         fx.pool,
+		Events:       fx.bus,
+		ChatSessions: repo.NewChatSessionRepo(fx.pool),
+	})
+	if err != nil {
+		t.Fatalf("New project service: %v", err)
+	}
+	if _, err := projectService.Archive(ctx, fx.org.ID, fx.project.ID); err != nil {
+		t.Fatalf("Archive project: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		state := loadTaskRuntimeState(t, ctx, fx.pool, created.ID)
+		return state.Contract().Status == "retired", nil
+	})
+
+	state := loadTaskRuntimeState(t, ctx, fx.pool, created.ID)
+	contract := state.Contract()
+	if contract.Status != "retired" {
+		t.Fatalf("runtime status = %q, want retired", contract.Status)
+	}
+	if contract.RetireReason != "project_archived" {
+		t.Fatalf("runtime retire_reason = %q, want project_archived", contract.RetireReason)
+	}
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:       fx.pool,
+		RunService: runService,
+		EventBus:   fx.bus,
+		Logger:     newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.recoverRun(ctx, started.Run, "heartbeat silence exceeded"); err != nil {
+		t.Fatalf("recoverRun: %v", err)
+	}
+
+	var recoveryCount int
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM run
+		WHERE organization_id = $1
+		  AND trigger_type = 'supervisor'
+		  AND metadata->>'supervisor_recovery_from' = $2
+	`, fx.org.ID, started.Run.ID.String()).Scan(&recoveryCount); err != nil {
+		t.Fatalf("count supervisor recovery runs: %v", err)
+	}
+	if recoveryCount != 0 {
+		t.Fatalf("supervisor recovery run count = %d, want 0", recoveryCount)
+	}
 }
 
 func hasRunForPrincipal(runs []Run, principalID uuid.UUID) bool {
@@ -2368,10 +2492,12 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 	runCancellationSub := processor.SubscribeRunCancellationRequested(&org.ID)
 	flowAdvancedSub := processor.SubscribeFlowAdvanced(&org.ID)
 	projectResumedSub := processor.SubscribeProjectResumed(&org.ID)
+	projectArchivedSub := processor.SubscribeProjectArchived(&org.ID)
 	turnCompletedSub := processor.SubscribeTurnCompletedWakeups(&org.ID)
 	turnCancelledSub := processor.SubscribeTurnCancelledWakeups(&org.ID)
 	t.Cleanup(func() {
 		bus.Unsubscribe(projectResumedSub)
+		bus.Unsubscribe(projectArchivedSub)
 		bus.Unsubscribe(turnCompletedSub)
 		bus.Unsubscribe(turnCancelledSub)
 	})
@@ -2456,6 +2582,15 @@ func seedTaskQueueProjectWithAgent(t *testing.T, ctx context.Context, pool *pgxp
 		t.Fatalf("assign agent to project: %v", err)
 	}
 	return org, project, agent
+}
+
+func loadTaskRuntimeState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID uuid.UUID) RuntimeState {
+	t.Helper()
+	state, err := NewRuntimeStateRepository(pool).GetByScope(ctx, "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	return state
 }
 
 func mustCreateTaskQueueAgentAssignment(

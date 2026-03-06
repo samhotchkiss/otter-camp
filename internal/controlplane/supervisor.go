@@ -460,8 +460,52 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 		return nil
 	}
 
-	if runRecord.TaskID != nil && runRecord.FlowNodeID != nil {
-		deadLetterCount, err := s.runs.CountDeadLetterByTaskFlowNode(ctx, *runRecord.TaskID, *runRecord.FlowNodeID)
+	resolvedTaskID := runRecord.TaskID
+	resolvedSessionID := runRecord.SessionID
+	resolvedFlowNodeID := runRecord.FlowNodeID
+	runtimeMetadata := map[string]any{}
+	if runtimeReader, ok := s.runService.(interface {
+		GetExecutionRuntimeState(context.Context, uuid.UUID, uuid.UUID) (RuntimeState, error)
+	}); ok {
+		state, stateErr := runtimeReader.GetExecutionRuntimeState(ctx, uuidPointerValue(runRecord.TaskID), uuidPointerValue(runRecord.SessionID))
+		if stateErr == nil {
+			contract := state.Contract()
+			if state.ActiveRunID != nil && *state.ActiveRunID != uuid.Nil && *state.ActiveRunID != runRecord.ID {
+				s.logger.Info("supervisor: runtime state already has a different active owner", "run_id", runRecord.ID, "active_run_id", *state.ActiveRunID)
+				return nil
+			}
+			if contract.Status == "retired" || contract.Status == "terminal" {
+				s.logger.Info("supervisor: skipping recovery for retired runtime state", "run_id", runRecord.ID, "runtime_status", contract.Status)
+				return nil
+			}
+			if contract.TaskID != nil && *contract.TaskID != uuid.Nil {
+				resolvedTaskID = contract.TaskID
+			}
+			if contract.SessionID != nil && *contract.SessionID != uuid.Nil {
+				resolvedSessionID = contract.SessionID
+			}
+			if contract.FlowNodeID != nil && *contract.FlowNodeID != uuid.Nil {
+				resolvedFlowNodeID = contract.FlowNodeID
+			}
+			if contract.FlowNodeExecutionID != nil && *contract.FlowNodeExecutionID != uuid.Nil {
+				runtimeMetadata["flow_node_execution_id"] = contract.FlowNodeExecutionID.String()
+			}
+			if contract.ProviderSessionID != "" {
+				runtimeMetadata["provider_session_id"] = contract.ProviderSessionID
+			}
+			if contract.Status != "" {
+				runtimeMetadata["runtime_status"] = contract.Status
+			}
+			if contract.PendingWakeReason != "" {
+				runtimeMetadata["runtime_pending_wake_reason"] = contract.PendingWakeReason
+			}
+		} else if !errors.Is(stateErr, ErrNotFound) {
+			return stateErr
+		}
+	}
+
+	if resolvedTaskID != nil && resolvedFlowNodeID != nil {
+		deadLetterCount, err := s.runs.CountDeadLetterByTaskFlowNode(ctx, *resolvedTaskID, *resolvedFlowNodeID)
 		if err != nil {
 			return err
 		}
@@ -477,6 +521,9 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 		"run_mode":                   runMode(runRecord),
 		"supervisor_recovery_from":   runRecord.ID.String(),
 		"supervisor_recovery_reason": strings.TrimSpace(reason),
+	}
+	for key, value := range runtimeMetadata {
+		metadata[key] = value
 	}
 	encodedMetadata, err := json.Marshal(metadata)
 	if err != nil {
@@ -495,9 +542,9 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 				PrincipalID:    uuid.Nil,
 				TriggerType:    "supervisor",
 				ProjectID:      runRecord.ProjectID,
-				TaskID:         runRecord.TaskID,
-				FlowNodeID:     runRecord.FlowNodeID,
-				SessionID:      runRecord.SessionID,
+				TaskID:         resolvedTaskID,
+				FlowNodeID:     resolvedFlowNodeID,
+				SessionID:      resolvedSessionID,
 				TurnID:         runRecord.TurnID,
 				Metadata:       encodedMetadata,
 			},
@@ -526,9 +573,9 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 			PrincipalID:    uuid.Nil,
 			TriggerType:    "supervisor",
 			ProjectID:      runRecord.ProjectID,
-			TaskID:         runRecord.TaskID,
-			FlowNodeID:     runRecord.FlowNodeID,
-			SessionID:      runRecord.SessionID,
+			TaskID:         resolvedTaskID,
+			FlowNodeID:     resolvedFlowNodeID,
+			SessionID:      resolvedSessionID,
 			TurnID:         runRecord.TurnID,
 			Metadata:       encodedMetadata,
 		})

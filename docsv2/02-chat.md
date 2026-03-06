@@ -163,6 +163,8 @@ Cross-session concurrency is allowed, but a single task/session execution bounda
 - Repeated wakeups for the same owner merge into the active execution instead of starting another overlapping run.
 - Wakeups for a different owner are recorded and deferred until the current owner exits, yields, or is declared stale by the control plane.
 - Deferred wakeups resume by promoting the queued run and appending exactly one kickoff message for the resumed owner.
+- The control plane persists a runtime-state contract for that boundary with the task/session/flow binding ids, last progress timestamp, pending deferred wakeup info, and whether the current failure is resumable or terminal.
+- Task completion, task cancellation, and project archive retire the runtime-state record so archived or finished work cannot be resumed accidentally.
 
 This means "agents can work concurrently" applies across different sessions, not as parallel overlapping execution inside the same task runtime boundary.
 
@@ -229,7 +231,7 @@ Async kicks are modeled as execution wakeups, not "always create a new run." The
 - different owner: persist a deferred wakeup and wait
 - stale or released owner: promote the oldest deferred wakeup and resume execution once
 
-The chat layer only appends a new kickoff message when a wakeup actually starts or is promoted. Coalesced wakeups are visible in control-plane history but do not create duplicate kickoff chatter.
+Resume decisions are driven from the persisted runtime-state contract first, not by reconstructing state from chat rows alone. The chat layer only appends a new kickoff message when a wakeup actually starts or is promoted. Coalesced wakeups are visible in control-plane history but do not create duplicate kickoff chatter.
 
 ### Tool Call Policy (No Mid-Turn Approval)
 

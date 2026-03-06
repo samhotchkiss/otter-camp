@@ -123,6 +123,24 @@ func TestCreateExecutionWakeupSameOwnerCoalescesActiveRun(t *testing.T) {
 	if !found {
 		t.Fatal("expected wakeup_coalesced event")
 	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	contract := state.Contract()
+	if contract.Status != "active" {
+		t.Fatalf("runtime status = %q, want active", contract.Status)
+	}
+	if contract.TaskID == nil || *contract.TaskID != taskID {
+		t.Fatalf("runtime task_id = %v, want %s", contract.TaskID, taskID)
+	}
+	if contract.SessionID == nil || *contract.SessionID != sessionID {
+		t.Fatalf("runtime session_id = %v, want %s", contract.SessionID, sessionID)
+	}
+	if contract.LastProgressEvent != "wakeup_coalesced" {
+		t.Fatalf("runtime last_progress_event = %q, want wakeup_coalesced", contract.LastProgressEvent)
+	}
 }
 
 func TestCreateExecutionWakeupDifferentOwnerDefers(t *testing.T) {
@@ -194,6 +212,21 @@ func TestCreateExecutionWakeupDifferentOwnerDefers(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected wakeup_deferred event")
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	contract := state.Contract()
+	if contract.Status != "active" {
+		t.Fatalf("runtime status = %q, want active", contract.Status)
+	}
+	if contract.DeferredRunID == nil || *contract.DeferredRunID != deferred.Run.ID {
+		t.Fatalf("runtime deferred_run_id = %v, want %s", contract.DeferredRunID, deferred.Run.ID)
+	}
+	if contract.ResumeDisposition != "resumable" {
+		t.Fatalf("runtime resume_disposition = %q, want resumable", contract.ResumeDisposition)
 	}
 }
 
@@ -280,6 +313,259 @@ func TestCreateExecutionWakeupStaleOwnerPromotesDeferredRun(t *testing.T) {
 	}
 	if staleRun.Status != "failed" {
 		t.Fatalf("stale active run status = %q, want failed", staleRun.Status)
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	contract := state.Contract()
+	if contract.Status != "active" {
+		t.Fatalf("runtime status = %q, want active", contract.Status)
+	}
+	if state.ActiveRunID == nil || *state.ActiveRunID != deferred.Run.ID {
+		t.Fatalf("runtime active_run_id = %v, want %s", state.ActiveRunID, deferred.Run.ID)
+	}
+	if contract.LastProgressEvent != "wakeup_promoted" {
+		t.Fatalf("runtime last_progress_event = %q, want wakeup_promoted", contract.LastProgressEvent)
+	}
+}
+
+func TestReleaseExecutionOwnerMarksRuntimeStateResumable(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+		ReleaseExecutionOwner(context.Context, uuid.UUID, uuid.UUID, string) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	started, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    agentID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "assigned_task",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup: %v", err)
+	}
+
+	released, err := wakeSvc.ReleaseExecutionOwner(context.Background(), taskID, sessionID, "chat.turn.completed")
+	if err != nil {
+		t.Fatalf("ReleaseExecutionOwner: %v", err)
+	}
+	if released.Decision != "" {
+		t.Fatalf("release decision = %q, want empty", released.Decision)
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	if state.ActiveRunID != nil {
+		t.Fatalf("runtime active_run_id = %v, want nil", state.ActiveRunID)
+	}
+	contract := state.Contract()
+	if contract.Status != "resumable" {
+		t.Fatalf("runtime status = %q, want resumable", contract.Status)
+	}
+	if contract.TaskID == nil || *contract.TaskID != taskID {
+		t.Fatalf("runtime task_id = %v, want %s", contract.TaskID, taskID)
+	}
+	if contract.SessionID == nil || *contract.SessionID != sessionID {
+		t.Fatalf("runtime session_id = %v, want %s", contract.SessionID, sessionID)
+	}
+	if contract.LastProgressEvent != "chat.turn.completed" {
+		t.Fatalf("runtime last_progress_event = %q, want chat.turn.completed", contract.LastProgressEvent)
+	}
+	if started.Run.ID == uuid.Nil {
+		t.Fatal("expected started run id")
+	}
+}
+
+func TestReleaseExecutionOwnerPromotesDeferredRuntimeState(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+		ReleaseExecutionOwner(context.Context, uuid.UUID, uuid.UUID, string) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	workerID := uuid.New()
+	reviewerID := uuid.New()
+
+	started, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    workerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup started: %v", err)
+	}
+	deferred, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: started.Run.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup deferred: %v", err)
+	}
+	if deferred.Decision != executionWakeupDeferred {
+		t.Fatalf("deferred decision = %q, want %q", deferred.Decision, executionWakeupDeferred)
+	}
+
+	promoted, err := wakeSvc.ReleaseExecutionOwner(context.Background(), taskID, sessionID, "chat.turn.completed")
+	if err != nil {
+		t.Fatalf("ReleaseExecutionOwner: %v", err)
+	}
+	if promoted.Decision != executionWakeupPromoted {
+		t.Fatalf("promoted decision = %q, want %q", promoted.Decision, executionWakeupPromoted)
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	if state.ActiveRunID == nil || *state.ActiveRunID != deferred.Run.ID {
+		t.Fatalf("runtime active_run_id = %v, want %s", state.ActiveRunID, deferred.Run.ID)
+	}
+	contract := state.Contract()
+	if contract.Status != "active" {
+		t.Fatalf("runtime status = %q, want active", contract.Status)
+	}
+	if contract.LastProgressEvent != "wakeup_promoted" {
+		t.Fatalf("runtime last_progress_event = %q, want wakeup_promoted", contract.LastProgressEvent)
+	}
+}
+
+func TestFailRunPermanentMarksRuntimeStateTerminal(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	started, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    agentID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "assigned_task",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup: %v", err)
+	}
+	if err := svc.FailRun(context.Background(), started.Run.ID, "permanent failure", "permanent"); err != nil {
+		t.Fatalf("FailRun: %v", err)
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	if state.ActiveRunID != nil {
+		t.Fatalf("runtime active_run_id = %v, want nil", state.ActiveRunID)
+	}
+	contract := state.Contract()
+	if contract.Status != "terminal" {
+		t.Fatalf("runtime status = %q, want terminal", contract.Status)
+	}
+	if contract.ResumeDisposition != "terminal" {
+		t.Fatalf("runtime resume_disposition = %q, want terminal", contract.ResumeDisposition)
+	}
+	if contract.FailureClass != "permanent" {
+		t.Fatalf("runtime failure_class = %q, want permanent", contract.FailureClass)
+	}
+}
+
+func TestRetireRuntimeStateForTaskMarksRetired(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+		RetireRuntimeStateForTask(context.Context, uuid.UUID, string) error
+	})
+
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	if _, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    agentID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "assigned_task",
+	}); err != nil {
+		t.Fatalf("CreateExecutionWakeup: %v", err)
+	}
+	if err := wakeSvc.RetireRuntimeStateForTask(context.Background(), taskID, "done"); err != nil {
+		t.Fatalf("RetireRuntimeStateForTask: %v", err)
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	if state.ActiveRunID != nil {
+		t.Fatalf("runtime active_run_id = %v, want nil", state.ActiveRunID)
+	}
+	contract := state.Contract()
+	if contract.Status != "retired" {
+		t.Fatalf("runtime status = %q, want retired", contract.Status)
+	}
+	if contract.ResumeDisposition != "terminal" {
+		t.Fatalf("runtime resume_disposition = %q, want terminal", contract.ResumeDisposition)
+	}
+	if contract.RetireReason != "done" {
+		t.Fatalf("runtime retire_reason = %q, want done", contract.RetireReason)
+	}
+	if contract.RetiredAt == nil {
+		t.Fatal("runtime retired_at = nil, want non-nil")
 	}
 }
 
@@ -1017,6 +1303,21 @@ func (r *fakeRuntimeStateRepo) SetActive(_ context.Context, stateID uuid.UUID, r
 	return RuntimeState{}, ErrNotFound
 }
 
+func (r *fakeRuntimeStateRepo) UpdateMetadata(_ context.Context, stateID uuid.UUID, metadata json.RawMessage) (RuntimeState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, state := range r.byScope {
+		if state.ID != stateID {
+			continue
+		}
+		state.Metadata = append(json.RawMessage(nil), metadata...)
+		state.UpdatedAt = state.UpdatedAt.Add(time.Second)
+		r.byScope[key] = state
+		return state, nil
+	}
+	return RuntimeState{}, ErrNotFound
+}
+
 func (r *fakeRuntimeStateRepo) ClearActive(_ context.Context, stateID uuid.UUID) (RuntimeState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1033,6 +1334,33 @@ func (r *fakeRuntimeStateRepo) ClearActive(_ context.Context, stateID uuid.UUID)
 		return state, nil
 	}
 	return RuntimeState{}, ErrNotFound
+}
+
+func (r *fakeRuntimeStateRepo) ListByTask(_ context.Context, taskID uuid.UUID) ([]RuntimeState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var items []RuntimeState
+	for _, state := range r.byScope {
+		contract := state.Contract()
+		if state.ScopeType == "task" && state.ScopeID == taskID {
+			items = append(items, state)
+			continue
+		}
+		if contract.TaskID != nil && *contract.TaskID == taskID {
+			items = append(items, state)
+		}
+	}
+	return items, nil
+}
+
+func (r *fakeRuntimeStateRepo) ListByProject(_ context.Context, _ uuid.UUID) ([]RuntimeState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := make([]RuntimeState, 0, len(r.byScope))
+	for _, state := range r.byScope {
+		items = append(items, state)
+	}
+	return items, nil
 }
 
 type fakeDomainBus struct {

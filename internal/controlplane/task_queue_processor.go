@@ -22,6 +22,7 @@ const (
 	taskRunCancellationConsumerName = "controlplane.run-cancellation"
 	flowAdvancedConsumerName        = "controlplane.flow-advanced"
 	projectResumedConsumerName      = "controlplane.project-resumed"
+	projectArchivedConsumerName     = "controlplane.project-archived"
 	turnCompletedConsumerName       = "controlplane.turn-completed"
 	turnCancelledConsumerName       = "controlplane.turn-cancelled"
 	taskQueueTriggerType            = "scheduler"
@@ -74,6 +75,8 @@ type taskQueueRunStarter interface {
 	GetRun(ctx context.Context, runID uuid.UUID) (Run, error)
 	ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]Run, error)
 	ReleaseExecutionOwner(ctx context.Context, taskID, sessionID uuid.UUID, reason string) (executionWakeupResult, error)
+	RetireRuntimeStateForTask(ctx context.Context, taskID uuid.UUID, reason string) error
+	RetireRuntimeStateForProject(ctx context.Context, projectID uuid.UUID, reason string) error
 }
 
 type taskQueueChatService interface {
@@ -181,6 +184,12 @@ func (p *TaskQueueProcessor) SubscribeTaskQueued(orgID *uuid.UUID) eventbus.Subs
 func (p *TaskQueueProcessor) SubscribeProjectResumed(orgID *uuid.UUID) eventbus.Subscription {
 	return p.events.Subscribe(projectResumedConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
 		return p.handleProjectResumedEvent(ctx, event)
+	})
+}
+
+func (p *TaskQueueProcessor) SubscribeProjectArchived(orgID *uuid.UUID) eventbus.Subscription {
+	return p.events.Subscribe(projectArchivedConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return p.handleProjectArchivedEvent(ctx, event)
 	})
 }
 
@@ -821,6 +830,9 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 			}
 		}
 	}
+	if err := p.runs.RetireRuntimeStateForTask(ctx, payload.TaskID, toStatus); err != nil {
+		return err
+	}
 	if payload.ProjectID != uuid.Nil {
 		if err := p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID); err != nil {
 			return err
@@ -934,6 +946,7 @@ func (p *TaskQueueProcessor) handleProjectResumedEvent(ctx context.Context, even
 	if event.EventType != "project.resumed" {
 		return nil
 	}
+
 	var payload struct {
 		ProjectID uuid.UUID `json:"project_id"`
 	}
@@ -944,6 +957,23 @@ func (p *TaskQueueProcessor) handleProjectResumedEvent(ctx context.Context, even
 		return nil
 	}
 	return p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID)
+}
+
+func (p *TaskQueueProcessor) handleProjectArchivedEvent(ctx context.Context, event eventbus.DomainEvent) error {
+	if event.EventType != "project.archived" {
+		return nil
+	}
+
+	var payload struct {
+		ProjectID uuid.UUID `json:"project_id"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil
+	}
+	if payload.ProjectID == uuid.Nil {
+		return nil
+	}
+	return p.runs.RetireRuntimeStateForProject(ctx, payload.ProjectID, "project_archived")
 }
 
 func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event eventbus.DomainEvent) error {
