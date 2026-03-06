@@ -21,6 +21,7 @@ REVIEW_MARKER="${ISSUES_DIR}/reviewer-instructions.md"
 
 WATCHDOG_LOG="${STATE_DIR}/supervisor-watchdog.log"
 LOCK_DIR="${STATE_DIR}/supervisor-watchdog.lock"
+LOCK_HEARTBEAT_FILE="${LOCK_DIR}/heartbeat"
 NOTES_FILE="${ISSUES_DIR}/notes.md"
 
 STALE_BUILDER_SECONDS="${WATCHDOG_STALE_BUILDER_SECONDS:-1800}"
@@ -28,6 +29,7 @@ STALE_REVIEWER_SECONDS="${WATCHDOG_STALE_REVIEWER_SECONDS:-600}"
 STALE_IN_REVIEW_SECONDS="${WATCHDOG_STALE_IN_REVIEW_SECONDS:-7200}"
 STALE_IN_PROGRESS_SECONDS="${WATCHDOG_STALE_IN_PROGRESS_SECONDS:-3600}"
 STALE_NEEDS_REVIEW_SECONDS="${WATCHDOG_STALE_NEEDS_REVIEW_SECONDS:-1800}"
+LOCK_STALE_SECONDS="${WATCHDOG_LOCK_STALE_SECONDS:-300}"
 REVIEWER_MAX_RUNTIME_SECONDS="${WATCHDOG_REVIEWER_MAX_RUNTIME_SECONDS:-1500}"
 START_RETRY_COUNT="${WATCHDOG_START_RETRY_COUNT:-3}"
 START_RETRY_DELAY_SECONDS="${WATCHDOG_START_RETRY_DELAY_SECONDS:-10}"
@@ -91,19 +93,22 @@ ensure_managed_repo() {
 
 acquire_lock() {
   if mkdir "${LOCK_DIR}" 2>/dev/null; then
-    echo $$ > "${LOCK_DIR}/pid"
+    initialize_lock_dir
     return 0
   fi
 
-  local lock_pid=""
-  if [[ -f "${LOCK_DIR}/pid" ]]; then
-    lock_pid="$(cat "${LOCK_DIR}/pid" 2>/dev/null || true)"
-  fi
-
-  if [[ -n "${lock_pid}" ]] && ! kill -0 "${lock_pid}" 2>/dev/null; then
+  local state reason lock_pid age
+  IFS=$'\t' read -r state reason lock_pid age < <(inspect_lock_state)
+  if [[ "${state}" == "stale" ]]; then
+    log "reclaiming stale watchdog lock (reason=${reason}, pid=${lock_pid:-none}, age=${age}s)"
+    if [[ -n "${lock_pid}" ]] && [[ "${lock_pid}" =~ ^[0-9]+$ ]] && kill -0 "${lock_pid}" 2>/dev/null; then
+      kill_pids "watchdog-lock-holder" "${lock_pid}"
+    fi
     rm -rf "${LOCK_DIR}"
-    mkdir "${LOCK_DIR}"
-    echo $$ > "${LOCK_DIR}/pid"
+    if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+      return 1
+    fi
+    initialize_lock_dir
     return 0
   fi
 
@@ -112,6 +117,80 @@ acquire_lock() {
 
 release_lock() {
   rm -rf "${LOCK_DIR}" 2>/dev/null || true
+}
+
+initialize_lock_dir() {
+  printf '%s\n' "$$" > "${LOCK_DIR}/pid"
+  touch_lock_heartbeat
+}
+
+touch_lock_heartbeat() {
+  [[ -d "${LOCK_DIR}" ]] || return 0
+  touch "${LOCK_HEARTBEAT_FILE}" 2>/dev/null || true
+}
+
+read_lock_pid() {
+  if [[ ! -f "${LOCK_DIR}/pid" ]]; then
+    return 0
+  fi
+  tr -d '[:space:]' < "${LOCK_DIR}/pid" 2>/dev/null || true
+}
+
+lock_activity_age_seconds() {
+  if [[ -e "${LOCK_HEARTBEAT_FILE}" ]]; then
+    file_age_seconds "${LOCK_HEARTBEAT_FILE}"
+    return
+  fi
+  if [[ -e "${LOCK_DIR}/pid" ]]; then
+    file_age_seconds "${LOCK_DIR}/pid"
+    return
+  fi
+  file_age_seconds "${LOCK_DIR}"
+}
+
+inspect_lock_state() {
+  if [[ ! -d "${LOCK_DIR}" ]]; then
+    printf 'missing\tno_lock\t\t0\n'
+    return 0
+  fi
+
+  local pid age
+  pid="$(read_lock_pid)"
+  age="$(lock_activity_age_seconds)"
+
+  if [[ -z "${pid}" ]]; then
+    printf 'stale\tmissing_pid\t\t%s\n' "${age}"
+    return 0
+  fi
+  if [[ ! "${pid}" =~ ^[0-9]+$ ]]; then
+    printf 'stale\tinvalid_pid\t%s\t%s\n' "${pid}" "${age}"
+    return 0
+  fi
+  if ! kill -0 "${pid}" 2>/dev/null; then
+    printf 'stale\tdead_pid\t%s\t%s\n' "${pid}" "${age}"
+    return 0
+  fi
+  if (( age > LOCK_STALE_SECONDS )); then
+    printf 'stale\theartbeat_expired\t%s\t%s\n' "${pid}" "${age}"
+    return 0
+  fi
+
+  printf 'active\tfresh\t%s\t%s\n' "${pid}" "${age}"
+}
+
+sleep_with_heartbeat() {
+  local seconds="$1"
+  while (( seconds > 0 )); do
+    touch_lock_heartbeat
+    sleep 1
+    seconds=$((seconds - 1))
+  done
+}
+
+run_watchdog_stage() {
+  touch_lock_heartbeat
+  "$@"
+  touch_lock_heartbeat
 }
 
 file_age_seconds() {
@@ -367,7 +446,7 @@ kill_pids() {
     kill "${pid}" 2>/dev/null || true
   done <<< "${pids}"
 
-  sleep 2
+  sleep_with_heartbeat 2
 
   while IFS= read -r pid; do
     [[ -z "${pid}" ]] && continue
@@ -576,7 +655,7 @@ start_codex_with_retries() {
     fi
     if (( attempt < START_RETRY_COUNT )); then
       log "builder start retry ${attempt}/${START_RETRY_COUNT} failed; retrying in ${START_RETRY_DELAY_SECONDS}s"
-      sleep "${START_RETRY_DELAY_SECONDS}"
+      sleep_with_heartbeat "${START_RETRY_DELAY_SECONDS}"
     fi
   done
   append_note_throttled "builder-start-failed" 1800 "supervisor failed to start builder after ${START_RETRY_COUNT} attempts"
@@ -591,7 +670,7 @@ start_reviewer_with_retries() {
     fi
     if (( attempt < START_RETRY_COUNT )); then
       log "reviewer start retry ${attempt}/${START_RETRY_COUNT} failed; retrying in ${START_RETRY_DELAY_SECONDS}s"
-      sleep "${START_RETRY_DELAY_SECONDS}"
+      sleep_with_heartbeat "${START_RETRY_DELAY_SECONDS}"
     fi
   done
   append_note_throttled "reviewer-start-failed" 1800 "supervisor failed to start reviewer after ${START_RETRY_COUNT} attempts"
@@ -771,25 +850,27 @@ main() {
     log "github retry helper missing or not executable: ${GITHUB_RETRY_HELPER}"
   fi
 
-  log "run started (dry_run=${DRY_RUN}, base_branch=${BASE_BRANCH}, enforce_dep_graph=${ENFORCE_DEP_GRAPH}, stale_builder=${STALE_BUILDER_SECONDS}s, stale_reviewer=${STALE_REVIEWER_SECONDS}s, stale_in_review=${STALE_IN_REVIEW_SECONDS}s, stale_in_progress=${STALE_IN_PROGRESS_SECONDS}s, stale_needs_review=${STALE_NEEDS_REVIEW_SECONDS}s)"
+  log "run started (dry_run=${DRY_RUN}, base_branch=${BASE_BRANCH}, enforce_dep_graph=${ENFORCE_DEP_GRAPH}, stale_builder=${STALE_BUILDER_SECONDS}s, stale_reviewer=${STALE_REVIEWER_SECONDS}s, stale_in_review=${STALE_IN_REVIEW_SECONDS}s, stale_in_progress=${STALE_IN_PROGRESS_SECONDS}s, stale_needs_review=${STALE_NEEDS_REVIEW_SECONDS}s, lock_stale=${LOCK_STALE_SECONDS}s)"
 
-  enforce_completed_dependencies
-  enforce_in_progress_dependencies
-  validate_run_jsonl_terminal_state
-  requeue_stale_in_review
-  requeue_stale_in_progress
-  flag_stale_needs_review
-  heal_builder
-  heal_reviewer
+  run_watchdog_stage enforce_completed_dependencies
+  run_watchdog_stage enforce_in_progress_dependencies
+  run_watchdog_stage validate_run_jsonl_terminal_state
+  run_watchdog_stage requeue_stale_in_review
+  run_watchdog_stage requeue_stale_in_progress
+  run_watchdog_stage flag_stale_needs_review
+  run_watchdog_stage heal_builder
+  run_watchdog_stage heal_reviewer
 
   log "run complete"
 }
 
-if ! acquire_lock; then
-  echo "supervisor watchdog already running" >&2
-  exit 0
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  if ! acquire_lock; then
+    echo "supervisor watchdog already running" >&2
+    exit 0
+  fi
+
+  trap release_lock EXIT INT TERM
+
+  main
 fi
-
-trap release_lock EXIT INT TERM
-
-main
