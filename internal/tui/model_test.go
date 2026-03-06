@@ -1321,6 +1321,190 @@ func TestTaskDetailHistoryVisibleByDefaultEX249(t *testing.T) {
 	}
 }
 
+func TestTaskDetailFlowVisualizationShowsRejectLoopEX258(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-258-loop"
+	model.workspace.tasks["task-258-loop"] = &taskRecord{
+		ID:                 "task-258-loop",
+		Title:              "Flow topology",
+		Status:             "in_progress",
+		FlowCurrentNodeID:  "review",
+		SelectedFlowNodeID: "review",
+		FlowNodes: []TaskFlowNode{
+			{
+				ID:            "work",
+				Name:          "Implement",
+				NodeType:      "work",
+				ActorType:     "agent",
+				ActorLabel:    "Builder",
+				State:         "completed",
+				NextNodeID:    "review",
+				VisitCount:    1,
+				SubtaskCounts: TaskSubtaskCounts{Total: 2, Done: 2},
+				Executions: []TaskFlowExecution{{
+					ID:          "exec-work-1",
+					FlowNodeID:  "work",
+					VisitNumber: 1,
+					State:       "completed",
+					SessionID:   "00000000-0000-0000-0000-000000002581",
+				}},
+			},
+			{
+				ID:                "review",
+				Name:              "Code Review",
+				NodeType:          "review",
+				ActorType:         "role",
+				ActorLabel:        "Reviewer",
+				State:             "active",
+				IsCurrent:         true,
+				NextNodeID:        "done",
+				RejectNodeID:      "work",
+				VisitCount:        1,
+				LatestExecutionID: "exec-review-1",
+				SessionID:         "00000000-0000-0000-0000-000000002582",
+				Executions: []TaskFlowExecution{{
+					ID:          "exec-review-1",
+					FlowNodeID:  "review",
+					VisitNumber: 1,
+					State:       "active",
+					SessionID:   "00000000-0000-0000-0000-000000002582",
+					Subtasks: []SubtaskItem{{
+						Title:  "Attach diff summary",
+						Status: "done",
+					}},
+				}},
+			},
+			{
+				ID:         "done",
+				Name:       "Merge",
+				NodeType:   "merge",
+				ActorLabel: "System",
+				State:      "pending",
+			},
+		},
+		Events: []TaskEvent{{
+			EventType:  "flow.advanced",
+			ActorType:  "system",
+			FlowNodeID: "review",
+			CreatedAt:  time.Date(2026, 3, 5, 17, 0, 0, 0, time.UTC),
+		}},
+	}
+
+	view := strings.Join(model.renderTaskView(120, 60), "\n")
+	for _, want := range []string{
+		"approve -> Merge",
+		"reject  -> Implement (loop)",
+		"role: Reviewer",
+		"Selected Node",
+		"Enter·open selected journal",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("flow view missing %q: %q", want, view)
+		}
+	}
+}
+
+func TestTaskDetailFlowVisualizationTracksCurrentNodeAcrossRejectionEX258(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-258-state"
+	model.workspace.tasks["task-258-state"] = &taskRecord{
+		ID:                "task-258-state",
+		Title:             "Rejection loop",
+		Status:            "in_progress",
+		FlowCurrentNodeID: "review",
+		FlowNodes: []TaskFlowNode{
+			{ID: "work", Name: "Implement", NodeType: "work", State: "completed"},
+			{ID: "review", Name: "Review", NodeType: "review", State: "active", IsCurrent: true, RejectNodeID: "work"},
+		},
+	}
+
+	before := strings.Join(model.renderTaskView(120, 40), "\n")
+	if !strings.Contains(before, "[*] Review") {
+		t.Fatalf("expected current review node in flow view: %q", before)
+	}
+
+	model.workspace.tasks["task-258-state"].FlowCurrentNodeID = "work"
+	model.workspace.tasks["task-258-state"].SelectedFlowNodeID = "work"
+	model.workspace.tasks["task-258-state"].FlowNodes = []TaskFlowNode{
+		{ID: "work", Name: "Implement", NodeType: "work", State: "active", IsCurrent: true, VisitCount: 2},
+		{ID: "review", Name: "Review", NodeType: "review", State: "rejected", RejectNodeID: "work", RejectedVisits: 1},
+	}
+
+	after := strings.Join(model.renderTaskView(120, 40), "\n")
+	for _, want := range []string{"[*] Implement", "[↺] Review"} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("rejection flow view missing %q: %q", want, after)
+		}
+	}
+}
+
+func TestTaskDetailLoadedStoresFlowTopologyMetadataEX258(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model.workspace.mainView = ViewTask
+	model.workspace.selectedTaskID = "task-258-loaded"
+
+	updated, _ := model.Update(taskDetailLoadedMsg{Detail: TaskDetailItem{
+		ID:                "task-258-loaded",
+		Title:             "Loaded topology",
+		FlowCurrentNodeID: "review",
+		FlowNodes: []TaskFlowNode{
+			{
+				ID:            "review",
+				Name:          "Review",
+				NodeType:      "review",
+				ActorType:     "role",
+				ActorLabel:    "Reviewer",
+				State:         "active",
+				IsCurrent:     true,
+				SessionID:     "00000000-0000-0000-0000-000000002583",
+				VisitCount:    1,
+				SubtaskCounts: TaskSubtaskCounts{Total: 1, Done: 1},
+				Executions: []TaskFlowExecution{{
+					ID:          "exec-review-2",
+					FlowNodeID:  "review",
+					VisitNumber: 1,
+					State:       "active",
+					SessionID:   "00000000-0000-0000-0000-000000002583",
+				}},
+			},
+		},
+		FlowEdges: []TaskFlowEdge{{
+			FromNodeID: "review",
+			ToNodeID:   "done",
+			Kind:       "next",
+		}},
+		Events: []TaskEvent{{
+			EventType:  "flow.advanced",
+			ActorType:  "system",
+			FlowNodeID: "review",
+			CreatedAt:  time.Date(2026, 3, 5, 18, 0, 0, 0, time.UTC),
+		}},
+	}})
+	got := updated.(Model)
+
+	task := got.workspace.tasks["task-258-loaded"]
+	if task == nil {
+		t.Fatal("task detail not stored")
+	}
+	if task.SelectedFlowNodeID != "review" {
+		t.Fatalf("SelectedFlowNodeID = %q, want review", task.SelectedFlowNodeID)
+	}
+	if len(task.FlowNodes) != 1 || task.FlowNodes[0].ActorLabel != "Reviewer" {
+		t.Fatalf("flow node metadata not stored: %+v", task.FlowNodes)
+	}
+	if len(task.FlowEdges) != 1 || task.FlowEdges[0].Kind != "next" {
+		t.Fatalf("flow edge metadata not stored: %+v", task.FlowEdges)
+	}
+}
+
 func TestTaskPaneNavigationStateMachineEX249(t *testing.T) {
 	t.Parallel()
 

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -253,6 +254,282 @@ func TestTaskHTTPAdvanceFlowAndMissingActiveExecution(t *testing.T) {
 	}
 	if executions[1].FlowNodeID != nodeB.ID || executions[1].Status != "active" {
 		t.Fatalf("second execution = %+v, want node=%s status=active", executions[1], nodeB.ID)
+	}
+}
+
+func TestTaskHTTPGetFlowIncludesTopologyCurrentStateAndActorsEX258(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "flow-visualization-linear", false)
+	pmAgent := seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	graph := seedTaskFlowGraph(t, testServer.Pool, org.ID, project.ID, pmAgent.ID, adminUser.ID, false)
+
+	taskRecord := seedTaskForFlowTemplate(t, testServer.Pool, org.ID, project.ID, graph.Template.ID, graph.Review.ID, "in_progress")
+	sessionRepo := repo.NewChatSessionRepo(testServer.Pool)
+	execRepo := repo.NewFlowNodeExecutionRepo(testServer.Pool)
+	subtaskRepo := repo.NewProjectSubtaskRepo(testServer.Pool)
+
+	base := time.Date(2026, time.March, 1, 10, 0, 0, 0, time.UTC)
+	workSession := createTaskFlowSession(t, sessionRepo, org.ID, taskRecord.ID, "work")
+	reviewSession := createTaskFlowSession(t, sessionRepo, org.ID, taskRecord.ID, "review")
+	workCompletedAt := base.Add(5 * time.Minute)
+
+	workExec, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  graph.Work.ID,
+		VisitNumber: 1,
+		Status:      "completed",
+		SessionID:   &workSession.ID,
+		StartedAt:   base,
+		CompletedAt: &workCompletedAt,
+		Metadata:    json.RawMessage(`{"summary":"implemented"}`),
+	})
+	if err != nil {
+		t.Fatalf("create work execution: %v", err)
+	}
+	reviewExec, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  graph.Review.ID,
+		VisitNumber: 2,
+		Status:      "active",
+		SessionID:   &reviewSession.ID,
+		StartedAt:   base.Add(10 * time.Minute),
+		Metadata:    json.RawMessage(`{"summary":"awaiting review"}`),
+	})
+	if err != nil {
+		t.Fatalf("create review execution: %v", err)
+	}
+
+	if _, err := subtaskRepo.Create(context.Background(), repo.ProjectSubtask{
+		TaskID:              taskRecord.ID,
+		FlowNodeExecutionID: workExec.ID,
+		Title:               "Implement endpoint payload",
+		WorkStatus:          "done",
+		SequenceNumber:      1,
+		CreatedByType:       "system",
+	}); err != nil {
+		t.Fatalf("create work subtask: %v", err)
+	}
+	if _, err := subtaskRepo.Create(context.Background(), repo.ProjectSubtask{
+		TaskID:              taskRecord.ID,
+		FlowNodeExecutionID: reviewExec.ID,
+		Title:               "Review topology output",
+		WorkStatus:          "in_progress",
+		SequenceNumber:      1,
+		CreatedByType:       "system",
+	}); err != nil {
+		t.Fatalf("create review subtask: %v", err)
+	}
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/flow", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get flow status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	flow := decodeTaskFlowResponse(t, resp.Body)
+	if flow.TaskID != taskRecord.ID {
+		t.Fatalf("task_id = %s, want %s", flow.TaskID, taskRecord.ID)
+	}
+	if flow.CurrentNode == nil || flow.CurrentNode.ID != graph.Review.ID {
+		t.Fatalf("current_node = %+v, want review node %s", flow.CurrentNode, graph.Review.ID)
+	}
+	if flow.CurrentExecution == nil || flow.CurrentExecution.ID != reviewExec.ID {
+		t.Fatalf("current_execution = %+v, want %s", flow.CurrentExecution, reviewExec.ID)
+	}
+	if len(flow.Nodes) != 3 {
+		t.Fatalf("node count = %d, want 3", len(flow.Nodes))
+	}
+	if len(flow.Edges) != 2 {
+		t.Fatalf("edge count = %d, want 2", len(flow.Edges))
+	}
+	if !hasTaskFlowEdge(flow.Edges, graph.Work.ID, graph.Review.ID, "next", false) {
+		t.Fatalf("missing work -> review edge: %+v", flow.Edges)
+	}
+	if !hasTaskFlowEdge(flow.Edges, graph.Review.ID, graph.Done.ID, "next", false) {
+		t.Fatalf("missing review -> done edge: %+v", flow.Edges)
+	}
+
+	workNode := mustTaskFlowNode(t, flow.Nodes, graph.Work.ID)
+	if workNode.State != "completed" {
+		t.Fatalf("work state = %q, want completed", workNode.State)
+	}
+	if workNode.ActorLabel != pmAgent.DisplayName {
+		t.Fatalf("work actor_label = %q, want %q", workNode.ActorLabel, pmAgent.DisplayName)
+	}
+	if workNode.VisitCount != 1 || len(workNode.Executions) != 1 {
+		t.Fatalf("work visits = %d/%d, want 1/1", workNode.VisitCount, len(workNode.Executions))
+	}
+	if workNode.LatestSessionID == nil || *workNode.LatestSessionID != workSession.ID {
+		t.Fatalf("work latest_session_id = %v, want %s", workNode.LatestSessionID, workSession.ID)
+	}
+	if workNode.SubtaskCounts.Done != 1 || workNode.SubtaskCounts.Total != 1 {
+		t.Fatalf("work subtask_counts = %+v, want total=1 done=1", workNode.SubtaskCounts)
+	}
+
+	reviewNode := mustTaskFlowNode(t, flow.Nodes, graph.Review.ID)
+	if !reviewNode.IsCurrent || reviewNode.State != "active" {
+		t.Fatalf("review node current/state = %v/%q, want true/active", reviewNode.IsCurrent, reviewNode.State)
+	}
+	if reviewNode.ActorLabel != adminUser.DisplayName {
+		t.Fatalf("review actor_label = %q, want %q", reviewNode.ActorLabel, adminUser.DisplayName)
+	}
+	if reviewNode.LatestSessionID == nil || *reviewNode.LatestSessionID != reviewSession.ID {
+		t.Fatalf("review latest_session_id = %v, want %s", reviewNode.LatestSessionID, reviewSession.ID)
+	}
+	if reviewNode.SubtaskCounts.InProgress != 1 || reviewNode.SubtaskCounts.Total != 1 {
+		t.Fatalf("review subtask_counts = %+v, want total=1 in_progress=1", reviewNode.SubtaskCounts)
+	}
+
+	doneNode := mustTaskFlowNode(t, flow.Nodes, graph.Done.ID)
+	if doneNode.State != "pending" {
+		t.Fatalf("done state = %q, want pending", doneNode.State)
+	}
+	if doneNode.ActorLabel != "Release Manager" {
+		t.Fatalf("done actor_label = %q, want %q", doneNode.ActorLabel, "Release Manager")
+	}
+}
+
+func TestTaskHTTPGetFlowIncludesRejectLoopAndHistoricalNodeExecutionsEX258(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "flow-visualization-loop", false)
+	pmAgent := seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	graph := seedTaskFlowGraph(t, testServer.Pool, org.ID, project.ID, pmAgent.ID, adminUser.ID, true)
+
+	taskRecord := seedTaskForFlowTemplate(t, testServer.Pool, org.ID, project.ID, graph.Template.ID, graph.Work.ID, "in_progress")
+	sessionRepo := repo.NewChatSessionRepo(testServer.Pool)
+	execRepo := repo.NewFlowNodeExecutionRepo(testServer.Pool)
+	subtaskRepo := repo.NewProjectSubtaskRepo(testServer.Pool)
+
+	base := time.Date(2026, time.March, 2, 14, 0, 0, 0, time.UTC)
+	workSession1 := createTaskFlowSession(t, sessionRepo, org.ID, taskRecord.ID, "work-1")
+	reviewSession := createTaskFlowSession(t, sessionRepo, org.ID, taskRecord.ID, "review")
+	workSession2 := createTaskFlowSession(t, sessionRepo, org.ID, taskRecord.ID, "work-2")
+
+	workCompletedAt := base.Add(5 * time.Minute)
+	reviewCompletedAt := base.Add(15 * time.Minute)
+	workExec1, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  graph.Work.ID,
+		VisitNumber: 1,
+		Status:      "completed",
+		SessionID:   &workSession1.ID,
+		StartedAt:   base,
+		CompletedAt: &workCompletedAt,
+		Metadata:    json.RawMessage(`{"summary":"first pass"}`),
+	})
+	if err != nil {
+		t.Fatalf("create work execution 1: %v", err)
+	}
+	reviewExec, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  graph.Review.ID,
+		VisitNumber: 2,
+		Status:      "rejected",
+		SessionID:   &reviewSession.ID,
+		StartedAt:   base.Add(10 * time.Minute),
+		CompletedAt: &reviewCompletedAt,
+		Metadata:    json.RawMessage(`{"reason":"needs changes"}`),
+	})
+	if err != nil {
+		t.Fatalf("create review execution: %v", err)
+	}
+	workExec2, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  graph.Work.ID,
+		VisitNumber: 3,
+		Status:      "active",
+		SessionID:   &workSession2.ID,
+		StartedAt:   base.Add(20 * time.Minute),
+		Metadata:    json.RawMessage(`{"summary":"rework"}`),
+	})
+	if err != nil {
+		t.Fatalf("create work execution 2: %v", err)
+	}
+
+	if _, err := subtaskRepo.Create(context.Background(), repo.ProjectSubtask{
+		TaskID:              taskRecord.ID,
+		FlowNodeExecutionID: workExec1.ID,
+		Title:               "Initial implementation",
+		WorkStatus:          "done",
+		SequenceNumber:      1,
+		CreatedByType:       "system",
+	}); err != nil {
+		t.Fatalf("create work subtask 1: %v", err)
+	}
+	if _, err := subtaskRepo.Create(context.Background(), repo.ProjectSubtask{
+		TaskID:              taskRecord.ID,
+		FlowNodeExecutionID: reviewExec.ID,
+		Title:               "Address reviewer feedback",
+		WorkStatus:          "cancelled",
+		SequenceNumber:      1,
+		CreatedByType:       "system",
+	}); err != nil {
+		t.Fatalf("create review subtask: %v", err)
+	}
+	if _, err := subtaskRepo.Create(context.Background(), repo.ProjectSubtask{
+		TaskID:              taskRecord.ID,
+		FlowNodeExecutionID: workExec2.ID,
+		Title:               "Rework endpoint payload",
+		WorkStatus:          "in_progress",
+		SequenceNumber:      1,
+		CreatedByType:       "system",
+	}); err != nil {
+		t.Fatalf("create work subtask 2: %v", err)
+	}
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/flow", nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get flow status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	flow := decodeTaskFlowResponse(t, resp.Body)
+	if flow.CurrentNode == nil || flow.CurrentNode.ID != graph.Work.ID {
+		t.Fatalf("current_node = %+v, want work node %s", flow.CurrentNode, graph.Work.ID)
+	}
+	if flow.CurrentExecution == nil || flow.CurrentExecution.ID != workExec2.ID {
+		t.Fatalf("current_execution = %+v, want %s", flow.CurrentExecution, workExec2.ID)
+	}
+	if !hasTaskFlowEdge(flow.Edges, graph.Review.ID, graph.Work.ID, "reject", true) {
+		t.Fatalf("missing reject back-edge in %+v", flow.Edges)
+	}
+
+	workNode := mustTaskFlowNode(t, flow.Nodes, graph.Work.ID)
+	if !workNode.IsCurrent || workNode.State != "active" {
+		t.Fatalf("work node current/state = %v/%q, want true/active", workNode.IsCurrent, workNode.State)
+	}
+	if workNode.VisitCount != 2 || workNode.CompletedVisits != 1 {
+		t.Fatalf("work visit counts = %+v, want visit_count=2 completed_visits=1", workNode)
+	}
+	if len(workNode.Executions) != 2 {
+		t.Fatalf("work execution count = %d, want 2", len(workNode.Executions))
+	}
+	if workNode.Executions[0].SessionID == nil || *workNode.Executions[0].SessionID != workSession1.ID {
+		t.Fatalf("work execution[0] session = %v, want %s", workNode.Executions[0].SessionID, workSession1.ID)
+	}
+	if workNode.Executions[1].SessionID == nil || *workNode.Executions[1].SessionID != workSession2.ID {
+		t.Fatalf("work execution[1] session = %v, want %s", workNode.Executions[1].SessionID, workSession2.ID)
+	}
+	if workNode.SubtaskCounts.InProgress != 1 || workNode.SubtaskCounts.Total != 1 {
+		t.Fatalf("work latest subtask_counts = %+v, want total=1 in_progress=1", workNode.SubtaskCounts)
+	}
+
+	reviewNode := mustTaskFlowNode(t, flow.Nodes, graph.Review.ID)
+	if reviewNode.State != "rejected" {
+		t.Fatalf("review state = %q, want rejected", reviewNode.State)
+	}
+	if reviewNode.RejectedVisits != 1 || len(reviewNode.Executions) != 1 {
+		t.Fatalf("review rejected_visits/executions = %d/%d, want 1/1", reviewNode.RejectedVisits, len(reviewNode.Executions))
+	}
+	if reviewNode.Executions[0].SessionID == nil || *reviewNode.Executions[0].SessionID != reviewSession.ID {
+		t.Fatalf("review execution session = %v, want %s", reviewNode.Executions[0].SessionID, reviewSession.ID)
+	}
+	if reviewNode.SubtaskCounts.Cancelled != 1 || reviewNode.SubtaskCounts.Total != 1 {
+		t.Fatalf("review subtask_counts = %+v, want total=1 cancelled=1", reviewNode.SubtaskCounts)
 	}
 }
 
@@ -783,4 +1060,171 @@ func seedReviewedTerminalFlowState(t *testing.T, pool *pgxpool.Pool, orgID, proj
 			t.Fatalf("create completed execution %d: %v", index+1, err)
 		}
 	}
+}
+
+type seededTaskFlowGraph struct {
+	Template repo.FlowTemplate
+	Work     repo.FlowNode
+	Review   repo.FlowNode
+	Done     repo.FlowNode
+}
+
+func seedTaskFlowGraph(t *testing.T, pool *pgxpool.Pool, orgID, projectID, agentID, reviewerID uuid.UUID, includeRejectLoop bool) seededTaskFlowGraph {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(context.Background(), repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "flow-visualization-" + uuid.NewString()[:8],
+		DisplayName:    "Flow Visualization",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create visualization template: %v", err)
+	}
+
+	agentType := "agent"
+	humanType := "human"
+	roleType := "role"
+
+	workNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Implement",
+		NodeType:       "work",
+		Position:       1,
+		ActorType:      &agentType,
+		ActorID:        &agentID,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		ActorType:      &humanType,
+		ActorID:        &reviewerID,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	doneNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		ActorType:      &roleType,
+		MaxVisits:      3,
+		Metadata:       json.RawMessage(`{"actor_role":"release_manager"}`),
+	})
+	if err != nil {
+		t.Fatalf("create done node: %v", err)
+	}
+
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(context.Background(), workNode); err != nil {
+		t.Fatalf("update work node next edge: %v", err)
+	}
+	reviewNode.NextNodeID = &doneNode.ID
+	if includeRejectLoop {
+		reviewNode.RejectNodeID = &workNode.ID
+	}
+	if _, err := nodeRepo.Update(context.Background(), reviewNode); err != nil {
+		t.Fatalf("update review node edges: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(context.Background(), template); err != nil {
+		t.Fatalf("update visualization template start node: %v", err)
+	}
+
+	return seededTaskFlowGraph{
+		Template: template,
+		Work:     workNode,
+		Review:   reviewNode,
+		Done:     doneNode,
+	}
+}
+
+func seedTaskForFlowTemplate(t *testing.T, pool *pgxpool.Pool, orgID, projectID, templateID, currentNodeID uuid.UUID, workStatus string) repo.ProjectTask {
+	t.Helper()
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	taskRecord, err := taskRepo.Create(context.Background(), repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		Title:          "flow-visualization-task",
+		WorkStatus:     workStatus,
+		FlowTemplateID: &templateID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create visualization task: %v", err)
+	}
+	taskRecord, err = taskRepo.SetFlowNode(context.Background(), taskRecord.ID, &currentNodeID)
+	if err != nil {
+		t.Fatalf("set visualization task current node: %v", err)
+	}
+	return taskRecord
+}
+
+func createTaskFlowSession(t *testing.T, sessionRepo *repo.ChatSessionRepo, orgID, taskID uuid.UUID, mode string) repo.ChatSession {
+	t.Helper()
+
+	title := mode
+	session, err := sessionRepo.Create(context.Background(), repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        taskID,
+		Mode:           "sync",
+		Status:         "active",
+		Title:          &title,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task flow session: %v", err)
+	}
+	return session
+}
+
+func decodeTaskFlowResponse(t *testing.T, body []byte) taskFlowResponse {
+	t.Helper()
+
+	var payload struct {
+		Data taskFlowResponse `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode task flow response: %v body=%s", err, string(body))
+	}
+	return payload.Data
+}
+
+func mustTaskFlowNode(t *testing.T, nodes []taskFlowNodeViewResponse, nodeID uuid.UUID) taskFlowNodeViewResponse {
+	t.Helper()
+
+	for _, node := range nodes {
+		if node.ID == nodeID {
+			return node
+		}
+	}
+	t.Fatalf("node %s not found in %+v", nodeID, nodes)
+	return taskFlowNodeViewResponse{}
+}
+
+func hasTaskFlowEdge(edges []taskFlowEdgeResponse, fromNodeID, toNodeID uuid.UUID, kind string, isBackEdge bool) bool {
+	for _, edge := range edges {
+		if edge.FromNodeID == fromNodeID && edge.ToNodeID == toNodeID && edge.Kind == kind && edge.IsBackEdge == isBackEdge {
+			return true
+		}
+	}
+	return false
 }

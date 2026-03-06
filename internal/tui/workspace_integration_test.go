@@ -184,6 +184,81 @@ func TestTaskJumpDuplicateTitlesRequireExplicitDisambiguationEX257(t *testing.T)
 	}
 }
 
+func TestTaskFlowSelectionOpensHistoricalJournalEX258(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, sessionID string) ([]ChatMessage, error) {
+			return []ChatMessage{{ID: "msg-" + sessionID, Content: "history"}}, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-258-history"
+	model.activeScope = ScopeTask
+	model.taskPaneTab = taskPaneTabJournal
+	model.taskPaneTaskID = "task-258-history"
+	model.focus = MainPanel
+	model.activeSession = "00000000-0000-0000-0000-000000002586"
+	model.workspace.tasks["task-258-history"] = &taskRecord{
+		ID:                 "task-258-history",
+		Title:              "Inspect historical node",
+		Status:             "in_progress",
+		FlowCurrentNodeID:  "review",
+		SelectedFlowNodeID: "review",
+		FlowNodes: []TaskFlowNode{
+			{
+				ID:         "work",
+				Name:       "Implement",
+				NodeType:   "work",
+				State:      "completed",
+				SessionID:  "00000000-0000-0000-0000-000000002585",
+				VisitCount: 1,
+				Executions: []TaskFlowExecution{{
+					ID:          "exec-work",
+					FlowNodeID:  "work",
+					VisitNumber: 1,
+					State:       "completed",
+					SessionID:   "00000000-0000-0000-0000-000000002585",
+				}},
+			},
+			{
+				ID:         "review",
+				Name:       "Review",
+				NodeType:   "review",
+				State:      "active",
+				IsCurrent:  true,
+				SessionID:  "00000000-0000-0000-0000-000000002586",
+				VisitCount: 1,
+				Executions: []TaskFlowExecution{{
+					ID:          "exec-review",
+					FlowNodeID:  "review",
+					VisitNumber: 1,
+					State:       "active",
+					SessionID:   "00000000-0000-0000-0000-000000002586",
+				}},
+			},
+		},
+	}
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	model = updated.(Model)
+	runNonTimerCmds(cmd)
+	if got := model.ActiveChatSession(); got != "00000000-0000-0000-0000-000000002585" {
+		t.Fatalf("active session after flow selection = %q, want historical work journal", got)
+	}
+
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	runNonTimerCmds(cmd)
+	if got := model.ActiveChatSession(); got != "00000000-0000-0000-0000-000000002585" {
+		t.Fatalf("active session after Enter = %q, want historical work journal", got)
+	}
+	if got := model.FocusedPanel(); got != ChatPanel {
+		t.Fatalf("focus after Enter = %s, want chat", panelLabel(got))
+	}
+}
+
 func TestTaskDetailUsesActiveExecutionSessionInRightPaneEX249(t *testing.T) {
 	t.Parallel()
 

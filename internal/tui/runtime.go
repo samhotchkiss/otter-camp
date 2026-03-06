@@ -93,10 +93,59 @@ type FlowStep struct {
 	Status   string // "completed", "active", "pending"
 }
 
+type TaskSubtaskCounts struct {
+	Total      int
+	Done       int
+	InProgress int
+	Pending    int
+	Blocked    int
+	Cancelled  int
+}
+
 // SubtaskItem represents a subtask within a task.
 type SubtaskItem struct {
 	Title  string
 	Status string // "pending", "in_progress", "done"
+}
+
+type TaskFlowExecution struct {
+	ID            string
+	FlowNodeID    string
+	VisitNumber   int
+	Status        string
+	State         string
+	SessionID     string
+	StartedAt     time.Time
+	CompletedAt   *time.Time
+	SubtaskCounts TaskSubtaskCounts
+	Subtasks      []SubtaskItem
+}
+
+type TaskFlowEdge struct {
+	FromNodeID string
+	ToNodeID   string
+	Kind       string
+	IsBackEdge bool
+}
+
+type TaskFlowNode struct {
+	ID                string
+	Name              string
+	NodeType          string
+	Position          int
+	ActorType         string
+	ActorLabel        string
+	State             string
+	IsCurrent         bool
+	NextNodeID        string
+	RejectNodeID      string
+	VisitCount        int
+	CompletedVisits   int
+	RejectedVisits    int
+	SessionID         string
+	LatestExecutionID string
+	SubtaskCounts     TaskSubtaskCounts
+	Executions        []TaskFlowExecution
 }
 
 // TaskDependency represents a dependency relationship between tasks.
@@ -108,10 +157,11 @@ type TaskDependency struct {
 
 // TaskEvent represents a single timestamped event in a task's lifecycle.
 type TaskEvent struct {
-	EventType string         // "task.created", "status.changed", "task.review_rejected"
-	ActorType string         // "human_user", "agent", "system", "supervisor"
-	Payload   map[string]any // event-specific data (from_status, to_status, reason, etc.)
-	CreatedAt time.Time
+	EventType  string // "task.created", "status.changed", "task.review_rejected"
+	ActorType  string // "human_user", "agent", "system", "supervisor"
+	FlowNodeID string
+	Payload    map[string]any // event-specific data (from_status, to_status, reason, etc.)
+	CreatedAt  time.Time
 }
 
 // TaskDetailItem is the full task record fetched on demand when the user selects a task.
@@ -128,6 +178,9 @@ type TaskDetailItem struct {
 	RecentExecutionID   string
 	AgentName           string // display_name of the assigned agent, if any
 	FlowNodeName        string // current flow node display_name, if any
+	FlowCurrentNodeID   string
+	FlowNodes           []TaskFlowNode
+	FlowEdges           []TaskFlowEdge
 	RequiresHumanReview bool   // whether this task requires human review
 	BranchName          string // git branch name, if any
 	FlowSteps           []FlowStep

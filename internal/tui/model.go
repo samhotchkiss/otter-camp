@@ -412,6 +412,8 @@ func (m Model) taskExecutionSessionID(task *taskRecord) string {
 		return ""
 	}
 	switch {
+	case strings.TrimSpace(task.selectedFlowNodeSessionID()) != "":
+		return strings.TrimSpace(task.selectedFlowNodeSessionID())
 	case strings.TrimSpace(task.ActiveExecutionID) != "":
 		return strings.TrimSpace(task.ActiveExecutionID)
 	case strings.TrimSpace(task.RecentExecutionID) != "":
@@ -626,6 +628,38 @@ func (m *Model) syncTaskPaneSelection(force bool) tea.Cmd {
 		}
 	}
 	return m.applyTaskPaneSelection(task, m.activeScope, nextTab, force)
+}
+
+func (m *Model) stepTaskFlowSelection(delta int) tea.Cmd {
+	task := m.activeTaskRecord()
+	if task == nil || len(task.FlowNodes) == 0 {
+		m.statusMessage = "No flow nodes to inspect."
+		return nil
+	}
+	task.ensureSelectedFlowNode()
+	index := task.flowNodeIndexByID(task.SelectedFlowNodeID)
+	if index < 0 {
+		index = 0
+	}
+	next := index + delta
+	if next < 0 {
+		m.statusMessage = "Already at first flow node."
+		return nil
+	}
+	if next >= len(task.FlowNodes) {
+		m.statusMessage = "Already at last flow node."
+		return nil
+	}
+	task.SelectedFlowNodeID = task.FlowNodes[next].ID
+	label := strings.TrimSpace(task.FlowNodes[next].Name)
+	if label == "" {
+		label = "flow node"
+	}
+	m.statusMessage = "Inspecting " + truncate(label, 40) + "."
+	if m.taskPaneEnabled() && m.workspace.mainView == ViewTask && m.activeScope == ScopeTask && m.taskPaneTab != taskPaneTabDiscussion {
+		return m.applyTaskPaneSelection(task, ScopeTask, m.taskPaneTab, true)
+	}
+	return nil
 }
 
 func (m *Model) cycleTaskPaneTab(forward bool) tea.Cmd {
@@ -969,12 +1003,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rec.Priority = typed.Detail.Priority
 		rec.AgentName = typed.Detail.AgentName
 		rec.FlowNodeName = typed.Detail.FlowNodeName
+		rec.FlowCurrentNodeID = typed.Detail.FlowCurrentNodeID
+		rec.FlowNodes = append([]TaskFlowNode(nil), typed.Detail.FlowNodes...)
+		rec.FlowEdges = append([]TaskFlowEdge(nil), typed.Detail.FlowEdges...)
 		rec.RequiresHumanReview = typed.Detail.RequiresHumanReview
 		rec.BranchName = typed.Detail.BranchName
 		rec.FlowSteps = typed.Detail.FlowSteps
 		rec.SubtaskItems = typed.Detail.SubtaskItems
 		rec.Dependencies = typed.Detail.Dependencies
 		rec.Events = append([]TaskEvent(nil), typed.Detail.Events...)
+		rec.ensureSelectedFlowNode()
 		// Format task events into human-readable history strings
 		if len(typed.Detail.Events) > 0 {
 			hist := make([]string, 0, len(typed.Detail.Events))
@@ -990,6 +1028,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					from, _ := ev.Payload["from_status"].(string)
 					to, _ := ev.Payload["to_status"].(string)
 					line = fmt.Sprintf("%s  %s → %s (%s)", ts, from, to, actor)
+				case "flow.advanced":
+					target := rec.flowNodeName(ev.FlowNodeID)
+					if target == "" {
+						target = "flow advanced"
+					}
+					line = fmt.Sprintf("%s  Advanced to %s (%s)", ts, target, actor)
+				case "flow.rejected":
+					target := rec.flowNodeName(ev.FlowNodeID)
+					if target == "" {
+						target = "review loop"
+					}
+					line = fmt.Sprintf("%s  Rejected to %s (%s)", ts, target, actor)
 				case "task.review_rejected":
 					line = fmt.Sprintf("%s  Review rejected (%s)", ts, actor)
 				case "task.created":
@@ -1022,6 +1072,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				label = fmt.Sprintf("OC-%d: %s", rec.TaskNumber, label)
 			}
 			m.workspace.sessionToTaskLabel[sid] = label
+		}
+		for _, node := range rec.FlowNodes {
+			for _, execution := range node.Executions {
+				if sid := strings.TrimSpace(execution.SessionID); sid != "" && rec.Title != "" {
+					label := strings.TrimSpace(rec.Title)
+					if rec.TaskNumber > 0 {
+						label = fmt.Sprintf("OC-%d: %s", rec.TaskNumber, label)
+					}
+					m.workspace.sessionToTaskLabel[sid] = label
+				}
+			}
 		}
 		// When the task detail arrives with a session ID and we're currently
 		// viewing this task in scope=task, load the task's chat history.
@@ -3173,7 +3234,19 @@ func (m *Model) handleEnterKey() tea.Cmd {
 			return nil
 		}
 		if m.workspace.mainView == ViewTask {
-			if sessionID, ok := m.workspace.openSelectedTaskSession(); ok {
+			task := m.activeTaskRecord()
+			executionSessionID := ""
+			discussionSessionID := ""
+			sessionID := ""
+			if task != nil {
+				executionSessionID = m.taskExecutionSessionID(task)
+				discussionSessionID = m.taskDiscussionSessionID(task)
+				sessionID = executionSessionID
+				if strings.TrimSpace(sessionID) == "" {
+					sessionID = discussionSessionID
+				}
+			}
+			if strings.TrimSpace(sessionID) != "" {
 				m.state.LastActiveChatSession = sessionID
 				// EX-186: clear stale turn state before switching sessions.
 				m.clearTurnIfSwitchingSession(sessionID)
@@ -3187,13 +3260,23 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				}
 				switch taskStatus {
 				case "in_progress":
-					m.statusMessage = "Resumed task session."
+					if executionSessionID == "" && strings.TrimSpace(discussionSessionID) != "" {
+						m.statusMessage = "Opened task discussion."
+					} else if task != nil && task.selectedFlowNode() != nil && task.SelectedFlowNodeID != task.FlowCurrentNodeID {
+						m.statusMessage = "Opened selected node journal."
+					} else {
+						m.statusMessage = "Resumed task session."
+					}
 				case "done", "approved":
 					m.statusMessage = "Viewing completed task session."
 				default:
-					m.statusMessage = "Opened task session."
+					if executionSessionID == "" && strings.TrimSpace(discussionSessionID) != "" {
+						m.statusMessage = "Opened task discussion."
+					} else {
+						m.statusMessage = "Opened task session."
+					}
 				}
-				if m.runtimeHints.LoadChatHistory != nil {
+				if looksLikeUUID(sessionID) && m.runtimeHints.LoadChatHistory != nil {
 					// EX-182: clear stale messages so the loading indicator
 					// appears while the task session's history loads.
 					m.chatMessages = nil
@@ -3203,7 +3286,7 @@ func (m *Model) handleEnterKey() tea.Cmd {
 				}
 				return nil
 			}
-			m.statusMessage = "No active session for this task."
+			m.statusMessage = "No journal for the selected flow node."
 			return nil
 		}
 		if m.workspace.mainView == ViewProject {
@@ -3618,13 +3701,7 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		return true, nil
 	case 'h':
 		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
-			m.workspace.showTaskHistory = !m.workspace.showTaskHistory
-			if m.workspace.showTaskHistory {
-				m.statusMessage = "Showing task history"
-			} else {
-				m.statusMessage = "Task history hidden"
-			}
-			return true, nil
+			return true, m.stepTaskFlowSelection(-1)
 		}
 		if m.focus == SidebarPanel {
 			// EX-416: empty sidebar guard — mirrors EX-413/414/415 for h key.
@@ -3686,6 +3763,9 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		m.statusMessage = "h/l collapse/expand sidebar sections — press 1 to focus sidebar"
 		return true, nil
 	case 'l':
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			return true, m.stepTaskFlowSelection(1)
+		}
 		if m.focus == SidebarPanel {
 			// EX-416: empty sidebar guard — mirrors EX-413/414/415 for l key.
 			if len(m.workspace.visibleSidebarIDs()) == 0 {
@@ -3735,6 +3815,18 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		}
 		// EX-217: give feedback instead of silent no-op when sidebar not focused.
 		m.statusMessage = "h/l collapse/expand sidebar sections — press 1 to focus sidebar"
+		return true, nil
+	case 'H':
+		if m.focus == MainPanel && m.workspace.mainView == ViewTask {
+			m.workspace.showTaskHistory = !m.workspace.showTaskHistory
+			if m.workspace.showTaskHistory {
+				m.statusMessage = "Showing task history"
+			} else {
+				m.statusMessage = "Task history hidden"
+			}
+			return true, nil
+		}
+		m.statusMessage = "H is not bound. Press h (lowercase) to collapse sidebar sections (1 to focus sidebar)."
 		return true, nil
 	case 's':
 		if m.focus == MainPanel || m.focus == SidebarPanel {
@@ -4496,12 +4588,6 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		// EX-382: capital F — not bound. Users may mean lowercase 'f' (defer in inbox).
 		if m.focus != ChatPanel {
 			m.statusMessage = "F is not bound. Press f (lowercase) to defer in Inbox view. Press i for Inbox."
-			return true, nil
-		}
-	case 'H':
-		// EX-382: capital H — not bound. Users may mean lowercase 'h' (collapse sidebar).
-		if m.focus != ChatPanel {
-			m.statusMessage = "H is not bound. Press h (lowercase) to collapse sidebar sections (1 to focus sidebar)."
 			return true, nil
 		}
 	case 'J':
