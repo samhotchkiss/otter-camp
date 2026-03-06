@@ -3708,6 +3708,9 @@ func (m Model) renderStatusBar(layout layoutState, focus Panel) string {
 		if m.runtimeHints.BinaryStale {
 			rvLabel += "!"
 			rvStyle = styleDisconnected
+		} else if m.runtimeHints.BinaryMetadataWarning {
+			rvLabel += "?"
+			rvStyle = styleReconnecting
 		}
 		segments = append(segments, statusBarSegment{text: rvStyle.Render(rvLabel), priority: 3})
 	}
