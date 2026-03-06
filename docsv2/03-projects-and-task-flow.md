@@ -59,6 +59,13 @@ Every new project starts with a mandatory bootstrap task as the first project ta
 
 This uses the normal flow system and normal scheduler rules. The bootstrap task's `blocks_scope = 'all'` gate prevents any other task from starting until Frank approves and the task reaches `done`.
 
+### Fresh Kickoff vs Resume
+
+- A **fresh kickoff** means "start this project again as a clean slate." The system creates at most one new live project and one canonical project-scoped planning session for that kickoff request.
+- Repeating or retrying the same fresh kickoff request must reuse that canonical live project/session path. The system must not silently create a second active project or a second parallel project-planning session for the same intended run.
+- Archived or closed project/session transcripts from prior runs are excluded from fresh-kickoff planning context. They are only reintroduced when the operator explicitly chooses **resume** or **recovery** mode.
+- If fresh kickoff cannot reach initial task creation within the prompt/turn guardrails, the session surfaces one concrete blocker and stops auto-churning.
+
 ### The `requires_human_review` Flag
 
 Draft tasks carry a `requires_human_review` boolean that controls whether the PM can queue the task autonomously or needs human sign-off first.
@@ -117,6 +124,8 @@ This means an agent always knows *why* it's doing what it's doing.
 ### Conversational Context
 
 Beyond structured context, tasks accumulate context through their sync session — the human and PM hashing out requirements, clarifying ambiguity, feedback from rejected reviews. This is available to agents via the session history and Ellie's memory.
+
+For fresh kickoff, this conversational context starts at the new kickoff request and its canonical project handoff/session. Historical transcripts from archived or closed prior runs are not injected unless the operator explicitly resumes or recovers that earlier run.
 
 ## Task Lifecycle
 

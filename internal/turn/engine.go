@@ -376,6 +376,9 @@ type turnRuntime struct {
 	toolSet           []tools.ToolDescriptor
 	stopReason        string
 	projectIdentity   *projectIdentity
+	historyStartID    *uuid.UUID
+	disableMemory     bool
+	freshKickoff      bool
 }
 
 type projectIdentity struct {
@@ -1013,6 +1016,12 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		runAttemptID:     runAttemptIDFromMetadata(message.Metadata),
 		startedAt:        e.turnStartTime(turn),
 	}
+	runtime.projectIdentity = e.loadProjectIdentityForMessage(ctx, sessionID, messageID)
+	if isFreshKickoffRequest(session, message) {
+		runtime.historyStartID = &message.ID
+		runtime.disableMemory = true
+		runtime.freshKickoff = true
+	}
 
 	cancelCtx, stopCancelWatch := e.watchTurnCancellation(ctx, runtime)
 	defer stopCancelWatch()
@@ -1116,6 +1125,8 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			ModelProfileID:   profile.LogicalProfileID,
 			ToolDescriptors:  toolSet,
 			PreviousManifest: previousManifest,
+			HistoryStartID:   cloneUUIDPointer(rt.historyStartID),
+			DisableMemory:    rt.disableMemory,
 		})
 		if assembleErr != nil && !errors.Is(assembleErr, prompt.ErrContextCompressed) {
 			return fmt.Errorf("assemble: %w", assembleErr)
@@ -1127,6 +1138,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		if errors.Is(assembleErr, prompt.ErrContextCompressed) {
 			continuations++
 			if continuations > maxContinuationTurnDepth {
+				if handled, handleErr := e.handleFreshKickoffBlocker(ctx, rt, "prompt context remained too large before the kickoff could reach initial task creation"); handled {
+					return handleErr
+				}
 				return fmt.Errorf("context compression continuation depth exceeded")
 			}
 			rt.stopReason = ""
@@ -1141,6 +1155,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		if guardrail > 0 && assembled != nil && assembled.TotalTokens > guardrail {
 			continuations++
 			if continuations > maxContinuationTurnDepth {
+				if handled, handleErr := e.handleFreshKickoffBlocker(ctx, rt, fmt.Sprintf("prompt input kept exceeding the %d-token guardrail before the kickoff could reach initial task creation", guardrail)); handled {
+					return handleErr
+				}
 				return fmt.Errorf("agent turn prompt exceeded guardrail continuation depth")
 			}
 			rt.stopReason = ""
@@ -2178,6 +2195,112 @@ func buildValidationLoopSystemMessage(state taskValidationGuardState) string {
 	return fmt.Sprintf("[Deterministic tool validation loop blocked after %d identical failures: %s (%s)]", state.Count, toolName, reason)
 }
 
+func (e *TurnEngine) loadProjectIdentityForMessage(ctx context.Context, sessionID, messageID uuid.UUID) *projectIdentity {
+	if e == nil || e.turns == nil || e.messages == nil || sessionID == uuid.Nil || messageID == uuid.Nil {
+		return nil
+	}
+
+	turns, err := e.turns.ListBySession(ctx, sessionID)
+	if err != nil {
+		return nil
+	}
+	turnIDs := make(map[uuid.UUID]struct{}, len(turns))
+	for _, turn := range turns {
+		if turn.TriggerMessageID == nil || *turn.TriggerMessageID != messageID {
+			continue
+		}
+		turnIDs[turn.ID] = struct{}{}
+	}
+	if len(turnIDs) == 0 {
+		return nil
+	}
+
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return nil
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.TurnID == nil {
+			continue
+		}
+		if _, ok := turnIDs[*message.TurnID]; !ok {
+			continue
+		}
+		if identity, ok := parseProjectIdentityFromMessage(message); ok {
+			return identity
+		}
+	}
+	return nil
+}
+
+func parseProjectIdentityFromMessage(message repo.ChatMessage) (*projectIdentity, bool) {
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+		return nil, false
+	}
+	if strings.TrimSpace(message.Content) == "" {
+		return nil, false
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(message.Content), &payload); err != nil {
+		return nil, false
+	}
+	name := stringValue(payload["tool_name"])
+	if name == "" {
+		return nil, false
+	}
+	result := ToolResult{
+		Name:  name,
+		Error: stringValue(payload["error"]),
+	}
+	if message.ToolCallID != nil {
+		result.ToolCallID = strings.TrimSpace(*message.ToolCallID)
+	}
+	if output, ok := payload["output"].(map[string]any); ok {
+		result.Output = output
+	}
+	return parseProjectIdentityFromToolResult(result)
+}
+
+func isFreshKickoffRequest(session *chat.ChatSession, message repo.ChatMessage) bool {
+	if session == nil || message.ID == uuid.Nil {
+		return false
+	}
+	scopeType := strings.ToLower(strings.TrimSpace(session.ScopeType))
+	if scopeType != "organization" && scopeType != "project" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return false
+	}
+	text := strings.ToLower(normalizeInstructionText(message.Content))
+	if text == "" {
+		return false
+	}
+	explicitFresh := strings.Contains(text, "from scratch") || strings.Contains(text, "start over") || strings.Contains(text, "fresh start") || strings.Contains(text, "fresh kickoff") || strings.Contains(text, "clean slate") || strings.Contains(text, "new run") || strings.Contains(text, "do over")
+	if !explicitFresh && (strings.Contains(text, "resume") || strings.Contains(text, "recover") || strings.Contains(text, "continue where") || strings.Contains(text, "pick up where") || strings.Contains(text, "reopen")) {
+		return false
+	}
+	if explicitFresh {
+		return true
+	}
+	return strings.Contains(text, "restart") && (strings.Contains(text, "fresh") || strings.Contains(text, "from scratch") || strings.Contains(text, "clean slate") || strings.Contains(text, "start over") || strings.Contains(text, "new run"))
+}
+
+func (e *TurnEngine) handleFreshKickoffBlocker(ctx context.Context, rt *turnRuntime, reason string) (bool, error) {
+	if rt == nil || !rt.freshKickoff {
+		return false, nil
+	}
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildFreshKickoffBlockerMessage(rt.projectIdentity, reason)); err != nil {
+		return true, err
+	}
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 func parseProjectIdentityFromToolResult(result ToolResult) (*projectIdentity, bool) {
 	if !strings.EqualFold(strings.TrimSpace(result.Name), "project.create") {
 		return nil, false
@@ -2280,6 +2403,20 @@ func parseUUIDAny(value any) (uuid.UUID, bool) {
 	}
 }
 
+func stringValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String())
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", typed))
+	}
+}
+
 func (e *TurnEngine) maybeEscalateWorkerRetryProfile(ctx context.Context, rt *turnRuntime, current repo.ModelProfile) (repo.ModelProfile, bool) {
 	if rt == nil || rt.session == nil {
 		return repo.ModelProfile{}, false
@@ -2309,6 +2446,20 @@ func buildProjectCreateConflictGuardError(identity *projectIdentity) string {
 		return "project already created in this flow"
 	}
 	return fmt.Sprintf("project already created in this flow as slug=%s project_id=%s; continue with that project unless the user explicitly starts a new create attempt", strings.TrimSpace(identity.slug), identity.id)
+}
+
+func buildFreshKickoffBlockerMessage(identity *projectIdentity, reason string) string {
+	reason = strings.TrimSpace(reason)
+	if identity == nil {
+		if reason == "" {
+			return "[Fresh kickoff blocked: unable to reach initial task creation within the current prompt guardrails. Review the kickoff request and retry only after narrowing scope or choosing explicit resume/recovery mode.]"
+		}
+		return fmt.Sprintf("[Fresh kickoff blocked: %s. Review the kickoff request and retry only after narrowing scope or choosing explicit resume/recovery mode.]", reason)
+	}
+	if reason == "" {
+		return fmt.Sprintf("[Fresh kickoff blocked: unable to reach initial task creation within the current prompt guardrails. Continue only with the canonical live project slug=%s project_id=%s unless you explicitly choose resume/recovery mode.]", strings.TrimSpace(identity.slug), identity.id)
+	}
+	return fmt.Sprintf("[Fresh kickoff blocked: %s. Continue only with the canonical live project slug=%s project_id=%s unless you explicitly choose resume/recovery mode.]", reason, strings.TrimSpace(identity.slug), identity.id)
 }
 
 func normalizeInstructionText(value string) string {

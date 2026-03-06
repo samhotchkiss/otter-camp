@@ -313,6 +313,59 @@ func NewService(opts Options) (ChatService, error) {
 	return svc, nil
 }
 
+func shouldReuseCanonicalSession(scopeType, mode string) bool {
+	return strings.EqualFold(strings.TrimSpace(scopeType), "project") && strings.EqualFold(strings.TrimSpace(mode), "async")
+}
+
+func canonicalSessionLess(left, right repo.ChatSession) bool {
+	if !left.CreatedAt.IsZero() && !right.CreatedAt.IsZero() && !left.CreatedAt.Equal(right.CreatedAt) {
+		return left.CreatedAt.Before(right.CreatedAt)
+	}
+	if left.ID != right.ID {
+		return left.ID.String() < right.ID.String()
+	}
+	return strings.TrimSpace(derefStr(left.Title)) < strings.TrimSpace(derefStr(right.Title))
+}
+
+func derefStr(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func (s *service) findReusableCanonicalSession(ctx context.Context, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID, mode string) (*repo.ChatSession, error) {
+	if s == nil || s.sessions == nil || !shouldReuseCanonicalSession(scopeType, mode) {
+		return nil, nil
+	}
+	sessions, err := s.sessions.ListByOrg(ctx, organizationID)
+	if err != nil {
+		return nil, err
+	}
+
+	var reusable *repo.ChatSession
+	for i := range sessions {
+		session := sessions[i]
+		if session.OrganizationID != organizationID || session.ScopeID != scopeID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.ScopeType), strings.TrimSpace(scopeType)) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.Mode), strings.TrimSpace(mode)) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+			continue
+		}
+		if reusable == nil || canonicalSessionLess(session, *reusable) {
+			candidate := session
+			reusable = &candidate
+		}
+	}
+	return reusable, nil
+}
+
 func (s *service) CreateSession(ctx context.Context, input CreateSessionInput) (*ChatSession, error) {
 	orgID, principal, err := s.resolveOrg(ctx, input.OrganizationID)
 	if err != nil {
@@ -339,6 +392,11 @@ func (s *service) CreateSession(ctx context.Context, input CreateSessionInput) (
 		if existing != nil && existing.Status == "active" && existing.OrganizationID == orgID {
 			return nil, ErrActiveSyncSessionExists
 		}
+	}
+	if reusable, reuseErr := s.findReusableCanonicalSession(ctx, orgID, scopeType, input.ScopeID, mode); reuseErr != nil {
+		return nil, reuseErr
+	} else if reusable != nil {
+		return reusable, nil
 	}
 
 	if scopeType == "project_task" {

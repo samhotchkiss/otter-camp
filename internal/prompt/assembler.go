@@ -82,6 +82,8 @@ type AssemblyInput struct {
 	ModelProfileID   string
 	ToolDescriptors  []tools.ToolDescriptor
 	PreviousManifest *MemoryManifest
+	HistoryStartID   *uuid.UUID
+	DisableMemory    bool
 }
 
 type AssembledPrompt struct {
@@ -469,6 +471,10 @@ func (a *PromptAssembler) Assemble(ctx context.Context, input AssemblyInput) (*A
 	if err != nil {
 		return nil, err
 	}
+	if input.HistoryStartID != nil && *input.HistoryStartID != uuid.Nil {
+		messages = filterPromptMessagesFromID(messages, *input.HistoryStartID)
+		summaries = nil
+	}
 
 	assembled := &AssembledPrompt{
 		LayerTokens: map[string]int{
@@ -498,7 +504,11 @@ func (a *PromptAssembler) Assemble(ctx context.Context, input AssemblyInput) (*A
 	layer2 := a.buildLayer2(ctx, session, agentRecord, input.ToolDescriptors)
 	layer3 := a.buildLayer3(ctx, session, taskCtx)
 	layer4 := a.buildLayer4(ctx, session, taskCtx, agentRecord.ID, input.ToolDescriptors, &assembled.Errors)
-	layer5, manifest := a.buildLayer5(ctx, session, agentRecord.ID, messages, input.PreviousManifest, memoryBudget)
+	layer5 := "## Relevant Context\n(none)"
+	manifest := MemoryManifest{InjectedMemoryIDs: []uuid.UUID{}}
+	if !input.DisableMemory {
+		layer5, manifest = a.buildLayer5(ctx, session, agentRecord.ID, messages, input.PreviousManifest, memoryBudget)
+	}
 	assembled.MemoryManifest = manifest
 
 	historyMessages, layer6Compressed := a.buildLayer6(messages, summaries, layer6Budget)
@@ -1488,6 +1498,28 @@ func reverseRankedMemories(items []memory.RankedMemory) {
 		j := len(items) - 1 - i
 		items[i], items[j] = items[j], items[i]
 	}
+}
+
+func filterPromptMessagesFromID(messages []repo.ChatMessage, startID uuid.UUID) []repo.ChatMessage {
+	if startID == uuid.Nil || len(messages) == 0 {
+		return messages
+	}
+	start := -1
+	for i := range messages {
+		if messages[i].ID == startID {
+			start = i
+			break
+		}
+	}
+	if start <= 0 {
+		if start == 0 {
+			return messages
+		}
+		return messages
+	}
+	filtered := make([]repo.ChatMessage, len(messages)-start)
+	copy(filtered, messages[start:])
+	return filtered
 }
 
 func buildMemoryQuery(messages []repo.ChatMessage) string {

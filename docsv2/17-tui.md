@@ -110,6 +110,7 @@ The sidebar mirrors the session sidebar from the web UI spec — the operator's 
 
 - Sessions grouped by scope: org at top, then projects with their task sessions nested.
 - Project labels shown in the sidebar, project view header, dashboard task-board header, and task context must use one shared resolver: `project.display_name` first, then `project.slug`, then a stable generic fallback such as "Untitled project". Raw `Project <id-fragment>` placeholders must not be shown to the operator.
+- A fresh kickoff binds the project row, project session entry, and downstream task/session surfaces to one canonical live project/session path. The TUI must not show one project while the worker is continuing a duplicate or archived session from an earlier run.
 - **Unread indicator** (`*`) on sessions with unseen messages. Bubbles up: if any task in a project has unread, the project entry shows `*` too.
 - Selecting a session (Enter) switches the chat pane to that session. Main content does not change.
 - Selecting a task-scoped sidebar chat also binds the task detail right pane to that task's sync discussion session. If task detail data arrives without an explicit discussion session ID, the TUI keeps using the already-open sidebar task chat as the discussion binding.

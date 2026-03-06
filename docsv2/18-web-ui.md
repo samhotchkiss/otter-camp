@@ -170,6 +170,7 @@ Below the navigation. Lists all sessions the human participates in, grouped by s
 
 - **Org session** ("General"): always at the top. Talk to Frank.
 - **Project groups**: each project is a collapsible group. The project label is clickable (switches chat pane to the project session). It uses the shared display-name resolver: `project.display_name`, then `project.slug`, then a stable generic fallback such as "Untitled project". Raw internal ID fragments must not be shown. Nested underneath are the task sync sessions for that project.
+- Fresh kickoff always resolves to one canonical live project session for that project. The web UI must not route the operator into an archived or duplicate prior-run session while showing the newer live project as selected.
 - **Collapsed by default** for inactive projects. Expanded for projects with active work or unread messages.
 - **Unread indicators**: dot badge on sessions with unseen messages. Bubbles up: if any task session in a project has unread, the project group header shows an indicator too.
 - **Active highlight**: the currently loaded chat session is highlighted in the session list.

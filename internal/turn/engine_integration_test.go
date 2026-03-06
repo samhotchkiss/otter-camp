@@ -5,6 +5,7 @@ package turn
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
+	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -1129,6 +1131,303 @@ func TestTurnEngineIntegrationProjectCreateConflictThenSuccessLocksIdentity(t *t
 	}
 }
 
+func TestTurnEngineIntegrationFreshKickoffRetryKeepsSingleProjectAndSession(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	freshKickoff := "Restart Sam.blog from scratch as a fresh kickoff. Do not resume archived work."
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateContent(ctx, fixture.userMessage.ID, freshKickoff); err != nil {
+		t.Fatalf("UpdateContent fresh kickoff request: %v", err)
+	}
+	fixture.userMessage.Content = freshKickoff
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "project.create", Tier: "tier1"},
+		{Name: "session.create", Tier: "tier1"},
+	}}
+
+	projectRepo := repo.NewProjectRepo(fixture.pool)
+	dispatched := make([]string, 0, 4)
+	createdProjectID := uuid.Nil
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = append(dispatched, call.ID)
+		switch strings.TrimSpace(call.Name) {
+		case "project.create":
+			created, err := projectRepo.Create(ctx, repo.Project{
+				OrganizationID: fixture.org.ID,
+				Slug:           "sam-blog-fresh",
+				DisplayName:    "Sam Blog Fresh",
+				DeliveryMode:   "gated",
+				CreatedByType:  "system",
+				CreatedByID:    uuid.Nil,
+				Settings:       json.RawMessage(`{}`),
+			})
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			createdProjectID = created.ID
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"project": map[string]any{
+						"id":   created.ID,
+						"slug": created.Slug,
+						"name": created.DisplayName,
+					},
+				},
+			}, nil
+		case "session.create":
+			scopeID, err := uuid.Parse(stringValue(call.Arguments["scope_id"]))
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: fmt.Sprintf("invalid scope_id: %v", err)}, nil
+			}
+			session, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+				OrganizationID: fixture.org.ID,
+				ScopeType:      stringValue(call.Arguments["scope_type"]),
+				ScopeID:        scopeID,
+				Mode:           stringValue(call.Arguments["mode"]),
+			})
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"session": map[string]any{
+						"id":     session.ID,
+						"mode":   session.Mode,
+						"status": session.Status,
+					},
+				},
+			}, nil
+		default:
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+		}
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "create-1", Name: "project.create", Tier: "tier1", Arguments: map[string]any{"name": "Sam Blog Fresh", "slug": "sam-blog-fresh"}}}}, nil
+		case 2:
+			if createdProjectID == uuid.Nil {
+				t.Fatal("createdProjectID missing before session.create")
+			}
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "session-1", Name: "session.create", Tier: "tier1", Arguments: map[string]any{"scope_type": "project", "scope_id": createdProjectID.String(), "mode": "async"}}}}, nil
+		case 3:
+			return ModelResponse{}, fmt.Errorf("simulated_fresh_kickoff_retry")
+		case 4:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "create-retry", Name: "project.create", Tier: "tier1", Arguments: map[string]any{"name": "Sam Blog Fresh", "slug": "sam-blog-fresh"}}}}, nil
+		case 5:
+			if createdProjectID == uuid.Nil {
+				t.Fatal("createdProjectID missing before retry session.create")
+			}
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "session-retry", Name: "session.create", Tier: "tier1", Arguments: map[string]any{"scope_type": "project", "scope_id": createdProjectID.String(), "mode": "async"}}}}, nil
+		default:
+			return ModelResponse{Content: "kickoff stabilized"}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err == nil || !strings.Contains(err.Error(), "simulated_fresh_kickoff_retry") {
+		t.Fatalf("first HandleUserMessage error = %v, want simulated retry failure", err)
+	}
+	if err := fixture.engine.handleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID, nil, 1); err != nil {
+		t.Fatalf("retry handleUserMessage: %v", err)
+	}
+
+	if strings.Join(dispatched, ",") != "create-1,session-1,session-retry" {
+		t.Fatalf("dispatched tier1 calls = %v, want [create-1 session-1 session-retry]", dispatched)
+	}
+	if createdProjectID == uuid.Nil {
+		t.Fatal("expected created project id")
+	}
+
+	var activeProjects int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project
+		WHERE organization_id = $1
+		  AND status = 'active'
+	`, fixture.org.ID).Scan(&activeProjects); err != nil {
+		t.Fatalf("count active projects: %v", err)
+	}
+	if activeProjects != 1 {
+		t.Fatalf("active project count = %d, want 1", activeProjects)
+	}
+
+	var activeSessions int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE organization_id = $1
+		  AND scope_type = 'project'
+		  AND scope_id = $2
+		  AND mode = 'async'
+		  AND status = 'active'
+	`, fixture.org.ID, createdProjectID).Scan(&activeSessions); err != nil {
+		t.Fatalf("count active project sessions: %v", err)
+	}
+	if activeSessions != 1 {
+		t.Fatalf("active project session count = %d, want 1", activeSessions)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	foundBlockedRetry := false
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || message.ToolCallID == nil || *message.ToolCallID != "create-retry" {
+			continue
+		}
+		if strings.Contains(message.Content, "project already created in this flow") {
+			foundBlockedRetry = true
+			break
+		}
+	}
+	if !foundBlockedRetry {
+		t.Fatal("missing blocked retry project.create tool result")
+	}
+}
+
+func TestTurnEngineIntegrationFreshKickoffPromptExcludesArchivedPriorRunContext(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	oldContext := "Archived Sam.blog run referenced duplicate temp agents, old flow templates, and stale analysis."
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateContent(ctx, fixture.userMessage.ID, oldContext); err != nil {
+		t.Fatalf("UpdateContent old context: %v", err)
+	}
+	oldAssistantType := "agent"
+	oldAssistant, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  fixture.session.ID,
+		AuthorType: &oldAssistantType,
+		AuthorID:   &fixture.agent.ID,
+		Role:       "assistant",
+		Content:    "Archived project: duplicate temp agents and old flow templates.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage old assistant: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, oldAssistant.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus old assistant: %v", err)
+	}
+
+	freshMessageText := "Start Sam.blog from scratch as a fresh kickoff. Do not resume the archived run."
+	authorType := "human_user"
+	freshMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  fixture.session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    freshMessageText,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage fresh kickoff: %v", err)
+	}
+
+	retriever := &capturingMemoryRetriever{
+		memories: []memory.RankedMemory{{
+			Memory: repo.Memory{
+				ID:      uuid.New(),
+				Content: "archived prior-run analysis and tool results should not appear",
+			},
+			Score: 1,
+		}},
+	}
+	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{
+		Pool:            fixture.pool,
+		MemoryRetriever: retriever,
+	})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	fixture.engine.assembler = assembler
+
+	promptBlob := ""
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		var builder strings.Builder
+		builder.WriteString(strings.ToLower(strings.TrimSpace(req.Prompt.SystemPrompt)))
+		builder.WriteString("\n")
+		for _, message := range req.Prompt.Messages {
+			builder.WriteString(strings.ToLower(strings.TrimSpace(message.Content)))
+			builder.WriteString("\n")
+		}
+		promptBlob = builder.String()
+		return ModelResponse{Content: "fresh kickoff only"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, freshMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage fresh kickoff: %v", err)
+	}
+
+	if strings.Contains(promptBlob, "duplicate temp agents") || strings.Contains(promptBlob, "old flow templates") || strings.Contains(promptBlob, "archived sam.blog run") {
+		t.Fatalf("fresh kickoff prompt unexpectedly included archived prior-run context: %q", promptBlob)
+	}
+	if !strings.Contains(promptBlob, strings.ToLower(freshMessageText)) {
+		t.Fatalf("fresh kickoff prompt missing current request: %q", promptBlob)
+	}
+	if retriever.calls != 0 {
+		t.Fatalf("memory retriever calls = %d, want 0 for fresh kickoff isolation", retriever.calls)
+	}
+}
+
+func TestTurnEngineIntegrationFreshKickoffCompressionLimitSurfacesSingleBlocker(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	freshKickoff := "Start Sam.blog from scratch as a fresh kickoff."
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateContent(ctx, fixture.userMessage.ID, freshKickoff); err != nil {
+		t.Fatalf("UpdateContent fresh kickoff request: %v", err)
+	}
+	fixture.userMessage.Content = freshKickoff
+	fixture.engine.assembler = &fakeAssembler{results: []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: 16}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: 16}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: 16}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: 16}, err: prompt.ErrContextCompressed},
+	}}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage fresh kickoff compression: %v", err)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 4 {
+		t.Fatalf("turn count = %d, want 4 bounded continuation turns", len(turns))
+	}
+	if turns[len(turns)-1].Status != "completed" {
+		t.Fatalf("final turn status = %q, want completed", turns[len(turns)-1].Status)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	blockerCount := 0
+	continuationCount := 0
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, "Fresh kickoff blocked:") {
+			blockerCount++
+		}
+		if strings.Contains(message.Content, "Context compressed - continuing in a new turn.") {
+			continuationCount++
+		}
+	}
+	if blockerCount != 1 {
+		t.Fatalf("fresh kickoff blocker count = %d, want 1", blockerCount)
+	}
+	if continuationCount != 3 {
+		t.Fatalf("continuation notice count = %d, want 3 before blocker", continuationCount)
+	}
+}
+
 func TestTurnEngineIntegrationProjectKickoffResponderOrderFrankThenLori(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -2017,6 +2316,16 @@ func (a *sessionHistoryAssembler) Assemble(ctx context.Context, input prompt.Ass
 		promptMessages = append(promptMessages, prompt.PromptMessage{Role: "system", Content: "history unavailable"})
 	}
 	return &prompt.AssembledPrompt{Messages: promptMessages, TotalTokens: 64}, nil
+}
+
+type capturingMemoryRetriever struct {
+	calls    int
+	memories []memory.RankedMemory
+}
+
+func (r *capturingMemoryRetriever) Query(_ context.Context, _ memory.RetrievalRequest) (memory.RetrievalResult, error) {
+	r.calls++
+	return memory.RetrievalResult{Memories: append([]memory.RankedMemory(nil), r.memories...)}, nil
 }
 
 func hasAssistantFinal(messages []repo.ChatMessage) bool {
