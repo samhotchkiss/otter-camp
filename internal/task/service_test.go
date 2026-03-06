@@ -31,6 +31,7 @@ func TestStatusTransitionMatrix(t *testing.T) {
 		{"blocked", "cancelled"},
 		{"on_hold", "in_progress"},
 		{"on_hold", "cancelled"},
+		{"review", "blocked"},
 		{"review", "done"},
 		{"review", "in_progress"},
 		{"review", "cancelled"},
@@ -57,7 +58,6 @@ func TestStatusTransitionMatrix(t *testing.T) {
 		{"on_hold", "queued"},
 		{"on_hold", "done"},
 		{"review", "queued"},
-		{"review", "blocked"},
 		{"in_progress", "draft"},
 		{"in_progress", "queued"},
 	}
@@ -466,6 +466,49 @@ func TestValidateExecutableFlowTemplateReturnsErrorWhenLookupFails(t *testing.T)
 	err := svc.validateExecutableFlowTemplate(context.Background(), uuid.New())
 	if err == nil {
 		t.Fatal("validateExecutableFlowTemplate err = nil, want error")
+	}
+}
+
+func TestValidateExecutableFlowTemplateUsesConfiguredStartNodeForRejectLoop(t *testing.T) {
+	flowTemplateID := uuid.New()
+	workNodeID := uuid.New()
+	reviewNodeID := uuid.New()
+	doneNodeID := uuid.New()
+
+	svc := newUnitService(&fakeTaskRepo{})
+	svc.flowTemplates = &fakeFlowTemplateRepo{
+		templates: map[uuid.UUID]repo.FlowTemplate{
+			flowTemplateID: {
+				ID:          flowTemplateID,
+				StartNodeID: &workNodeID,
+			},
+		},
+	}
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			workNodeID: {
+				ID:             workNodeID,
+				FlowTemplateID: flowTemplateID,
+				NodeType:       "work",
+				NextNodeID:     &reviewNodeID,
+			},
+			reviewNodeID: {
+				ID:             reviewNodeID,
+				FlowTemplateID: flowTemplateID,
+				NodeType:       "review",
+				NextNodeID:     &doneNodeID,
+				RejectNodeID:   &workNodeID,
+			},
+			doneNodeID: {
+				ID:             doneNodeID,
+				FlowTemplateID: flowTemplateID,
+				NodeType:       "done",
+			},
+		},
+	}
+
+	if err := svc.validateExecutableFlowTemplate(context.Background(), flowTemplateID); err != nil {
+		t.Fatalf("validateExecutableFlowTemplate err = %v, want nil", err)
 	}
 }
 
@@ -1118,18 +1161,19 @@ func TestActOnInboxItemTaskReviewDismissMarksActedOnly(t *testing.T) {
 
 func newUnitService(taskRepo *fakeTaskRepo) *service {
 	return &service{
-		tasks:       taskRepo,
-		events:      &fakeTaskEventRepo{},
-		inbox:       &fakeInboxRepo{},
-		queue:       &fakeQueueRepo{},
-		project:     &fakeProjectRepo{projects: make(map[uuid.UUID]repo.Project)},
-		assignments: &fakeAssignmentRepo{},
-		agents:      &fakeAgentRepo{},
-		users:       &fakeUserRepo{},
-		executions:  &fakeFlowExecutionRepo{},
-		flowNodes:   &fakeFlowNodeRepo{nodes: map[uuid.UUID]repo.FlowNode{}},
-		eventBus:    &fakeEventBus{},
-		clock:       clock.NewFake(time.Now().UTC()),
+		tasks:         taskRepo,
+		events:        &fakeTaskEventRepo{},
+		inbox:         &fakeInboxRepo{},
+		queue:         &fakeQueueRepo{},
+		project:       &fakeProjectRepo{projects: make(map[uuid.UUID]repo.Project)},
+		assignments:   &fakeAssignmentRepo{},
+		agents:        &fakeAgentRepo{},
+		users:         &fakeUserRepo{},
+		executions:    &fakeFlowExecutionRepo{},
+		flowNodes:     &fakeFlowNodeRepo{nodes: map[uuid.UUID]repo.FlowNode{}},
+		flowTemplates: &fakeFlowTemplateRepo{},
+		eventBus:      &fakeEventBus{},
+		clock:         clock.NewFake(time.Now().UTC()),
 	}
 }
 
@@ -1273,6 +1317,11 @@ type fakeFlowNodeRepo struct {
 	getByTemplateErr error
 }
 
+type fakeFlowTemplateRepo struct {
+	templates  map[uuid.UUID]repo.FlowTemplate
+	getByIDErr error
+}
+
 func validExecutableTemplateNodes(flowTemplateID uuid.UUID) map[uuid.UUID]repo.FlowNode {
 	workNodeID := uuid.New()
 	reviewNodeID := uuid.New()
@@ -1339,6 +1388,19 @@ func (f *fakeFlowNodeRepo) GetByTemplateOrdered(_ context.Context, flowTemplateI
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeFlowTemplateRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowTemplate, error) {
+	if f.getByIDErr != nil {
+		return repo.FlowTemplate{}, f.getByIDErr
+	}
+	if f.templates == nil {
+		return repo.FlowTemplate{ID: id}, nil
+	}
+	if item, ok := f.templates[id]; ok {
+		return item, nil
+	}
+	return repo.FlowTemplate{ID: id}, nil
 }
 
 func (f *fakeQueueRepo) Enqueue(_ context.Context, entry repo.MergeQueueEntry) (repo.MergeQueueEntry, error) {

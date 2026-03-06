@@ -18,6 +18,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/model"
@@ -250,6 +251,11 @@ type flowNodeRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowNode, error)
 }
 
+type flowAdvancer interface {
+	AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error)
+	RecordNodeCommit(ctx context.Context, taskID uuid.UUID, commitSHA, branchName string) (*repo.FlowNodeExecution, error)
+}
+
 type assignmentRepository interface {
 	GetPM(ctx context.Context, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
 }
@@ -294,6 +300,7 @@ type Options struct {
 	Tasks           taskRepository
 	TaskTransitions taskTransitionService
 	FlowNodes       flowNodeRepository
+	FlowAdvancer    flowAdvancer
 	Assignments     assignmentRepository
 	Projects        projectRepository
 	MemorySources   memorySourceRepository
@@ -332,6 +339,7 @@ type TurnEngine struct {
 	tasks           taskRepository
 	taskTransitions taskTransitionService
 	flowNodes       flowNodeRepository
+	flowAdvancer    flowAdvancer
 	assignments     assignmentRepository
 	projects        projectRepository
 	sources         memorySourceRepository
@@ -452,6 +460,16 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	if opts.FlowNodes == nil && opts.Pool != nil {
 		opts.FlowNodes = repo.NewFlowNodeRepo(opts.Pool)
 	}
+	if opts.FlowAdvancer == nil && opts.Pool != nil {
+		flowAdvancer, err := flowsvc.NewService(flowsvc.Options{
+			Pool:   opts.Pool,
+			Events: opts.Events,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("turn engine flow advancement service: %w", err)
+		}
+		opts.FlowAdvancer = flowAdvancer
+	}
 	if opts.Assignments == nil && opts.Pool != nil {
 		opts.Assignments = repo.NewAgentProjectAssignmentRepo(opts.Pool)
 	}
@@ -533,6 +551,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		tasks:                 opts.Tasks,
 		taskTransitions:       opts.TaskTransitions,
 		flowNodes:             opts.FlowNodes,
+		flowAdvancer:          opts.FlowAdvancer,
 		assignments:           opts.Assignments,
 		projects:              opts.Projects,
 		sources:               opts.MemorySources,
@@ -810,6 +829,11 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	if latestUser.SequenceNumber > assistant.SequenceNumber {
 		return nil
 	}
+	if handled, handleErr := e.handleCompletedWorkTurn(ctx, taskRecord, latestCompleted.RespondingID, messages, payload.TurnID); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
 	if indicatesTaskCompletion(assistant.Content) {
 		return nil
 	}
@@ -841,6 +865,30 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 		return nil
 	}
 	return nil
+}
+
+type workCompletionSignal struct {
+	commitSHA      string
+	filesCommitted int
+}
+
+func (e *TurnEngine) handleCompletedWorkTurn(ctx context.Context, taskRecord repo.ProjectTask, agentID uuid.UUID, messages []repo.ChatMessage, turnID uuid.UUID) (bool, error) {
+	if e.flowAdvancer == nil || taskRecord.ID == uuid.Nil || agentID == uuid.Nil {
+		return false, nil
+	}
+	signal, ok := completedWorkSignalFromMessages(messages, turnID)
+	if !ok {
+		return false, nil
+	}
+	if signal.commitSHA != "" {
+		if _, err := e.flowAdvancer.RecordNodeCommit(ctx, taskRecord.ID, signal.commitSHA, ""); err != nil {
+			return false, err
+		}
+	}
+	if _, err := e.flowAdvancer.AdvanceFlow(ctx, taskRecord.ID, flowsvc.Actor{Type: "agent", ID: agentID}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID) error {
@@ -3145,6 +3193,90 @@ func indicatesTaskCompletion(content string) bool {
 		}
 	}
 	return false
+}
+
+func completedWorkSignalFromMessages(messages []repo.ChatMessage, turnID uuid.UUID) (workCompletionSignal, bool) {
+	var latest workCompletionSignal
+	found := false
+	for _, message := range messages {
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		if !strings.EqualFold(toolName, "git.commit") {
+			continue
+		}
+		commitSHA := strings.TrimSpace(anyString(output["sha"]))
+		if commitSHA == "" {
+			commitSHA = strings.TrimSpace(anyString(output["short_sha"]))
+		}
+		filesCommitted := anyInt(output["files_committed"])
+		if commitSHA == "" || filesCommitted < 1 {
+			continue
+		}
+		latest = workCompletionSignal{
+			commitSHA:      commitSHA,
+			filesCommitted: filesCommitted,
+		}
+		found = true
+	}
+	return latest, found
+}
+
+func parseToolResultMessage(content string) (string, map[string]any, string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return "", nil, "", false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return "", nil, "", false
+	}
+	if payload == nil {
+		return "", nil, "", false
+	}
+	toolName := strings.TrimSpace(anyString(payload["tool_name"]))
+	if toolName == "" {
+		return "", nil, "", false
+	}
+	output, _ := payload["output"].(map[string]any)
+	errText := strings.TrimSpace(anyString(payload["error"]))
+	return toolName, output, errText, true
+}
+
+func anyString(raw any) string {
+	if raw == nil {
+		return ""
+	}
+	switch typed := raw.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprintf("%v", raw)
+	}
+}
+
+func anyInt(raw any) int {
+	switch typed := raw.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
 }
 
 type rateLimitRetryAfterProvider interface {
