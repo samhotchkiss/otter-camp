@@ -103,6 +103,7 @@ type Plan struct {
 	EvidenceMaturity    string             `json:"evidence_maturity,omitempty"`
 	RiskLevel           string             `json:"risk_level,omitempty"`
 	DiscoveryMode       string             `json:"discovery_mode,omitempty"`
+	BacklogFormat       string             `json:"backlog_format,omitempty"`
 	ProcessEnforced     bool               `json:"process_enforced,omitempty"`
 	Subjective          bool               `json:"subjective"`
 	Comparative         bool               `json:"comparative"`
@@ -143,6 +144,10 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 	subjective := containsAny(text, subjectiveSignals)
 	comparative := containsAny(text, comparativeSignals)
 	verifiable := leadingQuestionPattern.MatchString(strings.TrimSpace(text)) || containsAny(text, verifiableSignals)
+	backlogFormat := ""
+	if playbook == PlaybookBacklogDecomposition {
+		backlogFormat = inferBacklogFormat(text)
+	}
 
 	plan := Plan{
 		Mode:                ModeExecutionFirst,
@@ -152,12 +157,13 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 		EvidenceMaturity:    evidenceMaturity,
 		RiskLevel:           riskLevel,
 		DiscoveryMode:       discoveryMode,
+		BacklogFormat:       backlogFormat,
 		ProcessEnforced:     playbookRequiresContract(playbook, text),
 		Subjective:          subjective,
 		Comparative:         comparative,
 		MultiOption:         multiOption,
 		Artifacts:           playbookArtifacts(playbook),
-		FollowOnSuggestions: playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel, discoveryMode),
+		FollowOnSuggestions: playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel, discoveryMode, backlogFormat),
 	}
 	plan.Artifacts = hydrateArtifactDefaults(plan.Playbook, plan.Artifacts)
 
@@ -238,6 +244,7 @@ func ApplyMetadata(existing json.RawMessage, plan Plan) json.RawMessage {
 	planningPayload["evidence_maturity"] = plan.EvidenceMaturity
 	planningPayload["risk_level"] = plan.RiskLevel
 	planningPayload["discovery_mode"] = plan.DiscoveryMode
+	planningPayload["backlog_format"] = plan.BacklogFormat
 	planningPayload["process_enforced"] = plan.ProcessEnforced
 	planningPayload["subjective"] = plan.Subjective
 	planningPayload["comparative"] = plan.Comparative
@@ -292,6 +299,7 @@ func Parse(metadata json.RawMessage) (Plan, bool) {
 		EvidenceMaturity:    strings.TrimSpace(readString(rawPlanning["evidence_maturity"])),
 		RiskLevel:           strings.TrimSpace(readString(rawPlanning["risk_level"])),
 		DiscoveryMode:       NormalizeDiscoveryMode(readString(rawPlanning["discovery_mode"])),
+		BacklogFormat:       NormalizeBacklogFormat(readString(rawPlanning["backlog_format"])),
 		ProcessEnforced:     readBool(rawPlanning["process_enforced"]),
 		Subjective:          readBool(rawPlanning["subjective"]),
 		Comparative:         readBool(rawPlanning["comparative"]),

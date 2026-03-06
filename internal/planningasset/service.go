@@ -307,6 +307,14 @@ func genericScaffoldContent(now time.Time, task repo.ProjectTask, plan taskplan.
 		taskLabel = fmt.Sprintf("OC-%d", task.TaskNumber)
 	}
 	sections := scaffoldSectionBlock(plan, artifact)
+	contextDetails := []string{
+		"- Project stage: " + strings.TrimSpace(plan.ProjectStage),
+		"- Evidence maturity: " + strings.TrimSpace(plan.EvidenceMaturity),
+		"- Risk level: " + strings.TrimSpace(plan.RiskLevel),
+	}
+	if plan.Playbook == taskplan.PlaybookBacklogDecomposition && plan.BacklogFormat != "" {
+		contextDetails = append(contextDetails, "- Backlog format: "+plan.BacklogFormat)
+	}
 	return strings.TrimSpace(fmt.Sprintf(`
 # %s
 
@@ -319,15 +327,13 @@ func genericScaffoldContent(now time.Time, task repo.ProjectTask, plan taskplan.
 Replace this scaffold with the durable planning output for this artifact.
 
 ## Context
-- Project stage: %s
-- Evidence maturity: %s
-- Risk level: %s
+%s
 
 %s
 
 ## Notes
 - Keep decisions, trade-offs, and unresolved questions in this file so downstream work can link to it directly.
-`, strings.TrimSpace(artifact.Title), strings.TrimSpace(artifact.Kind), strings.TrimSpace(plan.Playbook), taskLabel, now.UTC().Format(time.RFC3339), strings.TrimSpace(plan.ProjectStage), strings.TrimSpace(plan.EvidenceMaturity), strings.TrimSpace(plan.RiskLevel), sections))
+`, strings.TrimSpace(artifact.Title), strings.TrimSpace(artifact.Kind), strings.TrimSpace(plan.Playbook), taskLabel, now.UTC().Format(time.RFC3339), strings.Join(contextDetails, "\n"), sections))
 }
 
 func scaffoldSectionBlock(plan taskplan.Plan, artifact taskplan.PlannedArtifact) string {
@@ -385,6 +391,8 @@ func scaffoldPrompt(section string) string {
 		return "State the single outcome this strategy is optimizing for."
 	case "goals":
 		return "State the concrete outcomes this spec must achieve."
+	case "themes":
+		return "Group the work into major themes or workstreams."
 	case "target segments":
 		return "Name the primary segments, users, or buyers this work serves."
 	case "beachhead segment":
@@ -417,6 +425,20 @@ func scaffoldPrompt(section string) string {
 		return "List the guardrail metrics that must not degrade while the north star improves."
 	case "positioning":
 		return "State the positioning the market should remember after the launch."
+	case "scope slices":
+		return "Break the parent scope into the smallest independently completable slices."
+	case "stories":
+		return "List the backlog items in the team's preferred story shape."
+	case "user stories":
+		return "List the backlog items in user-story form without losing delivery detail."
+	case "job stories":
+		return "List the backlog items in job-story form using situation, motivation, and outcome."
+	case "why":
+		return "Explain why each item exists and what outcome it protects."
+	case "what":
+		return "Describe the concrete deliverable, change, or behavior for each item."
+	case "acceptance criteria":
+		return "Write testable pass/fail acceptance criteria for every item; do not leave them implied."
 	case "key metrics":
 		return "Define the leading and lagging metrics that will show this is working."
 	case "defensibility":
@@ -491,6 +513,14 @@ func scaffoldPrompt(section string) string {
 		return "Describe what the team will do if launch assumptions fail or timing slips."
 	case "expansion plan":
 		return "Explain how the team will expand after the beachhead segment if launch signals are strong."
+	case "order":
+		return "Define the delivery order and why that sequence is safest."
+	case "design input":
+		return "Identify the items that need design, content, or UX input before execution."
+	case "technical spikes":
+		return "List the research or enabling work needed before the team can estimate or commit."
+	case "technical notes":
+		return "Capture implementation notes, constraints, or architecture considerations that affect delivery."
 	case "mitigations":
 		return "Describe how each material dependency or delivery risk will be managed."
 	case "dates":
@@ -501,6 +531,10 @@ func scaffoldPrompt(section string) string {
 		return "List any unresolved blockers that prevent a go decision today."
 	case "rollback":
 		return "Describe the rollback or containment plan if the rollout must stop."
+	case "exit criteria":
+		return "State what must be true before the team can call the work complete."
+	case "release gates":
+		return "List approvals, rollout checks, or launch controls required before release."
 	default:
 		return "Capture the durable decision for this section."
 	}

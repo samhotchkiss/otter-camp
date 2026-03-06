@@ -1494,6 +1494,206 @@ func TestIntegrationTaskCompletionRequiresPlanningContractOrOverride(t *testing.
 	}
 }
 
+func TestIntegrationTaskCreateBacklogDecompositionSupportsMultipleStoryFormats(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	repoRoot := t.TempDir()
+
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	tests := []struct {
+		name               string
+		title              string
+		description        string
+		wantFormat         string
+		wantStoryPhrases   []string
+		wantFollowOnPhrase string
+	}{
+		{
+			name:        "user stories",
+			title:       "Break the approved checkout scope into user stories",
+			description: "Decompose the approved checkout scope into user stories with acceptance criteria, dependency ordering, and owners for the delivery team.",
+			wantFormat:  taskplan.BacklogFormatUserStories,
+			wantStoryPhrases: []string{
+				"- Backlog format: user_stories",
+				"## User Stories",
+				"## Acceptance Criteria",
+				"## Technical Notes",
+				"## Open Questions",
+			},
+			wantFollowOnPhrase: "Generate test scenarios directly from the user stories",
+		},
+		{
+			name:        "job stories",
+			title:       "Break the approved checkout scope into job stories",
+			description: "Decompose the approved checkout scope into job stories with acceptance criteria, dependency ordering, and owners for the payments team.",
+			wantFormat:  taskplan.BacklogFormatJobStories,
+			wantStoryPhrases: []string{
+				"- Backlog format: job_stories",
+				"## Job Stories",
+				"## Acceptance Criteria",
+				"## Technical Notes",
+				"## Open Questions",
+			},
+			wantFollowOnPhrase: "Generate test scenarios directly from the job stories",
+		},
+		{
+			name:        "why what acceptance",
+			title:       "Break the approved onboarding scope into why/what/acceptance format",
+			description: "Decompose the approved onboarding scope into why/what/acceptance format for the cross-functional launch team with owners and dependency ordering.",
+			wantFormat:  taskplan.BacklogFormatWhyWhatAcceptance,
+			wantStoryPhrases: []string{
+				"- Backlog format: why_what_acceptance",
+				"## Why",
+				"## What",
+				"## Acceptance Criteria",
+				"## Technical Notes",
+				"## Open Questions",
+			},
+			wantFollowOnPhrase: "Generate test scenarios directly from the why/what/acceptance",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+				"project_id":  project.ID.String(),
+				"title":       tc.title,
+				"description": tc.description,
+			})
+			if err != nil {
+				t.Fatalf("task.create: %v", err)
+			}
+
+			planning, ok := out["planning"].(map[string]any)
+			if !ok {
+				t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+			}
+			if planning["playbook"] != taskplan.PlaybookBacklogDecomposition {
+				t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookBacklogDecomposition)
+			}
+			contextPayload := planningContextPayload(t, planning)
+			if got := strings.TrimSpace(fmt.Sprintf("%v", contextPayload["backlog_format"])); got != tc.wantFormat {
+				t.Fatalf("planning.context.backlog_format = %q, want %q", got, tc.wantFormat)
+			}
+
+			followOns := planningStringSlice(t, planning["follow_on_suggestions"])
+			if !containsSubstring(followOns, tc.wantFollowOnPhrase) {
+				t.Fatalf("follow_on_suggestions = %#v, want phrase %q", followOns, tc.wantFollowOnPhrase)
+			}
+
+			storyArtifact := artifactPayloadBySlug(t, planning["artifacts"], "story-cards")
+			storyPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, storyArtifact, "repo_path")))
+			storyBody, err := os.ReadFile(storyPath)
+			if err != nil {
+				t.Fatalf("read story-cards artifact: %v", err)
+			}
+			for _, phrase := range tc.wantStoryPhrases {
+				if !strings.Contains(string(storyBody), phrase) {
+					t.Fatalf("story-cards artifact missing %q:\n%s", phrase, string(storyBody))
+				}
+			}
+
+			sequencingArtifact := artifactPayloadBySlug(t, planning["artifacts"], "sequencing-plan")
+			sequencingPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, sequencingArtifact, "repo_path")))
+			sequencingBody, err := os.ReadFile(sequencingPath)
+			if err != nil {
+				t.Fatalf("read sequencing artifact: %v", err)
+			}
+			for _, phrase := range []string{"## Order", "## Dependencies", "## Design Input", "## Technical Spikes"} {
+				if !strings.Contains(string(sequencingBody), phrase) {
+					t.Fatalf("sequencing artifact missing %q:\n%s", phrase, string(sequencingBody))
+				}
+			}
+
+			taskID := nestedUUID(t, out, "task", "id")
+			taskRecord, err := taskRepo.GetByID(ctx, taskID)
+			if err != nil {
+				t.Fatalf("load task: %v", err)
+			}
+			plan, ok := taskplan.Parse(taskRecord.Metadata)
+			if !ok {
+				t.Fatal("taskplan.Parse(metadata) = false, want true")
+			}
+			if plan.BacklogFormat != tc.wantFormat {
+				t.Fatalf("persisted BacklogFormat = %q, want %q", plan.BacklogFormat, tc.wantFormat)
+			}
+		})
+	}
+}
+
+func TestIntegrationTaskCreateBacklogDecompositionSuggestsTestScenarioGeneration(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	repoRoot := t.TempDir()
+
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
+
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":  project.ID.String(),
+		"title":       "Break the approved onboarding scope into why/what/acceptance format",
+		"description": "Decompose the approved onboarding scope into why/what/acceptance format for the cross-functional launch team so test scenarios can follow directly from the backlog pack.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["playbook"] != taskplan.PlaybookBacklogDecomposition {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookBacklogDecomposition)
+	}
+
+	followOns := planningStringSlice(t, planning["follow_on_suggestions"])
+	if !containsSubstring(followOns, "Generate test scenarios directly from the why/what/acceptance") {
+		t.Fatalf("follow_on_suggestions = %#v, want test-scenario generation guidance", followOns)
+	}
+
+	storyArtifact := artifactPayloadBySlug(t, planning["artifacts"], "story-cards")
+	storyPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, storyArtifact, "repo_path")))
+	storyBody, err := os.ReadFile(storyPath)
+	if err != nil {
+		t.Fatalf("read story-cards artifact: %v", err)
+	}
+	body := string(storyBody)
+	for _, phrase := range []string{"## Why", "## What", "## Acceptance Criteria"} {
+		if !strings.Contains(body, phrase) {
+			t.Fatalf("story-cards artifact missing %q:\n%s", phrase, body)
+		}
+	}
+}
+
 func TestIntegrationTaskCreateSelectsDifferentPlaybooksAndOutputs(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

@@ -109,9 +109,9 @@ var playbookArtifactContracts = map[string][]ArtifactContract{
 		{Slug: "dependency-log", Title: "Dependency log", RequiredSections: []string{"dependencies", "risks", "mitigations"}},
 	},
 	PlaybookBacklogDecomposition: {
-		{Slug: "epic-breakdown", Title: "Epic breakdown", RequiredSections: []string{"themes", "goals", "scope slices"}},
-		{Slug: "story-cards", Title: "Story cards", RequiredSections: []string{"stories", "acceptance criteria", "owners"}},
-		{Slug: "sequencing-plan", Title: "Sequencing plan", RequiredSections: []string{"order", "dependencies", "handoffs"}},
+		{Slug: "epic-breakdown", Title: "Epic breakdown", RequiredSections: []string{"themes", "goals", "scope slices", "technical notes", "open questions"}},
+		{Slug: "story-cards", Title: "Story cards", RequiredSections: []string{"stories", "acceptance criteria", "owners", "technical notes", "open questions"}},
+		{Slug: "sequencing-plan", Title: "Sequencing plan", RequiredSections: []string{"order", "dependencies", "design input", "technical spikes"}},
 		{Slug: "definition-of-done", Title: "Definition of done", RequiredSections: []string{"exit criteria", "verification", "release gates"}},
 	},
 	PlaybookRiskReadiness: {
@@ -151,9 +151,9 @@ var playbookReviewChecklists = map[string][]string{
 		"Confirm acceptance criteria and dependency mitigations are testable, and that unknowns are called out instead of invented.",
 	},
 	PlaybookBacklogDecomposition: {
-		"Verify the epic breakdown and story cards preserve the parent intent without hidden scope drift.",
-		"Check that sequencing and dependency order would let execution begin without re-planning.",
-		"Confirm the definition of done is measurable at the story level.",
+		"Verify the epic breakdown and selected story format preserve the parent intent without hidden scope drift.",
+		"Check that sequencing, dependency order, design input, and technical spikes would let execution begin without re-planning.",
+		"Confirm every backlog item has testable acceptance criteria plus technical notes or open questions where they materially affect delivery.",
 	},
 	PlaybookRiskReadiness: {
 		"Verify the risk register names the major risks with explicit severity and impact classification.",
@@ -202,6 +202,12 @@ func ArtifactContractForPlan(plan Plan) []ArtifactContract {
 					contracts[i].RequiredSections = DiscoveryValidationPlanSections(mode)
 				}
 			}
+		}
+	}
+
+	if strings.TrimSpace(plan.Playbook) == PlaybookBacklogDecomposition {
+		if sections := BacklogStoryCardSections(plan.BacklogFormat); len(sections) > 0 {
+			contracts = replaceContractSections(contracts, "story-cards", sections)
 		}
 	}
 
@@ -493,6 +499,21 @@ func appendContractSections(contracts []ArtifactContract, slug string, sections 
 	for _, contract := range contracts {
 		if normalizeArtifactSlug(contract.Slug) == target {
 			contract.RequiredSections = appendNormalizedSections(contract.RequiredSections, sections...)
+		}
+		out = append(out, contract)
+	}
+	return out
+}
+
+func replaceContractSections(contracts []ArtifactContract, slug string, sections []string) []ArtifactContract {
+	if len(contracts) == 0 {
+		return contracts
+	}
+	target := normalizeArtifactSlug(slug)
+	out := make([]ArtifactContract, 0, len(contracts))
+	for _, contract := range contracts {
+		if normalizeArtifactSlug(contract.Slug) == target {
+			contract.RequiredSections = append([]string(nil), sections...)
 		}
 		out = append(out, contract)
 	}

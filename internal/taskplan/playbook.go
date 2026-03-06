@@ -28,6 +28,12 @@ const (
 )
 
 const (
+	BacklogFormatUserStories       = "user_stories"
+	BacklogFormatJobStories        = "job_stories"
+	BacklogFormatWhyWhatAcceptance = "why_what_acceptance"
+)
+
+const (
 	StageConcept    = "concept"
 	StageValidation = "validation"
 	StageDefinition = "definition"
@@ -375,6 +381,55 @@ var (
 		"risky",
 		"high risk",
 	}
+	backlogUserStorySignals = []string{
+		"user story",
+		"user stories",
+		"agile story",
+		"agile stories",
+	}
+	backlogJobStorySignals = []string{
+		"job story",
+		"job stories",
+		"jtbd",
+		"jobs to be done",
+		"when i",
+		"i want to",
+		"so i can",
+	}
+	backlogWhyWhatAcceptanceSignals = []string{
+		"why/what/acceptance",
+		"why what acceptance",
+		"why / what / acceptance",
+		"why + what + acceptance",
+		"why what format",
+	}
+	backlogDecompositionPrioritySignals = []string{
+		"backlog",
+		"decompose",
+		"break down",
+		"epic",
+		"epics",
+		"sprint backlog",
+		"user story",
+		"user stories",
+		"job story",
+		"job stories",
+		"why/what/acceptance",
+		"why what acceptance",
+		"why / what / acceptance",
+	}
+	backlogCrossFunctionalSignals = []string{
+		"design",
+		"copy",
+		"content",
+		"launch",
+		"marketing",
+		"sales",
+		"support",
+		"operations",
+		"ops",
+		"enablement",
+	}
 )
 
 func selectPlaybookContext(text string) (playbook, workType, projectStage, evidenceMaturity, riskLevel, discoveryMode string) {
@@ -499,9 +554,31 @@ func inferDiscoveryMode(text, projectStage, evidenceMaturity string) string {
 	return DiscoveryModeNewProduct
 }
 
+func inferBacklogFormat(text string) string {
+	switch {
+	case containsAny(text, backlogJobStorySignals):
+		return BacklogFormatJobStories
+	case containsAny(text, backlogWhyWhatAcceptanceSignals):
+		return BacklogFormatWhyWhatAcceptance
+	case containsAny(text, backlogUserStorySignals):
+		return BacklogFormatUserStories
+	case containsAny(text, backlogCrossFunctionalSignals):
+		return BacklogFormatWhyWhatAcceptance
+	default:
+		return BacklogFormatUserStories
+	}
+}
+
+func hasExplicitBacklogDecompositionRequest(text string) bool {
+	return containsAny(text, backlogDecompositionPrioritySignals)
+}
+
 func selectPlaybook(text, workType, projectStage, evidenceMaturity, riskLevel string) string {
 	if workType == PlaybookRiskReadiness || riskLevel == RiskCritical {
 		return PlaybookRiskReadiness
+	}
+	if hasExplicitBacklogDecompositionRequest(text) {
+		return PlaybookBacklogDecomposition
 	}
 	if shouldDefaultToRiskReadiness(text, projectStage, riskLevel) {
 		return PlaybookRiskReadiness
@@ -660,6 +737,45 @@ func NormalizeDiscoveryMode(value string) string {
 	}
 }
 
+func NormalizeBacklogFormat(value string) string {
+	switch strings.TrimSpace(value) {
+	case BacklogFormatUserStories:
+		return BacklogFormatUserStories
+	case BacklogFormatJobStories:
+		return BacklogFormatJobStories
+	case BacklogFormatWhyWhatAcceptance:
+		return BacklogFormatWhyWhatAcceptance
+	default:
+		return ""
+	}
+}
+
+func BacklogFormatLabel(value string) string {
+	switch NormalizeBacklogFormat(value) {
+	case BacklogFormatUserStories:
+		return "user stories"
+	case BacklogFormatJobStories:
+		return "job stories"
+	case BacklogFormatWhyWhatAcceptance:
+		return "why/what/acceptance"
+	default:
+		return ""
+	}
+}
+
+func BacklogStoryCardSections(value string) []string {
+	switch NormalizeBacklogFormat(value) {
+	case BacklogFormatUserStories:
+		return []string{"user stories", "acceptance criteria", "owners", "technical notes", "open questions"}
+	case BacklogFormatJobStories:
+		return []string{"job stories", "acceptance criteria", "owners", "technical notes", "open questions"}
+	case BacklogFormatWhyWhatAcceptance:
+		return []string{"why", "what", "acceptance criteria", "owners", "technical notes", "open questions"}
+	default:
+		return nil
+	}
+}
+
 func DiscoveryValidationPlanSections(mode string) []string {
 	sections := []string{
 		"ideas explored",
@@ -678,7 +794,7 @@ func DiscoveryValidationPlanSections(mode string) []string {
 	return sections
 }
 
-func playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel, discoveryMode string) []string {
+func playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel, discoveryMode, backlogFormat string) []string {
 	switch playbook {
 	case PlaybookDiscovery:
 		switch NormalizeDiscoveryMode(discoveryMode) {
@@ -708,10 +824,15 @@ func playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskL
 			"Run a readiness pass if hidden dependencies or launch risk emerge during planning.",
 		}
 	case PlaybookBacklogDecomposition:
+		formatLabel := BacklogFormatLabel(backlogFormat)
+		if formatLabel == "" {
+			formatLabel = "backlog"
+		}
 		return []string{
-			"Estimate and sequence the decomposed work before sprint or queue commitment.",
-			"Assign owners and dependency order so execution can start without re-planning.",
-			"Promote blocked stories back into execution/spec or risk/readiness planning when needed.",
+			"Estimate and sequence the decomposed " + formatLabel + " before sprint or queue commitment.",
+			"Generate test scenarios directly from the " + formatLabel + " and acceptance criteria before execution starts.",
+			"Flag design input, dependency order, and technical spikes so execution can start without re-planning.",
+			"Promote blocked work back into execution/spec or risk/readiness planning when needed.",
 		}
 	case PlaybookRiskReadiness:
 		return []string{
