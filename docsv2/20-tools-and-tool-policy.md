@@ -569,12 +569,15 @@ When an agent emits a tool call during the turn loop:
 4. **Execution**: execute the tool per its tier's path.
 5. **Result formatting**: return the result in a consistent format regardless of tier. The agent does not know or care which tier a tool belongs to.
 
+`file.write` gets one extra normalization pass before validation. If the provider leaves a recoverable `_raw` argument blob behind, the runtime extracts `path`, `content`, `encoding`, and `create_dirs` deterministically instead of spuriously failing with `path_required`. If `path` is still absent after normalization, the runtime returns one actionable validation payload rather than alternating between neighboring successful writes and missing-path noise.
+
 ### Error Handling
 
 Tool call errors are returned as tool results, not as exceptions. The agent sees the error and can adapt:
 
 - **Tool not found**: `{"error": "tool_not_found", "message": "No tool named 'task.destroy' exists."}`
 - **Parameter validation**: `{"error": "invalid_parameters", "message": "Missing required field 'title'.", "details": {...}}`
+- **`file.write` missing path**: `{"error": "path_required", "message": "file.write requires a non-empty path. Provide a workspace-relative file path in \`path\`."}`
 - **Permission denied**: `{"error": "permission_denied", "message": "You do not have permission to execute CLI commands in this project."}`
 - **Execution failure**: `{"error": "execution_failed", "message": "Command exited with code 1.", "output": "..."}`
 - **Timeout**: `{"error": "timeout", "message": "Tool execution exceeded the 30-second timeout."}`
