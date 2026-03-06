@@ -1322,6 +1322,9 @@ func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
 	if plan.DiscoveryMode != "" {
 		context["discovery_mode"] = plan.DiscoveryMode
 	}
+	if plan.BacklogFormat != "" {
+		context["backlog_format"] = plan.BacklogFormat
+	}
 	response := map[string]any{
 		"mode":                  plan.Mode,
 		"playbook":              plan.Playbook,

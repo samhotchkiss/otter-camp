@@ -191,6 +191,79 @@ func TestAnalyzeDiscoveryModeClassification(t *testing.T) {
 	}
 }
 
+func TestAnalyzeBacklogFormatSelectionPreservesAcceptanceCriteria(t *testing.T) {
+	tests := []struct {
+		name              string
+		title             string
+		description       string
+		wantFormat        string
+		wantStorySections []string
+	}{
+		{
+			name:              "user stories",
+			title:             "Break the approved checkout spec into user stories",
+			description:       "Decompose the approved checkout scope into user stories with acceptance criteria, dependency order, and sprint-ready owners.",
+			wantFormat:        BacklogFormatUserStories,
+			wantStorySections: []string{"user stories", "acceptance criteria", "owners", "technical notes", "open questions"},
+		},
+		{
+			name:              "job stories",
+			title:             "Break the approved checkout spec into job stories",
+			description:       "Decompose the approved checkout scope into job stories for the payments team with acceptance criteria and dependency order.",
+			wantFormat:        BacklogFormatJobStories,
+			wantStorySections: []string{"job stories", "acceptance criteria", "owners", "technical notes", "open questions"},
+		},
+		{
+			name:              "why what acceptance",
+			title:             "Break the approved onboarding scope into why/what/acceptance format",
+			description:       "Decompose the approved onboarding scope into why/what/acceptance format for the cross-functional launch team with dependency order and owners.",
+			wantFormat:        BacklogFormatWhyWhatAcceptance,
+			wantStorySections: []string{"why", "what", "acceptance criteria", "owners", "technical notes", "open questions"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := Analyze(tc.title, &tc.description)
+			if plan.Playbook != PlaybookBacklogDecomposition {
+				t.Fatalf("Playbook = %q, want %q", plan.Playbook, PlaybookBacklogDecomposition)
+			}
+			if plan.BacklogFormat != tc.wantFormat {
+				t.Fatalf("BacklogFormat = %q, want %q", plan.BacklogFormat, tc.wantFormat)
+			}
+
+			metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+			parsed, ok := Parse(metadata)
+			if !ok {
+				t.Fatal("Parse(metadata) = false, want true")
+			}
+			if parsed.BacklogFormat != tc.wantFormat {
+				t.Fatalf("parsed BacklogFormat = %q, want %q", parsed.BacklogFormat, tc.wantFormat)
+			}
+
+			contracts := ArtifactContractForPlan(parsed)
+			found := false
+			for _, contract := range contracts {
+				if contract.Slug != "story-cards" {
+					continue
+				}
+				found = true
+				for _, wantSection := range tc.wantStorySections {
+					if !containsString(contract.RequiredSections, wantSection) {
+						t.Fatalf("story-cards required sections = %#v, want %q", contract.RequiredSections, wantSection)
+					}
+				}
+				if !containsString(contract.RequiredSections, "acceptance criteria") {
+					t.Fatalf("story-cards required sections = %#v, want acceptance criteria", contract.RequiredSections)
+				}
+			}
+			if !found {
+				t.Fatalf("story-cards contract missing from %#v", contracts)
+			}
+		})
+	}
+}
+
 func TestAnalyzeWithDelegatedPolicyChoosesAutonomousInternalReview(t *testing.T) {
 	description := "Generate 10 homepage design options, compare them, and recommend a direction that stays on-brand."
 

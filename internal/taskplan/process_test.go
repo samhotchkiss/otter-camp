@@ -302,6 +302,52 @@ func TestCompletionReportRequiresHypothesesForThinContextStrategy(t *testing.T) 
 	}
 }
 
+func TestCompletionReportRejectsBacklogDecompositionWithoutAcceptanceCriteria(t *testing.T) {
+	description := "Decompose the approved checkout scope into job stories with dependency order, owners, and technical notes for the delivery team."
+	plan := Analyze("Break the approved checkout scope into job stories", &description)
+	if plan.BacklogFormat != BacklogFormatJobStories {
+		t.Fatalf("BacklogFormat = %q, want %q", plan.BacklogFormat, BacklogFormatJobStories)
+	}
+	metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	metadata, _, _, err := ApplyProcessUpdate(metadata, ProcessUpdate{
+		Artifacts: []ArtifactEvidence{
+			{
+				Slug:     "epic-breakdown",
+				Summary:  "Epic themes and scope slices for checkout delivery.",
+				Sections: []string{"themes", "goals", "scope slices", "technical notes", "open questions"},
+			},
+			{
+				Slug:     "story-cards",
+				Summary:  "Job stories and ownership for checkout delivery.",
+				Sections: []string{"job stories", "owners", "technical notes", "open questions"},
+			},
+			{
+				Slug:     "sequencing-plan",
+				Summary:  "Dependency order plus design and spike work.",
+				Sections: []string{"order", "dependencies", "design input", "technical spikes"},
+			},
+			{
+				Slug:     "definition-of-done",
+				Summary:  "Story-level exit criteria and release gates.",
+				Sections: []string{"exit criteria", "verification", "release gates"},
+			},
+		},
+		HasArtifactChanges: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+
+	_, err = CompletionReport(metadata)
+	if !errors.Is(err, ErrPlanningArtifactContractIncomplete) {
+		t.Fatalf("CompletionReport err = %v, want ErrPlanningArtifactContractIncomplete", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "acceptance criteria") {
+		t.Fatalf("CompletionReport error = %v, want missing acceptance criteria", err)
+	}
+}
+
 func TestApplyProcessUpdateRecordsOverrideForIncompleteContract(t *testing.T) {
 	description := "Write the PRD, requirements, implementation plan, and acceptance criteria for the billing migration."
 	plan := Analyze("PRD for billing migration", &description)
