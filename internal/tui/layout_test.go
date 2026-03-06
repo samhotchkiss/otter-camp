@@ -52,7 +52,7 @@ func TestLayoutVisibilityAndHintsBySizeClass(t *testing.T) {
 			sidebarVisible:    false,
 			wantClass:         SizeXS,
 			wantVisible:       [3]bool{false, false, true},
-			hiddenHintContain: "sidebar hidden",
+			hiddenHintContain: "1 sidebar",
 		},
 		{
 			name:              "s main+chat with drawer hidden",
@@ -62,7 +62,7 @@ func TestLayoutVisibilityAndHintsBySizeClass(t *testing.T) {
 			sidebarVisible:    false,
 			wantClass:         SizeS,
 			wantVisible:       [3]bool{false, true, true},
-			hiddenHintContain: "sidebar hidden",
+			hiddenHintContain: "1 sidebar",
 		},
 		{
 			name:              "s sidebar+chat when sidebar focused",
@@ -72,7 +72,7 @@ func TestLayoutVisibilityAndHintsBySizeClass(t *testing.T) {
 			sidebarVisible:    true,
 			wantClass:         SizeS,
 			wantVisible:       [3]bool{true, false, true},
-			hiddenHintContain: "main hidden",
+			hiddenHintContain: "2 main",
 		},
 		{
 			name:              "m shows all panes",
@@ -123,6 +123,17 @@ func TestLayoutVisibilityAndHintsBySizeClass(t *testing.T) {
 				t.Fatalf("hidden hints = %q, want substring %q", layout.hiddenHints, tc.hiddenHintContain)
 			}
 		})
+	}
+}
+
+func TestComputeLayoutKeepsReadableSidebarWidthAtTabletBreakpointEX253(t *testing.T) {
+	layout := computeLayout(100, 34, MainPanel, false, DefaultState().PanelProportions)
+
+	if layout.sizeClass != SizeM {
+		t.Fatalf("size class = %s, want %s", layout.sizeClass, SizeM)
+	}
+	if got := layout.widths[SidebarPanel]; got < 18 {
+		t.Fatalf("sidebar width = %d, want >= 18 for readable compact labels", got)
 	}
 }
 
