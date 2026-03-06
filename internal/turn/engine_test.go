@@ -231,6 +231,42 @@ func TestHandleTurnJobDuplicateDeliveryDoesNotCreateSecondTurn(t *testing.T) {
 	}
 }
 
+func TestHandleTurnJobCancelledMessageDoesNotCreateTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	metadata, err := chat.MergeAgentTurnDispatchCancelledMetadata(message.Metadata, "unit-test", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("merge cancelled metadata: %v", err)
+	}
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, metadata); err != nil {
+		t.Fatalf("UpdateMetadata user message: %v", err)
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	if got := len(fixture.chat.turnOrder); got != 0 {
+		t.Fatalf("turn count = %d, want 0", got)
+	}
+	if fixture.model.streamCalls != 0 {
+		t.Fatalf("stream calls = %d, want 0", fixture.model.streamCalls)
+	}
+}
+
 func TestHandleTurnJobRetryAttemptCreatesDistinctTurnAndRecordsRetryState(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

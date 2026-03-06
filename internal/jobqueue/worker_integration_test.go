@@ -65,6 +65,109 @@ func TestJobWorkerProcessesEnqueuedJobs(t *testing.T) {
 	}
 }
 
+func TestAgentTurnEnqueueDedupesActiveAttempt(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	sessionID := uuid.New()
+	messageID := uuid.New()
+	payload := map[string]any{
+		"session_id": sessionID,
+		"message_id": messageID,
+	}
+
+	firstID, err := worker.Enqueue(context.Background(), nil, agentTurnJobType, 70, payload, nil)
+	if err != nil {
+		t.Fatalf("enqueue first agent_turn: %v", err)
+	}
+	secondID, err := worker.Enqueue(context.Background(), nil, agentTurnJobType, 70, payload, nil)
+	if err != nil {
+		t.Fatalf("enqueue duplicate agent_turn: %v", err)
+	}
+	if secondID != firstID {
+		t.Fatalf("duplicate enqueue id = %s, want %s", secondID, firstID)
+	}
+
+	var activeRows int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE dedupe_key = $1
+		  AND status IN ('pending', 'claimed')
+	`, AgentTurnAttemptKey(sessionID, messageID, 0)).Scan(&activeRows); err != nil {
+		t.Fatalf("count active deduped rows: %v", err)
+	}
+	if activeRows != 1 {
+		t.Fatalf("active deduped rows = %d, want 1", activeRows)
+	}
+}
+
+func TestAgentTurnDuplicateEnqueueWhileClaimedDoesNotCreateSecondLiveClaim(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "agent-turn-claim",
+		BatchSize:            10,
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	sessionID := uuid.New()
+	messageID := uuid.New()
+	payload := map[string]any{
+		"session_id": sessionID,
+		"message_id": messageID,
+	}
+
+	firstID, err := worker.Enqueue(context.Background(), nil, agentTurnJobType, 70, payload, nil)
+	if err != nil {
+		t.Fatalf("enqueue first agent_turn: %v", err)
+	}
+	claimed, err := worker.claimPending(context.Background())
+	if err != nil {
+		t.Fatalf("claim pending agent_turn: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed rows = %d, want 1", len(claimed))
+	}
+	if claimed[0].ID != firstID {
+		t.Fatalf("claimed row id = %s, want %s", claimed[0].ID, firstID)
+	}
+
+	secondID, err := worker.Enqueue(context.Background(), nil, agentTurnJobType, 70, payload, nil)
+	if err != nil {
+		t.Fatalf("enqueue duplicate while claimed: %v", err)
+	}
+	if secondID != firstID {
+		t.Fatalf("duplicate claimed enqueue id = %s, want %s", secondID, firstID)
+	}
+
+	again, err := worker.claimPending(context.Background())
+	if err != nil {
+		t.Fatalf("claim pending after duplicate enqueue: %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("second claim count = %d, want 0", len(again))
+	}
+
+	var activeRows int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE dedupe_key = $1
+		  AND status IN ('pending', 'claimed')
+	`, AgentTurnAttemptKey(sessionID, messageID, 0)).Scan(&activeRows); err != nil {
+		t.Fatalf("count claimed deduped rows: %v", err)
+	}
+	if activeRows != 1 {
+		t.Fatalf("active claimed rows = %d, want 1", activeRows)
+	}
+}
+
 func TestJobWorkerSkipLockedAcrossTwoWorkers(t *testing.T) {
 	pool := testdb.New(t)
 

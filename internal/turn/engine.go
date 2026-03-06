@@ -856,6 +856,18 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 		return nil
 	}
+	if chat.AgentTurnDispatchCancelled(message.Metadata) {
+		e.logger.Info("skipping cancelled agent turn dispatch", "session_id", sessionID, "message_id", messageID)
+		return nil
+	}
+	cancelled, err := e.logicalMessageCancelled(ctx, sessionID, messageID)
+	if err != nil {
+		return err
+	}
+	if cancelled {
+		e.logger.Info("skipping agent turn after logical message cancellation", "session_id", sessionID, "message_id", messageID)
+		return nil
+	}
 
 	agentID := uuid.Nil
 	if routedAgentID != nil && *routedAgentID != uuid.Nil {
@@ -2796,6 +2808,25 @@ func isRunAttributionConstraintError(err error) bool {
 		strings.Contains(text, "model_invocation_run_attempt_id_fk")
 }
 
+func (e *TurnEngine) logicalMessageCancelled(ctx context.Context, sessionID, messageID uuid.UUID) (bool, error) {
+	if e.turns == nil {
+		return false, nil
+	}
+	turns, err := e.turns.ListBySession(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	for _, turn := range turns {
+		if turn.TriggerMessageID == nil || *turn.TriggerMessageID != messageID {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(turn.Status), "cancelled") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func reactionDelta(emoji string) (float64, bool) {
 	normalized := strings.TrimSpace(strings.ToLower(emoji))
 	switch normalized {
@@ -2855,6 +2886,22 @@ func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat
 		return false, err
 	} else if paused {
 		e.logPausedTurnSkip("skipping agent turn enqueue for paused project", session, reason, payload.MessageID)
+		return false, nil
+	}
+	message, err := e.messages.GetByID(ctx, payload.MessageID)
+	if err != nil {
+		return false, err
+	}
+	if chat.AgentTurnDispatchCancelled(message.Metadata) {
+		e.logger.Info("skipping enqueue for cancelled agent turn dispatch", "session_id", payload.SessionID, "message_id", payload.MessageID)
+		return false, nil
+	}
+	cancelled, err := e.logicalMessageCancelled(ctx, payload.SessionID, payload.MessageID)
+	if err != nil {
+		return false, err
+	}
+	if cancelled {
+		e.logger.Info("skipping enqueue after logical message cancellation", "session_id", payload.SessionID, "message_id", payload.MessageID)
 		return false, nil
 	}
 	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, payload, runAfter); err != nil {
