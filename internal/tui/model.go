@@ -165,6 +165,11 @@ type inboxItemsLoadedMsg struct {
 	Items []InboxSummaryItem
 }
 
+type operatorDashboardLoadedMsg struct {
+	Data *OperatorDashboardData
+	Err  error
+}
+
 const (
 	memorySampleInterval   = 5 * time.Second
 	keypressLatencyBudget  = 100 * time.Millisecond
@@ -816,8 +821,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.proofRealtime = true
 			m.workspace.activity = appendActivity(m.workspace.activity, "realtime events connected")
 			// Load sidebar data on first successful connection.
+			var cmds []tea.Cmd
 			if m.runtimeHints.LoadOrgSession != nil || m.runtimeHints.LoadInboxCount != nil || m.runtimeHints.LoadRecentChats != nil || m.runtimeHints.LoadProjects != nil {
-				return m, loadSidebarDataCmd(m.runtimeHints)
+				cmds = append(cmds, loadSidebarDataCmd(m.runtimeHints))
+			}
+			if cmd := loadOperatorDashboardCmd(m.runtimeHints); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			if len(cmds) > 0 {
+				return m, tea.Batch(cmds...)
 			}
 		}
 		return m, nil
@@ -1005,6 +1017,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(typed.Agents) > 0 {
 			m.workspace.agents = typed.Agents
 		}
+		return m, nil
+	case operatorDashboardLoadedMsg:
+		if typed.Err != nil {
+			m.workspace.activity = appendActivity(m.workspace.activity, "runtime health refresh failed")
+			if m.workspace.operatorDashboard == nil {
+				m.statusMessage = "Runtime health load failed."
+			}
+			return m, nil
+		}
+		m.workspace.setOperatorDashboard(typed.Data)
 		return m, nil
 	case settingsLoadedMsg:
 		if typed.Err != nil {
@@ -4232,6 +4254,23 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			// hint is not configured.
 			return true, loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)
 		}
+	case '4', '5', '6', '7', '8', '9':
+		if m.focus == MainPanel && m.workspace.mainView == ViewDashboard {
+			if len(m.workspace.operatorTargets) == 0 {
+				m.statusMessage = "Panels: 1 sidebar · 2 main · 3 chat. Press ? for full key reference."
+				return true, nil
+			}
+			shortcut := int(r - '0')
+			target, ok := m.workspace.operatorTargets[shortcut]
+			if !ok {
+				m.statusMessage = fmt.Sprintf("No runtime item %d.", shortcut)
+				return true, nil
+			}
+			return true, m.navigateToOperatorDashboardTarget(target)
+		} else if m.focus != ChatPanel {
+			m.statusMessage = "Panels: 1 sidebar · 2 main · 3 chat. Press ? for full key reference."
+			return true, nil
+		}
 	case 'n':
 		if m.focus != ChatPanel {
 			if nextID := m.workspace.nextUnreadSession(); nextID != "" {
@@ -4331,6 +4370,13 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		switch {
 		case m.focus == MainPanel && m.workspace.mainView == ViewDashboard:
 			m.statusMessage = "Refreshing task board…"
+			cmds := []tea.Cmd{loadSidebarDataCmd(m.runtimeHints)}
+			if cmd := loadOperatorDashboardCmd(m.runtimeHints); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			m.workspace.activity = appendActivity(m.workspace.activity,
+				"dashboard refreshed at "+m.now().Format("15:04:05"))
+			return true, tea.Batch(cmds...)
 		case m.focus == MainPanel && m.workspace.mainView == ViewActivity:
 			m.statusMessage = "Refreshing activity…"
 		case m.focus == MainPanel && m.workspace.mainView == ViewMerges:
@@ -4614,13 +4660,6 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 		// EX-380: capital 'T' — not bound. Users may mean lowercase 't' (task view).
 		if m.focus != ChatPanel {
 			m.statusMessage = "T is not bound. Press t (lowercase) to open task detail."
-			return true, nil
-		}
-	case '4', '5', '6', '7', '8', '9':
-		// EX-372: Users may guess that 4-9 switch panels (1=sidebar, 2=main, 3=chat).
-		// Give a hint pointing to the actual panel shortcuts instead of silently doing nothing.
-		if m.focus != ChatPanel {
-			m.statusMessage = "Panels: 1 sidebar · 2 main · 3 chat. Press ? for full key reference."
 			return true, nil
 		}
 	case '.':
@@ -6144,6 +6183,13 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		switch m.workspace.mainView {
 		case ViewDashboard:
 			m.statusMessage = "Refreshing task board…"
+			cmds := []tea.Cmd{loadSidebarDataCmd(m.runtimeHints)}
+			if cmd := loadOperatorDashboardCmd(m.runtimeHints); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			m.workspace.activity = appendActivity(m.workspace.activity,
+				"dashboard refreshed at "+m.now().Format("15:04:05"))
+			return tea.Batch(cmds...)
 		case ViewActivity:
 			m.statusMessage = "Refreshing activity…"
 		case ViewMerges:
@@ -7562,6 +7608,49 @@ func (m *Model) navigateToTaskJumpTarget(taskID string) tea.Cmd {
 	return loadTaskDetailCmd(taskID, m.runtimeHints)
 }
 
+func (m *Model) navigateToOperatorDashboardTarget(target operatorDashboardTarget) tea.Cmd {
+	label := strings.TrimSpace(target.Title)
+	if label == "" {
+		label = "runtime item"
+	}
+
+	if strings.TrimSpace(target.TaskID) != "" {
+		m.workspace.selectedTaskID = strings.TrimSpace(target.TaskID)
+		if strings.TrimSpace(target.ProjectID) != "" {
+			m.workspace.selectedProjectID = strings.TrimSpace(target.ProjectID)
+		}
+		m.workspace.syncSidebarToTask(m.workspace.selectedTaskID)
+		m.workspace.syncProjectCursorToTask(m.workspace.selectedTaskID)
+		m.workspace.setMainView(ViewTask)
+		m.setFocus(MainPanel)
+		m.activeScope = ScopeTask
+		m.statusMessage = "Opened runtime item: " + truncate(label, 40)
+		cmds := []tea.Cmd{loadTaskDetailCmd(m.workspace.selectedTaskID, m.runtimeHints)}
+		if m.workspace.selectedProjectID != "" && m.workspace.selectedProject == nil {
+			if cmd := loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		return tea.Batch(cmds...)
+	}
+
+	if strings.TrimSpace(target.ProjectID) != "" {
+		m.workspace.selectedProjectID = strings.TrimSpace(target.ProjectID)
+		m.workspace.selectedProject = nil
+		m.workspace.setMainView(ViewProject)
+		m.setFocus(MainPanel)
+		m.activeScope = ScopeProject
+		m.statusMessage = "Opened runtime item: " + truncate(label, 40)
+		return tea.Batch(
+			loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints),
+			loadProjectTasksCmd(m.workspace.selectedProjectID, m.runtimeHints, false),
+		)
+	}
+
+	m.statusMessage = "Runtime item does not include a task or project target."
+	return nil
+}
+
 func (m *Model) taskJumpAmbiguousStatus(query string, matches []string) string {
 	if len(matches) == 0 {
 		return fmt.Sprintf("Task %q not found.", query)
@@ -8241,7 +8330,13 @@ func (m Model) commandFallbackHelp() string {
 				if m.workspace.selectedTaskID != "" {
 					taskHint += " · t task detail"
 				}
+				if len(m.workspace.operatorTargets) > 0 {
+					taskHint += " · 4-9 runtime jump"
+				}
 				return taskHint + " · g/G first/last · i inbox · n next unread · Tab navigate · / filter · : commands · ? help"
+			}
+			if len(m.workspace.operatorTargets) > 0 {
+				return "4-9 runtime jump · i inbox · n next unread · Tab navigate · : commands · ? help"
 			}
 			return "i inbox · n next unread · Tab navigate · : commands · ? help"
 		default:
@@ -8628,6 +8723,18 @@ func loadInboxItemsCmd(hints RuntimeHints) tea.Cmd {
 			return inboxItemsLoadedMsg{}
 		}
 		return inboxItemsLoadedMsg{Items: items}
+	}
+}
+
+func loadOperatorDashboardCmd(hints RuntimeHints) tea.Cmd {
+	if hints.LoadOperatorDashboard == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		data, err := hints.LoadOperatorDashboard(ctx)
+		return operatorDashboardLoadedMsg{Data: data, Err: err}
 	}
 }
 

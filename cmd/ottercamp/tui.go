@@ -428,6 +428,9 @@ func runTUICommand(args []string) int {
 				}
 				return out, nil
 			}
+			runtimeHints.LoadOperatorDashboard = func(ctx context.Context) (*tuiapp.OperatorDashboardData, error) {
+				return loadTUIOperatorDashboard(ctx, apiClient)
+			}
 			runtimeHints.LoadTaskDetail = func(ctx context.Context, taskID string) (*tuiapp.TaskDetailItem, error) {
 				return loadTUITaskDetail(ctx, apiClient, taskID)
 			}
@@ -799,6 +802,141 @@ func resolveTUIRealtimeCredentials(serverURLFlag, apiKeyFlag string) (string, st
 
 func printTUIUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp tui [--server-url URL] [--api-key KEY] [--non-interactive]")
+}
+
+func loadTUIOperatorDashboard(ctx context.Context, apiClient *cliAPIClient) (*tuiapp.OperatorDashboardData, error) {
+	var resp struct {
+		Data struct {
+			Summary struct {
+				Health          string `json:"health"`
+				QuietHealthy    bool   `json:"quiet_healthy"`
+				ActiveProjects  int    `json:"active_projects"`
+				ActiveTasks     int    `json:"active_tasks"`
+				ActiveRuns      int    `json:"active_runs"`
+				StaleTasks      int    `json:"stale_tasks"`
+				StaleExecutions int    `json:"stale_executions"`
+				BlockedItems    int    `json:"blocked_items"`
+				RecentFailures  int    `json:"recent_failures"`
+			} `json:"summary"`
+			Active         tuiOperatorDashboardSectionPayload `json:"active"`
+			Stale          tuiOperatorDashboardSectionPayload `json:"stale"`
+			Blocked        tuiOperatorDashboardSectionPayload `json:"blocked"`
+			RecentFailures tuiOperatorDashboardSectionPayload `json:"recent_failures"`
+			RecentActivity tuiOperatorDashboardSectionPayload `json:"recent_activity"`
+			Thresholds     struct {
+				StaleExecutionSeconds int `json:"stale_execution_seconds"`
+				StaleTaskSeconds      int `json:"stale_task_seconds"`
+			} `json:"thresholds"`
+			ServerTime time.Time `json:"server_time"`
+		} `json:"data"`
+	}
+	if err := apiClient.request(ctx, "GET", "/v1/control/dashboard?limit=6", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &tuiapp.OperatorDashboardData{
+		Summary: tuiapp.OperatorDashboardSummary{
+			Health:          resp.Data.Summary.Health,
+			QuietHealthy:    resp.Data.Summary.QuietHealthy,
+			ActiveProjects:  resp.Data.Summary.ActiveProjects,
+			ActiveTasks:     resp.Data.Summary.ActiveTasks,
+			ActiveRuns:      resp.Data.Summary.ActiveRuns,
+			StaleTasks:      resp.Data.Summary.StaleTasks,
+			StaleExecutions: resp.Data.Summary.StaleExecutions,
+			BlockedItems:    resp.Data.Summary.BlockedItems,
+			RecentFailures:  resp.Data.Summary.RecentFailures,
+		},
+		Active:         convertTUIOperatorDashboardSection(resp.Data.Active),
+		Stale:          convertTUIOperatorDashboardSection(resp.Data.Stale),
+		Blocked:        convertTUIOperatorDashboardSection(resp.Data.Blocked),
+		RecentFailures: convertTUIOperatorDashboardSection(resp.Data.RecentFailures),
+		RecentActivity: convertTUIOperatorDashboardSection(resp.Data.RecentActivity),
+		Thresholds: tuiapp.OperatorDashboardThresholds{
+			StaleExecutionSeconds: resp.Data.Thresholds.StaleExecutionSeconds,
+			StaleTaskSeconds:      resp.Data.Thresholds.StaleTaskSeconds,
+		},
+		ServerTime: resp.Data.ServerTime,
+	}, nil
+}
+
+type tuiOperatorDashboardSectionPayload struct {
+	Count      int                               `json:"count"`
+	TotalCount int                               `json:"total_count"`
+	Items      []tuiOperatorDashboardItemPayload `json:"items"`
+}
+
+type tuiOperatorDashboardRefPayload struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+type tuiOperatorDashboardTaskRefPayload struct {
+	ID         string `json:"id"`
+	TaskNumber int    `json:"task_number"`
+	Label      string `json:"label"`
+}
+
+type tuiOperatorDashboardItemPayload struct {
+	Kind            string                              `json:"kind"`
+	Title           string                              `json:"title"`
+	Summary         string                              `json:"summary"`
+	Status          string                              `json:"status"`
+	Project         *tuiOperatorDashboardRefPayload     `json:"project"`
+	Task            *tuiOperatorDashboardTaskRefPayload `json:"task"`
+	Run             *tuiOperatorDashboardRefPayload     `json:"run"`
+	UpdatedAt       time.Time                           `json:"updated_at"`
+	AgeSeconds      int                                 `json:"age_seconds"`
+	StaleForSeconds int                                 `json:"stale_for_seconds"`
+	Links           struct {
+		Project string `json:"project"`
+		Task    string `json:"task"`
+		Run     string `json:"run"`
+	} `json:"links"`
+}
+
+func convertTUIOperatorDashboardSection(section tuiOperatorDashboardSectionPayload) tuiapp.OperatorDashboardSection {
+	items := make([]tuiapp.OperatorDashboardItem, 0, len(section.Items))
+	for _, item := range section.Items {
+		items = append(items, tuiapp.OperatorDashboardItem{
+			Kind:            item.Kind,
+			Title:           item.Title,
+			Summary:         item.Summary,
+			Status:          item.Status,
+			Project:         convertTUIOperatorDashboardRef(item.Project),
+			Task:            convertTUIOperatorDashboardTaskRef(item.Task),
+			Run:             convertTUIOperatorDashboardRef(item.Run),
+			UpdatedAt:       item.UpdatedAt,
+			AgeSeconds:      item.AgeSeconds,
+			StaleForSeconds: item.StaleForSeconds,
+			Links: tuiapp.OperatorDashboardLinks{
+				Project: item.Links.Project,
+				Task:    item.Links.Task,
+				Run:     item.Links.Run,
+			},
+		})
+	}
+	return tuiapp.OperatorDashboardSection{
+		Count:      section.Count,
+		TotalCount: section.TotalCount,
+		Items:      items,
+	}
+}
+
+func convertTUIOperatorDashboardRef(ref *tuiOperatorDashboardRefPayload) *tuiapp.OperatorDashboardRef {
+	if ref == nil {
+		return nil
+	}
+	return &tuiapp.OperatorDashboardRef{ID: ref.ID, Label: ref.Label}
+}
+
+func convertTUIOperatorDashboardTaskRef(ref *tuiOperatorDashboardTaskRefPayload) *tuiapp.OperatorDashboardTaskRef {
+	if ref == nil {
+		return nil
+	}
+	return &tuiapp.OperatorDashboardTaskRef{
+		ID:         ref.ID,
+		TaskNumber: ref.TaskNumber,
+		Label:      ref.Label,
+	}
 }
 
 func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID string) (*tuiapp.TaskDetailItem, error) {

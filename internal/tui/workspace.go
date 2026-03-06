@@ -175,15 +175,25 @@ type workspaceState struct {
 	showTaskHistory            bool   // whether to show task history/audit trail
 	dashboardCursor            int    // cursor within the dashboard task board (index into taskOrder excluding done/cancelled)
 
-	inbox       []inboxItem
-	inboxCursor int
-	activity    []string
-	agents      []string
-	mergeQueue  []string
-	schedules   []string
+	inbox             []inboxItem
+	inboxCursor       int
+	activity          []string
+	agents            []string
+	mergeQueue        []string
+	schedules         []string
+	operatorDashboard *OperatorDashboardData
+	operatorTargets   map[int]operatorDashboardTarget
 
 	activeSessionID string
 	settings        *SettingsData
+}
+
+type operatorDashboardTarget struct {
+	Shortcut  int
+	Title     string
+	ProjectID string
+	TaskID    string
+	RunID     string
 }
 
 func newWorkspaceState() workspaceState {
@@ -228,8 +238,63 @@ func newWorkspaceState() workspaceState {
 		agents:             []string{},
 		mergeQueue:         []string{},
 		schedules:          []string{},
+		operatorTargets:    map[int]operatorDashboardTarget{},
 		activeSessionID:    generalSessionID,
 	}
+}
+
+func (w *workspaceState) setOperatorDashboard(data *OperatorDashboardData) {
+	if data == nil {
+		w.operatorDashboard = nil
+		w.operatorTargets = map[int]operatorDashboardTarget{}
+		return
+	}
+
+	cloned := *data
+	w.operatorTargets = map[int]operatorDashboardTarget{}
+	cloned.Active = operatorDashboardSectionWithShortcuts(data.Active, &w.operatorTargets)
+	cloned.Stale = operatorDashboardSectionWithShortcuts(data.Stale, &w.operatorTargets)
+	cloned.Blocked = operatorDashboardSectionWithShortcuts(data.Blocked, &w.operatorTargets)
+	cloned.RecentFailures = operatorDashboardSectionWithShortcuts(data.RecentFailures, &w.operatorTargets)
+	cloned.RecentActivity = operatorDashboardSectionWithShortcuts(data.RecentActivity, &w.operatorTargets)
+	w.operatorDashboard = &cloned
+}
+
+func operatorDashboardSectionWithShortcuts(section OperatorDashboardSection, targets *map[int]operatorDashboardTarget) OperatorDashboardSection {
+	cloned := OperatorDashboardSection{
+		Count:      section.Count,
+		TotalCount: section.TotalCount,
+		Items:      make([]OperatorDashboardItem, 0, len(section.Items)),
+	}
+	if *targets == nil {
+		*targets = map[int]operatorDashboardTarget{}
+	}
+	nextShortcut := len(*targets) + 4
+	for _, item := range section.Items {
+		clonedItem := item
+		if nextShortcut <= 9 {
+			target := operatorDashboardTarget{
+				Shortcut: nextShortcut,
+				Title:    strings.TrimSpace(clonedItem.Title),
+			}
+			if clonedItem.Project != nil {
+				target.ProjectID = strings.TrimSpace(clonedItem.Project.ID)
+			}
+			if clonedItem.Task != nil {
+				target.TaskID = strings.TrimSpace(clonedItem.Task.ID)
+			}
+			if clonedItem.Run != nil {
+				target.RunID = strings.TrimSpace(clonedItem.Run.ID)
+			}
+			if target.ProjectID != "" || target.TaskID != "" || target.RunID != "" {
+				clonedItem.Shortcut = nextShortcut
+				(*targets)[nextShortcut] = target
+				nextShortcut++
+			}
+		}
+		cloned.Items = append(cloned.Items, clonedItem)
+	}
+	return cloned
 }
 
 func resolveMainViewCommand(command string) (MainView, bool) {
