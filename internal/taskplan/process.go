@@ -121,16 +121,16 @@ var playbookArtifactContracts = map[string][]ArtifactContract{
 		{Slug: "readiness-checklist", Title: "Readiness checklist", RequiredSections: []string{"go/no-go checklist", "blockers", "rollback"}},
 	},
 	PlaybookMetrics: {
-		{Slug: "metric-tree", Title: "Metric tree", RequiredSections: []string{"north star", "drivers", "counter metrics"}},
+		{Slug: "metric-tree", Title: "Metric tree", RequiredSections: []string{"north star", "input metrics", "health metrics", "counter metrics"}},
 		{Slug: "instrumentation-plan", Title: "Instrumentation plan", RequiredSections: []string{"events", "owners", "qa"}},
 		{Slug: "dashboard-spec", Title: "Dashboard spec", RequiredSections: []string{"views", "slices", "alerts"}},
 		{Slug: "review-cadence", Title: "Metric review cadence", RequiredSections: []string{"schedule", "owners", "thresholds"}},
 	},
 	PlaybookGTMLaunch: {
-		{Slug: "launch-brief", Title: "Launch brief", RequiredSections: []string{"launch scope", "audience", "timing"}},
-		{Slug: "audience-messaging", Title: "Audience and messaging brief", RequiredSections: []string{"segments", "messages", "proof"}},
-		{Slug: "channel-plan", Title: "Channel plan", RequiredSections: []string{"channels", "owners", "timeline"}},
-		{Slug: "launch-checklist", Title: "Launch checklist", RequiredSections: []string{"readiness", "approvals", "contingency"}},
+		{Slug: "launch-brief", Title: "Launch brief", RequiredSections: []string{"launch scope", "beachhead segment", "icp", "success metrics"}},
+		{Slug: "audience-messaging", Title: "Audience and messaging brief", RequiredSections: []string{"positioning", "messaging", "proof"}},
+		{Slug: "channel-plan", Title: "Channel plan", RequiredSections: []string{"channel strategy", "owners", "launch timeline"}},
+		{Slug: "launch-checklist", Title: "Launch checklist", RequiredSections: []string{"readiness", "approvals", "contingency", "expansion plan"}},
 	},
 }
 
@@ -161,14 +161,14 @@ var playbookReviewChecklists = map[string][]string{
 		"Confirm the readiness checklist includes a go/no-go checklist, blockers, and rollback expectations.",
 	},
 	PlaybookMetrics: {
-		"Verify the metric tree names the north star, key drivers, and counter-metrics.",
-		"Check that instrumentation ownership and QA are explicit before launch or experiment review.",
-		"Confirm dashboards, thresholds, and review cadence support real operating decisions.",
+		"Verify the metric tree names the north star plus explicit input, health, and counter-metrics.",
+		"Check that instrumentation ownership, dashboards, and QA are explicit before launch or experiment review.",
+		"Confirm thresholds and review cadence support real operating decisions instead of passive reporting.",
 	},
 	PlaybookGTMLaunch: {
-		"Verify the launch brief defines scope, audience, and timing for the rollout.",
-		"Check that messaging proof points and channel ownership are explicit, not implied.",
-		"Confirm the launch checklist covers approvals, contingencies, and readiness gates.",
+		"Verify the launch brief defines scope, beachhead segment, ICP, and success metrics for the rollout.",
+		"Check that positioning, messaging proof points, channel strategy, and launch timeline are explicit, not implied.",
+		"Confirm the launch checklist covers approvals, contingencies, readiness gates, and the post-beachhead expansion plan.",
 	},
 }
 

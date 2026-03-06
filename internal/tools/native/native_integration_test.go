@@ -730,7 +730,7 @@ func TestIntegrationBlogIdeasCreateReviewPacketInboxHandoff(t *testing.T) {
 	for _, item := range checklist {
 		checklistJoined = append(checklistJoined, fmt.Sprintf("%v", item))
 	}
-	if !containsString(checklistJoined, "Verify the launch brief defines scope, audience, and timing for the rollout.") {
+	if !containsString(checklistJoined, "Verify the launch brief defines scope, beachhead segment, ICP, and success metrics for the rollout.") {
 		t.Fatalf("review_checklist = %v, want GTM rubric", checklistJoined)
 	}
 	artifacts, ok := payload["artifacts"].([]any)
@@ -1093,6 +1093,248 @@ func TestIntegrationTaskCreateRiskReadinessArtifactsAndFollowOnSuggestions(t *te
 	}
 	if !foundPremortem {
 		t.Fatalf("project.get planning_artifacts missing premortem entry: %#v", projectArtifacts)
+	}
+}
+
+func TestIntegrationTaskCreateMetricsPlanningProducesRepoBackedArtifact(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	repoRoot := t.TempDir()
+
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":  project.ID.String(),
+		"title":       "Metric tree and instrumentation plan",
+		"description": "Define the north-star metric, input metrics, health metrics, counter-metrics, dashboard requirements, and weekly review cadence for activation.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["playbook"] != taskplan.PlaybookMetrics {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookMetrics)
+	}
+
+	followOns := planningStringSlice(t, planning["follow_on_suggestions"])
+	if !containsSubstring(followOns, "Create dashboard, scorecard, or success-tracking tasks") {
+		t.Fatalf("follow_on_suggestions = %#v, want metrics follow-on task guidance", followOns)
+	}
+
+	metricArtifact := artifactPayloadBySlug(t, planning["artifacts"], "metric-tree")
+	metricPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, metricArtifact, "repo_path")))
+	metricBody, err := os.ReadFile(metricPath)
+	if err != nil {
+		t.Fatalf("read metric-tree artifact: %v", err)
+	}
+	for _, phrase := range []string{"## North Star", "## Input Metrics", "## Health Metrics", "## Counter Metrics"} {
+		if !strings.Contains(string(metricBody), phrase) {
+			t.Fatalf("metric-tree artifact missing %q:\n%s", phrase, string(metricBody))
+		}
+	}
+
+	cadenceArtifact := artifactPayloadBySlug(t, planning["artifacts"], "review-cadence")
+	cadencePath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, cadenceArtifact, "repo_path")))
+	cadenceBody, err := os.ReadFile(cadencePath)
+	if err != nil {
+		t.Fatalf("read review-cadence artifact: %v", err)
+	}
+	for _, phrase := range []string{"## Schedule", "## Thresholds"} {
+		if !strings.Contains(string(cadenceBody), phrase) {
+			t.Fatalf("review-cadence artifact missing %q:\n%s", phrase, string(cadenceBody))
+		}
+	}
+
+	taskID := nestedUUID(t, out, "task", "id")
+	taskRecord, err := taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok {
+		t.Fatal("taskplan.Parse(metadata) = false, want true")
+	}
+	foundMetricArtifact := false
+	for _, artifact := range plan.Artifacts {
+		if artifact.Slug != "metric-tree" {
+			continue
+		}
+		foundMetricArtifact = true
+		if strings.TrimSpace(artifact.RepoPath) == "" {
+			t.Fatalf("metric-tree repo_path = %q, want repo-backed artifact path", artifact.RepoPath)
+		}
+	}
+	if !foundMetricArtifact {
+		t.Fatalf("persisted artifacts missing metric-tree: %#v", plan.Artifacts)
+	}
+
+	projectView, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "project.get", map[string]any{
+		"project_id": project.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("project.get: %v", err)
+	}
+	projectArtifacts := artifactPayloads(t, projectView["planning_artifacts"])
+	foundProjectMetricArtifact := false
+	for _, artifact := range projectArtifacts {
+		if artifactStringValue(t, artifact, "slug") == "metric-tree" {
+			foundProjectMetricArtifact = true
+			break
+		}
+	}
+	if !foundProjectMetricArtifact {
+		t.Fatalf("project.get planning_artifacts missing metric-tree entry: %#v", projectArtifacts)
+	}
+}
+
+func TestIntegrationTaskCreateLaunchPlanningProducesRepoBackedArtifactAndFollowOns(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	repoRoot := t.TempDir()
+
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":  project.ID.String(),
+		"title":       "Go-to-market launch plan",
+		"description": "Create the GTM launch plan with beachhead segment, ICP, positioning and messaging, channel strategy, launch timeline, success metrics, and expansion plan for the analytics release.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["playbook"] != taskplan.PlaybookGTMLaunch {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookGTMLaunch)
+	}
+
+	followOns := planningStringSlice(t, planning["follow_on_suggestions"])
+	if !containsSubstring(followOns, "Create launch-checklist, channel-execution, or enablement tasks") {
+		t.Fatalf("follow_on_suggestions = %#v, want launch follow-on task guidance", followOns)
+	}
+
+	launchBrief := artifactPayloadBySlug(t, planning["artifacts"], "launch-brief")
+	launchBriefPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, launchBrief, "repo_path")))
+	launchBriefBody, err := os.ReadFile(launchBriefPath)
+	if err != nil {
+		t.Fatalf("read launch-brief artifact: %v", err)
+	}
+	for _, phrase := range []string{"## Launch Scope", "## Beachhead Segment", "## ICP", "## Success Metrics"} {
+		if !strings.Contains(string(launchBriefBody), phrase) {
+			t.Fatalf("launch-brief artifact missing %q:\n%s", phrase, string(launchBriefBody))
+		}
+	}
+
+	audienceMessaging := artifactPayloadBySlug(t, planning["artifacts"], "audience-messaging")
+	audienceMessagingPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, audienceMessaging, "repo_path")))
+	audienceMessagingBody, err := os.ReadFile(audienceMessagingPath)
+	if err != nil {
+		t.Fatalf("read audience-messaging artifact: %v", err)
+	}
+	for _, phrase := range []string{"## Positioning", "## Messaging", "## Proof"} {
+		if !strings.Contains(string(audienceMessagingBody), phrase) {
+			t.Fatalf("audience-messaging artifact missing %q:\n%s", phrase, string(audienceMessagingBody))
+		}
+	}
+
+	channelPlan := artifactPayloadBySlug(t, planning["artifacts"], "channel-plan")
+	channelPlanPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, channelPlan, "repo_path")))
+	channelPlanBody, err := os.ReadFile(channelPlanPath)
+	if err != nil {
+		t.Fatalf("read channel-plan artifact: %v", err)
+	}
+	for _, phrase := range []string{"## Channel Strategy", "## Launch Timeline"} {
+		if !strings.Contains(string(channelPlanBody), phrase) {
+			t.Fatalf("channel-plan artifact missing %q:\n%s", phrase, string(channelPlanBody))
+		}
+	}
+
+	launchChecklist := artifactPayloadBySlug(t, planning["artifacts"], "launch-checklist")
+	launchChecklistPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, launchChecklist, "repo_path")))
+	launchChecklistBody, err := os.ReadFile(launchChecklistPath)
+	if err != nil {
+		t.Fatalf("read launch-checklist artifact: %v", err)
+	}
+	if !strings.Contains(string(launchChecklistBody), "## Expansion Plan") {
+		t.Fatalf("launch-checklist artifact missing expansion plan:\n%s", string(launchChecklistBody))
+	}
+
+	taskID := nestedUUID(t, out, "task", "id")
+	taskRecord, err := taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok {
+		t.Fatal("taskplan.Parse(metadata) = false, want true")
+	}
+	foundLaunchBrief := false
+	for _, artifact := range plan.Artifacts {
+		if artifact.Slug != "launch-brief" {
+			continue
+		}
+		foundLaunchBrief = true
+		if strings.TrimSpace(artifact.RepoPath) == "" {
+			t.Fatalf("launch-brief repo_path = %q, want repo-backed artifact path", artifact.RepoPath)
+		}
+	}
+	if !foundLaunchBrief {
+		t.Fatalf("persisted artifacts missing launch-brief: %#v", plan.Artifacts)
+	}
+
+	projectView, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "project.get", map[string]any{
+		"project_id": project.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("project.get: %v", err)
+	}
+	projectArtifacts := artifactPayloads(t, projectView["planning_artifacts"])
+	foundProjectLaunchArtifact := false
+	for _, artifact := range projectArtifacts {
+		if artifactStringValue(t, artifact, "slug") == "launch-brief" {
+			foundProjectLaunchArtifact = true
+			break
+		}
+	}
+	if !foundProjectLaunchArtifact {
+		t.Fatalf("project.get planning_artifacts missing launch-brief entry: %#v", projectArtifacts)
 	}
 }
 
