@@ -1,6 +1,7 @@
 package native
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -69,6 +70,13 @@ func actorFromContext(ctx context.Context) executionActor {
 		principalType: "system",
 		principalID:   uuid.Nil,
 	}
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func normalizeSlug(value string) string {
@@ -950,6 +958,50 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		enrichedMetadata = metadataWithProcess
 		planning = processUpdate.plan
 	}
+	desiredTask := repo.ProjectTask{
+		OrganizationID:      scope.organizationID,
+		ProjectID:           projectID,
+		Title:               title,
+		Description:         description,
+		BlocksScope:         blocksScope,
+		FlowTemplateID:      resolvedFlowTemplateID,
+		RequiresHumanReview: requiresHumanReview,
+		Metadata:            enrichedMetadata,
+	}
+	if scope.projectID != nil && *scope.projectID == projectID {
+		reused, reusedExisting, reuseErr := e.findReusableProjectScopedTask(ctx, desiredTask)
+		if reuseErr != nil {
+			return nil, reuseErr
+		}
+		if reusedExisting {
+			if planning.HasSelection() {
+				beforeSync := reused
+				reused, planning, err = e.syncPlanningArtifacts(ctx, reused, actor)
+				if err != nil {
+					return nil, err
+				}
+				if !bytes.Equal(beforeSync.Metadata, reused.Metadata) {
+					if updated, updateErr := e.tasks.Update(ctx, reused); updateErr != nil {
+						return nil, updateErr
+					} else {
+						reused = updated
+					}
+				}
+			}
+			response := map[string]any{
+				"task": map[string]any{
+					"id":           reused.ID,
+					"task_number":  reused.TaskNumber,
+					"work_status":  reused.WorkStatus,
+					"blocks_scope": reused.BlocksScope,
+				},
+			}
+			if planning.HasSelection() {
+				response["planning"] = reviewPlanningResponse(planning)
+			}
+			return response, nil
+		}
+	}
 	created, err := e.tasks.Create(ctx, repo.ProjectTask{
 		OrganizationID:      scope.organizationID,
 		ProjectID:           projectID,
@@ -1488,6 +1540,273 @@ func uuidStringSlice(ids []uuid.UUID) []string {
 	return out
 }
 
+func shouldReuseScopedSession(scopeType, mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(scopeType)) {
+	case "project":
+		return true
+	case "project_task":
+		return strings.EqualFold(strings.TrimSpace(mode), "sync")
+	default:
+		return false
+	}
+}
+
+func chatSessionCanonicalLess(left, right repo.ChatSession) bool {
+	if !left.CreatedAt.IsZero() && !right.CreatedAt.IsZero() && !left.CreatedAt.Equal(right.CreatedAt) {
+		return left.CreatedAt.Before(right.CreatedAt)
+	}
+	if left.ID != right.ID {
+		return left.ID.String() < right.ID.String()
+	}
+	return normalizeComparableText(derefString(left.Title)) < normalizeComparableText(derefString(right.Title))
+}
+
+func taskCanonicalLess(left, right repo.ProjectTask) bool {
+	if left.TaskNumber > 0 && right.TaskNumber > 0 && left.TaskNumber != right.TaskNumber {
+		return left.TaskNumber < right.TaskNumber
+	}
+	if !left.CreatedAt.IsZero() && !right.CreatedAt.IsZero() && !left.CreatedAt.Equal(right.CreatedAt) {
+		return left.CreatedAt.Before(right.CreatedAt)
+	}
+	if left.ID != right.ID {
+		return left.ID.String() < right.ID.String()
+	}
+	return normalizeComparableText(left.Title) < normalizeComparableText(right.Title)
+}
+
+func isTaskTerminal(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "done", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeComparableText(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+
+func metadataObject(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+		return nil
+	}
+	return payload
+}
+
+func metadataStringValue(payload map[string]any, key string) (string, bool) {
+	if payload == nil {
+		return "", false
+	}
+	value, ok := payload[key]
+	if !ok {
+		return "", false
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "", false
+	}
+	return trimmed, true
+}
+
+func metadataIntValue(payload map[string]any, key string) (int, bool) {
+	if payload == nil {
+		return 0, false
+	}
+	value, ok := payload[key]
+	if !ok {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int32:
+		return int(typed), true
+	case int64:
+		return int(typed), true
+	case float64:
+		result := int(typed)
+		if float64(result) != typed {
+			return 0, false
+		}
+		return result, true
+	case string:
+		var result int
+		if _, err := fmt.Sscanf(strings.TrimSpace(typed), "%d", &result); err != nil {
+			return 0, false
+		}
+		return result, true
+	default:
+		return 0, false
+	}
+}
+
+func hasMeaningfulJSON(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" || trimmed == "{}" || trimmed == "[]" {
+		return false
+	}
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false
+	}
+	switch typed := payload.(type) {
+	case nil:
+		return false
+	case map[string]any:
+		return len(typed) > 0
+	case []any:
+		return len(typed) > 0
+	case string:
+		return strings.TrimSpace(typed) != ""
+	default:
+		return true
+	}
+}
+
+func decompositionWorkstreamIndex(task repo.ProjectTask, parentTaskID uuid.UUID) (int, bool) {
+	payload := metadataObject(task.Metadata)
+	parentRaw, ok := metadataStringValue(payload, "decomposition_parent_task_id")
+	if !ok {
+		return 0, false
+	}
+	parentID, err := uuid.Parse(parentRaw)
+	if err != nil || parentID != parentTaskID {
+		return 0, false
+	}
+	index, ok := metadataIntValue(payload, "workstream_index")
+	if !ok || index < 1 {
+		return 0, false
+	}
+	return index, true
+}
+
+func (e *NativeToolExecutor) findReusableScopedSession(ctx context.Context, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID, mode string) (*repo.ChatSession, error) {
+	if e.chatSessions == nil || !shouldReuseScopedSession(scopeType, mode) {
+		return nil, nil
+	}
+
+	sessions, err := e.chatSessions.ListByOrg(ctx, organizationID)
+	if err != nil {
+		return nil, err
+	}
+
+	normalizedScopeType := strings.ToLower(strings.TrimSpace(scopeType))
+	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
+	var reusable *repo.ChatSession
+	for i := range sessions {
+		session := sessions[i]
+		if session.OrganizationID != organizationID || session.ScopeID != scopeID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.ScopeType), normalizedScopeType) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+			continue
+		}
+		if normalizedScopeType == "project_task" && !strings.EqualFold(strings.TrimSpace(session.Mode), normalizedMode) {
+			continue
+		}
+		if reusable == nil || chatSessionCanonicalLess(session, *reusable) {
+			candidate := session
+			reusable = &candidate
+		}
+	}
+	return reusable, nil
+}
+
+func (e *NativeToolExecutor) findReusableProjectScopedTask(ctx context.Context, desired repo.ProjectTask) (repo.ProjectTask, bool, error) {
+	if e.tasks == nil {
+		return repo.ProjectTask{}, false, nil
+	}
+
+	tasks, err := e.tasks.ListByProject(ctx, desired.ProjectID)
+	if err != nil {
+		return repo.ProjectTask{}, false, err
+	}
+
+	desiredTitle := normalizeComparableText(desired.Title)
+	desiredDescription := normalizeComparableText(derefString(desired.Description))
+	var reusable *repo.ProjectTask
+	for i := range tasks {
+		taskRecord := tasks[i]
+		if isTaskTerminal(taskRecord.WorkStatus) {
+			continue
+		}
+		if normalizeComparableText(taskRecord.Title) != desiredTitle {
+			continue
+		}
+		existingDescription := normalizeComparableText(derefString(taskRecord.Description))
+		if desiredDescription != "" && existingDescription != "" && existingDescription != desiredDescription {
+			continue
+		}
+		if reusable == nil || taskCanonicalLess(taskRecord, *reusable) {
+			candidate := taskRecord
+			reusable = &candidate
+		}
+	}
+	if reusable == nil {
+		return repo.ProjectTask{}, false, nil
+	}
+
+	repaired, err := e.repairTaskIfNeeded(ctx, *reusable, desired)
+	if err != nil {
+		return repo.ProjectTask{}, false, err
+	}
+	return repaired, true, nil
+}
+
+func (e *NativeToolExecutor) repairTaskIfNeeded(ctx context.Context, existing repo.ProjectTask, desired repo.ProjectTask) (repo.ProjectTask, error) {
+	if e.tasks == nil {
+		return existing, nil
+	}
+
+	updated := existing
+	changed := false
+
+	if strings.TrimSpace(derefString(updated.Description)) == "" && strings.TrimSpace(derefString(desired.Description)) != "" {
+		description := strings.TrimSpace(derefString(desired.Description))
+		updated.Description = &description
+		changed = true
+	}
+
+	if strings.EqualFold(strings.TrimSpace(updated.WorkStatus), "draft") {
+		if updated.FlowTemplateID == nil && desired.FlowTemplateID != nil && *desired.FlowTemplateID != uuid.Nil {
+			flowTemplateID := *desired.FlowTemplateID
+			updated.FlowTemplateID = &flowTemplateID
+			changed = true
+		}
+		existingBlocksScope, _ := normalizeTaskBlocksScope(updated.BlocksScope)
+		desiredBlocksScope, _ := normalizeTaskBlocksScope(desired.BlocksScope)
+		if existingBlocksScope != "all" && desiredBlocksScope == "all" {
+			updated.BlocksScope = desiredBlocksScope
+			changed = true
+		}
+		if !updated.RequiresHumanReview && desired.RequiresHumanReview {
+			updated.RequiresHumanReview = true
+			changed = true
+		}
+		if !hasMeaningfulJSON(updated.Metadata) && hasMeaningfulJSON(desired.Metadata) {
+			updated.Metadata = append(json.RawMessage(nil), desired.Metadata...)
+			changed = true
+		}
+	}
+
+	if !changed {
+		return existing, nil
+	}
+	return e.tasks.Update(ctx, updated)
+}
+
 type queueDecompositionResult struct {
 	applied      bool
 	childTaskIDs []uuid.UUID
@@ -1511,8 +1830,46 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 	}
 	actor := actorFromContext(ctx)
 
+	existingChildren := map[int]repo.ProjectTask{}
+	projectTasks, err := e.tasks.ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return queueDecompositionResult{}, err
+	}
+	for _, projectTask := range projectTasks {
+		if isTaskTerminal(projectTask.WorkStatus) {
+			continue
+		}
+		workstreamIndex, ok := decompositionWorkstreamIndex(projectTask, taskRecord.ID)
+		if !ok {
+			continue
+		}
+		if current, exists := existingChildren[workstreamIndex]; !exists || taskCanonicalLess(projectTask, current) {
+			existingChildren[workstreamIndex] = projectTask
+		}
+	}
+
 	childTaskIDs := make([]uuid.UUID, 0, len(prepared.ChildDrafts))
 	for _, childDraft := range prepared.ChildDrafts {
+		workstreamIndex, _ := metadataIntValue(metadataObject(childDraft.Metadata), "workstream_index")
+		desiredChild := repo.ProjectTask{
+			OrganizationID:      taskRecord.OrganizationID,
+			ProjectID:           taskRecord.ProjectID,
+			Title:               childDraft.Title,
+			Description:         childDraft.Description,
+			WorkStatus:          "draft",
+			FlowTemplateID:      taskRecord.FlowTemplateID,
+			RequiresHumanReview: taskRecord.RequiresHumanReview,
+			Priority:            taskRecord.Priority,
+			Metadata:            childDraft.Metadata,
+		}
+		if existingChild, ok := existingChildren[workstreamIndex]; ok {
+			repairedChild, repairErr := e.repairTaskIfNeeded(ctx, existingChild, desiredChild)
+			if repairErr != nil {
+				return queueDecompositionResult{}, repairErr
+			}
+			childTaskIDs = append(childTaskIDs, repairedChild.ID)
+			continue
+		}
 		createdChild, createErr := e.tasks.Create(ctx, repo.ProjectTask{
 			OrganizationID:      taskRecord.OrganizationID,
 			ProjectID:           taskRecord.ProjectID,
@@ -2463,20 +2820,27 @@ func (e *NativeToolExecutor) handleSessionCreate(ctx context.Context, input map[
 	if title != "" {
 		titlePtr = &title
 	}
-	actor := actorFromContext(ctx)
-	created, err := e.chatSessions.Create(ctx, repo.ChatSession{
-		OrganizationID: scope.organizationID,
-		ScopeType:      scopeType,
-		ScopeID:        scopeID,
-		Mode:           mode,
-		Title:          titlePtr,
-		Status:         "active",
-		CreatedByType:  actor.createdByType,
-		CreatedByID:    actor.createdByID,
-		Metadata:       json.RawMessage(`{}`),
-	})
-	if err != nil {
-		return nil, err
+	created := repo.ChatSession{}
+	if reusable, reuseErr := e.findReusableScopedSession(ctx, scope.organizationID, scopeType, scopeID, mode); reuseErr != nil {
+		return nil, reuseErr
+	} else if reusable != nil {
+		created = *reusable
+	} else {
+		actor := actorFromContext(ctx)
+		created, err = e.chatSessions.Create(ctx, repo.ChatSession{
+			OrganizationID: scope.organizationID,
+			ScopeType:      scopeType,
+			ScopeID:        scopeID,
+			Mode:           mode,
+			Title:          titlePtr,
+			Status:         "active",
+			CreatedByType:  actor.createdByType,
+			CreatedByID:    actor.createdByID,
+			Metadata:       json.RawMessage(`{}`),
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Auto-add project-assigned agents as participants for project-scoped sessions.
@@ -2519,6 +2883,21 @@ func (e *NativeToolExecutor) autoAddProjectParticipants(ctx context.Context, ses
 		return nil
 	}
 
+	existingParticipants, err := e.participants.ListBySession(ctx, sessionID)
+	if err != nil {
+		existingParticipants = nil
+	}
+	existingAgentParticipants := make(map[uuid.UUID]struct{}, len(existingParticipants))
+	for _, participant := range existingParticipants {
+		if participant.RemovedAt != nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") {
+			continue
+		}
+		existingAgentParticipants[participant.ParticipantID] = struct{}{}
+	}
+
 	// Sort: workers first, then PMs, then others — so the worker becomes
 	// the primary responder via resolveFirstAgentParticipant.
 	roleOrder := map[string]int{"worker": 0, "reviewer": 1, "project_manager": 2, "observer": 3}
@@ -2539,6 +2918,9 @@ func (e *NativeToolExecutor) autoAddProjectParticipants(ctx context.Context, ses
 		if !a.IsActive {
 			continue
 		}
+		if _, exists := existingAgentParticipants[a.AgentID]; exists {
+			continue
+		}
 		_, err := e.participants.Create(ctx, repo.ChatParticipant{
 			SessionID:              sessionID,
 			ParticipantType:        "agent",
@@ -2549,6 +2931,7 @@ func (e *NativeToolExecutor) autoAddProjectParticipants(ctx context.Context, ses
 		if err != nil {
 			continue
 		}
+		existingAgentParticipants[a.AgentID] = struct{}{}
 		participants = append(participants, map[string]any{
 			"agent_id":     a.AgentID,
 			"project_role": a.Role,
