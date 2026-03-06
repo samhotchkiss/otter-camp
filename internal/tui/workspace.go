@@ -363,6 +363,8 @@ func (w *workspaceState) taskSessionID(taskID string) string {
 			return strings.TrimSpace(task.RecentExecutionID)
 		case strings.TrimSpace(task.SessionID) != "":
 			return strings.TrimSpace(task.SessionID)
+		case strings.TrimSpace(task.DiscussionSessionID) != "":
+			return strings.TrimSpace(task.DiscussionSessionID)
 		}
 	}
 	return strings.TrimSpace(w.taskSessionIDs[taskID])

@@ -1167,6 +1167,33 @@ func TestEnterOnTaskDetailOpensAsyncSession(t *testing.T) {
 	}
 }
 
+func TestEnterOnTaskDetailFallsBackToDiscussionSessionEX254(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewTask)
+	model.workspace.tasks["task-254-discussion"] = &taskRecord{
+		ID:                  "task-254-discussion",
+		Title:               "Sandbox Discussion",
+		DiscussionSessionID: "session-task-254-discussion",
+		Status:              "review",
+	}
+	model.workspace.selectedTaskID = "task-254-discussion"
+	model.workspace.activeSessionID = generalSessionID
+	model.activeSession = generalSessionID
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if got := model.WorkspaceSession(); got != "session-task-254-discussion" {
+		t.Fatalf("workspace session after Enter = %q, want %q", got, "session-task-254-discussion")
+	}
+	if got := model.ActiveChatSession(); got != "session-task-254-discussion" {
+		t.Fatalf("active chat session after Enter = %q, want %q", got, "session-task-254-discussion")
+	}
+	if got := model.statusMessage; got == "No active session for this task." {
+		t.Fatalf("status message = %q, want discussion session to open", got)
+	}
+}
+
 func TestTaskDetailDefaultRightPaneSourceEX249(t *testing.T) {
 	t.Parallel()
 
@@ -1236,6 +1263,39 @@ func TestTaskDetailDefaultRightPaneSourceEX249(t *testing.T) {
 				t.Fatal("task detail load should return a session sync cmd")
 			}
 		})
+	}
+}
+
+func TestTaskDetailLoadPreservesSelectedDiscussionSessionEX254(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+			return nil, nil
+		},
+	})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-254-selected-discussion"
+	model.activeScope = ScopeTask
+	model.activeSession = "00000000-0000-0000-0000-000000002541"
+
+	updated, cmd := model.Update(taskDetailLoadedMsg{Detail: TaskDetailItem{
+		ID:                  "task-254-selected-discussion",
+		Title:               "Selected discussion",
+		SessionID:           "00000000-0000-0000-0000-000000002542",
+		ActiveExecutionID:   "00000000-0000-0000-0000-000000002542",
+		DiscussionSessionID: "00000000-0000-0000-0000-000000002541",
+	}})
+	got := updated.(Model)
+
+	if got.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("task pane tab = %s, want %s", got.taskPaneTab, taskPaneTabDiscussion)
+	}
+	if got.activeSession != "00000000-0000-0000-0000-000000002541" {
+		t.Fatalf("active session = %q, want preserved discussion session", got.activeSession)
+	}
+	if cmd == nil {
+		t.Fatal("task detail load should return a session sync cmd")
 	}
 }
 

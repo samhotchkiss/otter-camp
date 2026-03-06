@@ -4,9 +4,11 @@ package tui
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -216,6 +218,158 @@ func TestTaskDetailUsesActiveExecutionSessionInRightPaneEX249(t *testing.T) {
 	if !strings.Contains(chatPanel, "Journal") {
 		t.Fatalf("chat panel should expose task tabs: %q", chatPanel)
 	}
+}
+
+func TestTaskDetailRendersBoundDiscussionAndExecutionSessionsEX254(t *testing.T) {
+	t.Parallel()
+
+	executionSessionID := "00000000-0000-0000-0000-000000002541"
+	discussionSessionID := "00000000-0000-0000-0000-000000002542"
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, sessionID string) ([]ChatMessage, error) {
+			switch sessionID {
+			case executionSessionID:
+				return []ChatMessage{{ID: "exec-marker", Role: "assistant", Content: "EXECUTION MARKER: async execution session.", Finalized: true}}, nil
+			case discussionSessionID:
+				return []ChatMessage{{ID: "discussion-marker", Role: "assistant", Content: "DISCUSSION MARKER: sync task discussion session.", Finalized: true}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-254-live"
+	model.activeScope = ScopeTask
+
+	updated, cmd := model.Update(taskDetailLoadedMsg{Detail: TaskDetailItem{
+		ID:                  "task-254-live",
+		Title:               "UX Task Detail Sandbox",
+		SessionID:           executionSessionID,
+		ActiveExecutionID:   executionSessionID,
+		RecentExecutionID:   executionSessionID,
+		DiscussionSessionID: discussionSessionID,
+	}})
+	model = updated.(Model)
+	model = applyImmediateCmdMessages(t, model, cmd)
+
+	task := model.workspace.tasks["task-254-live"]
+	if task == nil {
+		t.Fatal("task detail record missing after load")
+	}
+	if task.DiscussionSessionID != discussionSessionID {
+		t.Fatalf("DiscussionSessionID = %q, want %q", task.DiscussionSessionID, discussionSessionID)
+	}
+	if task.ActiveExecutionID != executionSessionID {
+		t.Fatalf("ActiveExecutionID = %q, want %q", task.ActiveExecutionID, executionSessionID)
+	}
+	if task.RecentExecutionID != executionSessionID {
+		t.Fatalf("RecentExecutionID = %q, want %q", task.RecentExecutionID, executionSessionID)
+	}
+	if model.ActiveChatSession() != executionSessionID {
+		t.Fatalf("active session = %q, want execution session", model.ActiveChatSession())
+	}
+	if model.taskPaneTab != taskPaneTabJournal {
+		t.Fatalf("task pane tab = %s, want %s", model.taskPaneTab, taskPaneTabJournal)
+	}
+
+	journalPanel := model.renderChatPanel(56, 18, true)
+	if !renderedPanelContains(journalPanel, "EXECUTION MARKER: async execution session.") {
+		t.Fatalf("journal panel missing execution marker: %q", journalPanel)
+	}
+
+	model = applyImmediateCmdMessages(t, model, model.applyTaskPaneSelection(task, ScopeTask, taskPaneTabDiscussion, false))
+	if model.ActiveChatSession() != discussionSessionID {
+		t.Fatalf("active session after discussion switch = %q, want %q", model.ActiveChatSession(), discussionSessionID)
+	}
+
+	discussionPanel := model.renderChatPanel(56, 18, true)
+	if !renderedPanelContains(discussionPanel, "DISCUSSION MARKER: sync task discussion session.") {
+		t.Fatalf("discussion panel missing discussion marker: %q", discussionPanel)
+	}
+}
+
+func TestJumpToSessionByNameKeepsTaskDetailInSyncEX254(t *testing.T) {
+	t.Parallel()
+
+	taskID := "task-254-sync"
+	executionSessionID := "00000000-0000-0000-0000-000000002543"
+	discussionSessionID := "00000000-0000-0000-0000-000000002544"
+	nodeID := "session-" + discussionSessionID
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			return &TaskDetailItem{
+				ID:                  id,
+				Title:               "UX Task Detail Sandbox",
+				SessionID:           executionSessionID,
+				ActiveExecutionID:   executionSessionID,
+				RecentExecutionID:   executionSessionID,
+				DiscussionSessionID: discussionSessionID,
+			}, nil
+		},
+		LoadChatHistory: func(_ context.Context, sessionID string) ([]ChatMessage, error) {
+			switch sessionID {
+			case executionSessionID:
+				return []ChatMessage{{ID: "exec-sync", Role: "assistant", Content: "EXECUTION MARKER: async execution session.", Finalized: true}}, nil
+			case discussionSessionID:
+				return []ChatMessage{{ID: "discussion-sync", Role: "assistant", Content: "DISCUSSION MARKER 3: discussion session intentionally made newest.", Finalized: true}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.nodes[nodeID] = &sidebarNode{
+		ID:           nodeID,
+		Kind:         sidebarKindSession,
+		SessionID:    discussionSessionID,
+		SessionScope: "project_task",
+		TaskID:       taskID,
+		Label:        "Sandbox Discussion",
+	}
+	model.workspace.topLevel = append(model.workspace.topLevel, nodeID)
+
+	model = applyImmediateCmdMessages(t, model, model.jumpToSessionByName("Sandbox Discussion"))
+
+	if model.MainView() != ViewTask {
+		t.Fatalf("main view = %s, want %s", model.MainView(), ViewTask)
+	}
+	if model.workspace.selectedTaskID != taskID {
+		t.Fatalf("selectedTaskID = %q, want %q", model.workspace.selectedTaskID, taskID)
+	}
+	if model.ActiveChatSession() != discussionSessionID {
+		t.Fatalf("active session = %q, want %q", model.ActiveChatSession(), discussionSessionID)
+	}
+	if model.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("task pane tab = %s, want %s", model.taskPaneTab, taskPaneTabDiscussion)
+	}
+
+	panel := model.renderChatPanel(56, 18, true)
+	if !renderedPanelContains(panel, "DISCUSSION MARKER 3: discussion session intentionally made newest.") {
+		t.Fatalf("discussion panel missing synced session marker: %q", panel)
+	}
+}
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
+func renderedPanelContains(rendered string, want string) bool {
+	plain := ansiEscapePattern.ReplaceAllString(rendered, "")
+	plain = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			return r
+		case unicode.IsSpace(r):
+			return ' '
+		case strings.ContainsRune(" .,:;!?-_/'\"", r):
+			return r
+		default:
+			return ' '
+		}
+	}, plain)
+	plain = strings.Join(strings.Fields(plain), " ")
+	want = strings.Join(strings.Fields(want), " ")
+	return strings.Contains(plain, want)
 }
 
 func TestTaskPaneTabSwitchPreservesScrollStateEX249(t *testing.T) {
@@ -588,5 +742,33 @@ func TestTaskTraceShowsFullToolResultDetailEX252(t *testing.T) {
 	}
 	if strings.Contains(rendered, "400 of") {
 		t.Fatalf("trace surface should not use the preview truncation notice: %q", rendered)
+	}
+}
+
+func applyImmediateCmdMessages(t *testing.T, model Model, cmd tea.Cmd) Model {
+	t.Helper()
+	if cmd == nil {
+		return model
+	}
+
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+
+	select {
+	case msg := <-done:
+		if msg == nil {
+			return model
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, next := range batch {
+				model = applyImmediateCmdMessages(t, model, next)
+			}
+			return model
+		}
+		updated, followup := model.Update(msg)
+		model = updated.(Model)
+		return applyImmediateCmdMessages(t, model, followup)
+	case <-time.After(50 * time.Millisecond):
+		return model
 	}
 }

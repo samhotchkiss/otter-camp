@@ -426,152 +426,7 @@ func runTUICommand(args []string) int {
 				return out, nil
 			}
 			runtimeHints.LoadTaskDetail = func(ctx context.Context, taskID string) (*tuiapp.TaskDetailItem, error) {
-				var resp struct {
-					Data struct {
-						ID                  string  `json:"id"`
-						TaskNumber          int     `json:"task_number"`
-						Title               string  `json:"title"`
-						Description         *string `json:"description"`
-						WorkStatus          string  `json:"work_status"`
-						Priority            int     `json:"priority"`
-						AssignedAgentID     string  `json:"assigned_agent_id"`
-						RequiresHumanReview bool    `json:"requires_human_review"`
-						BranchName          *string `json:"branch_name"`
-						CurrentFlowNode     *struct {
-							ID          string `json:"id"`
-							DisplayName string `json:"display_name"`
-						} `json:"current_flow_node"`
-					} `json:"data"`
-				}
-				if err := apiClient.request(ctx, "GET", "/v1/tasks/"+url.PathEscape(taskID), nil, &resp); err != nil {
-					return nil, err
-				}
-				d := resp.Data
-				desc := ""
-				if d.Description != nil {
-					desc = *d.Description
-				}
-				item := &tuiapp.TaskDetailItem{
-					ID:                  d.ID,
-					TaskNumber:          d.TaskNumber,
-					Title:               d.Title,
-					Description:         desc,
-					WorkStatus:          d.WorkStatus,
-					Priority:            d.Priority,
-					RequiresHumanReview: d.RequiresHumanReview,
-				}
-				if d.BranchName != nil {
-					item.BranchName = *d.BranchName
-				}
-				if d.CurrentFlowNode != nil {
-					item.FlowNodeName = d.CurrentFlowNode.DisplayName
-				}
-				// Fetch assigned agent display name if present
-				if d.AssignedAgentID != "" {
-					var agentResp struct {
-						Data struct {
-							DisplayName string `json:"display_name"`
-						} `json:"data"`
-					}
-					if apiClient.request(ctx, "GET", "/v1/agents/"+url.PathEscape(d.AssignedAgentID), nil, &agentResp) == nil {
-						item.AgentName = agentResp.Data.DisplayName
-					}
-				}
-				// Fetch flow pipeline data
-				var flowResp struct {
-					Data struct {
-						CurrentNode *struct {
-							ID          string `json:"id"`
-							DisplayName string `json:"display_name"`
-							NodeType    string `json:"node_type"`
-						} `json:"current_node"`
-						Executions []struct {
-							FlowNodeID string `json:"flow_node_id"`
-							Status     string `json:"status"`
-						} `json:"executions"`
-						Subtasks []struct {
-							Title  string `json:"title"`
-							Status string `json:"status"`
-						} `json:"subtasks"`
-					} `json:"data"`
-				}
-				flowPath := "/v1/tasks/" + url.PathEscape(taskID) + "/flow"
-				if apiClient.request(ctx, "GET", flowPath, nil, &flowResp) == nil {
-					f := flowResp.Data
-					// Build flow steps from executions
-					if f.CurrentNode != nil {
-						// Map execution statuses by node ID
-						execMap := map[string]string{}
-						for _, ex := range f.Executions {
-							execMap[ex.FlowNodeID] = ex.Status
-						}
-						step := tuiapp.FlowStep{
-							Name:     f.CurrentNode.DisplayName,
-							NodeType: f.CurrentNode.NodeType,
-						}
-						if status, ok := execMap[f.CurrentNode.ID]; ok {
-							step.Status = status
-						} else {
-							step.Status = "pending"
-						}
-						item.FlowSteps = append(item.FlowSteps, step)
-					}
-					// Subtasks
-					for _, st := range f.Subtasks {
-						item.SubtaskItems = append(item.SubtaskItems, tuiapp.SubtaskItem{
-							Title:  st.Title,
-							Status: st.Status,
-						})
-					}
-				}
-				// Fetch task dependencies (outbound = "depends on")
-				var depsResp struct {
-					Data []struct {
-						DependsOnID string `json:"depends_on_id"`
-					} `json:"data"`
-				}
-				depsPath := "/v1/tasks/" + url.PathEscape(taskID) + "/dependencies"
-				if apiClient.request(ctx, "GET", depsPath, nil, &depsResp) == nil {
-					for _, dep := range depsResp.Data {
-						item.Dependencies = append(item.Dependencies, tuiapp.TaskDependency{
-							TaskID:    dep.DependsOnID,
-							Direction: "depends_on",
-						})
-					}
-				}
-				// Fetch task event history
-				var eventsResp struct {
-					Data []struct {
-						EventType string         `json:"event_type"`
-						ActorType string         `json:"actor_type"`
-						Payload   map[string]any `json:"payload"`
-						CreatedAt time.Time      `json:"created_at"`
-					} `json:"data"`
-				}
-				eventsPath := "/v1/tasks/" + url.PathEscape(taskID) + "/events?limit=50"
-				if apiClient.request(ctx, "GET", eventsPath, nil, &eventsResp) == nil {
-					// API returns DESC (newest first); reverse to chronological
-					for i := len(eventsResp.Data) - 1; i >= 0; i-- {
-						ev := eventsResp.Data[i]
-						item.Events = append(item.Events, tuiapp.TaskEvent{
-							EventType: ev.EventType,
-							ActorType: ev.ActorType,
-							Payload:   ev.Payload,
-							CreatedAt: ev.CreatedAt,
-						})
-					}
-				}
-				// Find the task's async chat session (scope_type=project_task)
-				var sessResp struct {
-					Data []struct {
-						ID string `json:"id"`
-					} `json:"data"`
-				}
-				sessPath := "/v1/chat-sessions?scope_type=project_task&scope_id=" + url.QueryEscape(taskID)
-				if apiClient.request(ctx, "GET", sessPath, nil, &sessResp) == nil && len(sessResp.Data) > 0 {
-					item.SessionID = sessResp.Data[0].ID
-				}
-				return item, nil
+				return loadTUITaskDetail(ctx, apiClient, taskID)
 			}
 			runtimeHints.SendChatMessage = func(ctx context.Context, sessionID, content string) error {
 				resolvedID, resolveErr := resolveTUIChatSessionID(ctx, apiClient, sessionID)
@@ -941,6 +796,187 @@ func resolveTUIRealtimeCredentials(serverURLFlag, apiKeyFlag string) (string, st
 
 func printTUIUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp tui [--server-url URL] [--api-key KEY] [--non-interactive]")
+}
+
+func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID string) (*tuiapp.TaskDetailItem, error) {
+	var resp struct {
+		Data struct {
+			ID                  string  `json:"id"`
+			TaskNumber          int     `json:"task_number"`
+			Title               string  `json:"title"`
+			Description         *string `json:"description"`
+			WorkStatus          string  `json:"work_status"`
+			Priority            int     `json:"priority"`
+			AssignedAgentID     string  `json:"assigned_agent_id"`
+			RequiresHumanReview bool    `json:"requires_human_review"`
+			BranchName          *string `json:"branch_name"`
+			CurrentFlowNode     *struct {
+				ID          string `json:"id"`
+				DisplayName string `json:"display_name"`
+			} `json:"current_flow_node"`
+		} `json:"data"`
+	}
+	if err := apiClient.request(ctx, "GET", "/v1/tasks/"+url.PathEscape(taskID), nil, &resp); err != nil {
+		return nil, err
+	}
+	d := resp.Data
+	desc := ""
+	if d.Description != nil {
+		desc = *d.Description
+	}
+	item := &tuiapp.TaskDetailItem{
+		ID:                  d.ID,
+		TaskNumber:          d.TaskNumber,
+		Title:               d.Title,
+		Description:         desc,
+		WorkStatus:          d.WorkStatus,
+		Priority:            d.Priority,
+		RequiresHumanReview: d.RequiresHumanReview,
+	}
+	if d.BranchName != nil {
+		item.BranchName = *d.BranchName
+	}
+	if d.CurrentFlowNode != nil {
+		item.FlowNodeName = d.CurrentFlowNode.DisplayName
+	}
+	if d.AssignedAgentID != "" {
+		var agentResp struct {
+			Data struct {
+				DisplayName string `json:"display_name"`
+			} `json:"data"`
+		}
+		if apiClient.request(ctx, "GET", "/v1/agents/"+url.PathEscape(d.AssignedAgentID), nil, &agentResp) == nil {
+			item.AgentName = agentResp.Data.DisplayName
+		}
+	}
+
+	var flowResp struct {
+		Data struct {
+			CurrentNode *struct {
+				ID          string `json:"id"`
+				DisplayName string `json:"display_name"`
+				NodeType    string `json:"node_type"`
+			} `json:"current_node"`
+			Executions []struct {
+				FlowNodeID string `json:"flow_node_id"`
+				Status     string `json:"status"`
+			} `json:"executions"`
+			Subtasks []struct {
+				Title  string `json:"title"`
+				Status string `json:"status"`
+			} `json:"subtasks"`
+		} `json:"data"`
+	}
+	flowPath := "/v1/tasks/" + url.PathEscape(taskID) + "/flow"
+	if apiClient.request(ctx, "GET", flowPath, nil, &flowResp) == nil {
+		f := flowResp.Data
+		if f.CurrentNode != nil {
+			execMap := map[string]string{}
+			for _, ex := range f.Executions {
+				execMap[ex.FlowNodeID] = ex.Status
+			}
+			step := tuiapp.FlowStep{
+				Name:     f.CurrentNode.DisplayName,
+				NodeType: f.CurrentNode.NodeType,
+			}
+			if status, ok := execMap[f.CurrentNode.ID]; ok {
+				step.Status = status
+			} else {
+				step.Status = "pending"
+			}
+			item.FlowSteps = append(item.FlowSteps, step)
+		}
+		for _, st := range f.Subtasks {
+			item.SubtaskItems = append(item.SubtaskItems, tuiapp.SubtaskItem{
+				Title:  st.Title,
+				Status: st.Status,
+			})
+		}
+	}
+
+	var depsResp struct {
+		Data []struct {
+			DependsOnID string `json:"depends_on_id"`
+		} `json:"data"`
+	}
+	depsPath := "/v1/tasks/" + url.PathEscape(taskID) + "/dependencies"
+	if apiClient.request(ctx, "GET", depsPath, nil, &depsResp) == nil {
+		for _, dep := range depsResp.Data {
+			item.Dependencies = append(item.Dependencies, tuiapp.TaskDependency{
+				TaskID:    dep.DependsOnID,
+				Direction: "depends_on",
+			})
+		}
+	}
+
+	var eventsResp struct {
+		Data []struct {
+			EventType string         `json:"event_type"`
+			ActorType string         `json:"actor_type"`
+			Payload   map[string]any `json:"payload"`
+			CreatedAt time.Time      `json:"created_at"`
+		} `json:"data"`
+	}
+	eventsPath := "/v1/tasks/" + url.PathEscape(taskID) + "/events?limit=50"
+	if apiClient.request(ctx, "GET", eventsPath, nil, &eventsResp) == nil {
+		for i := len(eventsResp.Data) - 1; i >= 0; i-- {
+			ev := eventsResp.Data[i]
+			item.Events = append(item.Events, tuiapp.TaskEvent{
+				EventType: ev.EventType,
+				ActorType: ev.ActorType,
+				Payload:   ev.Payload,
+				CreatedAt: ev.CreatedAt,
+			})
+		}
+	}
+
+	sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{
+		ScopeType: "project_task",
+		ScopeID:   taskID,
+		Limit:     50,
+	})
+	if err == nil {
+		populateTUITaskDetailSessions(item, sessions.Data)
+	}
+
+	return item, nil
+}
+
+func populateTUITaskDetailSessions(item *tuiapp.TaskDetailItem, sessions []cliChatSession) {
+	if item == nil {
+		return
+	}
+
+	item.SessionID = ""
+	item.DiscussionSessionID = ""
+	item.ActiveExecutionID = ""
+	item.RecentExecutionID = ""
+
+	for _, session := range sessions {
+		if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(session.Mode)) {
+		case "sync":
+			if item.DiscussionSessionID == "" {
+				item.DiscussionSessionID = session.ID.String()
+			}
+		case "async":
+			if item.RecentExecutionID == "" {
+				item.RecentExecutionID = session.ID.String()
+			}
+			if strings.EqualFold(strings.TrimSpace(session.Status), "active") && item.ActiveExecutionID == "" {
+				item.ActiveExecutionID = session.ID.String()
+			}
+		}
+	}
+
+	switch {
+	case item.ActiveExecutionID != "":
+		item.SessionID = item.ActiveExecutionID
+	case item.RecentExecutionID != "":
+		item.SessionID = item.RecentExecutionID
+	}
 }
 
 func resolveTUIChatSessionID(ctx context.Context, client *cliAPIClient, sessionID string) (uuid.UUID, error) {
