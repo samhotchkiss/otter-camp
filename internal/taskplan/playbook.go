@@ -577,11 +577,11 @@ func selectPlaybook(text, workType, projectStage, evidenceMaturity, riskLevel st
 	if workType == PlaybookRiskReadiness || riskLevel == RiskCritical {
 		return PlaybookRiskReadiness
 	}
-	if shouldDefaultToRiskReadiness(text, projectStage, riskLevel) {
-		return PlaybookRiskReadiness
-	}
 	if hasExplicitBacklogDecompositionRequest(text) {
 		return PlaybookBacklogDecomposition
+	}
+	if shouldDefaultToRiskReadiness(text, projectStage, riskLevel) {
+		return PlaybookRiskReadiness
 	}
 
 	switch workType {
