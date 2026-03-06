@@ -445,17 +445,39 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 		"flow_node_id": flowNodeID,
 	})
 	if plan, ok := taskplan.Parse(taskRecord.Metadata); ok && plan.RequiresReviewAndRefinement() {
+		artifactTitles := make([]string, 0, len(plan.Artifacts))
+		for _, artifact := range plan.Artifacts {
+			if strings.TrimSpace(artifact.Title) != "" {
+				artifactTitles = append(artifactTitles, artifact.Title)
+			}
+		}
 		title = "Review options and recommendation"
 		body = fmt.Sprintf(
-			"%s\n\nPlanned stages: %s\nReview packet sections: %s",
+			"%s\n\nPlaybook: %s\nPlanning context: work_type=%s, stage=%s, evidence=%s, risk=%s\nPlanned stages: %s\nPlanned artifacts: %s\nReview packet sections: %s\nSuggested next steps: %s",
 			plan.ReviewPacket.Summary,
+			plan.Playbook,
+			plan.WorkType,
+			plan.ProjectStage,
+			plan.EvidenceMaturity,
+			plan.RiskLevel,
 			strings.Join(plan.PlannedStages, " -> "),
+			strings.Join(artifactTitles, ", "),
 			strings.Join(plan.ReviewPacket.Sections, ", "),
+			strings.Join(plan.FollowOnSuggestions, " | "),
 		)
 		payload, _ = json.Marshal(map[string]any{
-			"task_id":        taskRecord.ID,
-			"flow_node_id":   flowNodeID,
-			"planned_stages": plan.PlannedStages,
+			"task_id":      taskRecord.ID,
+			"flow_node_id": flowNodeID,
+			"playbook":     plan.Playbook,
+			"context": map[string]any{
+				"work_type":         plan.WorkType,
+				"project_stage":     plan.ProjectStage,
+				"evidence_maturity": plan.EvidenceMaturity,
+				"risk_level":        plan.RiskLevel,
+			},
+			"planned_stages":        plan.PlannedStages,
+			"artifacts":             plan.Artifacts,
+			"follow_on_suggestions": plan.FollowOnSuggestions,
 			"review_packet": map[string]any{
 				"summary":  plan.ReviewPacket.Summary,
 				"sections": plan.ReviewPacket.Sections,

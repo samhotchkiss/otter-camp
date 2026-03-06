@@ -148,6 +148,11 @@ type TaskFlowNode struct {
 	Executions        []TaskFlowExecution
 }
 
+type TaskPlanningArtifact struct {
+	Slug  string
+	Title string
+}
+
 // TaskDependency represents a dependency relationship between tasks.
 type TaskDependency struct {
 	TaskID    string // UUID of the related task
@@ -166,28 +171,35 @@ type TaskEvent struct {
 
 // TaskDetailItem is the full task record fetched on demand when the user selects a task.
 type TaskDetailItem struct {
-	ID                  string
-	ProjectID           string
-	TaskNumber          int
-	Title               string
-	Description         string
-	WorkStatus          string
-	Priority            int
-	SessionID           string // preferred execution session (active when present, otherwise recent)
-	DiscussionSessionID string
-	ActiveExecutionID   string
-	RecentExecutionID   string
-	AgentName           string // display_name of the assigned agent, if any
-	FlowNodeName        string // current flow node display_name, if any
-	FlowCurrentNodeID   string
-	FlowNodes           []TaskFlowNode
-	FlowEdges           []TaskFlowEdge
-	RequiresHumanReview bool   // whether this task requires human review
-	BranchName          string // git branch name, if any
-	FlowSteps           []FlowStep
-	SubtaskItems        []SubtaskItem
-	Dependencies        []TaskDependency
-	Events              []TaskEvent
+	ID                       string
+	ProjectID                string
+	TaskNumber               int
+	Title                    string
+	Description              string
+	WorkStatus               string
+	Priority                 int
+	SessionID                string // preferred execution session (active when present, otherwise recent)
+	DiscussionSessionID      string
+	ActiveExecutionID        string
+	RecentExecutionID        string
+	AgentName                string // display_name of the assigned agent, if any
+	FlowNodeName             string // current flow node display_name, if any
+	FlowCurrentNodeID        string
+	FlowNodes                []TaskFlowNode
+	FlowEdges                []TaskFlowEdge
+	PlanningPlaybook         string
+	PlanningWorkType         string
+	PlanningProjectStage     string
+	PlanningEvidenceMaturity string
+	PlanningRiskLevel        string
+	PlanningArtifacts        []TaskPlanningArtifact
+	PlanningFollowOns        []string
+	RequiresHumanReview      bool   // whether this task requires human review
+	BranchName               string // git branch name, if any
+	FlowSteps                []FlowStep
+	SubtaskItems             []SubtaskItem
+	Dependencies             []TaskDependency
+	Events                   []TaskEvent
 }
 
 type RuntimeHints struct {

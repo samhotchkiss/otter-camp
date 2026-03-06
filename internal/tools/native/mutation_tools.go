@@ -811,7 +811,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			"blocks_scope": created.BlocksScope,
 		},
 	}
-	if planning.RequiresPlanningFlow() {
+	if planning.HasSelection() {
 		response["planning"] = reviewPlanningResponse(planning)
 	}
 	return response, nil
@@ -950,7 +950,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			"child_task_ids": uuidStringSlice(decomposition.childTaskIDs),
 		}
 	}
-	if planning.RequiresPlanningFlow() {
+	if planning.HasSelection() {
 		response["planning"] = reviewPlanningResponse(planning)
 	}
 	return response, nil
@@ -1076,11 +1076,11 @@ func (e *NativeToolExecutor) applyReviewRefinementPlanning(
 
 	policy := taskplan.ResolveReviewPolicy(projectSettings, metadata)
 	plan := taskplan.AnalyzeWithPolicy(title, description, policy)
+	enrichedMetadata := taskplan.ApplyMetadata(metadata, plan)
 	if !plan.RequiresPlanningFlow() {
-		return plan, flowTemplateID, metadata, nil
+		return plan, flowTemplateID, enrichedMetadata, nil
 	}
 
-	enrichedMetadata := taskplan.ApplyMetadata(metadata, plan)
 	resolvedFlowTemplateID := flowTemplateID
 	if resolvedFlowTemplateID != nil && *resolvedFlowTemplateID != uuid.Nil {
 		return plan, resolvedFlowTemplateID, enrichedMetadata, nil
@@ -1122,9 +1122,18 @@ func (e *NativeToolExecutor) resolveSystemFlowTemplate(ctx context.Context, orga
 
 func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
 	response := map[string]any{
-		"mode":           plan.Mode,
-		"review_policy":  reviewPolicyResponse(taskplan.ReviewPolicy{Mode: plan.ReviewPolicyMode, Guardrails: plan.Guardrails, SummaryCadence: plan.SummaryCadence}),
-		"planned_stages": append([]string(nil), plan.PlannedStages...),
+		"mode":     plan.Mode,
+		"playbook": plan.Playbook,
+		"context": map[string]any{
+			"work_type":         plan.WorkType,
+			"project_stage":     plan.ProjectStage,
+			"evidence_maturity": plan.EvidenceMaturity,
+			"risk_level":        plan.RiskLevel,
+		},
+		"review_policy":         reviewPolicyResponse(taskplan.ReviewPolicy{Mode: plan.ReviewPolicyMode, Guardrails: plan.Guardrails, SummaryCadence: plan.SummaryCadence}),
+		"planned_stages":        append([]string(nil), plan.PlannedStages...),
+		"artifacts":             planningArtifactResponse(plan.Artifacts),
+		"follow_on_suggestions": append([]string(nil), plan.FollowOnSuggestions...),
 		"review_packet": map[string]any{
 			"summary":  plan.ReviewPacket.Summary,
 			"sections": append([]string(nil), plan.ReviewPacket.Sections...),
@@ -1135,6 +1144,17 @@ func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
 		response["summary_cadence"] = plan.SummaryCadence
 	}
 	return response
+}
+
+func planningArtifactResponse(artifacts []taskplan.PlannedArtifact) []map[string]any {
+	out := make([]map[string]any, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		out = append(out, map[string]any{
+			"slug":  artifact.Slug,
+			"title": artifact.Title,
+		})
+	}
+	return out
 }
 
 func uuidStringSlice(ids []uuid.UUID) []string {

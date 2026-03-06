@@ -401,6 +401,9 @@ func TestIntegrationTaskCreateSubjectiveMultiOptionUsesReviewRefinementPlanning(
 	if planning["mode"] != "review_and_refinement" {
 		t.Fatalf("planning.mode = %v, want review_and_refinement", planning["mode"])
 	}
+	if planning["playbook"] != taskplan.PlaybookStrategy {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookStrategy)
+	}
 	if planning["default_template_slug"] != "default-review-refinement" {
 		t.Fatalf("default_template_slug = %v, want default-review-refinement", planning["default_template_slug"])
 	}
@@ -415,6 +418,13 @@ func TestIntegrationTaskCreateSubjectiveMultiOptionUsesReviewRefinementPlanning(
 	}
 	if *taskRecord.FlowTemplateID != template.ID {
 		t.Fatalf("flow_template_id = %s, want %s", *taskRecord.FlowTemplateID, template.ID)
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok {
+		t.Fatal("taskplan.Parse(metadata) = false, want true")
+	}
+	if plan.Playbook != taskplan.PlaybookStrategy {
+		t.Fatalf("persisted playbook = %q, want %s", plan.Playbook, taskplan.PlaybookStrategy)
 	}
 
 	nodes, err := repo.NewFlowNodeRepo(pool).GetByTemplateOrdered(ctx, template.ID)
@@ -462,7 +472,7 @@ func TestIntegrationDelegatedCreativeWorkflowUsesInternalReviewWithoutHumanCheck
 		t.Fatalf("project.review_policy.mode = %v, want %s", reviewPolicy["mode"], taskplan.PolicyDelegatedAuthority)
 	}
 
-	createTask := func(title, description string) (uuid.UUID, map[string]any) {
+	createTask := func(title, description, wantPlaybook string) (uuid.UUID, map[string]any) {
 		t.Helper()
 		out, err := executor.Execute(integrationExecCtxWith(orgID, worker.ID), "task.create", map[string]any{
 			"project_id":  project.ID.String(),
@@ -479,6 +489,9 @@ func TestIntegrationDelegatedCreativeWorkflowUsesInternalReviewWithoutHumanCheck
 		if planning["mode"] != taskplan.ModeAutonomousInternal {
 			t.Fatalf("planning.mode for %q = %v, want %s", title, planning["mode"], taskplan.ModeAutonomousInternal)
 		}
+		if planning["playbook"] != wantPlaybook {
+			t.Fatalf("planning.playbook for %q = %v, want %s", title, planning["playbook"], wantPlaybook)
+		}
 		if planning["default_template_slug"] != taskplan.InternalReviewTemplate {
 			t.Fatalf("default_template_slug for %q = %v, want %s", title, planning["default_template_slug"], taskplan.InternalReviewTemplate)
 		}
@@ -488,10 +501,12 @@ func TestIntegrationDelegatedCreativeWorkflowUsesInternalReviewWithoutHumanCheck
 	firstTaskID, _ := createTask(
 		"Homepage design options",
 		"Generate 10 homepage design options, compare them, and recommend the strongest one within the brand guardrails.",
+		taskplan.PlaybookStrategy,
 	)
 	secondTaskID, _ := createTask(
 		"Launch-week blog post ideas",
 		"Brainstorm 8 launch-week blog post ideas, compare them, and recommend which ones to ship next.",
+		taskplan.PlaybookGTMLaunch,
 	)
 
 	taskRepo := repo.NewProjectTaskRepo(pool)
@@ -508,6 +523,12 @@ func TestIntegrationDelegatedCreativeWorkflowUsesInternalReviewWithoutHumanCheck
 	}
 	if secondTask.FlowTemplateID == nil || *secondTask.FlowTemplateID != template.ID {
 		t.Fatalf("second flow_template_id = %v, want %s", secondTask.FlowTemplateID, template.ID)
+	}
+	if plan, ok := taskplan.Parse(firstTask.Metadata); !ok || plan.Playbook != taskplan.PlaybookStrategy {
+		t.Fatalf("first task playbook = %#v, want %s", plan, taskplan.PlaybookStrategy)
+	}
+	if plan, ok := taskplan.Parse(secondTask.Metadata); !ok || plan.Playbook != taskplan.PlaybookGTMLaunch {
+		t.Fatalf("second task playbook = %#v, want %s", plan, taskplan.PlaybookGTMLaunch)
 	}
 
 	if _, err := taskRepo.UpdateStatus(ctx, firstTaskID, "in_progress"); err != nil {
@@ -639,10 +660,16 @@ func TestIntegrationBlogIdeasCreateReviewPacketInboxHandoff(t *testing.T) {
 	if body == nil || !strings.Contains(*body, "comparison") || !strings.Contains(*body, "recommendation") {
 		t.Fatalf("inbox body = %v, want review packet sections", body)
 	}
+	if body == nil || !strings.Contains(*body, "Playbook: gtm_launch") {
+		t.Fatalf("inbox body = %v, want playbook details", body)
+	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(actionPayload, &payload); err != nil {
 		t.Fatalf("unmarshal action_payload: %v", err)
+	}
+	if payload["playbook"] != taskplan.PlaybookGTMLaunch {
+		t.Fatalf("payload playbook = %v, want %s", payload["playbook"], taskplan.PlaybookGTMLaunch)
 	}
 	rawPacket, ok := payload["review_packet"].(map[string]any)
 	if !ok {
@@ -658,6 +685,127 @@ func TestIntegrationBlogIdeasCreateReviewPacketInboxHandoff(t *testing.T) {
 	}
 	if !containsString(joined, "comparison") || !containsString(joined, "shortlist") || !containsString(joined, "recommendation") {
 		t.Fatalf("review packet sections = %v, want comparison/shortlist/recommendation", joined)
+	}
+}
+
+func TestIntegrationTaskCreateSelectsDifferentPlaybooksAndOutputs(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	tests := []struct {
+		title              string
+		description        string
+		wantPlaybook       string
+		wantFirstArtifact  string
+		wantFollowOnPhrase string
+	}{
+		{
+			title:              "Validate the onboarding problem",
+			description:        "Run customer interviews, document assumptions, and build a validation plan for this new product idea before we commit scope.",
+			wantPlaybook:       taskplan.PlaybookDiscovery,
+			wantFirstArtifact:  "Problem brief",
+			wantFollowOnPhrase: "Schedule research or discovery interviews",
+		},
+		{
+			title:              "PRD for billing migration",
+			description:        "Write the PRD, implementation plan, acceptance criteria, and dependency log for the billing migration.",
+			wantPlaybook:       taskplan.PlaybookExecutionSpec,
+			wantFirstArtifact:  "PRD / requirements spec",
+			wantFollowOnPhrase: "Review the spec with delivery owners",
+		},
+		{
+			title:              "Go-to-market launch plan",
+			description:        "Create the GTM launch plan, messaging brief, channel plan, and sales enablement checklist for release.",
+			wantPlaybook:       taskplan.PlaybookGTMLaunch,
+			wantFirstArtifact:  "Launch brief",
+			wantFollowOnPhrase: "Align sales, support, and product owners",
+		},
+	}
+
+	for _, tc := range tests {
+		out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+			"project_id":  project.ID.String(),
+			"title":       tc.title,
+			"description": tc.description,
+		})
+		if err != nil {
+			t.Fatalf("task.create %q: %v", tc.title, err)
+		}
+
+		planning, ok := out["planning"].(map[string]any)
+		if !ok {
+			t.Fatalf("planning output for %q = %T, want map[string]any", tc.title, out["planning"])
+		}
+		if planning["playbook"] != tc.wantPlaybook {
+			t.Fatalf("planning.playbook for %q = %v, want %s", tc.title, planning["playbook"], tc.wantPlaybook)
+		}
+
+		var firstArtifact map[string]any
+		switch typedArtifacts := planning["artifacts"].(type) {
+		case []map[string]any:
+			if len(typedArtifacts) == 0 {
+				t.Fatalf("planning.artifacts for %q = empty, want artifact list", tc.title)
+			}
+			firstArtifact = typedArtifacts[0]
+		case []any:
+			if len(typedArtifacts) == 0 {
+				t.Fatalf("planning.artifacts for %q = empty, want artifact list", tc.title)
+			}
+			cast, castOK := typedArtifacts[0].(map[string]any)
+			if !castOK {
+				t.Fatalf("first artifact for %q = %T, want map[string]any", tc.title, typedArtifacts[0])
+			}
+			firstArtifact = cast
+		default:
+			t.Fatalf("planning.artifacts for %q = %T, want slice", tc.title, planning["artifacts"])
+		}
+		if firstArtifact["title"] != tc.wantFirstArtifact {
+			t.Fatalf("first artifact title for %q = %v, want %q", tc.title, firstArtifact["title"], tc.wantFirstArtifact)
+		}
+
+		var firstFollowOn string
+		switch typedFollowOns := planning["follow_on_suggestions"].(type) {
+		case []string:
+			if len(typedFollowOns) == 0 {
+				t.Fatalf("follow_on_suggestions for %q = empty, want suggestions", tc.title)
+			}
+			firstFollowOn = typedFollowOns[0]
+		case []any:
+			if len(typedFollowOns) == 0 {
+				t.Fatalf("follow_on_suggestions for %q = empty, want suggestions", tc.title)
+			}
+			firstFollowOn = fmt.Sprintf("%v", typedFollowOns[0])
+		default:
+			t.Fatalf("follow_on_suggestions for %q = %T, want slice", tc.title, planning["follow_on_suggestions"])
+		}
+		if !strings.Contains(firstFollowOn, tc.wantFollowOnPhrase) {
+			t.Fatalf("first follow-on for %q = %q, want phrase %q", tc.title, firstFollowOn, tc.wantFollowOnPhrase)
+		}
+
+		taskID := nestedUUID(t, out, "task", "id")
+		taskRecord, err := taskRepo.GetByID(ctx, taskID)
+		if err != nil {
+			t.Fatalf("load task %q: %v", tc.title, err)
+		}
+		plan, ok := taskplan.Parse(taskRecord.Metadata)
+		if !ok {
+			t.Fatalf("taskplan.Parse(metadata) for %q = false, want true", tc.title)
+		}
+		if plan.Playbook != tc.wantPlaybook {
+			t.Fatalf("persisted playbook for %q = %q, want %s", tc.title, plan.Playbook, tc.wantPlaybook)
+		}
+		if len(plan.Artifacts) == 0 || plan.Artifacts[0].Title != tc.wantFirstArtifact {
+			t.Fatalf("persisted artifacts for %q = %#v, want first title %q", tc.title, plan.Artifacts, tc.wantFirstArtifact)
+		}
+		if len(plan.FollowOnSuggestions) == 0 || !strings.Contains(plan.FollowOnSuggestions[0], tc.wantFollowOnPhrase) {
+			t.Fatalf("persisted follow-ons for %q = %#v, want phrase %q", tc.title, plan.FollowOnSuggestions, tc.wantFollowOnPhrase)
+		}
 	}
 }
 

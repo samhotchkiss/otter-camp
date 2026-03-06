@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
 	clitools "github.com/samhotchkiss/otter-camp/internal/cli"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	tuiapp "github.com/samhotchkiss/otter-camp/internal/tui"
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 )
@@ -803,16 +804,17 @@ func printTUIUsage(w *os.File) {
 func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID string) (*tuiapp.TaskDetailItem, error) {
 	var resp struct {
 		Data struct {
-			ID                  string  `json:"id"`
-			ProjectID           string  `json:"project_id"`
-			TaskNumber          int     `json:"task_number"`
-			Title               string  `json:"title"`
-			Description         *string `json:"description"`
-			WorkStatus          string  `json:"work_status"`
-			Priority            int     `json:"priority"`
-			AssignedAgentID     string  `json:"assigned_agent_id"`
-			RequiresHumanReview bool    `json:"requires_human_review"`
-			BranchName          *string `json:"branch_name"`
+			ID                  string          `json:"id"`
+			ProjectID           string          `json:"project_id"`
+			TaskNumber          int             `json:"task_number"`
+			Title               string          `json:"title"`
+			Description         *string         `json:"description"`
+			WorkStatus          string          `json:"work_status"`
+			Priority            int             `json:"priority"`
+			AssignedAgentID     string          `json:"assigned_agent_id"`
+			RequiresHumanReview bool            `json:"requires_human_review"`
+			BranchName          *string         `json:"branch_name"`
+			Metadata            json.RawMessage `json:"metadata"`
 			CurrentFlowNode     *struct {
 				ID          string `json:"id"`
 				DisplayName string `json:"display_name"`
@@ -848,6 +850,20 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 	}
 	if d.CurrentFlowNode != nil {
 		item.FlowNodeName = d.CurrentFlowNode.DisplayName
+	}
+	if plan, ok := taskplan.Parse(d.Metadata); ok {
+		item.PlanningPlaybook = plan.Playbook
+		item.PlanningWorkType = plan.WorkType
+		item.PlanningProjectStage = plan.ProjectStage
+		item.PlanningEvidenceMaturity = plan.EvidenceMaturity
+		item.PlanningRiskLevel = plan.RiskLevel
+		for _, artifact := range plan.Artifacts {
+			item.PlanningArtifacts = append(item.PlanningArtifacts, tuiapp.TaskPlanningArtifact{
+				Slug:  artifact.Slug,
+				Title: artifact.Title,
+			})
+		}
+		item.PlanningFollowOns = append(item.PlanningFollowOns, plan.FollowOnSuggestions...)
 	}
 	if d.AssignedAgentID != "" {
 		var agentResp struct {

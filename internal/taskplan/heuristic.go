@@ -96,16 +96,23 @@ type ReviewPacket struct {
 }
 
 type Plan struct {
-	Mode                string       `json:"mode"`
-	Subjective          bool         `json:"subjective"`
-	Comparative         bool         `json:"comparative"`
-	MultiOption         bool         `json:"multi_option"`
-	ReviewPolicyMode    string       `json:"review_policy_mode,omitempty"`
-	Guardrails          []string     `json:"guardrails,omitempty"`
-	SummaryCadence      string       `json:"summary_cadence,omitempty"`
-	PlannedStages       []string     `json:"planned_stages,omitempty"`
-	DefaultTemplateSlug string       `json:"default_template_slug,omitempty"`
-	ReviewPacket        ReviewPacket `json:"review_packet,omitempty"`
+	Mode                string            `json:"mode"`
+	Playbook            string            `json:"playbook,omitempty"`
+	WorkType            string            `json:"work_type,omitempty"`
+	ProjectStage        string            `json:"project_stage,omitempty"`
+	EvidenceMaturity    string            `json:"evidence_maturity,omitempty"`
+	RiskLevel           string            `json:"risk_level,omitempty"`
+	Subjective          bool              `json:"subjective"`
+	Comparative         bool              `json:"comparative"`
+	MultiOption         bool              `json:"multi_option"`
+	ReviewPolicyMode    string            `json:"review_policy_mode,omitempty"`
+	Guardrails          []string          `json:"guardrails,omitempty"`
+	SummaryCadence      string            `json:"summary_cadence,omitempty"`
+	PlannedStages       []string          `json:"planned_stages,omitempty"`
+	DefaultTemplateSlug string            `json:"default_template_slug,omitempty"`
+	Artifacts           []PlannedArtifact `json:"artifacts,omitempty"`
+	FollowOnSuggestions []string          `json:"follow_on_suggestions,omitempty"`
+	ReviewPacket        ReviewPacket      `json:"review_packet,omitempty"`
 }
 
 func (p Plan) RequiresReviewAndRefinement() bool {
@@ -116,20 +123,40 @@ func (p Plan) RequiresPlanningFlow() bool {
 	return p.Mode != "" && p.Mode != ModeExecutionFirst
 }
 
+func (p Plan) HasSelection() bool {
+	return strings.TrimSpace(p.Playbook) != ""
+}
+
 func Analyze(title string, description *string) Plan {
 	return AnalyzeWithPolicy(title, description, ReviewPolicy{})
 }
 
 func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) Plan {
 	text := normalizeText(title, description)
-	if text == "" {
-		return Plan{Mode: ModeExecutionFirst}
-	}
+	playbook, workType, projectStage, evidenceMaturity, riskLevel := selectPlaybookContext(text)
 
 	multiOption := multiOptionCountPattern.MatchString(text) || containsAny(text, multiOptionSignals)
 	subjective := containsAny(text, subjectiveSignals)
 	comparative := containsAny(text, comparativeSignals)
 	verifiable := leadingQuestionPattern.MatchString(strings.TrimSpace(text)) || containsAny(text, verifiableSignals)
+
+	plan := Plan{
+		Mode:                ModeExecutionFirst,
+		Playbook:            playbook,
+		WorkType:            workType,
+		ProjectStage:        projectStage,
+		EvidenceMaturity:    evidenceMaturity,
+		RiskLevel:           riskLevel,
+		Subjective:          subjective,
+		Comparative:         comparative,
+		MultiOption:         multiOption,
+		Artifacts:           playbookArtifacts(playbook),
+		FollowOnSuggestions: playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel),
+	}
+
+	if text == "" {
+		return plan
+	}
 
 	reviewScore := 0
 	if multiOption {
@@ -148,17 +175,12 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 	if reviewScore >= 2 && (multiOption || subjective) {
 		policy = normalizeReviewPolicy(policy)
 		if policy.AllowsAutonomousContinuation() {
-			plan := Plan{
-				Mode:                ModeAutonomousInternal,
-				Subjective:          subjective,
-				Comparative:         comparative,
-				MultiOption:         multiOption,
-				ReviewPolicyMode:    policy.Mode,
-				Guardrails:          append([]string(nil), policy.Guardrails...),
-				SummaryCadence:      policy.SummaryCadence,
-				PlannedStages:       []string{"generation", "internal_review", "autonomous_delivery"},
-				DefaultTemplateSlug: InternalReviewTemplate,
-			}
+			plan.Mode = ModeAutonomousInternal
+			plan.ReviewPolicyMode = policy.Mode
+			plan.Guardrails = append([]string(nil), policy.Guardrails...)
+			plan.SummaryCadence = policy.SummaryCadence
+			plan.PlannedStages = []string{"generation", "internal_review", "autonomous_delivery"}
+			plan.DefaultTemplateSlug = InternalReviewTemplate
 			if policy.Mode == PolicyHumanReviewPreferred {
 				plan.PlannedStages = []string{"generation", "internal_review", "periodic_review_summary"}
 				if plan.SummaryCadence == "" {
@@ -168,31 +190,22 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 			return plan
 		}
 
-		return Plan{
-			Mode:                ModeReviewAndRefinement,
-			Subjective:          subjective,
-			Comparative:         comparative,
-			MultiOption:         multiOption,
-			ReviewPolicyMode:    PolicyHumanReviewRequired,
-			PlannedStages:       []string{"generation", "internal_review", "human_review"},
-			DefaultTemplateSlug: ReviewRefinementTemplate,
-			ReviewPacket: ReviewPacket{
-				Summary:  reviewPacketSummary,
-				Sections: append([]string(nil), reviewPacketSections...),
-			},
+		plan.Mode = ModeReviewAndRefinement
+		plan.ReviewPolicyMode = PolicyHumanReviewRequired
+		plan.PlannedStages = []string{"generation", "internal_review", "human_review"}
+		plan.DefaultTemplateSlug = ReviewRefinementTemplate
+		plan.ReviewPacket = ReviewPacket{
+			Summary:  reviewPacketSummary,
+			Sections: append([]string(nil), reviewPacketSections...),
 		}
+		return plan
 	}
 
-	return Plan{
-		Mode:        ModeExecutionFirst,
-		Subjective:  subjective,
-		Comparative: comparative,
-		MultiOption: multiOption,
-	}
+	return plan
 }
 
 func ApplyMetadata(existing json.RawMessage, plan Plan) json.RawMessage {
-	if !plan.RequiresPlanningFlow() {
+	if !plan.HasSelection() {
 		return normalizeJSON(existing)
 	}
 
@@ -206,6 +219,11 @@ func ApplyMetadata(existing json.RawMessage, plan Plan) json.RawMessage {
 
 	payload[metadataKeyPlanning] = map[string]any{
 		"mode":                  plan.Mode,
+		"playbook":              plan.Playbook,
+		"work_type":             plan.WorkType,
+		"project_stage":         plan.ProjectStage,
+		"evidence_maturity":     plan.EvidenceMaturity,
+		"risk_level":            plan.RiskLevel,
 		"subjective":            plan.Subjective,
 		"comparative":           plan.Comparative,
 		"multi_option":          plan.MultiOption,
@@ -214,6 +232,8 @@ func ApplyMetadata(existing json.RawMessage, plan Plan) json.RawMessage {
 		"summary_cadence":       plan.SummaryCadence,
 		"planned_stages":        append([]string(nil), plan.PlannedStages...),
 		"default_template_slug": plan.DefaultTemplateSlug,
+		"artifacts":             append([]PlannedArtifact(nil), plan.Artifacts...),
+		"follow_on_suggestions": append([]string(nil), plan.FollowOnSuggestions...),
 		"review_packet": map[string]any{
 			"summary":  plan.ReviewPacket.Summary,
 			"sections": append([]string(nil), plan.ReviewPacket.Sections...),
@@ -244,12 +264,18 @@ func Parse(metadata json.RawMessage) (Plan, bool) {
 
 	mode, _ := rawPlanning["mode"].(string)
 	mode = strings.TrimSpace(mode)
-	if mode == "" {
+	playbook := strings.TrimSpace(readString(rawPlanning["playbook"]))
+	if mode == "" && playbook == "" {
 		return Plan{}, false
 	}
 
 	plan := Plan{
 		Mode:                mode,
+		Playbook:            playbook,
+		WorkType:            strings.TrimSpace(readString(rawPlanning["work_type"])),
+		ProjectStage:        strings.TrimSpace(readString(rawPlanning["project_stage"])),
+		EvidenceMaturity:    strings.TrimSpace(readString(rawPlanning["evidence_maturity"])),
+		RiskLevel:           strings.TrimSpace(readString(rawPlanning["risk_level"])),
 		Subjective:          readBool(rawPlanning["subjective"]),
 		Comparative:         readBool(rawPlanning["comparative"]),
 		MultiOption:         readBool(rawPlanning["multi_option"]),
@@ -258,6 +284,8 @@ func Parse(metadata json.RawMessage) (Plan, bool) {
 		SummaryCadence:      strings.TrimSpace(readString(rawPlanning["summary_cadence"])),
 		DefaultTemplateSlug: strings.TrimSpace(readString(rawPlanning["default_template_slug"])),
 		PlannedStages:       readStringSlice(rawPlanning["planned_stages"]),
+		Artifacts:           readPlannedArtifacts(rawPlanning["artifacts"]),
+		FollowOnSuggestions: readStringSlice(rawPlanning["follow_on_suggestions"]),
 	}
 
 	if rawPacket, ok := rawPlanning["review_packet"].(map[string]any); ok {
@@ -332,4 +360,32 @@ func readStringSlice(value any) []string {
 		}
 	}
 	return out
+}
+
+func readPlannedArtifacts(value any) []PlannedArtifact {
+	raw, ok := value.([]any)
+	if !ok {
+		typed, typedOK := value.([]PlannedArtifact)
+		if !typedOK {
+			return nil
+		}
+		return append([]PlannedArtifact(nil), typed...)
+	}
+
+	artifacts := make([]PlannedArtifact, 0, len(raw))
+	for _, item := range raw {
+		artifactMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		artifact := PlannedArtifact{
+			Slug:  strings.TrimSpace(readString(artifactMap["slug"])),
+			Title: strings.TrimSpace(readString(artifactMap["title"])),
+		}
+		if artifact.Slug == "" && artifact.Title == "" {
+			continue
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts
 }

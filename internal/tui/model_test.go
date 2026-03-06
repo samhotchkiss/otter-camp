@@ -1097,14 +1097,21 @@ func TestTaskDetailViewShowsExtendedFieldsAndFullEventLog(t *testing.T) {
 	model.workspace.setMainView(ViewTask)
 	model.workspace.selectedTaskID = "task-1"
 	model.workspace.tasks["task-1"] = &taskRecord{
-		ID:                 "task-1",
-		Title:              "Launch docs",
-		Description:        "Doc launch requirements.",
-		AcceptanceCriteria: "Approved.",
-		Subtasks:           []string{"Draft checklist"},
-		SessionID:          "session-task-1",
-		Status:             "todo",
-		Flow:               1,
+		ID:                       "task-1",
+		Title:                    "Launch docs",
+		Description:              "Doc launch requirements.",
+		AcceptanceCriteria:       "Approved.",
+		Subtasks:                 []string{"Draft checklist"},
+		SessionID:                "session-task-1",
+		Status:                   "todo",
+		Flow:                     1,
+		PlanningPlaybook:         "gtm_launch",
+		PlanningWorkType:         "gtm_launch",
+		PlanningProjectStage:     "launch",
+		PlanningEvidenceMaturity: "directional",
+		PlanningRiskLevel:        "high",
+		PlanningArtifacts:        []TaskPlanningArtifact{{Slug: "launch-brief", Title: "Launch brief"}},
+		PlanningFollowOns:        []string{"Align sales, support, and product owners on the launch brief before public rollout."},
 	}
 	model.workspace.tasks["task-1"].History = []string{
 		"created",
@@ -1121,6 +1128,10 @@ func TestTaskDetailViewShowsExtendedFieldsAndFullEventLog(t *testing.T) {
 	for _, want := range []string{
 		"Description",
 		"Acceptance Criteria",
+		"Planning",
+		"Playbook: gtm launch",
+		"Launch brief",
+		"Align sales, support, and product owners",
 		"Subtasks",
 		"created",
 		"awaiting operator approval",
