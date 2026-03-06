@@ -363,6 +363,284 @@ func TestTurnEngineIntegrationProjectSessionEventRoutesJobToPMAndAddsParticipant
 	}
 }
 
+func TestTurnEngineIntegrationAsyncExecutionSessionSingleMessageCreatesSingleTurn(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	assignedAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, assignedAgent.ID)
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "run exactly once",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("once"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "once"}, nil
+	}
+
+	actorID := fixture.user.ID
+	event := eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.message.user_sent",
+		ActorType:      "human",
+		ActorID:        &actorID,
+		Payload:        mustJSON(t, map[string]any{"session_id": taskSession.ID.String(), "message_id": userMessage.ID.String()}),
+	}
+	if err := fixture.engine.HandleUserMessageEvent(ctx, event); err != nil {
+		t.Fatalf("HandleUserMessageEvent: %v", err)
+	}
+
+	jobs := loadAgentTurnJobsForMessage(t, ctx, fixture.pool, taskSession.ID, userMessage.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	for _, job := range jobs {
+		if err := fixture.engine.HandleTurnJob(ctx, job); err != nil {
+			t.Fatalf("HandleTurnJob: %v", err)
+		}
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1", len(turns))
+	}
+	if turns[0].TriggerMessageID == nil || *turns[0].TriggerMessageID != userMessage.ID {
+		t.Fatalf("trigger_message_id = %v, want %s", turns[0].TriggerMessageID, userMessage.ID)
+	}
+	if turns[0].RetryCount != 0 {
+		t.Fatalf("retry_count = %d, want 0", turns[0].RetryCount)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	if got := countAssistantFinalMessages(messages); got != 1 {
+		t.Fatalf("assistant final messages = %d, want 1", got)
+	}
+}
+
+func TestTurnEngineIntegrationAsyncExecutionSessionDuplicateDeliveryDoesNotCreateSecondTurn(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	assignedAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, assignedAgent.ID)
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "do not duplicate",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("single"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "single"}, nil
+	}
+
+	actorID := fixture.user.ID
+	event := eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.message.user_sent",
+		ActorType:      "human",
+		ActorID:        &actorID,
+		Payload:        mustJSON(t, map[string]any{"session_id": taskSession.ID.String(), "message_id": userMessage.ID.String()}),
+	}
+	for i := 0; i < 2; i++ {
+		if err := fixture.engine.HandleUserMessageEvent(ctx, event); err != nil {
+			t.Fatalf("HandleUserMessageEvent[%d]: %v", i, err)
+		}
+	}
+
+	jobs := loadAgentTurnJobsForMessage(t, ctx, fixture.pool, taskSession.ID, userMessage.ID)
+	if len(jobs) != 2 {
+		t.Fatalf("agent_turn jobs = %d, want 2 duplicate deliveries", len(jobs))
+	}
+	for i, job := range jobs {
+		if err := fixture.engine.HandleTurnJob(ctx, job); err != nil {
+			t.Fatalf("HandleTurnJob[%d]: %v", i, err)
+		}
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1", len(turns))
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	if got := countAssistantFinalMessages(messages); got != 1 {
+		t.Fatalf("assistant final messages = %d, want 1", got)
+	}
+}
+
+func TestTurnEngineIntegrationAsyncExecutionSessionRetryAttemptIsDistinctFromDuplicateDelivery(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	assignedAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, assignedAgent.ID)
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "retry me distinctly",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		token := "retry-0"
+		if req.TurnID != uuid.Nil {
+			token = "retry-" + req.TurnID.String()[:8]
+		}
+		if err := onChunk(token); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: token}, nil
+	}
+
+	firstJob := jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: mustJSON(t, AgentTurnPayload{
+			SessionID: taskSession.ID,
+			MessageID: userMessage.ID,
+		}),
+	}
+	duplicateJob := jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: mustJSON(t, AgentTurnPayload{
+			SessionID: taskSession.ID,
+			MessageID: userMessage.ID,
+		}),
+	}
+	retryJob := jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: mustJSON(t, AgentTurnPayload{
+			SessionID:  taskSession.ID,
+			MessageID:  userMessage.ID,
+			RetryCount: 1,
+		}),
+	}
+
+	if err := fixture.engine.HandleTurnJob(ctx, firstJob); err != nil {
+		t.Fatalf("HandleTurnJob first: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(ctx, duplicateJob); err != nil {
+		t.Fatalf("HandleTurnJob duplicate: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(ctx, retryJob); err != nil {
+		t.Fatalf("HandleTurnJob retry: %v", err)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 2 {
+		t.Fatalf("turn count = %d, want 2", len(turns))
+	}
+	if turns[0].RetryCount != 0 || turns[1].RetryCount != 1 {
+		t.Fatalf("retry counts = [%d %d], want [0 1]", turns[0].RetryCount, turns[1].RetryCount)
+	}
+	if turns[0].TriggerMessageID == nil || turns[1].TriggerMessageID == nil {
+		t.Fatal("trigger_message_id should be set on both turns")
+	}
+	if *turns[0].TriggerMessageID != userMessage.ID || *turns[1].TriggerMessageID != userMessage.ID {
+		t.Fatalf("trigger_message_ids = [%v %v], want %s", turns[0].TriggerMessageID, turns[1].TriggerMessageID, userMessage.ID)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	if got := countAssistantFinalMessages(messages); got != 2 {
+		t.Fatalf("assistant final messages = %d, want 2", got)
+	}
+	if !containsSystemMessage(messages, "[Retry attempt 1 started.]") {
+		t.Fatal("missing visible retry state marker")
+	}
+}
+
 func TestTurnEngineIntegrationProjectCreateConflictThenSuccessLocksIdentity(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -1154,6 +1432,58 @@ func latestAssistantMessage(messages []repo.ChatMessage) (repo.ChatMessage, bool
 	return repo.ChatMessage{}, false
 }
 
+func countAssistantFinalMessages(messages []repo.ChatMessage) int {
+	count := 0
+	for _, item := range messages {
+		if item.Role == "assistant" && item.Status == "final" {
+			count++
+		}
+	}
+	return count
+}
+
+func containsSystemMessage(messages []repo.ChatMessage, content string) bool {
+	for _, item := range messages {
+		if item.Role == "system" && strings.TrimSpace(item.Content) == strings.TrimSpace(content) {
+			return true
+		}
+	}
+	return false
+}
+
+func loadAgentTurnJobsForMessage(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sessionID, messageID uuid.UUID) []jobqueue.Job {
+	t.Helper()
+
+	rows, err := pool.Query(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE job_type = $1
+		  AND payload->>'session_id' = $2
+		  AND payload->>'message_id' = $3
+		ORDER BY created_at ASC, id ASC
+	`, AgentTurnJobType, sessionID.String(), messageID.String())
+	if err != nil {
+		t.Fatalf("query agent_turn jobs: %v", err)
+	}
+	defer rows.Close()
+
+	jobs := make([]jobqueue.Job, 0)
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			t.Fatalf("scan agent_turn payload: %v", err)
+		}
+		jobs = append(jobs, jobqueue.Job{
+			JobType: AgentTurnJobType,
+			Payload: payload,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate agent_turn jobs: %v", err)
+	}
+	return jobs
+}
+
 func waitForMemoryConfidence(t *testing.T, memories *repo.MemoryRepo, memoryID uuid.UUID, want float64) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -1374,15 +1704,86 @@ func mustCreateProject(t *testing.T, ctx context.Context, pool *pgxpool.Pool, or
 	return project
 }
 
+func mustCreateExecutionFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID, userID uuid.UUID) repo.FlowTemplate {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "turn-flow-" + uuid.NewString()[:8],
+		DisplayName:    "Turn Flow",
+		Description:    "Turn engine test flow",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    userID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create work flow node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create review flow node: %v", err)
+	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create merge flow node: %v", err)
+	}
+
+	workNode.NextNodeID = &reviewNode.ID
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("update work flow node: %v", err)
+	}
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update review flow node: %v", err)
+	}
+
+	template.StartNodeID = &workNode.ID
+	template, err = templateRepo.Update(ctx, template)
+	if err != nil {
+		t.Fatalf("update flow template start node: %v", err)
+	}
+	return template
+}
+
 func mustCreateTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID, userID, assignedAgentID uuid.UUID) repo.ProjectTask {
 	t.Helper()
 	assigned := assignedAgentID
 	createdBy := userID
+	flowTemplate := mustCreateExecutionFlowTemplate(t, ctx, pool, orgID, projectID, userID)
 	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
 		OrganizationID:  orgID,
 		ProjectID:       projectID,
 		Title:           "Route me",
 		WorkStatus:      "in_progress",
+		FlowTemplateID:  &flowTemplate.ID,
 		CreatedByType:   "human_user",
 		CreatedByID:     &createdBy,
 		AssignedAgentID: &assigned,
