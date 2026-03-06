@@ -116,6 +116,8 @@ type Plan struct {
 	Artifacts           []PlannedArtifact  `json:"artifacts,omitempty"`
 	ArtifactEvidence    []ArtifactEvidence `json:"artifact_evidence,omitempty"`
 	FollowOnSuggestions []string           `json:"follow_on_suggestions,omitempty"`
+	FollowOnStopReason  string             `json:"follow_on_stop_reason,omitempty"`
+	FollowOn            FollowOnPlan       `json:"follow_on,omitempty"`
 	ReviewPacket        ReviewPacket       `json:"review_packet,omitempty"`
 	Override            *PlanningOverride  `json:"override,omitempty"`
 }
@@ -139,6 +141,7 @@ func Analyze(title string, description *string) Plan {
 func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) Plan {
 	text := normalizeText(title, description)
 	playbook, workType, projectStage, evidenceMaturity, riskLevel, discoveryMode := selectPlaybookContext(text)
+	policy = normalizeReviewPolicy(policy)
 
 	multiOption := multiOptionCountPattern.MatchString(text) || containsAny(text, multiOptionSignals)
 	subjective := containsAny(text, subjectiveSignals)
@@ -162,13 +165,16 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 		Subjective:          subjective,
 		Comparative:         comparative,
 		MultiOption:         multiOption,
+		ReviewPolicyMode:    policy.Mode,
+		Guardrails:          append([]string(nil), policy.Guardrails...),
+		SummaryCadence:      policy.SummaryCadence,
 		Artifacts:           playbookArtifacts(playbook),
 		FollowOnSuggestions: playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel, discoveryMode, backlogFormat),
 	}
 	plan.Artifacts = hydrateArtifactDefaults(plan.Playbook, plan.Artifacts)
 
 	if text == "" {
-		return plan
+		return hydrateFollowOnPlan(plan)
 	}
 
 	reviewScore := 0
@@ -186,12 +192,8 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 	}
 
 	if reviewScore >= 2 && (multiOption || subjective) {
-		policy = normalizeReviewPolicy(policy)
 		if policy.AllowsAutonomousContinuation() {
 			plan.Mode = ModeAutonomousInternal
-			plan.ReviewPolicyMode = policy.Mode
-			plan.Guardrails = append([]string(nil), policy.Guardrails...)
-			plan.SummaryCadence = policy.SummaryCadence
 			plan.PlannedStages = []string{"generation", "internal_review", "autonomous_delivery"}
 			plan.DefaultTemplateSlug = InternalReviewTemplate
 			if policy.Mode == PolicyHumanReviewPreferred {
@@ -200,7 +202,7 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 					plan.SummaryCadence = "weekly"
 				}
 			}
-			return plan
+			return hydrateFollowOnPlan(plan)
 		}
 
 		plan.Mode = ModeReviewAndRefinement
@@ -211,10 +213,10 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 			Summary:  reviewPacketSummary,
 			Sections: append([]string(nil), reviewPacketSections...),
 		}
-		return plan
+		return hydrateFollowOnPlan(plan)
 	}
 
-	return plan
+	return hydrateFollowOnPlan(plan)
 }
 
 func ApplyMetadata(existing json.RawMessage, plan Plan) json.RawMessage {
@@ -256,6 +258,9 @@ func ApplyMetadata(existing json.RawMessage, plan Plan) json.RawMessage {
 	planningPayload["default_template_slug"] = plan.DefaultTemplateSlug
 	planningPayload["artifacts"] = append([]PlannedArtifact(nil), plan.Artifacts...)
 	planningPayload["follow_on_suggestions"] = append([]string(nil), plan.FollowOnSuggestions...)
+	if strings.TrimSpace(plan.FollowOnStopReason) != "" {
+		planningPayload["follow_on_stop_reason"] = plan.FollowOnStopReason
+	}
 	planningPayload["review_packet"] = map[string]any{
 		"summary":  plan.ReviewPacket.Summary,
 		"sections": append([]string(nil), plan.ReviewPacket.Sections...),
@@ -312,6 +317,7 @@ func Parse(metadata json.RawMessage) (Plan, bool) {
 		Artifacts:           readPlannedArtifacts(rawPlanning["artifacts"]),
 		ArtifactEvidence:    readArtifactEvidence(rawPlanning["artifact_evidence"]),
 		FollowOnSuggestions: readStringSlice(rawPlanning["follow_on_suggestions"]),
+		FollowOnStopReason:  strings.TrimSpace(readString(rawPlanning["follow_on_stop_reason"])),
 		Override:            readPlanningOverride(rawPlanning["override"]),
 	}
 	plan.Artifacts = hydrateArtifactDefaults(plan.Playbook, plan.Artifacts)
@@ -323,7 +329,7 @@ func Parse(metadata json.RawMessage) (Plan, bool) {
 		}
 	}
 
-	return plan, true
+	return hydrateFollowOnPlan(plan), true
 }
 
 func containsAny(text string, signals []string) bool {

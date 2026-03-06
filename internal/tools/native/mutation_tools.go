@@ -263,7 +263,22 @@ func applyPlanningProcessInput(existing json.RawMessage, input map[string]any, a
 		}
 	}
 
-	if !hasArtifacts && !hasOverride {
+	rawFollowOnStopReason, hasFollowOnStopReason := input["planning_follow_on_stop_reason"]
+	var followOnStopReason *string
+	if hasFollowOnStopReason {
+		if rawFollowOnStopReason == nil {
+			empty := ""
+			followOnStopReason = &empty
+		} else {
+			value, ok := readString(input, "planning_follow_on_stop_reason")
+			if !ok {
+				return nil, planningProcessInputResult{}, errors.New("planning_follow_on_stop_reason must be a string")
+			}
+			followOnStopReason = &value
+		}
+	}
+
+	if !hasArtifacts && !hasOverride && !hasFollowOnStopReason {
 		return existing, planningProcessInputResult{}, nil
 	}
 
@@ -271,6 +286,7 @@ func applyPlanningProcessInput(existing json.RawMessage, input map[string]any, a
 		Artifacts:          artifacts,
 		HasArtifactChanges: hasArtifacts,
 		OverrideReason:     overrideReason,
+		FollowOnStopReason: followOnStopReason,
 		ActorType:          actor.principalType,
 		ActorID:            actor.principalID,
 		RecordedAt:         time.Now().UTC(),
@@ -1336,6 +1352,7 @@ func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
 		"artifact_contract":     planningArtifactContractResponse(nil),
 		"artifact_evidence":     planningArtifactEvidenceResponse(plan.ArtifactEvidence),
 		"follow_on_suggestions": append([]string(nil), plan.FollowOnSuggestions...),
+		"follow_on":             planningFollowOnResponse(plan.FollowOn),
 		"review_checklist":      []string{},
 		"process_status":        report.ProcessStatus,
 		"missing_requirements":  report.MissingRequirements(),
@@ -1352,6 +1369,39 @@ func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
 	}
 	if plan.SummaryCadence != "" {
 		response["summary_cadence"] = plan.SummaryCadence
+	}
+	return response
+}
+
+func planningFollowOnResponse(followOn taskplan.FollowOnPlan) map[string]any {
+	response := map[string]any{
+		"status": followOn.Status,
+		"reason": followOn.Reason,
+	}
+	if followOn.StopReason != "" {
+		response["stop_reason"] = followOn.StopReason
+	}
+	if len(followOn.Candidates) > 0 {
+		candidates := make([]map[string]any, 0, len(followOn.Candidates))
+		for _, candidate := range followOn.Candidates {
+			item := map[string]any{
+				"action_type": candidate.ActionType,
+				"title":       candidate.Title,
+				"summary":     candidate.Summary,
+				"reason":      candidate.Reason,
+			}
+			if candidate.WorkStatus != "" {
+				item["work_status"] = candidate.WorkStatus
+			}
+			if candidate.TargetPlaybook != "" {
+				item["target_playbook"] = candidate.TargetPlaybook
+			}
+			if candidate.SourceArtifactSlug != "" {
+				item["source_artifact_slug"] = candidate.SourceArtifactSlug
+			}
+			candidates = append(candidates, item)
+		}
+		response["candidates"] = candidates
 	}
 	return response
 }
