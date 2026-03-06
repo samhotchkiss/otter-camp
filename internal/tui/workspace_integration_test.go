@@ -97,6 +97,91 @@ func TestKeyboardOnlyNavigationOpenInContextFlow(t *testing.T) {
 	}
 }
 
+func TestTaskJumpDuplicateTitlesRequireExplicitDisambiguationEX257(t *testing.T) {
+	t.Parallel()
+
+	loadCalledWith := ""
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			loadCalledWith = id
+			return &TaskDetailItem{ID: id, Title: "Shared task"}, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 160, Height: 34})
+	model.focus = MainPanel
+	model.workspace.mainView = ViewDashboard
+	model.workspace.nodes["project-proj-257-alpha"] = &sidebarNode{
+		ID:        "project-proj-257-alpha",
+		Kind:      sidebarKindProject,
+		Label:     "Alpha Project",
+		ProjectID: "proj-257-alpha",
+	}
+	model.workspace.nodes["project-proj-257-beta"] = &sidebarNode{
+		ID:        "project-proj-257-beta",
+		Kind:      sidebarKindProject,
+		Label:     "Beta Project",
+		ProjectID: "proj-257-beta",
+	}
+	model.workspace.tasks = map[string]*taskRecord{
+		"11111111-1111-1111-1111-111111111111": {
+			ID:         "11111111-1111-1111-1111-111111111111",
+			ProjectID:  "proj-257-alpha",
+			TaskNumber: 12,
+			Title:      "Shared task",
+		},
+		"22222222-2222-2222-2222-222222222222": {
+			ID:         "22222222-2222-2222-2222-222222222222",
+			ProjectID:  "proj-257-beta",
+			TaskNumber: 7,
+			Title:      "Shared task",
+		},
+	}
+	model.workspace.taskOrder = []string{
+		"11111111-1111-1111-1111-111111111111",
+		"22222222-2222-2222-2222-222222222222",
+	}
+
+	cmd := model.executeCommand(":task Shared task")
+	if cmd != nil {
+		t.Fatal("EX-257: ambiguous :task jump returned cmd; want nil")
+	}
+
+	if got := model.MainView(); got != ViewDashboard {
+		t.Fatalf("EX-257: ambiguous :task jump changed main view to %v", got)
+	}
+	if got := model.workspace.selectedTaskID; got != "" {
+		t.Fatalf("EX-257: ambiguous :task jump selected task %q", got)
+	}
+	if loadCalledWith != "" {
+		t.Fatalf("EX-257: ambiguous :task jump loaded task detail for %q", loadCalledWith)
+	}
+	for _, want := range []string{
+		`Ambiguous task "Shared task".`,
+		"Alpha Project",
+		"Beta Project",
+	} {
+		if !strings.Contains(model.statusMessage, want) {
+			t.Fatalf("EX-257: ambiguous status %q missing %q", model.statusMessage, want)
+		}
+	}
+
+	cmd = model.executeCommand(":task OC-7")
+	if cmd == nil {
+		t.Fatal("EX-257: task-number :task jump returned nil cmd")
+	}
+	_ = cmd()
+
+	if got := model.MainView(); got != ViewTask {
+		t.Fatalf("EX-257: task-number :task jump main view = %v, want %v", got, ViewTask)
+	}
+	if got := model.workspace.selectedTaskID; got != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("EX-257: task-number :task jump selected %q, want beta task", got)
+	}
+	if loadCalledWith != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("EX-257: task-number :task jump loaded %q, want beta task", loadCalledWith)
+	}
+}
+
 func TestTaskDetailUsesActiveExecutionSessionInRightPaneEX249(t *testing.T) {
 	t.Parallel()
 

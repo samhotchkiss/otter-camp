@@ -8871,6 +8871,185 @@ func TestJumpToTaskByTitleIdempotencyEX479(t *testing.T) {
 	})
 }
 
+func TestJumpToTaskByTitleUniqueDirectEX257(t *testing.T) {
+	taskID := "task-257-unique"
+	loadCalledWith := ""
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			loadCalledWith = id
+			return &TaskDetailItem{ID: id, Title: "Unique build task"}, nil
+		},
+	})
+	m.focus = MainPanel
+	m.workspace.mainView = ViewDashboard
+	m.workspace.tasks = map[string]*taskRecord{
+		taskID:           {ID: taskID, ProjectID: "proj-257-alpha", TaskNumber: 12, Title: "Unique build task"},
+		"task-257-other": {ID: "task-257-other", ProjectID: "proj-257-beta", TaskNumber: 9, Title: "Other task"},
+	}
+	m.workspace.taskOrder = []string{taskID, "task-257-other"}
+
+	cmd := m.jumpToTaskByTitle("Unique build")
+
+	if m.workspace.mainView != ViewTask {
+		t.Fatalf("EX-257: mainView = %v, want ViewTask", m.workspace.mainView)
+	}
+	if m.workspace.selectedTaskID != taskID {
+		t.Fatalf("EX-257: selectedTaskID = %q, want %q", m.workspace.selectedTaskID, taskID)
+	}
+	if got := m.statusMessage; got != "Task: OC-12: Unique build task" {
+		t.Fatalf("EX-257: statusMessage = %q, want %q", got, "Task: OC-12: Unique build task")
+	}
+	if cmd == nil {
+		t.Fatal("EX-257: unique task jump returned nil cmd")
+	}
+	_ = cmd()
+	if loadCalledWith != taskID {
+		t.Fatalf("EX-257: LoadTaskDetail called with %q, want %q", loadCalledWith, taskID)
+	}
+}
+
+func TestJumpToTaskByTitleAmbiguousDuplicateEX257(t *testing.T) {
+	loadCalled := false
+	m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+			loadCalled = true
+			return &TaskDetailItem{ID: id, Title: "Shared task"}, nil
+		},
+	})
+	m.focus = MainPanel
+	m.workspace.mainView = ViewDashboard
+	m.workspace.nodes["project-proj-257-alpha"] = &sidebarNode{
+		ID:        "project-proj-257-alpha",
+		Kind:      sidebarKindProject,
+		Label:     "Alpha Project",
+		ProjectID: "proj-257-alpha",
+	}
+	m.workspace.nodes["project-proj-257-beta"] = &sidebarNode{
+		ID:        "project-proj-257-beta",
+		Kind:      sidebarKindProject,
+		Label:     "Beta Project",
+		ProjectID: "proj-257-beta",
+	}
+	m.workspace.tasks = map[string]*taskRecord{
+		"11111111-1111-1111-1111-111111111111": {
+			ID:         "11111111-1111-1111-1111-111111111111",
+			ProjectID:  "proj-257-alpha",
+			TaskNumber: 12,
+			Title:      "Shared task",
+		},
+		"22222222-2222-2222-2222-222222222222": {
+			ID:         "22222222-2222-2222-2222-222222222222",
+			ProjectID:  "proj-257-beta",
+			TaskNumber: 7,
+			Title:      "Shared task",
+		},
+	}
+	m.workspace.taskOrder = []string{
+		"11111111-1111-1111-1111-111111111111",
+		"22222222-2222-2222-2222-222222222222",
+	}
+
+	cmd := m.jumpToTaskByTitle("Shared task")
+
+	if cmd != nil {
+		t.Fatal("EX-257: ambiguous task jump returned cmd; want nil")
+	}
+	if loadCalled {
+		t.Fatal("EX-257: ambiguous task jump triggered detail load")
+	}
+	if m.workspace.mainView != ViewDashboard {
+		t.Fatalf("EX-257: ambiguous jump changed mainView to %v", m.workspace.mainView)
+	}
+	if m.workspace.selectedTaskID != "" {
+		t.Fatalf("EX-257: ambiguous jump selected task %q; want none", m.workspace.selectedTaskID)
+	}
+	for _, want := range []string{
+		`Ambiguous task "Shared task".`,
+		`:task OC-12`,
+		"Alpha Project",
+		"Beta Project",
+		"11111111-1111-1111-1111-111111111111",
+		"22222222-2222-2222-2222-222222222222",
+	} {
+		if !strings.Contains(m.statusMessage, want) {
+			t.Fatalf("EX-257: ambiguous status %q missing %q", m.statusMessage, want)
+		}
+	}
+}
+
+func TestJumpToTaskByTitleDisambiguatesByTaskReferenceEX257(t *testing.T) {
+	buildModel := func() (Model, *string) {
+		loadCalledWith := new(string)
+		m := NewModelWithRuntime(DefaultState(), RuntimeHints{
+			LoadTaskDetail: func(_ context.Context, id string) (*TaskDetailItem, error) {
+				*loadCalledWith = id
+				return &TaskDetailItem{ID: id, Title: "Shared task"}, nil
+			},
+		})
+		m.focus = MainPanel
+		m.workspace.mainView = ViewDashboard
+		m.workspace.tasks = map[string]*taskRecord{
+			"11111111-1111-1111-1111-111111111111": {
+				ID:         "11111111-1111-1111-1111-111111111111",
+				ProjectID:  "proj-257-alpha",
+				TaskNumber: 12,
+				Title:      "Shared task",
+			},
+			"22222222-2222-2222-2222-222222222222": {
+				ID:         "22222222-2222-2222-2222-222222222222",
+				ProjectID:  "proj-257-beta",
+				TaskNumber: 7,
+				Title:      "Shared task",
+			},
+		}
+		m.workspace.taskOrder = []string{
+			"11111111-1111-1111-1111-111111111111",
+			"22222222-2222-2222-2222-222222222222",
+		}
+		return m, loadCalledWith
+	}
+
+	t.Run("exact-task-number", func(t *testing.T) {
+		m, loadCalledWith := buildModel()
+
+		cmd := m.jumpToTaskByTitle("OC-7")
+
+		if m.workspace.selectedTaskID != "22222222-2222-2222-2222-222222222222" {
+			t.Fatalf("EX-257: task-number jump selected %q, want beta task", m.workspace.selectedTaskID)
+		}
+		if m.workspace.mainView != ViewTask {
+			t.Fatalf("EX-257: task-number jump mainView = %v, want ViewTask", m.workspace.mainView)
+		}
+		if cmd == nil {
+			t.Fatal("EX-257: task-number jump returned nil cmd")
+		}
+		_ = cmd()
+		if *loadCalledWith != "22222222-2222-2222-2222-222222222222" {
+			t.Fatalf("EX-257: task-number jump loaded %q, want beta task", *loadCalledWith)
+		}
+	})
+
+	t.Run("exact-task-id", func(t *testing.T) {
+		m, loadCalledWith := buildModel()
+
+		cmd := m.jumpToTaskByTitle("11111111-1111-1111-1111-111111111111")
+
+		if m.workspace.selectedTaskID != "11111111-1111-1111-1111-111111111111" {
+			t.Fatalf("EX-257: task-id jump selected %q, want alpha task", m.workspace.selectedTaskID)
+		}
+		if m.workspace.mainView != ViewTask {
+			t.Fatalf("EX-257: task-id jump mainView = %v, want ViewTask", m.workspace.mainView)
+		}
+		if cmd == nil {
+			t.Fatal("EX-257: task-id jump returned nil cmd")
+		}
+		_ = cmd()
+		if *loadCalledWith != "11111111-1111-1111-1111-111111111111" {
+			t.Fatalf("EX-257: task-id jump loaded %q, want alpha task", *loadCalledWith)
+		}
+	})
+}
+
 // EX-481: jumpToTaskByTitle navigated to ViewTask but never called loadTaskDetailCmd,
 // so description / session ID / flow info were missing when the task had not been
 // previously detail-fetched. This test verifies the detail load fires.
