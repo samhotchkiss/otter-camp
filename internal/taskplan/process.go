@@ -97,14 +97,14 @@ var playbookArtifactContracts = map[string][]ArtifactContract{
 		{Slug: "validation-plan", Title: "Validation plan", RequiredSections: []string{"ideas explored", "assumptions", "validation experiments", "decision framework"}},
 	},
 	PlaybookStrategy: {
-		{Slug: "strategy-brief", Title: "Strategy brief", RequiredSections: []string{"goal", "audience", "approach"}},
+		{Slug: "strategy-brief", Title: "Strategy brief", RequiredSections: []string{"goal", "target segments", "not serving", "core capabilities"}},
 		{Slug: "tradeoff-matrix", Title: "Tradeoff matrix", RequiredSections: []string{"options", "tradeoffs", "decision"}},
 		{Slug: "decision-log", Title: "Decision log", RequiredSections: []string{"decision", "rationale", "owner"}},
-		{Slug: "success-narrative", Title: "Success narrative", RequiredSections: []string{"outcome", "milestones", "risks"}},
+		{Slug: "success-narrative", Title: "Success narrative", RequiredSections: []string{"key metrics", "defensibility", "milestones", "risks"}},
 	},
 	PlaybookExecutionSpec: {
-		{Slug: "prd", Title: "PRD / requirements spec", RequiredSections: []string{"objective", "scope", "constraints"}},
-		{Slug: "implementation-plan", Title: "Implementation plan", RequiredSections: []string{"milestones", "owners", "rollout"}},
+		{Slug: "prd", Title: "PRD / requirements spec", RequiredSections: []string{"goals", "non-goals", "scope", "constraints", "success metrics", "open questions"}},
+		{Slug: "implementation-plan", Title: "Implementation plan", RequiredSections: []string{"milestones", "phasing", "owners", "rollout"}},
 		{Slug: "acceptance-criteria", Title: "Acceptance criteria", RequiredSections: []string{"scenarios", "edge cases", "verification"}},
 		{Slug: "dependency-log", Title: "Dependency log", RequiredSections: []string{"dependencies", "risks", "mitigations"}},
 	},
@@ -141,14 +141,14 @@ var playbookReviewChecklists = map[string][]string{
 		"Confirm assumptions and validation criteria are concrete enough to support a go/no-go decision.",
 	},
 	PlaybookStrategy: {
-		"Verify the strategy brief names the goal, audience, and chosen approach.",
-		"Check that tradeoffs, decision rationale, and ownership are explicit rather than implied.",
-		"Confirm the success narrative and risks would let downstream teams act without re-framing the strategy.",
+		"Verify the strategy brief names the goal, target segments, exclusions, and core capabilities.",
+		"Check that tradeoffs, decision rationale, key metrics, and ownership are explicit rather than implied.",
+		"Confirm defensibility is named (or explicitly absent) and thin-context claims are marked as hypotheses or open questions.",
 	},
 	PlaybookExecutionSpec: {
-		"Verify the spec defines objective, scope, and constraints clearly enough to implement.",
-		"Check that implementation milestones, owners, and rollout sequencing are explicit.",
-		"Confirm acceptance criteria and dependency mitigations are testable, not aspirational.",
+		"Verify the spec defines goals, non-goals, scope, constraints, and success metrics clearly enough to implement.",
+		"Check that open questions, phasing, owners, and rollout sequencing are explicit before delivery work starts.",
+		"Confirm acceptance criteria and dependency mitigations are testable, and that unknowns are called out instead of invented.",
 	},
 	PlaybookBacklogDecomposition: {
 		"Verify the epic breakdown and story cards preserve the parent intent without hidden scope drift.",
@@ -190,26 +190,27 @@ func ArtifactContractForPlaybook(playbook string) []ArtifactContract {
 
 func ArtifactContractForPlan(plan Plan) []ArtifactContract {
 	contracts := ArtifactContractForPlaybook(plan.Playbook)
-	if strings.TrimSpace(plan.Playbook) != PlaybookDiscovery {
-		return contracts
+	if len(contracts) == 0 {
+		return nil
 	}
-	mode := NormalizeDiscoveryMode(plan.DiscoveryMode)
-	if mode == "" {
-		return contracts
-	}
-	out := make([]ArtifactContract, 0, len(contracts))
-	for _, contract := range contracts {
-		cloned := ArtifactContract{
-			Slug:             contract.Slug,
-			Title:            contract.Title,
-			RequiredSections: append([]string(nil), contract.RequiredSections...),
+
+	if strings.TrimSpace(plan.Playbook) == PlaybookDiscovery {
+		mode := NormalizeDiscoveryMode(plan.DiscoveryMode)
+		if mode != "" {
+			for i := range contracts {
+				if contracts[i].Slug == "validation-plan" {
+					contracts[i].RequiredSections = DiscoveryValidationPlanSections(mode)
+				}
+			}
 		}
-		if cloned.Slug == "validation-plan" {
-			cloned.RequiredSections = DiscoveryValidationPlanSections(mode)
-		}
-		out = append(out, cloned)
 	}
-	return out
+
+	if requiresHypothesisLabels(plan) {
+		contracts = appendContractSections(contracts, "strategy-brief", "hypotheses")
+		contracts = appendContractSections(contracts, "decision-log", "open questions")
+	}
+
+	return contracts
 }
 
 func ReviewChecklistForPlaybook(playbook string) []string {
@@ -221,23 +222,31 @@ func ReviewChecklistForPlaybook(playbook string) []string {
 }
 
 func ReviewChecklistForPlan(plan Plan) []string {
-	if strings.TrimSpace(plan.Playbook) != PlaybookDiscovery {
-		return ReviewChecklistForPlaybook(plan.Playbook)
-	}
-	switch NormalizeDiscoveryMode(plan.DiscoveryMode) {
-	case DiscoveryModeExistingProduct:
-		return []string{
-			"Verify the discovery mode is explicit and grounded in the current product surface, target user, and evidence gaps.",
-			"Check that prior feedback, instrumentation baseline, and observed-usage experiments are explicit before approving downstream planning.",
-			"Confirm the validation plan names ideas explored, assumptions, validation experiments, and a clear decision framework.",
+	if strings.TrimSpace(plan.Playbook) == PlaybookDiscovery {
+		switch NormalizeDiscoveryMode(plan.DiscoveryMode) {
+		case DiscoveryModeExistingProduct:
+			return []string{
+				"Verify the discovery mode is explicit and grounded in the current product surface, target user, and evidence gaps.",
+				"Check that prior feedback, instrumentation baseline, and observed-usage experiments are explicit before approving downstream planning.",
+				"Confirm the validation plan names ideas explored, assumptions, validation experiments, and a clear decision framework.",
+			}
+		default:
+			return []string{
+				"Verify the discovery mode is explicit and grounded in a new-product or unvalidated-concept framing.",
+				"Check that low-cost tests and desirability signals are explicit before approving downstream planning.",
+				"Confirm the validation plan names ideas explored, assumptions, validation experiments, and a clear decision framework.",
+			}
 		}
-	default:
-		return []string{
-			"Verify the discovery mode is explicit and grounded in a new-product or unvalidated-concept framing.",
-			"Check that low-cost tests and desirability signals are explicit before approving downstream planning.",
-			"Confirm the validation plan names ideas explored, assumptions, validation experiments, and a clear decision framework.",
-		}
 	}
+
+	checklist := ReviewChecklistForPlaybook(plan.Playbook)
+	if len(checklist) == 0 {
+		return nil
+	}
+	if requiresHypothesisLabels(plan) {
+		checklist = append(checklist, "Ensure low-confidence statements are labeled as hypotheses or open questions before approving the strategy.")
+	}
+	return checklist
 }
 
 func ApplyProcessUpdate(existing json.RawMessage, update ProcessUpdate) (json.RawMessage, Plan, ValidationReport, error) {
@@ -473,6 +482,49 @@ func normalizeArtifactEvidence(evidence ArtifactEvidence) ArtifactEvidence {
 	out.Sections = normalizeStringList(evidence.Sections)
 	out.AssetRefs = normalizeStringList(evidence.AssetRefs)
 	return out
+}
+
+func appendContractSections(contracts []ArtifactContract, slug string, sections ...string) []ArtifactContract {
+	if len(contracts) == 0 || len(sections) == 0 {
+		return contracts
+	}
+	target := normalizeArtifactSlug(slug)
+	out := make([]ArtifactContract, 0, len(contracts))
+	for _, contract := range contracts {
+		if normalizeArtifactSlug(contract.Slug) == target {
+			contract.RequiredSections = appendNormalizedSections(contract.RequiredSections, sections...)
+		}
+		out = append(out, contract)
+	}
+	return out
+}
+
+func appendNormalizedSections(existing []string, additions ...string) []string {
+	if len(additions) == 0 {
+		return append([]string(nil), existing...)
+	}
+	out := append([]string(nil), existing...)
+	seen := make(map[string]struct{}, len(out))
+	for _, value := range out {
+		seen[normalizeContractKey(value)] = struct{}{}
+	}
+	for _, value := range additions {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := normalizeContractKey(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func requiresHypothesisLabels(plan Plan) bool {
+	return strings.TrimSpace(plan.Playbook) == PlaybookStrategy && strings.TrimSpace(plan.EvidenceMaturity) == EvidenceUnknown
 }
 
 func mergeArtifactEvidence(existing, updates []ArtifactEvidence) []ArtifactEvidence {

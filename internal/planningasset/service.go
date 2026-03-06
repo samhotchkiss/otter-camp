@@ -306,6 +306,7 @@ func genericScaffoldContent(now time.Time, task repo.ProjectTask, plan taskplan.
 	if task.TaskNumber > 0 {
 		taskLabel = fmt.Sprintf("OC-%d", task.TaskNumber)
 	}
+	sections := scaffoldSectionBlock(plan, artifact)
 	return strings.TrimSpace(fmt.Sprintf(`
 # %s
 
@@ -322,9 +323,112 @@ Replace this scaffold with the durable planning output for this artifact.
 - Evidence maturity: %s
 - Risk level: %s
 
+%s
+
 ## Notes
 - Keep decisions, trade-offs, and unresolved questions in this file so downstream work can link to it directly.
-`, strings.TrimSpace(artifact.Title), strings.TrimSpace(artifact.Kind), strings.TrimSpace(plan.Playbook), taskLabel, now.UTC().Format(time.RFC3339), strings.TrimSpace(plan.ProjectStage), strings.TrimSpace(plan.EvidenceMaturity), strings.TrimSpace(plan.RiskLevel)))
+`, strings.TrimSpace(artifact.Title), strings.TrimSpace(artifact.Kind), strings.TrimSpace(plan.Playbook), taskLabel, now.UTC().Format(time.RFC3339), strings.TrimSpace(plan.ProjectStage), strings.TrimSpace(plan.EvidenceMaturity), strings.TrimSpace(plan.RiskLevel), sections))
+}
+
+func scaffoldSectionBlock(plan taskplan.Plan, artifact taskplan.PlannedArtifact) string {
+	required := requiredSectionsForArtifact(plan, artifact.Slug)
+	if len(required) == 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+	for _, section := range required {
+		builder.WriteString("\n## ")
+		builder.WriteString(formatSectionHeading(section))
+		builder.WriteString("\n")
+		builder.WriteString("- ")
+		builder.WriteString(scaffoldPrompt(section))
+		builder.WriteString("\n")
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func requiredSectionsForArtifact(plan taskplan.Plan, slug string) []string {
+	target := strings.TrimSpace(slug)
+	for _, contract := range taskplan.ArtifactContractForPlan(plan) {
+		if strings.TrimSpace(contract.Slug) != target {
+			continue
+		}
+		return append([]string(nil), contract.RequiredSections...)
+	}
+	return nil
+}
+
+func formatSectionHeading(value string) string {
+	fields := strings.Fields(strings.ReplaceAll(strings.TrimSpace(value), "-", " "))
+	for i, field := range fields {
+		if field == "" {
+			continue
+		}
+		fields[i] = strings.ToUpper(field[:1]) + field[1:]
+	}
+	return strings.Join(fields, " ")
+}
+
+func scaffoldPrompt(section string) string {
+	switch strings.TrimSpace(strings.ToLower(section)) {
+	case "goal":
+		return "State the single outcome this strategy is optimizing for."
+	case "goals":
+		return "State the concrete outcomes this spec must achieve."
+	case "target segments":
+		return "Name the primary segments, users, or buyers this work serves."
+	case "not serving":
+		return "List the excluded segments, use cases, or requests and why they stay out of scope."
+	case "core capabilities":
+		return "Describe the capabilities the chosen direction depends on."
+	case "options":
+		return "List the credible options that were considered."
+	case "tradeoffs":
+		return "Make the upside, downside, and deliberate sacrifices explicit."
+	case "decision":
+		return "Record the chosen direction or answer."
+	case "rationale":
+		return "Explain why this choice wins now."
+	case "owner", "owners":
+		return "Name the directly accountable owner or owners."
+	case "key metrics":
+		return "Define the leading and lagging metrics that will show this is working."
+	case "defensibility":
+		return "Describe the moat, or say explicitly that no defensibility exists yet."
+	case "milestones":
+		return "Break the work or outcome into major checkpoints."
+	case "risks":
+		return "List the material risks that could invalidate the plan."
+	case "hypotheses":
+		return "Label assumptions that still need validation; do not present them as facts."
+	case "open questions":
+		return "List unresolved questions, missing inputs, or decisions still pending."
+	case "non-goals":
+		return "State the explicit exclusions to prevent scope creep."
+	case "scope":
+		return "Describe what is in scope for this phase."
+	case "constraints":
+		return "Capture the technical, business, legal, or time constraints."
+	case "success metrics":
+		return "Define measurable outcomes and thresholds for success."
+	case "phasing":
+		return "Split the work into phases, or state why a single phase is sufficient."
+	case "rollout":
+		return "Describe rollout sequencing, launch controls, and fallback expectations."
+	case "scenarios":
+		return "List the primary user or system scenarios that must pass."
+	case "edge cases":
+		return "Call out important edge conditions and failure modes."
+	case "verification":
+		return "Describe how this will be tested or verified."
+	case "dependencies":
+		return "List upstream or downstream dependencies and external commitments."
+	case "mitigations":
+		return "Describe how each material dependency risk will be managed."
+	default:
+		return "Capture the durable decision for this section."
+	}
 }
 
 func discoveryScaffoldContent(now time.Time, task repo.ProjectTask, plan taskplan.Plan, artifact taskplan.PlannedArtifact) string {
