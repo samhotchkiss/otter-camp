@@ -68,6 +68,7 @@ type ProcessUpdate struct {
 	Artifacts          []ArtifactEvidence
 	HasArtifactChanges bool
 	OverrideReason     *string
+	FollowOnStopReason *string
 	ActorType          string
 	ActorID            uuid.UUID
 	RecordedAt         time.Time
@@ -250,7 +251,7 @@ func ReviewChecklistForPlan(plan Plan) []string {
 }
 
 func ApplyProcessUpdate(existing json.RawMessage, update ProcessUpdate) (json.RawMessage, Plan, ValidationReport, error) {
-	if !update.HasArtifactChanges && update.OverrideReason == nil {
+	if !update.HasArtifactChanges && update.OverrideReason == nil && update.FollowOnStopReason == nil {
 		plan, ok := Parse(existing)
 		if !ok {
 			return normalizeJSON(existing), Plan{}, ValidationReport{}, nil
@@ -275,6 +276,14 @@ func ApplyProcessUpdate(existing json.RawMessage, update ProcessUpdate) (json.Ra
 		current := readArtifactEvidence(rawPlanning["artifact_evidence"])
 		next := mergeArtifactEvidence(current, update.Artifacts)
 		rawPlanning["artifact_evidence"] = serializeArtifactEvidence(next)
+	}
+	if update.FollowOnStopReason != nil {
+		reason := strings.TrimSpace(*update.FollowOnStopReason)
+		if reason == "" {
+			delete(rawPlanning, "follow_on_stop_reason")
+		} else {
+			rawPlanning["follow_on_stop_reason"] = reason
+		}
 	}
 	payload[metadataKeyPlanning] = rawPlanning
 

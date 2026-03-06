@@ -985,6 +985,62 @@ func TestIntegrationTaskCreateDiscoveryArtifactsVaryByDiscoveryMode(t *testing.T
 	}
 }
 
+func TestIntegrationTaskCreateDiscoveryIncludesStructuredFollowOnCandidate(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	repoRoot := t.TempDir()
+
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":  project.ID.String(),
+		"title":       "Validate the onboarding problem",
+		"description": "Run customer interviews, document assumptions, and build a validation plan for this new product idea before we commit scope.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	followOn := planningFollowOnPayload(t, planning)
+	if got := strings.TrimSpace(fmt.Sprintf("%v", followOn["status"])); got != taskplan.FollowOnStatusProposed {
+		t.Fatalf("follow_on.status = %q, want %q", got, taskplan.FollowOnStatusProposed)
+	}
+	candidates := planningFollowOnCandidates(t, planning)
+	first := candidates[0]
+	if got := strings.TrimSpace(fmt.Sprintf("%v", first["action_type"])); got != taskplan.FollowOnActionDraftTask {
+		t.Fatalf("follow_on.candidates[0].action_type = %q, want %q", got, taskplan.FollowOnActionDraftTask)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", first["work_status"])); got != "draft" {
+		t.Fatalf("follow_on.candidates[0].work_status = %q, want draft", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", first["target_playbook"])); got != taskplan.PlaybookExecutionSpec {
+		t.Fatalf("follow_on.candidates[0].target_playbook = %q, want %q", got, taskplan.PlaybookExecutionSpec)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", first["source_artifact_slug"])); got != "validation-plan" {
+		t.Fatalf("follow_on.candidates[0].source_artifact_slug = %q, want validation-plan", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", first["title"])); !strings.Contains(got, "PRD/spec") {
+		t.Fatalf("follow_on.candidates[0].title = %q, want PRD/spec guidance", got)
+	}
+}
+
 func TestIntegrationTaskCreateRiskReadinessArtifactsAndFollowOnSuggestions(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -1203,6 +1259,70 @@ func TestIntegrationTaskCreateMetricsPlanningProducesRepoBackedArtifact(t *testi
 	}
 	if !foundProjectMetricArtifact {
 		t.Fatalf("project.get planning_artifacts missing metric-tree entry: %#v", projectArtifacts)
+	}
+}
+
+func TestIntegrationTaskCreateStrategyIncludesDownstreamFollowOnCandidates(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	repoRoot := t.TempDir()
+
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":  project.ID.String(),
+		"title":       "Positioning and roadmap for analytics expansion",
+		"description": "Define the product strategy, positioning tradeoffs, and the roadmap sequence for the analytics platform.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["playbook"] != taskplan.PlaybookStrategy {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookStrategy)
+	}
+
+	followOn := planningFollowOnPayload(t, planning)
+	if got := strings.TrimSpace(fmt.Sprintf("%v", followOn["status"])); got != taskplan.FollowOnStatusProposed {
+		t.Fatalf("follow_on.status = %q, want %q", got, taskplan.FollowOnStatusProposed)
+	}
+	candidates := planningFollowOnCandidates(t, planning)
+	if got := strings.TrimSpace(fmt.Sprintf("%v", candidates[0]["action_type"])); got != taskplan.FollowOnActionReadyTask {
+		t.Fatalf("follow_on.candidates[0].action_type = %q, want %q", got, taskplan.FollowOnActionReadyTask)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", candidates[0]["work_status"])); got != "queued" {
+		t.Fatalf("follow_on.candidates[0].work_status = %q, want queued", got)
+	}
+
+	foundMetrics := false
+	foundGTM := false
+	for _, candidate := range candidates {
+		switch strings.TrimSpace(fmt.Sprintf("%v", candidate["target_playbook"])) {
+		case taskplan.PlaybookMetrics:
+			foundMetrics = true
+		case taskplan.PlaybookGTMLaunch:
+			foundGTM = true
+		}
+	}
+	if !foundMetrics || !foundGTM {
+		t.Fatalf("follow_on candidates = %#v, want metrics and gtm follow-ons", candidates)
 	}
 }
 
@@ -2704,6 +2824,51 @@ func planningContextPayload(t *testing.T, planning map[string]any) map[string]an
 		t.Fatalf("planning.context = %T, want map[string]any", raw)
 	}
 	return context
+}
+
+func planningFollowOnPayload(t *testing.T, planning map[string]any) map[string]any {
+	t.Helper()
+	raw, ok := planning["follow_on"]
+	if !ok {
+		t.Fatalf("planning missing follow_on: %#v", planning)
+	}
+	payload, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("planning.follow_on = %T, want map[string]any", raw)
+	}
+	return payload
+}
+
+func planningFollowOnCandidates(t *testing.T, planning map[string]any) []map[string]any {
+	t.Helper()
+	payload := planningFollowOnPayload(t, planning)
+	raw, ok := payload["candidates"]
+	if !ok {
+		t.Fatalf("planning.follow_on missing candidates: %#v", payload)
+	}
+	switch typed := raw.(type) {
+	case []map[string]any:
+		if len(typed) == 0 {
+			t.Fatal("planning.follow_on.candidates = empty, want candidates")
+		}
+		return typed
+	case []any:
+		if len(typed) == 0 {
+			t.Fatal("planning.follow_on.candidates = empty, want candidates")
+		}
+		out := make([]map[string]any, 0, len(typed))
+		for i, item := range typed {
+			candidate, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("planning.follow_on.candidates[%d] = %T, want map[string]any", i, item)
+			}
+			out = append(out, candidate)
+		}
+		return out
+	default:
+		t.Fatalf("planning.follow_on.candidates = %T, want slice", raw)
+	}
+	return nil
 }
 
 func planningStringSlice(t *testing.T, raw any) []string {

@@ -1726,6 +1726,66 @@ func TestTaskUpdateAllowsDoneWithPlanningOverrideReason(t *testing.T) {
 	}
 }
 
+func TestTaskUpdatePersistsPlanningFollowOnStopReason(t *testing.T) {
+	taskID := uuid.New()
+	description := "Run customer interviews, document assumptions, and build a validation plan for this new product idea before we commit scope."
+	plan := taskplan.Analyze("Validate the onboarding problem", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			WorkStatus:     "draft",
+			Metadata:       metadata,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	stopReason := "The PM wants to choose the winning opportunity before any downstream planning task is created."
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":                        taskID.String(),
+		"planning_follow_on_stop_reason": stopReason,
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update error = %v, want nil", out["error"])
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+
+	planningOut, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	followOn, ok := planningOut["follow_on"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning.follow_on = %T, want map[string]any", planningOut["follow_on"])
+	}
+	if followOn["status"] != taskplan.FollowOnStatusStopped {
+		t.Fatalf("follow_on.status = %v, want %s", followOn["status"], taskplan.FollowOnStatusStopped)
+	}
+	if followOn["stop_reason"] != stopReason {
+		t.Fatalf("follow_on.stop_reason = %v, want recorded reason", followOn["stop_reason"])
+	}
+
+	parsed, ok := taskplan.Parse(tasks.task.Metadata)
+	if !ok {
+		t.Fatal("taskplan.Parse(metadata) = false, want true")
+	}
+	if parsed.FollowOnStopReason != stopReason {
+		t.Fatalf("FollowOnStopReason = %q, want %q", parsed.FollowOnStopReason, stopReason)
+	}
+	if parsed.FollowOn.Status != taskplan.FollowOnStatusStopped {
+		t.Fatalf("FollowOn.Status = %q, want %q", parsed.FollowOn.Status, taskplan.FollowOnStatusStopped)
+	}
+}
+
 func TestTaskUpdateAllowsCancelledWithoutFlowTemplate(t *testing.T) {
 	taskID := uuid.New()
 	tasks := &mockTaskRepo{
