@@ -1070,7 +1070,8 @@ create table runtime_state (
   unique (scope_type, scope_id),
   check (
     (active_principal_type is null and active_principal_id is null)
-    or (active_principal_type is not null and active_principal_id is not null)
+    or (active_principal_type = 'system' and active_principal_id is null)
+    or (active_principal_type in ('human_user', 'agent') and active_principal_id is not null)
   )
 );
 

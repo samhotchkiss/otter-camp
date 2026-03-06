@@ -27,8 +27,8 @@ type executionWakeupInput struct {
 }
 
 type executionWakeupResult struct {
-	Run        Run
-	Decision   executionWakeupDecision
+	Run         Run
+	Decision    executionWakeupDecision
 	BlockingRun *Run
 }
 
@@ -307,6 +307,19 @@ func (s *runService) findDeferredWakeup(
 	principalType string,
 	principalID *uuid.UUID,
 ) (Run, bool, error) {
+	type deferredWakeupFinder interface {
+		FindOldestDeferredWakeup(context.Context, uuid.UUID, executionScope, string, *uuid.UUID) (Run, bool, error)
+	}
+	if finder, ok := s.runs.(deferredWakeupFinder); ok {
+		runRecord, found, err := finder.FindOldestDeferredWakeup(ctx, organizationID, scope, principalType, principalID)
+		if err != nil || !found {
+			return runRecord, found, err
+		}
+		if isDeferredWakeupRun(runRecord, scope) && (principalType == "" || sameExecutionOwner(&runRecord, principalType, uuidPointerValue(principalID))) {
+			return runRecord, true, nil
+		}
+	}
+
 	filter := RunListFilter{
 		OrganizationID: organizationID,
 		Status:         "created",

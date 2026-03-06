@@ -308,6 +308,72 @@ func (r *RunRepository) List(ctx context.Context, filter RunListFilter) ([]Run, 
 	return items, nil
 }
 
+func (r *RunRepository) FindOldestDeferredWakeup(ctx context.Context, organizationID uuid.UUID, scope executionScope, principalType string, principalID *uuid.UUID) (Run, bool, error) {
+	if organizationID == uuid.Nil {
+		return Run{}, false, fmt.Errorf("organization_id is required")
+	}
+
+	query := `
+		SELECT id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
+		       principal_type, principal_id, status, idempotency_key, trigger_type, version,
+		       failure_reason, failure_class, input_tokens, output_tokens, metadata, created_at, updated_at, started_at, completed_at
+		FROM run
+		WHERE organization_id = $1
+		  AND status = 'created'
+		  AND metadata->'execution_wakeup'->>'state' = 'deferred'
+		  AND metadata->'execution_wakeup'->>'scope_type' = $2
+		  AND metadata->'execution_wakeup'->>'scope_id' = $3`
+	args := []any{organizationID, strings.TrimSpace(scope.Type), scope.ID.String()}
+	argPos := 4
+
+	if scope.Type == "task" {
+		query += fmt.Sprintf(" AND task_id = $%d", argPos)
+		args = append(args, scope.ID)
+		argPos++
+	}
+	if scope.Type == "session" {
+		query += fmt.Sprintf(" AND session_id = $%d", argPos)
+		args = append(args, scope.ID)
+		argPos++
+	}
+	if normalizedType := normalizePrincipalType(principalType); normalizedType != "" {
+		query += fmt.Sprintf(" AND principal_type = $%d", argPos)
+		args = append(args, normalizedType)
+		argPos++
+		if normalizedType == "system" || principalID == nil || *principalID == uuid.Nil {
+			query += " AND principal_id IS NULL"
+		} else {
+			query += fmt.Sprintf(" AND principal_id = $%d", argPos)
+			args = append(args, *principalID)
+			argPos++
+		}
+	}
+
+	query += " ORDER BY created_at ASC, id ASC LIMIT 1"
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return Run{}, false, mapDBError(err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if rows.Err() != nil {
+			return Run{}, false, mapDBError(rows.Err())
+		}
+		return Run{}, false, nil
+	}
+
+	item, scanErr := scanRun(rows)
+	if scanErr != nil {
+		return Run{}, false, mapDBError(scanErr)
+	}
+	if rows.Err() != nil {
+		return Run{}, false, mapDBError(rows.Err())
+	}
+	return item, true, nil
+}
+
 func (r *RunRepository) ListByTask(ctx context.Context, organizationID, taskID uuid.UUID, limit int) ([]Run, error) {
 	filter := RunListFilter{OrganizationID: organizationID, TaskID: &taskID, Limit: limit}
 	return r.List(ctx, filter)
