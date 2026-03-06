@@ -2315,6 +2315,143 @@ func TestIntegrationFlowListTemplatesReturnsNodeSummaries(t *testing.T) {
 	}
 }
 
+func TestIntegrationFlowCreateTemplateAcceptsWorkReviewSuccessPath(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.create_template", map[string]any{
+		"project_id": project.ID.String(),
+		"name":       "Planner Minimum Flow",
+		"nodes": []any{
+			map[string]any{"display_name": "Work", "node_type": "work"},
+			map[string]any{"display_name": "Review", "node_type": "review"},
+			map[string]any{"display_name": "Success", "node_type": "success"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("flow.create_template: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("flow.create_template error = %v, want nil", out["error"])
+	}
+
+	templateOut, ok := out["template"].(map[string]any)
+	if !ok {
+		t.Fatalf("template output = %T, want map[string]any", out["template"])
+	}
+	templateID := mustUUIDValue(t, templateOut["id"])
+
+	template, err := repo.NewFlowTemplateRepo(pool).GetByID(ctx, templateID)
+	if err != nil {
+		t.Fatalf("load flow template: %v", err)
+	}
+	nodes, err := repo.NewFlowNodeRepo(pool).GetByTemplateOrdered(ctx, templateID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("flow nodes = %d, want 3", len(nodes))
+	}
+	if template.StartNodeID == nil || *template.StartNodeID != nodes[0].ID {
+		t.Fatalf("start_node_id = %v, want %s", template.StartNodeID, nodes[0].ID)
+	}
+	if nodes[0].NodeType != "work" || nodes[1].NodeType != "review" || nodes[2].NodeType != "merge" {
+		t.Fatalf("node types = [%s %s %s], want [work review merge]", nodes[0].NodeType, nodes[1].NodeType, nodes[2].NodeType)
+	}
+	if nodes[0].NextNodeID == nil || *nodes[0].NextNodeID != nodes[1].ID {
+		t.Fatalf("work next_node_id = %v, want %s", nodes[0].NextNodeID, nodes[1].ID)
+	}
+	if nodes[1].NextNodeID == nil || *nodes[1].NextNodeID != nodes[2].ID {
+		t.Fatalf("review next_node_id = %v, want %s", nodes[1].NextNodeID, nodes[2].ID)
+	}
+	if nodes[2].NextNodeID != nil {
+		t.Fatalf("merge next_node_id = %v, want nil", nodes[2].NextNodeID)
+	}
+}
+
+func TestIntegrationFlowCreateTemplateNormalizesHumanReviewAlias(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.create_template", map[string]any{
+		"project_id": project.ID.String(),
+		"name":       "Planner Human Review Flow",
+		"nodes": []any{
+			map[string]any{"display_name": "Work", "node_type": "work"},
+			map[string]any{"display_name": "Human Review", "node_type": "human_review"},
+			map[string]any{"display_name": "Completion", "node_type": "completion"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("flow.create_template: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("flow.create_template error = %v, want nil", out["error"])
+	}
+
+	templateOut, ok := out["template"].(map[string]any)
+	if !ok {
+		t.Fatalf("template output = %T, want map[string]any", out["template"])
+	}
+	nodes, err := repo.NewFlowNodeRepo(pool).GetByTemplateOrdered(ctx, mustUUIDValue(t, templateOut["id"]))
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("flow nodes = %d, want 3", len(nodes))
+	}
+	if nodes[1].NodeType != "review" {
+		t.Fatalf("review node type = %q, want review", nodes[1].NodeType)
+	}
+	if !nodes[1].RequiresHumanReview {
+		t.Fatal("requires_human_review = false, want true")
+	}
+	if nodes[2].NodeType != "merge" {
+		t.Fatalf("completion node type = %q, want merge", nodes[2].NodeType)
+	}
+}
+
+func TestIntegrationFlowCreateTemplateRejectsInvalidNodeTypeWithBoundedError(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.create_template", map[string]any{
+		"project_id": project.ID.String(),
+		"name":       "Invalid Planner Flow",
+		"nodes": []any{
+			map[string]any{"display_name": "Work", "node_type": "work"},
+			map[string]any{"display_name": "QA Gate", "node_type": "qa_gate"},
+			map[string]any{"display_name": "Merge", "node_type": "merge"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("flow.create_template: %v", err)
+	}
+	if out["error"] != "invalid_node_type" {
+		t.Fatalf("error = %v, want invalid_node_type", out["error"])
+	}
+	if out["invalid_node_type"] != "qa_gate" {
+		t.Fatalf("invalid_node_type = %v, want qa_gate", out["invalid_node_type"])
+	}
+	if strings.TrimSpace(fmt.Sprintf("%v", out["message"])) == flowTemplateValidationMessage {
+		t.Fatalf("message = %v, want bounded invalid-node guidance", out["message"])
+	}
+	if _, ok := out["template"]; ok {
+		t.Fatalf("template output = %#v, want no template on invalid node type", out["template"])
+	}
+}
+
 func TestIntegrationTaskUpdatePublishesStatusChangedDomainEvent(t *testing.T) {
 	pool := testdb.New(t)
 	backgroundCtx := context.Background()

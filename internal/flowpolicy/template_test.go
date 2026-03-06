@@ -35,14 +35,14 @@ func TestValidateExecutableFlowNodesRejectsReviewOnlyFlow(t *testing.T) {
 	}
 }
 
-func TestValidateExecutableFlowTemplateAcceptsWorkReviewDonePath(t *testing.T) {
-	doneID := uuid.New()
+func TestValidateExecutableFlowTemplateAcceptsWorkReviewMergePath(t *testing.T) {
+	mergeID := uuid.New()
 	reviewID := uuid.New()
 	workID := uuid.New()
 	nodes := []repo.FlowNode{
 		flowNode(workID, "work", &reviewID, nil),
-		flowNode(reviewID, "review", &doneID, nil),
-		flowNode(doneID, "done", nil, nil),
+		flowNode(reviewID, "review", &mergeID, nil),
+		flowNode(mergeID, "merge", nil, nil),
 	}
 
 	if err := ValidateExecutableFlowTemplate(&workID, nodes); err != nil {
@@ -66,13 +66,13 @@ func TestValidateExecutableFlowNodesRejectsTerminalNodeWithPendingUnreviewedWork
 }
 
 func TestValidateExecutableFlowTemplateAcceptsRejectLoopThroughReReview(t *testing.T) {
-	doneID := uuid.New()
+	mergeID := uuid.New()
 	reviewID := uuid.New()
 	workID := uuid.New()
 	nodes := []repo.FlowNode{
 		flowNode(workID, "work", &reviewID, nil),
-		flowNode(reviewID, "review", &doneID, &workID),
-		flowNode(doneID, "done", nil, nil),
+		flowNode(reviewID, "review", &mergeID, &workID),
+		flowNode(mergeID, "merge", nil, nil),
 	}
 
 	if err := ValidateExecutableFlowTemplate(&workID, nodes); err != nil {
@@ -81,14 +81,14 @@ func TestValidateExecutableFlowTemplateAcceptsRejectLoopThroughReReview(t *testi
 }
 
 func TestValidateExecutableFlowNodesRejectsDisconnectedEntryWithoutReview(t *testing.T) {
-	doneID := uuid.New()
+	mergeID := uuid.New()
 	reviewID := uuid.New()
 	workID := uuid.New()
 	disconnectedWorkID := uuid.New()
 	nodes := []repo.FlowNode{
 		flowNode(workID, "work", &reviewID, nil),
-		flowNode(reviewID, "review", &doneID, nil),
-		flowNode(doneID, "done", nil, nil),
+		flowNode(reviewID, "review", &mergeID, nil),
+		flowNode(mergeID, "merge", nil, nil),
 		flowNode(disconnectedWorkID, "work", nil, nil),
 	}
 
@@ -106,6 +106,19 @@ func TestValidateExecutableFlowTemplateRejectsUnknownStartNode(t *testing.T) {
 
 	if err := ValidateExecutableFlowTemplate(&startNodeID, nodes); !errors.Is(err, ErrFlowNodeTemplateMismatch) {
 		t.Fatalf("ValidateExecutableFlowTemplate err = %v, want ErrFlowNodeTemplateMismatch", err)
+	}
+}
+
+func TestValidateExecutableFlowTemplateRejectsTerminalReviewWithoutMerge(t *testing.T) {
+	reviewID := uuid.New()
+	workID := uuid.New()
+	nodes := []repo.FlowNode{
+		flowNode(workID, "work", &reviewID, nil),
+		flowNode(reviewID, "review", nil, nil),
+	}
+
+	if err := ValidateExecutableFlowTemplate(&workID, nodes); !errors.Is(err, ErrExecutableFlowPath) {
+		t.Fatalf("ValidateExecutableFlowTemplate err = %v, want ErrExecutableFlowPath", err)
 	}
 }
 

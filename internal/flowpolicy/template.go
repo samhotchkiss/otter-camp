@@ -2,7 +2,6 @@ package flowpolicy
 
 import (
 	"errors"
-	"strings"
 
 	"github.com/google/uuid"
 
@@ -104,11 +103,11 @@ func validateExecutableFlowPath(startNodeID uuid.UUID, nodes []repo.FlowNode) er
 	reachedTerminal := false
 	var walk func(node repo.FlowNode, hasWork bool, hasReviewedWork bool, pendingReviewWork bool) error
 	walk = func(node repo.FlowNode, hasWork bool, hasReviewedWork bool, pendingReviewWork bool) error {
-		switch strings.ToLower(strings.TrimSpace(node.NodeType)) {
-		case "work":
+		switch CanonicalNodeType(node.NodeType) {
+		case NodeTypeWork:
 			hasWork = true
 			pendingReviewWork = true
-		case "review":
+		case NodeTypeReview:
 			if pendingReviewWork {
 				pendingReviewWork = false
 				hasReviewedWork = true
@@ -128,7 +127,7 @@ func validateExecutableFlowPath(startNodeID uuid.UUID, nodes []repo.FlowNode) er
 
 		if node.NextNodeID == nil || *node.NextNodeID == uuid.Nil {
 			reachedTerminal = true
-			if !hasWork || !hasReviewedWork || pendingReviewWork {
+			if CanonicalNodeType(node.NodeType) != NodeTypeMerge || !hasWork || !hasReviewedWork || pendingReviewWork {
 				return ErrExecutableFlowPath
 			}
 		}

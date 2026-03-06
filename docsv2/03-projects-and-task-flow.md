@@ -131,7 +131,7 @@ For fresh kickoff, this conversational context starts at the new kickoff request
 
 Work status: `draft`, `queued`, `in_progress`, `blocked`, `on_hold`, `review`, `done`, `cancelled`
 
-There is no separate approval state machine. Review and approval are handled by review nodes in the flow template (see Flow Nodes). A review node's approve/reject decision advances or loops the flow, which maps directly to work status transitions (`review` → `done` or `review` → `in_progress`).
+There is no separate approval state machine. Review and approval are handled by review nodes in the flow template (see Flow Nodes). A review node's approve/reject decision advances or loops the flow, which maps directly to work status transitions (`review` → explicit completion/merge → `done`, or `review` → `in_progress`).
 
 ### Work Status Definitions
 
@@ -220,13 +220,13 @@ Flow templates are designed conversationally through the project manager, not th
 
 The PM asks targeted questions only when they need to disambiguate, then builds the flow. For most work, they should propose and let the human adjust:
 
-> "For implementation work like this, I'd set it up as: write code → code review → done. The worker handles implementation, the reviewer checks quality. Sound good, or is there something unusual about this one?"
+> "For implementation work like this, I'd set it up as: write code → code review → merge. The worker handles implementation, the reviewer checks quality, and the explicit merge/completion step closes the task. Sound good, or is there something unusual about this one?"
 
 The PM's flow design skill includes:
 
 - **Opinionated defaults for common work types**: implementation, design, content, research, operations. The PM knows what good workflows look like and doesn't make the human figure it out.
 - **Brief reasoning**: they explain why they're recommending a particular structure ("I'm including a human review gate because this touches the billing system"), so the human can calibrate without having to interrogate.
-- **Validation**: no orphan nodes, review nodes always have both approve and reject edges, at least one terminal path to done.
+- **Validation**: no orphan nodes, review nodes always have both approve and reject edges, and every executable path includes `work` → `review` → terminal `merge`.
 
 The PM may @mention Lori if there's a staffing question about who should own a particular flow step.
 
@@ -242,12 +242,13 @@ The UI shows flow templates as read-only visualizations in the project view. Edi
 
 ## Flow Nodes
 
-- Node types: `work`, `review`
+- Canonical stored node types: `work`, `review`, `decision`, `parallel`, `merge`
+- Planner/runtime aliases: `human_review` normalizes to `review` with `requires_human_review = true`; `success` and `completion` normalize to terminal `merge`
 - Actor types: `role`, `project_manager`, `human`, `agent`
 - Edges: `next_node`, `reject_node`
 - Skills: optional list of skill references required for this node. Only these skills are loaded into the agent's prompt during execution of this node (see 10-skills-integration.md).
 - **Start node**: identified by `flow_template.start_node_id`. This is the first node activated when a task begins execution.
-- **Terminal node**: any node where `next_node_id` is null. When a task completes a terminal node, the task transitions to `done` (and enters the merge queue if the project has a repo).
+- **Terminal node**: a `merge` node where `next_node_id` is null. When a task completes that terminal `merge` node, the task transitions to `done` (and enters the merge queue if the project has a repo).
 
 ## Flow Progression
 
@@ -432,7 +433,7 @@ Some work is recurring — check an inbox every 10 minutes, draft a blog post ev
 
 A **task schedule** defines: which project, which flow template, how often, and what to do when instances overlap. When the schedule fires, the system creates a task — pre-scoped with context from the schedule definition, `requires_human_review = false`, transitions straight to `queued`. The scheduler picks it up like any other task.
 
-Lightweight recurring work (check inbox) gets a one-node flow. Heavyweight recurring work (weekly blog post) gets a multi-node flow with review. Same mechanism, different templates.
+Lightweight recurring work (check inbox) still uses the minimum `work` → `review` → `merge` flow, but the steps may be lightweight. Heavyweight recurring work (weekly blog post) uses the same minimum path with richer node assignments and review requirements. Same mechanism, different templates.
 
 ### Creation
 
@@ -633,7 +634,7 @@ create table project (
 ```sql
 create table flow_template (
   id              uuid primary key default gen_random_uuid(),
-  project_id      uuid references project(id),  -- nullable for system-provided default templates (e.g., "single work node", "work + review")
+  project_id      uuid references project(id),  -- nullable for system-provided default templates (e.g., minimum work-review-merge flows)
   name            text not null,
   description     text,
   version         int not null default 1,
@@ -657,7 +658,7 @@ create table flow_node (
   flow_template_id uuid not null references flow_template(id),
   name             text not null,
   description      text,
-  node_type        text not null check (node_type in ('work', 'review')),
+  node_type        text not null check (node_type in ('work', 'review', 'decision', 'parallel', 'merge')),
   actor_type       text not null check (actor_type in ('role', 'project_manager', 'human', 'agent')),
   actor_role       text,              -- set when actor_type = role: worker, reviewer, planner
   actor_id         uuid,              -- set when actor_type = agent
@@ -959,7 +960,7 @@ create index on project_task_event (task_id, created_at);
 - **`commit_sha` on flow_node_execution for review diff base.** Each reviewer sees only changes since the last completed node, not the full branch diff.
 - **Blockers are tasks, not a separate entity.** Agent files a new task with a dependency link. PM triages. Escalation: PM → Frank → human.
 - **`blocks_scope = 'all'` is a project-wide execution gate.** While any gate task is outstanding, only the lowest-numbered outstanding gate task in that project may start.
-- **Every new project starts with a bootstrap gate task.** Task 1 is a `blocks_scope = 'all'` governance flow: Lori does staffing/decomposition work, Frank reviews and approves before other tasks can start.
+- **Every new project starts with a bootstrap gate task.** Task 1 is a `blocks_scope = 'all'` governance flow: Lori does staffing/decomposition work, Frank reviews it, and an explicit completion/merge node closes the gate before other tasks can start.
 - **Cancelled dependencies create resolution tasks.** When a dependency is cancelled, the system auto-creates a task for the PM to resolve the situation. Blocked progress creates tasks, not notifications.
 - **Dependencies can be removed.** PM can unlink a dependency at any time. If a blocked task has no remaining unresolved dependencies, it resumes.
 - **Dependencies form a DAG.** Cycles rejected at creation time.
@@ -968,7 +969,7 @@ create index on project_task_event (task_id, created_at);
 - **Merge queue serializes merges to main.** Tasks enter the queue when `done`. Serial processing. Trivial conflicts auto-resolved; non-trivial escalated to PM.
 - **Merge state lives on `merge_queue_entry`, not duplicated on the task.** A task can be `done` but still in the merge queue. UI queries both tables.
 - **Proactive supervision is the PM's responsibility.** PM periodically reviews active runs for stuck agents. System provides mechanical signals (heartbeat timeout, orphaned runs) but PM applies judgment.
-- **Scheduled tasks use the same task primitive.** A schedule creates tasks from a template on a cron cadence. Lightweight recurring work gets a one-node flow. Everything lives within a project — org-level recurring work goes in an operations project.
+- **Scheduled tasks use the same task primitive.** A schedule creates tasks from a template on a cron cadence. Lightweight recurring work still uses the minimum work-review-merge flow. Everything lives within a project — org-level recurring work goes in an operations project.
 - **Three overlap policies for scheduled tasks**: skip (don't create if previous is running), queue (create anyway), replace (cancel previous and create new).
 - **Max task duration on schedules.** Wall clock time from task creation. Exceeded = auto-cancel. Prevents zombie pileup.
 - **Schedules are created, paused, and edited through conversation with the PM.** UI shows schedules read-only. PM should proactively suggest schedules when it recognizes recurring patterns.

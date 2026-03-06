@@ -500,12 +500,22 @@ func (s *service) createBootstrapGate(ctx context.Context, projectRecord repo.Pr
 	if err != nil {
 		return err
 	}
+	mergeNode, err := s.nodes.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       flowpolicy.NodeTypeMerge,
+		Position:       3,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		return err
+	}
 
 	setupNode.NextNodeID = &reviewNode.ID
 	if _, err := s.nodes.Update(ctx, setupNode); err != nil {
 		return err
 	}
-	reviewNode.NextNodeID = nil
+	reviewNode.NextNodeID = &mergeNode.ID
 	reviewNode.RejectNodeID = &setupNode.ID
 	if _, err := s.nodes.Update(ctx, reviewNode); err != nil {
 		return err
@@ -1053,11 +1063,15 @@ func (s *service) AddFlowNode(ctx context.Context, templateID uuid.UUID, req Add
 	if validation.HasHTMLTag(nodeName) {
 		return nil, ErrDisplayNameInvalid
 	}
+	nodeSpec, err := flowpolicy.NormalizeNodeSpec(req.NodeType, req.RequiresHumanReview)
+	if err != nil {
+		return nil, err
+	}
 
 	created, err := s.nodes.Create(ctx, repo.FlowNode{
 		FlowTemplateID:      templateID,
 		DisplayName:         nodeName,
-		NodeType:            strings.TrimSpace(req.NodeType),
+		NodeType:            nodeSpec.NodeType,
 		Position:            req.Position,
 		ActorType:           trimStringPointer(req.ActorType),
 		ActorID:             req.ActorID,
@@ -1065,7 +1079,7 @@ func (s *service) AddFlowNode(ctx context.Context, templateID uuid.UUID, req Add
 		RejectNodeID:        req.RejectNodeID,
 		MCPTools:            req.MCPTools,
 		ToolDomains:         req.ToolDomains,
-		RequiresHumanReview: req.RequiresHumanReview,
+		RequiresHumanReview: nodeSpec.RequiresHumanReview,
 		MaxVisits:           req.MaxVisits,
 		Metadata:            req.Metadata,
 	})
@@ -1105,8 +1119,16 @@ func (s *service) UpdateFlowNode(ctx context.Context, nodeID uuid.UUID, req Upda
 		}
 		next.DisplayName = trimmed
 	}
+	if req.RequiresHumanReview != nil {
+		next.RequiresHumanReview = *req.RequiresHumanReview
+	}
 	if req.NodeType != nil {
-		next.NodeType = strings.TrimSpace(*req.NodeType)
+		nodeSpec, err := flowpolicy.NormalizeNodeSpec(*req.NodeType, next.RequiresHumanReview)
+		if err != nil {
+			return nil, err
+		}
+		next.NodeType = nodeSpec.NodeType
+		next.RequiresHumanReview = nodeSpec.RequiresHumanReview
 	}
 	if req.Position != nil {
 		next.Position = *req.Position
@@ -1128,9 +1150,6 @@ func (s *service) UpdateFlowNode(ctx context.Context, nodeID uuid.UUID, req Upda
 	}
 	if req.ToolDomains != nil {
 		next.ToolDomains = *req.ToolDomains
-	}
-	if req.RequiresHumanReview != nil {
-		next.RequiresHumanReview = *req.RequiresHumanReview
 	}
 	if req.MaxVisits != nil {
 		next.MaxVisits = *req.MaxVisits
