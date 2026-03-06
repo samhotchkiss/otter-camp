@@ -498,10 +498,21 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 			if strings.TrimSpace(plan.ReviewPacket.Summary) != "" {
 				bodyLines[0] = plan.ReviewPacket.Summary
 			}
+			contextParts := []string{
+				fmt.Sprintf("work_type=%s", plan.WorkType),
+				fmt.Sprintf("stage=%s", plan.ProjectStage),
+			}
+			if plan.DiscoveryMode != "" {
+				contextParts = append(contextParts, fmt.Sprintf("discovery_mode=%s", plan.DiscoveryMode))
+			}
+			contextParts = append(contextParts,
+				fmt.Sprintf("evidence=%s", plan.EvidenceMaturity),
+				fmt.Sprintf("risk=%s", plan.RiskLevel),
+			)
 			bodyLines = append(bodyLines,
 				"",
 				fmt.Sprintf("Playbook: %s", plan.Playbook),
-				fmt.Sprintf("Planning context: work_type=%s, stage=%s, evidence=%s, risk=%s", plan.WorkType, plan.ProjectStage, plan.EvidenceMaturity, plan.RiskLevel),
+				fmt.Sprintf("Planning context: %s", strings.Join(contextParts, ", ")),
 				fmt.Sprintf("Planning process: %s", report.ProcessStatus),
 				fmt.Sprintf("Planned stages: %s", strings.Join(plan.PlannedStages, " -> ")),
 				fmt.Sprintf("Planned artifacts: %s", strings.Join(artifactSummaries, ", ")),
@@ -522,16 +533,20 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 				bodyLines = append(bodyLines, fmt.Sprintf("Suggested next steps: %s", strings.Join(plan.FollowOnSuggestions, " | ")))
 			}
 			body = strings.Join(bodyLines, "\n")
+			payloadContext := map[string]any{
+				"work_type":         plan.WorkType,
+				"project_stage":     plan.ProjectStage,
+				"evidence_maturity": plan.EvidenceMaturity,
+				"risk_level":        plan.RiskLevel,
+			}
+			if plan.DiscoveryMode != "" {
+				payloadContext["discovery_mode"] = plan.DiscoveryMode
+			}
 			payload, _ = json.Marshal(map[string]any{
-				"task_id":      taskRecord.ID,
-				"flow_node_id": flowNodeID,
-				"playbook":     plan.Playbook,
-				"context": map[string]any{
-					"work_type":         plan.WorkType,
-					"project_stage":     plan.ProjectStage,
-					"evidence_maturity": plan.EvidenceMaturity,
-					"risk_level":        plan.RiskLevel,
-				},
+				"task_id":               taskRecord.ID,
+				"flow_node_id":          flowNodeID,
+				"playbook":              plan.Playbook,
+				"context":               payloadContext,
 				"planned_stages":        plan.PlannedStages,
 				"artifacts":             reviewArtifactPayload(plan.Artifacts),
 				"artifact_contract":     report.ArtifactContract,

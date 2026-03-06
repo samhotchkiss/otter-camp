@@ -851,6 +851,130 @@ func TestIntegrationTaskCreatePersistsRepoBackedPlanningArtifactsAndVersions(t *
 	}
 }
 
+func TestIntegrationTaskCreateDiscoveryArtifactsVaryByDiscoveryMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	repoRoot := t.TempDir()
+
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	tests := []struct {
+		name               string
+		title              string
+		description        string
+		wantMode           string
+		wantFollowOnPart   string
+		wantContentPhrases []string
+	}{
+		{
+			name:             "new product",
+			title:            "Validate the new product onboarding concept",
+			description:      "Run customer interviews, capture assumptions, and design low-cost validation for this new product idea before we commit scope.",
+			wantMode:         taskplan.DiscoveryModeNewProduct,
+			wantFollowOnPart: "low-cost desirability tests",
+			wantContentPhrases: []string{
+				"Discovery mode: new_product",
+				"## Ideas Explored",
+				"## Assumptions",
+				"## Validation Experiments",
+				"## Low-Cost Tests",
+				"## Desirability Signals",
+				"## Decision Framework",
+			},
+		},
+		{
+			name:             "existing product",
+			title:            "Investigate checkout drop-off in the existing product",
+			description:      "Review support tickets, current funnel instrumentation, and usage data for the existing product before defining experiments.",
+			wantMode:         taskplan.DiscoveryModeExistingProduct,
+			wantFollowOnPart: "instrumentation, usage data, and prior feedback",
+			wantContentPhrases: []string{
+				"Discovery mode: existing_product",
+				"## Ideas Explored",
+				"## Assumptions",
+				"## Validation Experiments",
+				"## Prior Feedback",
+				"## Instrumentation Baseline",
+				"## Decision Framework",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+				"project_id":  project.ID.String(),
+				"title":       tc.title,
+				"description": tc.description,
+			})
+			if err != nil {
+				t.Fatalf("task.create: %v", err)
+			}
+
+			planning, ok := out["planning"].(map[string]any)
+			if !ok {
+				t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+			}
+			if planning["playbook"] != taskplan.PlaybookDiscovery {
+				t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookDiscovery)
+			}
+			contextPayload := planningContextPayload(t, planning)
+			if got := strings.TrimSpace(fmt.Sprintf("%v", contextPayload["discovery_mode"])); got != tc.wantMode {
+				t.Fatalf("planning.context.discovery_mode = %q, want %q", got, tc.wantMode)
+			}
+
+			followOns := planningStringSlice(t, planning["follow_on_suggestions"])
+			if len(followOns) == 0 {
+				t.Fatal("follow_on_suggestions = empty, want non-empty suggestions")
+			}
+			if !containsSubstring(followOns, tc.wantFollowOnPart) {
+				t.Fatalf("follow_on_suggestions = %#v, want phrase %q", followOns, tc.wantFollowOnPart)
+			}
+
+			validationArtifact := artifactPayloadBySlug(t, planning["artifacts"], "validation-plan")
+			artifactPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, validationArtifact, "repo_path")))
+			content, err := os.ReadFile(artifactPath)
+			if err != nil {
+				t.Fatalf("read validation artifact: %v", err)
+			}
+			body := string(content)
+			for _, phrase := range tc.wantContentPhrases {
+				if !strings.Contains(body, phrase) {
+					t.Fatalf("validation artifact missing %q:\n%s", phrase, body)
+				}
+			}
+
+			taskID := nestedUUID(t, out, "task", "id")
+			taskRecord, err := taskRepo.GetByID(ctx, taskID)
+			if err != nil {
+				t.Fatalf("load task: %v", err)
+			}
+			plan, ok := taskplan.Parse(taskRecord.Metadata)
+			if !ok {
+				t.Fatal("taskplan.Parse(metadata) = false, want true")
+			}
+			if plan.DiscoveryMode != tc.wantMode {
+				t.Fatalf("persisted DiscoveryMode = %q, want %q", plan.DiscoveryMode, tc.wantMode)
+			}
+		})
+	}
+}
+
 func TestIntegrationTaskCompletionRequiresPlanningContractOrOverride(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -2082,10 +2206,30 @@ func containsString(items []string, needle string) bool {
 	return false
 }
 
+func containsSubstring(items []string, needle string) bool {
+	for _, item := range items {
+		if strings.Contains(item, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func firstArtifactPayload(t *testing.T, raw any) map[string]any {
 	t.Helper()
 	items := artifactPayloads(t, raw)
 	return items[0]
+}
+
+func artifactPayloadBySlug(t *testing.T, raw any, slug string) map[string]any {
+	t.Helper()
+	for _, artifact := range artifactPayloads(t, raw) {
+		if artifactStringValue(t, artifact, "slug") == slug {
+			return artifact
+		}
+	}
+	t.Fatalf("artifact payload missing slug %q", slug)
+	return nil
 }
 
 func artifactPayloads(t *testing.T, raw any) []map[string]any {
@@ -2111,6 +2255,40 @@ func artifactPayloads(t *testing.T, raw any) []map[string]any {
 		return out
 	default:
 		t.Fatalf("artifact payload = %T, want slice", raw)
+	}
+	return nil
+}
+
+func planningContextPayload(t *testing.T, planning map[string]any) map[string]any {
+	t.Helper()
+	raw, ok := planning["context"]
+	if !ok {
+		t.Fatalf("planning missing context: %#v", planning)
+	}
+	context, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("planning.context = %T, want map[string]any", raw)
+	}
+	return context
+}
+
+func planningStringSlice(t *testing.T, raw any) []string {
+	t.Helper()
+	switch typed := raw.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for i, item := range typed {
+			value, ok := item.(string)
+			if !ok {
+				t.Fatalf("planning string slice[%d] = %T, want string", i, item)
+			}
+			out = append(out, value)
+		}
+		return out
+	default:
+		t.Fatalf("planning string slice = %T, want []string/[]any", raw)
 	}
 	return nil
 }

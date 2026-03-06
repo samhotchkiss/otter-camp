@@ -98,3 +98,65 @@ func TestApplyProcessUpdateRecordsOverrideForIncompleteContract(t *testing.T) {
 		t.Fatalf("final ProcessStatus = %q, want %q", finalReport.ProcessStatus, ProcessStatusOverridden)
 	}
 }
+
+func TestEvaluateDiscoveryContractUsesModeSpecificValidationSections(t *testing.T) {
+	tests := []struct {
+		name         string
+		title        string
+		description  string
+		wantMode     string
+		wantSections []string
+	}{
+		{
+			name:         "new product",
+			title:        "Validate the onboarding concept",
+			description:  "Run customer interviews, capture assumptions, and design low-cost validation for this new product idea before we commit scope.",
+			wantMode:     DiscoveryModeNewProduct,
+			wantSections: []string{"low-cost tests", "desirability signals", "decision framework"},
+		},
+		{
+			name:         "existing product",
+			title:        "Investigate checkout drop-off in the existing product",
+			description:  "Review support tickets, current funnel instrumentation, and usage data for the existing product before defining experiments.",
+			wantMode:     DiscoveryModeExistingProduct,
+			wantSections: []string{"prior feedback", "instrumentation baseline", "decision framework"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := Analyze(tc.title, &tc.description)
+			if plan.DiscoveryMode != tc.wantMode {
+				t.Fatalf("DiscoveryMode = %q, want %q", plan.DiscoveryMode, tc.wantMode)
+			}
+
+			report := Evaluate(plan)
+			var validation ArtifactContract
+			found := false
+			for _, contract := range report.ArtifactContract {
+				if contract.Slug == "validation-plan" {
+					validation = contract
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("validation-plan contract missing from %#v", report.ArtifactContract)
+			}
+			for _, wantSection := range tc.wantSections {
+				if !containsString(validation.RequiredSections, wantSection) {
+					t.Fatalf("validation required sections = %#v, want %q", validation.RequiredSections, wantSection)
+				}
+			}
+		})
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}

@@ -115,6 +115,49 @@ func TestAnalyzeClassifiesVerifiableRequestsAsExecutionFirst(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDiscoveryModeClassification(t *testing.T) {
+	tests := []struct {
+		name        string
+		title       string
+		description string
+		wantMode    string
+	}{
+		{
+			name:        "new product discovery",
+			title:       "Validate the onboarding concept before we spec it",
+			description: "Run customer interviews, capture assumptions, and design low-cost validation for this new product idea before committing scope.",
+			wantMode:    DiscoveryModeNewProduct,
+		},
+		{
+			name:        "existing product discovery",
+			title:       "Investigate checkout drop-off in the existing product",
+			description: "Review support tickets, current funnel instrumentation, and usage data for the existing product before defining experiments.",
+			wantMode:    DiscoveryModeExistingProduct,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := Analyze(tc.title, &tc.description)
+			if plan.Playbook != PlaybookDiscovery {
+				t.Fatalf("Playbook = %q, want %q", plan.Playbook, PlaybookDiscovery)
+			}
+			if plan.DiscoveryMode != tc.wantMode {
+				t.Fatalf("DiscoveryMode = %q, want %q", plan.DiscoveryMode, tc.wantMode)
+			}
+
+			metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+			parsed, ok := Parse(metadata)
+			if !ok {
+				t.Fatal("Parse(metadata) = false, want true")
+			}
+			if parsed.DiscoveryMode != tc.wantMode {
+				t.Fatalf("parsed DiscoveryMode = %q, want %q", parsed.DiscoveryMode, tc.wantMode)
+			}
+		})
+	}
+}
+
 func TestAnalyzeWithDelegatedPolicyChoosesAutonomousInternalReview(t *testing.T) {
 	description := "Generate 10 homepage design options, compare them, and recommend a direction that stays on-brand."
 

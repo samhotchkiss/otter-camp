@@ -295,6 +295,13 @@ func resolveArtifactPath(repoRoot, repoPath string) (string, error) {
 }
 
 func scaffoldContent(now time.Time, task repo.ProjectTask, plan taskplan.Plan, artifact taskplan.PlannedArtifact) string {
+	if plan.Playbook == taskplan.PlaybookDiscovery {
+		return discoveryScaffoldContent(now, task, plan, artifact)
+	}
+	return genericScaffoldContent(now, task, plan, artifact)
+}
+
+func genericScaffoldContent(now time.Time, task repo.ProjectTask, plan taskplan.Plan, artifact taskplan.PlannedArtifact) string {
 	taskLabel := task.ID.String()
 	if task.TaskNumber > 0 {
 		taskLabel = fmt.Sprintf("OC-%d", task.TaskNumber)
@@ -318,6 +325,122 @@ Replace this scaffold with the durable planning output for this artifact.
 ## Notes
 - Keep decisions, trade-offs, and unresolved questions in this file so downstream work can link to it directly.
 `, strings.TrimSpace(artifact.Title), strings.TrimSpace(artifact.Kind), strings.TrimSpace(plan.Playbook), taskLabel, now.UTC().Format(time.RFC3339), strings.TrimSpace(plan.ProjectStage), strings.TrimSpace(plan.EvidenceMaturity), strings.TrimSpace(plan.RiskLevel)))
+}
+
+func discoveryScaffoldContent(now time.Time, task repo.ProjectTask, plan taskplan.Plan, artifact taskplan.PlannedArtifact) string {
+	taskLabel := task.ID.String()
+	if task.TaskNumber > 0 {
+		taskLabel = fmt.Sprintf("OC-%d", task.TaskNumber)
+	}
+
+	mode := taskplan.NormalizeDiscoveryMode(plan.DiscoveryMode)
+	if mode == "" {
+		mode = taskplan.DiscoveryModeNewProduct
+	}
+
+	var body string
+	switch strings.TrimSpace(artifact.Slug) {
+	case "problem-brief":
+		body = strings.TrimSpace(`
+## Problem
+- Describe the customer problem and why it matters now.
+
+## Target User
+- Name the user or buyer segment and what context they are in.
+
+## Evidence Gaps
+- Call out what is still unknown and what evidence is missing before the team should commit scope.
+`)
+	case "research-plan":
+		body = strings.TrimSpace(`
+## Objectives
+- State the decisions this discovery pass must unlock.
+
+## Methods
+- List the research methods, interview format, or evidence collection approach you will use.
+
+## Participants
+- Name the participant profile, sample size, or internal data sources you will rely on.
+`)
+	case "assumption-log":
+		body = strings.TrimSpace(`
+## Assumptions
+- Record the highest-risk assumptions the team is making today.
+
+## Risks
+- Note what could go wrong if those assumptions are wrong.
+
+## Open Questions
+- Capture unresolved questions that still block a confident decision.
+`)
+	case "validation-plan":
+		if mode == taskplan.DiscoveryModeExistingProduct {
+			body = strings.TrimSpace(`
+## Ideas Explored
+- Capture the current product problems, workflow changes, or solution directions considered.
+
+## Assumptions
+- Record the assumptions about current user behavior and the likely causes behind it.
+
+## Validation Experiments
+- Define experiments on observed usage before expanding scope or committing delivery work.
+
+## Prior Feedback
+- Summarize the support tickets, customer feedback, research notes, or win/loss evidence that already exists.
+
+## Instrumentation Baseline
+- Note the events, funnels, cohorts, dashboards, or telemetry gaps needed to measure the change.
+
+## Decision Framework
+- State the continue / pivot / stop criteria and who will make the call once the evidence comes back.
+`)
+		} else {
+			body = strings.TrimSpace(`
+## Ideas Explored
+- Capture the concepts, problem framings, or opportunity spaces explored so far.
+
+## Assumptions
+- Record the highest-risk assumptions about customer demand, willingness to try, and market reach.
+
+## Validation Experiments
+- List the experiments you will run before writing specs or committing build scope.
+
+## Low-Cost Tests
+- Prefer interviews, concierge workflows, landing pages, prototypes, or smoke tests before heavy implementation.
+
+## Desirability Signals
+- Define the desirability and market-reach evidence that proves the concept is worth pursuing further.
+
+## Decision Framework
+- State the go / no-go criteria, what would invalidate the concept, and who will make the call.
+`)
+		}
+	default:
+		return genericScaffoldContent(now, task, plan, artifact)
+	}
+
+	return strings.TrimSpace(fmt.Sprintf(`
+# %s
+
+- Kind: %s
+- Playbook: %s
+- Discovery mode: %s
+- Source task: %s
+- Generated at: %s
+
+## Purpose
+Capture durable discovery output that downstream strategy, spec, and backlog work can reference directly.
+
+%s
+
+## Context
+- Project stage: %s
+- Evidence maturity: %s
+- Risk level: %s
+
+## Notes
+- Keep decisions, trade-offs, and unresolved questions in this file so downstream work can link to it directly.
+`, strings.TrimSpace(artifact.Title), strings.TrimSpace(artifact.Kind), strings.TrimSpace(plan.Playbook), mode, taskLabel, now.UTC().Format(time.RFC3339), body, strings.TrimSpace(plan.ProjectStage), strings.TrimSpace(plan.EvidenceMaturity), strings.TrimSpace(plan.RiskLevel)))
 }
 
 func normalizeSlug(value string) string {
