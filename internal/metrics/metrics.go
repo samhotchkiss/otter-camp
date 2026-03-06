@@ -57,6 +57,10 @@ var (
 		Name: "ottercamp_agent_turn_dispatch_suppressed_total",
 		Help: "Total suppressed agent turn dispatch attempts by reason.",
 	}, []string{"reason"})
+	AgentTurnValidationLoopBlockedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ottercamp_agent_turn_validation_loop_blocked_total",
+		Help: "Total task-scoped validation loop blockers raised by tool and failure code.",
+	}, []string{"tool_name", "failure_code"})
 )
 
 func Register() {
@@ -69,6 +73,7 @@ func Register() {
 			MemoryItemsTotal,
 			AgentTurnsTotal,
 			AgentTurnDispatchSuppressedTotal,
+			AgentTurnValidationLoopBlockedTotal,
 		)
 	})
 }
@@ -146,6 +151,14 @@ func RecordAgentTurn(status string) {
 func RecordAgentTurnDispatchSuppressed(reason string) {
 	Register()
 	AgentTurnDispatchSuppressedTotal.WithLabelValues(normalizeLabel(reason, "unknown")).Inc()
+}
+
+func RecordAgentTurnValidationLoopBlock(toolName, failureCode string) {
+	Register()
+	AgentTurnValidationLoopBlockedTotal.WithLabelValues(
+		normalizeLabel(toolName, "unknown"),
+		normalizeLabel(failureCode, "unknown"),
+	).Inc()
 }
 
 func SetJobQueueDepth(jobType, status string, count float64) {
