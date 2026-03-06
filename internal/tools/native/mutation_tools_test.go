@@ -332,6 +332,7 @@ func TestEmailComposeCreatesDraftActionReviewInboxItem(t *testing.T) {
 
 type mockTaskRepo struct {
 	task                repo.ProjectTask
+	listByProjectTasks  []repo.ProjectTask
 	createdTasks        []repo.ProjectTask
 	getByIDErr          error
 	setFlowNodeErr      error
@@ -356,18 +357,57 @@ func (m *mockTaskRepo) Create(_ context.Context, task repo.ProjectTask) (repo.Pr
 		created.TaskNumber = 100 + m.createCalls
 	}
 	m.createdTasks = append(m.createdTasks, created)
+	m.storeTask(created)
 	return created, nil
 }
 
-func (m *mockTaskRepo) GetByID(context.Context, uuid.UUID) (repo.ProjectTask, error) {
+func (m *mockTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTask, error) {
 	if m.getByIDErr != nil {
 		return repo.ProjectTask{}, m.getByIDErr
+	}
+	if m.task.ID == id {
+		return m.task, nil
+	}
+	for _, task := range m.listByProjectTasks {
+		if task.ID == id {
+			return task, nil
+		}
+	}
+	for _, task := range m.createdTasks {
+		if task.ID == id {
+			return task, nil
+		}
 	}
 	return m.task, nil
 }
 
-func (m *mockTaskRepo) ListByProject(context.Context, uuid.UUID, ...string) ([]repo.ProjectTask, error) {
-	return nil, errors.New("not implemented")
+func (m *mockTaskRepo) ListByProject(_ context.Context, projectID uuid.UUID, _ ...string) ([]repo.ProjectTask, error) {
+	if m.listByProjectTasks != nil {
+		items := make([]repo.ProjectTask, 0, len(m.listByProjectTasks))
+		for _, task := range m.listByProjectTasks {
+			if projectID == uuid.Nil || task.ProjectID == projectID {
+				items = append(items, task)
+			}
+		}
+		return items, nil
+	}
+	items := make([]repo.ProjectTask, 0, 1+len(m.createdTasks))
+	seen := map[uuid.UUID]struct{}{}
+	if m.task.ID != uuid.Nil && (projectID == uuid.Nil || m.task.ProjectID == projectID) {
+		items = append(items, m.task)
+		seen[m.task.ID] = struct{}{}
+	}
+	for _, task := range m.createdTasks {
+		if projectID != uuid.Nil && task.ProjectID != projectID {
+			continue
+		}
+		if _, ok := seen[task.ID]; ok {
+			continue
+		}
+		items = append(items, task)
+		seen[task.ID] = struct{}{}
+	}
+	return items, nil
 }
 
 func (m *mockTaskRepo) SetFlowNode(_ context.Context, id uuid.UUID, flowNodeID *uuid.UUID) (repo.ProjectTask, error) {
@@ -398,7 +438,34 @@ func (m *mockTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.Pr
 		return repo.ProjectTask{}, m.updateErr
 	}
 	m.task = task
+	m.storeTask(task)
 	return m.task, nil
+}
+
+func (m *mockTaskRepo) storeTask(task repo.ProjectTask) {
+	if task.ID == uuid.Nil {
+		return
+	}
+	if m.task.ID == task.ID {
+		m.task = task
+	}
+	replaced := false
+	for i := range m.listByProjectTasks {
+		if m.listByProjectTasks[i].ID == task.ID {
+			m.listByProjectTasks[i] = task
+			replaced = true
+			break
+		}
+	}
+	if !replaced && m.listByProjectTasks != nil {
+		m.listByProjectTasks = append(m.listByProjectTasks, task)
+	}
+	for i := range m.createdTasks {
+		if m.createdTasks[i].ID == task.ID {
+			m.createdTasks[i] = task
+			return
+		}
+	}
 }
 
 type mockFlowNodeRepo struct {
@@ -780,6 +847,214 @@ func TestTaskUpdateQueuedOversizedTaskPublishesTaskCreatedEventsForDecomposedChi
 		if payload["decomposition_parent"] != taskID.String() {
 			t.Fatalf("decomposition_parent = %v, want %s", payload["decomposition_parent"], taskID.String())
 		}
+	}
+}
+
+func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := strings.Join([]string{
+		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
+		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
+		"- Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots.",
+	}, "\n")
+	childOneID := uuid.New()
+	childTwoID := uuid.New()
+	childOneMetadata := json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s","workstream_index":2}`, taskID))
+	childTwoMetadata := json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s","workstream_index":3}`, taskID))
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      projectID,
+			Title:          "Blog migration epic",
+			Description:    &description,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+			Metadata:       json.RawMessage(`{}`),
+		},
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				Title:          "Blog migration epic",
+				Description:    &description,
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Metadata:       json.RawMessage(`{}`),
+			},
+			{
+				ID:             childOneID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     2,
+				Title:          "Blog migration epic (Workstream 2)",
+				Description: func() *string {
+					value := "Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage."
+					return &value
+				}(),
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Metadata:       childOneMetadata,
+			},
+			{
+				ID:             childTwoID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     3,
+				Title:          "Blog migration epic (Workstream 3)",
+				Description: func() *string {
+					value := "Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots."
+					return &value
+				}(),
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Metadata:       childTwoMetadata,
+			},
+		},
+	}
+	publisher := &recordingEventPublisher{}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		Events:        publisher,
+	})
+	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: validExecutableTemplateNodeList(flowTemplateID),
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if tasks.createCalls != 0 {
+		t.Fatalf("create calls = %d, want 0", tasks.createCalls)
+	}
+
+	decomp, ok := out["decomposition"].(map[string]any)
+	if !ok {
+		t.Fatalf("decomposition output = %T, want map[string]any", out["decomposition"])
+	}
+	childIDs, ok := decomp["child_task_ids"].([]string)
+	if !ok {
+		t.Fatalf("decomposition.child_task_ids = %T, want []string", decomp["child_task_ids"])
+	}
+	if len(childIDs) != 2 {
+		t.Fatalf("decomposition.child_task_ids len = %d, want 2", len(childIDs))
+	}
+	if mustUUIDFromAny(t, childIDs[0]) != childOneID {
+		t.Fatalf("first child task id = %v, want %s", childIDs[0], childOneID)
+	}
+	if mustUUIDFromAny(t, childIDs[1]) != childTwoID {
+		t.Fatalf("second child task id = %v, want %s", childIDs[1], childTwoID)
+	}
+
+	for _, event := range publisher.events {
+		if event.EventType == "task.created" {
+			t.Fatalf("unexpected task.created event for reused decomposition child: %+v", event)
+		}
+	}
+}
+
+func TestTaskCreateProjectSessionReusesExistingDraftTask(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+	existingTaskID := uuid.New()
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:                  existingTaskID,
+			OrganizationID:      orgID,
+			ProjectID:           projectID,
+			TaskNumber:          3,
+			Title:               "Set up CMS import mapping",
+			WorkStatus:          "draft",
+			BlocksScope:         "none",
+			RequiresHumanReview: false,
+			Metadata:            json.RawMessage(`{}`),
+		},
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:                  existingTaskID,
+				OrganizationID:      orgID,
+				ProjectID:           projectID,
+				TaskNumber:          3,
+				Title:               "Set up CMS import mapping",
+				WorkStatus:          "draft",
+				BlocksScope:         "none",
+				RequiresHumanReview: false,
+				Metadata:            json.RawMessage(`{}`),
+			},
+		},
+	}
+	sessions := &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.chatSessions = sessions
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+	})
+
+	out, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id":            projectID.String(),
+		"title":                 "Set up CMS import mapping",
+		"description":           "Map legacy markdown content to the CMS schema and validate canonical slugs.",
+		"blocks_scope":          "all",
+		"requires_human_review": true,
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if tasks.createCalls != 0 {
+		t.Fatalf("create calls = %d, want 0", tasks.createCalls)
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+	if tasks.task.Description == nil || !strings.Contains(*tasks.task.Description, "Map legacy markdown content") {
+		t.Fatalf("description = %v, want repaired description", tasks.task.Description)
+	}
+	if tasks.task.BlocksScope != "all" {
+		t.Fatalf("blocks_scope = %q, want all", tasks.task.BlocksScope)
+	}
+	if !tasks.task.RequiresHumanReview {
+		t.Fatal("requires_human_review = false, want true")
+	}
+
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if mustUUIDFromAny(t, taskOut["id"]) != existingTaskID {
+		t.Fatalf("task.id = %v, want %s", taskOut["id"], existingTaskID)
+	}
+	if taskOut["task_number"] != 3 {
+		t.Fatalf("task_number = %v, want 3", taskOut["task_number"])
 	}
 }
 
@@ -2168,18 +2443,33 @@ func (f *fakeAgentRepo) Update(_ context.Context, agent repo.Agent) (repo.Agent,
 
 type fakeChatSessionRepo struct {
 	lastCreated repo.ChatSession
+	sessions    []repo.ChatSession
 }
 
 func (f *fakeChatSessionRepo) Create(_ context.Context, s repo.ChatSession) (repo.ChatSession, error) {
-	s.ID = uuid.New()
+	if s.ID == uuid.Nil {
+		s.ID = uuid.New()
+	}
 	f.lastCreated = s
+	f.sessions = append(f.sessions, s)
 	return s, nil
 }
-func (f *fakeChatSessionRepo) GetByID(context.Context, uuid.UUID) (repo.ChatSession, error) {
-	return repo.ChatSession{}, nil
+func (f *fakeChatSessionRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+	for _, session := range f.sessions {
+		if session.ID == id {
+			return session, nil
+		}
+	}
+	return repo.ChatSession{}, repo.ErrNotFound
 }
-func (f *fakeChatSessionRepo) ListByOrg(context.Context, uuid.UUID) ([]repo.ChatSession, error) {
-	return nil, nil
+func (f *fakeChatSessionRepo) ListByOrg(_ context.Context, organizationID uuid.UUID) ([]repo.ChatSession, error) {
+	items := make([]repo.ChatSession, 0, len(f.sessions))
+	for _, session := range f.sessions {
+		if session.OrganizationID == organizationID {
+			items = append(items, session)
+		}
+	}
+	return items, nil
 }
 
 type fakeParticipantRepo struct {
@@ -2191,8 +2481,14 @@ func (f *fakeParticipantRepo) Create(_ context.Context, p repo.ChatParticipant) 
 	f.participants = append(f.participants, p)
 	return p, nil
 }
-func (f *fakeParticipantRepo) ListBySession(context.Context, uuid.UUID) ([]repo.ChatParticipant, error) {
-	return nil, nil
+func (f *fakeParticipantRepo) ListBySession(_ context.Context, sessionID uuid.UUID) ([]repo.ChatParticipant, error) {
+	items := make([]repo.ChatParticipant, 0, len(f.participants))
+	for _, participant := range f.participants {
+		if participant.SessionID == sessionID && participant.RemovedAt == nil {
+			items = append(items, participant)
+		}
+	}
+	return items, nil
 }
 
 func TestProjectCreatePublishesStaffingEventAndDoesNotAutoAssignAgents(t *testing.T) {
@@ -2366,6 +2662,81 @@ func TestSessionCreateAutoAddsProjectParticipants(t *testing.T) {
 	}
 	if participants.participants[1].ParticipantID != frankID {
 		t.Fatalf("second participant = %v, want Frank", participants.participants[1].ParticipantID)
+	}
+}
+
+func TestSessionCreateProjectScopeReusesCanonicalSession(t *testing.T) {
+	frankID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+	loriID := uuid.New()
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	projectID := uuid.New()
+	sessionID := uuid.New()
+
+	sessions := &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+	participants := &fakeParticipantRepo{}
+	assignments := &fakeAssignmentRepo{
+		assignments: []repo.AgentProjectAssignment{
+			{AgentID: frankID, ProjectID: projectID, Role: "pm", IsActive: true},
+			{AgentID: loriID, ProjectID: projectID, Role: "worker", IsActive: true},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.chatSessions = sessions
+	executor.participants = participants
+	executor.assignments = assignments
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &frankID,
+	})
+
+	first, err := executor.Execute(ctx, "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Sam.blog recovery",
+	})
+	if err != nil {
+		t.Fatalf("first session.create: %v", err)
+	}
+	second, err := executor.Execute(ctx, "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Sam.blog recovery 2",
+	})
+	if err != nil {
+		t.Fatalf("second session.create: %v", err)
+	}
+
+	firstSession := first["session"].(map[string]any)
+	secondSession := second["session"].(map[string]any)
+	if mustUUIDFromAny(t, firstSession["id"]) != sessionID {
+		t.Fatalf("first session id = %v, want %s", firstSession["id"], sessionID)
+	}
+	if mustUUIDFromAny(t, secondSession["id"]) != sessionID {
+		t.Fatalf("second session id = %v, want %s", secondSession["id"], sessionID)
+	}
+	if len(sessions.sessions) != 1 {
+		t.Fatalf("session rows = %d, want 1", len(sessions.sessions))
+	}
+	if len(participants.participants) != 2 {
+		t.Fatalf("participant rows = %d, want 2", len(participants.participants))
+	}
+	if autoParticipants, ok := second["auto_participants"]; ok && autoParticipants != nil {
+		t.Fatalf("second auto_participants = %v, want nil/absent when reusing participants", autoParticipants)
 	}
 }
 

@@ -2356,6 +2356,145 @@ func TestIntegrationTaskUpdatePublishesStatusChangedDomainEvent(t *testing.T) {
 	}
 }
 
+func TestIntegrationSessionCreateProjectScopeReusesExistingSession(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+
+	first, err := executor.Execute(ctx, "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Sam.blog recovery",
+	})
+	if err != nil {
+		t.Fatalf("first session.create: %v", err)
+	}
+	second, err := executor.Execute(ctx, "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Sam.blog recovery 2",
+	})
+	if err != nil {
+		t.Fatalf("second session.create: %v", err)
+	}
+
+	firstSession := first["session"].(map[string]any)
+	secondSession := second["session"].(map[string]any)
+	firstID := mustUUIDValue(t, firstSession["id"])
+	secondID := mustUUIDValue(t, secondSession["id"])
+	if firstID != secondID {
+		t.Fatalf("session ids = %s and %s, want reuse of canonical session", firstID, secondID)
+	}
+
+	var sessionCount int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE organization_id = $1
+		  AND scope_type = 'project'
+		  AND scope_id = $2
+		  AND status = 'active'
+	`, orgID, project.ID).Scan(&sessionCount); err != nil {
+		t.Fatalf("count active project sessions: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Fatalf("active project sessions = %d, want 1", sessionCount)
+	}
+}
+
+func TestIntegrationProjectSessionTaskPlanningIsIdempotent(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Sam.blog recovery",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, agent.ID, sessionID)
+
+	plannedTasks := []struct {
+		title       string
+		description string
+	}{
+		{
+			title:       "Import legacy posts into the CMS",
+			description: "Map legacy markdown entries into the CMS schema and verify canonical slug preservation.",
+		},
+		{
+			title:       "Backfill media asset redirects",
+			description: "Upload migrated media assets and validate redirect coverage for existing production URLs.",
+		},
+		{
+			title:       "Validate taxonomy parity",
+			description: "Compare migrated tags and categories against the legacy site and fix parity gaps.",
+		},
+	}
+
+	firstPassIDs := make([]uuid.UUID, 0, len(plannedTasks))
+	for _, plannedTask := range plannedTasks {
+		out, execErr := executor.Execute(projectCtx, "task.create", map[string]any{
+			"project_id":  project.ID.String(),
+			"title":       plannedTask.title,
+			"description": plannedTask.description,
+		})
+		if execErr != nil {
+			t.Fatalf("first-pass task.create for %q: %v", plannedTask.title, execErr)
+		}
+		firstPassIDs = append(firstPassIDs, mustUUIDValue(t, out["task"].(map[string]any)["id"]))
+	}
+
+	for idx, plannedTask := range plannedTasks {
+		out, execErr := executor.Execute(projectCtx, "task.create", map[string]any{
+			"project_id":  project.ID.String(),
+			"title":       plannedTask.title,
+			"description": plannedTask.description,
+		})
+		if execErr != nil {
+			t.Fatalf("second-pass task.create for %q: %v", plannedTask.title, execErr)
+		}
+		if repeatedID := mustUUIDValue(t, out["task"].(map[string]any)["id"]); repeatedID != firstPassIDs[idx] {
+			t.Fatalf("second-pass task id for %q = %s, want %s", plannedTask.title, repeatedID, firstPassIDs[idx])
+		}
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	tasks, err := taskRepo.ListByProject(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks: %v", err)
+	}
+	if len(tasks) != len(plannedTasks) {
+		t.Fatalf("project task count = %d, want %d", len(tasks), len(plannedTasks))
+	}
+
+	titleSet := make(map[string]struct{}, len(tasks))
+	numberSet := make(map[int]struct{}, len(tasks))
+	for _, task := range tasks {
+		if _, exists := titleSet[task.Title]; exists {
+			t.Fatalf("duplicate task title found after repeated recovery: %q", task.Title)
+		}
+		titleSet[task.Title] = struct{}{}
+		if _, exists := numberSet[task.TaskNumber]; exists {
+			t.Fatalf("duplicate task number found after repeated recovery: %d", task.TaskNumber)
+		}
+		numberSet[task.TaskNumber] = struct{}{}
+	}
+}
+
 func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
@@ -2725,6 +2864,14 @@ func integrationExecCtxWith(orgID, agentID uuid.UUID) context.Context {
 	return mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
 		OrganizationID: orgID,
 		AgentID:        &agentID,
+	})
+}
+
+func integrationExecCtxWithSession(orgID, agentID, sessionID uuid.UUID) context.Context {
+	return mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
 	})
 }
 
