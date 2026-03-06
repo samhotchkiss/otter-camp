@@ -871,6 +871,9 @@ func TestTaskCreateSubjectiveMultiOptionAutoAssignsReviewRefinementTemplate(t *t
 	if planning["mode"] != "review_and_refinement" {
 		t.Fatalf("planning.mode = %v, want review_and_refinement", planning["mode"])
 	}
+	if planning["playbook"] != taskplan.PlaybookStrategy {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookStrategy)
+	}
 	stages, ok := planning["planned_stages"].([]string)
 	if !ok {
 		rawStages, castOK := planning["planned_stages"].([]any)
@@ -896,6 +899,9 @@ func TestTaskCreateSubjectiveMultiOptionAutoAssignsReviewRefinementTemplate(t *t
 	}
 	if planningMeta["default_template_slug"] != "default-review-refinement" {
 		t.Fatalf("default_template_slug = %v, want default-review-refinement", planningMeta["default_template_slug"])
+	}
+	if planningMeta["playbook"] != taskplan.PlaybookStrategy {
+		t.Fatalf("playbook = %v, want %s", planningMeta["playbook"], taskplan.PlaybookStrategy)
 	}
 }
 
@@ -981,6 +987,9 @@ func TestTaskCreateDelegatedCreativePolicyUsesInternalReviewTemplate(t *testing.
 	if planning["default_template_slug"] != taskplan.InternalReviewTemplate {
 		t.Fatalf("default_template_slug = %v, want %s", planning["default_template_slug"], taskplan.InternalReviewTemplate)
 	}
+	if planning["playbook"] != taskplan.PlaybookStrategy {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookStrategy)
+	}
 	reviewPolicy, ok := planning["review_policy"].(map[string]any)
 	if !ok {
 		t.Fatalf("planning.review_policy = %T, want map[string]any", planning["review_policy"])
@@ -1002,6 +1011,9 @@ func TestTaskCreateDelegatedCreativePolicyUsesInternalReviewTemplate(t *testing.
 	}
 	if planningMeta["default_template_slug"] != taskplan.InternalReviewTemplate {
 		t.Fatalf("default_template_slug = %v, want %s", planningMeta["default_template_slug"], taskplan.InternalReviewTemplate)
+	}
+	if planningMeta["playbook"] != taskplan.PlaybookStrategy {
+		t.Fatalf("playbook = %v, want %s", planningMeta["playbook"], taskplan.PlaybookStrategy)
 	}
 }
 
@@ -1035,14 +1047,32 @@ func TestTaskCreateVerifiableRequestDoesNotAutoAssignReviewRefinementTemplate(t 
 	if err != nil {
 		t.Fatalf("task.create: %v", err)
 	}
-	if _, ok := out["planning"]; ok {
-		t.Fatalf("planning output should be omitted for execution-first work, got %v", out["planning"])
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["mode"] != taskplan.ModeExecutionFirst {
+		t.Fatalf("planning.mode = %v, want %s", planning["mode"], taskplan.ModeExecutionFirst)
+	}
+	if planning["playbook"] != taskplan.PlaybookExecutionSpec {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookExecutionSpec)
 	}
 	if len(tasks.createdTasks) != 1 {
 		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
 	}
 	if tasks.createdTasks[0].FlowTemplateID != nil {
 		t.Fatalf("flow_template_id = %v, want nil", tasks.createdTasks[0].FlowTemplateID)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(tasks.createdTasks[0].Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	planningMeta, ok := metadata["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning metadata = %T, want map[string]any", metadata["planning"])
+	}
+	if planningMeta["playbook"] != taskplan.PlaybookExecutionSpec {
+		t.Fatalf("playbook = %v, want %s", planningMeta["playbook"], taskplan.PlaybookExecutionSpec)
 	}
 }
 
@@ -1235,6 +1265,9 @@ func TestTaskUpdateReviewPolicyOverrideBeatsProjectPolicyWhenQueuing(t *testing.
 	}
 	if planning["default_template_slug"] != taskplan.InternalReviewTemplate {
 		t.Fatalf("default_template_slug = %v, want %s", planning["default_template_slug"], taskplan.InternalReviewTemplate)
+	}
+	if planning["playbook"] != taskplan.PlaybookStrategy {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookStrategy)
 	}
 	policy, ok := taskplan.ParseReviewPolicy(tasks.task.Metadata)
 	if !ok {

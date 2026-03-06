@@ -1820,6 +1820,43 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	if task.RequiresHumanReview {
 		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  ⚠  Human review required"))
 	}
+	if task.PlanningPlaybook != "" {
+		formatPlanningLabel := func(value string) string {
+			value = strings.TrimSpace(strings.ReplaceAll(value, "_", " "))
+			if value == "" {
+				return "unspecified"
+			}
+			return value
+		}
+		lines = append(lines, "")
+		lines = append(lines, divider(width, "Planning"))
+		lines = append(lines, styleMuted.Render("  Playbook: "+formatPlanningLabel(task.PlanningPlaybook)))
+		lines = append(lines, styleMuted.Render(fmt.Sprintf(
+			"  Context: work type %s · stage %s · evidence %s · risk %s",
+			formatPlanningLabel(task.PlanningWorkType),
+			formatPlanningLabel(task.PlanningProjectStage),
+			formatPlanningLabel(task.PlanningEvidenceMaturity),
+			formatPlanningLabel(task.PlanningRiskLevel),
+		)))
+		if len(task.PlanningArtifacts) > 0 {
+			lines = append(lines, styleMuted.Render("  Planned artifacts:"))
+			for _, artifact := range task.PlanningArtifacts {
+				title := strings.TrimSpace(artifact.Title)
+				if title == "" {
+					title = formatPlanningLabel(artifact.Slug)
+				}
+				lines = append(lines, styleText.Render("    - "+truncate(title, width-8)))
+			}
+		}
+		if len(task.PlanningFollowOns) > 0 {
+			lines = append(lines, styleMuted.Render("  Suggested next steps:"))
+			for _, suggestion := range task.PlanningFollowOns {
+				for _, wrapped := range wrapText(strings.TrimSpace(suggestion), maxInt(10, width-8)) {
+					lines = append(lines, styleText.Render("    - "+wrapped))
+				}
+			}
+		}
+	}
 	// Flow pipeline visualization
 	if len(task.FlowNodes) > 0 {
 		lines = append(lines, "")

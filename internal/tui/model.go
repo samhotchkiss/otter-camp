@@ -1060,6 +1060,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rec.FlowCurrentNodeID = typed.Detail.FlowCurrentNodeID
 		rec.FlowNodes = append([]TaskFlowNode(nil), typed.Detail.FlowNodes...)
 		rec.FlowEdges = append([]TaskFlowEdge(nil), typed.Detail.FlowEdges...)
+		rec.PlanningPlaybook = typed.Detail.PlanningPlaybook
+		rec.PlanningWorkType = typed.Detail.PlanningWorkType
+		rec.PlanningProjectStage = typed.Detail.PlanningProjectStage
+		rec.PlanningEvidenceMaturity = typed.Detail.PlanningEvidenceMaturity
+		rec.PlanningRiskLevel = typed.Detail.PlanningRiskLevel
+		rec.PlanningArtifacts = append([]TaskPlanningArtifact(nil), typed.Detail.PlanningArtifacts...)
+		rec.PlanningFollowOns = append([]string(nil), typed.Detail.PlanningFollowOns...)
 		rec.RequiresHumanReview = typed.Detail.RequiresHumanReview
 		rec.BranchName = typed.Detail.BranchName
 		rec.FlowSteps = typed.Detail.FlowSteps

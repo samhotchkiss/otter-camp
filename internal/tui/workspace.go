@@ -71,33 +71,40 @@ type sidebarNode struct {
 }
 
 type taskRecord struct {
-	ID                  string
-	ProjectID           string
-	TaskNumber          int
-	Title               string
-	Description         string
-	AcceptanceCriteria  string
-	Subtasks            []string
-	SessionID           string // preferred execution session (active when present, otherwise recent)
-	DiscussionSessionID string
-	ActiveExecutionID   string
-	RecentExecutionID   string
-	Status              string
-	Priority            int
-	Flow                int
-	FlowNodeName        string // human-readable current flow step name
-	AgentName           string // display_name of assigned agent
-	RequiresHumanReview bool
-	History             []string
-	Events              []TaskEvent
-	BranchName          string
-	FlowCurrentNodeID   string
-	FlowNodes           []TaskFlowNode
-	FlowEdges           []TaskFlowEdge
-	SelectedFlowNodeID  string
-	FlowSteps           []FlowStep
-	SubtaskItems        []SubtaskItem
-	Dependencies        []TaskDependency
+	ID                       string
+	ProjectID                string
+	TaskNumber               int
+	Title                    string
+	Description              string
+	AcceptanceCriteria       string
+	Subtasks                 []string
+	SessionID                string // preferred execution session (active when present, otherwise recent)
+	DiscussionSessionID      string
+	ActiveExecutionID        string
+	RecentExecutionID        string
+	Status                   string
+	Priority                 int
+	Flow                     int
+	FlowNodeName             string // human-readable current flow step name
+	AgentName                string // display_name of assigned agent
+	RequiresHumanReview      bool
+	History                  []string
+	Events                   []TaskEvent
+	BranchName               string
+	FlowCurrentNodeID        string
+	FlowNodes                []TaskFlowNode
+	FlowEdges                []TaskFlowEdge
+	SelectedFlowNodeID       string
+	PlanningPlaybook         string
+	PlanningWorkType         string
+	PlanningProjectStage     string
+	PlanningEvidenceMaturity string
+	PlanningRiskLevel        string
+	PlanningArtifacts        []TaskPlanningArtifact
+	PlanningFollowOns        []string
+	FlowSteps                []FlowStep
+	SubtaskItems             []SubtaskItem
+	Dependencies             []TaskDependency
 }
 
 type inboxItem struct {
