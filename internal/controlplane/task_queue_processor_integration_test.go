@@ -22,6 +22,7 @@ import (
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
@@ -327,6 +328,257 @@ func TestTaskQueueProcessorIntegrationCompletingGateStartsNextQueuedTask(t *test
 		}
 		return regular.WorkStatus == "in_progress", nil
 	})
+}
+
+func TestTaskQueueProcessorIntegrationLowRiskAsyncDecisionContinuesAndEmitsReviewArtifactEX248(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Async Reviewer", "reviewer")
+	template := seedTaskQueueReviewCompletionFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, fx.agent.ID, reviewer.ID)
+	description := "Use a reasonable assumption for the placeholder homepage copy, keep the choice low-risk, and confirm later."
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Draft homepage copy",
+		Description:     &description,
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	inboxRepo := repo.NewInboxItemRepo(fx.pool)
+
+	var (
+		taskRecord repo.ProjectTask
+		runRecord  Run
+		artifact   repo.InboxItem
+	)
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		var waitErr error
+		taskRecord, waitErr = taskRepo.GetByID(ctx, created.ID)
+		if waitErr != nil {
+			return false, waitErr
+		}
+		if taskRecord.WorkStatus != "in_progress" || taskRecord.CurrentFlowNodeID == nil {
+			return false, nil
+		}
+
+		runs, waitErr := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			Status:         "in_progress",
+			TriggerType:    taskQueueTriggerType,
+			Limit:          10,
+		})
+		if waitErr != nil {
+			return false, waitErr
+		}
+		if len(runs) == 0 {
+			return false, nil
+		}
+		runRecord = runs[0]
+
+		items, waitErr := inboxRepo.ListBroadcast(ctx, fx.org.ID, repo.InboxListOptions{
+			IncludeActed: true,
+			ItemType:     "system_alert",
+			Limit:        50,
+		})
+		if waitErr != nil {
+			return false, waitErr
+		}
+		var found bool
+		artifact, found = findAsyncDecisionArtifact(items, created.ID, taskplan.AsyncDecisionProceedAndFlag)
+		return found, nil
+	})
+
+	if taskRecord.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", taskRecord.WorkStatus)
+	}
+	if runRecord.ID == uuid.Nil {
+		t.Fatal("expected async run to start for low-risk task")
+	}
+	if artifact.SourceTaskID == nil || *artifact.SourceTaskID != created.ID {
+		t.Fatalf("artifact source_task_id = %v, want %s", artifact.SourceTaskID, created.ID)
+	}
+}
+
+func TestTaskQueueProcessorIntegrationHighRiskAsyncDecisionPausesTaskEX248(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Async Reviewer", "reviewer")
+	template := seedTaskQueueReviewCompletionFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, fx.agent.ID, reviewer.ID)
+	description := "This pricing decision is irreversible, affects billing, and must not be guessed."
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Resolve production pricing migration",
+		Description:     &description,
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	inboxRepo := repo.NewInboxItemRepo(fx.pool)
+
+	var (
+		taskRecord repo.ProjectTask
+		artifact   repo.InboxItem
+	)
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		var waitErr error
+		taskRecord, waitErr = taskRepo.GetByID(ctx, created.ID)
+		if waitErr != nil {
+			return false, waitErr
+		}
+		if taskRecord.WorkStatus != "review" {
+			return false, nil
+		}
+
+		items, waitErr := inboxRepo.ListBroadcast(ctx, fx.org.ID, repo.InboxListOptions{
+			IncludeActed: true,
+			ItemType:     "system_alert",
+			Limit:        50,
+		})
+		if waitErr != nil {
+			return false, waitErr
+		}
+		var found bool
+		artifact, found = findAsyncDecisionArtifact(items, created.ID, taskplan.AsyncDecisionHardStop)
+		return found, nil
+	})
+
+	runs, err := runRepo.List(ctx, RunListFilter{
+		OrganizationID: fx.org.ID,
+		TaskID:         &created.ID,
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("List runs: %v", err)
+	}
+
+	if taskRecord.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", taskRecord.WorkStatus)
+	}
+	if taskRecord.CurrentFlowNodeID != nil {
+		t.Fatalf("task current_flow_node_id = %v, want nil before execution starts", taskRecord.CurrentFlowNodeID)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("run count = %d, want 0 for hard-stop task", len(runs))
+	}
+	if artifact.SourceTaskID == nil || *artifact.SourceTaskID != created.ID {
+		t.Fatalf("artifact source_task_id = %v, want %s", artifact.SourceTaskID, created.ID)
+	}
+}
+
+func TestTaskQueueProcessorIntegrationReviewCheckpointDoesNotFreezeParallelWorkEX248(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Async Reviewer", "reviewer")
+	template := seedTaskQueueReviewCompletionFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, fx.agent.ID, reviewer.ID)
+	reviewDescription := "Prepare the launch direction, then pause for review before finalizing the selected concept."
+
+	gateTask, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Launch direction checkpoint",
+		Description:     &reviewDescription,
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		BlocksScope:     "all",
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask gate: %v", err)
+	}
+	regularTask, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Implement onboarding API",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		BlocksScope:     "none",
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask regular: %v", err)
+	}
+
+	if _, err := fx.tasks.TransitionStatus(ctx, gateTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus gate queued: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, regularTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus regular queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+
+	var (
+		gateRecord    repo.ProjectTask
+		regularRecord repo.ProjectTask
+	)
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		var waitErr error
+		gateRecord, waitErr = taskRepo.GetByID(ctx, gateTask.ID)
+		if waitErr != nil {
+			return false, waitErr
+		}
+		regularRecord, waitErr = taskRepo.GetByID(ctx, regularTask.ID)
+		if waitErr != nil {
+			return false, waitErr
+		}
+		if gateRecord.WorkStatus != "review" || regularRecord.WorkStatus != "in_progress" {
+			return false, nil
+		}
+
+		runs, waitErr := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &regularTask.ID,
+			Status:         "in_progress",
+			TriggerType:    taskQueueTriggerType,
+			Limit:          10,
+		})
+		if waitErr != nil {
+			return false, waitErr
+		}
+		return len(runs) > 0, nil
+	})
+
+	if gateRecord.WorkStatus != "review" {
+		t.Fatalf("gate task work_status = %q, want review", gateRecord.WorkStatus)
+	}
+	if regularRecord.WorkStatus != "in_progress" {
+		t.Fatalf("regular task work_status = %q, want in_progress", regularRecord.WorkStatus)
+	}
 }
 
 func TestTaskQueueProcessorIntegrationSchedulerRunCompletedOnTaskDone(t *testing.T) {
@@ -1732,19 +1984,71 @@ func seedTaskQueueFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 	startNode, err := nodeRepo.Create(ctx, repo.FlowNode{
 		FlowTemplateID: template.ID,
-		DisplayName:    "Start",
+		DisplayName:    "Work",
 		NodeType:       "work",
 		Position:       1,
 		MaxVisits:      3,
 	})
 	if err != nil {
-		t.Fatalf("create start flow node: %v", err)
+		t.Fatalf("create work flow node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create review flow node: %v", err)
+	}
+	completionNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create completion flow node: %v", err)
+	}
+
+	startNode.NextNodeID = &reviewNode.ID
+	reviewNode.NextNodeID = &completionNode.ID
+	if _, err := nodeRepo.Update(ctx, startNode); err != nil {
+		t.Fatalf("update work flow edge: %v", err)
+	}
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update review flow edge: %v", err)
 	}
 	template.StartNodeID = &startNode.ID
 	if _, err := templateRepo.Update(ctx, template); err != nil {
 		t.Fatalf("update flow template start node: %v", err)
 	}
 	return template
+}
+
+func findAsyncDecisionArtifact(items []repo.InboxItem, taskID uuid.UUID, outcome string) (repo.InboxItem, bool) {
+	for _, item := range items {
+		if item.SourceTaskID == nil || *item.SourceTaskID != taskID {
+			continue
+		}
+		if item.ItemType != "system_alert" {
+			continue
+		}
+		var payload map[string]any
+		if len(item.ActionPayload) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(item.ActionPayload, &payload); err != nil {
+			continue
+		}
+		if strings.TrimSpace(fmt.Sprint(payload["outcome"])) != outcome {
+			continue
+		}
+		return item, true
+	}
+	return repo.InboxItem{}, false
 }
 
 func waitForTaskQueueCondition(t *testing.T, timeout time.Duration, check func() (bool, error)) {

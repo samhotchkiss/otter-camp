@@ -13,6 +13,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 	projectResumedConsumerName      = "controlplane.project-resumed"
 	taskQueueTriggerType            = "scheduler"
 	taskSupervisorTriggerType       = "supervisor"
+	asyncDecisionPolicyName         = "async_forward_progress"
 )
 
 type taskQueueEventSubscriber interface {
@@ -40,6 +42,7 @@ type taskQueueProjectRepository interface {
 
 type taskQueueStatusTransitioner interface {
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
+	CreateInboxItem(ctx context.Context, req tasksvc.CreateInboxItemRequest) (*tasksvc.InboxItem, error)
 }
 
 type taskQueueFlowStarter interface {
@@ -234,6 +237,11 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
 		return nil
 	}
+	if paused, err := p.applyAsyncDecisionPolicy(ctx, event, taskRecord); err != nil {
+		return err
+	} else if paused {
+		return nil
+	}
 
 	if taskRecord.FlowTemplateID != nil {
 		return p.ensureFlowRun(ctx, event, taskRecord)
@@ -268,6 +276,88 @@ func (p *TaskQueueProcessor) processNextEligibleQueuedTask(ctx context.Context, 
 	return p.processQueuedTask(ctx, event, next.ID)
 }
 
+func (p *TaskQueueProcessor) applyAsyncDecisionPolicy(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask) (bool, error) {
+	decision := taskplan.AssessAsyncDecision(taskRecord.Title, taskRecord.Description)
+	if !decision.NeedsReviewArtifact() {
+		return false, nil
+	}
+	if err := p.createAsyncDecisionArtifact(ctx, taskRecord, decision); err != nil {
+		return false, err
+	}
+	if !decision.PausesTask() {
+		return false, nil
+	}
+	if _, err := p.taskService.TransitionStatus(ctx, taskRecord.ID, "review", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		var transitionErr tasksvc.ErrInvalidStatusTransition
+		if !errors.As(err, &transitionErr) {
+			return false, err
+		}
+	}
+	if err := p.processNextEligibleQueuedTask(ctx, event, taskRecord.ProjectID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (p *TaskQueueProcessor) createAsyncDecisionArtifact(ctx context.Context, taskRecord repo.ProjectTask, decision taskplan.AsyncDecision) error {
+	title, body := buildAsyncDecisionArtifact(taskRecord, decision)
+	payload, err := json.Marshal(map[string]any{
+		"policy":       asyncDecisionPolicyName,
+		"outcome":      decision.Outcome,
+		"reason":       decision.Reason,
+		"task_id":      taskRecord.ID.String(),
+		"project_id":   taskRecord.ProjectID.String(),
+		"task_number":  taskRecord.TaskNumber,
+		"task_title":   strings.TrimSpace(taskRecord.Title),
+		"blocks_scope": strings.TrimSpace(taskRecord.BlocksScope),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = p.taskService.CreateInboxItem(ctx, tasksvc.CreateInboxItemRequest{
+		OrganizationID:  taskRecord.OrganizationID,
+		TargetUserID:    nil,
+		ItemType:        "system_alert",
+		SourceProjectID: &taskRecord.ProjectID,
+		SourceTaskID:    &taskRecord.ID,
+		CreatedByType:   "system",
+		Title:           title,
+		Body:            &body,
+		ActionPayload:   payload,
+	})
+	return err
+}
+
+func buildAsyncDecisionArtifact(taskRecord repo.ProjectTask, decision taskplan.AsyncDecision) (string, string) {
+	taskLabel := fmt.Sprintf("task #%d", taskRecord.TaskNumber)
+	if taskRecord.TaskNumber == 0 {
+		taskLabel = "task"
+	}
+
+	statusLine := "Async work will continue while this is surfaced for later review."
+	switch decision.Outcome {
+	case taskplan.AsyncDecisionPrepareForReview:
+		statusLine = "The task has been paused in review at its human checkpoint."
+	case taskplan.AsyncDecisionHardStop:
+		statusLine = "The task has been paused in review because this decision should not be guessed."
+	}
+
+	title := "Async review note for " + taskLabel
+	switch decision.Outcome {
+	case taskplan.AsyncDecisionPrepareForReview:
+		title = "Review checkpoint for " + taskLabel
+	case taskplan.AsyncDecisionHardStop:
+		title = "Hard stop for " + taskLabel
+	}
+
+	taskTitle := strings.TrimSpace(taskRecord.Title)
+	if taskTitle == "" {
+		taskTitle = "Untitled task"
+	}
+	body := fmt.Sprintf("%s: %s\n\nOutcome: %s\nReason: %s\n\n%s", taskLabel, taskTitle, decision.Outcome, decision.Reason, statusLine)
+	return title, body
+}
+
 func lowestOutstandingGateTask(tasks []repo.ProjectTask) *repo.ProjectTask {
 	var selected *repo.ProjectTask
 	for _, taskRecord := range tasks {
@@ -276,6 +366,9 @@ func lowestOutstandingGateTask(tasks []repo.ProjectTask) *repo.ProjectTask {
 		}
 		status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
 		if status == "done" || status == "cancelled" {
+			continue
+		}
+		if status == "review" && taskplan.AssessAsyncDecision(taskRecord.Title, taskRecord.Description).AllowsParallelProgress() {
 			continue
 		}
 		if selected == nil || taskRecord.TaskNumber < selected.TaskNumber {
