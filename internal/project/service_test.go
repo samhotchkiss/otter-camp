@@ -527,6 +527,14 @@ func (f *fakeProjectDeleteCleanup) DeleteProjectScoped(_ context.Context, projec
 	return f.err
 }
 
+func (f *fakeProjectDeleteCleanup) CloseProjectScoped(_ context.Context, projectID uuid.UUID) error {
+	if f.order != nil {
+		*f.order = append(*f.order, f.label)
+	}
+	f.projectID = projectID
+	return f.err
+}
+
 type fakeProjectTaskActivityChecker struct {
 	hasActive bool
 	err       error

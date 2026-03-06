@@ -246,6 +246,7 @@ type modelInvocationProjectCleaner interface {
 
 type chatSessionProjectCleaner interface {
 	DeleteProjectScoped(ctx context.Context, projectID uuid.UUID) error
+	CloseProjectScoped(ctx context.Context, projectID uuid.UUID) error
 }
 
 type projectTaskActivityChecker interface {
@@ -840,6 +841,13 @@ func (s *service) Archive(ctx context.Context, orgID, projectID uuid.UUID) (*Pro
 	project, err := s.Get(ctx, orgID, projectID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Close scoped chat sessions first so archive does not leave an archived project with live chats.
+	if s.chatSessions != nil {
+		if err := s.chatSessions.CloseProjectScoped(ctx, project.ID); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := s.projects.Archive(ctx, project.ID); err != nil {

@@ -247,6 +247,7 @@ func TestTaskSchedule_OverlapPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFlowTemplate: %v", err)
 	}
+	template = makeFlowTemplateExecutable073(t, ctx, pool, template)
 
 	schedule, err := projectService.CreateSchedule(ctx, CreateScheduleRequest{
 		OrganizationID: org.ID,
@@ -337,4 +338,53 @@ func seedProjectTestData073(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		t.Fatalf("create project: %v", err)
 	}
 	return org, projectRecord
+}
+
+func makeFlowTemplateExecutable073(t *testing.T, ctx context.Context, pool *pgxpool.Pool, template *FlowTemplate) *FlowTemplate {
+	t.Helper()
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("link work node: %v", err)
+	}
+
+	updated, err := repo.NewFlowTemplateRepo(pool).Update(ctx, repo.FlowTemplate{
+		ID:             template.ID,
+		OrganizationID: template.OrganizationID,
+		ProjectID:      template.ProjectID,
+		Slug:           template.Slug,
+		DisplayName:    template.DisplayName,
+		Description:    template.Description,
+		StartNodeID:    &workNode.ID,
+		IsCurrent:      template.IsCurrent,
+		Version:        template.Version,
+		CreatedByType:  template.CreatedByType,
+		CreatedByID:    template.CreatedByID,
+	})
+	if err != nil {
+		t.Fatalf("update template start node: %v", err)
+	}
+	result := FlowTemplate(updated)
+	return &result
 }

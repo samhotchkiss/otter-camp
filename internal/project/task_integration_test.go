@@ -35,7 +35,7 @@ func TestTask_StateMachine_FullPath(t *testing.T) {
 	}
 
 	current := taskRecord
-	for _, nextStatus := range []string{"queued", "in_progress", "review", "done"} {
+	for _, nextStatus := range []string{"queued", "in_progress", "review"} {
 		actor := tasksvc.Actor{Type: "system"}
 		if nextStatus == "in_progress" {
 			actor.AllowNoActiveFlow = true
@@ -44,6 +44,51 @@ func TestTask_StateMachine_FullPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("TransitionStatus %s: %v", nextStatus, err)
 		}
+	}
+
+	nodes, err := repo.NewFlowNodeRepo(fx.pool).GetByTemplateOrdered(ctx, fx.flowTemplate.ID)
+	if err != nil {
+		t.Fatalf("GetByTemplateOrdered: %v", err)
+	}
+	if len(nodes) < 2 {
+		t.Fatalf("flow node count = %d, want at least 2", len(nodes))
+	}
+	current.CurrentFlowNodeID = &nodes[1].ID
+	updatedTask, err := fx.taskRepo.Update(ctx, *current)
+	if err != nil {
+		t.Fatalf("Update current flow node: %v", err)
+	}
+	current = &updatedTask
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	workExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      current.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("Create work execution: %v", err)
+	}
+	if _, err := executionRepo.Complete(ctx, workExecution.ID); err != nil {
+		t.Fatalf("Complete work execution: %v", err)
+	}
+	reviewExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      current.ID,
+		FlowNodeID:  nodes[1].ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("Create review execution: %v", err)
+	}
+	if _, err := executionRepo.Complete(ctx, reviewExecution.ID); err != nil {
+		t.Fatalf("Complete review execution: %v", err)
+	}
+
+	current, err = fx.taskService.TransitionStatus(ctx, current.ID, "done", tasksvc.Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
 	}
 	if current.WorkStatus != "done" {
 		t.Fatalf("final work_status = %q, want %q", current.WorkStatus, "done")
@@ -452,6 +497,35 @@ func seedTaskFixtureData073(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	})
 	if err != nil {
 		t.Fatalf("create flow template: %v", err)
+	}
+	workNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: flowTemplate.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: flowTemplate.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := repo.NewFlowNodeRepo(pool).Update(ctx, workNode); err != nil {
+		t.Fatalf("link work node: %v", err)
+	}
+	flowTemplate.StartNodeID = &workNode.ID
+	flowTemplate, err = repo.NewFlowTemplateRepo(pool).Update(ctx, flowTemplate)
+	if err != nil {
+		t.Fatalf("update flow template start node: %v", err)
 	}
 
 	pmUser, err := repo.NewHumanUserRepo(pool).Create(ctx, repo.HumanUser{

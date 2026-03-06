@@ -479,6 +479,14 @@ func createLinearTemplate073(t *testing.T, ctx context.Context, fx flowFixture07
 func createFlowTask073(t *testing.T, ctx context.Context, fx flowFixture073, title, status string, templateID *uuid.UUID) repo.ProjectTask {
 	t.Helper()
 
+	if templateID == nil {
+		switch strings.TrimSpace(status) {
+		case "queued", "in_progress", "review", "done":
+			template, _ := createLinearTemplate073(t, ctx, fx, 2, false, 5)
+			templateID = &template.ID
+		}
+	}
+
 	taskRecord, err := fx.taskRepo.Create(ctx, repo.ProjectTask{
 		OrganizationID: fx.org.ID,
 		ProjectID:      fx.project.ID,
