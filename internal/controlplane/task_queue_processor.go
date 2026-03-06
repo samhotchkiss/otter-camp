@@ -192,11 +192,20 @@ func (p *TaskQueueProcessor) handleTaskQueuedEvent(ctx context.Context, event ev
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return nil
 	}
-	if payload.TaskID == uuid.Nil || !strings.EqualFold(strings.TrimSpace(payload.ToStatus), "queued") {
+	if payload.TaskID == uuid.Nil || !taskStatusStartsAsyncWork(payload.ToStatus) {
 		return nil
 	}
 
 	return p.processQueuedTask(ctx, event, payload.TaskID)
+}
+
+func taskStatusStartsAsyncWork(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "in_progress":
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventbus.DomainEvent, taskID uuid.UUID) error {

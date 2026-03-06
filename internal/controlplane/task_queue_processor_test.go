@@ -12,12 +12,12 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
-func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresNonQueuedEvents(t *testing.T) {
+func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresIrrelevantStatusesAndEvents(t *testing.T) {
 	processor := &TaskQueueProcessor{}
 
 	payload, err := json.Marshal(map[string]any{
 		"task_id":   uuid.New(),
-		"to_status": "in_progress",
+		"to_status": "review",
 	})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -42,6 +42,148 @@ func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresNonQueuedEvents(t *testin
 		if err := processor.handleTaskQueuedEvent(context.Background(), event); err != nil {
 			t.Fatalf("handleTaskQueuedEvent(%s) error = %v, want nil", event.EventType, err)
 		}
+	}
+}
+
+func TestTaskQueueProcessorHandleTaskQueuedEventCreatesMissingTaskSessionOnceForInProgressTask(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+
+	sessionRepo := &fakeTaskQueueSessionRepository{}
+	chatService := &fakeTaskQueueChatService{
+		onCreateSession: func(session *chat.ChatSession) {
+			sessionRepo.StoreSession(session)
+		},
+	}
+	runService := &fakeTaskQueueRunStarter{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:              taskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				WorkStatus:      "in_progress",
+				Title:           "Start task work",
+				AssignedAgentID: &agentID,
+			},
+		},
+		runs:     runService,
+		chats:    chatService,
+		sessions: sessionRepo,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    taskID,
+		"project_id": projectID,
+		"to_status":  "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	if err := processor.handleTaskQueuedEvent(ctx, eventbus.DomainEvent{
+		ID:        uuid.New(),
+		EventType: "task.status_changed",
+		Payload:   payload,
+	}); err != nil {
+		t.Fatalf("handleTaskQueuedEvent: %v", err)
+	}
+
+	if len(chatService.createSessionInputs) != 1 {
+		t.Fatalf("CreateSession calls = %d, want 1", len(chatService.createSessionInputs))
+	}
+	createdInput := chatService.createSessionInputs[0]
+	if createdInput.ScopeType != "project_task" {
+		t.Fatalf("CreateSession scope_type = %q, want project_task", createdInput.ScopeType)
+	}
+	if createdInput.ScopeID != taskID {
+		t.Fatalf("CreateSession scope_id = %s, want %s", createdInput.ScopeID, taskID)
+	}
+	if createdInput.Mode != "async" {
+		t.Fatalf("CreateSession mode = %q, want async", createdInput.Mode)
+	}
+
+	session, err := sessionRepo.GetByScopeAndMode(ctx, "project_task", taskID, "async")
+	if err != nil {
+		t.Fatalf("GetByScopeAndMode: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected persisted task-scoped async session")
+	}
+
+	if len(runService.createRunInputs) != 1 {
+		t.Fatalf("CreateRun calls = %d, want 1", len(runService.createRunInputs))
+	}
+	if runService.createRunInputs[0].SessionID == nil || *runService.createRunInputs[0].SessionID != session.ID {
+		t.Fatalf("CreateRun session_id = %v, want %s", runService.createRunInputs[0].SessionID, session.ID)
+	}
+}
+
+func TestTaskQueueProcessorHandleTaskQueuedEventRepeatedStartReusesExistingTaskSession(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+
+	sessionRepo := &fakeTaskQueueSessionRepository{}
+	chatService := &fakeTaskQueueChatService{
+		onCreateSession: func(session *chat.ChatSession) {
+			sessionRepo.StoreSession(session)
+		},
+	}
+	runService := &fakeTaskQueueRunStarter{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:              taskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				WorkStatus:      "in_progress",
+				Title:           "Resume task work",
+				AssignedAgentID: &agentID,
+			},
+		},
+		runs:     runService,
+		chats:    chatService,
+		sessions: sessionRepo,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    taskID,
+		"project_id": projectID,
+		"to_status":  "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := processor.handleTaskQueuedEvent(ctx, eventbus.DomainEvent{
+			ID:        uuid.New(),
+			EventType: "task.status_changed",
+			Payload:   payload,
+		}); err != nil {
+			t.Fatalf("handleTaskQueuedEvent call %d: %v", i+1, err)
+		}
+	}
+
+	if len(chatService.createSessionInputs) != 1 {
+		t.Fatalf("CreateSession calls = %d, want 1", len(chatService.createSessionInputs))
+	}
+	if len(runService.createRunInputs) != 2 {
+		t.Fatalf("CreateRun calls = %d, want 2", len(runService.createRunInputs))
+	}
+	firstSessionID := runService.createRunInputs[0].SessionID
+	secondSessionID := runService.createRunInputs[1].SessionID
+	if firstSessionID == nil || secondSessionID == nil {
+		t.Fatalf("CreateRun session_ids = (%v, %v), want both non-nil", firstSessionID, secondSessionID)
+	}
+	if *firstSessionID != *secondSessionID {
+		t.Fatalf("CreateRun session_ids = (%s, %s), want same task session", *firstSessionID, *secondSessionID)
 	}
 }
 
@@ -682,15 +824,51 @@ func indexOfCall(calls []string, target string) int {
 }
 
 type fakeTaskQueueSessionRepository struct {
-	session *repo.ChatSession
-	err     error
+	session  *repo.ChatSession
+	sessions map[string]*repo.ChatSession
+	lookups  []taskQueueSessionLookup
+	err      error
 }
 
-func (f *fakeTaskQueueSessionRepository) GetByScopeAndMode(context.Context, string, uuid.UUID, string) (*repo.ChatSession, error) {
+type taskQueueSessionLookup struct {
+	scopeType string
+	scopeID   uuid.UUID
+	mode      string
+}
+
+func (f *fakeTaskQueueSessionRepository) GetByScopeAndMode(_ context.Context, scopeType string, scopeID uuid.UUID, mode string) (*repo.ChatSession, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
+	f.lookups = append(f.lookups, taskQueueSessionLookup{
+		scopeType: strings.TrimSpace(scopeType),
+		scopeID:   scopeID,
+		mode:      strings.TrimSpace(mode),
+	})
+	if f.sessions != nil {
+		if session, ok := f.sessions[f.sessionKey(scopeType, scopeID, mode)]; ok {
+			cloned := *session
+			return &cloned, nil
+		}
+		return nil, nil
+	}
 	return f.session, nil
+}
+
+func (f *fakeTaskQueueSessionRepository) StoreSession(session *repo.ChatSession) {
+	if session == nil {
+		return
+	}
+	if f.sessions == nil {
+		f.sessions = map[string]*repo.ChatSession{}
+	}
+	cloned := *session
+	f.session = &cloned
+	f.sessions[f.sessionKey(session.ScopeType, session.ScopeID, session.Mode)] = &cloned
+}
+
+func (f *fakeTaskQueueSessionRepository) sessionKey(scopeType string, scopeID uuid.UUID, mode string) string {
+	return strings.TrimSpace(scopeType) + "|" + scopeID.String() + "|" + strings.TrimSpace(mode)
 }
 
 type fakeTaskQueueTaskRepository struct {
@@ -905,7 +1083,9 @@ type addParticipantCall struct {
 type fakeTaskQueueChatService struct {
 	calls               []string
 	session             *chat.ChatSession
+	createSessionInputs []chat.CreateSessionInput
 	createSessionErr    error
+	onCreateSession     func(*chat.ChatSession)
 	addParticipantCalls []addParticipantCall
 	addParticipantErr   error
 	appendMessageErr    error
@@ -916,10 +1096,14 @@ type fakeTaskQueueChatService struct {
 
 func (f *fakeTaskQueueChatService) CreateSession(_ context.Context, input chat.CreateSessionInput) (*chat.ChatSession, error) {
 	f.calls = append(f.calls, "create_session")
+	f.createSessionInputs = append(f.createSessionInputs, input)
 	if f.createSessionErr != nil {
 		return nil, f.createSessionErr
 	}
 	if f.session != nil {
+		if f.onCreateSession != nil {
+			f.onCreateSession(f.session)
+		}
 		return f.session, nil
 	}
 	session := &chat.ChatSession{
@@ -929,6 +1113,9 @@ func (f *fakeTaskQueueChatService) CreateSession(_ context.Context, input chat.C
 		ScopeID:        input.ScopeID,
 		Mode:           input.Mode,
 		Status:         "active",
+	}
+	if f.onCreateSession != nil {
+		f.onCreateSession(session)
 	}
 	return session, nil
 }

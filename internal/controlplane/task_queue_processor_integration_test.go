@@ -797,6 +797,246 @@ func TestTaskQueueProcessorIntegrationQueuedAssignedAgentTaskStartsRun(t *testin
 	}
 }
 
+func TestTaskQueueProcessorIntegrationInProgressAssignedAgentTaskCreatesTaskSessionAndKickoff(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	sessionRepo := repo.NewChatSessionRepo(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+	participantRepo := repo.NewChatParticipantRepo(fx.pool)
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+
+	projectSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: fx.org.ID,
+		ScopeType:      "project",
+		ScopeID:        fx.project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"task_queue_processor_integration_test"}`),
+	})
+	if err != nil {
+		t.Fatalf("Create project-scoped async session: %v", err)
+	}
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Direct in-progress assigned-agent task",
+		Description:     stringPtr("Start work immediately in the task-scoped async session."),
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := taskRepo.UpdateStatus(ctx, created.ID, "on_hold"); err != nil {
+		t.Fatalf("UpdateStatus on_hold: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+
+	var (
+		taskSession repo.ChatSession
+		runRecord   Run
+	)
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		session, err := sessionRepo.GetByScopeAndMode(ctx, "project_task", created.ID, "async")
+		if err != nil {
+			return false, err
+		}
+		if session == nil {
+			return false, nil
+		}
+		taskSession = *session
+
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		var boundRun Run
+		for _, candidate := range runs {
+			if candidate.Status == "in_progress" && candidate.SessionID != nil && *candidate.SessionID == taskSession.ID {
+				boundRun = candidate
+				break
+			}
+		}
+		if boundRun.ID == uuid.Nil {
+			return false, nil
+		}
+		runRecord = boundRun
+
+		messages, err := messageRepo.ListBySession(ctx, taskSession.ID)
+		if err != nil {
+			return false, err
+		}
+		return hasTaskQueueKickoffMessage(messages, created.ID), nil
+	})
+
+	if runRecord.ID == uuid.Nil {
+		t.Fatal("expected in_progress run bound to task session")
+	}
+	if runRecord.SessionID == nil || *runRecord.SessionID != taskSession.ID {
+		t.Fatalf("run session_id = %v, want %s", runRecord.SessionID, taskSession.ID)
+	}
+	if taskSession.ID == projectSession.ID {
+		t.Fatalf("task session reused project-scoped session %s", projectSession.ID)
+	}
+
+	var taskSessionCount int
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE scope_type = 'project_task'
+		  AND scope_id = $1
+		  AND mode = 'async'
+	`, created.ID).Scan(&taskSessionCount); err != nil {
+		t.Fatalf("count task-scoped async sessions: %v", err)
+	}
+	if taskSessionCount != 1 {
+		t.Fatalf("task-scoped async session count = %d, want 1", taskSessionCount)
+	}
+
+	participants, err := participantRepo.ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession participants: %v", err)
+	}
+	var foundAgentResponder bool
+	for _, participant := range participants {
+		if participant.ParticipantType == "agent" && participant.ParticipantID == fx.agent.ID {
+			foundAgentResponder = true
+			break
+		}
+	}
+	if !foundAgentResponder {
+		t.Fatal("expected active responder agent participant on task session")
+	}
+}
+
+func TestTaskQueueProcessorIntegrationRepeatedInProgressEventsReuseTaskSession(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	sessionRepo := repo.NewChatSessionRepo(fx.pool)
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Repeated in-progress session reuse",
+		Description:     stringPtr("Reuse the existing task session on restart or recovery."),
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := taskRepo.UpdateStatus(ctx, created.ID, "on_hold"); err != nil {
+		t.Fatalf("UpdateStatus on_hold: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+
+	var initialSession repo.ChatSession
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		session, err := sessionRepo.GetByScopeAndMode(ctx, "project_task", created.ID, "async")
+		if err != nil {
+			return false, err
+		}
+		if session == nil {
+			return false, nil
+		}
+		initialSession = *session
+
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		return len(runs) >= 1, nil
+	})
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    created.ID.String(),
+		"project_id": fx.project.ID.String(),
+		"to_status":  "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fx.bus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: fx.org.ID,
+		EventType:      "task.status_changed",
+		ActorType:      "system",
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("publish task.status_changed: %v", err)
+	}
+
+	var runs []Run
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		current, err := sessionRepo.GetByScopeAndMode(ctx, "project_task", created.ID, "async")
+		if err != nil {
+			return false, err
+		}
+		if current == nil || current.ID != initialSession.ID {
+			return false, nil
+		}
+
+		runs, err = runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		if len(runs) < 2 {
+			return false, nil
+		}
+
+		var taskSessionCount int
+		if err := fx.pool.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM chat_session
+			WHERE scope_type = 'project_task'
+			  AND scope_id = $1
+			  AND mode = 'async'
+		`, created.ID).Scan(&taskSessionCount); err != nil {
+			return false, err
+		}
+		return taskSessionCount == 1, nil
+	})
+
+	for _, runRecord := range runs {
+		if runRecord.SessionID == nil || *runRecord.SessionID != initialSession.ID {
+			t.Fatalf("run %s session_id = %v, want %s", runRecord.ID, runRecord.SessionID, initialSession.ID)
+		}
+	}
+}
+
 func TestTaskQueueProcessorIntegrationPausedProjectQueuedWorkStartsAfterResume(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
@@ -1436,6 +1676,26 @@ func hasFlowKickoffMessage(messages []repo.ChatMessage, eventType string, execut
 	return false
 }
 
+func hasTaskQueueKickoffMessage(messages []repo.ChatMessage, taskID uuid.UUID) bool {
+	for _, message := range messages {
+		if message.Role != "user" || len(message.Metadata) == 0 {
+			continue
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
+			continue
+		}
+		if metadata["source"] != "task_queue_processor" {
+			continue
+		}
+		if strings.TrimSpace(valueAsString(metadata["task_id"])) != taskID.String() {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 type taskQueueProcessorFixture struct {
 	pool               *pgxpool.Pool
 	bus                *eventbus.Bus
@@ -2011,20 +2271,6 @@ func seedTaskQueueFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
 		t.Fatalf("update review flow edge: %v", err)
-	}
-	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
-		FlowTemplateID: template.ID,
-		DisplayName:    "Review",
-		NodeType:       "review",
-		Position:       2,
-		MaxVisits:      3,
-	})
-	if err != nil {
-		t.Fatalf("create review flow node: %v", err)
-	}
-	startNode.NextNodeID = &reviewNode.ID
-	if _, err := nodeRepo.Update(ctx, startNode); err != nil {
-		t.Fatalf("update start flow node next edge: %v", err)
 	}
 	template.StartNodeID = &startNode.ID
 	if _, err := templateRepo.Update(ctx, template); err != nil {
