@@ -388,6 +388,98 @@ func TestTaskPaneStreamingEscAndCancelEX249(t *testing.T) {
 	}
 }
 
+func TestTaskPaneEnterCancelCommandDoesNotPostLiteralMessageEX260(t *testing.T) {
+	t.Parallel()
+
+	cancelCalls := 0
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+			return nil, nil
+		},
+		CancelChatTurn: func(_ context.Context, _ string) error {
+			cancelCalls++
+			return nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-260-stream"
+	model.workspace.tasks["task-260-stream"] = &taskRecord{
+		ID:                  "task-260-stream",
+		Title:               "Cancel via composer",
+		Status:              "in_progress",
+		SessionID:           "00000000-0000-0000-0000-000000002602",
+		ActiveExecutionID:   "00000000-0000-0000-0000-000000002602",
+		DiscussionSessionID: "00000000-0000-0000-0000-000000002603",
+	}
+	model.focus = ChatPanel
+	model.activeScope = ScopeTask
+	model.activeSession = "00000000-0000-0000-0000-000000002603"
+	model.taskPaneTab = taskPaneTabDiscussion
+	model.taskPaneTaskID = "task-260-stream"
+	model.taskPaneMode = taskPaneModeCompose
+	model.turnsSynced = true
+	model.activeTurn = true
+	model.chatInput = ":cancel"
+	model.chatMessages = []ChatMessage{{
+		ID:        "existing-msg",
+		Role:      "assistant",
+		Content:   "DISCUSSION MARKER: task discussion session.",
+		Timestamp: time.Now().UTC(),
+	}}
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("Enter on :cancel should dispatch a cancel request")
+	}
+	msg := cmd()
+	var request chatCancelRequestedMsg
+	switch typed := msg.(type) {
+	case chatCancelRequestedMsg:
+		request = typed
+	case tea.BatchMsg:
+		found := false
+		for _, child := range typed {
+			done := make(chan tea.Msg, 1)
+			go func(c tea.Cmd) { done <- c() }(child)
+			select {
+			case childMsg := <-done:
+				if cancelMsg, ok := childMsg.(chatCancelRequestedMsg); ok {
+					request = cancelMsg
+					found = true
+				}
+			case <-time.After(50 * time.Millisecond):
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Enter on :cancel should emit chatCancelRequestedMsg inside batch, got %T", msg)
+		}
+	default:
+		t.Fatalf("Enter on :cancel should emit chatCancelRequestedMsg, got %T", msg)
+	}
+	_ = cancelChatTurnCmd(request, model.runtimeHints.CancelChatTurn)()
+
+	if cancelCalls != 1 {
+		t.Fatalf(":cancel should call cancel once; got %d", cancelCalls)
+	}
+	if model.activeTurn {
+		t.Fatal(":cancel should stop the active turn")
+	}
+	if model.chatInput != "" {
+		t.Fatalf(":cancel should clear the composer, got %q", model.chatInput)
+	}
+	if len(model.chatMessages) != 1 {
+		t.Fatalf(":cancel should not append a literal user message; got %d messages", len(model.chatMessages))
+	}
+	if strings.Contains(model.chatMessages[0].Content, ":cancel") {
+		t.Fatalf("existing transcript should not be replaced by literal :cancel content: %+v", model.chatMessages)
+	}
+}
+
 func TestTaskPanePointerRefocusActivatesComposerEX252(t *testing.T) {
 	t.Parallel()
 
