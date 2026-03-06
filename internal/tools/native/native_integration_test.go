@@ -1099,6 +1099,117 @@ func TestIntegrationTaskCreateScaffoldsStrategyAndSpecArtifactsWithOperationalSe
 	}
 }
 
+func TestIntegrationTaskCreateRiskReadinessArtifactsAndFollowOnSuggestions(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	repoRoot := t.TempDir()
+
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":  project.ID.String(),
+		"title":       "Public launch readiness for billing migration",
+		"description": "Build the pre-mortem, risk register, mitigation plan, and readiness checklist for the risky public launch and customer-facing billing migration before go live.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["playbook"] != taskplan.PlaybookRiskReadiness {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookRiskReadiness)
+	}
+
+	artifacts := artifactPayloads(t, planning["artifacts"])
+	artifactBySlug := make(map[string]map[string]any, len(artifacts))
+	for _, artifact := range artifacts {
+		artifactBySlug[artifactStringValue(t, artifact, "slug")] = artifact
+	}
+
+	premortemPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, artifactBySlug["premortem"], "repo_path")))
+	premortemContent, err := os.ReadFile(premortemPath)
+	if err != nil {
+		t.Fatalf("read premortem artifact: %v", err)
+	}
+	if !strings.Contains(string(premortemContent), "## Failure Modes") || !strings.Contains(string(premortemContent), "## Triggers") || !strings.Contains(string(premortemContent), "## Responses") {
+		t.Fatalf("premortem artifact missing expected sections:\n%s", string(premortemContent))
+	}
+
+	riskRegisterPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, artifactBySlug["risk-register"], "repo_path")))
+	riskRegisterContent, err := os.ReadFile(riskRegisterPath)
+	if err != nil {
+		t.Fatalf("read risk register artifact: %v", err)
+	}
+	if !strings.Contains(string(riskRegisterContent), "## Major Risks") || !strings.Contains(string(riskRegisterContent), "## Severity") || !strings.Contains(string(riskRegisterContent), "## Impact") {
+		t.Fatalf("risk register artifact missing expected sections:\n%s", string(riskRegisterContent))
+	}
+
+	readinessPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, artifactBySlug["readiness-checklist"], "repo_path")))
+	readinessContent, err := os.ReadFile(readinessPath)
+	if err != nil {
+		t.Fatalf("read readiness artifact: %v", err)
+	}
+	if !strings.Contains(string(readinessContent), "## Go / No-Go Checklist") {
+		t.Fatalf("readiness artifact missing go/no-go checklist:\n%s", string(readinessContent))
+	}
+
+	var followOns []string
+	switch typed := planning["follow_on_suggestions"].(type) {
+	case []string:
+		followOns = append([]string(nil), typed...)
+	case []any:
+		for _, item := range typed {
+			followOns = append(followOns, fmt.Sprintf("%v", item))
+		}
+	default:
+		t.Fatalf("follow_on_suggestions = %T, want slice", planning["follow_on_suggestions"])
+	}
+	foundTargetedTests := false
+	for _, followOn := range followOns {
+		if strings.Contains(followOn, "Create targeted test scenarios") {
+			foundTargetedTests = true
+			break
+		}
+	}
+	if !foundTargetedTests {
+		t.Fatalf("follow_on_suggestions = %#v, want targeted test scenario follow-on", followOns)
+	}
+
+	projectView, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "project.get", map[string]any{
+		"project_id": project.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("project.get: %v", err)
+	}
+	projectArtifacts := artifactPayloads(t, projectView["planning_artifacts"])
+	foundPremortem := false
+	for _, artifact := range projectArtifacts {
+		if artifactStringValue(t, artifact, "slug") == "premortem" {
+			foundPremortem = true
+			break
+		}
+	}
+	if !foundPremortem {
+		t.Fatalf("project.get planning_artifacts missing premortem entry: %#v", projectArtifacts)
+	}
+}
+
 func TestIntegrationTaskCompletionRequiresPlanningContractOrOverride(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

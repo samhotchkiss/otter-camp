@@ -127,6 +127,49 @@ func TestCompletionReportRejectsSpecWithoutNonGoalsMetricsAndPhasing(t *testing.
 	}
 }
 
+func TestCompletionReportRejectsIncompleteRiskReadinessArtifacts(t *testing.T) {
+	description := "Build the pre-mortem, risk register, mitigation plan, and readiness checklist for the regulated rollout."
+	plan := Analyze("Launch readiness pre-mortem", &description)
+	metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	metadata, _, _, err := ApplyProcessUpdate(metadata, ProcessUpdate{
+		Artifacts: []ArtifactEvidence{
+			{
+				Slug:     "risk-register",
+				Summary:  "Material launch risks are captured.",
+				Sections: []string{"major risks", "impact"},
+			},
+			{
+				Slug:     "premortem",
+				Summary:  "Likely failure modes are documented.",
+				Sections: []string{"failure modes", "triggers", "responses"},
+			},
+			{
+				Slug:     "mitigation-plan",
+				Summary:  "Mitigations are listed.",
+				Sections: []string{"mitigations", "dates"},
+			},
+			{
+				Slug:     "readiness-checklist",
+				Summary:  "Readiness blockers and rollback are recorded.",
+				Sections: []string{"blockers", "rollback"},
+			},
+		},
+		HasArtifactChanges: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+
+	_, err = CompletionReport(metadata)
+	if !errors.Is(err, ErrPlanningArtifactContractIncomplete) {
+		t.Fatalf("CompletionReport err = %v, want ErrPlanningArtifactContractIncomplete", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "severity") || !strings.Contains(err.Error(), "owners") || !strings.Contains(err.Error(), "go/no-go checklist") {
+		t.Fatalf("CompletionReport error = %v, want missing risk readiness sections", err)
+	}
+}
+
 func TestCompletionReportRequiresHypothesesForThinContextStrategy(t *testing.T) {
 	description := "Define the product strategy and positioning tradeoffs for this greenfield analytics platform with no data yet."
 	plan := Analyze("Strategy for greenfield analytics platform", &description)

@@ -115,10 +115,10 @@ var playbookArtifactContracts = map[string][]ArtifactContract{
 		{Slug: "definition-of-done", Title: "Definition of done", RequiredSections: []string{"exit criteria", "verification", "release gates"}},
 	},
 	PlaybookRiskReadiness: {
-		{Slug: "risk-register", Title: "Risk register", RequiredSections: []string{"risks", "impact", "likelihood"}},
+		{Slug: "risk-register", Title: "Risk register", RequiredSections: []string{"major risks", "severity", "impact"}},
 		{Slug: "premortem", Title: "Pre-mortem", RequiredSections: []string{"failure modes", "triggers", "responses"}},
 		{Slug: "mitigation-plan", Title: "Mitigation plan", RequiredSections: []string{"mitigations", "owners", "dates"}},
-		{Slug: "readiness-checklist", Title: "Readiness checklist", RequiredSections: []string{"go live criteria", "blockers", "rollback"}},
+		{Slug: "readiness-checklist", Title: "Readiness checklist", RequiredSections: []string{"go/no-go checklist", "blockers", "rollback"}},
 	},
 	PlaybookMetrics: {
 		{Slug: "metric-tree", Title: "Metric tree", RequiredSections: []string{"north star", "drivers", "counter metrics"}},
@@ -156,9 +156,9 @@ var playbookReviewChecklists = map[string][]string{
 		"Confirm the definition of done is measurable at the story level.",
 	},
 	PlaybookRiskReadiness: {
-		"Verify the risk register covers impact, likelihood, and named owners for material risks.",
-		"Check that the pre-mortem and mitigation plan describe realistic triggers and responses.",
-		"Confirm the readiness checklist includes blockers, approvals, and rollback expectations.",
+		"Verify the risk register names the major risks with explicit severity and impact classification.",
+		"Check that the pre-mortem and mitigation plan describe realistic triggers, responses, and named owners.",
+		"Confirm the readiness checklist includes a go/no-go checklist, blockers, and rollback expectations.",
 	},
 	PlaybookMetrics: {
 		"Verify the metric tree names the north star, key drivers, and counter-metrics.",

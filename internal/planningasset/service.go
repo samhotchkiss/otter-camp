@@ -360,9 +360,16 @@ func requiredSectionsForArtifact(plan taskplan.Plan, slug string) []string {
 }
 
 func formatSectionHeading(value string) string {
-	fields := strings.Fields(strings.ReplaceAll(strings.TrimSpace(value), "-", " "))
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "go/no-go checklist":
+		return "Go / No-Go Checklist"
+	}
+
+	normalized := strings.ReplaceAll(strings.TrimSpace(value), "-", " ")
+	normalized = strings.ReplaceAll(normalized, "/", " / ")
+	fields := strings.Fields(normalized)
 	for i, field := range fields {
-		if field == "" {
+		if field == "" || field == "/" {
 			continue
 		}
 		fields[i] = strings.ToUpper(field[:1]) + field[1:]
@@ -400,6 +407,18 @@ func scaffoldPrompt(section string) string {
 		return "Break the work or outcome into major checkpoints."
 	case "risks":
 		return "List the material risks that could invalidate the plan."
+	case "major risks":
+		return "List the major risks that could stop, damage, or materially delay the initiative."
+	case "severity":
+		return "Classify each risk by severity so the team can prioritize mitigation and review."
+	case "impact":
+		return "Describe the business, customer, or operational impact if the risk lands."
+	case "failure modes":
+		return "Describe how this initiative could fail in the real world before launch or rollout."
+	case "triggers":
+		return "Call out the signals or conditions that would indicate the failure mode is becoming real."
+	case "responses":
+		return "Record the concrete response the team should take if the risk starts materializing."
 	case "hypotheses":
 		return "Label assumptions that still need validation; do not present them as facts."
 	case "open questions":
@@ -425,7 +444,15 @@ func scaffoldPrompt(section string) string {
 	case "dependencies":
 		return "List upstream or downstream dependencies and external commitments."
 	case "mitigations":
-		return "Describe how each material dependency risk will be managed."
+		return "Describe how each material dependency or delivery risk will be managed."
+	case "dates":
+		return "Capture the due dates or checkpoints for each mitigation."
+	case "go/no-go checklist":
+		return "Record the go / no-go checklist the team must satisfy before sign-off."
+	case "blockers":
+		return "List any unresolved blockers that prevent a go decision today."
+	case "rollback":
+		return "Describe the rollback or containment plan if the rollout must stop."
 	default:
 		return "Capture the durable decision for this section."
 	}
