@@ -94,7 +94,7 @@ var playbookArtifactContracts = map[string][]ArtifactContract{
 		{Slug: "problem-brief", Title: "Problem brief", RequiredSections: []string{"problem", "target user", "evidence gaps"}},
 		{Slug: "research-plan", Title: "Research plan", RequiredSections: []string{"objectives", "methods", "participants"}},
 		{Slug: "assumption-log", Title: "Assumption log", RequiredSections: []string{"assumptions", "risks", "open questions"}},
-		{Slug: "validation-plan", Title: "Validation plan", RequiredSections: []string{"experiments", "success criteria", "decision rule"}},
+		{Slug: "validation-plan", Title: "Validation plan", RequiredSections: []string{"ideas explored", "assumptions", "validation experiments", "decision framework"}},
 	},
 	PlaybookStrategy: {
 		{Slug: "strategy-brief", Title: "Strategy brief", RequiredSections: []string{"goal", "audience", "approach"}},
@@ -188,12 +188,56 @@ func ArtifactContractForPlaybook(playbook string) []ArtifactContract {
 	return out
 }
 
+func ArtifactContractForPlan(plan Plan) []ArtifactContract {
+	contracts := ArtifactContractForPlaybook(plan.Playbook)
+	if strings.TrimSpace(plan.Playbook) != PlaybookDiscovery {
+		return contracts
+	}
+	mode := NormalizeDiscoveryMode(plan.DiscoveryMode)
+	if mode == "" {
+		return contracts
+	}
+	out := make([]ArtifactContract, 0, len(contracts))
+	for _, contract := range contracts {
+		cloned := ArtifactContract{
+			Slug:             contract.Slug,
+			Title:            contract.Title,
+			RequiredSections: append([]string(nil), contract.RequiredSections...),
+		}
+		if cloned.Slug == "validation-plan" {
+			cloned.RequiredSections = DiscoveryValidationPlanSections(mode)
+		}
+		out = append(out, cloned)
+	}
+	return out
+}
+
 func ReviewChecklistForPlaybook(playbook string) []string {
 	checklist := playbookReviewChecklists[strings.TrimSpace(playbook)]
 	if len(checklist) == 0 {
 		return nil
 	}
 	return append([]string(nil), checklist...)
+}
+
+func ReviewChecklistForPlan(plan Plan) []string {
+	if strings.TrimSpace(plan.Playbook) != PlaybookDiscovery {
+		return ReviewChecklistForPlaybook(plan.Playbook)
+	}
+	switch NormalizeDiscoveryMode(plan.DiscoveryMode) {
+	case DiscoveryModeExistingProduct:
+		return []string{
+			"Verify the discovery mode is explicit and grounded in the current product surface, target user, and evidence gaps.",
+			"Check that prior feedback, instrumentation baseline, and observed-usage experiments are explicit before approving downstream planning.",
+			"Confirm the validation plan names ideas explored, assumptions, validation experiments, and a clear decision framework.",
+		}
+	default:
+		return []string{
+			"Verify the discovery mode is explicit and grounded in a new-product or unvalidated-concept framing.",
+			"Check that low-cost tests and desirability signals are explicit before approving downstream planning.",
+			"Confirm the validation plan names ideas explored, assumptions, validation experiments, and a clear decision framework.",
+		}
+	}
 }
 
 func ApplyProcessUpdate(existing json.RawMessage, update ProcessUpdate) (json.RawMessage, Plan, ValidationReport, error) {
@@ -293,8 +337,8 @@ func CompletionReport(metadata json.RawMessage) (ValidationReport, error) {
 func Evaluate(plan Plan) ValidationReport {
 	report := ValidationReport{
 		Playbook:         strings.TrimSpace(plan.Playbook),
-		ArtifactContract: ArtifactContractForPlaybook(plan.Playbook),
-		ReviewChecklist:  ReviewChecklistForPlaybook(plan.Playbook),
+		ArtifactContract: ArtifactContractForPlan(plan),
+		ReviewChecklist:  ReviewChecklistForPlan(plan),
 		Override:         clonePlanningOverride(plan.Override),
 	}
 	report.Enforced = plan.ProcessEnforced && len(report.ArtifactContract) > 0

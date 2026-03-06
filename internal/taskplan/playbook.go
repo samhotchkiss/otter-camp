@@ -23,6 +23,11 @@ const (
 )
 
 const (
+	DiscoveryModeNewProduct      = "new_product"
+	DiscoveryModeExistingProduct = "existing_product"
+)
+
+const (
 	StageConcept    = "concept"
 	StageValidation = "validation"
 	StageDefinition = "definition"
@@ -74,14 +79,23 @@ var (
 			"discovery",
 			"discover",
 			"user research",
+			"user interviews",
 			"customer research",
 			"customer interview",
+			"customer interviews",
 			"problem validation",
+			"validation plan",
+			"validation experiment",
+			"validation experiments",
 			"market research",
 			"validate demand",
 			"prototype",
 			"mvp",
 			"hypothesis",
+			"assumption",
+			"assumptions",
+			"experiment",
+			"experiments",
 		},
 		PlaybookStrategy: {
 			"strategy",
@@ -225,9 +239,28 @@ var (
 	existingProductSignals = []string{
 		"existing product",
 		"current product",
+		"existing feature",
 		"existing users",
+		"current users",
 		"current funnel",
+		"live product",
+		"usage data",
+		"instrumentation",
+		"support ticket",
+		"support tickets",
+		"retention",
+		"feedback",
 		"today's product",
+	}
+	newProductSignals = []string{
+		"new product",
+		"new idea",
+		"unvalidated concept",
+		"unproven concept",
+		"net new",
+		"0 to 1",
+		"zero to one",
+		"greenfield",
 	}
 
 	evidenceUnknownSignals = []string{
@@ -300,13 +333,16 @@ var (
 	}
 )
 
-func selectPlaybookContext(text string) (playbook, workType, projectStage, evidenceMaturity, riskLevel string) {
+func selectPlaybookContext(text string) (playbook, workType, projectStage, evidenceMaturity, riskLevel, discoveryMode string) {
 	workType = inferWorkType(text)
 	projectStage = inferProjectStage(text, workType)
 	evidenceMaturity = inferEvidenceMaturity(text, projectStage)
 	riskLevel = inferRiskLevel(text, projectStage, evidenceMaturity)
 	playbook = selectPlaybook(text, workType, projectStage, evidenceMaturity, riskLevel)
-	return playbook, workType, projectStage, evidenceMaturity, riskLevel
+	if playbook == PlaybookDiscovery {
+		discoveryMode = inferDiscoveryMode(text, projectStage, evidenceMaturity)
+	}
+	return playbook, workType, projectStage, evidenceMaturity, riskLevel, discoveryMode
 }
 
 func inferWorkType(text string) string {
@@ -396,6 +432,27 @@ func inferRiskLevel(text, projectStage, evidenceMaturity string) string {
 		return RiskMedium
 	}
 	return RiskLow
+}
+
+func inferDiscoveryMode(text, projectStage, evidenceMaturity string) string {
+	switch {
+	case containsAny(text, existingProductSignals):
+		return DiscoveryModeExistingProduct
+	case containsAny(text, newProductSignals):
+		return DiscoveryModeNewProduct
+	}
+
+	switch projectStage {
+	case StageConcept:
+		return DiscoveryModeNewProduct
+	case StageDelivery, StageLaunch, StagePostLaunch:
+		return DiscoveryModeExistingProduct
+	}
+
+	if evidenceMaturity == EvidenceValidated {
+		return DiscoveryModeExistingProduct
+	}
+	return DiscoveryModeNewProduct
 }
 
 func selectPlaybook(text, workType, projectStage, evidenceMaturity, riskLevel string) string {
@@ -532,13 +589,51 @@ func NormalizeArtifactKind(value string) string {
 	}
 }
 
-func playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel string) []string {
+func NormalizeDiscoveryMode(value string) string {
+	switch strings.TrimSpace(value) {
+	case DiscoveryModeNewProduct:
+		return DiscoveryModeNewProduct
+	case DiscoveryModeExistingProduct:
+		return DiscoveryModeExistingProduct
+	default:
+		return ""
+	}
+}
+
+func DiscoveryValidationPlanSections(mode string) []string {
+	sections := []string{
+		"ideas explored",
+		"assumptions",
+		"validation experiments",
+	}
+
+	switch NormalizeDiscoveryMode(mode) {
+	case DiscoveryModeExistingProduct:
+		sections = append(sections, "prior feedback", "instrumentation baseline")
+	default:
+		sections = append(sections, "low-cost tests", "desirability signals")
+	}
+
+	sections = append(sections, "decision framework")
+	return sections
+}
+
+func playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel, discoveryMode string) []string {
 	switch playbook {
 	case PlaybookDiscovery:
-		return []string{
-			"Schedule research or discovery interviews before committing delivery scope.",
-			"Synthesize evidence into a go/no-go recommendation once the first discovery pass completes.",
-			"Promote validated findings into a strategy or execution/spec planning pass.",
+		switch NormalizeDiscoveryMode(discoveryMode) {
+		case DiscoveryModeExistingProduct:
+			return []string{
+				"Pull instrumentation, usage data, and prior feedback for the current product surface before changing scope.",
+				"Turn observed behavior into targeted experiments on the live product before escalating to delivery planning.",
+				"Promote validated findings into a strategy or execution/spec planning pass once the strongest usage signals are clear.",
+			}
+		default:
+			return []string{
+				"Schedule research or discovery interviews and low-cost desirability tests before committing delivery scope.",
+				"Use prototypes, concierge workflows, or smoke tests to retire the highest-risk assumptions before writing specs.",
+				"Promote validated findings into a strategy or execution/spec planning pass once the concept earns more investment.",
+			}
 		}
 	case PlaybookStrategy:
 		return []string{

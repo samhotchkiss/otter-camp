@@ -102,6 +102,7 @@ type Plan struct {
 	ProjectStage        string             `json:"project_stage,omitempty"`
 	EvidenceMaturity    string             `json:"evidence_maturity,omitempty"`
 	RiskLevel           string             `json:"risk_level,omitempty"`
+	DiscoveryMode       string             `json:"discovery_mode,omitempty"`
 	ProcessEnforced     bool               `json:"process_enforced,omitempty"`
 	Subjective          bool               `json:"subjective"`
 	Comparative         bool               `json:"comparative"`
@@ -136,7 +137,7 @@ func Analyze(title string, description *string) Plan {
 
 func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) Plan {
 	text := normalizeText(title, description)
-	playbook, workType, projectStage, evidenceMaturity, riskLevel := selectPlaybookContext(text)
+	playbook, workType, projectStage, evidenceMaturity, riskLevel, discoveryMode := selectPlaybookContext(text)
 
 	multiOption := multiOptionCountPattern.MatchString(text) || containsAny(text, multiOptionSignals)
 	subjective := containsAny(text, subjectiveSignals)
@@ -150,12 +151,13 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 		ProjectStage:        projectStage,
 		EvidenceMaturity:    evidenceMaturity,
 		RiskLevel:           riskLevel,
+		DiscoveryMode:       discoveryMode,
 		ProcessEnforced:     playbookRequiresContract(playbook, text),
 		Subjective:          subjective,
 		Comparative:         comparative,
 		MultiOption:         multiOption,
 		Artifacts:           playbookArtifacts(playbook),
-		FollowOnSuggestions: playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel),
+		FollowOnSuggestions: playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel, discoveryMode),
 	}
 	plan.Artifacts = hydrateArtifactDefaults(plan.Playbook, plan.Artifacts)
 
@@ -235,6 +237,7 @@ func ApplyMetadata(existing json.RawMessage, plan Plan) json.RawMessage {
 	planningPayload["project_stage"] = plan.ProjectStage
 	planningPayload["evidence_maturity"] = plan.EvidenceMaturity
 	planningPayload["risk_level"] = plan.RiskLevel
+	planningPayload["discovery_mode"] = plan.DiscoveryMode
 	planningPayload["process_enforced"] = plan.ProcessEnforced
 	planningPayload["subjective"] = plan.Subjective
 	planningPayload["comparative"] = plan.Comparative
@@ -288,6 +291,7 @@ func Parse(metadata json.RawMessage) (Plan, bool) {
 		ProjectStage:        strings.TrimSpace(readString(rawPlanning["project_stage"])),
 		EvidenceMaturity:    strings.TrimSpace(readString(rawPlanning["evidence_maturity"])),
 		RiskLevel:           strings.TrimSpace(readString(rawPlanning["risk_level"])),
+		DiscoveryMode:       NormalizeDiscoveryMode(readString(rawPlanning["discovery_mode"])),
 		ProcessEnforced:     readBool(rawPlanning["process_enforced"]),
 		Subjective:          readBool(rawPlanning["subjective"]),
 		Comparative:         readBool(rawPlanning["comparative"]),

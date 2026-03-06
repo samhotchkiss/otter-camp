@@ -1313,15 +1313,19 @@ func (e *NativeToolExecutor) resolveSystemFlowTemplate(ctx context.Context, orga
 
 func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
 	report := taskplan.Evaluate(plan)
+	context := map[string]any{
+		"work_type":         plan.WorkType,
+		"project_stage":     plan.ProjectStage,
+		"evidence_maturity": plan.EvidenceMaturity,
+		"risk_level":        plan.RiskLevel,
+	}
+	if plan.DiscoveryMode != "" {
+		context["discovery_mode"] = plan.DiscoveryMode
+	}
 	response := map[string]any{
-		"mode":     plan.Mode,
-		"playbook": plan.Playbook,
-		"context": map[string]any{
-			"work_type":         plan.WorkType,
-			"project_stage":     plan.ProjectStage,
-			"evidence_maturity": plan.EvidenceMaturity,
-			"risk_level":        plan.RiskLevel,
-		},
+		"mode":                  plan.Mode,
+		"playbook":              plan.Playbook,
+		"context":               context,
 		"review_policy":         reviewPolicyResponse(taskplan.ReviewPolicy{Mode: plan.ReviewPolicyMode, Guardrails: plan.Guardrails, SummaryCadence: plan.SummaryCadence}),
 		"process_enforced":      plan.ProcessEnforced,
 		"planned_stages":        append([]string(nil), plan.PlannedStages...),
