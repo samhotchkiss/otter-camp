@@ -171,6 +171,7 @@ func NewControlPlaneRouteRegistrar(opts ControlPlaneRouteOptions) *ControlPlaneR
 }
 
 func (r *ControlPlaneRouteRegistrar) RegisterRoutes(router chi.Router) {
+	router.Get("/control/dashboard", r.handlers.getOperatorDashboard)
 	router.Post("/control/runs", r.handlers.createRun)
 	router.Get("/control/runs", r.handlers.listRuns)
 	router.Get("/control/runs/{id}", r.handlers.getRun)

@@ -33,6 +33,7 @@ func TestControlPlaneRoutesRegistered(t *testing.T) {
 	}
 
 	required := []string{
+		"GET /control/dashboard",
 		"POST /control/runs",
 		"GET /control/runs",
 		"GET /control/runs/{id}",

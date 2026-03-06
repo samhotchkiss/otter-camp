@@ -206,6 +206,71 @@ type TaskDetailItem struct {
 	Events                   []TaskEvent
 }
 
+type OperatorDashboardSummary struct {
+	Health          string
+	QuietHealthy    bool
+	ActiveProjects  int
+	ActiveTasks     int
+	ActiveRuns      int
+	StaleTasks      int
+	StaleExecutions int
+	BlockedItems    int
+	RecentFailures  int
+}
+
+type OperatorDashboardThresholds struct {
+	StaleExecutionSeconds int
+	StaleTaskSeconds      int
+}
+
+type OperatorDashboardSection struct {
+	Count int
+	Items []OperatorDashboardItem
+}
+
+type OperatorDashboardRef struct {
+	ID    string
+	Label string
+}
+
+type OperatorDashboardTaskRef struct {
+	ID         string
+	TaskNumber int
+	Label      string
+}
+
+type OperatorDashboardLinks struct {
+	Project string
+	Task    string
+	Run     string
+}
+
+type OperatorDashboardItem struct {
+	Shortcut       int
+	Kind           string
+	Title          string
+	Summary        string
+	Status         string
+	Project        *OperatorDashboardRef
+	Task           *OperatorDashboardTaskRef
+	Run            *OperatorDashboardRef
+	UpdatedAt      time.Time
+	AgeSeconds     int
+	StaleForSecond int
+	Links          OperatorDashboardLinks
+}
+
+type OperatorDashboardData struct {
+	Summary        OperatorDashboardSummary
+	Active         OperatorDashboardSection
+	Stale          OperatorDashboardSection
+	Blocked        OperatorDashboardSection
+	RecentFailures OperatorDashboardSection
+	RecentActivity OperatorDashboardSection
+	Thresholds     OperatorDashboardThresholds
+	ServerTime     time.Time
+}
+
 type RuntimeHints struct {
 	ModifierReliabilityUncertain bool
 	BinaryStale                  bool
@@ -226,6 +291,7 @@ type RuntimeHints struct {
 	LoadProjectTasks             func(ctx context.Context, projectID string) ([]SidebarTaskItem, error)
 	LoadProjectDetail            func(ctx context.Context, projectID string) (*ProjectDetail, error)
 	LoadTaskDetail               func(ctx context.Context, taskID string) (*TaskDetailItem, error)
+	LoadOperatorDashboard        func(ctx context.Context) (*OperatorDashboardData, error)
 	LoadAgents                   func(ctx context.Context) ([]string, error) // returns "name=lifecycle_status" strings
 	LoadInboxItems               func(ctx context.Context) ([]InboxSummaryItem, error)
 	// ActOnInboxItem sends approve/reject/defer/dismiss for a specific inbox item ID.

@@ -254,6 +254,12 @@ The landing view on TUI launch. Quick status overview.
   OTTERCAMP                                          Feb 22, 2026
   ───────────────────────────────────────────────────────────────
 
+  RUNTIME HEALTH                                  ATTENTION REQUIRED
+  Running (3)         Stale (2)         Blocked (1)       Recent Failures (2)
+  4 Task "Session management"            8m stale run lock      3m run failed
+  5 Task "Billing retry"                 12m stale task         6m retry queued
+  6 Task "Landing page polish"           Human input waiting    9m wakeup promoted
+
   INBOX (3 items)
   ! Escalation: Auth conflict                    OtterCamp V2
     Task Scoping: Landing page design            Client Portal
@@ -270,9 +276,12 @@ The landing view on TUI launch. Quick status overview.
   12m ago  . Agent started "Session management"       OC V2
 ```
 
+- Runtime health summarizes live execution state across the org. It highlights running work, stale tasks/executions, blocked items (including human-input waits), recent failures, and the most recent operator-relevant activity.
+- The dashboard headline shifts between healthy and attention-required states based on stale work, blockers, or recent failures.
 - Inbox section shows top items with urgency indicators.
 - Project summary shows task counts by status category.
-- Activity feed shows recent events across all projects.
+- Activity feed shows recent events across all projects, including failures, retries, promotions, and completions.
+- When runtime targets are present, keys `4`-`9` jump directly into the linked task or project detail from the runtime health list.
 - j/k navigates, Enter drills into the selected item.
 
 ### Project List

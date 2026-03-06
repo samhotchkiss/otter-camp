@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -305,6 +306,255 @@ func TestControlPlaneAPIToolExecutionsDeniedFilter(t *testing.T) {
 	}
 }
 
+func TestOperatorDashboardSummaryIncludesStaleTaskAndExecution(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+	runRepo := controlplane.NewRunRepository(testServer.Pool)
+	stateRepo := controlplane.NewRuntimeStateRepository(testServer.Pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-stale",
+		DisplayName:    "Ops Dashboard Stale",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		Slug:           "ops-dashboard-stale-template",
+		DisplayName:    "Ops Dashboard Stale Template",
+		Description:    "template for operator dashboard integration tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	createdByID := adminA.ID
+	staleExecTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Investigate stalled runtime",
+		WorkStatus:     "in_progress",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create stale execution task: %v", err)
+	}
+	staleExecutionAt := time.Now().UTC().Add(-12 * time.Minute)
+	staleRun, err := runRepo.Create(ctx, controlplane.Run{
+		OrganizationID: orgA.ID,
+		ProjectID:      &project.ID,
+		TaskID:         &staleExecTask.ID,
+		PrincipalType:  "human_user",
+		PrincipalID:    adminA.ID,
+		Status:         "in_progress",
+		TriggerType:    "api",
+		StartedAt:      &staleExecutionAt,
+	})
+	if err != nil {
+		t.Fatalf("create stale run: %v", err)
+	}
+	if _, err := testServer.Pool.Exec(ctx, `UPDATE run SET updated_at = $2 WHERE id = $1`, staleRun.ID, staleExecutionAt); err != nil {
+		t.Fatalf("backdate stale run: %v", err)
+	}
+	state, err := stateRepo.Ensure(ctx, orgA.ID, "task", staleExecTask.ID)
+	if err != nil {
+		t.Fatalf("ensure runtime state: %v", err)
+	}
+	if _, err := stateRepo.SetActive(ctx, state.ID, staleRun.ID, "human_user", &adminA.ID, staleExecutionAt, staleExecutionAt); err != nil {
+		t.Fatalf("set active runtime state: %v", err)
+	}
+
+	staleTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Review queue is wedged",
+		WorkStatus:     "queued",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create stale task: %v", err)
+	}
+	if _, err := testServer.Pool.Exec(ctx, `UPDATE project_task SET updated_at = $2 WHERE id = $1`, staleTask.ID, time.Now().UTC().Add(-40*time.Minute)); err != nil {
+		t.Fatalf("backdate stale task: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=6", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	if payload.Summary.StaleTasks != 1 {
+		t.Fatalf("stale_tasks=%d want=1 body=%s", payload.Summary.StaleTasks, string(resp.Body))
+	}
+	if payload.Summary.StaleExecutions != 1 {
+		t.Fatalf("stale_executions=%d want=1 body=%s", payload.Summary.StaleExecutions, string(resp.Body))
+	}
+
+	staleExecutionItem := findOperatorDashboardItem(payload.Stale.Items, "stale_execution", staleRun.ID)
+	if staleExecutionItem == nil {
+		t.Fatalf("stale execution item missing body=%s", string(resp.Body))
+	}
+	if staleExecutionItem.Task == nil || staleExecutionItem.Task.ID != staleExecTask.ID {
+		t.Fatalf("stale execution task ref=%+v want task=%s body=%s", staleExecutionItem.Task, staleExecTask.ID, string(resp.Body))
+	}
+
+	staleTaskItem := findOperatorDashboardItem(payload.Stale.Items, "stale_task", staleTask.ID)
+	if staleTaskItem == nil {
+		t.Fatalf("stale task item missing body=%s", string(resp.Body))
+	}
+	if staleTaskItem.Links.Task != "/v1/tasks/"+staleTask.ID.String() {
+		t.Fatalf("stale task link=%q want=%q body=%s", staleTaskItem.Links.Task, "/v1/tasks/"+staleTask.ID.String(), string(resp.Body))
+	}
+}
+
+func TestOperatorDashboardRecentActivityIncludesFailuresRetriesAndNavigationTargets(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+	runRepo := controlplane.NewRunRepository(testServer.Pool)
+	eventRepo := controlplane.NewRunEventRepository(testServer.Pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-activity",
+		DisplayName:    "Ops Dashboard Activity",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		Slug:           "ops-dashboard-activity-template",
+		DisplayName:    "Ops Dashboard Activity Template",
+		Description:    "template for operator dashboard activity integration tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	createdByID := adminA.ID
+	task, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Retry deployment reconciliation",
+		WorkStatus:     "in_progress",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	failureReason := "worker timed out"
+	runRecord, err := runRepo.Create(ctx, controlplane.Run{
+		OrganizationID: orgA.ID,
+		ProjectID:      &project.ID,
+		TaskID:         &task.ID,
+		PrincipalType:  "human_user",
+		PrincipalID:    adminA.ID,
+		Status:         "failed",
+		TriggerType:    "api",
+		FailureReason:  &failureReason,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := eventRepo.Append(ctx, controlplane.RunEvent{
+		RunID:     runRecord.ID,
+		EventType: "run_failed",
+		ActorType: "system",
+		Payload:   []byte(`{"reason":"worker timed out"}`),
+	}); err != nil {
+		t.Fatalf("append run_failed: %v", err)
+	}
+	if _, err := eventRepo.Append(ctx, controlplane.RunEvent{
+		RunID:     runRecord.ID,
+		EventType: "wakeup_promoted",
+		ActorType: "system",
+		Payload:   []byte(`{"reason":"stale_owner_timeout"}`),
+	}); err != nil {
+		t.Fatalf("append wakeup_promoted: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=6", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	if payload.Summary.RecentFailures < 2 {
+		t.Fatalf("recent_failures=%d want>=2 body=%s", payload.Summary.RecentFailures, string(resp.Body))
+	}
+
+	retryItem := findOperatorDashboardItem(payload.RecentActivity.Items, "wakeup_promoted", runRecord.ID)
+	if retryItem == nil {
+		t.Fatalf("recent activity missing wakeup_promoted body=%s", string(resp.Body))
+	}
+	if retryItem.Project == nil || retryItem.Project.ID != project.ID {
+		t.Fatalf("retry project ref=%+v want=%s body=%s", retryItem.Project, project.ID, string(resp.Body))
+	}
+	if retryItem.Task == nil || retryItem.Task.ID != task.ID {
+		t.Fatalf("retry task ref=%+v want=%s body=%s", retryItem.Task, task.ID, string(resp.Body))
+	}
+	if retryItem.Run == nil || retryItem.Run.ID != runRecord.ID {
+		t.Fatalf("retry run ref=%+v want=%s body=%s", retryItem.Run, runRecord.ID, string(resp.Body))
+	}
+	if retryItem.Links.Project != "/v1/projects/"+project.ID.String() {
+		t.Fatalf("retry project link=%q want=%q body=%s", retryItem.Links.Project, "/v1/projects/"+project.ID.String(), string(resp.Body))
+	}
+	if retryItem.Links.Task != "/v1/tasks/"+task.ID.String() {
+		t.Fatalf("retry task link=%q want=%q body=%s", retryItem.Links.Task, "/v1/tasks/"+task.ID.String(), string(resp.Body))
+	}
+	if retryItem.Links.Run != "/v1/control/runs/"+runRecord.ID.String() {
+		t.Fatalf("retry run link=%q want=%q body=%s", retryItem.Links.Run, "/v1/control/runs/"+runRecord.ID.String(), string(resp.Body))
+	}
+
+	failureItem := findOperatorDashboardItem(payload.RecentFailures.Items, "run_failed", runRecord.ID)
+	if failureItem == nil {
+		t.Fatalf("recent failures missing run_failed body=%s", string(resp.Body))
+	}
+}
+
 func newControlPlaneTestServer(t *testing.T) (*controlPlaneIntegrationServer, repo.Organization, repo.HumanUser, repo.Organization, repo.HumanUser) {
 	t.Helper()
 
@@ -348,4 +598,34 @@ func newControlPlaneTestServer(t *testing.T) (*controlPlaneIntegrationServer, re
 	})
 	ts := httptest.NewServer(handler)
 	return &controlPlaneIntegrationServer{URL: ts.URL, Pool: pool, ts: ts, runService: runService}, orgA, adminA, orgB, adminB
+}
+
+func decodeOperatorDashboardResponse(t *testing.T, body []byte) operatorDashboardResponse {
+	t.Helper()
+
+	var payload struct {
+		Data operatorDashboardResponse `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode operator dashboard: %v body=%s", err, string(body))
+	}
+	return payload.Data
+}
+
+func findOperatorDashboardItem(items []operatorDashboardItemResponse, kind string, id uuid.UUID) *operatorDashboardItemResponse {
+	for i := range items {
+		item := &items[i]
+		if strings.TrimSpace(item.Kind) != strings.TrimSpace(kind) {
+			continue
+		}
+		switch {
+		case item.Run != nil && item.Run.ID == id:
+			return item
+		case item.Task != nil && item.Task.ID == id:
+			return item
+		case item.Project != nil && item.Project.ID == id:
+			return item
+		}
+	}
+	return nil
 }

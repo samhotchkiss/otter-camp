@@ -323,6 +323,14 @@ The landing page. The operator's starting point on every visit. Shows what needs
 |  | > Draft Review: Welcome email       Client Portal | |
 |  +--------------------------------------------------+ |
 |                                                       |
+|  Runtime Health                     Attention Required|
+|  +--------------------------------------------------+ |
+|  | Running 3 | Stale 2 | Blocked 1 | Failures 2      | |
+|  | Session management              8m stale run lock | |
+|  | Billing retry                   Human input wait  | |
+|  | Landing page polish             6m retry queued   | |
+|  +--------------------------------------------------+ |
+|                                                       |
 |  Project Health                                       |
 |  +--------------------------------------------------+ |
 |  | OtterCamp V2    12 tasks   3 in_progress  1 blocked |
@@ -342,10 +350,11 @@ The landing page. The operator's starting point on every visit. Shows what needs
 **Sections:**
 
 - **Action items**: top-of-page summary pulled from the inbox. Shows the highest-urgency items that need the operator's attention. Clicking an item navigates to it in the inbox or opens it in context. Limited to the top 5-10 items; "View all in Inbox" link for the rest.
+- **Runtime health**: org-wide execution summary sourced from the control-plane dashboard. Shows counts for active work, stale tasks or executions, blocked items, and recent failures. Each section also surfaces the most important recent entries, such as a stuck run lock, human-input wait, failed run, retry promotion, or newly active task. Clicking an item opens the linked task, project, or run detail.
 - **Project health**: each project with task counts by work status (in_progress, blocked, review, queued). Quick visual scan of what is moving and what is stuck. Clicking a project navigates to its project view.
-- **Activity feed**: real-time stream of significant events across all projects (from ui-spec-for-figma.md Activity Feed). Reverse chronological. Each entry shows timestamp, event type indicator, description, and source project/task. Clicking navigates to the relevant context.
+- **Activity feed**: real-time stream of significant events across all projects (from ui-spec-for-figma.md Activity Feed). Reverse chronological. Each entry shows timestamp, event type indicator, description, and source project/task. Failures, retries, wakeup promotions, and completions all appear here. Clicking navigates to the relevant context.
 
-The activity feed updates in real time via SSE. New entries appear at the top with a subtle animation.
+The runtime health summary and activity feed update in real time via SSE. New entries appear at the top with a subtle animation, and the dashboard headline reflects whether the system is quietly healthy, actively healthy, or needs attention.
 
 ### Project View
 

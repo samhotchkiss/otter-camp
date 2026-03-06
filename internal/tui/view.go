@@ -954,6 +954,30 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		}
 	}
 
+	if dashboard := m.workspace.operatorDashboard; dashboard != nil {
+		lines = append(lines, "")
+		lines = append(lines, divider(width, "Runtime Health"))
+		lines = append(lines, styleText.Render("  "+operatorDashboardHeadline(dashboard.Summary)))
+		lines = append(lines, styleMuted.Render(fmt.Sprintf(
+			"  Active %d project(s) · %d task(s) · %d run(s)",
+			dashboard.Summary.ActiveProjects,
+			dashboard.Summary.ActiveTasks,
+			dashboard.Summary.ActiveRuns,
+		)))
+		lines = append(lines, styleMuted.Render(fmt.Sprintf(
+			"  Stale %d task(s) · %d execution(s) · Blocked %d · Recent failures %d",
+			dashboard.Summary.StaleTasks,
+			dashboard.Summary.StaleExecutions,
+			dashboard.Summary.BlockedItems,
+			dashboard.Summary.RecentFailures,
+		)))
+		lines = append(lines, renderOperatorDashboardSection("Running", dashboard.Active, width, 2)...)
+		lines = append(lines, renderOperatorDashboardSection("Stale", dashboard.Stale, width, 2)...)
+		lines = append(lines, renderOperatorDashboardSection("Blocked", dashboard.Blocked, width, 2)...)
+		lines = append(lines, renderOperatorDashboardSection("Recent Failures", dashboard.RecentFailures, width, 2)...)
+		lines = append(lines, renderOperatorDashboardSection("Recent Activity", dashboard.RecentActivity, width, 3)...)
+	}
+
 	// Board columns
 	lines = append(lines, "")
 	boardTitle := "Task Board"
@@ -1301,6 +1325,51 @@ func buildColumnHeader(name string, count, width int, color lipgloss.Color) stri
 // buildColumnSep returns the separator line for a column (single line).
 func buildColumnSep(width int) string {
 	return lipgloss.NewStyle().Width(width).Render(styleDivider.Render(strings.Repeat("─", width-1))) + " "
+}
+
+func operatorDashboardHeadline(summary OperatorDashboardSummary) string {
+	switch summary.Health {
+	case "quiet_healthy":
+		return "Quiet and healthy — no stale, blocked, or failing work."
+	case "attention_required":
+		return "Attention required — stale or failing runtime work is present."
+	default:
+		return "Runtime healthy — active work is moving and ready for supervision."
+	}
+}
+
+func renderOperatorDashboardSection(title string, section OperatorDashboardSection, width, limit int) []string {
+	if len(section.Items) == 0 {
+		return nil
+	}
+
+	lines := []string{styleLabel.Render(title)}
+	visible := minInt(len(section.Items), limit)
+	for i := 0; i < visible; i++ {
+		lines = append(lines, styleText.Render(truncate(operatorDashboardItemLine(section.Items[i]), maxInt(width-2, 12))))
+	}
+	if len(section.Items) > visible {
+		lines = append(lines, styleMuted.Render(fmt.Sprintf("  +%d more", len(section.Items)-visible)))
+	}
+	return lines
+}
+
+func operatorDashboardItemLine(item OperatorDashboardItem) string {
+	prefix := "•"
+	if item.Shortcut > 0 {
+		prefix = fmt.Sprintf("%d.", item.Shortcut)
+	}
+	parts := []string{strings.TrimSpace(item.Title)}
+	if trimmed := strings.TrimSpace(item.Summary); trimmed != "" {
+		parts = append(parts, trimmed)
+	}
+	if item.StaleForSecond > 0 {
+		parts = append(parts, "over stale threshold")
+	}
+	if age := relativeTime(item.UpdatedAt); age != "" {
+		parts = append(parts, age)
+	}
+	return "  " + prefix + " " + strings.Join(parts, " · ")
 }
 
 func (m Model) renderProjectView(width, maxLines int) []string {
