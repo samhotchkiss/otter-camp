@@ -66,6 +66,7 @@ type sidebarNode struct {
 	TaskID       string
 	TaskNumber   int
 	ProjectID    string
+	ProjectSlug  string
 	WorkStatus   string
 	UpdatedAt    time.Time // for session nodes: last activity time
 }
@@ -140,6 +141,7 @@ type ProjectFileEntry struct {
 // ProjectDetail holds metadata for a project loaded from the API.
 type ProjectDetail struct {
 	ID           string
+	Slug         string
 	DisplayName  string
 	Description  string
 	DeliveryMode string
@@ -1164,11 +1166,12 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 	for _, proj := range projects {
 		id := "project-" + proj.ID
 		newNodes[id] = &sidebarNode{
-			ID:        id,
-			Label:     proj.DisplayName,
-			Kind:      sidebarKindProject,
-			ProjectID: proj.ID,
-			Expanded:  expandedProjects[id],
+			ID:          id,
+			Label:       ResolveProjectLabel(proj.DisplayName, proj.Slug, ""),
+			Kind:        sidebarKindProject,
+			ProjectID:   proj.ID,
+			ProjectSlug: strings.TrimSpace(proj.Slug),
+			Expanded:    expandedProjects[id],
 		}
 		newTopLevel = append(newTopLevel, id)
 		// Re-add previously loaded task children for this project
@@ -1191,6 +1194,7 @@ func (w *workspaceState) existingProjects() []SidebarProjectItem {
 		if node := w.nodes[id]; node != nil && node.Kind == sidebarKindProject {
 			out = append(out, SidebarProjectItem{
 				ID:          node.ProjectID,
+				Slug:        node.ProjectSlug,
 				DisplayName: node.Label,
 			})
 		}
@@ -1201,7 +1205,7 @@ func (w *workspaceState) existingProjects() []SidebarProjectItem {
 func (w *workspaceState) knownActiveProjects() []SidebarProjectItem {
 	seen := make(map[string]struct{})
 	out := make([]SidebarProjectItem, 0)
-	add := func(id, label string, updatedAt time.Time) {
+	add := func(id, displayName, slug, sessionTitle string, updatedAt time.Time) {
 		trimmedID := strings.TrimSpace(id)
 		if trimmedID == "" {
 			return
@@ -1209,12 +1213,10 @@ func (w *workspaceState) knownActiveProjects() []SidebarProjectItem {
 		if _, exists := seen[trimmedID]; exists {
 			return
 		}
-		resolvedLabel := strings.TrimSpace(label)
-		if resolvedLabel == "" {
-			resolvedLabel = w.projectDisplayName(trimmedID)
-		}
+		resolvedLabel := ResolveProjectLabel(displayName, slug, sessionTitle)
 		out = append(out, SidebarProjectItem{
 			ID:          trimmedID,
+			Slug:        strings.TrimSpace(slug),
 			DisplayName: resolvedLabel,
 			UpdatedAt:   updatedAt,
 		})
@@ -1222,26 +1224,26 @@ func (w *workspaceState) knownActiveProjects() []SidebarProjectItem {
 	}
 
 	for _, project := range w.existingProjects() {
-		add(project.ID, project.DisplayName, project.UpdatedAt)
+		add(project.ID, project.DisplayName, project.Slug, "", project.UpdatedAt)
 	}
 	if w.selectedProject != nil {
-		add(w.selectedProject.ID, w.selectedProject.DisplayName, time.Time{})
+		add(w.selectedProject.ID, w.selectedProject.DisplayName, w.selectedProject.Slug, "", time.Time{})
 	}
 	if strings.TrimSpace(w.selectedProjectID) != "" {
-		add(w.selectedProjectID, "", time.Time{})
+		add(w.selectedProjectID, "", "", "", time.Time{})
 	}
 	for _, id := range w.topLevel {
 		node := w.nodes[id]
 		if node == nil || node.Kind != sidebarKindSession || node.SessionScope != "project" {
 			continue
 		}
-		add(node.ProjectID, node.Label, node.UpdatedAt)
+		add(node.ProjectID, "", "", node.Label, node.UpdatedAt)
 	}
 	for _, task := range w.tasks {
 		if task == nil {
 			continue
 		}
-		add(task.ProjectID, "", time.Time{})
+		add(task.ProjectID, "", "", "", time.Time{})
 	}
 
 	return out
@@ -1252,27 +1254,31 @@ func (w *workspaceState) projectDisplayName(projectID string) string {
 	if trimmedID == "" {
 		return ""
 	}
-	if w.selectedProject != nil &&
-		strings.EqualFold(strings.TrimSpace(w.selectedProject.ID), trimmedID) &&
-		strings.TrimSpace(w.selectedProject.DisplayName) != "" {
-		return strings.TrimSpace(w.selectedProject.DisplayName)
+	var displayName string
+	var slug string
+	var sessionTitle string
+	if w.selectedProject != nil && strings.EqualFold(strings.TrimSpace(w.selectedProject.ID), trimmedID) {
+		displayName = w.selectedProject.DisplayName
+		slug = w.selectedProject.Slug
 	}
-	if node := w.nodes["project-"+trimmedID]; node != nil && strings.TrimSpace(node.Label) != "" {
-		return strings.TrimSpace(node.Label)
+	if node := w.nodes["project-"+trimmedID]; node != nil {
+		if strings.TrimSpace(displayName) == "" {
+			displayName = node.Label
+		}
+		if strings.TrimSpace(slug) == "" {
+			slug = node.ProjectSlug
+		}
 	}
 	for _, id := range w.topLevel {
 		node := w.nodes[id]
 		if node == nil || node.Kind != sidebarKindSession || node.SessionScope != "project" {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(node.ProjectID), trimmedID) && strings.TrimSpace(node.Label) != "" {
-			return strings.TrimSpace(node.Label)
+		if strings.EqualFold(strings.TrimSpace(node.ProjectID), trimmedID) && strings.TrimSpace(sessionTitle) == "" {
+			sessionTitle = node.Label
 		}
 	}
-	if len(trimmedID) > 8 {
-		return "Project " + trimmedID[:8]
-	}
-	return "Project " + trimmedID
+	return ResolveProjectLabel(displayName, slug, sessionTitle)
 }
 
 // existingChats extracts the current chat session items from the sidebar nodes.

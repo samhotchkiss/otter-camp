@@ -454,15 +454,7 @@ func (m Model) taskPaneProjectName(task *taskRecord) string {
 	if projectID == "" {
 		return ""
 	}
-	if m.workspace.selectedProject != nil &&
-		strings.EqualFold(strings.TrimSpace(m.workspace.selectedProject.ID), projectID) &&
-		strings.TrimSpace(m.workspace.selectedProject.DisplayName) != "" {
-		return strings.TrimSpace(m.workspace.selectedProject.DisplayName)
-	}
-	if node := m.workspace.nodes["project-"+projectID]; node != nil {
-		return strings.TrimSpace(node.Label)
-	}
-	return ""
+	return strings.TrimSpace(m.workspace.projectDisplayName(projectID))
 }
 
 func (m Model) taskPaneOrgSessionID() string {
@@ -1008,6 +1000,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.workspace.showProjectFiles = false
 		}
 		m.workspace.selectedProject = &typed.Detail
+		if node := m.workspace.nodes["project-"+typed.Detail.ID]; node != nil {
+			node.ProjectSlug = strings.TrimSpace(typed.Detail.Slug)
+			node.Label = ResolveProjectLabel(typed.Detail.DisplayName, typed.Detail.Slug, "")
+		}
 		// Apply any pending cursor request (task opened before project loaded).
 		if m.workspace.pendingProjectCursorTaskID != "" {
 			m.workspace.syncProjectCursorToTask(m.workspace.pendingProjectCursorTaskID)

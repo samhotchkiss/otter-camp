@@ -160,107 +160,10 @@ func runTUICommand(args []string) int {
 				return apiClient.request(ctx, "POST", "/v1/projects/"+url.PathEscape(projectID)+"/remotes", body, &resp)
 			}
 			runtimeHints.LoadRecentChats = func(ctx context.Context) ([]tuiapp.SidebarChatItem, error) {
-				sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{
-					Status: "active",
-					Limit:  10,
-				})
-				if err != nil {
-					return nil, err
-				}
-				out := make([]tuiapp.SidebarChatItem, 0, 4)
-				for _, s := range sessions.Data {
-					if strings.EqualFold(s.ScopeType, "organization") {
-						continue // Frank/General is always shown separately
-					}
-					name := ""
-					if s.Title != nil {
-						name = strings.TrimSpace(*s.Title)
-					}
-					var taskWorkStatus string
-					// For project_task sessions, always fetch task to get OC-N prefix and work status
-					if strings.EqualFold(s.ScopeType, "project_task") && s.ScopeID != uuid.Nil {
-						var taskResp struct {
-							Data struct {
-								Title      string `json:"title"`
-								TaskNumber int    `json:"task_number"`
-								WorkStatus string `json:"work_status"`
-							} `json:"data"`
-						}
-						if apiClient.request(ctx, "GET", "/v1/tasks/"+s.ScopeID.String(), nil, &taskResp) == nil {
-							taskWorkStatus = taskResp.Data.WorkStatus
-							// Prefer session title (user-named); fall back to task title
-							displayTitle := name
-							if displayTitle == "" {
-								displayTitle = strings.TrimSpace(taskResp.Data.Title)
-							}
-							if taskResp.Data.TaskNumber > 0 && displayTitle != "" {
-								name = fmt.Sprintf("OC-%d: %s", taskResp.Data.TaskNumber, displayTitle)
-							} else if taskResp.Data.TaskNumber > 0 {
-								name = fmt.Sprintf("OC-%d", taskResp.Data.TaskNumber)
-							} else {
-								name = displayTitle
-							}
-						}
-					}
-					// Resolve a descriptive name from the scope object (for other scope types)
-					if name == "" && s.ScopeID != uuid.Nil {
-						switch strings.ToLower(s.ScopeType) {
-						case "project":
-							var projResp struct {
-								Data struct {
-									DisplayName string `json:"display_name"`
-								} `json:"data"`
-							}
-							if apiClient.request(ctx, "GET", "/v1/projects/"+s.ScopeID.String(), nil, &projResp) == nil {
-								name = strings.TrimSpace(projResp.Data.DisplayName)
-							}
-						}
-					}
-					if name == "" {
-						name = s.ScopeType + " session"
-					}
-					updatedAt := s.CreatedAt
-					if s.LastMessageAt != nil {
-						updatedAt = *s.LastMessageAt
-					}
-					scopeID := ""
-					if s.ScopeID != uuid.Nil {
-						scopeID = s.ScopeID.String()
-					}
-					out = append(out, tuiapp.SidebarChatItem{
-						SessionID:   s.ID.String(),
-						DisplayName: name,
-						UpdatedAt:   updatedAt,
-						ScopeType:   strings.ToLower(s.ScopeType),
-						ScopeID:     scopeID,
-						WorkStatus:  taskWorkStatus,
-					})
-					if len(out) >= 4 {
-						break
-					}
-				}
-				return out, nil
+				return loadTUIRecentChats(ctx, apiClient)
 			}
 			runtimeHints.LoadProjects = func(ctx context.Context) ([]tuiapp.SidebarProjectItem, error) {
-				var resp struct {
-					Data []struct {
-						ID          string    `json:"id"`
-						DisplayName string    `json:"display_name"`
-						UpdatedAt   time.Time `json:"updated_at"`
-					} `json:"data"`
-				}
-				if err := apiClient.request(ctx, "GET", "/v1/projects?limit=50", nil, &resp); err != nil {
-					return nil, err
-				}
-				out := make([]tuiapp.SidebarProjectItem, 0, len(resp.Data))
-				for _, p := range resp.Data {
-					out = append(out, tuiapp.SidebarProjectItem{
-						ID:          p.ID,
-						DisplayName: p.DisplayName,
-						UpdatedAt:   p.UpdatedAt,
-					})
-				}
-				return out, nil
+				return loadTUIProjects(ctx, apiClient)
 			}
 			runtimeHints.LoadProjectTasks = func(ctx context.Context, projectID string) ([]tuiapp.SidebarTaskItem, error) {
 				var resp struct {
@@ -289,124 +192,7 @@ func runTUICommand(args []string) int {
 				return out, nil
 			}
 			runtimeHints.LoadProjectDetail = func(ctx context.Context, projectID string) (*tuiapp.ProjectDetail, error) {
-				var projResp struct {
-					Data struct {
-						ID           string `json:"id"`
-						DisplayName  string `json:"display_name"`
-						Description  string `json:"description"`
-						DeliveryMode string `json:"delivery_mode"`
-					} `json:"data"`
-				}
-				if err := apiClient.request(ctx, "GET", "/v1/projects/"+url.PathEscape(projectID), nil, &projResp); err != nil {
-					return nil, err
-				}
-				proj := projResp.Data
-				var tasksResp struct {
-					Data []struct {
-						ID         string `json:"id"`
-						Title      string `json:"title"`
-						WorkStatus string `json:"work_status"`
-						TaskNumber int    `json:"task_number"`
-						Priority   int    `json:"priority"`
-					} `json:"data"`
-				}
-				path := "/v1/projects/" + url.PathEscape(projectID) + "/tasks?limit=20"
-				_ = apiClient.request(ctx, "GET", path, nil, &tasksResp)
-				tasks := make([]tuiapp.SidebarTaskItem, 0, len(tasksResp.Data))
-				doneTasks := make([]tuiapp.SidebarTaskItem, 0)
-				for _, t := range tasksResp.Data {
-					item := tuiapp.SidebarTaskItem{
-						ID:         t.ID,
-						Title:      t.Title,
-						WorkStatus: t.WorkStatus,
-						TaskNumber: t.TaskNumber,
-						Priority:   t.Priority,
-					}
-					if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
-						doneTasks = append(doneTasks, item)
-					} else {
-						tasks = append(tasks, item)
-					}
-				}
-				// Fetch assigned agents
-				var agentsResp struct {
-					Data []struct {
-						AgentDisplayName string `json:"agent_display_name"`
-						Role             string `json:"role"`
-						IsActive         bool   `json:"is_active"`
-					} `json:"data"`
-				}
-				agentsPath := "/v1/projects/" + url.PathEscape(projectID) + "/agents"
-				var agents []tuiapp.ProjectAgent
-				if apiClient.request(ctx, "GET", agentsPath, nil, &agentsResp) == nil {
-					for _, a := range agentsResp.Data {
-						if a.IsActive {
-							agents = append(agents, tuiapp.ProjectAgent{
-								DisplayName: a.AgentDisplayName,
-								Role:        a.Role,
-							})
-						}
-					}
-				}
-				// Fetch connected remotes to show repo URL.
-				var remotesResp struct {
-					Data []struct {
-						URL       string `json:"url"`
-						IsDefault bool   `json:"is_default"`
-					} `json:"data"`
-				}
-				var repoURL string
-				remotesPath := "/v1/projects/" + url.PathEscape(projectID) + "/remotes"
-				if apiClient.request(ctx, "GET", remotesPath, nil, &remotesResp) == nil {
-					for _, r := range remotesResp.Data {
-						if r.IsDefault || repoURL == "" {
-							repoURL = r.URL
-						}
-					}
-				}
-				var filesResp struct {
-					Data struct {
-						RepoURL  *string `json:"repo_url"`
-						RepoPath *string `json:"repo_path"`
-						Files    []struct {
-							Path  string `json:"path"`
-							IsDir bool   `json:"is_dir"`
-							Depth int    `json:"depth"`
-						} `json:"files"`
-					} `json:"data"`
-				}
-				projectFiles := make([]tuiapp.ProjectFileEntry, 0)
-				repoPath := ""
-				filesPath := "/v1/projects/" + url.PathEscape(projectID) + "/files"
-				if apiClient.request(ctx, "GET", filesPath, nil, &filesResp) == nil {
-					if filesResp.Data.RepoURL != nil && strings.TrimSpace(*filesResp.Data.RepoURL) != "" {
-						repoURL = strings.TrimSpace(*filesResp.Data.RepoURL)
-					}
-					if filesResp.Data.RepoPath != nil {
-						repoPath = strings.TrimSpace(*filesResp.Data.RepoPath)
-					}
-					projectFiles = make([]tuiapp.ProjectFileEntry, 0, len(filesResp.Data.Files))
-					for _, file := range filesResp.Data.Files {
-						projectFiles = append(projectFiles, tuiapp.ProjectFileEntry{
-							Path:  file.Path,
-							IsDir: file.IsDir,
-							Depth: file.Depth,
-						})
-					}
-				}
-				return &tuiapp.ProjectDetail{
-					ID:           proj.ID,
-					DisplayName:  proj.DisplayName,
-					Description:  proj.Description,
-					DeliveryMode: proj.DeliveryMode,
-					RepoURL:      repoURL,
-					RepoPath:     repoPath,
-					Files:        projectFiles,
-					Tasks:        tasks,
-					DoneTasks:    doneTasks,
-					DoneCount:    len(doneTasks),
-					Agents:       agents,
-				}, nil
+				return loadTUIProjectDetail(ctx, apiClient, projectID)
 			}
 			runtimeHints.LoadAgents = func(ctx context.Context) ([]string, error) {
 				var resp struct {
@@ -802,6 +588,233 @@ func resolveTUIRealtimeCredentials(serverURLFlag, apiKeyFlag string) (string, st
 
 func printTUIUsage(w *os.File) {
 	fmt.Fprintln(w, "usage: ottercamp tui [--server-url URL] [--api-key KEY] [--non-interactive]")
+}
+
+func loadTUIRecentChats(ctx context.Context, apiClient *cliAPIClient) ([]tuiapp.SidebarChatItem, error) {
+	sessions, err := apiClient.ListChatSessions(ctx, chatListSessionsFilter{
+		Status: "active",
+		Limit:  10,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tuiapp.SidebarChatItem, 0, 4)
+	for _, s := range sessions.Data {
+		if strings.EqualFold(s.ScopeType, "organization") {
+			continue // Frank/General is always shown separately
+		}
+		name := ""
+		if s.Title != nil {
+			name = strings.TrimSpace(*s.Title)
+		}
+		var taskWorkStatus string
+		if strings.EqualFold(s.ScopeType, "project_task") && s.ScopeID != uuid.Nil {
+			var taskResp struct {
+				Data struct {
+					Title      string `json:"title"`
+					TaskNumber int    `json:"task_number"`
+					WorkStatus string `json:"work_status"`
+				} `json:"data"`
+			}
+			if apiClient.request(ctx, "GET", "/v1/tasks/"+s.ScopeID.String(), nil, &taskResp) == nil {
+				taskWorkStatus = taskResp.Data.WorkStatus
+				displayTitle := name
+				if displayTitle == "" {
+					displayTitle = strings.TrimSpace(taskResp.Data.Title)
+				}
+				if taskResp.Data.TaskNumber > 0 && displayTitle != "" {
+					name = fmt.Sprintf("OC-%d: %s", taskResp.Data.TaskNumber, displayTitle)
+				} else if taskResp.Data.TaskNumber > 0 {
+					name = fmt.Sprintf("OC-%d", taskResp.Data.TaskNumber)
+				} else {
+					name = displayTitle
+				}
+			}
+		}
+		if name == "" && strings.EqualFold(s.ScopeType, "project") && s.ScopeID != uuid.Nil {
+			var projResp struct {
+				Data struct {
+					DisplayName string `json:"display_name"`
+					Slug        string `json:"slug"`
+				} `json:"data"`
+			}
+			if apiClient.request(ctx, "GET", "/v1/projects/"+s.ScopeID.String(), nil, &projResp) == nil {
+				name = tuiapp.ResolveProjectLabel(projResp.Data.DisplayName, projResp.Data.Slug, "")
+			}
+		}
+		if name == "" {
+			if strings.EqualFold(s.ScopeType, "project") {
+				name = tuiapp.ResolveProjectLabel("", "", "")
+			} else {
+				name = s.ScopeType + " session"
+			}
+		}
+		updatedAt := s.CreatedAt
+		if s.LastMessageAt != nil {
+			updatedAt = *s.LastMessageAt
+		}
+		scopeID := ""
+		if s.ScopeID != uuid.Nil {
+			scopeID = s.ScopeID.String()
+		}
+		out = append(out, tuiapp.SidebarChatItem{
+			SessionID:   s.ID.String(),
+			DisplayName: name,
+			UpdatedAt:   updatedAt,
+			ScopeType:   strings.ToLower(s.ScopeType),
+			ScopeID:     scopeID,
+			WorkStatus:  taskWorkStatus,
+		})
+		if len(out) >= 4 {
+			break
+		}
+	}
+	return out, nil
+}
+
+func loadTUIProjects(ctx context.Context, apiClient *cliAPIClient) ([]tuiapp.SidebarProjectItem, error) {
+	var resp struct {
+		Data []struct {
+			ID          string    `json:"id"`
+			Slug        string    `json:"slug"`
+			DisplayName string    `json:"display_name"`
+			UpdatedAt   time.Time `json:"updated_at"`
+		} `json:"data"`
+	}
+	if err := apiClient.request(ctx, "GET", "/v1/projects?limit=50", nil, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]tuiapp.SidebarProjectItem, 0, len(resp.Data))
+	for _, p := range resp.Data {
+		out = append(out, tuiapp.SidebarProjectItem{
+			ID:          p.ID,
+			Slug:        strings.TrimSpace(p.Slug),
+			DisplayName: tuiapp.ResolveProjectLabel(p.DisplayName, p.Slug, ""),
+			UpdatedAt:   p.UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
+func loadTUIProjectDetail(ctx context.Context, apiClient *cliAPIClient, projectID string) (*tuiapp.ProjectDetail, error) {
+	var projResp struct {
+		Data struct {
+			ID           string `json:"id"`
+			Slug         string `json:"slug"`
+			DisplayName  string `json:"display_name"`
+			Description  string `json:"description"`
+			DeliveryMode string `json:"delivery_mode"`
+		} `json:"data"`
+	}
+	if err := apiClient.request(ctx, "GET", "/v1/projects/"+url.PathEscape(projectID), nil, &projResp); err != nil {
+		return nil, err
+	}
+	proj := projResp.Data
+	var tasksResp struct {
+		Data []struct {
+			ID         string `json:"id"`
+			Title      string `json:"title"`
+			WorkStatus string `json:"work_status"`
+			TaskNumber int    `json:"task_number"`
+			Priority   int    `json:"priority"`
+		} `json:"data"`
+	}
+	path := "/v1/projects/" + url.PathEscape(projectID) + "/tasks?limit=20"
+	_ = apiClient.request(ctx, "GET", path, nil, &tasksResp)
+	tasks := make([]tuiapp.SidebarTaskItem, 0, len(tasksResp.Data))
+	doneTasks := make([]tuiapp.SidebarTaskItem, 0)
+	for _, t := range tasksResp.Data {
+		item := tuiapp.SidebarTaskItem{
+			ID:         t.ID,
+			Title:      t.Title,
+			WorkStatus: t.WorkStatus,
+			TaskNumber: t.TaskNumber,
+			Priority:   t.Priority,
+		}
+		if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
+			doneTasks = append(doneTasks, item)
+		} else {
+			tasks = append(tasks, item)
+		}
+	}
+	var agentsResp struct {
+		Data []struct {
+			AgentDisplayName string `json:"agent_display_name"`
+			Role             string `json:"role"`
+			IsActive         bool   `json:"is_active"`
+		} `json:"data"`
+	}
+	agentsPath := "/v1/projects/" + url.PathEscape(projectID) + "/agents"
+	var agents []tuiapp.ProjectAgent
+	if apiClient.request(ctx, "GET", agentsPath, nil, &agentsResp) == nil {
+		for _, a := range agentsResp.Data {
+			if a.IsActive {
+				agents = append(agents, tuiapp.ProjectAgent{
+					DisplayName: a.AgentDisplayName,
+					Role:        a.Role,
+				})
+			}
+		}
+	}
+	var remotesResp struct {
+		Data []struct {
+			URL       string `json:"url"`
+			IsDefault bool   `json:"is_default"`
+		} `json:"data"`
+	}
+	var repoURL string
+	remotesPath := "/v1/projects/" + url.PathEscape(projectID) + "/remotes"
+	if apiClient.request(ctx, "GET", remotesPath, nil, &remotesResp) == nil {
+		for _, r := range remotesResp.Data {
+			if r.IsDefault || repoURL == "" {
+				repoURL = r.URL
+			}
+		}
+	}
+	var filesResp struct {
+		Data struct {
+			RepoURL  *string `json:"repo_url"`
+			RepoPath *string `json:"repo_path"`
+			Files    []struct {
+				Path  string `json:"path"`
+				IsDir bool   `json:"is_dir"`
+				Depth int    `json:"depth"`
+			} `json:"files"`
+		} `json:"data"`
+	}
+	projectFiles := make([]tuiapp.ProjectFileEntry, 0)
+	repoPath := ""
+	filesPath := "/v1/projects/" + url.PathEscape(projectID) + "/files"
+	if apiClient.request(ctx, "GET", filesPath, nil, &filesResp) == nil {
+		if filesResp.Data.RepoURL != nil && strings.TrimSpace(*filesResp.Data.RepoURL) != "" {
+			repoURL = strings.TrimSpace(*filesResp.Data.RepoURL)
+		}
+		if filesResp.Data.RepoPath != nil {
+			repoPath = strings.TrimSpace(*filesResp.Data.RepoPath)
+		}
+		projectFiles = make([]tuiapp.ProjectFileEntry, 0, len(filesResp.Data.Files))
+		for _, file := range filesResp.Data.Files {
+			projectFiles = append(projectFiles, tuiapp.ProjectFileEntry{
+				Path:  file.Path,
+				IsDir: file.IsDir,
+				Depth: file.Depth,
+			})
+		}
+	}
+	return &tuiapp.ProjectDetail{
+		ID:           proj.ID,
+		Slug:         strings.TrimSpace(proj.Slug),
+		DisplayName:  tuiapp.ResolveProjectLabel(proj.DisplayName, proj.Slug, ""),
+		Description:  proj.Description,
+		DeliveryMode: proj.DeliveryMode,
+		RepoURL:      repoURL,
+		RepoPath:     repoPath,
+		Files:        projectFiles,
+		Tasks:        tasks,
+		DoneTasks:    doneTasks,
+		DoneCount:    len(doneTasks),
+		Agents:       agents,
+	}, nil
 }
 
 func loadTUIOperatorDashboard(ctx context.Context, apiClient *cliAPIClient) (*tuiapp.OperatorDashboardData, error) {

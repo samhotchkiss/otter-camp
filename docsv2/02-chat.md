@@ -115,10 +115,10 @@ In addition, **per-node async sessions** are created automatically when a flow n
 Since there is one session per scope, the title is derived from the scope:
 
 - Org session: "General" (or the org name)
-- Project session: the project name
+- Project session: the resolved project label (`project.display_name` when present, otherwise `project.slug`, otherwise a stable generic fallback such as "Untitled project")
 - Task sync session: the task title
 
-No auto-generation or model calls needed. The `chat_session` table has an optional `title` field (nullable) — when null, the UI displays the scope name. The human can override the title if they want.
+No auto-generation or model calls needed. The `chat_session` table has an optional `title` field (nullable) — when null, the UI displays the scope name. For project scope, that scope name follows the same fallback contract everywhere in the product: `project.display_name`, then `project.slug`, then a stable generic fallback rather than an internal ID fragment. The human can override the title if they want.
 
 Discoverability beyond the sidebar is handled by the command bar (Superhuman-style fuzzy search across sessions, projects, and tasks).
 

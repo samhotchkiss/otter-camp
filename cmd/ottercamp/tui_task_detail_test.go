@@ -178,3 +178,87 @@ func writeTUITestJSON(t *testing.T, w http.ResponseWriter, payload any) {
 		t.Fatalf("encode response: %v", err)
 	}
 }
+
+func TestLoadTUIProjectsResolvesDisplayNameFallback(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/projects" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTUITestJSON(t, w, map[string]any{
+			"data": []map[string]any{
+				{"id": "proj-name", "slug": "name-slug", "display_name": "Project Name", "updated_at": "2026-03-06T00:00:00Z"},
+				{"id": "proj-slug", "slug": "slug-only", "display_name": "", "updated_at": "2026-03-06T00:00:00Z"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := newCLIAPIClient(server.URL, "test-key")
+	if err != nil {
+		t.Fatalf("newCLIAPIClient: %v", err)
+	}
+
+	items, err := loadTUIProjects(context.Background(), client)
+	if err != nil {
+		t.Fatalf("loadTUIProjects: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("project count = %d, want 2", len(items))
+	}
+	if items[0].DisplayName != "Project Name" {
+		t.Fatalf("items[0].DisplayName = %q, want Project Name", items[0].DisplayName)
+	}
+	if items[1].DisplayName != "slug-only" {
+		t.Fatalf("items[1].DisplayName = %q, want slug-only", items[1].DisplayName)
+	}
+}
+
+func TestLoadTUIProjectDetailResolvesSlugFallback(t *testing.T) {
+	t.Parallel()
+
+	projectID := "proj-slug"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/projects/" + projectID:
+			writeTUITestJSON(t, w, map[string]any{
+				"data": map[string]any{
+					"id":            projectID,
+					"slug":          "slug-only-project",
+					"display_name":  "",
+					"description":   "Slug fallback test",
+					"delivery_mode": "manual",
+				},
+			})
+		case "/v1/projects/" + projectID + "/tasks":
+			writeTUITestJSON(t, w, map[string]any{"data": []any{}})
+		case "/v1/projects/" + projectID + "/agents":
+			writeTUITestJSON(t, w, map[string]any{"data": []any{}})
+		case "/v1/projects/" + projectID + "/remotes":
+			writeTUITestJSON(t, w, map[string]any{"data": []any{}})
+		case "/v1/projects/" + projectID + "/files":
+			writeTUITestJSON(t, w, map[string]any{"data": map[string]any{"files": []any{}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newCLIAPIClient(server.URL, "test-key")
+	if err != nil {
+		t.Fatalf("newCLIAPIClient: %v", err)
+	}
+
+	detail, err := loadTUIProjectDetail(context.Background(), client, projectID)
+	if err != nil {
+		t.Fatalf("loadTUIProjectDetail: %v", err)
+	}
+	if detail.DisplayName != "slug-only-project" {
+		t.Fatalf("DisplayName = %q, want slug-only-project", detail.DisplayName)
+	}
+	if detail.Slug != "slug-only-project" {
+		t.Fatalf("Slug = %q, want slug-only-project", detail.Slug)
+	}
+}

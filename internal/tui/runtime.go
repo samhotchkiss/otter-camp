@@ -73,6 +73,7 @@ type SidebarChatItem struct {
 // SidebarProjectItem represents a project for the sidebar.
 type SidebarProjectItem struct {
 	ID          string
+	Slug        string
 	DisplayName string
 	UpdatedAt   time.Time
 }
