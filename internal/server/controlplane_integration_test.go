@@ -431,6 +431,84 @@ func TestOperatorDashboardSummaryIncludesStaleTaskAndExecution(t *testing.T) {
 	}
 }
 
+func TestOperatorDashboardSummaryAttentionRequiredWhenOnlyBlockedItemsPresent(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-blocked",
+		DisplayName:    "Ops Dashboard Blocked",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		Slug:           "ops-dashboard-blocked-template",
+		DisplayName:    "Ops Dashboard Blocked Template",
+		Description:    "template for operator dashboard blocked-only integration tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	createdByID := adminA.ID
+	blockedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Approve launch checklist",
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create blocked task: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=6", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	if payload.Summary.Health != "attention_required" {
+		t.Fatalf("summary.health=%q want=%q body=%s", payload.Summary.Health, "attention_required", string(resp.Body))
+	}
+	if payload.Summary.BlockedItems != 1 {
+		t.Fatalf("blocked_items=%d want=1 body=%s", payload.Summary.BlockedItems, string(resp.Body))
+	}
+	if payload.Summary.QuietHealthy {
+		t.Fatalf("quiet_healthy=%t want=false body=%s", payload.Summary.QuietHealthy, string(resp.Body))
+	}
+
+	blockedItem := findOperatorDashboardItem(payload.Blocked.Items, "review_blocked", blockedTask.ID)
+	if blockedItem == nil {
+		t.Fatalf("blocked review item missing body=%s", string(resp.Body))
+	}
+	if blockedItem.Links.Task != "/v1/tasks/"+blockedTask.ID.String() {
+		t.Fatalf("blocked task link=%q want=%q body=%s", blockedItem.Links.Task, "/v1/tasks/"+blockedTask.ID.String(), string(resp.Body))
+	}
+}
+
 func TestOperatorDashboardSectionTotalCountExceedsReturnedCountWhenLimited(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 

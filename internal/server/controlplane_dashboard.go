@@ -192,7 +192,7 @@ func (l operatorDashboardLoader) Load(ctx context.Context, organizationID, userI
 	health := "active_healthy"
 	if quietHealthy {
 		health = "quiet_healthy"
-	} else if staleTaskCount > 0 || staleExecutionCount > 0 || recentFailureCount > 0 {
+	} else if staleTaskCount > 0 || staleExecutionCount > 0 || blockedCount > 0 || recentFailureCount > 0 {
 		health = "attention_required"
 	}
 
