@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -7158,41 +7159,158 @@ func (m *Model) jumpToSessionByName(name string) tea.Cmd {
 
 // jumpToTaskByTitle finds a task by title substring and navigates to its detail view. EX-228.
 func (m *Model) jumpToTaskByTitle(title string) tea.Cmd {
-	titleLower := strings.ToLower(strings.TrimSpace(title))
-	for _, taskID := range m.workspace.taskOrder {
+	query := strings.TrimSpace(title)
+	titleLower := strings.ToLower(query)
+	numberQuery, hasNumberQuery := parseTaskJumpNumber(query)
+
+	var exactIDMatches []string
+	var exactNumberMatches []string
+	var exactTitleMatches []string
+	var substringMatches []string
+
+	for _, taskID := range m.taskJumpSearchOrder() {
 		task := m.workspace.tasks[taskID]
 		if task == nil {
 			continue
 		}
-		if strings.Contains(strings.ToLower(task.Title), titleLower) {
-			// EX-479: idempotency — if already viewing this task, say so rather
-			// than "Task: X" which implies navigation occurred. Mirrors EX-334
-			// ('t' key "Already viewing task detail.") and EX-462 (:task idempotency).
-			alreadyOnTask := m.focus == MainPanel && m.workspace.mainView == ViewTask &&
-				strings.EqualFold(m.workspace.selectedTaskID, taskID)
-			m.workspace.selectedTaskID = taskID
-			m.workspace.setMainView(ViewTask)
-			m.activeScope = ScopeTask
-			label := task.Title
-			if task.TaskNumber > 0 {
-				label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
-			}
-			if alreadyOnTask {
-				m.statusMessage = "Already viewing: " + truncate(label, 40)
-			} else {
-				m.statusMessage = "Task: " + truncate(label, 40)
-			}
-			// EX-481: load task detail so the view is populated with description,
-			// session ID, flow info, etc. Without this, `:task <name>` shows an
-			// incomplete panel whenever the task was seeded from a project-task-list
-			// but never individually detail-fetched. Mirrors handleEnterKey
-			// (ViewProject→Enter) and sidebar task selection which both call
-			// loadTaskDetailCmd. The idempotency case still refreshes, which is fine.
-			return loadTaskDetailCmd(taskID, m.runtimeHints)
+		taskTitle := strings.TrimSpace(task.Title)
+		switch {
+		case strings.EqualFold(strings.TrimSpace(task.ID), query):
+			exactIDMatches = append(exactIDMatches, taskID)
+		case hasNumberQuery && task.TaskNumber == numberQuery:
+			exactNumberMatches = append(exactNumberMatches, taskID)
+		case strings.EqualFold(taskTitle, query):
+			exactTitleMatches = append(exactTitleMatches, taskID)
+		case titleLower != "" && strings.Contains(strings.ToLower(taskTitle), titleLower):
+			substringMatches = append(substringMatches, taskID)
 		}
+	}
+
+	for _, matches := range [][]string{exactIDMatches, exactNumberMatches, exactTitleMatches, substringMatches} {
+		if len(matches) == 0 {
+			continue
+		}
+		if len(matches) > 1 {
+			m.statusMessage = m.taskJumpAmbiguousStatus(query, matches)
+			return nil
+		}
+		return m.navigateToTaskJumpTarget(matches[0])
 	}
 	m.statusMessage = fmt.Sprintf("Task %q not found.", title)
 	return nil
+}
+
+func parseTaskJumpNumber(query string) (int, bool) {
+	trimmed := strings.TrimSpace(query)
+	if len(trimmed) < len("OC-1") || !strings.EqualFold(trimmed[:3], "OC-") {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(trimmed[3:]))
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+func (m *Model) taskJumpSearchOrder() []string {
+	if len(m.workspace.tasks) == 0 {
+		return nil
+	}
+	order := make([]string, 0, len(m.workspace.tasks))
+	seen := make(map[string]struct{}, len(m.workspace.tasks))
+	for _, taskID := range m.workspace.taskOrder {
+		if _, ok := seen[taskID]; ok {
+			continue
+		}
+		if m.workspace.tasks[taskID] == nil {
+			continue
+		}
+		order = append(order, taskID)
+		seen[taskID] = struct{}{}
+	}
+	extraIDs := make([]string, 0, len(m.workspace.tasks)-len(order))
+	for taskID, task := range m.workspace.tasks {
+		if task == nil {
+			continue
+		}
+		if _, ok := seen[taskID]; ok {
+			continue
+		}
+		extraIDs = append(extraIDs, taskID)
+	}
+	sort.Strings(extraIDs)
+	return append(order, extraIDs...)
+}
+
+func (m *Model) navigateToTaskJumpTarget(taskID string) tea.Cmd {
+	task := m.workspace.tasks[taskID]
+	if task == nil {
+		m.statusMessage = fmt.Sprintf("Task %q not found.", taskID)
+		return nil
+	}
+	// EX-479: idempotency — if already viewing this task, say so rather
+	// than "Task: X" which implies navigation occurred. Mirrors EX-334
+	// ('t' key "Already viewing task detail.") and EX-462 (:task idempotency).
+	alreadyOnTask := m.focus == MainPanel && m.workspace.mainView == ViewTask &&
+		strings.EqualFold(m.workspace.selectedTaskID, taskID)
+	m.workspace.selectedTaskID = taskID
+	m.workspace.setMainView(ViewTask)
+	m.activeScope = ScopeTask
+	label := task.Title
+	if task.TaskNumber > 0 {
+		label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, task.Title)
+	}
+	if alreadyOnTask {
+		m.statusMessage = "Already viewing: " + truncate(label, 40)
+	} else {
+		m.statusMessage = "Task: " + truncate(label, 40)
+	}
+	// EX-481: load task detail so the view is populated with description,
+	// session ID, flow info, etc. Without this, `:task <name>` shows an
+	// incomplete panel whenever the task was seeded from a project-task-list
+	// but never individually detail-fetched. Mirrors handleEnterKey
+	// (ViewProject→Enter) and sidebar task selection which both call
+	// loadTaskDetailCmd. The idempotency case still refreshes, which is fine.
+	return loadTaskDetailCmd(taskID, m.runtimeHints)
+}
+
+func (m *Model) taskJumpAmbiguousStatus(query string, matches []string) string {
+	if len(matches) == 0 {
+		return fmt.Sprintf("Task %q not found.", query)
+	}
+	sample := "<task-id>"
+	for _, taskID := range matches {
+		task := m.workspace.tasks[taskID]
+		if task != nil && task.TaskNumber > 0 {
+			sample = fmt.Sprintf("OC-%d", task.TaskNumber)
+			break
+		}
+	}
+	parts := make([]string, 0, len(matches))
+	for _, taskID := range matches {
+		parts = append(parts, m.taskJumpCandidateLabel(taskID))
+	}
+	return fmt.Sprintf("Ambiguous task %q. Use :task %s or :task <task-id>. Matches: %s.",
+		query, sample, strings.Join(parts, "; "))
+}
+
+func (m *Model) taskJumpCandidateLabel(taskID string) string {
+	task := m.workspace.tasks[taskID]
+	if task == nil {
+		return "id " + taskID
+	}
+	label := strings.TrimSpace(task.Title)
+	if task.TaskNumber > 0 {
+		label = fmt.Sprintf("OC-%d: %s", task.TaskNumber, label)
+	}
+	if label == "" {
+		label = "Task " + taskID
+	}
+	projectLabel := strings.TrimSpace(m.workspace.projectDisplayName(task.ProjectID))
+	if projectLabel == "" {
+		return fmt.Sprintf("%s (id %s)", label, taskID)
+	}
+	return fmt.Sprintf("%s @ %s (id %s)", label, projectLabel, taskID)
 }
 
 func (m Model) chatTextInputActive() bool {
