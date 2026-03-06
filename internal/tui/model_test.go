@@ -1390,6 +1390,160 @@ func TestTaskPaneEscNavigatesAndCancelIsExplicitEX249(t *testing.T) {
 	}
 }
 
+func TestTaskPaneMouseFocusIntoChatResetsComposeEX252(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-252-focus"
+	model.workspace.tasks["task-252-focus"] = &taskRecord{
+		ID:                  "task-252-focus",
+		Title:               "Pointer focus",
+		Status:              "in_progress",
+		SessionID:           "00000000-0000-0000-0000-000000002520",
+		ActiveExecutionID:   "00000000-0000-0000-0000-000000002520",
+		DiscussionSessionID: "00000000-0000-0000-0000-000000002521",
+	}
+	model.focus = MainPanel
+	model.activeScope = ScopeTask
+	model.activeSession = "00000000-0000-0000-0000-000000002520"
+	model.taskPaneTab = taskPaneTabJournal
+	model.taskPaneTaskID = "task-252-focus"
+	model.taskPaneMode = taskPaneModeNavigate
+
+	clickX, clickY := chatPanelBodyClickPosition(model)
+	model = pressMsg(model, tea.MouseMsg{
+		X:      clickX,
+		Y:      clickY,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+
+	if model.focus != ChatPanel {
+		t.Fatalf("focus after pointer entry = %s, want chat", panelLabel(model.focus))
+	}
+	if model.taskPaneMode != taskPaneModeCompose {
+		t.Fatalf("task pane mode after pointer entry = %s, want compose", model.taskPaneMode)
+	}
+}
+
+func TestTaskPanePointerRefocusPreservesDraftEX252(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-252-draft"
+	model.workspace.tasks["task-252-draft"] = &taskRecord{
+		ID:                  "task-252-draft",
+		Title:               "Preserve draft",
+		Status:              "in_progress",
+		SessionID:           "00000000-0000-0000-0000-000000002522",
+		ActiveExecutionID:   "00000000-0000-0000-0000-000000002522",
+		DiscussionSessionID: "00000000-0000-0000-0000-000000002523",
+	}
+	model.focus = ChatPanel
+	model.activeScope = ScopeTask
+	model.activeSession = "00000000-0000-0000-0000-000000002522"
+	model.taskPaneTab = taskPaneTabJournal
+	model.taskPaneTaskID = "task-252-draft"
+	model.taskPaneMode = taskPaneModeNavigate
+	model.chatInput = "keep draft"
+
+	clickX, clickY := chatPanelBodyClickPosition(model)
+	model = pressMsg(model, tea.MouseMsg{
+		X:      clickX,
+		Y:      clickY,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+
+	if model.taskPaneMode != taskPaneModeCompose {
+		t.Fatalf("task pane mode after refocus = %s, want compose", model.taskPaneMode)
+	}
+	if model.chatInput != "keep draft" {
+		t.Fatalf("chat input after refocus = %q, want draft preserved", model.chatInput)
+	}
+}
+
+func TestTaskPaneMouseClickTabsEX252(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-252-tabs"
+	model.workspace.tasks["task-252-tabs"] = &taskRecord{
+		ID:                  "task-252-tabs",
+		Title:               "Clickable tabs",
+		Status:              "in_progress",
+		SessionID:           "00000000-0000-0000-0000-000000002524",
+		ActiveExecutionID:   "00000000-0000-0000-0000-000000002524",
+		DiscussionSessionID: "00000000-0000-0000-0000-000000002525",
+	}
+	model.focus = ChatPanel
+	model.activeScope = ScopeTask
+	model.activeSession = "00000000-0000-0000-0000-000000002524"
+	model.taskPaneTab = taskPaneTabJournal
+	model.taskPaneTaskID = "task-252-tabs"
+	model.taskPaneMode = taskPaneModeNavigate
+
+	for _, tab := range []taskPaneTab{taskPaneTabJournal, taskPaneTabEvents, taskPaneTabDiscussion, taskPaneTabTrace} {
+		clickX, clickY := taskPaneTabClickPosition(t, model, tab)
+		model = pressMsg(model, tea.MouseMsg{
+			X:      clickX,
+			Y:      clickY,
+			Action: tea.MouseActionPress,
+			Button: tea.MouseButtonLeft,
+		})
+		if model.taskPaneTab != tab {
+			t.Fatalf("task pane tab after click = %s, want %s", model.taskPaneTab, tab)
+		}
+	}
+}
+
+func TestTraceSurfaceShowsFullToolResultsEX252(t *testing.T) {
+	t.Parallel()
+
+	result := strings.Repeat("x", 410) + "TRACE-END"
+	toolCall := ToolCallStatus{
+		ID:     "call-252",
+		Name:   "builder.trace",
+		Status: "success",
+		Result: result,
+	}
+	model := NewModel(DefaultState())
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-252-trace"
+	model.taskPaneTab = taskPaneTabTrace
+	model.chatMessages = []ChatMessage{{
+		ID:        "msg-252-trace",
+		Role:      "assistant",
+		Timestamp: time.Now().UTC(),
+		ToolCalls: []ToolCallStatus{toolCall},
+	}}
+	model.chatMessageIndex = chatMessageIndex(model.chatMessages)
+	model.setToolCallExpanded("msg-252-trace", toolCallIdentity(toolCall, 0), true)
+
+	traceView := strings.Join(model.renderTaskSurface(80), "\n")
+	model.taskPaneTab = taskPaneTabDiscussion
+	discussionView := strings.Join(model.renderTaskSurface(80), "\n")
+
+	if !strings.Contains(traceView, "TRACE-END") {
+		t.Fatalf("trace view should contain full tool result tail: %q", traceView)
+	}
+	if strings.Contains(traceView, "400 of") {
+		t.Fatalf("trace view should not show truncation notice: %q", traceView)
+	}
+	if strings.Contains(discussionView, "TRACE-END") {
+		t.Fatalf("discussion view should still truncate tool result tail: %q", discussionView)
+	}
+	if !strings.Contains(discussionView, "400 of") {
+		t.Fatalf("discussion view should show truncation notice: %q", discussionView)
+	}
+}
+
 func TestDashboardCursorJKMoveSelection(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.workspace.tasks["task-1"] = &taskRecord{ID: "task-1", Title: "Launch docs", Status: "todo"}
@@ -1665,6 +1819,55 @@ func pressMsg(model Model, msg tea.Msg) Model {
 		panic("unexpected model type")
 	}
 	return next
+}
+
+func chatPanelBodyClickPosition(model Model) (int, int) {
+	layout := model.CurrentLayout()
+	return chatPanelStartX(layout) + 3, 5
+}
+
+func taskPaneTabClickPosition(t *testing.T, model Model, tab taskPaneTab) (int, int) {
+	t.Helper()
+
+	layout := model.CurrentLayout()
+	for _, hit := range taskPaneTabHitBoxes(chatPanelContentWidth(layout)) {
+		if hit.tab == tab {
+			return chatPanelStartX(layout) + 2 + hit.start + 1, 3
+		}
+	}
+	t.Fatalf("no hit box for task pane tab %s", tab)
+	return 0, 0
+}
+
+func chatPanelStartX(layout layoutState) int {
+	start := 0
+	if layout.visible[0] {
+		start += layout.widths[0] + 1
+	}
+	if layout.visible[1] {
+		start += layout.widths[1] + 1
+	}
+	return start
+}
+
+func chatMessageIndex(messages []ChatMessage) map[string]int {
+	index := make(map[string]int, len(messages))
+	for i, msg := range messages {
+		index[msg.ID] = i
+	}
+	return index
+}
+
+func cacheChatSession(model *Model, sessionID string, messages []ChatMessage, expanded map[string]map[string]bool) {
+	model.activeSession = sessionID
+	model.chatMessages = messages
+	model.chatMessageIndex = chatMessageIndex(messages)
+	model.toolCallExpanded = expanded
+	if model.toolCallExpanded == nil {
+		model.toolCallExpanded = map[string]map[string]bool{}
+	}
+	model.toolCallMessageIndex = map[string]int{}
+	model.saveActiveSessionState()
 }
 
 func TestStatusAutoClearFiresWhenGenerationMatches(t *testing.T) {
