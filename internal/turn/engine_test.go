@@ -20,6 +20,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
 
@@ -2156,6 +2157,163 @@ func TestHandleUserMessageCarriesRunAttributionIntoInvocationAndModelRequest(t *
 	}
 }
 
+func TestHandleUserMessageBlocksRepeatedToolValidationFailures(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write file",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("write"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{
+			ToolCalls: []ModelToolCall{{
+				ID:   "write-1",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"_raw": `{"content":"hello"}`,
+				},
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(ctx context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output:     map[string]any{"error": "path_required"},
+			RunID:      &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	taskRecord, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if taskRecord.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", taskRecord.WorkStatus)
+	}
+
+	guard, ok := parseTaskValidationGuard(taskRecord.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if !guard.Blocked {
+		t.Fatal("expected blocked validation guard")
+	}
+	if guard.Count != validationLoopBlockThreshold {
+		t.Fatalf("guard count = %d, want %d", guard.Count, validationLoopBlockThreshold)
+	}
+	if guard.FailureClass != "tool_validation" {
+		t.Fatalf("guard failure_class = %q, want tool_validation", guard.FailureClass)
+	}
+	if guard.FailureCode != "malformed_arguments_raw" {
+		t.Fatalf("guard failure_code = %q, want malformed_arguments_raw", guard.FailureCode)
+	}
+	if !strings.Contains(guard.FailureReason, "path_required") {
+		t.Fatalf("guard failure_reason = %q, want contains path_required", guard.FailureReason)
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocker calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "file.write") {
+		t.Fatalf("block reason = %q, want contains file.write", blocker.calls[0].reason)
+	}
+	if fixture.chat.failCalls != 0 {
+		t.Fatalf("failCalls = %d, want 0", fixture.chat.failCalls)
+	}
+	if fixture.chat.completeCalls != 1 {
+		t.Fatalf("completeCalls = %d, want 1", fixture.chat.completeCalls)
+	}
+	if !fixture.messages.containsContentSubstring("validation loop blocked") {
+		t.Fatal("expected validation loop system message")
+	}
+}
+
+func TestHandleUserMessageSkipsBlockedValidationLoop(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	guard := taskValidationGuardState{
+		InitialMessageID: fixture.userMessageID.String(),
+		Fingerprint:      "file.write:malformed_arguments_raw",
+		ToolName:         "file.write",
+		FailureClass:     "tool_validation",
+		FailureCode:      "malformed_arguments_raw",
+		FailureReason:    "malformed _raw arguments (path_required)",
+		Count:            validationLoopBlockThreshold,
+		BlockThreshold:   validationLoopBlockThreshold,
+		Blocked:          true,
+		FirstSeenAt:      time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:       time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), guard)
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      uuid.New(),
+				Title:          "Blocked task",
+				WorkStatus:     "blocked",
+				Metadata:       metadata,
+			},
+		},
+	}
+
+	if err := fixture.engine.handleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID, nil, 0); err != nil {
+		t.Fatalf("handleUserMessage: %v", err)
+	}
+	if got := len(fixture.chat.turnOrder); got != 0 {
+		t.Fatalf("created turns = %d, want 0", got)
+	}
+
+	enqueued, err := fixture.engine.enqueueAgentTurnIfActive(context.Background(), fixture.session, AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueueAgentTurnIfActive: %v", err)
+	}
+	if enqueued {
+		t.Fatal("expected enqueue to be suppressed")
+	}
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent turn jobs = %d, want 0", len(jobs))
+	}
+}
+
 type unitFixture struct {
 	engine        *TurnEngine
 	events        *fakeEventBus
@@ -2221,31 +2379,34 @@ func newUnitFixture(t *testing.T, mode string) *unitFixture {
 	resolver := &fakeProfileResolver{profile: profile}
 	memSources := &fakeMemorySourceRepo{}
 	memories := &fakeMemoryRepo{}
+	taskRepo := &fakeTaskRepo{}
+	taskTransitions := &fakeTaskTransitionService{repo: taskRepo}
 
 	engine, err := NewEngine(Options{
-		Chat:          chatSvc,
-		ToolResolver:  toolResolver,
-		Assembler:     assembler,
-		Summarization: &fakeSummarizationChecker{},
-		ModelGateway:  modelGateway,
-		Dispatcher:    dispatcher,
-		RunCanceler:   &fakeRunCanceler{},
-		Events:        events,
-		Enqueuer:      enqueuer,
-		Invocations:   invocations,
-		ModelProfiles: profiles,
-		Profiles:      resolver,
-		Messages:      messages,
-		Turns:         chatSvc,
-		Sessions:      chatSvc,
-		Agents:        &fakeAgentRepo{agent: agentRecord, starter: []repo.Agent{agentRecord}},
-		Tasks:         &fakeTaskRepo{},
-		Projects:      &fakeProjectRepo{},
-		FlowNodes:     &fakeFlowNodeRepo{},
-		MemorySources: memSources,
-		Memories:      memories,
-		Now:           func() time.Time { return time.Now().UTC() },
-		Sleep:         func(context.Context, time.Duration) error { return nil },
+		Chat:            chatSvc,
+		ToolResolver:    toolResolver,
+		Assembler:       assembler,
+		Summarization:   &fakeSummarizationChecker{},
+		ModelGateway:    modelGateway,
+		Dispatcher:      dispatcher,
+		RunCanceler:     &fakeRunCanceler{},
+		Events:          events,
+		Enqueuer:        enqueuer,
+		Invocations:     invocations,
+		ModelProfiles:   profiles,
+		Profiles:        resolver,
+		Messages:        messages,
+		Turns:           chatSvc,
+		Sessions:        chatSvc,
+		Agents:          &fakeAgentRepo{agent: agentRecord, starter: []repo.Agent{agentRecord}},
+		Tasks:           taskRepo,
+		TaskTransitions: taskTransitions,
+		Projects:        &fakeProjectRepo{},
+		FlowNodes:       &fakeFlowNodeRepo{},
+		MemorySources:   memSources,
+		Memories:        memories,
+		Now:             func() time.Time { return time.Now().UTC() },
+		Sleep:           func(context.Context, time.Duration) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
@@ -3059,6 +3220,53 @@ func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTas
 		return item, nil
 	}
 	return repo.ProjectTask{}, repo.ErrNotFound
+}
+
+func (f *fakeTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.ProjectTask, error) {
+	if f.err != nil {
+		return repo.ProjectTask{}, f.err
+	}
+	if f.items == nil {
+		f.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	f.items[task.ID] = task
+	return task, nil
+}
+
+type fakeTaskTransitionService struct {
+	repo  *fakeTaskRepo
+	calls []blockedTaskCall
+	err   error
+}
+
+type blockedTaskCall struct {
+	taskID uuid.UUID
+	reason string
+	actor  tasksvc.Actor
+}
+
+func (f *fakeTaskTransitionService) MarkBlocked(_ context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.calls = append(f.calls, blockedTaskCall{
+		taskID: taskID,
+		reason: strings.TrimSpace(reason),
+		actor:  actor,
+	})
+	if f.repo != nil {
+		taskRecord, err := f.repo.GetByID(context.Background(), taskID)
+		if err == nil {
+			taskRecord.WorkStatus = "blocked"
+			updated, updateErr := f.repo.Update(context.Background(), taskRecord)
+			if updateErr == nil {
+				blocked := tasksvc.ProjectTask(updated)
+				return &blocked, nil
+			}
+		}
+	}
+	blocked := tasksvc.ProjectTask{ID: taskID, WorkStatus: "blocked"}
+	return &blocked, nil
 }
 
 type fakeFlowNodeRepo struct {

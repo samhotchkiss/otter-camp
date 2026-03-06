@@ -36,6 +36,7 @@ func TestMetricsHandlerExposesRequiredMetricFamilies(t *testing.T) {
 	RecordAgentTurn("started")
 	RecordAgentTurn("completed")
 	RecordAgentTurnDispatchSuppressed("duplicate_enqueue")
+	RecordAgentTurnValidationLoopBlock("file.write", "path_required")
 
 	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	metricsRec := httptest.NewRecorder()
@@ -55,6 +56,7 @@ func TestMetricsHandlerExposesRequiredMetricFamilies(t *testing.T) {
 		`ottercamp_agent_turns_total{status="started"} 1`,
 		`ottercamp_agent_turns_total{status="completed"} 1`,
 		`ottercamp_agent_turn_dispatch_suppressed_total{reason="duplicate_enqueue"} 1`,
+		`ottercamp_agent_turn_validation_loop_blocked_total{failure_code="path_required",tool_name="file.write"} 1`,
 	}
 	for _, line := range required {
 		if !strings.Contains(body, line) {
@@ -190,6 +192,7 @@ func resetMetricsForTests() {
 	MemoryItemsTotal.Reset()
 	AgentTurnsTotal.Reset()
 	AgentTurnDispatchSuppressedTotal.Reset()
+	AgentTurnValidationLoopBlockedTotal.Reset()
 }
 
 func queryFromRows(rows metricsRows, queryErr error) metricsQueryFunc {

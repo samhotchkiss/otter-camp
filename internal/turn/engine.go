@@ -19,37 +19,43 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
+	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
 
 const (
-	AgentTurnJobType            = "agent_turn"
-	defaultAgentTurnJobPriority = 70
-	defaultMaxToolCalls         = 75
-	defaultSyncMaxDuration      = 5 * time.Minute
-	defaultAsyncMaxDuration     = 30 * time.Minute
-	defaultListeningEvalDelay   = 500 * time.Millisecond
-	defaultAutoContinueDelay    = 2 * time.Second
-	defaultModelRetryBudget     = 3
-	defaultRateLimitBackoff     = 30 * time.Second
-	maxRateLimitBackoff         = 30 * time.Minute
-	maxRateLimitRetries         = 5
-	maxConsecutiveAutoTurns     = 10
-	defaultSummarizeLayerBudget = 0
-	chunkPollSteerEveryNChunks  = 10
-	maxContinuationTurnDepth    = 3
-	defaultTurnConsumerName     = "turn-engine.user-message"
-	defaultReactionConsumerName = "turn-engine.reactions"
-	defaultTurnCompletedName    = "turn-engine.turn-completed"
-	defaultCancelConsumerPrefix = "turn-engine.cancel"
-	stopReasonMaxToolCalls      = "max_tool_calls"
-	stopReasonMaxDuration       = "max_duration"
-	workerPromptTokenGuardrail  = 32000
-	defaultPromptTokenGuardrail = 64000
+	AgentTurnJobType                = "agent_turn"
+	defaultAgentTurnJobPriority     = 70
+	defaultMaxToolCalls             = 75
+	defaultSyncMaxDuration          = 5 * time.Minute
+	defaultAsyncMaxDuration         = 30 * time.Minute
+	defaultListeningEvalDelay       = 500 * time.Millisecond
+	defaultAutoContinueDelay        = 2 * time.Second
+	defaultModelRetryBudget         = 3
+	defaultRateLimitBackoff         = 30 * time.Second
+	maxRateLimitBackoff             = 30 * time.Minute
+	maxRateLimitRetries             = 5
+	maxConsecutiveAutoTurns         = 10
+	defaultSummarizeLayerBudget     = 0
+	chunkPollSteerEveryNChunks      = 10
+	maxContinuationTurnDepth        = 3
+	defaultTurnConsumerName         = "turn-engine.user-message"
+	defaultReactionConsumerName     = "turn-engine.reactions"
+	defaultTurnCompletedName        = "turn-engine.turn-completed"
+	defaultCancelConsumerPrefix     = "turn-engine.cancel"
+	stopReasonMaxToolCalls          = "max_tool_calls"
+	stopReasonMaxDuration           = "max_duration"
+	stopReasonValidationBlocked     = "validation_loop_blocked"
+	workerPromptTokenGuardrail      = 32000
+	defaultPromptTokenGuardrail     = 64000
+	validationLoopBlockThreshold    = 3
+	taskValidationGuardMetadataKey  = "agent_turn_validation_guard"
+	validationLoopSuppressionReason = "validation_loop_blocked"
 )
 
 var (
@@ -233,6 +239,11 @@ type agentRepository interface {
 
 type taskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
+}
+
+type taskTransitionService interface {
+	MarkBlocked(ctx context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 }
 
 type flowNodeRepository interface {
@@ -273,19 +284,20 @@ type Options struct {
 	Events        EventBus
 	Enqueuer      JobEnqueuer
 
-	Invocations   modelInvocationRepo
-	ModelProfiles modelProfileLookup
-	Profiles      ProfileResolver
-	Messages      messageRepository
-	Turns         turnRepository
-	Sessions      sessionRepository
-	Agents        agentRepository
-	Tasks         taskRepository
-	FlowNodes     flowNodeRepository
-	Assignments   assignmentRepository
-	Projects      projectRepository
-	MemorySources memorySourceRepository
-	Memories      memoryRepository
+	Invocations     modelInvocationRepo
+	ModelProfiles   modelProfileLookup
+	Profiles        ProfileResolver
+	Messages        messageRepository
+	Turns           turnRepository
+	Sessions        sessionRepository
+	Agents          agentRepository
+	Tasks           taskRepository
+	TaskTransitions taskTransitionService
+	FlowNodes       flowNodeRepository
+	Assignments     assignmentRepository
+	Projects        projectRepository
+	MemorySources   memorySourceRepository
+	Memories        memoryRepository
 
 	DefaultModelProfileID *string
 	MaxToolCalls          int
@@ -310,19 +322,20 @@ type TurnEngine struct {
 	events        EventBus
 	enqueuer      JobEnqueuer
 
-	invocations modelInvocationRepo
-	profiles    modelProfileLookup
-	resolver    ProfileResolver
-	messages    messageRepository
-	turns       turnRepository
-	sessions    sessionRepository
-	agents      agentRepository
-	tasks       taskRepository
-	flowNodes   flowNodeRepository
-	assignments assignmentRepository
-	projects    projectRepository
-	sources     memorySourceRepository
-	memories    memoryRepository
+	invocations     modelInvocationRepo
+	profiles        modelProfileLookup
+	resolver        ProfileResolver
+	messages        messageRepository
+	turns           turnRepository
+	sessions        sessionRepository
+	agents          agentRepository
+	tasks           taskRepository
+	taskTransitions taskTransitionService
+	flowNodes       flowNodeRepository
+	assignments     assignmentRepository
+	projects        projectRepository
+	sources         memorySourceRepository
+	memories        memoryRepository
 
 	defaultModelProfileID *string
 	maxToolCalls          int
@@ -360,6 +373,29 @@ type turnRuntime struct {
 type projectIdentity struct {
 	id   uuid.UUID
 	slug string
+}
+
+type toolValidationFailure struct {
+	ToolName      string
+	FailureClass  string
+	FailureCode   string
+	FailureReason string
+	Fingerprint   string
+}
+
+type taskValidationGuardState struct {
+	InitialMessageID string `json:"initial_message_id"`
+	Fingerprint      string `json:"fingerprint"`
+	ToolName         string `json:"tool_name"`
+	FailureClass     string `json:"failure_class"`
+	FailureCode      string `json:"failure_code"`
+	FailureReason    string `json:"failure_reason"`
+	Count            int    `json:"count"`
+	BlockThreshold   int    `json:"block_threshold"`
+	Blocked          bool   `json:"blocked"`
+	FirstSeenAt      string `json:"first_seen_at,omitempty"`
+	LastSeenAt       string `json:"last_seen_at,omitempty"`
+	LastTurnID       string `json:"last_turn_id,omitempty"`
 }
 
 func NewEngine(opts Options) (*TurnEngine, error) {
@@ -425,6 +461,16 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	if opts.Memories == nil {
 		opts.Memories = repo.NewMemoryRepo(opts.Pool)
 	}
+	if opts.TaskTransitions == nil && opts.Pool != nil {
+		taskTransitions, err := tasksvc.NewService(tasksvc.Options{
+			Pool:     opts.Pool,
+			EventBus: opts.Events,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("turn engine task transition service: %w", err)
+		}
+		opts.TaskTransitions = taskTransitions
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
@@ -485,6 +531,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		sessions:              opts.Sessions,
 		agents:                opts.Agents,
 		tasks:                 opts.Tasks,
+		taskTransitions:       opts.TaskTransitions,
 		flowNodes:             opts.FlowNodes,
 		assignments:           opts.Assignments,
 		projects:              opts.Projects,
@@ -846,6 +893,12 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		e.logPausedTurnSkip("skipping agent turn for paused project", session, reason, messageID)
 		return nil
 	}
+	if blocked, guard, blockErr := e.validationLoopBlockerForSession(ctx, session); blockErr != nil {
+		return blockErr
+	} else if blocked {
+		e.logValidationLoopSuppressed("skipping agent turn for blocked validation loop", session, messageID, guard)
+		return nil
+	}
 	message, err := e.messages.GetByID(ctx, messageID)
 	if err != nil {
 		return err
@@ -1111,6 +1164,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			}
 			if _, err := e.messages.UpdateStatus(ctx, assistantMessage.ID, "final", ""); err != nil {
 				return fmt.Errorf("no-tool →final (msg status=%s): %w", currentMessage.Status, err)
+			}
+			if _, err := e.handleToolValidationResults(ctx, rt, nil, nil); err != nil {
+				return fmt.Errorf("clear validation guard: %w", err)
 			}
 			if err := e.completeTurn(ctx, rt); err != nil {
 				return fmt.Errorf("no-tool completeTurn: %w", err)
@@ -1516,13 +1572,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
-		toolCalls = append(toolCalls, ToolCall{
+		toolCall := ToolCall{
 			ID:              id,
 			Name:            name,
 			Tier:            tier,
 			Arguments:       arguments,
 			MCPConnectionID: call.MCPConnectionID,
-		})
+		}
+		toolCalls = append(toolCalls, toolCall)
 	}
 
 	maxDuration := e.syncMaxDuration
@@ -1580,7 +1637,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if err := e.appendToolResults(ctx, rt, results); err != nil {
 			return false, err
 		}
+		blocked, err := e.handleToolValidationResults(ctx, rt, runCalls, results)
+		if err != nil {
+			return false, err
+		}
 		rt.toolCallsUsed += len(runCalls)
+		if blocked {
+			return true, nil
+		}
 		if rt.toolCallsUsed >= toolBudget {
 			rt.stopReason = stopReasonMaxToolCalls
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
@@ -1612,7 +1676,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if err := e.appendToolResults(ctx, rt, []ToolResult{result}); err != nil {
 			return false, err
 		}
+		blocked, err := e.handleToolValidationResults(ctx, rt, []ToolCall{call}, []ToolResult{result})
+		if err != nil {
+			return false, err
+		}
 		rt.toolCallsUsed++
+		if blocked {
+			return true, nil
+		}
 		if rt.toolCallsUsed >= toolBudget {
 			rt.stopReason = stopReasonMaxToolCalls
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
@@ -1694,6 +1765,369 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 		}
 	}
 	return nil
+}
+
+func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRuntime, calls []ToolCall, results []ToolResult) (bool, error) {
+	if rt == nil || rt.session == nil || rt.turn == nil || e.tasks == nil {
+		return false, nil
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	failures := collectToolValidationFailures(calls, results)
+	current, ok := parseTaskValidationGuard(taskRecord.Metadata)
+	if len(failures) == 0 {
+		if !ok || current.Blocked || current.Count == 0 || current.InitialMessageID != rt.initialMessageID.String() {
+			return false, nil
+		}
+		cleared, clearErr := clearTaskValidationGuardMetadata(taskRecord.Metadata)
+		if clearErr != nil {
+			return false, clearErr
+		}
+		taskRecord.Metadata = cleared
+		if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	next := current
+	blockedNow := false
+	for _, failure := range failures {
+		candidate, candidateBlocked := nextTaskValidationGuardState(next, rt.initialMessageID, rt.turn.ID, failure, e.now())
+		next = candidate
+		if candidateBlocked {
+			blockedNow = true
+			break
+		}
+	}
+
+	merged, mergeErr := mergeTaskValidationGuardMetadata(taskRecord.Metadata, next)
+	if mergeErr != nil {
+		return false, mergeErr
+	}
+	taskRecord.Metadata = merged
+	updatedTask, err := e.tasks.Update(ctx, taskRecord)
+	if err != nil {
+		return false, err
+	}
+
+	if !blockedNow {
+		return false, nil
+	}
+
+	if !strings.EqualFold(strings.TrimSpace(updatedTask.WorkStatus), "blocked") {
+		blockReason := buildValidationLoopBlockReason(next)
+		if e.taskTransitions != nil {
+			if _, err := e.taskTransitions.MarkBlocked(ctx, updatedTask.ID, blockReason, tasksvc.Actor{Type: "system"}); err != nil {
+				return false, err
+			}
+		} else {
+			updatedTask.WorkStatus = "blocked"
+			if _, err := e.tasks.Update(ctx, updatedTask); err != nil {
+				return false, err
+			}
+		}
+	}
+
+	metrics.RecordAgentTurnValidationLoopBlock(next.ToolName, next.FailureCode)
+	rt.stopReason = stopReasonValidationBlocked
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildValidationLoopSystemMessage(next)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func collectToolValidationFailures(calls []ToolCall, results []ToolResult) []toolValidationFailure {
+	if len(results) == 0 {
+		return nil
+	}
+	callByID := make(map[string]ToolCall, len(calls))
+	for _, call := range calls {
+		callByID[strings.TrimSpace(call.ID)] = call
+	}
+
+	failures := make([]toolValidationFailure, 0, len(results))
+	for _, result := range results {
+		call, ok := callByID[strings.TrimSpace(result.ToolCallID)]
+		if !ok {
+			call = ToolCall{ID: result.ToolCallID, Name: result.Name}
+		}
+		failure, matched := classifyToolValidationFailure(call, result)
+		if matched {
+			failures = append(failures, failure)
+		}
+	}
+	return failures
+}
+
+func classifyToolValidationFailure(call ToolCall, result ToolResult) (toolValidationFailure, bool) {
+	toolName := strings.TrimSpace(call.Name)
+	if toolName == "" {
+		toolName = strings.TrimSpace(result.Name)
+	}
+	if toolName == "" {
+		return toolValidationFailure{}, false
+	}
+
+	if hasRawToolArguments(call) {
+		reason := "malformed _raw arguments"
+		if code := strings.TrimSpace(toolResultErrorCode(result)); code != "" {
+			reason = fmt.Sprintf("malformed _raw arguments (%s)", code)
+		}
+		return buildToolValidationFailure(toolName, "malformed_arguments_raw", reason), true
+	}
+
+	if code := normalizeValidationFailureCode(toolResultErrorCode(result)); isToolValidationCode(code) {
+		return buildToolValidationFailure(toolName, code, strings.TrimSpace(toolResultErrorCode(result))), true
+	}
+
+	if reason := strings.TrimSpace(stripToolFailurePrefix(result.Error, toolName)); reason != "" {
+		if code := normalizeValidationFailureCode(reason); isToolValidationCode(code) {
+			return buildToolValidationFailure(toolName, code, reason), true
+		}
+	}
+
+	return toolValidationFailure{}, false
+}
+
+func buildToolValidationFailure(toolName, failureCode, failureReason string) toolValidationFailure {
+	code := normalizeValidationFailureCode(failureCode)
+	if code == "" {
+		code = "validation_failure"
+	}
+	reason := strings.TrimSpace(failureReason)
+	if reason == "" {
+		reason = code
+	}
+	toolName = strings.TrimSpace(toolName)
+	return toolValidationFailure{
+		ToolName:      toolName,
+		FailureClass:  "tool_validation",
+		FailureCode:   code,
+		FailureReason: reason,
+		Fingerprint:   strings.ToLower(strings.TrimSpace(toolName)) + ":" + code,
+	}
+}
+
+func hasRawToolArguments(call ToolCall) bool {
+	if call.Arguments == nil {
+		return false
+	}
+	raw, ok := call.Arguments["_raw"]
+	if !ok || raw == nil {
+		return false
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", raw)) != ""
+}
+
+func toolResultErrorCode(result ToolResult) string {
+	if strings.TrimSpace(result.Error) != "" {
+		return strings.TrimSpace(result.Error)
+	}
+	if len(result.Output) == 0 {
+		return ""
+	}
+	raw, ok := result.Output["error"]
+	if !ok || raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", raw))
+}
+
+func stripToolFailurePrefix(message, toolName string) string {
+	trimmed := strings.TrimSpace(message)
+	prefix := strings.ToLower(strings.TrimSpace(toolName) + " failed:")
+	if prefix == "failed:" {
+		return trimmed
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, prefix) {
+		return strings.TrimSpace(trimmed[len(prefix):])
+	}
+	return trimmed
+}
+
+func normalizeValidationFailureCode(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return ""
+	}
+	builder := strings.Builder{}
+	builder.Grow(len(normalized))
+	lastUnderscore := false
+	for _, r := range normalized {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if lastUnderscore {
+			continue
+		}
+		builder.WriteByte('_')
+		lastUnderscore = true
+	}
+	return strings.Trim(builder.String(), "_")
+}
+
+func isToolValidationCode(code string) bool {
+	if strings.TrimSpace(code) == "" {
+		return false
+	}
+	switch code {
+	case "not_found",
+		"path_traversal",
+		"not_a_git_repo",
+		"cannot_commit_to_main",
+		"service_unavailable",
+		"cli_executor_unavailable",
+		"memory_service_unavailable",
+		"project_repository_unavailable",
+		"task_repository_unavailable",
+		"dependency_repository_unavailable",
+		"subtask_repository_unavailable",
+		"schedule_repository_unavailable",
+		"assignment_repository_unavailable",
+		"agent_repository_unavailable",
+		"chat_repository_unavailable",
+		"flow_repository_unavailable",
+		"profile_catalog_unavailable",
+		"inbox_repository_unavailable",
+		"project_manager_requires_staff_agent",
+		"pm_conflict",
+		"cycle_detected",
+		"cross_level_dependency",
+		"self_dependency":
+		return false
+	}
+	if strings.Contains(code, "unavailable") || strings.Contains(code, "timeout") || strings.Contains(code, "denied") || strings.Contains(code, "policy") {
+		return false
+	}
+	return strings.HasSuffix(code, "_required") ||
+		strings.HasPrefix(code, "invalid_") ||
+		strings.Contains(code, "validation") ||
+		strings.Contains(code, "schema") ||
+		strings.Contains(code, "malformed") ||
+		strings.Contains(code, "must_be") ||
+		strings.Contains(code, "can_only_be") ||
+		strings.Contains(code, "requires_")
+}
+
+func parseTaskValidationGuard(metadata json.RawMessage) (taskValidationGuardState, bool) {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return taskValidationGuardState{}, false
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return taskValidationGuardState{}, false
+	}
+	raw, ok := payload[taskValidationGuardMetadataKey]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return taskValidationGuardState{}, false
+	}
+	var state taskValidationGuardState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return taskValidationGuardState{}, false
+	}
+	if state.BlockThreshold <= 0 {
+		state.BlockThreshold = validationLoopBlockThreshold
+	}
+	return state, state.Count > 0 || state.Blocked
+}
+
+func mergeTaskValidationGuardMetadata(metadata json.RawMessage, state taskValidationGuardState) (json.RawMessage, error) {
+	payload := map[string]any{}
+	if len(metadata) != 0 && json.Valid(metadata) {
+		if err := json.Unmarshal(metadata, &payload); err != nil {
+			return nil, err
+		}
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload[taskValidationGuardMetadataKey] = state
+	merged, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(merged), nil
+}
+
+func clearTaskValidationGuardMetadata(metadata json.RawMessage) (json.RawMessage, error) {
+	payload := map[string]any{}
+	if len(metadata) != 0 && json.Valid(metadata) {
+		if err := json.Unmarshal(metadata, &payload); err != nil {
+			return nil, err
+		}
+	}
+	delete(payload, taskValidationGuardMetadataKey)
+	merged, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(merged), nil
+}
+
+func nextTaskValidationGuardState(current taskValidationGuardState, initialMessageID, turnID uuid.UUID, failure toolValidationFailure, now time.Time) (taskValidationGuardState, bool) {
+	nowValue := now.UTC().Format(time.RFC3339Nano)
+	next := taskValidationGuardState{
+		InitialMessageID: initialMessageID.String(),
+		Fingerprint:      failure.Fingerprint,
+		ToolName:         failure.ToolName,
+		FailureClass:     failure.FailureClass,
+		FailureCode:      failure.FailureCode,
+		FailureReason:    failure.FailureReason,
+		Count:            1,
+		BlockThreshold:   validationLoopBlockThreshold,
+		Blocked:          false,
+		FirstSeenAt:      nowValue,
+		LastSeenAt:       nowValue,
+		LastTurnID:       turnID.String(),
+	}
+	if current.InitialMessageID == next.InitialMessageID && current.Fingerprint == next.Fingerprint && current.Count > 0 {
+		next.Count = current.Count + 1
+		next.FirstSeenAt = current.FirstSeenAt
+		if next.FirstSeenAt == "" {
+			next.FirstSeenAt = nowValue
+		}
+	}
+	next.Blocked = next.Count >= validationLoopBlockThreshold
+	return next, next.Blocked && !current.Blocked
+}
+
+func buildValidationLoopBlockReason(state taskValidationGuardState) string {
+	reason := strings.TrimSpace(state.FailureReason)
+	if reason == "" {
+		reason = strings.TrimSpace(state.FailureCode)
+	}
+	toolName := strings.TrimSpace(state.ToolName)
+	if toolName == "" {
+		return fmt.Sprintf("deterministic tool validation loop blocked after %d identical failures: %s", state.Count, reason)
+	}
+	return fmt.Sprintf("deterministic tool validation loop blocked after %d identical failures: %s (%s)", state.Count, toolName, reason)
+}
+
+func buildValidationLoopSystemMessage(state taskValidationGuardState) string {
+	reason := strings.TrimSpace(state.FailureReason)
+	if reason == "" {
+		reason = strings.TrimSpace(state.FailureCode)
+	}
+	toolName := strings.TrimSpace(state.ToolName)
+	if toolName == "" {
+		return fmt.Sprintf("[Deterministic tool validation loop blocked after %d identical failures: %s]", state.Count, reason)
+	}
+	return fmt.Sprintf("[Deterministic tool validation loop blocked after %d identical failures: %s (%s)]", state.Count, toolName, reason)
 }
 
 func parseProjectIdentityFromToolResult(result ToolResult) (*projectIdentity, bool) {
@@ -2897,11 +3331,42 @@ func (e *TurnEngine) projectPausedForSession(ctx context.Context, session *chat.
 	return pauseState.IsPaused, pauseState.Reason, nil
 }
 
+func (e *TurnEngine) validationLoopBlockerForSession(ctx context.Context, session *chat.ChatSession) (bool, taskValidationGuardState, error) {
+	if session == nil || e.tasks == nil {
+		return false, taskValidationGuardState{}, nil
+	}
+	taskID := resolveTaskID(session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false, taskValidationGuardState{}, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return false, taskValidationGuardState{}, nil
+	}
+	if err != nil {
+		return false, taskValidationGuardState{}, err
+	}
+	guard, ok := parseTaskValidationGuard(taskRecord.Metadata)
+	if !ok || !guard.Blocked {
+		return false, taskValidationGuardState{}, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		return false, taskValidationGuardState{}, nil
+	}
+	return true, guard, nil
+}
+
 func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat.ChatSession, payload AgentTurnPayload, runAfter *time.Time) (bool, error) {
 	if paused, reason, err := e.projectPausedForSession(ctx, session); err != nil {
 		return false, err
 	} else if paused {
 		e.logPausedTurnSkip("skipping agent turn enqueue for paused project", session, reason, payload.MessageID)
+		return false, nil
+	}
+	if blocked, guard, err := e.validationLoopBlockerForSession(ctx, session); err != nil {
+		return false, err
+	} else if blocked {
+		e.logValidationLoopSuppressed("skipping agent turn enqueue for blocked validation loop", session, payload.MessageID, guard)
 		return false, nil
 	}
 	message, err := e.messages.GetByID(ctx, payload.MessageID)
@@ -2924,6 +3389,28 @@ func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat
 		return false, err
 	}
 	return true, nil
+}
+
+func (e *TurnEngine) logValidationLoopSuppressed(message string, session *chat.ChatSession, messageID uuid.UUID, guard taskValidationGuardState) {
+	metrics.RecordAgentTurnDispatchSuppressed(validationLoopSuppressionReason)
+	if e == nil || e.logger == nil || session == nil {
+		return
+	}
+	attrs := []any{
+		"session_id", session.ID,
+		"scope_type", strings.TrimSpace(session.ScopeType),
+		"tool_name", strings.TrimSpace(guard.ToolName),
+		"failure_class", strings.TrimSpace(guard.FailureClass),
+		"failure_code", strings.TrimSpace(guard.FailureCode),
+		"failure_count", guard.Count,
+	}
+	if messageID != uuid.Nil {
+		attrs = append(attrs, "message_id", messageID)
+	}
+	if taskID := resolveTaskID(session); taskID != nil && *taskID != uuid.Nil {
+		attrs = append(attrs, "task_id", *taskID)
+	}
+	e.logger.Info(message, attrs...)
 }
 
 func (e *TurnEngine) logPausedTurnSkip(message string, session *chat.ChatSession, reason string, messageID uuid.UUID) {
