@@ -802,6 +802,7 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 	var resp struct {
 		Data struct {
 			ID                  string  `json:"id"`
+			ProjectID           string  `json:"project_id"`
 			TaskNumber          int     `json:"task_number"`
 			Title               string  `json:"title"`
 			Description         *string `json:"description"`
@@ -826,6 +827,7 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 	}
 	item := &tuiapp.TaskDetailItem{
 		ID:                  d.ID,
+		ProjectID:           d.ProjectID,
 		TaskNumber:          d.TaskNumber,
 		Title:               d.Title,
 		Description:         desc,
