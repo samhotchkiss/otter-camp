@@ -303,14 +303,22 @@ var (
 	}
 	riskHighSignals = []string{
 		"high risk",
+		"risky",
 		"security",
 		"migration",
+		"billing",
+		"auth",
+		"authentication",
 		"compliance",
 		"launch blocker",
 		"replatform",
 		"executive",
 		"board",
 		"public launch",
+		"customer-facing",
+		"customer facing",
+		"high-visibility",
+		"high visibility",
 	}
 	riskCriticalSignals = []string{
 		"critical",
@@ -330,6 +338,42 @@ var (
 		"acceptance criteria",
 		"delivery plan",
 		"execution plan",
+	}
+	riskReadinessDomainSignals = []string{
+		"migration",
+		"billing",
+		"auth",
+		"authentication",
+		"security",
+		"compliance",
+		"regulated",
+	}
+	riskReadinessContextSignals = []string{
+		"readiness",
+		"sign-off",
+		"sign off",
+		"go live",
+		"go-live",
+		"rollout",
+		"pre-mortem",
+		"premortem",
+		"mitigation",
+		"checklist",
+	}
+	highVisibilityRolloutSignals = []string{
+		"public launch",
+		"customer-facing",
+		"customer facing",
+		"high-visibility",
+		"high visibility",
+		"executive",
+		"board",
+		"go live",
+		"go-live",
+	}
+	explicitRiskSignals = []string{
+		"risky",
+		"high risk",
 	}
 )
 
@@ -459,6 +503,9 @@ func selectPlaybook(text, workType, projectStage, evidenceMaturity, riskLevel st
 	if workType == PlaybookRiskReadiness || riskLevel == RiskCritical {
 		return PlaybookRiskReadiness
 	}
+	if shouldDefaultToRiskReadiness(text, projectStage, riskLevel) {
+		return PlaybookRiskReadiness
+	}
 
 	switch workType {
 	case PlaybookDiscovery, PlaybookStrategy, PlaybookExecutionSpec, PlaybookBacklogDecomposition, PlaybookMetrics, PlaybookGTMLaunch:
@@ -491,6 +538,19 @@ func selectPlaybook(text, workType, projectStage, evidenceMaturity, riskLevel st
 	default:
 		return PlaybookExecutionSpec
 	}
+}
+
+func shouldDefaultToRiskReadiness(text, projectStage, riskLevel string) bool {
+	if containsAny(text, riskReadinessDomainSignals) && containsAny(text, riskReadinessContextSignals) {
+		return true
+	}
+	if containsAny(text, riskReadinessDomainSignals) && containsAny(text, explicitRiskSignals) && riskLevel == RiskHigh {
+		return true
+	}
+	if projectStage == StageLaunch && containsAny(text, highVisibilityRolloutSignals) {
+		return true
+	}
+	return false
 }
 
 func playbookArtifacts(playbook string) []PlannedArtifact {
@@ -655,7 +715,8 @@ func playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskL
 		}
 	case PlaybookRiskReadiness:
 		return []string{
-			"Assign mitigation owners and dates for every high-risk item before sign-off.",
+			"Assign mitigation owners and dates for every high-severity item before sign-off.",
+			"Create targeted test scenarios for the riskiest failure modes before launch or migration approval.",
 			"Hold a readiness review once mitigation status is updated.",
 			"Feed unresolved blockers back into execution, GTM, or metrics planning as follow-up work.",
 		}

@@ -76,6 +76,39 @@ func TestAnalyzeSelectsBaselinePlaybooks(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDefaultsRiskyInitiativesToRiskReadiness(t *testing.T) {
+	tests := []struct {
+		name        string
+		title       string
+		description string
+	}{
+		{
+			name:        "billing migration",
+			title:       "Billing migration sign-off plan",
+			description: "Prepare the planning package for the billing migration, mitigation plan, and readiness review before we move customer traffic.",
+		},
+		{
+			name:        "auth security change",
+			title:       "Authentication hardening rollout",
+			description: "Plan the auth and security rollout for the customer-facing login changes, including readiness and mitigation owners.",
+		},
+		{
+			name:        "high visibility launch",
+			title:       "Public launch readiness",
+			description: "Prepare the risky public launch and high-visibility customer-facing rollout checklist before go live.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := Analyze(tc.title, &tc.description)
+			if plan.Playbook != PlaybookRiskReadiness {
+				t.Fatalf("Playbook = %q, want %q", plan.Playbook, PlaybookRiskReadiness)
+			}
+		})
+	}
+}
+
 func TestAnalyzeClassifiesSubjectiveMultiOptionRequestsAsReviewAndRefinement(t *testing.T) {
 	description := "Generate 10 homepage design options, compare them, shortlist the best two, and recommend a direction with tradeoffs."
 

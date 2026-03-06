@@ -530,37 +530,6 @@ func TestIntegrationDelegatedCreativeWorkflowUsesInternalReviewWithoutHumanCheck
 	if plan, ok := taskplan.Parse(secondTask.Metadata); !ok || plan.Playbook != taskplan.PlaybookGTMLaunch {
 		t.Fatalf("second task playbook = %#v, want %s", plan, taskplan.PlaybookGTMLaunch)
 	}
-	firstTaskUpdate, err := executor.Execute(integrationExecCtxWith(orgID, worker.ID), "task.update", map[string]any{
-		"task_id": firstTaskID.String(),
-		"planning_artifacts": []map[string]any{
-			{
-				"slug":     "strategy-brief",
-				"summary":  "Homepage direction focused on the best-fit audience.",
-				"sections": []string{"goal", "target segments", "not serving", "core capabilities"},
-			},
-			{
-				"slug":     "tradeoff-matrix",
-				"summary":  "Tradeoffs between the homepage concepts are documented.",
-				"sections": []string{"options", "tradeoffs", "decision"},
-			},
-			{
-				"slug":     "decision-log",
-				"summary":  "The preferred homepage direction and owner are recorded.",
-				"sections": []string{"decision", "rationale", "owner"},
-			},
-			{
-				"slug":     "success-narrative",
-				"summary":  "Success metrics and risks for the chosen direction are recorded.",
-				"sections": []string{"key metrics", "defensibility", "milestones", "risks"},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("task.update planning_artifacts: %v", err)
-	}
-	if firstTaskUpdate["error"] != nil {
-		t.Fatalf("task.update planning_artifacts error = %v, want nil", firstTaskUpdate["error"])
-	}
 
 	if _, err := taskRepo.UpdateStatus(ctx, firstTaskID, "in_progress"); err != nil {
 		t.Fatalf("UpdateStatus in_progress: %v", err)
@@ -580,6 +549,16 @@ func TestIntegrationDelegatedCreativeWorkflowUsesInternalReviewWithoutHumanCheck
 	}
 	if _, err := flowService.AdvanceFlow(ctx, firstTaskID, flowsvc.Actor{Type: "agent", ID: worker.ID}); err != nil {
 		t.Fatalf("AdvanceFlow work: %v", err)
+	}
+	override, err := executor.Execute(integrationExecCtxWith(orgID, worker.ID), "task.update", map[string]any{
+		"task_id":                  firstTaskID.String(),
+		"planning_override_reason": "Internal review is approving the creative direction before the strategy packet is fully documented.",
+	})
+	if err != nil {
+		t.Fatalf("task.update planning override: %v", err)
+	}
+	if override["error"] != nil {
+		t.Fatalf("task.update planning override error = %v, want nil", override["error"])
 	}
 	if _, err := flowService.AdvanceFlow(ctx, firstTaskID, flowsvc.Actor{Type: "agent", ID: reviewer.ID}); err != nil {
 		t.Fatalf("AdvanceFlow internal review: %v", err)
@@ -1006,7 +985,7 @@ func TestIntegrationTaskCreateDiscoveryArtifactsVaryByDiscoveryMode(t *testing.T
 	}
 }
 
-func TestIntegrationTaskCreateScaffoldsStrategyAndSpecArtifactsWithOperationalSections(t *testing.T) {
+func TestIntegrationTaskCreateRiskReadinessArtifactsAndFollowOnSuggestions(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
@@ -1026,76 +1005,94 @@ func TestIntegrationTaskCreateScaffoldsStrategyAndSpecArtifactsWithOperationalSe
 	}
 
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
-	tests := []struct {
-		title        string
-		description  string
-		wantPlaybook string
-		wantSections map[string][]string
-	}{
-		{
-			title:        "Strategy for greenfield analytics platform",
-			description:  "Define the product strategy, positioning tradeoffs, and roadmap sequence for this greenfield analytics platform with no data yet.",
-			wantPlaybook: taskplan.PlaybookStrategy,
-			wantSections: map[string][]string{
-				"strategy-brief":    {"## Target Segments", "## Not Serving", "## Core Capabilities", "## Hypotheses"},
-				"decision-log":      {"## Open Questions"},
-				"success-narrative": {"## Key Metrics", "## Defensibility"},
-			},
-		},
-		{
-			title:        "PRD for billing migration",
-			description:  "Write the PRD, implementation plan, acceptance criteria, and dependency log for the billing migration.",
-			wantPlaybook: taskplan.PlaybookExecutionSpec,
-			wantSections: map[string][]string{
-				"prd":                 {"## Goals", "## Non Goals", "## Success Metrics", "## Open Questions"},
-				"implementation-plan": {"## Phasing"},
-			},
-		},
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":  project.ID.String(),
+		"title":       "Public launch readiness for billing migration",
+		"description": "Build the pre-mortem, risk register, mitigation plan, and readiness checklist for the risky public launch and customer-facing billing migration before go live.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.wantPlaybook, func(t *testing.T) {
-			out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
-				"project_id":  project.ID.String(),
-				"title":       tc.title,
-				"description": tc.description,
-			})
-			if err != nil {
-				t.Fatalf("task.create: %v", err)
-			}
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planning["playbook"] != taskplan.PlaybookRiskReadiness {
+		t.Fatalf("planning.playbook = %v, want %s", planning["playbook"], taskplan.PlaybookRiskReadiness)
+	}
 
-			planning, ok := out["planning"].(map[string]any)
-			if !ok {
-				t.Fatalf("planning output = %T, want map[string]any", out["planning"])
-			}
-			if got := strings.TrimSpace(fmt.Sprintf("%v", planning["playbook"])); got != tc.wantPlaybook {
-				t.Fatalf("planning.playbook = %q, want %q", got, tc.wantPlaybook)
-			}
+	artifacts := artifactPayloads(t, planning["artifacts"])
+	artifactBySlug := make(map[string]map[string]any, len(artifacts))
+	for _, artifact := range artifacts {
+		artifactBySlug[artifactStringValue(t, artifact, "slug")] = artifact
+	}
 
-			artifacts := artifactPayloads(t, planning["artifacts"])
-			artifactBySlug := make(map[string]map[string]any, len(artifacts))
-			for _, artifact := range artifacts {
-				artifactBySlug[artifactStringValue(t, artifact, "slug")] = artifact
-			}
+	premortemPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, artifactBySlug["premortem"], "repo_path")))
+	premortemContent, err := os.ReadFile(premortemPath)
+	if err != nil {
+		t.Fatalf("read premortem artifact: %v", err)
+	}
+	if !strings.Contains(string(premortemContent), "## Failure Modes") || !strings.Contains(string(premortemContent), "## Triggers") || !strings.Contains(string(premortemContent), "## Responses") {
+		t.Fatalf("premortem artifact missing expected sections:\n%s", string(premortemContent))
+	}
 
-			for slug, expectedSections := range tc.wantSections {
-				artifact, ok := artifactBySlug[slug]
-				if !ok {
-					t.Fatalf("artifact slug %q missing from %#v", slug, artifactBySlug)
-				}
-				artifactPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, artifact, "repo_path")))
-				content, err := os.ReadFile(artifactPath)
-				if err != nil {
-					t.Fatalf("read planning artifact %q: %v", slug, err)
-				}
-				body := string(content)
-				for _, expected := range expectedSections {
-					if !strings.Contains(body, expected) {
-						t.Fatalf("artifact %q missing section %q:\n%s", slug, expected, body)
-					}
-				}
-			}
-		})
+	riskRegisterPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, artifactBySlug["risk-register"], "repo_path")))
+	riskRegisterContent, err := os.ReadFile(riskRegisterPath)
+	if err != nil {
+		t.Fatalf("read risk register artifact: %v", err)
+	}
+	if !strings.Contains(string(riskRegisterContent), "## Major Risks") || !strings.Contains(string(riskRegisterContent), "## Severity") || !strings.Contains(string(riskRegisterContent), "## Impact") {
+		t.Fatalf("risk register artifact missing expected sections:\n%s", string(riskRegisterContent))
+	}
+
+	readinessPath := filepath.Join(repoRoot, filepath.FromSlash(artifactStringValue(t, artifactBySlug["readiness-checklist"], "repo_path")))
+	readinessContent, err := os.ReadFile(readinessPath)
+	if err != nil {
+		t.Fatalf("read readiness artifact: %v", err)
+	}
+	if !strings.Contains(string(readinessContent), "## Go / No-Go Checklist") {
+		t.Fatalf("readiness artifact missing go/no-go checklist:\n%s", string(readinessContent))
+	}
+
+	var followOns []string
+	switch typed := planning["follow_on_suggestions"].(type) {
+	case []string:
+		followOns = append([]string(nil), typed...)
+	case []any:
+		for _, item := range typed {
+			followOns = append(followOns, fmt.Sprintf("%v", item))
+		}
+	default:
+		t.Fatalf("follow_on_suggestions = %T, want slice", planning["follow_on_suggestions"])
+	}
+	foundTargetedTests := false
+	for _, followOn := range followOns {
+		if strings.Contains(followOn, "Create targeted test scenarios") {
+			foundTargetedTests = true
+			break
+		}
+	}
+	if !foundTargetedTests {
+		t.Fatalf("follow_on_suggestions = %#v, want targeted test scenario follow-on", followOns)
+	}
+
+	projectView, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "project.get", map[string]any{
+		"project_id": project.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("project.get: %v", err)
+	}
+	projectArtifacts := artifactPayloads(t, projectView["planning_artifacts"])
+	foundPremortem := false
+	for _, artifact := range projectArtifacts {
+		if artifactStringValue(t, artifact, "slug") == "premortem" {
+			foundPremortem = true
+			break
+		}
+	}
+	if !foundPremortem {
+		t.Fatalf("project.get planning_artifacts missing premortem entry: %#v", projectArtifacts)
 	}
 }
 
@@ -1531,17 +1528,17 @@ func TestIntegrationAgentAssignProjectRejectsStarterTrioProjectRoles(t *testing.
 
 func TestIntegrationTaskUpdateSetsFlowTemplateAndAssignedAgent(t *testing.T) {
 	pool := testdb.New(t)
-	ctx := context.Background()
+	backgroundCtx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
 	actor := testutil.MakeAgent(t, pool, orgID)
 	assignee := testutil.MakeAgent(t, pool, orgID)
-	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	template := makeExecutableProjectFlowTemplate(t, backgroundCtx, pool, project.ID)
 	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{})
 
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
-	execCtx := integrationExecCtxWith(orgID, actor.ID)
-	out, err := executor.Execute(execCtx, "task.update", map[string]any{
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+	out, err := executor.Execute(ctx, "task.update", map[string]any{
 		"task_id":           task.ID.String(),
 		"flow_template_id":  template.ID.String(),
 		"assigned_agent_id": assignee.ID.String(),
@@ -1758,19 +1755,19 @@ func TestIntegrationFlowListTemplatesReturnsNodeSummaries(t *testing.T) {
 
 func TestIntegrationTaskUpdatePublishesStatusChangedDomainEvent(t *testing.T) {
 	pool := testdb.New(t)
-	ctx := context.Background()
+	backgroundCtx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
 	actor := testutil.MakeAgent(t, pool, orgID)
-	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	template := makeExecutableProjectFlowTemplate(t, backgroundCtx, pool, project.ID)
 	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
 		FlowTemplateID: &template.ID,
 		WorkStatus:     "draft",
 	})
 
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
-	execCtx := integrationExecCtxWith(orgID, actor.ID)
-	out, err := executor.Execute(execCtx, "task.update", map[string]any{
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+	out, err := executor.Execute(ctx, "task.update", map[string]any{
 		"task_id":     task.ID.String(),
 		"work_status": "queued",
 	})
@@ -1838,8 +1835,8 @@ func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	}
 
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
-	execCtx := integrationExecCtxWith(orgID, agent.ID)
-	out, err := executor.Execute(execCtx, "flow.advance", map[string]any{
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+	out, err := executor.Execute(ctx, "flow.advance", map[string]any{
 		"flow_node_execution_id": execution.ID.String(),
 		"commit_sha":             "abc123",
 	})
@@ -1989,14 +1986,14 @@ func TestIntegrationFlowAdvanceBackfillsMissingExecutionFromTaskScope(t *testing
 
 func TestIntegrationFlowAdvanceTerminalPublishesStatusChangedDomainEvent(t *testing.T) {
 	pool := testdb.New(t)
-	ctx := context.Background()
+	backgroundCtx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
-	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	template := makeExecutableProjectFlowTemplate(t, backgroundCtx, pool, project.ID)
 	agent := testutil.MakeAgent(t, pool, orgID)
 
 	nodeRepo := repo.NewFlowNodeRepo(pool)
-	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	nodes, err := nodeRepo.GetByTemplateOrdered(context.Background(), template.ID)
 	if err != nil {
 		t.Fatalf("list flow nodes: %v", err)
 	}
@@ -2014,12 +2011,12 @@ func TestIntegrationFlowAdvanceTerminalPublishesStatusChangedDomainEvent(t *test
 		}(),
 	})
 	taskRepo := repo.NewProjectTaskRepo(pool)
-	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &nodes[1].ID); err != nil {
+	if _, err := taskRepo.SetFlowNode(context.Background(), task.ID, &nodes[1].ID); err != nil {
 		t.Fatalf("set task current flow node: %v", err)
 	}
 
 	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
-	if _, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+	if _, err := executionRepo.Create(context.Background(), repo.FlowNodeExecution{
 		TaskID:      task.ID,
 		FlowNodeID:  nodes[0].ID,
 		VisitNumber: 1,
@@ -2027,7 +2024,7 @@ func TestIntegrationFlowAdvanceTerminalPublishesStatusChangedDomainEvent(t *test
 	}); err != nil {
 		t.Fatalf("create completed work execution: %v", err)
 	}
-	execution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+	execution, err := executionRepo.Create(context.Background(), repo.FlowNodeExecution{
 		TaskID:      task.ID,
 		FlowNodeID:  nodes[1].ID,
 		VisitNumber: 1,
@@ -2038,8 +2035,8 @@ func TestIntegrationFlowAdvanceTerminalPublishesStatusChangedDomainEvent(t *test
 	}
 
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
-	execCtx := integrationExecCtxWith(orgID, agent.ID)
-	out, err := executor.Execute(execCtx, "flow.advance", map[string]any{
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+	out, err := executor.Execute(ctx, "flow.advance", map[string]any{
 		"flow_node_execution_id": execution.ID.String(),
 	})
 	if err != nil {
@@ -2085,19 +2082,18 @@ func (f *failEventPublisher) Publish(_ context.Context, _ pgx.Tx, event eventbus
 
 func TestIntegrationFlowAdvanceTerminalRollsBackTaskUpdateWhenEventPublishFails(t *testing.T) {
 	pool := testdb.New(t)
-	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
-	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
 	agent := testutil.MakeAgent(t, pool, orgID)
 
 	nodeRepo := repo.NewFlowNodeRepo(pool)
-	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	nodes, err := nodeRepo.GetByTemplateOrdered(context.Background(), template.ID)
 	if err != nil {
 		t.Fatalf("list flow nodes: %v", err)
 	}
-	if len(nodes) != 2 {
-		t.Fatalf("nodes count = %d, want 2", len(nodes))
+	if len(nodes) != 1 {
+		t.Fatalf("nodes count = %d, want 1", len(nodes))
 	}
 
 	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
@@ -2110,22 +2106,14 @@ func TestIntegrationFlowAdvanceTerminalRollsBackTaskUpdateWhenEventPublishFails(
 		}(),
 	})
 	taskRepo := repo.NewProjectTaskRepo(pool)
-	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &nodes[1].ID); err != nil {
+	if _, err := taskRepo.SetFlowNode(context.Background(), task.ID, &nodes[0].ID); err != nil {
 		t.Fatalf("set task current flow node: %v", err)
 	}
 
 	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
-	if _, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+	execution, err := executionRepo.Create(context.Background(), repo.FlowNodeExecution{
 		TaskID:      task.ID,
 		FlowNodeID:  nodes[0].ID,
-		VisitNumber: 1,
-		Status:      "completed",
-	}); err != nil {
-		t.Fatalf("create completed work execution: %v", err)
-	}
-	execution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
-		TaskID:      task.ID,
-		FlowNodeID:  nodes[1].ID,
 		VisitNumber: 1,
 		Status:      "active",
 	})
@@ -2138,8 +2126,8 @@ func TestIntegrationFlowAdvanceTerminalRollsBackTaskUpdateWhenEventPublishFails(
 		WorkspaceRoot: t.TempDir(),
 		Events:        &failEventPublisher{failOn: "task.status_changed"},
 	})
-	execCtx := integrationExecCtxWith(orgID, agent.ID)
-	if _, err := executor.Execute(execCtx, "flow.advance", map[string]any{
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+	if _, err := executor.Execute(ctx, "flow.advance", map[string]any{
 		"flow_node_execution_id": execution.ID.String(),
 	}); err == nil {
 		t.Fatal("expected flow.advance failure when domain event publish fails")
@@ -2152,8 +2140,8 @@ func TestIntegrationFlowAdvanceTerminalRollsBackTaskUpdateWhenEventPublishFails(
 	if updatedTask.WorkStatus != "in_progress" {
 		t.Fatalf("task work_status = %q, want in_progress after rollback", updatedTask.WorkStatus)
 	}
-	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[1].ID {
-		t.Fatalf("task current_flow_node_id = %v, want %s after rollback", updatedTask.CurrentFlowNodeID, nodes[1].ID)
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[0].ID {
+		t.Fatalf("task current_flow_node_id = %v, want %s after rollback", updatedTask.CurrentFlowNodeID, nodes[0].ID)
 	}
 
 	var statusChangedEvents int
@@ -2287,6 +2275,66 @@ func seedReviewRefinementSystemTemplate(t *testing.T, ctx context.Context, pool 
 	return updated
 }
 
+func makeExecutableProjectFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID uuid.UUID) repo.FlowTemplate {
+	t.Helper()
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(ctx, projectID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &projectRecord.OrganizationID,
+		ProjectID:      &projectID,
+		Slug:           "flow-" + strings.ToLower(uuid.NewString()[:8]),
+		DisplayName:    "Executable Flow " + uuid.NewString()[:8],
+		Description:    "test flow template with terminal review path",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create executable flow template: %v", err)
+	}
+
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("link work node: %v", err)
+	}
+
+	template.StartNodeID = &workNode.ID
+	updated, err := templateRepo.Update(ctx, template)
+	if err != nil {
+		t.Fatalf("set executable flow start node: %v", err)
+	}
+	return updated
+}
+
 func seedInternalReviewSystemTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool) repo.FlowTemplate {
 	t.Helper()
 
@@ -2337,66 +2385,6 @@ func seedInternalReviewSystemTemplate(t *testing.T, ctx context.Context, pool *p
 	updated, err := templateRepo.Update(ctx, template)
 	if err != nil {
 		t.Fatalf("set internal review start node: %v", err)
-	}
-	return updated
-}
-
-func makeExecutableProjectFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID uuid.UUID) repo.FlowTemplate {
-	t.Helper()
-
-	projectRecord, err := repo.NewProjectRepo(pool).GetByID(ctx, projectID)
-	if err != nil {
-		t.Fatalf("load project: %v", err)
-	}
-
-	templateRepo := repo.NewFlowTemplateRepo(pool)
-	nodeRepo := repo.NewFlowNodeRepo(pool)
-
-	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
-		OrganizationID: &projectRecord.OrganizationID,
-		ProjectID:      &projectID,
-		Slug:           "flow-" + strings.ToLower(uuid.NewString()[:8]),
-		DisplayName:    "Executable Flow " + uuid.NewString()[:8],
-		Description:    "test flow template with review terminal",
-		IsCurrent:      true,
-		Version:        1,
-		CreatedByType:  "system",
-		CreatedByID:    uuid.Nil,
-	})
-	if err != nil {
-		t.Fatalf("create executable flow template: %v", err)
-	}
-
-	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
-		FlowTemplateID: template.ID,
-		DisplayName:    "Work",
-		NodeType:       "work",
-		Position:       1,
-		MaxVisits:      10,
-	})
-	if err != nil {
-		t.Fatalf("create work node: %v", err)
-	}
-	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
-		FlowTemplateID: template.ID,
-		DisplayName:    "Review",
-		NodeType:       "review",
-		Position:       2,
-		MaxVisits:      10,
-	})
-	if err != nil {
-		t.Fatalf("create review node: %v", err)
-	}
-
-	workNode.NextNodeID = &reviewNode.ID
-	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
-		t.Fatalf("link work node: %v", err)
-	}
-
-	template.StartNodeID = &workNode.ID
-	updated, err := templateRepo.Update(ctx, template)
-	if err != nil {
-		t.Fatalf("set executable flow start node: %v", err)
 	}
 	return updated
 }
