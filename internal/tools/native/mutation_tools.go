@@ -949,6 +949,17 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	if err != nil {
 		return nil, err
 	}
+	if planning.HasSelection() {
+		created, planning, err = e.syncPlanningArtifacts(ctx, created, actor)
+		if err != nil {
+			return nil, err
+		}
+		if updated, updateErr := e.tasks.Update(ctx, created); updateErr != nil {
+			return nil, updateErr
+		} else {
+			created = updated
+		}
+	}
 	response := map[string]any{
 		"task": map[string]any{
 			"id":           created.ID,
@@ -1088,6 +1099,14 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	} else if processUpdate.applied {
 		current.Metadata = metadataWithProcess
 		planning = processUpdate.plan
+	}
+	if synced, syncedPlan, syncErr := e.syncPlanningArtifacts(ctx, current, actorFromContext(ctx)); syncErr != nil {
+		return nil, syncErr
+	} else {
+		current = synced
+		if syncedPlan.HasSelection() {
+			planning = syncedPlan
+		}
 	}
 	updated, err := e.tasks.Update(ctx, current)
 	if err != nil {
@@ -1333,10 +1352,24 @@ func reviewPlanningResponse(plan taskplan.Plan) map[string]any {
 func planningArtifactResponse(artifacts []taskplan.PlannedArtifact) []map[string]any {
 	out := make([]map[string]any, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		out = append(out, map[string]any{
+		item := map[string]any{
 			"slug":  artifact.Slug,
 			"title": artifact.Title,
-		})
+			"kind":  artifact.Kind,
+		}
+		if artifact.ArtifactID != "" {
+			item["artifact_id"] = artifact.ArtifactID
+		}
+		if artifact.RepoPath != "" {
+			item["repo_path"] = artifact.RepoPath
+		}
+		if artifact.Version > 0 {
+			item["version"] = artifact.Version
+		}
+		if artifact.ContentSHA256 != "" {
+			item["content_sha256"] = artifact.ContentSHA256
+		}
+		out = append(out, item)
 	}
 	return out
 }

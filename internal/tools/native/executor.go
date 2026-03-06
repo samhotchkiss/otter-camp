@@ -153,6 +153,17 @@ type projectAssigner interface {
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error)
 }
 
+type projectEnvironmentReader interface {
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error)
+}
+
+type planningArtifactStore interface {
+	UpsertVersion(ctx context.Context, artifact repo.PlanningArtifactUpsert) (repo.PlanningArtifact, bool, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.PlanningArtifact, error)
+	ListBySourceTask(ctx context.Context, taskID uuid.UUID) ([]repo.PlanningArtifact, error)
+	ListVersions(ctx context.Context, artifactID uuid.UUID) ([]repo.PlanningArtifactVersion, error)
+}
+
 type eventPublisher interface {
 	Publish(ctx context.Context, tx pgx.Tx, event eventbus.DomainEvent) error
 }
@@ -230,6 +241,8 @@ type NativeToolExecutor struct {
 	mergeQueue     mergeQueueReader
 	dependencies   dependencyRepository
 	assignments    projectAssigner
+	environments   projectEnvironmentReader
+	planningAssets planningArtifactStore
 	audit          *repo.AuditEventRepo
 	memories       memoryWriter
 	secrets        secretResolver
@@ -276,6 +289,8 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		exec.mergeQueue = repo.NewMergeQueueEntryRepo(opts.Pool)
 		exec.dependencies = repo.NewProjectTaskDependencyRepo(opts.Pool)
 		exec.assignments = repo.NewAgentProjectAssignmentRepo(opts.Pool)
+		exec.environments = repo.NewProjectEnvironmentRepo(opts.Pool)
+		exec.planningAssets = repo.NewPlanningArtifactRepo(opts.Pool)
 		exec.audit = repo.NewAuditEventRepo(opts.Pool)
 		exec.memories = repo.NewMemoryRepo(opts.Pool)
 		if exec.events == nil {

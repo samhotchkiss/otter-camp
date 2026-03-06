@@ -157,6 +157,7 @@ func AnalyzeWithPolicy(title string, description *string, policy ReviewPolicy) P
 		Artifacts:           playbookArtifacts(playbook),
 		FollowOnSuggestions: playbookFollowOnSuggestions(playbook, projectStage, evidenceMaturity, riskLevel),
 	}
+	plan.Artifacts = hydrateArtifactDefaults(plan.Playbook, plan.Artifacts)
 
 	if text == "" {
 		return plan
@@ -301,6 +302,7 @@ func Parse(metadata json.RawMessage) (Plan, bool) {
 		FollowOnSuggestions: readStringSlice(rawPlanning["follow_on_suggestions"]),
 		Override:            readPlanningOverride(rawPlanning["override"]),
 	}
+	plan.Artifacts = hydrateArtifactDefaults(plan.Playbook, plan.Artifacts)
 
 	if rawPacket, ok := rawPlanning["review_packet"].(map[string]any); ok {
 		plan.ReviewPacket = ReviewPacket{
@@ -393,8 +395,13 @@ func readPlannedArtifacts(value any) []PlannedArtifact {
 			continue
 		}
 		artifact := PlannedArtifact{
-			Slug:  strings.TrimSpace(readString(artifactMap["slug"])),
-			Title: strings.TrimSpace(readString(artifactMap["title"])),
+			Slug:          strings.TrimSpace(readString(artifactMap["slug"])),
+			Title:         strings.TrimSpace(readString(artifactMap["title"])),
+			Kind:          NormalizeArtifactKind(readString(artifactMap["kind"])),
+			ArtifactID:    strings.TrimSpace(readString(artifactMap["artifact_id"])),
+			RepoPath:      strings.TrimSpace(readString(artifactMap["repo_path"])),
+			Version:       readInt(artifactMap["version"]),
+			ContentSHA256: strings.TrimSpace(readString(artifactMap["content_sha256"])),
 		}
 		if artifact.Slug == "" && artifact.Title == "" {
 			continue
@@ -402,4 +409,34 @@ func readPlannedArtifacts(value any) []PlannedArtifact {
 		artifacts = append(artifacts, artifact)
 	}
 	return artifacts
+}
+
+func readInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func hydrateArtifactDefaults(playbook string, artifacts []PlannedArtifact) []PlannedArtifact {
+	if len(artifacts) == 0 {
+		return artifacts
+	}
+	defaultKind := DefaultArtifactKindForPlaybook(playbook)
+	out := make([]PlannedArtifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		if NormalizeArtifactKind(artifact.Kind) == "" {
+			artifact.Kind = defaultKind
+		}
+		out = append(out, artifact)
+	}
+	return out
 }

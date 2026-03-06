@@ -177,6 +177,138 @@ func TestAnalyzeAmbiguousInputsFallbackDeterministically(t *testing.T) {
 	}
 }
 
+func TestAnalyzeArtifactsPersistKindMetadataAndRepoBackedFields(t *testing.T) {
+	tests := []struct {
+		name        string
+		title       string
+		description string
+		playbook    string
+		kind        string
+	}{
+		{
+			name:        "discovery",
+			title:       "Validate the onboarding problem",
+			description: "Run customer interviews, document assumptions, and build a validation plan for this new product idea before we commit scope.",
+			playbook:    PlaybookDiscovery,
+			kind:        ArtifactKindDiscoveryPlan,
+		},
+		{
+			name:        "strategy",
+			title:       "Homepage design options",
+			description: "Generate 10 homepage design options, compare them, and recommend a direction with tradeoffs.",
+			playbook:    PlaybookStrategy,
+			kind:        ArtifactKindStrategyArtifact,
+		},
+		{
+			name:        "execution spec",
+			title:       "PRD for billing migration",
+			description: "Write the PRD, implementation plan, acceptance criteria, and dependency log for the billing migration.",
+			playbook:    PlaybookExecutionSpec,
+			kind:        ArtifactKindPRDSpec,
+		},
+		{
+			name:        "backlog decomposition",
+			title:       "Break the approved PRD into delivery work",
+			description: "Decompose the scope into epics, user stories, sprint-ready tickets, and sequencing constraints.",
+			playbook:    PlaybookBacklogDecomposition,
+			kind:        ArtifactKindBacklogStoryPack,
+		},
+		{
+			name:        "risk readiness",
+			title:       "Launch readiness pre-mortem",
+			description: "Build the pre-mortem, risk register, mitigation plan, and readiness checklist for the regulated rollout.",
+			playbook:    PlaybookRiskReadiness,
+			kind:        ArtifactKindPreMortemReadinessArtifact,
+		},
+		{
+			name:        "metrics",
+			title:       "Metric tree and instrumentation plan",
+			description: "Define north-star metrics, KPI instrumentation, the dashboard spec, and weekly metric review cadence.",
+			playbook:    PlaybookMetrics,
+			kind:        ArtifactKindMetricsFramework,
+		},
+		{
+			name:        "gtm launch",
+			title:       "Go-to-market launch plan",
+			description: "Create the GTM launch plan, messaging brief, channel plan, and sales enablement checklist for release.",
+			playbook:    PlaybookGTMLaunch,
+			kind:        ArtifactKindGTMLaunchPlan,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := Analyze(tc.title, &tc.description)
+			if plan.Playbook != tc.playbook {
+				t.Fatalf("Playbook = %q, want %q", plan.Playbook, tc.playbook)
+			}
+			if len(plan.Artifacts) == 0 {
+				t.Fatalf("Artifacts = %#v, want non-empty artifact list", plan.Artifacts)
+			}
+			for i, artifact := range plan.Artifacts {
+				if artifact.Kind != tc.kind {
+					t.Fatalf("artifact[%d].Kind = %q, want %q", i, artifact.Kind, tc.kind)
+				}
+			}
+
+			plan.Artifacts[0].ArtifactID = "artifact-1"
+			plan.Artifacts[0].RepoPath = "planning/test/oc-1-artifact.md"
+			plan.Artifacts[0].Version = 2
+			plan.Artifacts[0].ContentSHA256 = "abc123"
+
+			metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+			parsed, ok := Parse(metadata)
+			if !ok {
+				t.Fatal("Parse(metadata) = false, want true")
+			}
+			if len(parsed.Artifacts) != len(plan.Artifacts) {
+				t.Fatalf("parsed artifacts len = %d, want %d", len(parsed.Artifacts), len(plan.Artifacts))
+			}
+			first := parsed.Artifacts[0]
+			if first.Kind != tc.kind {
+				t.Fatalf("parsed artifact kind = %q, want %q", first.Kind, tc.kind)
+			}
+			if first.ArtifactID != "artifact-1" {
+				t.Fatalf("parsed artifact_id = %q, want artifact-1", first.ArtifactID)
+			}
+			if first.RepoPath != "planning/test/oc-1-artifact.md" {
+				t.Fatalf("parsed repo_path = %q, want planning/test/oc-1-artifact.md", first.RepoPath)
+			}
+			if first.Version != 2 {
+				t.Fatalf("parsed version = %d, want 2", first.Version)
+			}
+			if first.ContentSHA256 != "abc123" {
+				t.Fatalf("parsed content_sha256 = %q, want abc123", first.ContentSHA256)
+			}
+		})
+	}
+}
+
+func TestParseHydratesArtifactKindDefaultsWhenMissing(t *testing.T) {
+	parsed, ok := Parse(json.RawMessage(`{
+		"planning": {
+			"mode": "execution_first",
+			"playbook": "execution_spec",
+			"artifacts": [
+				{
+					"slug": "prd",
+					"title": "PRD / requirements spec",
+					"repo_path": "planning/prd-spec/oc-7-prd.md"
+				}
+			]
+		}
+	}`))
+	if !ok {
+		t.Fatal("Parse(metadata) = false, want true")
+	}
+	if len(parsed.Artifacts) != 1 {
+		t.Fatalf("parsed artifacts len = %d, want 1", len(parsed.Artifacts))
+	}
+	if parsed.Artifacts[0].Kind != ArtifactKindPRDSpec {
+		t.Fatalf("parsed artifact kind = %q, want %q", parsed.Artifacts[0].Kind, ArtifactKindPRDSpec)
+	}
+}
+
 func TestApplyMetadataRoundTripsReviewPlanning(t *testing.T) {
 	description := "Brainstorm 12 launch-week blog post ideas, compare them, and recommend a shortlist."
 

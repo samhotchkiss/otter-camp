@@ -583,10 +583,21 @@ func TestIntegrationBlogIdeasCreateReviewPacketInboxHandoff(t *testing.T) {
 	project := testutil.MakeProject(t, pool, orgID)
 	worker := testutil.MakeAgent(t, pool, orgID)
 	reviewer := testutil.MakeAgent(t, pool, orgID)
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
 
 	seedReviewRefinementSystemTemplate(t, ctx, pool)
 
-	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
 	out, err := executor.Execute(integrationExecCtxWith(orgID, worker.ID), "task.create", map[string]any{
 		"project_id":  project.ID.String(),
 		"title":       "Launch-week blog post ideas",
@@ -594,6 +605,15 @@ func TestIntegrationBlogIdeasCreateReviewPacketInboxHandoff(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("task.create: %v", err)
+	}
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	createdArtifact := firstArtifactPayload(t, planning["artifacts"])
+	artifactRepoPath := artifactStringValue(t, createdArtifact, "repo_path")
+	if _, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(artifactRepoPath))); err != nil {
+		t.Fatalf("expected planning artifact at %q: %v", artifactRepoPath, err)
 	}
 
 	taskID := nestedUUID(t, out, "task", "id")
@@ -663,6 +683,9 @@ func TestIntegrationBlogIdeasCreateReviewPacketInboxHandoff(t *testing.T) {
 	if body == nil || !strings.Contains(*body, "Playbook: gtm_launch") {
 		t.Fatalf("inbox body = %v, want playbook details", body)
 	}
+	if body == nil || !strings.Contains(*body, "@ "+artifactRepoPath) {
+		t.Fatalf("inbox body = %v, want artifact repo path %q", body, artifactRepoPath)
+	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(actionPayload, &payload); err != nil {
@@ -699,6 +722,132 @@ func TestIntegrationBlogIdeasCreateReviewPacketInboxHandoff(t *testing.T) {
 	}
 	if !containsString(checklistJoined, "Verify the launch brief defines scope, audience, and timing for the rollout.") {
 		t.Fatalf("review_checklist = %v, want GTM rubric", checklistJoined)
+	}
+	artifacts, ok := payload["artifacts"].([]any)
+	if !ok || len(artifacts) == 0 {
+		t.Fatalf("payload artifacts = %T, want non-empty []any", payload["artifacts"])
+	}
+	artifactPayload, ok := artifacts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("payload first artifact = %T, want map[string]any", artifacts[0])
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", artifactPayload["repo_path"])); got != artifactRepoPath {
+		t.Fatalf("payload artifact repo_path = %q, want %q", got, artifactRepoPath)
+	}
+	if got := int(artifactPayload["version"].(float64)); got < 1 {
+		t.Fatalf("payload artifact version = %d, want >= 1", got)
+	}
+}
+
+func TestIntegrationTaskCreatePersistsRepoBackedPlanningArtifactsAndVersions(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	repoRoot := t.TempDir()
+
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: repoRoot})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":  project.ID.String(),
+		"title":       "PRD for billing migration",
+		"description": "Write the PRD, implementation plan, acceptance criteria, and dependency log for the billing migration.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+
+	planning, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	createdArtifact := firstArtifactPayload(t, planning["artifacts"])
+	artifactID := mustUUIDValue(t, createdArtifact["artifact_id"])
+	artifactRepoPath := artifactStringValue(t, createdArtifact, "repo_path")
+	if kind := artifactStringValue(t, createdArtifact, "kind"); kind != taskplan.ArtifactKindPRDSpec {
+		t.Fatalf("artifact kind = %q, want %q", kind, taskplan.ArtifactKindPRDSpec)
+	}
+	if version := artifactVersionValue(t, createdArtifact["version"]); version != 1 {
+		t.Fatalf("artifact version = %d, want 1", version)
+	}
+
+	artifactPath := filepath.Join(repoRoot, filepath.FromSlash(artifactRepoPath))
+	content, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatalf("read planning artifact: %v", err)
+	}
+	if !strings.Contains(string(content), "Playbook: execution_spec") {
+		t.Fatalf("artifact content missing expected playbook marker:\n%s", string(content))
+	}
+
+	taskID := nestedUUID(t, out, "task", "id")
+	taskView, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.get", map[string]any{
+		"task_id": taskID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.get: %v", err)
+	}
+	taskArtifact := firstArtifactPayload(t, taskView["planning"].(map[string]any)["artifacts"])
+	if got := artifactStringValue(t, taskArtifact, "repo_path"); got != artifactRepoPath {
+		t.Fatalf("task.get artifact repo_path = %q, want %q", got, artifactRepoPath)
+	}
+	if version := artifactVersionValue(t, taskArtifact["version"]); version != 1 {
+		t.Fatalf("task.get artifact version = %d, want 1", version)
+	}
+
+	projectView, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "project.get", map[string]any{
+		"project_id": project.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("project.get: %v", err)
+	}
+	projectArtifacts := artifactPayloads(t, projectView["planning_artifacts"])
+	foundProjectArtifact := false
+	for _, artifact := range projectArtifacts {
+		if artifactStringValue(t, artifact, "repo_path") == artifactRepoPath {
+			foundProjectArtifact = true
+			break
+		}
+	}
+	if !foundProjectArtifact {
+		t.Fatalf("project.get planning_artifacts missing repo_path %q: %#v", artifactRepoPath, projectArtifacts)
+	}
+
+	revised := string(content) + "\n## Revision\nUpdated implementation constraints.\n"
+	if err := os.WriteFile(artifactPath, []byte(revised), 0o644); err != nil {
+		t.Fatalf("write revised planning artifact: %v", err)
+	}
+	updated, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
+		"task_id": taskID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	updatedArtifact := firstArtifactPayload(t, updated["planning"].(map[string]any)["artifacts"])
+	if version := artifactVersionValue(t, updatedArtifact["version"]); version != 2 {
+		t.Fatalf("updated artifact version = %d, want 2", version)
+	}
+
+	versions, err := repo.NewPlanningArtifactRepo(pool).ListVersions(ctx, artifactID)
+	if err != nil {
+		t.Fatalf("ListVersions: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("artifact version rows = %d, want 2", len(versions))
+	}
+	if versions[0].VersionNumber != 2 || versions[1].VersionNumber != 1 {
+		t.Fatalf("artifact versions = [%d %d], want [2 1]", versions[0].VersionNumber, versions[1].VersionNumber)
 	}
 }
 
@@ -1931,6 +2080,69 @@ func containsString(items []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func firstArtifactPayload(t *testing.T, raw any) map[string]any {
+	t.Helper()
+	items := artifactPayloads(t, raw)
+	return items[0]
+}
+
+func artifactPayloads(t *testing.T, raw any) []map[string]any {
+	t.Helper()
+	switch typed := raw.(type) {
+	case []map[string]any:
+		if len(typed) == 0 {
+			t.Fatal("artifact payload = empty, want at least one artifact")
+		}
+		return typed
+	case []any:
+		if len(typed) == 0 {
+			t.Fatal("artifact payload = empty, want at least one artifact")
+		}
+		out := make([]map[string]any, 0, len(typed))
+		for i, item := range typed {
+			row, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("artifact payload[%d] = %T, want map[string]any", i, item)
+			}
+			out = append(out, row)
+		}
+		return out
+	default:
+		t.Fatalf("artifact payload = %T, want slice", raw)
+	}
+	return nil
+}
+
+func artifactStringValue(t *testing.T, artifact map[string]any, key string) string {
+	t.Helper()
+	raw, ok := artifact[key]
+	if !ok {
+		t.Fatalf("artifact missing key %q: %#v", key, artifact)
+	}
+	value, ok := raw.(string)
+	if !ok {
+		t.Fatalf("artifact[%q] = %T, want string", key, raw)
+	}
+	return strings.TrimSpace(value)
+}
+
+func artifactVersionValue(t *testing.T, raw any) int {
+	t.Helper()
+	switch typed := raw.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		t.Fatalf("artifact version = %T, want numeric type", raw)
+	}
+	return 0
 }
 
 func integrationExecCtx() context.Context {

@@ -8,7 +8,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
+	"github.com/samhotchkiss/otter-camp/internal/planningasset"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
 func (e *NativeToolExecutor) handleMemoryQuery(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -126,7 +128,7 @@ func (e *NativeToolExecutor) handleProjectGet(ctx context.Context, input map[str
 		}
 		return nil, err
 	}
-	return map[string]any{
+	response := map[string]any{
 		"project": map[string]any{
 			"id":              project.ID.String(),
 			"organization_id": project.OrganizationID.String(),
@@ -137,7 +139,17 @@ func (e *NativeToolExecutor) handleProjectGet(ctx context.Context, input map[str
 			"created_at":      project.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 			"updated_at":      project.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 		},
-	}, nil
+	}
+	if e.planningAssets != nil {
+		records, err := e.planningAssets.ListByProject(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		if len(records) > 0 {
+			response["planning_artifacts"] = planningArtifactResponse(planningasset.PlannedArtifactsFromRecords(records))
+		}
+	}
+	return response, nil
 }
 
 func (e *NativeToolExecutor) handleTaskList(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -238,7 +250,7 @@ func (e *NativeToolExecutor) handleTaskGet(ctx context.Context, input map[string
 	if task.AssignedAgentID != nil {
 		assigned = task.AssignedAgentID.String()
 	}
-	return map[string]any{
+	response := map[string]any{
 		"task": map[string]any{
 			"id":                    task.ID.String(),
 			"organization_id":       task.OrganizationID.String(),
@@ -257,7 +269,18 @@ func (e *NativeToolExecutor) handleTaskGet(ctx context.Context, input map[string
 			"updated_at":            task.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 			"completed_at":          toRFC3339(task.CompletedAt),
 		},
-	}, nil
+	}
+	if plan, ok := taskplan.Parse(task.Metadata); ok {
+		if e.planningAssets != nil {
+			records, err := e.planningAssets.ListBySourceTask(ctx, task.ID)
+			if err != nil {
+				return nil, err
+			}
+			plan = planningasset.OverlayPlanArtifacts(plan, records)
+		}
+		response["planning"] = reviewPlanningResponse(plan)
+	}
+	return response, nil
 }
 
 func (e *NativeToolExecutor) handleInboxList(ctx context.Context, input map[string]any) (map[string]any, error) {
