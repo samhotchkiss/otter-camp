@@ -3216,7 +3216,6 @@ func (f *fakeTaskTransitionService) MarkBlocked(_ context.Context, taskID uuid.U
 		taskRecord, err := f.repo.GetByID(context.Background(), taskID)
 		if err == nil {
 			taskRecord.WorkStatus = "blocked"
-			taskRecord.Metadata = taskRecord.Metadata
 			updated, updateErr := f.repo.Update(context.Background(), taskRecord)
 			if updateErr == nil {
 				blocked := tasksvc.ProjectTask(updated)
