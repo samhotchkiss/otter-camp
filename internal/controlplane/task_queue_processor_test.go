@@ -71,6 +71,26 @@ func TestSelectNextQueuedTaskUnderProjectGatePrefersLowestOutstandingGate(t *tes
 	}
 }
 
+func TestSelectNextQueuedTaskUnderProjectGateSkipsReviewCheckpointEX248(t *testing.T) {
+	projectID := uuid.New()
+	description := "Pause for review before finalizing the chosen launch direction."
+	reviewCheckpoint := repo.ProjectTask{
+		ID:          uuid.New(),
+		ProjectID:   projectID,
+		TaskNumber:  1,
+		Title:       "Prepare launch direction",
+		Description: &description,
+		WorkStatus:  "review",
+		BlocksScope: "all",
+	}
+	normal := repo.ProjectTask{ID: uuid.New(), ProjectID: projectID, TaskNumber: 2, WorkStatus: "queued", BlocksScope: "none"}
+
+	selected := selectNextQueuedTaskUnderProjectGate([]repo.ProjectTask{reviewCheckpoint, normal})
+	if selected == nil || selected.ID != normal.ID {
+		t.Fatalf("selected queued task = %v, want task %s", selected, normal.ID)
+	}
+}
+
 func TestProcessQueuedTaskSkipsPausedProject(t *testing.T) {
 	ctx := context.Background()
 	projectID := uuid.New()
