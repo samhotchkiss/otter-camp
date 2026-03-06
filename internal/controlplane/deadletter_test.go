@@ -122,18 +122,19 @@ func TestDeadLetterHandlerHandleInboxFailureIsNonFatal(t *testing.T) {
 func newRunServiceForDeadLetterTests(t *testing.T, deps *fakeRunDeps, taskEvents taskEventRecorder, inbox inboxCreator) RunService {
 	t.Helper()
 	svc, err := NewRunService(RunServiceOptions{
-		Runs:        deps.runs,
-		RunSteps:    deps.steps,
-		Attempts:    deps.attempts,
-		RunEvent:    deps.events,
-		TaskEvents:  taskEvents,
-		Inbox:       inbox,
-		Assignments: &noopAssignments{},
-		Agents:      &noopAgentReader{},
-		Users:       &noopUserReader{},
-		EventBus:    deps.bus,
-		Clock:       clock.NewFake(time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)),
-		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Runs:          deps.runs,
+		RunSteps:      deps.steps,
+		Attempts:      deps.attempts,
+		RunEvent:      deps.events,
+		RuntimeStates: deps.runtimeStates,
+		TaskEvents:    taskEvents,
+		Inbox:         inbox,
+		Assignments:   &noopAssignments{},
+		Agents:        &noopAgentReader{},
+		Users:         &noopUserReader{},
+		EventBus:      deps.bus,
+		Clock:         clock.NewFake(time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)),
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatalf("NewRunService: %v", err)

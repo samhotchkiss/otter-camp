@@ -156,6 +156,16 @@ Concurrency is governed by the existing infrastructure (see 07-models-and-infere
 
 No per-agent serialization is needed. If an agent has private memory and two concurrent turns both write to it, the memory pipeline handles concurrent writes (see 06-memory.md).
 
+### Task and Async Session Ownership
+
+Cross-session concurrency is allowed, but a single task/session execution boundary still has exactly one active execution owner at a time. For task-scoped async work and per-node async sessions:
+
+- Repeated wakeups for the same owner merge into the active execution instead of starting another overlapping run.
+- Wakeups for a different owner are recorded and deferred until the current owner exits, yields, or is declared stale by the control plane.
+- Deferred wakeups resume by promoting the queued run and appending exactly one kickoff message for the resumed owner.
+
+This means "agents can work concurrently" applies across different sessions, not as parallel overlapping execution inside the same task runtime boundary.
+
 ## Session Modes
 
 Sessions operate in one of two modes, which determines context assembly strategy and latency expectations.
@@ -212,6 +222,14 @@ Human message triggers entry. The agent loops through tools until it has a text 
 ### Async Entry Point
 
 The system kicks off the turn with a task prompt ("You're assigned to task X, here's your context, begin."). The agent loops through tools — reading files, writing code, querying Ellie, executing commands — until it either signals "step done" (calls the flow advancement tool) or produces a final message with no tool calls. If the context window fills up, the system checkpoints (summarizes conversation so far) and sends a continuation message so the agent can keep going.
+
+Async kicks are modeled as execution wakeups, not "always create a new run." The control plane first checks the current execution owner for that task/session boundary:
+
+- same owner: coalesce onto the active run
+- different owner: persist a deferred wakeup and wait
+- stale or released owner: promote the oldest deferred wakeup and resume execution once
+
+The chat layer only appends a new kickoff message when a wakeup actually starts or is promoted. Coalesced wakeups are visible in control-plane history but do not create duplicate kickoff chatter.
 
 ### Tool Call Policy (No Mid-Turn Approval)
 
