@@ -283,6 +283,7 @@ func TestToolDefinitionTier2SeedMigration(t *testing.T) {
 		"schedule.create":        "project.manage",
 		"schedule.update":        "project.manage",
 		"schedule.delete":        "project.manage",
+		"agent.create_staff":     "agent.manage",
 		"agent.create_temp":      "agent.create_temp",
 		"agent.update":           "agent.manage",
 		"agent.assign_project":   "agent.manage",
@@ -330,8 +331,8 @@ func TestToolDefinitionSeedSchemasIncludePropertiesAndRequiredParameters(t *test
 	`).Scan(&schemaCount); err != nil {
 		t.Fatalf("count native/browser tool definitions: %v", err)
 	}
-	if schemaCount != 74 {
-		t.Fatalf("native/browser tool definition count = %d, want 74", schemaCount)
+	if schemaCount != 75 {
+		t.Fatalf("native/browser tool definition count = %d, want 75", schemaCount)
 	}
 
 	rows, err := pool.Query(ctx, `
@@ -351,6 +352,11 @@ func TestToolDefinitionSeedSchemasIncludePropertiesAndRequiredParameters(t *test
 		"task.update":     {"task_id"},
 		"schedule.create": {"project_id", "flow_template_id", "cron"},
 		"message.send":    {"session_id", "content"},
+		"agent.create_staff": {
+			"name",
+			"agent_type",
+			"system_prompt",
+		},
 		"agent.assign_project": {
 			"agent_id",
 			"project_id",

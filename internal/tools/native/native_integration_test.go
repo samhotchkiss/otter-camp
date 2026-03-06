@@ -1983,6 +1983,63 @@ func TestIntegrationAgentAssignProjectCreatesPMAssignment(t *testing.T) {
 	}
 }
 
+func TestIntegrationFreshPMCandidateCanBeCreatedAndAssigned(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+
+	createdOut, err := executor.Execute(ctx, "agent.create_staff", map[string]any{
+		"name":          "Emiliano",
+		"agent_type":    "pm",
+		"system_prompt": "You are a project manager.",
+	})
+	if err != nil {
+		t.Fatalf("agent.create_staff: %v", err)
+	}
+	createdAgent, ok := createdOut["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent.create_staff output = %T, want map[string]any", createdOut["agent"])
+	}
+	agentID := mustUUIDValue(t, createdAgent["id"])
+	if createdAgent["agent_class"] != "staff" {
+		t.Fatalf("created agent_class = %v, want staff", createdAgent["agent_class"])
+	}
+	if createdAgent["lifecycle_status"] != "draft" {
+		t.Fatalf("created lifecycle_status = %v, want draft", createdAgent["lifecycle_status"])
+	}
+
+	assignOut, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
+		"agent_id":   agentID.String(),
+		"project_id": project.ID.String(),
+		"role":       "project_manager",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project: %v", err)
+	}
+	assignment, ok := assignOut["assignment"].(map[string]any)
+	if !ok {
+		t.Fatalf("assignment output = %T, want map[string]any", assignOut["assignment"])
+	}
+	if mustUUIDValue(t, assignment["agent_id"]) != agentID {
+		t.Fatalf("assignment agent_id = %v, want %s", assignment["agent_id"], agentID)
+	}
+
+	assignedRecord, err := repo.NewAgentRepo(pool).GetByID(context.Background(), agentID)
+	if err != nil {
+		t.Fatalf("load assigned PM: %v", err)
+	}
+	if assignedRecord.AgentClass != "staff" {
+		t.Fatalf("assigned agent_class = %q, want staff", assignedRecord.AgentClass)
+	}
+	if assignedRecord.LifecycleStatus != "active" {
+		t.Fatalf("assigned lifecycle_status = %q, want active", assignedRecord.LifecycleStatus)
+	}
+}
+
 func TestIntegrationAgentAssignProjectRejectsSecondPM(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
@@ -2026,6 +2083,59 @@ func TestIntegrationAgentAssignProjectRejectsSecondPM(t *testing.T) {
 	}
 	if activePMCount != 1 {
 		t.Fatalf("active pm assignments = %d, want 1", activePMCount)
+	}
+}
+
+func TestIntegrationTempPMCandidateReturnsActionableValidationError(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+
+	tempOut, err := executor.Execute(ctx, "agent.create_temp", map[string]any{
+		"name":          "Temp Emiliano",
+		"system_prompt": "You are a project manager.",
+		"scope_type":    "project",
+		"scope_id":      project.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("agent.create_temp: %v", err)
+	}
+	tempAgent, ok := tempOut["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent.create_temp output = %T, want map[string]any", tempOut["agent"])
+	}
+	tempAgentID := mustUUIDValue(t, tempAgent["id"])
+
+	assignOut, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
+		"agent_id":   tempAgentID.String(),
+		"project_id": project.ID.String(),
+		"role":       "project_manager",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project temp PM candidate: %v", err)
+	}
+	if assignOut["error"] != "project_manager_requires_staff_agent" {
+		t.Fatalf("error = %v, want project_manager_requires_staff_agent", assignOut["error"])
+	}
+	if assignOut["message"] != staffPMCreationMessage {
+		t.Fatalf("message = %v, want %q", assignOut["message"], staffPMCreationMessage)
+	}
+
+	var assignmentCount int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM agent_project_assignment
+		WHERE project_id = $1
+		  AND agent_id = $2
+	`, project.ID, tempAgentID).Scan(&assignmentCount); err != nil {
+		t.Fatalf("count temp PM assignments: %v", err)
+	}
+	if assignmentCount != 0 {
+		t.Fatalf("temp PM assignment rows = %d, want 0", assignmentCount)
 	}
 }
 

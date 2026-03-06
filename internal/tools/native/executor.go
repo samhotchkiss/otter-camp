@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	chatsvc "github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
@@ -98,6 +99,11 @@ type agentReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
 	List(ctx context.Context, organizationID uuid.UUID) ([]repo.Agent, error)
 	Update(ctx context.Context, agent repo.Agent) (repo.Agent, error)
+}
+
+type agentService interface {
+	Create(ctx context.Context, req agentsvc.CreateAgentRequest) (*agentsvc.Agent, error)
+	Unpause(ctx context.Context, orgID, agentID uuid.UUID) error
 }
 
 type flowTemplateReader interface {
@@ -186,6 +192,8 @@ func (publishOnlyEventBus) Subscribe(string, *uuid.UUID, eventbus.EventHandler) 
 	return eventbus.Subscription{}
 }
 
+func (publishOnlyEventBus) Unsubscribe(eventbus.Subscription) {}
+
 type cliExecutor interface {
 	Execute(ctx context.Context, input map[string]any) (map[string]any, error)
 }
@@ -208,6 +216,7 @@ type ExecutorOptions struct {
 	WorkspaceRoot  string
 	Memory         memoryQueryService
 	MemoryRecorder memoryRecordService
+	AgentService   agentService
 	CLI            cliExecutor
 	Events         eventPublisher
 	Command        commandContextFunc
@@ -234,6 +243,7 @@ type NativeToolExecutor struct {
 	participants   chatParticipantReader
 	messages       chatMessageReader
 	agents         agentReader
+	agentService   agentService
 	flowTemplates  flowTemplateReader
 	flowNodes      flowNodeReader
 	flowExecs      flowExecutionReader
@@ -265,6 +275,7 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		explicitRoot:   strings.TrimSpace(opts.WorkspaceRoot),
 		memory:         opts.Memory,
 		memoryRecorder: opts.MemoryRecorder,
+		agentService:   opts.AgentService,
 		cli:            opts.CLI,
 		events:         opts.Events,
 		command:        command,
@@ -274,6 +285,7 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 	}
 
 	if opts.Pool != nil {
+		agentRepo := repo.NewAgentRepo(opts.Pool)
 		exec.chatSessions = repo.NewChatSessionRepo(opts.Pool)
 		exec.organizations = repo.NewOrgRepo(opts.Pool)
 		exec.projects = repo.NewProjectRepo(opts.Pool)
@@ -281,7 +293,7 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		exec.inbox = repo.NewInboxItemRepo(opts.Pool)
 		exec.participants = repo.NewChatParticipantRepo(opts.Pool)
 		exec.messages = repo.NewChatMessageRepo(opts.Pool)
-		exec.agents = repo.NewAgentRepo(opts.Pool)
+		exec.agents = agentRepo
 		exec.flowTemplates = repo.NewFlowTemplateRepo(opts.Pool)
 		exec.flowNodes = repo.NewFlowNodeRepo(opts.Pool)
 		exec.flowExecs = repo.NewFlowNodeExecutionRepo(opts.Pool)
@@ -296,6 +308,20 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		exec.memories = repo.NewMemoryRepo(opts.Pool)
 		if exec.events == nil {
 			exec.events = eventbus.New(opts.Pool, nil, eventbus.Config{})
+		}
+		if exec.agentService == nil {
+			var agentEvents eventbus.EventBus = publishOnlyEventBus{publisher: exec.events}
+			if bus, ok := exec.events.(eventbus.EventBus); ok {
+				agentEvents = bus
+			}
+			agentService, agentErr := agentsvc.NewService(agentsvc.Options{
+				Pool:   opts.Pool,
+				Agents: agentRepo,
+				Events: agentEvents,
+			})
+			if agentErr == nil {
+				exec.agentService = agentService
+			}
 		}
 
 		chatService, chatErr := chatsvc.NewService(chatsvc.Options{
@@ -434,6 +460,8 @@ func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input
 		return e.handleScheduleUpdate(ctx, input)
 	case "schedule.delete":
 		return e.handleScheduleDelete(ctx, input)
+	case "agent.create_staff":
+		return e.handleAgentCreateStaff(ctx, input)
 	case "agent.create_temp":
 		return e.handleAgentCreateTemp(ctx, input)
 	case "agent.update":

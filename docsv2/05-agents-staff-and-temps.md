@@ -314,9 +314,10 @@ Projects need agents to do work. The staffing process is conversational — Lori
 **Initial staffing (project creation):**
 
 1. The PM is assigned first. Every project must have exactly one PM. The PM is a staff agent with the `project_manager` role for that project. Lori recommends an existing PM agent or proposes creating a new one.
-2. The PM and Lori then collaborate to set up the project's agent configuration. For staff roles (architecture reviewer, content reviewer), Lori recommends existing staff agents or proposes creating new ones. For worker and code review roles, Lori configures the temp profile templates — system prompt, skills, tool policy — that will be used when the PM spins up temps for task execution.
-3. The human approves or adjusts the staffing plan.
-4. Assignments are recorded in `agent_project_assignment`.
+2. When Lori needs a brand-new PM, she creates a **draft staff PM candidate**, not a temp. That draft candidate is then activated as part of successful PM assignment so fresh project planning can staff a new PM in one bounded flow.
+3. The PM and Lori then collaborate to set up the project's agent configuration. For staff roles (architecture reviewer, content reviewer), Lori recommends existing staff agents or proposes creating new ones. For worker and code review roles, Lori configures the temp profile templates — system prompt, skills, tool policy — that will be used when the PM spins up temps for task execution.
+4. The human approves or adjusts the staffing plan.
+5. Assignments are recorded in `agent_project_assignment`.
 
 For project bootstrap governance flows, Lori and Frank may be assigned directly on specific flow nodes using `actor_type = 'agent'`. This is intentional and does not change the standard project role model (`project_manager`, `worker`, `reviewer`, `planner`).
 
@@ -348,7 +349,7 @@ The project manager is not just another role — the PM has unique responsibilit
 - **Default responder**: the PM is the default responder in the project-scoped session and in task sync sessions.
 - **Private memory**: PMs have `private_memory_enabled = false` by default, the same as all other agents. Enable it explicitly if a PM is assigned to a project involving sensitive personal data.
 
-Every project has exactly one PM. If a PM agent is retired, a new PM must be assigned before the project can continue. Lori handles this transition.
+Every project has exactly one PM. If a PM agent is retired, a new PM must be assigned before the project can continue. Lori handles this transition. PM creation follows the staff lifecycle: new PMs begin as draft staff agents, not temps, and the supported assignment path activates that draft as part of PM assignment.
 
 ### Flow Node Actor Resolution
 
@@ -869,7 +870,7 @@ create index on agent_profile_template (is_active) where organization_id is null
 21. **Agent identity is stateless at the prompt level.** Everything is assembled fresh from profile, context, memory, and history on every turn. No "agent runtime" holding state between turns.
 22. **Private memory is opt-in for all agents.** `private_memory_enabled = false` for all agents by default — staff, PMs, Frank, Lori, Ellie, and temps alike. Enable it explicitly only for agents handling sensitive personal data (medical, financial, personal communications). Frank recommends enabling it when the human creates an agent for a sensitive role.
 23. **Skill attachments on agent profile are baseline competencies.** Activation depends on flow node context — agent skills are the fallback when no flow node skills are declared.
-24. **PMs are always staff agents.** PMs need deep project context, cross-project awareness, and persistent working relationships. They accumulate institutional knowledge that makes them more effective over time.
+24. **PMs are always staff agents.** PMs need deep project context, cross-project awareness, and persistent working relationships. They accumulate institutional knowledge that makes them more effective over time. Project staffing must create fresh PM candidates through the staff lifecycle; `agent.create_temp` is never a valid PM path.
 25. **Workers default to temp.** Implementation work — writing code, running tests, applying fixes — is done by temps. All temps are project-scoped and persist across multiple tasks. Temps keep the agent roster lean and can be promoted to staff if they prove valuable.
 26. **Reviewers default to temp, staff when judgment-dependent.** Code reviewers apply a fixed rubric (captured in skills/prompts) and can be temp. Policy, content, architecture, and compliance reviewers need accumulated judgment across projects and should be staff.
 27. **Staff agent memory extends across all assigned projects.** A staff agent assigned to three projects has memory from all three available on every turn. Cross-project knowledge accumulation is the key reason to make a role staff. This is the primary differentiator from temps.
