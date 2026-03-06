@@ -1318,6 +1318,46 @@ func TestTaskDetailLoadPreservesSelectedDiscussionSessionEX254(t *testing.T) {
 	}
 }
 
+func TestTaskDetailLoadUsesSidebarDiscussionFallbackEX285(t *testing.T) {
+	t.Parallel()
+
+	const (
+		taskID            = "task-285-fallback"
+		discussionSession = "00000000-0000-0000-0000-000000002851"
+		executionSession  = "00000000-0000-0000-0000-000000002852"
+	)
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+			return nil, nil
+		},
+	})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = taskID
+	model.workspace.taskSessionIDs[taskID] = discussionSession
+	model.activeScope = ScopeTask
+	model.activeSession = discussionSession
+
+	updated, cmd := model.Update(taskDetailLoadedMsg{Detail: TaskDetailItem{
+		ID:                taskID,
+		ProjectID:         "project-285",
+		Title:             "Sidebar discussion fallback",
+		SessionID:         executionSession,
+		ActiveExecutionID: executionSession,
+	}})
+	got := updated.(Model)
+
+	if got.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("task pane tab = %s, want %s", got.taskPaneTab, taskPaneTabDiscussion)
+	}
+	if got.activeSession != discussionSession {
+		t.Fatalf("active session = %q, want preserved sidebar discussion session", got.activeSession)
+	}
+	if cmd == nil {
+		t.Fatal("task detail load should return a session sync cmd")
+	}
+}
+
 func TestTaskDetailHistoryVisibleByDefaultEX249(t *testing.T) {
 	t.Parallel()
 

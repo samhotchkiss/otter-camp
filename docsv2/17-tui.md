@@ -111,6 +111,7 @@ The sidebar mirrors the session sidebar from the web UI spec — the operator's 
 - Sessions grouped by scope: org at top, then projects with their task sessions nested.
 - **Unread indicator** (`*`) on sessions with unseen messages. Bubbles up: if any task in a project has unread, the project entry shows `*` too.
 - Selecting a session (Enter) switches the chat pane to that session. Main content does not change.
+- Selecting a task-scoped sidebar chat also binds the task detail right pane to that task's sync discussion session. If task detail data arrives without an explicit discussion session ID, the TUI keeps using the already-open sidebar task chat as the discussion binding.
 - j/k navigates up/down the list. Enter selects. Folding/unfolding project groups with l/h (expand/collapse).
 - Per-node async sessions (agent work logs) do not appear in the sidebar.
 - Active session is highlighted with a distinct background.
@@ -368,6 +369,7 @@ Progressive disclosure: board card -> task detail -> work log.
 - Subtask list with status indicators.
 - Scrollable. Sections are collapsible with keybindings.
 - Tab to switch focus to the chat pane for discussing the task.
+- In task detail, the right-pane `Discussion` tab must stay bound to the task's real sync discussion session while the operator cycles tabs/scopes. The `No task discussion session.` placeholder appears only when no discussion session can actually be resolved for that task.
 
 ### Inbox
 

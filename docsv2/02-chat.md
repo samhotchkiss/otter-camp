@@ -129,6 +129,8 @@ Discoverability beyond the sidebar is handled by the command bar (Superhuman-sty
 - Each task has one persistent sync session (the discussion session) plus zero or more per-node async sessions (work logs).
 - Each project has one persistent session.
 - Each org has one persistent session ("General").
+- UI clients must preserve the task discussion binding when the operator opens a task from its existing sidebar task chat. If a task detail payload omits `discussion_session_id`, the client falls back to the already-known task-scoped sync session instead of inventing an empty state.
+- Empty-state copy claiming a task has no discussion session is only valid when neither task detail data nor prior task-scoped session context can resolve a sync discussion session.
 
 ### Scope and Agent Availability
 
