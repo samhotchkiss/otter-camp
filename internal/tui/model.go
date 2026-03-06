@@ -423,6 +423,45 @@ func (m Model) taskExecutionSessionID(task *taskRecord) string {
 	}
 }
 
+func (m Model) taskPaneProjectID(task *taskRecord) string {
+	if task != nil && strings.TrimSpace(task.ProjectID) != "" {
+		return strings.TrimSpace(task.ProjectID)
+	}
+	taskID := strings.TrimSpace(m.workspace.selectedTaskID)
+	if task != nil && strings.TrimSpace(task.ID) != "" {
+		taskID = strings.TrimSpace(task.ID)
+	}
+	if taskID == "" {
+		return ""
+	}
+	if node := m.workspace.nodes["task-"+taskID]; node != nil && strings.TrimSpace(node.ParentID) != "" {
+		if projectNode := m.workspace.nodes[node.ParentID]; projectNode != nil {
+			return strings.TrimSpace(projectNode.ProjectID)
+		}
+	}
+	return ""
+}
+
+func (m Model) taskPaneProjectName(task *taskRecord) string {
+	projectID := m.taskPaneProjectID(task)
+	if projectID == "" {
+		return ""
+	}
+	if m.workspace.selectedProject != nil &&
+		strings.EqualFold(strings.TrimSpace(m.workspace.selectedProject.ID), projectID) &&
+		strings.TrimSpace(m.workspace.selectedProject.DisplayName) != "" {
+		return strings.TrimSpace(m.workspace.selectedProject.DisplayName)
+	}
+	if node := m.workspace.nodes["project-"+projectID]; node != nil {
+		return strings.TrimSpace(node.Label)
+	}
+	return ""
+}
+
+func (m Model) taskPaneOrgSessionID() string {
+	return strings.TrimSpace(m.workspace.activeSessionID)
+}
+
 func (m Model) defaultTaskPaneTab(task *taskRecord) taskPaneTab {
 	if strings.TrimSpace(m.taskExecutionSessionID(task)) != "" {
 		return taskPaneTabJournal
@@ -509,6 +548,9 @@ func (m *Model) clearVisibleSessionState() {
 }
 
 func (m Model) taskPaneSessionID(task *taskRecord, scope ChatScope, tab taskPaneTab) string {
+	if task == nil {
+		return ""
+	}
 	switch scope {
 	case ScopeTask:
 		switch tab {
@@ -520,21 +562,9 @@ func (m Model) taskPaneSessionID(task *taskRecord, scope ChatScope, tab taskPane
 			return m.taskDiscussionSessionID(task)
 		}
 	case ScopeProject:
-		if projectSessionID := m.workspace.projectSessionID(m.workspace.selectedProjectID); looksLikeUUID(projectSessionID) {
-			return projectSessionID
-		}
-		if looksLikeUUID(m.workspace.selectedProjectID) {
-			return "session-project-" + m.workspace.selectedProjectID
-		}
-		if strings.TrimSpace(m.workspace.activeSessionID) != "" {
-			return strings.TrimSpace(m.workspace.activeSessionID)
-		}
-		return sessionForScope(scope)
+		return strings.TrimSpace(m.workspace.projectSessionID(m.taskPaneProjectID(task)))
 	default:
-		if strings.TrimSpace(m.workspace.activeSessionID) != "" {
-			return strings.TrimSpace(m.workspace.activeSessionID)
-		}
-		return sessionForScope(scope)
+		return m.taskPaneOrgSessionID()
 	}
 }
 
@@ -594,10 +624,28 @@ func (m *Model) applyTaskPaneSelection(task *taskRecord, scope ChatScope, tab ta
 	if scope != ScopeTask && tab != taskPaneTabDiscussion {
 		tab = taskPaneTabDiscussion
 	}
+	if projectID := m.taskPaneProjectID(task); projectID != "" {
+		m.workspace.selectedProjectID = projectID
+	}
 	m.activeScope = scope
 	m.taskPaneTab = tab
-	cmd := m.switchVisibleSession(m.taskPaneSessionID(task, m.activeScope, m.taskPaneTab), true)
+	sessionID := m.taskPaneSessionID(task, m.activeScope, m.taskPaneTab)
+	cmd := m.switchVisibleSession(sessionID, true)
 	m.restoreTaskPaneScrollFor(task.ID, m.activeScope, m.taskPaneTab)
+	if sessionID == "" {
+		switch scope {
+		case ScopeProject:
+			m.statusMessage = "No project session available for this task."
+		case ScopeOrg:
+			m.statusMessage = "No organization session available."
+		case ScopeTask:
+			if tab == taskPaneTabDiscussion {
+				m.statusMessage = "No task discussion session available."
+			} else {
+				m.statusMessage = "No task journal available."
+			}
+		}
+	}
 	return cmd
 }
 
@@ -610,7 +658,9 @@ func (m *Model) syncTaskPaneSelection(force bool) tea.Cmd {
 		return nil
 	}
 	nextTab := m.taskPaneTab
+	nextScope := m.activeScope
 	if force || m.taskPaneTaskID != task.ID {
+		nextScope = ScopeTask
 		currentSession := strings.TrimSpace(m.activeSession)
 		if currentSession != "" {
 			switch currentSession {
@@ -625,7 +675,7 @@ func (m *Model) syncTaskPaneSelection(force bool) tea.Cmd {
 			nextTab = m.defaultTaskPaneTab(task)
 		}
 	}
-	return m.applyTaskPaneSelection(task, m.activeScope, nextTab, force)
+	return m.applyTaskPaneSelection(task, nextScope, nextTab, force)
 }
 
 func (m *Model) cycleTaskPaneTab(forward bool) tea.Cmd {
@@ -952,8 +1002,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Task not yet in the map (e.g. from a CHATS session outside the loaded project)
 			// — create a minimal record so ViewTask can render it.
 			rec = &taskRecord{
-				ID:    typed.Detail.ID,
-				Title: typed.Detail.Title,
+				ID:        typed.Detail.ID,
+				ProjectID: typed.Detail.ProjectID,
+				Title:     typed.Detail.Title,
 			}
 			if m.workspace.tasks == nil {
 				m.workspace.tasks = make(map[string]*taskRecord)
@@ -961,6 +1012,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.workspace.tasks[typed.Detail.ID] = rec
 		}
 		rec.Description = typed.Detail.Description
+		if strings.TrimSpace(typed.Detail.ProjectID) != "" {
+			rec.ProjectID = strings.TrimSpace(typed.Detail.ProjectID)
+		}
 		rec.SessionID = typed.Detail.SessionID
 		rec.DiscussionSessionID = typed.Detail.DiscussionSessionID
 		rec.ActiveExecutionID = typed.Detail.ActiveExecutionID
@@ -1029,6 +1083,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// loads and finds no session ID yet.
 		if m.workspace.mainView == ViewTask &&
 			m.workspace.selectedTaskID == typed.Detail.ID {
+			if strings.TrimSpace(rec.ProjectID) != "" {
+				m.workspace.selectedProjectID = strings.TrimSpace(rec.ProjectID)
+			}
 			if cmd := m.syncTaskPaneSelection(m.taskPaneTaskID != typed.Detail.ID); cmd != nil {
 				return m, cmd
 			}
@@ -7040,6 +7097,25 @@ func decodePayload(raw json.RawMessage, out any) bool {
 }
 
 func (m *Model) switchScope(next ChatScope) tea.Cmd {
+	if m.taskPaneEnabled() {
+		task := m.activeTaskRecord()
+		if task != nil {
+			prevScope := m.activeScope
+			nextTab := m.taskPaneTab
+			if next != ScopeTask && nextTab != taskPaneTabDiscussion {
+				nextTab = taskPaneTabDiscussion
+			}
+			cmd := m.applyTaskPaneSelection(task, next, nextTab, false)
+			if m.statusMessage == "" {
+				if prevScope == next {
+					m.statusMessage = fmt.Sprintf("Already using scope %s.", next)
+				} else {
+					m.statusMessage = fmt.Sprintf("Scope switched to %s.", next)
+				}
+			}
+			return cmd
+		}
+	}
 	prevScope := m.activeScope
 	m.activeScope = next
 	if m.taskPaneEnabled() && next != ScopeTask && m.taskPaneTab != taskPaneTabDiscussion {

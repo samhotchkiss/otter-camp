@@ -251,7 +251,7 @@ func TestTaskDetailRendersBoundDiscussionAndExecutionSessionsEX254(t *testing.T)
 		DiscussionSessionID: discussionSessionID,
 	}})
 	model = updated.(Model)
-	model = applyImmediateCmdMessages(t, model, cmd)
+	model = applyImmediateCmdMessages(model, cmd)
 
 	task := model.workspace.tasks["task-254-live"]
 	if task == nil {
@@ -278,7 +278,7 @@ func TestTaskDetailRendersBoundDiscussionAndExecutionSessionsEX254(t *testing.T)
 		t.Fatalf("journal panel missing execution marker: %q", journalPanel)
 	}
 
-	model = applyImmediateCmdMessages(t, model, model.applyTaskPaneSelection(task, ScopeTask, taskPaneTabDiscussion, false))
+	model = applyImmediateCmdMessages(model, model.applyTaskPaneSelection(task, ScopeTask, taskPaneTabDiscussion, false))
 	if model.ActiveChatSession() != discussionSessionID {
 		t.Fatalf("active session after discussion switch = %q, want %q", model.ActiveChatSession(), discussionSessionID)
 	}
@@ -330,7 +330,7 @@ func TestJumpToSessionByNameKeepsTaskDetailInSyncEX254(t *testing.T) {
 	}
 	model.workspace.topLevel = append(model.workspace.topLevel, nodeID)
 
-	model = applyImmediateCmdMessages(t, model, model.jumpToSessionByName("Sandbox Discussion"))
+	model = applyImmediateCmdMessages(model, model.jumpToSessionByName("Sandbox Discussion"))
 
 	if model.MainView() != ViewTask {
 		t.Fatalf("main view = %s, want %s", model.MainView(), ViewTask)
@@ -451,6 +451,192 @@ func TestCompletedTaskFallsBackDeterministicallyEX249(t *testing.T) {
 	model = updated.(Model)
 	if model.taskPaneTab != taskPaneTabDiscussion {
 		t.Fatalf("discussion fallback tab = %s, want discussion", model.taskPaneTab)
+	}
+}
+
+func TestTaskPaneScopeCycleKeepsContentAndTabsInSyncEX259(t *testing.T) {
+	t.Parallel()
+
+	const (
+		orgSession        = "00000000-0000-0000-0000-000000002593"
+		projectSession    = "00000000-0000-0000-0000-000000002594"
+		executionSession  = "00000000-0000-0000-0000-000000002595"
+		discussionSession = "00000000-0000-0000-0000-000000002596"
+	)
+
+	historyBySession := map[string][]ChatMessage{
+		orgSession: {{
+			ID:        "org-msg",
+			Role:      "assistant",
+			Content:   "ORG MARKER: org chat session.",
+			Timestamp: time.Now().UTC(),
+		}},
+		projectSession: {{
+			ID:        "project-msg",
+			Role:      "assistant",
+			Content:   "PROJECT MARKER: project-scoped chat session.",
+			Timestamp: time.Now().UTC(),
+		}},
+		executionSession: {{
+			ID:        "execution-msg",
+			Role:      "assistant",
+			Content:   "EXECUTION MARKER: task execution session.",
+			Timestamp: time.Now().UTC(),
+		}},
+		discussionSession: {{
+			ID:        "discussion-msg",
+			Role:      "assistant",
+			Content:   "DISCUSSION MARKER: task discussion session.",
+			Timestamp: time.Now().UTC(),
+		}},
+	}
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, sessionID string) ([]ChatMessage, error) {
+			return historyBySession[sessionID], nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-259-cycle"
+	model.workspace.selectedProjectID = "project-stale"
+	model.workspace.activeSessionID = orgSession
+	model.activeScope = ScopeOrg
+	model.activeSession = orgSession
+	model.workspace.nodes["project-project-259"] = &sidebarNode{
+		ID:        "project-project-259",
+		Kind:      sidebarKindProject,
+		Label:     "Project 259",
+		ProjectID: "project-259",
+	}
+	model.workspace.nodes["session-project-259"] = &sidebarNode{
+		ID:           "session-project-259",
+		Kind:         sidebarKindSession,
+		Label:        "Project 259 chat",
+		SessionScope: "project",
+		ProjectID:    "project-259",
+		SessionID:    projectSession,
+	}
+
+	updated, cmd := model.Update(taskDetailLoadedMsg{Detail: TaskDetailItem{
+		ID:                  "task-259-cycle",
+		ProjectID:           "project-259",
+		Title:               "Cycle right pane",
+		SessionID:           executionSession,
+		ActiveExecutionID:   executionSession,
+		DiscussionSessionID: discussionSession,
+	}})
+	model = applyImmediateCmdMessages(updated.(Model), cmd)
+
+	if model.activeScope != ScopeTask {
+		t.Fatalf("initial task scope = %v, want %v", model.activeScope, ScopeTask)
+	}
+	if model.taskPaneTab != taskPaneTabJournal {
+		t.Fatalf("initial task tab = %s, want journal", model.taskPaneTab)
+	}
+	if body := strings.Join(model.renderTaskSurface(70), "\n"); !strings.Contains(body, "EXECUTION MARKER") {
+		t.Fatalf("task journal content should show execution marker: %q", body)
+	}
+
+	model.focus = ChatPanel
+	model.taskPaneMode = taskPaneModeNavigate
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = applyImmediateCmdMessages(updated.(Model), cmd)
+	if model.activeScope != ScopeProject {
+		t.Fatalf("scope after first Up = %v, want %v", model.activeScope, ScopeProject)
+	}
+	if model.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("tab after first Up = %s, want discussion", model.taskPaneTab)
+	}
+	if model.activeSession != projectSession {
+		t.Fatalf("session after first Up = %q, want project session", model.activeSession)
+	}
+	projectPanel := model.renderChatPanel(56, 18, true)
+	if strings.Contains(projectPanel, "[ Journal ]") || !strings.Contains(projectPanel, "(Journal)") {
+		t.Fatalf("project scope tabs should disable Journal: %q", projectPanel)
+	}
+	if body := strings.Join(model.renderTaskSurface(70), "\n"); !strings.Contains(body, "PROJECT MARKER") {
+		t.Fatalf("project scope content should show project marker: %q", body)
+	}
+
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = applyImmediateCmdMessages(updated.(Model), cmd)
+	if model.activeScope != ScopeOrg {
+		t.Fatalf("scope after second Up = %v, want %v", model.activeScope, ScopeOrg)
+	}
+	if model.activeSession != orgSession {
+		t.Fatalf("session after second Up = %q, want org session", model.activeSession)
+	}
+	if body := strings.Join(model.renderTaskSurface(70), "\n"); !strings.Contains(body, "ORG MARKER") {
+		t.Fatalf("org scope content should show org marker: %q", body)
+	}
+}
+
+func TestTaskPaneProjectScopeWithoutSessionShowsExplicitStateEX259(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+			return nil, nil
+		},
+	})
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-259-missing-project"
+	model.workspace.activeSessionID = "00000000-0000-0000-0000-000000002597"
+	model.activeSession = "00000000-0000-0000-0000-000000002597"
+
+	updated, cmd := model.Update(taskDetailLoadedMsg{Detail: TaskDetailItem{
+		ID:                  "task-259-missing-project",
+		ProjectID:           "project-259-missing",
+		Title:               "Missing project chat",
+		SessionID:           "00000000-0000-0000-0000-000000002598",
+		ActiveExecutionID:   "00000000-0000-0000-0000-000000002598",
+		DiscussionSessionID: "00000000-0000-0000-0000-000000002599",
+	}})
+	model = applyImmediateCmdMessages(updated.(Model), cmd)
+	model.focus = ChatPanel
+	model.taskPaneMode = taskPaneModeNavigate
+
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = applyImmediateCmdMessages(updated.(Model), cmd)
+
+	if model.activeScope != ScopeProject {
+		t.Fatalf("scope after Up = %v, want %v", model.activeScope, ScopeProject)
+	}
+	if model.activeSession != "" {
+		t.Fatalf("project scope activeSession without session = %q, want empty", model.activeSession)
+	}
+	body := strings.Join(model.renderTaskSurface(70), "\n")
+	if !strings.Contains(body, "No project discussion session.") {
+		t.Fatalf("missing project session should render explicit placeholder: %q", body)
+	}
+	if strings.Contains(body, "no messages yet") {
+		t.Fatalf("missing project session should not reuse generic empty-chat copy: %q", body)
+	}
+}
+
+func applyImmediateCmdMessages(model Model, cmd tea.Cmd) Model {
+	if cmd == nil {
+		return model
+	}
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	select {
+	case msg := <-done:
+		if msg == nil {
+			return model
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, child := range batch {
+				model = applyImmediateCmdMessages(model, child)
+			}
+			return model
+		}
+		updated, next := model.Update(msg)
+		return applyImmediateCmdMessages(updated.(Model), next)
+	case <-time.After(50 * time.Millisecond):
+		return model
 	}
 }
 
@@ -834,33 +1020,5 @@ func TestTaskTraceShowsFullToolResultDetailEX252(t *testing.T) {
 	}
 	if strings.Contains(rendered, "400 of") {
 		t.Fatalf("trace surface should not use the preview truncation notice: %q", rendered)
-	}
-}
-
-func applyImmediateCmdMessages(t *testing.T, model Model, cmd tea.Cmd) Model {
-	t.Helper()
-	if cmd == nil {
-		return model
-	}
-
-	done := make(chan tea.Msg, 1)
-	go func() { done <- cmd() }()
-
-	select {
-	case msg := <-done:
-		if msg == nil {
-			return model
-		}
-		if batch, ok := msg.(tea.BatchMsg); ok {
-			for _, next := range batch {
-				model = applyImmediateCmdMessages(t, model, next)
-			}
-			return model
-		}
-		updated, followup := model.Update(msg)
-		model = updated.(Model)
-		return applyImmediateCmdMessages(t, model, followup)
-	case <-time.After(50 * time.Millisecond):
-		return model
 	}
 }

@@ -1387,6 +1387,166 @@ func TestTaskPaneNavigationStateMachineEX249(t *testing.T) {
 	}
 }
 
+func TestTaskPaneSessionIDUsesTaskProjectContextEX259(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	task := &taskRecord{
+		ID:                  "task-259-session",
+		ProjectID:           "project-real",
+		DiscussionSessionID: "task-discussion-session",
+		ActiveExecutionID:   "task-execution-session",
+	}
+	model.workspace.tasks[task.ID] = task
+	model.workspace.selectedTaskID = task.ID
+	model.workspace.selectedProjectID = "project-stale"
+	model.workspace.activeSessionID = "org-session-real"
+	model.activeSession = "stale-active-session"
+	model.workspace.nodes["session-project-real"] = &sidebarNode{
+		ID:           "session-project-real",
+		Kind:         sidebarKindSession,
+		SessionScope: "project",
+		ProjectID:    "project-real",
+		SessionID:    "project-session-real",
+	}
+	model.workspace.nodes["session-project-stale"] = &sidebarNode{
+		ID:           "session-project-stale",
+		Kind:         sidebarKindSession,
+		SessionScope: "project",
+		ProjectID:    "project-stale",
+		SessionID:    "project-session-stale",
+	}
+
+	if got := model.taskPaneSessionID(task, ScopeProject, taskPaneTabDiscussion); got != "project-session-real" {
+		t.Fatalf("project scope session = %q, want %q", got, "project-session-real")
+	}
+	if got := model.taskPaneSessionID(task, ScopeOrg, taskPaneTabDiscussion); got != "org-session-real" {
+		t.Fatalf("org scope session = %q, want %q", got, "org-session-real")
+	}
+
+	delete(model.workspace.nodes, "session-project-real")
+	if got := model.taskPaneSessionID(task, ScopeProject, taskPaneTabDiscussion); got != "" {
+		t.Fatalf("project scope session without project chat = %q, want empty string", got)
+	}
+}
+
+func TestTaskDetailLoadResetsRightPaneToTaskScopeEX259(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadChatHistory: func(_ context.Context, _ string) ([]ChatMessage, error) {
+			return nil, nil
+		},
+	})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-259-open"
+	model.workspace.selectedProjectID = "project-stale"
+	model.workspace.activeSessionID = "00000000-0000-0000-0000-000000002590"
+	model.activeScope = ScopeOrg
+	model.activeSession = "00000000-0000-0000-0000-000000002590"
+
+	updated, _ := model.Update(taskDetailLoadedMsg{Detail: TaskDetailItem{
+		ID:                  "task-259-open",
+		ProjectID:           "project-real",
+		Title:               "Open task",
+		SessionID:           "00000000-0000-0000-0000-000000002591",
+		ActiveExecutionID:   "00000000-0000-0000-0000-000000002591",
+		DiscussionSessionID: "00000000-0000-0000-0000-000000002592",
+	}})
+	model = updated.(Model)
+
+	if model.activeScope != ScopeTask {
+		t.Fatalf("activeScope after task detail load = %v, want %v", model.activeScope, ScopeTask)
+	}
+	if model.taskPaneTab != taskPaneTabJournal {
+		t.Fatalf("task pane tab after task detail load = %s, want journal", model.taskPaneTab)
+	}
+	if model.activeSession != "00000000-0000-0000-0000-000000002591" {
+		t.Fatalf("active session after task detail load = %q, want execution session", model.activeSession)
+	}
+	if model.workspace.selectedProjectID != "project-real" {
+		t.Fatalf("selectedProjectID after task detail load = %q, want %q", model.workspace.selectedProjectID, "project-real")
+	}
+}
+
+func TestTaskPaneScopeSwitchCoercesDiscussionAndShowsMissingSessionEX259(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	task := &taskRecord{
+		ID:                  "task-259-switch",
+		ProjectID:           "project-real",
+		DiscussionSessionID: "task-discussion",
+		ActiveExecutionID:   "task-execution",
+	}
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = task.ID
+	model.workspace.tasks[task.ID] = task
+	model.taskPaneTaskID = task.ID
+	model.activeScope = ScopeTask
+	model.taskPaneTab = taskPaneTabJournal
+	model.activeSession = "task-execution"
+	model.workspace.nodes["session-project-real"] = &sidebarNode{
+		ID:           "session-project-real",
+		Kind:         sidebarKindSession,
+		SessionScope: "project",
+		ProjectID:    "project-real",
+		SessionID:    "project-session-real",
+	}
+
+	model.applyTaskPaneSelection(task, ScopeProject, taskPaneTabJournal, false)
+	if model.activeScope != ScopeProject {
+		t.Fatalf("activeScope after switch = %v, want %v", model.activeScope, ScopeProject)
+	}
+	if model.taskPaneTab != taskPaneTabDiscussion {
+		t.Fatalf("taskPaneTab after switch = %s, want discussion", model.taskPaneTab)
+	}
+	if model.activeSession != "project-session-real" {
+		t.Fatalf("activeSession after switch = %q, want project session", model.activeSession)
+	}
+
+	delete(model.workspace.nodes, "session-project-real")
+	model.activeSession = "task-execution"
+	model.statusMessage = ""
+	model.applyTaskPaneSelection(task, ScopeProject, taskPaneTabDiscussion, false)
+	if model.activeSession != "" {
+		t.Fatalf("activeSession without project session = %q, want empty", model.activeSession)
+	}
+	if model.statusMessage != "No project session available for this task." {
+		t.Fatalf("statusMessage without project session = %q, want explicit missing-session message", model.statusMessage)
+	}
+}
+
+func TestTaskPaneNonTaskScopeRendersTaskTabsDisabledEX259(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 140, Height: 34})
+	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-259-tabs"
+	model.workspace.tasks["task-259-tabs"] = &taskRecord{
+		ID:                  "task-259-tabs",
+		ProjectID:           "project-259-tabs",
+		Title:               "Disable task tabs",
+		DiscussionSessionID: "project-visible-session",
+	}
+	model.workspace.selectedProjectID = "project-259-tabs"
+	model.activeScope = ScopeProject
+	model.taskPaneTab = taskPaneTabDiscussion
+	model.activeSession = "project-visible-session"
+
+	panel := model.renderChatPanel(56, 18, true)
+	if strings.Contains(panel, "[ Journal ]") {
+		t.Fatalf("project scope should not render Journal as an active tab: %q", panel)
+	}
+	if !strings.Contains(panel, "(Journal)") {
+		t.Fatalf("project scope should render Journal as disabled: %q", panel)
+	}
+	if !strings.Contains(panel, "[ Discussion ]") {
+		t.Fatalf("project scope should keep Discussion active: %q", panel)
+	}
+}
+
 func TestTaskPaneEscNavigatesAndCancelIsExplicitEX249(t *testing.T) {
 	t.Parallel()
 

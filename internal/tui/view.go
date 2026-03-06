@@ -2694,7 +2694,10 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 	// so the chat header shows context: "Frank / General › OtterCamp Sales Site".
 	if m.activeScope == ScopeProject && m.workspace.selectedProjectID != "" {
 		projectName := ""
-		if m.workspace.selectedProject != nil && m.workspace.selectedProject.DisplayName != "" {
+		if isTaskPane {
+			projectName = m.taskPaneProjectName(m.activeTaskRecord())
+		}
+		if projectName == "" && m.workspace.selectedProject != nil && m.workspace.selectedProject.DisplayName != "" {
 			projectName = m.workspace.selectedProject.DisplayName
 		} else if node := m.workspace.nodes["project-"+m.workspace.selectedProjectID]; node != nil {
 			projectName = node.Label
@@ -2848,6 +2851,10 @@ func (m Model) renderChatPanel(innerW, innerH int, focused bool) string {
 func (m Model) renderTaskPaneTabs(width int) string {
 	parts := make([]string, 0, len(taskPaneTabs)+1)
 	for _, item := range taskPaneTabs {
+		if m.activeScope != ScopeTask && item.tab != taskPaneTabDiscussion {
+			parts = append(parts, styleMuted.Render("("+item.label+")"))
+			continue
+		}
 		label := " " + item.label + " "
 		if item.tab == m.taskPaneTab {
 			parts = append(parts, styleActive.Render("["+label+"]"))
@@ -2869,6 +2876,9 @@ func (m Model) renderTaskSurface(width int) []string {
 	if m.workspace.mainView != ViewTask {
 		return m.renderChatMessages(width)
 	}
+	if lines := m.renderTaskPaneUnavailableMessages(width); len(lines) > 0 {
+		return lines
+	}
 	switch m.taskPaneTab {
 	case taskPaneTabJournal:
 		return m.renderTaskJournalMessages(width)
@@ -2878,6 +2888,41 @@ func (m Model) renderTaskSurface(width int) []string {
 		return m.renderTaskTraceMessages(width)
 	default:
 		return m.renderChatMessages(width)
+	}
+}
+
+func (m Model) renderTaskPaneUnavailableMessages(width int) []string {
+	if !m.taskPaneEnabled() || strings.TrimSpace(m.activeSession) != "" || len(m.chatMessages) > 0 {
+		return nil
+	}
+	if m.taskPaneTab != taskPaneTabDiscussion {
+		return nil
+	}
+	center := func(s string) string {
+		return lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Foreground(colSubtle).Render(s)
+	}
+	switch m.activeScope {
+	case ScopeProject:
+		title := "No project discussion session."
+		subtitle := "Project-scoped chat is unavailable for this task."
+		if projectName := m.taskPaneProjectName(m.activeTaskRecord()); projectName != "" {
+			subtitle = "Project context: " + truncate(projectName, width-4)
+		}
+		return []string{"", center(title), center(subtitle)}
+	case ScopeOrg:
+		return []string{
+			"",
+			center("No organization session."),
+			center("Reload chats or switch back to Frank."),
+		}
+	case ScopeTask:
+		return []string{
+			"",
+			center("No task discussion session."),
+			center("This task does not have a discussion thread yet."),
+		}
+	default:
+		return nil
 	}
 }
 

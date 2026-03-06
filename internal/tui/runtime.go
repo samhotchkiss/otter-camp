@@ -117,6 +117,7 @@ type TaskEvent struct {
 // TaskDetailItem is the full task record fetched on demand when the user selects a task.
 type TaskDetailItem struct {
 	ID                  string
+	ProjectID           string
 	TaskNumber          int
 	Title               string
 	Description         string
