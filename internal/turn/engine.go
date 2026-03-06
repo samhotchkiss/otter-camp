@@ -1614,7 +1614,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 				tier = strings.ToLower(t)
 			}
 		}
-		arguments := toolargs.Normalize(name, cloneMap(call.Arguments))
+		arguments := cloneMap(call.Arguments)
 		arguments["organization_id"] = rt.session.OrganizationID.String()
 		if _, exists := arguments["session_id"]; !exists {
 			arguments["session_id"] = rt.session.ID.String()

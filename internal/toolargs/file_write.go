@@ -17,6 +17,7 @@ var (
 	fileWriteCreateDirsPattern = regexp.MustCompile(`(?s)"create_dirs"\s*:\s*(true|false)`)
 )
 
+// Normalize returns a shallow copy of input with tool-specific argument recovery applied.
 func Normalize(toolName string, input map[string]any) map[string]any {
 	cloned := cloneMap(input)
 	switch canonicalToolName(toolName) {
@@ -27,6 +28,7 @@ func Normalize(toolName string, input map[string]any) map[string]any {
 	}
 }
 
+// AttemptFingerprint returns a stable fingerprint for one attempted tool invocation.
 func AttemptFingerprint(toolName string, input map[string]any) string {
 	name := canonicalToolName(toolName)
 	normalized := Normalize(name, input)
