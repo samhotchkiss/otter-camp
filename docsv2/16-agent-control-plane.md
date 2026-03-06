@@ -659,6 +659,8 @@ Mutating operations require idempotency keys. The broker deduplicates requests b
 - If the first request completed, return the same result.
 - If the first request is still in progress, return a "duplicate, in progress" response.
 - If the first request failed, allow the retry (new RunAttempt).
+- Fresh project kickoff follows the same idempotency rule: a retry of the same fresh-start request must bind back to the canonical live project/session path created by the first successful `project.create`, not mint a second active project or parallel planning session.
+- Fresh kickoff and resume are distinct execution modes. Fresh kickoff suppresses archived/closed prior-run transcript context unless the operator explicitly chose resume/recovery; resume/recovery keeps the historical context because continuity is the point.
 
 ### Dead Letter Handling
 
@@ -702,6 +704,7 @@ The system actively prevents tasks from getting stuck. A background **supervisor
 - No auto-retry on permanent failures (policy denial, invalid input, repeated crashes with the same error).
 - After max retries, the supervisor takes over (stuck task detection path).
 - Custom retry policies can be set at the project or flow template level: "this deployment step should not auto-retry" or "this data fetch step can retry up to 10 times."
+- For fresh kickoff planning turns, exceeding the bounded prompt/continuation guardrail surfaces one blocker in the session and stops recursive churn. The system does not keep spinning new turns indefinitely.
 
 **Health heartbeat:**
 - Running agents emit periodic heartbeats (default interval: 30 seconds) as RunEvents.
