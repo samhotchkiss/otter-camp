@@ -158,6 +158,7 @@ type RunServiceOptions struct {
 	RunSteps runStepRepository
 	Attempts runAttemptRepository
 	RunEvent runEventRepository
+	RuntimeStates runtimeStateRepository
 
 	TaskEvents  taskEventRecorder
 	Inbox       inboxCreator
@@ -178,6 +179,7 @@ type runService struct {
 	runSteps runStepRepository
 	attempts runAttemptRepository
 	events   runEventRepository
+	runtime  runtimeStateRepository
 
 	taskEvents  taskEventRecorder
 	inbox       inboxCreator
@@ -195,7 +197,7 @@ type runService struct {
 
 func NewRunService(opts RunServiceOptions) (RunService, error) {
 	requiresPool := opts.Runs == nil || opts.RunSteps == nil || opts.Attempts == nil || opts.RunEvent == nil ||
-		opts.TaskEvents == nil || opts.Inbox == nil || opts.Assignments == nil || opts.Agents == nil || opts.Users == nil
+		opts.RuntimeStates == nil || opts.TaskEvents == nil || opts.Inbox == nil || opts.Assignments == nil || opts.Agents == nil || opts.Users == nil
 	if opts.Pool == nil && requiresPool {
 		return nil, fmt.Errorf("run service requires a database pool")
 	}
@@ -236,6 +238,11 @@ func NewRunService(opts RunServiceOptions) (RunService, error) {
 		svc.events = opts.RunEvent
 	} else {
 		svc.events = NewRunEventRepository(opts.Pool)
+	}
+	if opts.RuntimeStates != nil {
+		svc.runtime = opts.RuntimeStates
+	} else {
+		svc.runtime = NewRuntimeStateRepository(opts.Pool)
 	}
 	if opts.TaskEvents != nil {
 		svc.taskEvents = opts.TaskEvents

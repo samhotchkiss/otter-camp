@@ -1644,6 +1644,455 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 	})
 }
 
+func TestTaskQueueProcessorIntegrationDifferentOwnerWakeupDefersUntilTurnExit(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	worker := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "worker", "Deferred Worker", "worker")
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Deferred Reviewer", "reviewer")
+	template, nodeWork, nodeReview := seedTaskQueueRejectFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, worker.ID, reviewer.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Deferred reviewer wakeup",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+
+	var workExecution repo.FlowNodeExecution
+	var workRun Run
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeWork.ID {
+			return false, nil
+		}
+		workExecution, err = executionRepo.GetActive(ctx, created.ID, nodeWork.ID)
+		if err != nil {
+			if err == repo.ErrNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		if workExecution.SessionID == nil || *workExecution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeWork.ID,
+			Status:         "in_progress",
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		for _, candidate := range runs {
+			if candidate.PrincipalType == "agent" && candidate.PrincipalID == worker.ID {
+				workRun = candidate
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+
+	if _, err := fx.flow.AdvanceFlow(ctx, created.ID, flowsvc.Actor{Type: "agent", ID: worker.ID}); err != nil {
+		t.Fatalf("AdvanceFlow work->review: %v", err)
+	}
+
+	var reviewExecution repo.FlowNodeExecution
+	var reviewRun Run
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeReview.ID {
+			return false, nil
+		}
+		reviewExecution, err = executionRepo.GetActive(ctx, created.ID, nodeReview.ID)
+		if err != nil {
+			if err == repo.ErrNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeReview.ID,
+			Status:         "created",
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		if len(runs) != 1 {
+			return false, nil
+		}
+		reviewRun = runs[0]
+		return true, nil
+	})
+
+	if reviewRun.Status != "created" {
+		t.Fatalf("review run status = %q, want created while worker is active", reviewRun.Status)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": workExecution.SessionID.String(),
+		"turn_id":    uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("marshal turn completed payload: %v", err)
+	}
+	if err := fx.bus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: fx.org.ID,
+		EventType:      "chat.turn.completed",
+		ActorType:      "system",
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("publish chat.turn.completed: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		runRecord, err := runRepo.Get(ctx, reviewRun.ID)
+		if err != nil {
+			return false, err
+		}
+		if runRecord.Status != "in_progress" {
+			return false, nil
+		}
+		refreshedExecution, err := executionRepo.GetByID(ctx, reviewExecution.ID)
+		if err != nil {
+			return false, err
+		}
+		reviewExecution = refreshedExecution
+		if reviewExecution.SessionID == nil || *reviewExecution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		messages, err := messageRepo.ListBySession(ctx, *reviewExecution.SessionID)
+		if err != nil {
+			return false, err
+		}
+		return hasFlowKickoffMessage(messages, "flow.advanced", reviewExecution.ID), nil
+	})
+
+	updatedWorkRun, err := runRepo.Get(ctx, workRun.ID)
+	if err != nil {
+		t.Fatalf("Get worker run: %v", err)
+	}
+	if updatedWorkRun.Status != "in_progress" {
+		t.Fatalf("worker run status = %q, want in_progress tracking state", updatedWorkRun.Status)
+	}
+}
+
+func TestTaskQueueProcessorIntegrationDuplicateWakeupsCoalesceToOneActiveExecution(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Duplicate wakeups coalesce",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	runRepo := NewRunRepository(fx.pool)
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+	var taskRecord repo.ProjectTask
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		var err error
+		taskRecord, err = taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			Status:         "in_progress",
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		return len(runs) == 1, nil
+	})
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    created.ID,
+		"project_id": fx.project.ID,
+		"to_status":  "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("marshal duplicate payload: %v", err)
+	}
+	if err := fx.bus.Publish(ctx, nil, eventbus.DomainEvent{
+		ID:             uuid.New(),
+		OrganizationID: fx.org.ID,
+		EventType:      "task.status_changed",
+		ActorType:      "system",
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("publish duplicate status event: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		active := 0
+		for _, runRecord := range runs {
+			if runRecord.Status == "in_progress" {
+				active++
+			}
+		}
+		if active != 1 {
+			return false, nil
+		}
+		events, err := NewRunEventRepository(fx.pool).ListByRun(ctx, runs[0].ID, 0)
+		if err != nil {
+			return false, err
+		}
+		for _, event := range events {
+			if event.EventType == "wakeup_coalesced" {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+
+	if taskRecord.CurrentFlowNodeID == nil {
+		t.Fatal("current_flow_node_id is nil")
+	}
+	execution, err := executionRepo.GetActive(ctx, created.ID, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		t.Fatalf("GetActive execution: %v", err)
+	}
+	if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+		t.Fatal("execution session_id is nil")
+	}
+	messages, err := messageRepo.ListBySession(ctx, *execution.SessionID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	kickoffCount := 0
+	for _, message := range messages {
+		if message.Role == "user" && len(message.Metadata) > 0 {
+			var metadata map[string]any
+			if unmarshalErr := json.Unmarshal(message.Metadata, &metadata); unmarshalErr == nil && metadata["source"] == "task_queue_processor" {
+				kickoffCount++
+			}
+		}
+	}
+	if kickoffCount != 1 {
+		t.Fatalf("kickoff message count = %d, want 1", kickoffCount)
+	}
+}
+
+func TestTaskQueueProcessorIntegrationStaleOwnerPromotesDeferredWakeupOnce(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	worker := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "worker", "Stale Worker", "worker")
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Stale Reviewer", "reviewer")
+	template, nodeWork, nodeReview := seedTaskQueueRejectFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, worker.ID, reviewer.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Stale owner promotion",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+
+	var workRun Run
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeWork.ID {
+			return false, nil
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeWork.ID,
+			Status:         "in_progress",
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		if len(runs) == 0 {
+			return false, nil
+		}
+		workRun = runs[0]
+		return true, nil
+	})
+
+	if _, err := fx.flow.AdvanceFlow(ctx, created.ID, flowsvc.Actor{Type: "agent", ID: worker.ID}); err != nil {
+		t.Fatalf("AdvanceFlow work->review: %v", err)
+	}
+
+	var reviewExecution repo.FlowNodeExecution
+	var reviewRun Run
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeReview.ID {
+			return false, nil
+		}
+		reviewExecution, err = executionRepo.GetActive(ctx, created.ID, nodeReview.ID)
+		if err != nil {
+			if err == repo.ErrNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeReview.ID,
+			Status:         "created",
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		if len(runs) != 1 {
+			return false, nil
+		}
+		reviewRun = runs[0]
+		return true, nil
+	})
+
+	if _, err := fx.pool.Exec(ctx, `
+		UPDATE run
+		SET updated_at = now() - interval '10 minutes'
+		WHERE id = $1
+	`, workRun.ID); err != nil {
+		t.Fatalf("backdate worker run updated_at: %v", err)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":              created.ID,
+		"project_id":           fx.project.ID,
+		"to_flow_node_id":      nodeReview.ID,
+		"to_flow_execution_id": reviewExecution.ID,
+	})
+	if err != nil {
+		t.Fatalf("marshal duplicate flow event payload: %v", err)
+	}
+	if err := fx.bus.Publish(ctx, nil, eventbus.DomainEvent{
+		ID:             uuid.New(),
+		OrganizationID: fx.org.ID,
+		EventType:      "flow.advanced",
+		ActorType:      "system",
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("publish duplicate flow.advanced: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		promoted, err := runRepo.Get(ctx, reviewRun.ID)
+		if err != nil {
+			return false, err
+		}
+		if promoted.Status != "in_progress" {
+			return false, nil
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeReview.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		if len(runs) != 1 {
+			return false, nil
+		}
+		refreshedExecution, err := executionRepo.GetByID(ctx, reviewExecution.ID)
+		if err != nil {
+			return false, err
+		}
+		reviewExecution = refreshedExecution
+		if reviewExecution.SessionID == nil || *reviewExecution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		messages, err := messageRepo.ListBySession(ctx, *reviewExecution.SessionID)
+		if err != nil {
+			return false, err
+		}
+		return hasFlowKickoffMessage(messages, "flow.advanced", reviewExecution.ID), nil
+	})
+
+	updatedWorkerRun, err := runRepo.Get(ctx, workRun.ID)
+	if err != nil {
+		t.Fatalf("Get stale worker run: %v", err)
+	}
+	if updatedWorkerRun.Status != "failed" {
+		t.Fatalf("stale worker run status = %q, want failed", updatedWorkerRun.Status)
+	}
+}
+
 func hasRunForPrincipal(runs []Run, principalID uuid.UUID) bool {
 	for _, run := range runs {
 		if run.PrincipalType == "agent" && run.PrincipalID == principalID {
@@ -1757,6 +2206,10 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 	if err != nil {
 		t.Fatalf("New run service: %v", err)
 	}
+	queueRuns, ok := runService.(taskQueueRunStarter)
+	if !ok {
+		t.Fatal("run service does not implement task queue wakeup contract")
+	}
 
 	org, project, agent := seedTaskQueueProjectWithAgent(t, ctx, pool)
 	processor, err := NewTaskQueueProcessor(TaskQueueProcessorOptions{
@@ -1768,7 +2221,7 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 		FlowExecutions: repo.NewFlowNodeExecutionRepo(pool),
 		FlowNodes:      repo.NewFlowNodeRepo(pool),
 		Assignments:    repo.NewAgentProjectAssignmentRepo(pool),
-		Runs:           runService,
+		Runs:           queueRuns,
 		Chats:          chatService,
 		Sessions:       repo.NewChatSessionRepo(pool),
 	})
@@ -1781,8 +2234,12 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 	runCancellationSub := processor.SubscribeRunCancellationRequested(&org.ID)
 	flowAdvancedSub := processor.SubscribeFlowAdvanced(&org.ID)
 	projectResumedSub := processor.SubscribeProjectResumed(&org.ID)
+	turnCompletedSub := processor.SubscribeTurnCompletedWakeups(&org.ID)
+	turnCancelledSub := processor.SubscribeTurnCancelledWakeups(&org.ID)
 	t.Cleanup(func() {
 		bus.Unsubscribe(projectResumedSub)
+		bus.Unsubscribe(turnCompletedSub)
+		bus.Unsubscribe(turnCancelledSub)
 	})
 
 	return taskQueueProcessorFixture{

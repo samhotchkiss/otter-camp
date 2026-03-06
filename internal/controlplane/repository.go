@@ -62,6 +62,7 @@ type Run struct {
 type RunListFilter struct {
 	OrganizationID  uuid.UUID
 	TaskID          *uuid.UUID
+	SessionID       *uuid.UUID
 	FlowNodeID      *uuid.UUID
 	Status          string
 	PrincipalID     *uuid.UUID
@@ -251,6 +252,11 @@ func (r *RunRepository) List(ctx context.Context, filter RunListFilter) ([]Run, 
 	if filter.TaskID != nil {
 		query += fmt.Sprintf(" AND task_id = $%d", argPos)
 		args = append(args, *filter.TaskID)
+		argPos++
+	}
+	if filter.SessionID != nil {
+		query += fmt.Sprintf(" AND session_id = $%d", argPos)
+		args = append(args, *filter.SessionID)
 		argPos++
 	}
 	if filter.FlowNodeID != nil {
@@ -1637,7 +1643,8 @@ func normalizeRunEventType(value string) string {
 	switch strings.TrimSpace(strings.ToLower(value)) {
 	case "run_started", "run_completed", "run_failed", "run_cancelled", "run_timed_out", "run_paused",
 		"step_started", "step_completed", "step_failed", "attempt_started", "attempt_completed", "attempt_failed",
-		"tool_called", "tool_returned", "heartbeat", "output_chunk", "policy_denied", "budget_exceeded", "supervisor_recovery":
+		"tool_called", "tool_returned", "heartbeat", "output_chunk", "policy_denied", "budget_exceeded", "supervisor_recovery",
+		"wakeup_coalesced", "wakeup_deferred", "wakeup_promoted":
 		return strings.TrimSpace(strings.ToLower(value))
 	default:
 		return ""

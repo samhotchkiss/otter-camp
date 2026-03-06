@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -189,6 +190,19 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker run service setup: %w", err)
 	}
+	queueRuns, ok := runService.(interface {
+		CreateRun(ctx context.Context, input controlplane.CreateRunInput) (controlplane.Run, error)
+		CreateExecutionWakeup(ctx context.Context, input controlplane.ExecutionWakeupInput) (controlplane.ExecutionWakeupResult, error)
+		StartRun(ctx context.Context, runID uuid.UUID) error
+		CompleteRun(ctx context.Context, runID uuid.UUID, output json.RawMessage) error
+		ConfirmCancelled(ctx context.Context, runID uuid.UUID) error
+		GetRun(ctx context.Context, runID uuid.UUID) (controlplane.Run, error)
+		ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]controlplane.Run, error)
+		ReleaseExecutionOwner(ctx context.Context, taskID, sessionID uuid.UUID, reason string) (controlplane.ExecutionWakeupResult, error)
+	})
+	if !ok {
+		return fmt.Errorf("worker run service does not support execution wakeups")
+	}
 	queueProcessor, err := controlplane.NewTaskQueueProcessor(controlplane.TaskQueueProcessorOptions{
 		Events:         bus,
 		Tasks:          repo.NewProjectTaskRepo(pool.Raw()),
@@ -198,7 +212,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		FlowExecutions: repo.NewFlowNodeExecutionRepo(pool.Raw()),
 		FlowNodes:      repo.NewFlowNodeRepo(pool.Raw()),
 		Assignments:    repo.NewAgentProjectAssignmentRepo(pool.Raw()),
-		Runs:           runService,
+		Runs:           queueRuns,
 		Chats:          chatService,
 		Sessions:       repo.NewChatSessionRepo(pool.Raw()),
 	})
@@ -215,6 +229,10 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(flowAdvancedSub)
 	projectResumedSub := queueProcessor.SubscribeProjectResumed(nil)
 	defer bus.Unsubscribe(projectResumedSub)
+	turnCompletedSub := queueProcessor.SubscribeTurnCompletedWakeups(nil)
+	defer bus.Unsubscribe(turnCompletedSub)
+	turnCancelledSub := queueProcessor.SubscribeTurnCancelledWakeups(nil)
+	defer bus.Unsubscribe(turnCancelledSub)
 	toolResolver, err := tools.NewToolResolver(tools.ToolResolverOptions{
 		Pool:   pool.Raw(),
 		Events: bus,
@@ -419,8 +437,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(turnUserSub)
 	turnReactionSub := turnEngine.SubscribeReactionFeedback(nil)
 	defer bus.Unsubscribe(turnReactionSub)
-	turnCompletedSub := turnEngine.SubscribeTurnCompletedAutoContinuation(nil)
-	defer bus.Unsubscribe(turnCompletedSub)
+	turnAutoContinueSub := turnEngine.SubscribeTurnCompletedAutoContinuation(nil)
+	defer bus.Unsubscribe(turnAutoContinueSub)
 
 	memoryConsumer, err := memory.NewEventConsumer(memory.EventConsumerOptions{
 		Pool:     pool.Raw(),

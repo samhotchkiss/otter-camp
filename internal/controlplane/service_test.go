@@ -56,6 +56,233 @@ func TestCreateRunIdempotencyReturnsExistingRun(t *testing.T) {
 	}
 }
 
+func TestCreateExecutionWakeupSameOwnerCoalescesActiveRun(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	first, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    agentID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "assigned_task",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup first: %v", err)
+	}
+	if first.Decision != executionWakeupStarted {
+		t.Fatalf("first decision = %q, want %q", first.Decision, executionWakeupStarted)
+	}
+
+	second, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: first.Run.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    agentID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "assigned_task",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup second: %v", err)
+	}
+	if second.Decision != executionWakeupCoalesced {
+		t.Fatalf("second decision = %q, want %q", second.Decision, executionWakeupCoalesced)
+	}
+	if second.Run.ID != first.Run.ID {
+		t.Fatalf("coalesced run id = %s, want %s", second.Run.ID, first.Run.ID)
+	}
+	if repos.runs.createCalls != 1 {
+		t.Fatalf("run create calls = %d, want 1", repos.runs.createCalls)
+	}
+
+	found := false
+	for _, event := range repos.events.appended {
+		if event.RunID == first.Run.ID && event.EventType == "wakeup_coalesced" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected wakeup_coalesced event")
+	}
+}
+
+func TestCreateExecutionWakeupDifferentOwnerDefers(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	workerID := uuid.New()
+	reviewerID := uuid.New()
+
+	first, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    workerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup first: %v", err)
+	}
+
+	deferred, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: first.Run.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup deferred: %v", err)
+	}
+	if deferred.Decision != executionWakeupDeferred {
+		t.Fatalf("deferred decision = %q, want %q", deferred.Decision, executionWakeupDeferred)
+	}
+	if deferred.BlockingRun == nil || deferred.BlockingRun.ID != first.Run.ID {
+		t.Fatalf("blocking run = %+v, want %s", deferred.BlockingRun, first.Run.ID)
+	}
+	if repos.runs.createCalls != 2 {
+		t.Fatalf("run create calls = %d, want 2", repos.runs.createCalls)
+	}
+	if stored, err := repos.runs.Get(context.Background(), deferred.Run.ID); err != nil {
+		t.Fatalf("Get deferred run: %v", err)
+	} else if stored.Status != "created" {
+		t.Fatalf("deferred run status = %q, want created", stored.Status)
+	}
+
+	found := false
+	for _, event := range repos.events.appended {
+		if event.RunID == deferred.Run.ID && event.EventType == "wakeup_deferred" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected wakeup_deferred event")
+	}
+}
+
+func TestCreateExecutionWakeupStaleOwnerPromotesDeferredRun(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	workerID := uuid.New()
+	reviewerID := uuid.New()
+
+	first, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    workerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup first: %v", err)
+	}
+	deferred, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: first.Run.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup deferred: %v", err)
+	}
+
+	repos.runs.mu.Lock()
+	stale := repos.runs.byID[first.Run.ID]
+	stale.UpdatedAt = stale.UpdatedAt.Add(-10 * time.Minute)
+	repos.runs.byID[first.Run.ID] = stale
+	repos.runs.mu.Unlock()
+
+	promoted, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: first.Run.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup promote stale deferred: %v", err)
+	}
+	if promoted.Decision != executionWakeupPromoted {
+		t.Fatalf("promoted decision = %q, want %q", promoted.Decision, executionWakeupPromoted)
+	}
+	if promoted.Run.ID != deferred.Run.ID {
+		t.Fatalf("promoted run id = %s, want existing deferred %s", promoted.Run.ID, deferred.Run.ID)
+	}
+	if repos.runs.createCalls != 2 {
+		t.Fatalf("run create calls = %d, want 2", repos.runs.createCalls)
+	}
+
+	staleRun, err := repos.runs.Get(context.Background(), first.Run.ID)
+	if err != nil {
+		t.Fatalf("Get stale active run: %v", err)
+	}
+	if staleRun.Status != "failed" {
+		t.Fatalf("stale active run status = %q, want failed", staleRun.Status)
+	}
+}
+
 func TestCreateRunPolicyDeniedCreatesFailedRun(t *testing.T) {
 	repos := newFakeRunDeps()
 	repos.policy.decision = RunCreationPolicyDecision{Allowed: false, Reason: "deny"}
@@ -391,6 +618,7 @@ type fakeRunDeps struct {
 	steps         *fakeRunStepRepo
 	attempts      *fakeRunAttemptRepo
 	events        *fakeRunEventRepo
+	runtimeStates *fakeRuntimeStateRepo
 	bus           *fakeDomainBus
 	policy        *fakeRunPolicyService
 	budget        *fakeBudgetChecker
@@ -414,6 +642,9 @@ func newFakeRunDeps() *fakeRunDeps {
 		events: &fakeRunEventRepo{
 			seqByRun: make(map[uuid.UUID]int),
 		},
+		runtimeStates: &fakeRuntimeStateRepo{
+			byScope: make(map[string]RuntimeState),
+		},
 		bus:    &fakeDomainBus{},
 		policy: &fakeRunPolicyService{decision: RunCreationPolicyDecision{Allowed: true}},
 		budget: &fakeBudgetChecker{result: &budget.BudgetCheckResult{Allowed: true}},
@@ -427,6 +658,7 @@ func (d *fakeRunDeps) newService(t *testing.T) RunService {
 		RunSteps:      d.steps,
 		Attempts:      d.attempts,
 		RunEvent:      d.events,
+		RuntimeStates: d.runtimeStates,
 		EventBus:      d.bus,
 		Policy:        d.policy,
 		Budget:        d.budget,
@@ -575,6 +807,9 @@ func (r *fakeRunRepo) List(_ context.Context, filter RunListFilter) ([]Run, erro
 		if filter.TaskID != nil && (run.TaskID == nil || *run.TaskID != *filter.TaskID) {
 			continue
 		}
+		if filter.SessionID != nil && (run.SessionID == nil || *run.SessionID != *filter.SessionID) {
+			continue
+		}
 		out = append(out, run)
 	}
 	return out, nil
@@ -716,6 +951,88 @@ func (r *fakeRunEventRepo) GetLatestHeartbeat(_ context.Context, runID uuid.UUID
 		}
 	}
 	return RunEvent{}, ErrNotFound
+}
+
+type fakeRuntimeStateRepo struct {
+	mu      sync.Mutex
+	byScope map[string]RuntimeState
+}
+
+func (r *fakeRuntimeStateRepo) Ensure(_ context.Context, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID) (RuntimeState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := scopeType + "|" + scopeID.String()
+	if existing, ok := r.byScope[key]; ok {
+		return existing, nil
+	}
+	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
+	state := RuntimeState{
+		ID:             uuid.New(),
+		OrganizationID: organizationID,
+		ScopeType:      scopeType,
+		ScopeID:        scopeID,
+		Metadata:       []byte(`{}`),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	r.byScope[key] = state
+	return state, nil
+}
+
+func (r *fakeRuntimeStateRepo) GetByScope(_ context.Context, scopeType string, scopeID uuid.UUID) (RuntimeState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state, ok := r.byScope[scopeType+"|"+scopeID.String()]
+	if !ok {
+		return RuntimeState{}, ErrNotFound
+	}
+	return state, nil
+}
+
+func (r *fakeRuntimeStateRepo) SetActive(_ context.Context, stateID uuid.UUID, runID uuid.UUID, principalType string, principalID *uuid.UUID, lockAcquiredAt, lastWakeupAt time.Time) (RuntimeState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, state := range r.byScope {
+		if state.ID != stateID {
+			continue
+		}
+		runIDCopy := runID
+		state.ActiveRunID = &runIDCopy
+		principalTypeCopy := principalType
+		state.ActivePrincipalType = &principalTypeCopy
+		if principalID != nil && *principalID != uuid.Nil {
+			idCopy := *principalID
+			state.ActivePrincipalID = &idCopy
+		} else {
+			state.ActivePrincipalID = nil
+		}
+		lockCopy := lockAcquiredAt
+		lastWakeCopy := lastWakeupAt
+		state.LockAcquiredAt = &lockCopy
+		state.LastWakeupAt = &lastWakeCopy
+		state.UpdatedAt = lastWakeupAt
+		r.byScope[key] = state
+		return state, nil
+	}
+	return RuntimeState{}, ErrNotFound
+}
+
+func (r *fakeRuntimeStateRepo) ClearActive(_ context.Context, stateID uuid.UUID) (RuntimeState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, state := range r.byScope {
+		if state.ID != stateID {
+			continue
+		}
+		state.ActiveRunID = nil
+		state.ActivePrincipalType = nil
+		state.ActivePrincipalID = nil
+		state.LockAcquiredAt = nil
+		state.UpdatedAt = state.UpdatedAt.Add(time.Second)
+		r.byScope[key] = state
+		return state, nil
+	}
+	return RuntimeState{}, ErrNotFound
 }
 
 type fakeDomainBus struct {

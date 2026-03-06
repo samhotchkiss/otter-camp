@@ -483,30 +483,68 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 		return err
 	}
 
-	created, err := s.runService.CreateRun(ctx, CreateRunInput{
-		OrganizationID: runRecord.OrganizationID,
-		PrincipalType:  "system",
-		PrincipalID:    uuid.Nil,
-		TriggerType:    "supervisor",
-		ProjectID:      runRecord.ProjectID,
-		TaskID:         runRecord.TaskID,
-		FlowNodeID:     runRecord.FlowNodeID,
-		SessionID:      runRecord.SessionID,
-		TurnID:         runRecord.TurnID,
-		Metadata:       encodedMetadata,
-	})
-	if err != nil {
-		if fileErr := s.fileBlocker(ctx, runRecord, fmt.Sprintf("supervisor recovery failed: %v", err)); fileErr != nil {
-			return fileErr
+	var created Run
+	dispatchRecoveryMessage := true
+	if coordinator, ok := s.runService.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	}); ok {
+		result, wakeErr := coordinator.CreateExecutionWakeup(ctx, executionWakeupInput{
+			CreateRunInput: CreateRunInput{
+				OrganizationID: runRecord.OrganizationID,
+				PrincipalType:  "system",
+				PrincipalID:    uuid.Nil,
+				TriggerType:    "supervisor",
+				ProjectID:      runRecord.ProjectID,
+				TaskID:         runRecord.TaskID,
+				FlowNodeID:     runRecord.FlowNodeID,
+				SessionID:      runRecord.SessionID,
+				TurnID:         runRecord.TurnID,
+				Metadata:       encodedMetadata,
+			},
+			WakeupSource: "supervisor",
+			WakeupKind:   "supervisor_recovery",
+			WakeupPayload: map[string]any{
+				"source":                     "supervisor",
+				"run_mode":                   runMode(runRecord),
+				"supervisor_recovery_from":   runRecord.ID.String(),
+				"supervisor_recovery_reason": strings.TrimSpace(reason),
+			},
+		})
+		if wakeErr != nil {
+			if fileErr := s.fileBlocker(ctx, runRecord, fmt.Sprintf("supervisor recovery failed: %v", wakeErr)); fileErr != nil {
+				return fileErr
+			}
+			return s.maybeEscalateStaleBlocker(ctx, runRecord)
 		}
-		return s.maybeEscalateStaleBlocker(ctx, runRecord)
+		created = result.Run
+		dispatchRecoveryMessage = result.shouldDispatch()
+	} else {
+		var createErr error
+		created, createErr = s.runService.CreateRun(ctx, CreateRunInput{
+			OrganizationID: runRecord.OrganizationID,
+			PrincipalType:  "system",
+			PrincipalID:    uuid.Nil,
+			TriggerType:    "supervisor",
+			ProjectID:      runRecord.ProjectID,
+			TaskID:         runRecord.TaskID,
+			FlowNodeID:     runRecord.FlowNodeID,
+			SessionID:      runRecord.SessionID,
+			TurnID:         runRecord.TurnID,
+			Metadata:       encodedMetadata,
+		})
+		if createErr != nil {
+			if fileErr := s.fileBlocker(ctx, runRecord, fmt.Sprintf("supervisor recovery failed: %v", createErr)); fileErr != nil {
+				return fileErr
+			}
+			return s.maybeEscalateStaleBlocker(ctx, runRecord)
+		}
+
+		if startErr := s.runService.StartRun(ctx, created.ID); startErr != nil && !errors.Is(startErr, ErrInvalidTransition) {
+			s.logger.Warn("supervisor: failed to start recovery run", "recovery_run_id", created.ID, "error", startErr)
+		}
 	}
 
-	if startErr := s.runService.StartRun(ctx, created.ID); startErr != nil && !errors.Is(startErr, ErrInvalidTransition) {
-		s.logger.Warn("supervisor: failed to start recovery run", "recovery_run_id", created.ID, "error", startErr)
-	}
-
-	if s.chatService != nil && created.SessionID != nil && *created.SessionID != uuid.Nil {
+	if dispatchRecoveryMessage && s.chatService != nil && created.SessionID != nil && *created.SessionID != uuid.Nil {
 		sessionID := *created.SessionID
 		if strings.EqualFold(runRecord.PrincipalType, "agent") && runRecord.PrincipalID != uuid.Nil {
 			if _, addErr := s.chatService.AddParticipant(ctx, sessionID, "agent", runRecord.PrincipalID, "responder"); addErr != nil && !errors.Is(addErr, chat.ErrAlreadyParticipant) {

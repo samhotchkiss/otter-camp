@@ -22,6 +22,8 @@ const (
 	taskRunCancellationConsumerName = "controlplane.run-cancellation"
 	flowAdvancedConsumerName        = "controlplane.flow-advanced"
 	projectResumedConsumerName      = "controlplane.project-resumed"
+	turnCompletedConsumerName       = "controlplane.turn-completed"
+	turnCancelledConsumerName       = "controlplane.turn-cancelled"
 	taskQueueTriggerType            = "scheduler"
 	taskSupervisorTriggerType       = "supervisor"
 	asyncDecisionPolicyName         = "async_forward_progress"
@@ -65,14 +67,17 @@ type taskQueueAssignmentRepository interface {
 
 type taskQueueRunStarter interface {
 	CreateRun(ctx context.Context, input CreateRunInput) (Run, error)
+	CreateExecutionWakeup(ctx context.Context, input executionWakeupInput) (executionWakeupResult, error)
 	StartRun(ctx context.Context, runID uuid.UUID) error
 	CompleteRun(ctx context.Context, runID uuid.UUID, output json.RawMessage) error
 	ConfirmCancelled(ctx context.Context, runID uuid.UUID) error
 	GetRun(ctx context.Context, runID uuid.UUID) (Run, error)
 	ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]Run, error)
+	ReleaseExecutionOwner(ctx context.Context, taskID, sessionID uuid.UUID, reason string) (executionWakeupResult, error)
 }
 
 type taskQueueChatService interface {
+	GetSession(ctx context.Context, id uuid.UUID) (*chat.ChatSession, error)
 	CreateSession(ctx context.Context, input chat.CreateSessionInput) (*chat.ChatSession, error)
 	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
@@ -176,6 +181,18 @@ func (p *TaskQueueProcessor) SubscribeTaskQueued(orgID *uuid.UUID) eventbus.Subs
 func (p *TaskQueueProcessor) SubscribeProjectResumed(orgID *uuid.UUID) eventbus.Subscription {
 	return p.events.Subscribe(projectResumedConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
 		return p.handleProjectResumedEvent(ctx, event)
+	})
+}
+
+func (p *TaskQueueProcessor) SubscribeTurnCompletedWakeups(orgID *uuid.UUID) eventbus.Subscription {
+	return p.events.Subscribe(turnCompletedConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return p.handleTurnTerminalEvent(ctx, event)
+	})
+}
+
+func (p *TaskQueueProcessor) SubscribeTurnCancelledWakeups(orgID *uuid.UUID) eventbus.Subscription {
+	return p.events.Subscribe(turnCancelledConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return p.handleTurnTerminalEvent(ctx, event)
 	})
 }
 
@@ -442,6 +459,7 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 		"task_status_event_id":   event.ID,
 		"flow_node_execution_id": execution.ID,
 		"run_mode":               "async",
+		"wake_kind":              "flow_current",
 	})
 	if err != nil {
 		return err
@@ -454,77 +472,35 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 		principalID = *taskRecord.AssignedAgentID
 	}
 
-	runRecord, err := p.runs.CreateRun(ctx, CreateRunInput{
-		OrganizationID: taskRecord.OrganizationID,
-		PrincipalType:  principalType,
-		PrincipalID:    principalID,
-		TriggerType:    taskQueueTriggerType,
-		ProjectID:      &taskRecord.ProjectID,
-		TaskID:         &taskRecord.ID,
-		FlowNodeID:     taskRecord.CurrentFlowNodeID,
-		SessionID:      execution.SessionID,
-		IdempotencyKey: &idempotencyKey,
-		Metadata:       metadata,
+	result, err := p.runs.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: taskRecord.OrganizationID,
+			PrincipalType:  principalType,
+			PrincipalID:    principalID,
+			TriggerType:    taskQueueTriggerType,
+			ProjectID:      &taskRecord.ProjectID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     taskRecord.CurrentFlowNodeID,
+			SessionID:      execution.SessionID,
+			IdempotencyKey: &idempotencyKey,
+			Metadata:       metadata,
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+		WakeupPayload: map[string]any{
+			"source":                 "task_queue_processor",
+			"task_status_event_id":   event.ID.String(),
+			"flow_node_execution_id": execution.ID.String(),
+			"run_mode":               "async",
+		},
 	})
 	if err != nil {
 		return err
 	}
-
-	if err := p.runs.StartRun(ctx, runRecord.ID); err != nil && !errors.Is(err, ErrInvalidTransition) {
-		return err
-	}
-
-	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID == uuid.Nil {
+	if !result.shouldDispatch() {
 		return nil
 	}
-
-	// Re-fetch execution to pick up the session_id set by CreateRun → RouteRunToSession → EnsureNodeSession.
-	// The local execution variable is stale (fetched before the session was created).
-	if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
-		if refreshed, refreshErr := p.flowExecutions.GetActive(ctx, taskRecord.ID, *taskRecord.CurrentFlowNodeID); refreshErr == nil {
-			execution = refreshed
-		}
-	}
-
-	sessionID := execution.SessionID
-	if runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
-		sessionID = runRecord.SessionID
-	}
-	if sessionID == nil || *sessionID == uuid.Nil {
-		return nil
-	}
-
-	if _, err := p.chats.AddParticipant(ctx, *sessionID, "agent", *taskRecord.AssignedAgentID, "responder"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
-		return err
-	}
-
-	hasKickoffMessage, err := p.sessionHasKickoffMessage(ctx, *sessionID, runRecord.ID)
-	if err != nil {
-		return err
-	}
-	if hasKickoffMessage {
-		return nil
-	}
-
-	messageMetadata, err := json.Marshal(map[string]any{
-		"source":                 "task_queue_processor",
-		"run_id":                 runRecord.ID.String(),
-		"task_id":                taskRecord.ID.String(),
-		"flow_node_execution_id": execution.ID.String(),
-	})
-	if err != nil {
-		return err
-	}
-	if _, err := p.chats.AppendMessage(ctx, chat.AppendMessageInput{
-		SessionID: *sessionID,
-		Role:      "user",
-		Content:   buildFlowKickoffMessage(taskRecord, execution),
-		Metadata:  messageMetadata,
-	}); err != nil {
-		return err
-	}
-
-	return nil
+	return p.dispatchWakeupRun(ctx, result.Run)
 }
 
 func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask) error {
@@ -552,65 +528,44 @@ func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event e
 	if session == nil {
 		return fmt.Errorf("task %s missing async session", taskRecord.ID)
 	}
-	if _, err := p.chats.AddParticipant(ctx, session.ID, "agent", *taskRecord.AssignedAgentID, "responder"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
-		return err
-	}
-
 	idempotencyKey := fmt.Sprintf("task-queued:agent-turn:%s:%s", taskRecord.ID, event.ID)
 	metadata, err := json.Marshal(map[string]any{
 		"source":               "task_queue_processor",
 		"task_status_event_id": event.ID,
 		"run_mode":             "async",
+		"wake_kind":            "assigned_task",
 	})
 	if err != nil {
 		return err
 	}
 
-	runRecord, err := p.runs.CreateRun(ctx, CreateRunInput{
-		OrganizationID: taskRecord.OrganizationID,
-		PrincipalType:  "agent",
-		PrincipalID:    *taskRecord.AssignedAgentID,
-		TriggerType:    taskQueueTriggerType,
-		ProjectID:      &taskRecord.ProjectID,
-		TaskID:         &taskRecord.ID,
-		SessionID:      &session.ID,
-		IdempotencyKey: &idempotencyKey,
-		Metadata:       metadata,
+	result, err := p.runs.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: taskRecord.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    *taskRecord.AssignedAgentID,
+			TriggerType:    taskQueueTriggerType,
+			ProjectID:      &taskRecord.ProjectID,
+			TaskID:         &taskRecord.ID,
+			SessionID:      &session.ID,
+			IdempotencyKey: &idempotencyKey,
+			Metadata:       metadata,
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "assigned_task",
+		WakeupPayload: map[string]any{
+			"source":               "task_queue_processor",
+			"task_status_event_id": event.ID.String(),
+			"run_mode":             "async",
+		},
 	})
 	if err != nil {
 		return err
 	}
-
-	if err := p.runs.StartRun(ctx, runRecord.ID); err != nil && !errors.Is(err, ErrInvalidTransition) {
-		return err
-	}
-
-	hasKickoffMessage, err := p.sessionHasKickoffMessage(ctx, session.ID, runRecord.ID)
-	if err != nil {
-		return err
-	}
-	if hasKickoffMessage {
+	if !result.shouldDispatch() {
 		return nil
 	}
-
-	messageMetadata, err := json.Marshal(map[string]any{
-		"source":  "task_queue_processor",
-		"run_id":  runRecord.ID.String(),
-		"task_id": taskRecord.ID.String(),
-	})
-	if err != nil {
-		return err
-	}
-	if _, err := p.chats.AppendMessage(ctx, chat.AppendMessageInput{
-		SessionID: session.ID,
-		Role:      "user",
-		Content:   buildQueueKickoffMessage(taskRecord),
-		Metadata:  messageMetadata,
-	}); err != nil {
-		return err
-	}
-
-	return nil
+	return p.dispatchWakeupRun(ctx, result.Run)
 }
 
 func (p *TaskQueueProcessor) sessionHasKickoffMessage(ctx context.Context, sessionID, runID uuid.UUID) (bool, error) {
@@ -634,6 +589,170 @@ func (p *TaskQueueProcessor) sessionHasKickoffMessage(ctx context.Context, sessi
 		}
 	}
 	return false, nil
+}
+
+func (p *TaskQueueProcessor) dispatchWakeupRun(ctx context.Context, runRecord Run) error {
+	switch strings.TrimSpace(executionWakeupSource(runRecord.Metadata)) {
+	case "task_queue_processor":
+		return p.dispatchTaskQueueWakeup(ctx, runRecord)
+	case "supervisor":
+		return p.dispatchSupervisorWakeup(ctx, runRecord)
+	default:
+		return nil
+	}
+}
+
+func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRecord Run) error {
+	if runRecord.TaskID == nil || *runRecord.TaskID == uuid.Nil {
+		return nil
+	}
+	taskRecord, err := p.tasks.GetByID(ctx, *runRecord.TaskID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	switch strings.TrimSpace(executionWakeupKind(runRecord.Metadata)) {
+	case "assigned_task":
+		sessionID := runRecord.SessionID
+		if sessionID == nil || *sessionID == uuid.Nil {
+			session, sessionErr := p.sessions.GetByScopeAndMode(ctx, "project_task", taskRecord.ID, "async")
+			if sessionErr != nil {
+				return sessionErr
+			}
+			if session == nil {
+				return nil
+			}
+			sessionID = &session.ID
+		}
+		if sessionID == nil || *sessionID == uuid.Nil {
+			return nil
+		}
+		messageMetadata, err := json.Marshal(map[string]any{
+			"source":  "task_queue_processor",
+			"run_id":  runRecord.ID.String(),
+			"task_id": taskRecord.ID.String(),
+		})
+		if err != nil {
+			return err
+		}
+		return p.appendWakeupKickoff(ctx, runRecord, *sessionID, buildQueueKickoffMessage(taskRecord), messageMetadata)
+	case "flow_current":
+		executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
+		if !ok {
+			return nil
+		}
+		execution, err := p.flowExecutions.GetByID(ctx, executionID)
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		sessionID := execution.SessionID
+		if runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
+			sessionID = runRecord.SessionID
+		}
+		if sessionID == nil || *sessionID == uuid.Nil {
+			return nil
+		}
+		messageMetadata, err := json.Marshal(map[string]any{
+			"source":                 "task_queue_processor",
+			"run_id":                 runRecord.ID.String(),
+			"task_id":                taskRecord.ID.String(),
+			"flow_node_execution_id": execution.ID.String(),
+		})
+		if err != nil {
+			return err
+		}
+		return p.appendWakeupKickoff(ctx, runRecord, *sessionID, buildFlowKickoffMessage(taskRecord, execution), messageMetadata)
+	case "flow_transition":
+		executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
+		if !ok {
+			return nil
+		}
+		execution, err := p.flowExecutions.GetByID(ctx, executionID)
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if runRecord.FlowNodeID == nil || *runRecord.FlowNodeID == uuid.Nil {
+			return nil
+		}
+		node, err := p.flowNodes.GetByID(ctx, *runRecord.FlowNodeID)
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		sessionID := execution.SessionID
+		if runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
+			sessionID = runRecord.SessionID
+		}
+		if sessionID == nil || *sessionID == uuid.Nil {
+			return nil
+		}
+		eventType := metadataStringValue(runRecord.Metadata, "flow_event_type")
+		rejectionFeedback := metadataStringValue(runRecord.Metadata, "rejection_feedback")
+		messageMetadata, err := json.Marshal(map[string]any{
+			"source":                 "task_queue_processor",
+			"run_id":                 runRecord.ID.String(),
+			"task_id":                taskRecord.ID.String(),
+			"flow_node_execution_id": execution.ID.String(),
+			"flow_event_type":        eventType,
+		})
+		if err != nil {
+			return err
+		}
+		return p.appendWakeupKickoff(ctx, runRecord, *sessionID, buildFlowTransitionKickoffMessage(taskRecord, node, execution, eventType, rejectionFeedback), messageMetadata)
+	default:
+		return nil
+	}
+}
+
+func (p *TaskQueueProcessor) dispatchSupervisorWakeup(ctx context.Context, runRecord Run) error {
+	if runRecord.SessionID == nil || *runRecord.SessionID == uuid.Nil {
+		return nil
+	}
+	messageMetadata, err := json.Marshal(map[string]any{
+		"source": "supervisor",
+		"run_id": runRecord.ID.String(),
+		"reason": metadataStringValue(runRecord.Metadata, "supervisor_recovery_reason"),
+	})
+	if err != nil {
+		return err
+	}
+	return p.appendWakeupKickoff(ctx, runRecord, *runRecord.SessionID, "supervisor recovery: resume task", messageMetadata)
+}
+
+func (p *TaskQueueProcessor) appendWakeupKickoff(ctx context.Context, runRecord Run, sessionID uuid.UUID, content string, metadata json.RawMessage) error {
+	if sessionID == uuid.Nil {
+		return nil
+	}
+	if runRecord.PrincipalType == "agent" && runRecord.PrincipalID != uuid.Nil {
+		if _, err := p.chats.AddParticipant(ctx, sessionID, "agent", runRecord.PrincipalID, "responder"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
+			return err
+		}
+	}
+	hasKickoffMessage, err := p.sessionHasKickoffMessage(ctx, sessionID, runRecord.ID)
+	if err != nil {
+		return err
+	}
+	if hasKickoffMessage {
+		return nil
+	}
+	_, err = p.chats.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: sessionID,
+		Role:      "user",
+		Content:   content,
+		Metadata:  metadata,
+	})
+	return err
 }
 
 func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
@@ -827,6 +946,42 @@ func (p *TaskQueueProcessor) handleProjectResumedEvent(ctx context.Context, even
 	return p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID)
 }
 
+func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event eventbus.DomainEvent) error {
+	if event.EventType != "chat.turn.completed" && event.EventType != "chat.turn.cancelled" {
+		return nil
+	}
+
+	var payload struct {
+		SessionID uuid.UUID `json:"session_id"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil
+	}
+	if payload.SessionID == uuid.Nil {
+		return nil
+	}
+
+	session, err := p.chats.GetSession(ctx, payload.SessionID)
+	if errors.Is(err, repo.ErrNotFound) || session == nil {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") || session.ScopeID == uuid.Nil {
+		return nil
+	}
+
+	result, err := p.runs.ReleaseExecutionOwner(ctx, session.ScopeID, session.ID, event.EventType)
+	if err != nil {
+		return err
+	}
+	if !result.shouldDispatch() {
+		return nil
+	}
+	return p.dispatchWakeupRun(ctx, result.Run)
+}
+
 func (p *TaskQueueProcessor) ensureFlowTransitionRun(
 	ctx context.Context,
 	event eventbus.DomainEvent,
@@ -843,71 +998,45 @@ func (p *TaskQueueProcessor) ensureFlowTransitionRun(
 		"flow_event_type":        event.EventType,
 		"flow_node_execution_id": nextExecution.ID,
 		"run_mode":               "async",
+		"wake_kind":              "flow_transition",
+		"rejection_feedback":     strings.TrimSpace(rejectionFeedback),
 	})
 	if err != nil {
 		return err
 	}
 
 	sessionID := nextExecution.SessionID
-	runRecord, err := p.runs.CreateRun(ctx, CreateRunInput{
-		OrganizationID: taskRecord.OrganizationID,
-		PrincipalType:  "agent",
-		PrincipalID:    agentID,
-		TriggerType:    taskQueueTriggerType,
-		ProjectID:      &taskRecord.ProjectID,
-		TaskID:         &taskRecord.ID,
-		FlowNodeID:     &nextNode.ID,
-		SessionID:      sessionID,
-		IdempotencyKey: &idempotencyKey,
-		Metadata:       metadata,
+	result, err := p.runs.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: taskRecord.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    agentID,
+			TriggerType:    taskQueueTriggerType,
+			ProjectID:      &taskRecord.ProjectID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     &nextNode.ID,
+			SessionID:      sessionID,
+			IdempotencyKey: &idempotencyKey,
+			Metadata:       metadata,
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+		WakeupPayload: map[string]any{
+			"source":                 "task_queue_processor",
+			"flow_event_id":          event.ID.String(),
+			"flow_event_type":        event.EventType,
+			"flow_node_execution_id": nextExecution.ID.String(),
+			"run_mode":               "async",
+			"rejection_feedback":     strings.TrimSpace(rejectionFeedback),
+		},
 	})
 	if err != nil {
 		return err
 	}
-
-	if err := p.runs.StartRun(ctx, runRecord.ID); err != nil && !errors.Is(err, ErrInvalidTransition) {
-		return err
-	}
-
-	if runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
-		sessionID = runRecord.SessionID
-	}
-	if sessionID == nil || *sessionID == uuid.Nil {
+	if !result.shouldDispatch() {
 		return nil
 	}
-
-	if _, err := p.chats.AddParticipant(ctx, *sessionID, "agent", agentID, "responder"); err != nil && !errors.Is(err, chat.ErrAlreadyParticipant) {
-		return err
-	}
-
-	hasKickoffMessage, err := p.sessionHasKickoffMessage(ctx, *sessionID, runRecord.ID)
-	if err != nil {
-		return err
-	}
-	if hasKickoffMessage {
-		return nil
-	}
-
-	messageMetadata, err := json.Marshal(map[string]any{
-		"source":                 "task_queue_processor",
-		"run_id":                 runRecord.ID.String(),
-		"task_id":                taskRecord.ID.String(),
-		"flow_node_execution_id": nextExecution.ID.String(),
-		"flow_event_type":        event.EventType,
-	})
-	if err != nil {
-		return err
-	}
-	if _, err := p.chats.AppendMessage(ctx, chat.AppendMessageInput{
-		SessionID: *sessionID,
-		Role:      "user",
-		Content:   buildFlowTransitionKickoffMessage(taskRecord, nextNode, nextExecution, event.EventType, rejectionFeedback),
-		Metadata:  messageMetadata,
-	}); err != nil {
-		return err
-	}
-
-	return nil
+	return p.dispatchWakeupRun(ctx, result.Run)
 }
 
 func (p *TaskQueueProcessor) resolveFlowTransitionAgent(ctx context.Context, taskRecord repo.ProjectTask, node repo.FlowNode) (*uuid.UUID, error) {
@@ -1038,4 +1167,27 @@ func valueAsString(value any) string {
 	default:
 		return ""
 	}
+}
+
+func metadataStringValue(metadata json.RawMessage, key string) string {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(valueAsString(payload[strings.TrimSpace(key)]))
+}
+
+func metadataUUIDValue(metadata json.RawMessage, key string) (uuid.UUID, bool) {
+	raw := metadataStringValue(metadata, key)
+	if raw == "" {
+		return uuid.Nil, false
+	}
+	parsed, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return parsed, true
 }

@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -629,6 +630,14 @@ func TestEnsureAssignedAgentRunAddsParticipantBeforeKickoff(t *testing.T) {
 	chatService := &fakeTaskQueueChatService{}
 
 	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Queued task",
+			},
+		},
 		sessions: sessionRepo,
 		runs:     runService,
 		chats:    chatService,
@@ -679,6 +688,14 @@ func TestEnsureAssignedAgentRunIgnoresDuplicateParticipant(t *testing.T) {
 	runID := uuid.New()
 
 	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Queued task",
+			},
+		},
 		sessions: &fakeTaskQueueSessionRepository{
 			session: &repo.ChatSession{ID: sessionID},
 		},
@@ -715,6 +732,14 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 
 	chatService := &fakeTaskQueueChatService{}
 	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Flow task",
+			},
+		},
 		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
 			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID},
 		},
@@ -788,6 +813,14 @@ func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
 		},
 	}
 	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Flow task",
+			},
+		},
 		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
 			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID},
 		},
@@ -924,6 +957,7 @@ type fakeTaskQueueRunStarter struct {
 	completeRunCalls        []completeRunCall
 	confirmCancelledCalls   []uuid.UUID
 	listRunsByTaskCalls     []listRunsByTaskCall
+	releaseExecutionCalls   []releaseExecutionCall
 	createRunInputs         []CreateRunInput
 	dedupeByIdempotency     bool
 	idempotentRuns          map[string]Run
@@ -940,6 +974,12 @@ type listRunsByTaskCall struct {
 	taskID         uuid.UUID
 	status         string
 	triggerType    string
+}
+
+type releaseExecutionCall struct {
+	taskID    uuid.UUID
+	sessionID uuid.UUID
+	reason    string
 }
 
 func (f *fakeTaskQueueRunStarter) CreateRun(_ context.Context, input CreateRunInput) (Run, error) {
@@ -959,8 +999,38 @@ func (f *fakeTaskQueueRunStarter) CreateRun(_ context.Context, input CreateRunIn
 	if run.ID == uuid.Nil {
 		run.ID = uuid.New()
 	}
+	if run.OrganizationID == uuid.Nil {
+		run.OrganizationID = input.OrganizationID
+	}
+	if run.ProjectID == nil {
+		run.ProjectID = input.ProjectID
+	}
+	if run.TaskID == nil {
+		run.TaskID = input.TaskID
+	}
+	if run.FlowNodeID == nil {
+		run.FlowNodeID = input.FlowNodeID
+	}
 	if run.SessionID == nil {
 		run.SessionID = input.SessionID
+	}
+	if run.TurnID == nil {
+		run.TurnID = input.TurnID
+	}
+	if run.PrincipalType == "" {
+		run.PrincipalType = input.PrincipalType
+	}
+	if run.PrincipalID == uuid.Nil {
+		run.PrincipalID = input.PrincipalID
+	}
+	if run.TriggerType == "" {
+		run.TriggerType = input.TriggerType
+	}
+	if run.IdempotencyKey == nil {
+		run.IdempotencyKey = input.IdempotencyKey
+	}
+	if len(run.Metadata) == 0 {
+		run.Metadata = append(json.RawMessage(nil), input.Metadata...)
 	}
 	if f.dedupeByIdempotency && input.IdempotencyKey != nil {
 		f.uniqueCreateRunCount++
@@ -974,6 +1044,32 @@ func (f *fakeTaskQueueRunStarter) StartRun(context.Context, uuid.UUID) error {
 		return f.startErr
 	}
 	return nil
+}
+
+func (f *fakeTaskQueueRunStarter) CreateExecutionWakeup(ctx context.Context, input executionWakeupInput) (executionWakeupResult, error) {
+	createInput := input.CreateRunInput
+	if scope, ok := executionScopeFromInput(createInput); ok {
+		createInput.Metadata = buildExecutionWakeupMetadata(
+			createInput.Metadata,
+			scope,
+			input.WakeupSource,
+			input.WakeupKind,
+			input.WakeupPayload,
+			"started",
+			nil,
+		)
+	}
+	runRecord, err := f.CreateRun(ctx, createInput)
+	if err != nil {
+		return executionWakeupResult{}, err
+	}
+	if err := f.StartRun(ctx, runRecord.ID); err != nil && !errors.Is(err, ErrInvalidTransition) {
+		return executionWakeupResult{}, err
+	}
+	return executionWakeupResult{
+		Run:      runRecord,
+		Decision: executionWakeupStarted,
+	}, nil
 }
 
 func (f *fakeTaskQueueRunStarter) CompleteRun(_ context.Context, runID uuid.UUID, output json.RawMessage) error {
@@ -1019,6 +1115,15 @@ func (f *fakeTaskQueueRunStarter) ListRunsByTask(_ context.Context, organization
 		}
 	}
 	return nil, nil
+}
+
+func (f *fakeTaskQueueRunStarter) ReleaseExecutionOwner(_ context.Context, taskID, sessionID uuid.UUID, reason string) (executionWakeupResult, error) {
+	f.releaseExecutionCalls = append(f.releaseExecutionCalls, releaseExecutionCall{
+		taskID:    taskID,
+		sessionID: sessionID,
+		reason:    reason,
+	})
+	return executionWakeupResult{}, nil
 }
 
 type fakeTaskQueueFlowExecutionRepository struct {
@@ -1094,6 +1199,18 @@ type fakeTaskQueueChatService struct {
 	listMessagesErr     error
 }
 
+func (f *fakeTaskQueueChatService) GetSession(_ context.Context, id uuid.UUID) (*chat.ChatSession, error) {
+	if f.session != nil && f.session.ID == id {
+		return f.session, nil
+	}
+	for _, message := range f.listMessages {
+		if message != nil && message.SessionID == id && f.session != nil {
+			return f.session, nil
+		}
+	}
+	return nil, repo.ErrNotFound
+}
+
 func (f *fakeTaskQueueChatService) CreateSession(_ context.Context, input chat.CreateSessionInput) (*chat.ChatSession, error) {
 	f.calls = append(f.calls, "create_session")
 	f.createSessionInputs = append(f.createSessionInputs, input)
@@ -1114,6 +1231,7 @@ func (f *fakeTaskQueueChatService) CreateSession(_ context.Context, input chat.C
 		Mode:           input.Mode,
 		Status:         "active",
 	}
+	f.session = session
 	if f.onCreateSession != nil {
 		f.onCreateSession(session)
 	}
