@@ -41,6 +41,138 @@ func TestCompletionReportRejectsMissingRequiredSections(t *testing.T) {
 	}
 }
 
+func TestCompletionReportRejectsStrategyWithoutOperationalSections(t *testing.T) {
+	description := "Define the product strategy, positioning tradeoffs, and the roadmap sequence for the analytics platform."
+	plan := Analyze("Positioning tradeoffs for analytics expansion", &description)
+	metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	metadata, _, _, err := ApplyProcessUpdate(metadata, ProcessUpdate{
+		Artifacts: []ArtifactEvidence{
+			{
+				Slug:     "strategy-brief",
+				Summary:  "Strategy direction for the analytics expansion.",
+				Sections: []string{"goal", "target segments", "core capabilities"},
+			},
+			{
+				Slug:     "tradeoff-matrix",
+				Summary:  "Decision criteria and tradeoffs are documented.",
+				Sections: []string{"options", "tradeoffs", "decision"},
+			},
+			{
+				Slug:     "decision-log",
+				Summary:  "The accountable owner and rationale are recorded.",
+				Sections: []string{"decision", "rationale", "owner"},
+			},
+			{
+				Slug:     "success-narrative",
+				Summary:  "Outcome narrative for the selected direction.",
+				Sections: []string{"milestones", "risks"},
+			},
+		},
+		HasArtifactChanges: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+
+	_, err = CompletionReport(metadata)
+	if !errors.Is(err, ErrPlanningArtifactContractIncomplete) {
+		t.Fatalf("CompletionReport err = %v, want ErrPlanningArtifactContractIncomplete", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "not serving") || !strings.Contains(err.Error(), "key metrics") || !strings.Contains(err.Error(), "defensibility") {
+		t.Fatalf("CompletionReport error = %v, want missing strategy operating sections", err)
+	}
+}
+
+func TestCompletionReportRejectsSpecWithoutNonGoalsMetricsAndPhasing(t *testing.T) {
+	description := "Write the PRD, requirements, implementation plan, and acceptance criteria for the billing migration."
+	plan := Analyze("PRD for billing migration", &description)
+	metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	metadata, _, _, err := ApplyProcessUpdate(metadata, ProcessUpdate{
+		Artifacts: []ArtifactEvidence{
+			{
+				Slug:     "prd",
+				Summary:  "Billing migration scope and requirements.",
+				Sections: []string{"goals", "scope", "constraints"},
+			},
+			{
+				Slug:     "implementation-plan",
+				Summary:  "Delivery sequencing and ownership.",
+				Sections: []string{"milestones", "owners", "rollout"},
+			},
+			{
+				Slug:     "acceptance-criteria",
+				Summary:  "Acceptance scenarios and verification checks.",
+				Sections: []string{"scenarios", "edge cases", "verification"},
+			},
+			{
+				Slug:     "dependency-log",
+				Summary:  "Dependencies and mitigations.",
+				Sections: []string{"dependencies", "risks", "mitigations"},
+			},
+		},
+		HasArtifactChanges: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+
+	_, err = CompletionReport(metadata)
+	if !errors.Is(err, ErrPlanningArtifactContractIncomplete) {
+		t.Fatalf("CompletionReport err = %v, want ErrPlanningArtifactContractIncomplete", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "non-goals") || !strings.Contains(err.Error(), "success metrics") || !strings.Contains(err.Error(), "open questions") || !strings.Contains(err.Error(), "phasing") {
+		t.Fatalf("CompletionReport error = %v, want missing spec operating sections", err)
+	}
+}
+
+func TestCompletionReportRequiresHypothesesForThinContextStrategy(t *testing.T) {
+	description := "Define the product strategy and positioning tradeoffs for this greenfield analytics platform with no data yet."
+	plan := Analyze("Strategy for greenfield analytics platform", &description)
+	metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	metadata, _, report, err := ApplyProcessUpdate(metadata, ProcessUpdate{
+		Artifacts: []ArtifactEvidence{
+			{
+				Slug:     "strategy-brief",
+				Summary:  "Draft strategy for the greenfield analytics platform.",
+				Sections: []string{"goal", "target segments", "not serving", "core capabilities"},
+			},
+			{
+				Slug:     "tradeoff-matrix",
+				Summary:  "Tradeoffs between focus options.",
+				Sections: []string{"options", "tradeoffs", "decision"},
+			},
+			{
+				Slug:     "decision-log",
+				Summary:  "Decision record for the draft direction.",
+				Sections: []string{"decision", "rationale", "owner"},
+			},
+			{
+				Slug:     "success-narrative",
+				Summary:  "Success narrative for the first phase.",
+				Sections: []string{"key metrics", "defensibility", "milestones", "risks"},
+			},
+		},
+		HasArtifactChanges: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+	if report.ProcessStatus != ProcessStatusPending {
+		t.Fatalf("ProcessStatus = %q, want %q", report.ProcessStatus, ProcessStatusPending)
+	}
+
+	_, err = CompletionReport(metadata)
+	if !errors.Is(err, ErrPlanningArtifactContractIncomplete) {
+		t.Fatalf("CompletionReport err = %v, want ErrPlanningArtifactContractIncomplete", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "hypotheses") || !strings.Contains(err.Error(), "open questions") {
+		t.Fatalf("CompletionReport error = %v, want thin-context hypothesis requirements", err)
+	}
+}
+
 func TestApplyProcessUpdateRecordsOverrideForIncompleteContract(t *testing.T) {
 	description := "Write the PRD, requirements, implementation plan, and acceptance criteria for the billing migration."
 	plan := Analyze("PRD for billing migration", &description)
@@ -51,7 +183,7 @@ func TestApplyProcessUpdateRecordsOverrideForIncompleteContract(t *testing.T) {
 			{
 				Slug:     "prd",
 				Summary:  "Billing migration scope and requirements.",
-				Sections: []string{"objective", "scope"},
+				Sections: []string{"goals", "scope"},
 			},
 		},
 		HasArtifactChanges: true,
