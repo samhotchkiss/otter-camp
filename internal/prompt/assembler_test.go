@@ -374,14 +374,18 @@ func TestReduceToolsToBudgetDropsDeprioritizedBeforePrioritizedAndKeepsCore(t *t
 func TestPromptAssemblerReturnsErrContextCompressedWhenOnlySummariesOverflow(t *testing.T) {
 	orgID := uuid.New()
 	assembler := mustUnitAssembler(t, unitAssemblerConfig{
-		session:             repo.ChatSession{ID: uuid.New(), OrganizationID: orgID, ScopeType: "organization", ScopeID: orgID, Mode: "sync"},
-		agent:               repo.Agent{ID: uuid.New(), OrganizationID: orgID, SystemPrompt: "Agent"},
-		messages:            []repo.ChatMessage{},
-		summaries:           []repo.ChatSummary{{FromSequence: 1, ToSequence: 100, SummaryText: strings.Repeat("summary ", 200)}},
-		defaultLayer6Budget: 20,
+		session:      repo.ChatSession{ID: uuid.New(), OrganizationID: orgID, ScopeType: "organization", ScopeID: orgID, Mode: "sync"},
+		agent:        repo.Agent{ID: uuid.New(), OrganizationID: orgID, SystemPrompt: "Agent"},
+		messages:     []repo.ChatMessage{},
+		summaries:    []repo.ChatSummary{{FromSequence: 1, ToSequence: 100, SummaryText: strings.Repeat("summary ", 1400)}},
+		modelProfile: repo.ModelProfile{LogicalProfileID: "main", ContextWindowTokens: 256},
 	})
 
-	_, err := assembler.Assemble(context.Background(), AssemblyInput{SessionID: assembler.sessions.(*fakeSessionRepo).session.ID, AgentID: assembler.agents.(*fakeAgentRepo).agent.ID})
+	_, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID:      assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:        assembler.agents.(*fakeAgentRepo).agent.ID,
+		ModelProfileID: "main",
+	})
 	if !errors.Is(err, ErrContextCompressed) {
 		t.Fatalf("Assemble error = %v, want ErrContextCompressed", err)
 	}
