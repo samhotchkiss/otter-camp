@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -169,6 +170,33 @@ func TestWorkspaceForContextTaskScopeSharesProjectWorkspace(t *testing.T) {
 	}
 	if len(exec.workspaces) != 1 {
 		t.Fatalf("workspace cache entries = %d, want 1", len(exec.workspaces))
+	}
+}
+
+func TestWorkspaceForContextTaskScopeRequiresTaskBinding(t *testing.T) {
+	dataDir := t.TempDir()
+	orgID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+
+	exec := NewExecutor(ExecutorOptions{DataDir: dataDir})
+	exec.chatSessions = &stubChatSessionRepo{
+		byID: map[uuid.UUID]repo.ChatSession{
+			sessionID: {ID: sessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+	})
+
+	_, _, err := exec.workspaceForContext(ctx)
+	if err == nil {
+		t.Fatal("workspaceForContext error = nil, want task binding invariant")
+	}
+	if !strings.Contains(err.Error(), "internal invariant: task-scoped execution is missing bound task context") {
+		t.Fatalf("workspaceForContext error = %v, want task binding invariant", err)
 	}
 }
 

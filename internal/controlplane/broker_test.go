@@ -218,6 +218,102 @@ func TestToolBrokerDispatchCLIAugmentsExecutionContext(t *testing.T) {
 	}
 }
 
+func TestToolBrokerDispatchCLIAugmentsTaskContextFromTaskSession(t *testing.T) {
+	agentID := uuid.New()
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	cliExec := &fakeCLIExecutor{output: map[string]any{"ok": true}}
+
+	broker, err := NewToolBroker(ToolBrokerOptions{
+		Executions: newFakeToolExecutionRepo(),
+		Runs:       &brokerFakeRunRepo{byID: map[uuid.UUID]Run{}},
+		Agents: &brokerFakeAgentRepo{byID: map[uuid.UUID]repo.Agent{
+			agentID: {ID: agentID, OrganizationID: orgID},
+		}},
+		ToolDefinitions: &brokerFakeToolDefinitionRepo{byName: map[string]repo.ToolDefinition{
+			"cli.execute": {Name: "cli.execute", ToolDomain: "cli", ToolTier: "tier2", RequiredCapability: strPtr("system.cli.execute")},
+		}},
+		Sessions: &brokerFakeSessionRepo{byID: map[uuid.UUID]repo.ChatSession{
+			sessionID: {ID: sessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID},
+		}},
+		Tasks: &brokerFakeTaskRepo{byID: map[uuid.UUID]repo.ProjectTask{
+			taskID: {ID: taskID, OrganizationID: orgID, ProjectID: projectID},
+		}},
+		Policy: &fakeCapabilityPolicy{decision: CapabilityDecision{Allowed: true}},
+		CLI:    cliExec,
+	})
+	if err != nil {
+		t.Fatalf("NewToolBroker: %v", err)
+	}
+
+	_, err = broker.Dispatch(context.Background(), DispatchInput{
+		SessionID: &sessionID,
+		AgentID:   agentID,
+		ToolName:  "cli.execute",
+		ToolTier:  "tier2",
+		Input: map[string]any{
+			"command": "echo hello",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if cliExec.lastInput["project_id"] != projectID.String() {
+		t.Fatalf("project_id = %v, want %s", cliExec.lastInput["project_id"], projectID)
+	}
+	if cliExec.lastInput["task_id"] != taskID.String() {
+		t.Fatalf("task_id = %v, want %s", cliExec.lastInput["task_id"], taskID)
+	}
+}
+
+func TestToolBrokerDispatchTaskSessionBindingInvariantBlocksCLI(t *testing.T) {
+	agentID := uuid.New()
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	taskID := uuid.New()
+	cliExec := &fakeCLIExecutor{output: map[string]any{"ok": true}}
+
+	broker, err := NewToolBroker(ToolBrokerOptions{
+		Executions: newFakeToolExecutionRepo(),
+		Runs:       &brokerFakeRunRepo{byID: map[uuid.UUID]Run{}},
+		Agents: &brokerFakeAgentRepo{byID: map[uuid.UUID]repo.Agent{
+			agentID: {ID: agentID, OrganizationID: orgID},
+		}},
+		ToolDefinitions: &brokerFakeToolDefinitionRepo{byName: map[string]repo.ToolDefinition{
+			"cli.execute": {Name: "cli.execute", ToolDomain: "cli", ToolTier: "tier2", RequiredCapability: strPtr("system.cli.execute")},
+		}},
+		Sessions: &brokerFakeSessionRepo{byID: map[uuid.UUID]repo.ChatSession{
+			sessionID: {ID: sessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID},
+		}},
+		Policy: &fakeCapabilityPolicy{decision: CapabilityDecision{Allowed: true}},
+		CLI:    cliExec,
+	})
+	if err != nil {
+		t.Fatalf("NewToolBroker: %v", err)
+	}
+
+	_, err = broker.Dispatch(context.Background(), DispatchInput{
+		SessionID: &sessionID,
+		AgentID:   agentID,
+		ToolName:  "cli.execute",
+		ToolTier:  "tier2",
+		Input: map[string]any{
+			"command": "echo hello",
+		},
+	})
+	if err == nil {
+		t.Fatal("Dispatch error = nil, want task binding invariant")
+	}
+	if !strings.Contains(err.Error(), taskScopeBindingInvariantPrefix) {
+		t.Fatalf("Dispatch error = %v, want invariant prefix %q", err, taskScopeBindingInvariantPrefix)
+	}
+	if cliExec.lastInput != nil {
+		t.Fatalf("cli executor should not be invoked when task binding is missing, got input=%v", cliExec.lastInput)
+	}
+}
+
 func mustNewTestBroker(t *testing.T, execRepo *fakeToolExecutionRepo, agentID uuid.UUID, agent repo.Agent, definition repo.ToolDefinition) *ToolBroker {
 	t.Helper()
 	broker, err := NewToolBroker(ToolBrokerOptions{
@@ -303,6 +399,30 @@ func (f *brokerFakeToolDefinitionRepo) GetByName(_ context.Context, name string)
 	item, ok := f.byName[name]
 	if !ok {
 		return repo.ToolDefinition{}, repo.ErrNotFound
+	}
+	return item, nil
+}
+
+type brokerFakeSessionRepo struct {
+	byID map[uuid.UUID]repo.ChatSession
+}
+
+func (f *brokerFakeSessionRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+	item, ok := f.byID[id]
+	if !ok {
+		return repo.ChatSession{}, repo.ErrNotFound
+	}
+	return item, nil
+}
+
+type brokerFakeTaskRepo struct {
+	byID map[uuid.UUID]repo.ProjectTask
+}
+
+func (f *brokerFakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTask, error) {
+	item, ok := f.byID[id]
+	if !ok {
+		return repo.ProjectTask{}, repo.ErrNotFound
 	}
 	return item, nil
 }

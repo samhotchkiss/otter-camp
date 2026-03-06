@@ -533,6 +533,83 @@ func TestTurnEngineIntegrationAsyncExecutionSessionDuplicateDeliveryDoesNotCreat
 	}
 }
 
+func TestTurnEngineIntegrationTaskRecoveryTurnUsesAssignedAgentAndTaskContext(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	assignedAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	frank := mustCreateStarterFrank(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, assignedAgent.ID)
+
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", frank.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant Frank: %v", err)
+	}
+	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: taskSession.ID,
+		Role:      "user",
+		Content:   "supervisor recovery: resume task",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage recovery: %v", err)
+	}
+
+	var dispatched ToolCall
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched = call
+		runID := uuid.New()
+		onRunStarted(runID)
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}, RunID: &runID}, nil
+	}
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(string) error) (ModelResponse, error) {
+		round++
+		if round == 1 {
+			return ModelResponse{
+				ToolCalls: []ModelToolCall{{
+					ID:        "recovery-cli",
+					Name:      "cli.execute",
+					Tier:      "tier2",
+					Arguments: map[string]any{"command": "echo recovered"},
+				}},
+			}, nil
+		}
+		return ModelResponse{Content: "recovered"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+
+	if got := dispatched.Arguments["task_id"]; got != taskRecord.ID.String() {
+		t.Fatalf("task_id = %v, want %s", got, taskRecord.ID)
+	}
+	if got := dispatched.Arguments["project_id"]; got != project.ID.String() {
+		t.Fatalf("project_id = %v, want %s", got, project.ID)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) == 0 {
+		t.Fatal("expected recovery turn")
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.RespondingID != assignedAgent.ID {
+		t.Fatalf("turn responding_id = %s, want %s", lastTurn.RespondingID, assignedAgent.ID)
+	}
+}
+
 func TestTurnEngineIntegrationCancelledMessageSuppressesLateClaimedRetryJob(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

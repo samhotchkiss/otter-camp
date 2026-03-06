@@ -29,6 +29,8 @@ type ExecutionContext struct {
 	RunID           *uuid.UUID
 	AgentID         *uuid.UUID
 	SessionID       *uuid.UUID
+	ProjectID       *uuid.UUID
+	TaskID          *uuid.UUID
 }
 
 type executionContextKey struct{}
