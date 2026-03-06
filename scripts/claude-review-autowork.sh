@@ -166,6 +166,70 @@ EOF
   log "startup-context cache=${CONTEXT_CACHE_MODE} changed=${CONTEXT_CACHE_CHANGED_DOCS}"
 }
 
+write_prompt_file() {
+  {
+    if [[ -n "${CONTEXT_CACHE_PREFACE}" ]]; then
+      printf '%s\n\n' "${CONTEXT_CACHE_PREFACE}"
+    fi
+
+    printf 'Read and follow %s exactly.\n\n' "${REVIEW_INSTRUCTIONS_FILE}"
+
+    cat <<'EOF'
+Primary operating docs:
+EOF
+    printf -- '- %s/build/INSTRUCTIONS.md\n' "${CONTROL_REPO_DIR}"
+    printf -- '- %s/build/CONTEXT.md\n' "${CONTROL_REPO_DIR}"
+    printf -- '- Active review task(s) from %s/03-needs-review and %s/04-in-review\n\n' "${SHARED_ISSUES_DIR}" "${SHARED_ISSUES_DIR}"
+
+    cat <<'EOF'
+Critical rules:
+EOF
+    printf -- '- Perform review work in %s.\n' "${REVIEW_WORKTREE_DIR}"
+    cat <<'EOF'
+- Do not keep files stuck in 04-in-review; move to 05-completed or back to 01-ready with concrete notes.
+EOF
+    printf -- '- Ensure approved task PRs are merged into branch %s before moving tasks to 05-completed.\n' "${REQUIRED_BASE_BRANCH}"
+    cat <<'EOF'
+- If changes are required, add a top-level "## Reviewer Required Changes (YYYY-MM-DD HH:MM TZ)" block to the task file before moving it to 01-ready.
+- Required changes block must include reviewer name/model, severity-ordered checklist items (P0-P3), file references, required fix, and required tests per item.
+EOF
+    printf -- '- Also append a concise summary to %s/notes.md.\n' "${SHARED_ISSUES_DIR}"
+    cat <<'EOF'
+- Use non-interactive GitHub CLI checks/actions (gh pr view, gh pr checks, gh pr merge).
+- Never run gh pr create or interactive auth/login commands.
+- Never inline multi-line markdown in shell one-liners.
+  - For any long markdown payload, write to a file with `cat <<'EOF' > <file>` and pass the file path to CLI flags.
+EOF
+    printf '  - For notes appends, use `cat <<'"'"'EOF'"'"' >> %s/notes.md`.\n' "${SHARED_ISSUES_DIR}"
+    cat <<'EOF'
+- Command outcome taxonomy:
+  - `lookup_miss`: path/glob/file discovery miss (`No such file`, `no matches found`)
+  - `search_miss`: zero-result search (`rg`/`grep`/`find` with no matches)
+  - `build_or_test_failure`: actual failing verification/build/test commands
+  - `infra_failure`: CLI/auth/network/runtime failures
+- For exploratory search/discovery commands that may miss, use non-blocking form (`|| true`) where safe.
+- Never suppress non-zero exits for required verification commands (tests/build/checks).
+- For `git push` and `gh pr edit`, use retry wrapper:
+  - `scripts/lib/github-retry.sh git push <remote> <refspec>`
+  - `scripts/lib/github-retry.sh gh pr edit <args...>`
+- Wrapper output includes retry attempt count and terminal reason; treat `action=fail_fast` as non-retryable.
+- Baseline health artifacts for build-run noise triage:
+  - `config/autowork-baseline-test-matrix.json`
+  - `config/autowork-flake-registry.json`
+- Any waiver in the flake registry must include owner, expiry date, and linked evidence.
+EOF
+    printf -- '- Append blocker details to %s/notes.md.\n' "${SHARED_ISSUES_DIR}"
+    cat <<'EOF'
+- API routes are /v1/* except health (/health*) and test reset (POST /test/reset).
+- Headless MCP policy: claude.ai MCP servers are disabled by default for reviewer runs.
+  - To enable when auth is configured, set AUTO_REVIEW_ENABLE_CLAUDEAI_MCP=1.
+  - If preflight logs cached Google connector auth gaps, keep MCP disabled until OAuth is fixed.
+
+Begin reviewing now and continue until no review items remain in 03-needs-review or 04-in-review.
+EOF
+  } > "${PROMPT_FILE}"
+}
+
 is_dirty_worktree() {
   [[ -n "$(git -C "${REVIEW_WORKTREE_DIR}" status --porcelain 2>/dev/null || true)" ]]
 }
@@ -361,51 +425,7 @@ configure_headless_mcp
 setup_startup_context_cache
 configure_headless_mcp
 
-cat > "${PROMPT_FILE}" <<PROMPT
-${CONTEXT_CACHE_PREFACE}
-
-Read and follow ${REVIEW_INSTRUCTIONS_FILE} exactly.
-
-Primary operating docs:
-- ${CONTROL_REPO_DIR}/build/INSTRUCTIONS.md
-- ${CONTROL_REPO_DIR}/build/CONTEXT.md
-- Active review task(s) from ${SHARED_ISSUES_DIR}/03-needs-review and ${SHARED_ISSUES_DIR}/04-in-review
-
-Critical rules:
-- Perform review work in ${REVIEW_WORKTREE_DIR}.
-- Do not keep files stuck in 04-in-review; move to 05-completed or back to 01-ready with concrete notes.
-- Ensure approved task PRs are merged into branch ${REQUIRED_BASE_BRANCH} before moving tasks to 05-completed.
-- If changes are required, add a top-level "## Reviewer Required Changes (YYYY-MM-DD HH:MM TZ)" block to the task file before moving it to 01-ready.
-- Required changes block must include reviewer name/model, severity-ordered checklist items (P0-P3), file references, required fix, and required tests per item.
-- Also append a concise summary to ${SHARED_ISSUES_DIR}/notes.md.
-- Use non-interactive GitHub CLI checks/actions (gh pr view, gh pr checks, gh pr merge).
-- Never run gh pr create or interactive auth/login commands.
-- Never inline multi-line markdown in shell one-liners.
-  - For any long markdown payload, write to a file with `cat <<'EOF' > <file>` and pass the file path to CLI flags.
-  - For notes appends, use `cat <<'EOF' >> ${SHARED_ISSUES_DIR}/notes.md`.
-- Command outcome taxonomy:
-  - `lookup_miss`: path/glob/file discovery miss (`No such file`, `no matches found`)
-  - `search_miss`: zero-result search (`rg`/`grep`/`find` with no matches)
-  - `build_or_test_failure`: actual failing verification/build/test commands
-  - `infra_failure`: CLI/auth/network/runtime failures
-- For exploratory search/discovery commands that may miss, use non-blocking form (`|| true`) where safe.
-- Never suppress non-zero exits for required verification commands (tests/build/checks).
-- For `git push` and `gh pr edit`, use retry wrapper:
-  - `scripts/lib/github-retry.sh git push <remote> <refspec>`
-  - `scripts/lib/github-retry.sh gh pr edit <args...>`
-- Wrapper output includes retry attempt count and terminal reason; treat `action=fail_fast` as non-retryable.
-- Baseline health artifacts for build-run noise triage:
-  - `config/autowork-baseline-test-matrix.json`
-  - `config/autowork-flake-registry.json`
-- Any waiver in the flake registry must include owner, expiry date, and linked evidence.
-- Append blocker details to ${SHARED_ISSUES_DIR}/notes.md.
-- API routes are /v1/* except health (/health*) and test reset (POST /test/reset).
-- Headless MCP policy: claude.ai MCP servers are disabled by default for reviewer runs.
-  - To enable when auth is configured, set AUTO_REVIEW_ENABLE_CLAUDEAI_MCP=1.
-  - If preflight logs cached Google connector auth gaps, keep MCP disabled until OAuth is fixed.
-
-Begin reviewing now and continue until no review items remain in 03-needs-review or 04-in-review.
-PROMPT
+write_prompt_file
 
 RUN_NAME="review-$(date '+%Y%m%d-%H%M%S')"
 RUN_SCRIPT="${STATE_DIR}/${RUN_NAME}.sh"
