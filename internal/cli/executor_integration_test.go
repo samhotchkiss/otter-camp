@@ -6,15 +6,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
+	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	repopkg "github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/testutil"
+	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
 )
 
 type integrationFixture struct {
@@ -271,6 +274,93 @@ func TestExecutorIntegrationPathTraversalRejectedBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestIntegrationTaskScopedCLIExecuteSharesProjectWorkspaceRootEX303(t *testing.T) {
+	fixture := newTaskWorkspaceFixture(t)
+
+	if _, err := fixture.nativeExecutor.Execute(fixture.ctx, "file.write", map[string]any{
+		"path":        "notes/plan.md",
+		"content":     "shared workspace",
+		"create_dirs": true,
+	}); err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+
+	pwdOut, err := fixture.nativeExecutor.Execute(fixture.ctx, "cli.execute", fixture.cliInput("pwd"))
+	if err != nil {
+		t.Fatalf("cli.execute pwd: %v", err)
+	}
+	if got := stdoutInlineValue(t, pwdOut); got != fixture.workspaceRoot+"\n" {
+		t.Fatalf("pwd stdout = %q, want %q", got, fixture.workspaceRoot+"\\n")
+	}
+
+	catOut, err := fixture.nativeExecutor.Execute(fixture.ctx, "cli.execute", fixture.cliInput("cat notes/plan.md"))
+	if err != nil {
+		t.Fatalf("cli.execute cat: %v", err)
+	}
+	if got := stdoutInlineValue(t, catOut); got != "shared workspace" {
+		t.Fatalf("cat stdout = %q, want shared workspace", got)
+	}
+}
+
+func TestIntegrationTaskScopedCLIExecuteWritesVisibleToFileToolsEX303(t *testing.T) {
+	fixture := newTaskWorkspaceFixture(t)
+
+	command := "mkdir -p scripts && printf '%s' 'echo recovered' | tee scripts/recover.sh"
+	if _, err := fixture.nativeExecutor.Execute(fixture.ctx, "cli.execute", fixture.cliInput(command)); err != nil {
+		t.Fatalf("cli.execute write: %v", err)
+	}
+
+	readOut, err := fixture.nativeExecutor.Execute(fixture.ctx, "file.read", map[string]any{"path": "scripts/recover.sh"})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := readOut["content"]; got != "echo recovered" {
+		t.Fatalf("file.read content = %v, want echo recovered", got)
+	}
+}
+
+func TestIntegrationTaskWorkspaceRecoveryCheckpointStaysOnOneRootEX303(t *testing.T) {
+	fixture := newTaskWorkspaceFixture(t)
+	manifest := `{"phase":"transform","status":"resume-ready"}`
+
+	if _, err := fixture.nativeExecutor.Execute(fixture.ctx, "file.write", map[string]any{
+		"path":        "checkpoint/manifest.json",
+		"content":     manifest,
+		"create_dirs": true,
+	}); err != nil {
+		t.Fatalf("file.write manifest: %v", err)
+	}
+
+	readManifest, err := fixture.nativeExecutor.Execute(fixture.ctx, "file.read", map[string]any{"path": "checkpoint/manifest.json"})
+	if err != nil {
+		t.Fatalf("file.read manifest: %v", err)
+	}
+	if got := readManifest["content"]; got != manifest {
+		t.Fatalf("file.read manifest = %v, want %s", got, manifest)
+	}
+
+	command := "test -f checkpoint/manifest.json && mkdir -p output && cp checkpoint/manifest.json output/manifest.json && printf '%s' 'done' | tee output/ok.txt"
+	if _, err := fixture.nativeExecutor.Execute(fixture.ctx, "cli.execute", fixture.cliInput(command)); err != nil {
+		t.Fatalf("cli.execute continuation: %v", err)
+	}
+
+	outputManifest, err := fixture.nativeExecutor.Execute(fixture.ctx, "file.read", map[string]any{"path": "output/manifest.json"})
+	if err != nil {
+		t.Fatalf("file.read output manifest: %v", err)
+	}
+	if got := outputManifest["content"]; got != manifest {
+		t.Fatalf("output manifest = %v, want %s", got, manifest)
+	}
+
+	outputMarker, err := fixture.nativeExecutor.Execute(fixture.ctx, "file.read", map[string]any{"path": "output/ok.txt"})
+	if err != nil {
+		t.Fatalf("file.read output marker: %v", err)
+	}
+	if got := outputMarker["content"]; got != "done" {
+		t.Fatalf("output marker = %v, want done", got)
+	}
+}
+
 func newIntegrationFixture(t *testing.T, projectSettings map[string]any) integrationFixture {
 	t.Helper()
 	ctx := context.Background()
@@ -299,17 +389,11 @@ func newIntegrationFixture(t *testing.T, projectSettings map[string]any) integra
 		t.Fatalf("create project: %v", err)
 	}
 
-	task, err := repopkg.NewProjectTaskRepo(pool).Create(ctx, repopkg.ProjectTask{
-		OrganizationID: orgID,
-		ProjectID:      project.ID,
-		Title:          "CLI Task",
-		WorkStatus:     "in_progress",
-		CreatedByType:  "system",
-		CreatedByID:    ptrUUID(uuid.Nil),
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:         "CLI Task",
+		CreatedByType: "system",
+		CreatedByID:   ptrUUID(uuid.Nil),
 	})
-	if err != nil {
-		t.Fatalf("create task: %v", err)
-	}
 
 	agent := testutil.MakeAgent(t, pool, orgID)
 
@@ -364,6 +448,113 @@ func newIntegrationFixture(t *testing.T, projectSettings map[string]any) integra
 		runID:        runRecord.ID,
 		runStepID:    step.ID,
 	}
+}
+
+type taskWorkspaceFixture struct {
+	nativeExecutor *nativetools.NativeToolExecutor
+	ctx            context.Context
+	orgID          uuid.UUID
+	projectID      uuid.UUID
+	taskID         uuid.UUID
+	agentID        uuid.UUID
+	runID          uuid.UUID
+	runStepID      uuid.UUID
+	workspaceRoot  string
+}
+
+func newTaskWorkspaceFixture(t *testing.T) taskWorkspaceFixture {
+	t.Helper()
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+	resolvedDataDir, err := filepath.EvalSymlinks(dataDir)
+	if err != nil {
+		t.Fatalf("resolve data dir symlink: %v", err)
+	}
+
+	runRecord, err := controlplane.NewRunRepository(pool).Create(ctx, controlplane.Run{
+		OrganizationID: orgID,
+		ProjectID:      &project.ID,
+		TaskID:         &task.ID,
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		Status:         "in_progress",
+		TriggerType:    "api",
+		Metadata:       []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	step, err := controlplane.NewRunStepRepository(pool).Create(ctx, controlplane.RunStep{
+		RunID:      runRecord.ID,
+		StepNumber: 1,
+		Status:     "in_progress",
+		Metadata:   []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create run_step: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{
+		Executions: NewRepository(pool),
+		Projects:   repopkg.NewProjectRepo(pool),
+		DataDir:    dataDir,
+	})
+	nativeExecutor := nativetools.NewExecutor(nativetools.ExecutorOptions{
+		Pool:    pool,
+		DataDir: dataDir,
+		CLI:     executor,
+	})
+
+	return taskWorkspaceFixture{
+		nativeExecutor: nativeExecutor,
+		ctx: mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+			OrganizationID: orgID,
+			AgentID:        &agent.ID,
+			SessionID:      &session.ID,
+		}),
+		orgID:         orgID,
+		projectID:     project.ID,
+		taskID:        task.ID,
+		agentID:       agent.ID,
+		runID:         runRecord.ID,
+		runStepID:     step.ID,
+		workspaceRoot: filepath.Join(resolvedDataDir, "workspaces", project.Slug),
+	}
+}
+
+func (f taskWorkspaceFixture) cliInput(command string) map[string]any {
+	return map[string]any{
+		"run_id":          f.runID.String(),
+		"run_step_id":     f.runStepID.String(),
+		"task_id":         f.taskID.String(),
+		"project_id":      f.projectID.String(),
+		"agent_id":        f.agentID.String(),
+		"organization_id": f.orgID.String(),
+		"command":         command,
+	}
+}
+
+func stdoutInlineValue(t *testing.T, output map[string]any) string {
+	t.Helper()
+	exitCode, ok := output["exit_code"].(int)
+	if !ok {
+		t.Fatalf("exit_code = %T, want int", output["exit_code"])
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit_code = %d, want 0 (output=%#v)", exitCode, output)
+	}
+	value, ok := output["stdout_inline"].(string)
+	if !ok {
+		t.Fatalf("stdout_inline = %T, want string", output["stdout_inline"])
+	}
+	return value
 }
 
 func ptrUUID(value uuid.UUID) *uuid.UUID {
