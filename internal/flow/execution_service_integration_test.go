@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -469,18 +468,8 @@ func TestFlowExecutionServiceOnTaskCancelledMarksDependentsBlocked(t *testing.T)
 	if err != nil {
 		t.Fatalf("ListByProject: %v", err)
 	}
-	foundResolution := false
-	for _, taskRecord := range tasks {
-		if taskRecord.ID == taskA.ID || taskRecord.ID == taskB.ID {
-			continue
-		}
-		if taskRecord.WorkStatus == "queued" && strings.HasPrefix(taskRecord.Title, "Resolve blocker for task "+fixture.project.Slug+"-") {
-			foundResolution = true
-			break
-		}
-	}
-	if !foundResolution {
-		t.Fatal("expected resolution task for cancelled dependency")
+	if len(tasks) != 2 {
+		t.Fatalf("project task count = %d, want 2 without auto-created blocker resolution tasks", len(tasks))
 	}
 }
 

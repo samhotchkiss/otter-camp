@@ -826,7 +826,7 @@ func TestTransitionStatusCancelledArchivesActiveMergeQueueEntries(t *testing.T) 
 	}
 }
 
-func TestMarkBlockedCreatesResolutionTaskTitle(t *testing.T) {
+func TestMarkBlockedDoesNotCreateResolutionTaskByDefault(t *testing.T) {
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 	taskID := uuid.New()
 	orgID := uuid.New()
@@ -844,6 +844,84 @@ func TestMarkBlockedCreatesResolutionTaskTitle(t *testing.T) {
 				Title:          "Blocked task",
 				WorkStatus:     "in_progress",
 				CreatedByType:  "system",
+			},
+		},
+	}
+	projectRepo := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "alpha",
+			},
+		},
+	}
+	assignments := &fakeAssignmentRepo{
+		pmByProject: map[uuid.UUID]repo.AgentProjectAssignment{
+			projectID: {
+				ProjectID: projectID,
+				AgentID:   pmAgentID,
+				IsActive:  true,
+				Role:      "pm",
+			},
+		},
+	}
+	agents := &fakeAgentRepo{
+		agents: map[uuid.UUID]repo.Agent{
+			pmAgentID: {
+				ID:             pmAgentID,
+				OrganizationID: orgID,
+				AgentClass:     "staff",
+				CreatedByType:  "human_user",
+				CreatedByID:    pmUserID,
+			},
+		},
+	}
+	users := &fakeUserRepo{
+		usersByID: map[uuid.UUID]repo.HumanUser{
+			pmUserID: {ID: pmUserID, OrganizationID: orgID, Role: "admin", IsActive: true},
+		},
+		usersByOrg: map[uuid.UUID][]repo.HumanUser{
+			orgID: {{ID: pmUserID, OrganizationID: orgID, Role: "admin", IsActive: true}},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.project = projectRepo
+	svc.assignments = assignments
+	svc.agents = agents
+	svc.users = users
+	svc.clock = clock.NewFake(now)
+
+	_, err := svc.MarkBlocked(context.Background(), taskID, "blocked by dependency", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	if len(taskRepo.createdTasks) != 0 {
+		t.Fatalf("created resolution tasks = %d, want 0", len(taskRepo.createdTasks))
+	}
+}
+
+func TestMarkBlockedCreatesResolutionTaskWhenPolicyRequiresIt(t *testing.T) {
+	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
+	taskID := uuid.New()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	pmAgentID := uuid.New()
+	pmUserID := uuid.New()
+
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     3,
+				Title:          "Blocked task",
+				WorkStatus:     "in_progress",
+				CreatedByType:  "system",
+				Metadata:       ApplyBlockerAutoResolutionTask(json.RawMessage(`{}`), true),
 			},
 		},
 	}
@@ -1325,6 +1403,7 @@ type fakeFlowTemplateRepo struct {
 func validExecutableTemplateNodes(flowTemplateID uuid.UUID) map[uuid.UUID]repo.FlowNode {
 	workNodeID := uuid.New()
 	reviewNodeID := uuid.New()
+	mergeNodeID := uuid.New()
 	return map[uuid.UUID]repo.FlowNode{
 		workNodeID: {
 			ID:             workNodeID,
@@ -1336,6 +1415,12 @@ func validExecutableTemplateNodes(flowTemplateID uuid.UUID) map[uuid.UUID]repo.F
 			ID:             reviewNodeID,
 			FlowTemplateID: flowTemplateID,
 			NodeType:       "review",
+			NextNodeID:     &mergeNodeID,
+		},
+		mergeNodeID: {
+			ID:             mergeNodeID,
+			FlowTemplateID: flowTemplateID,
+			NodeType:       "merge",
 		},
 	}
 }

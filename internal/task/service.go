@@ -931,56 +931,58 @@ func (s *service) MarkBlocked(ctx context.Context, taskID uuid.UUID, reason stri
 		return nil, err
 	}
 
-	projectRecord, err := s.project.GetByID(ctx, blocked.ProjectID)
-	if err != nil {
-		return nil, err
-	}
-
-	pmAssignment, err := s.assignments.GetPM(ctx, blocked.ProjectID)
-	if err != nil {
-		return nil, ErrPMNotAssigned
-	}
-	if blocked.FlowTemplateID != nil {
-		if err := s.validateExecutableFlowTemplate(ctx, *blocked.FlowTemplateID); err != nil {
-			return nil, ErrFlowTemplateReviewRequired
-		}
-	}
-
-	title := fmt.Sprintf("Resolve blocker for task %s-%d", projectRecord.Slug, blocked.TaskNumber)
 	createdByID := pointerUUID(actor.ID)
 	if strings.TrimSpace(actor.Type) == "system" {
 		createdByID = nil
 	}
-	resolutionTask, createErr := s.tasks.Create(ctx, repo.ProjectTask{
-		OrganizationID:      blocked.OrganizationID,
-		ProjectID:           blocked.ProjectID,
-		Title:               title,
-		Description:         pointerString("Automatically created to resolve blocker"),
-		WorkStatus:          "queued",
-		FlowTemplateID:      blocked.FlowTemplateID,
-		CreatedByType:       normalizeActorTypeForTask(actor.Type),
-		CreatedByID:         createdByID,
-		AssignedAgentID:     &pmAssignment.AgentID,
-		RequiresHumanReview: false,
-		Metadata:            json.RawMessage(`{"auto_created":"mark_blocked"}`),
-	})
-	if createErr != nil {
-		return nil, createErr
-	}
+	if blockerPolicyAutoCreateResolutionTask(blocked.Metadata) {
+		projectRecord, err := s.project.GetByID(ctx, blocked.ProjectID)
+		if err != nil {
+			return nil, err
+		}
 
-	if err := s.recordTaskEvent(ctx, resolutionTask, "task.created", normalizeActorTypeForTask(actor.Type), createdByID, map[string]any{
-		"task_id":     resolutionTask.ID,
-		"task_number": resolutionTask.TaskNumber,
-	}); err != nil {
-		return nil, err
-	}
-	if err := s.publishTaskDomainEvent(ctx, resolutionTask.OrganizationID, "task.created", normalizeActorTypeForTask(actor.Type), createdByID, map[string]any{
-		"task_id":         resolutionTask.ID,
-		"project_id":      resolutionTask.ProjectID,
-		"task_number":     resolutionTask.TaskNumber,
-		"auto_resolution": true,
-	}); err != nil {
-		return nil, err
+		pmAssignment, err := s.assignments.GetPM(ctx, blocked.ProjectID)
+		if err != nil {
+			return nil, ErrPMNotAssigned
+		}
+		if blocked.FlowTemplateID != nil {
+			if err := s.validateExecutableFlowTemplate(ctx, *blocked.FlowTemplateID); err != nil {
+				return nil, ErrFlowTemplateReviewRequired
+			}
+		}
+
+		title := fmt.Sprintf("Resolve blocker for task %s-%d", projectRecord.Slug, blocked.TaskNumber)
+		resolutionTask, createErr := s.tasks.Create(ctx, repo.ProjectTask{
+			OrganizationID:      blocked.OrganizationID,
+			ProjectID:           blocked.ProjectID,
+			Title:               title,
+			Description:         pointerString("Automatically created to resolve blocker"),
+			WorkStatus:          "queued",
+			FlowTemplateID:      blocked.FlowTemplateID,
+			CreatedByType:       normalizeActorTypeForTask(actor.Type),
+			CreatedByID:         createdByID,
+			AssignedAgentID:     &pmAssignment.AgentID,
+			RequiresHumanReview: false,
+			Metadata:            json.RawMessage(`{"auto_created":"mark_blocked"}`),
+		})
+		if createErr != nil {
+			return nil, createErr
+		}
+
+		if err := s.recordTaskEvent(ctx, resolutionTask, "task.created", normalizeActorTypeForTask(actor.Type), createdByID, map[string]any{
+			"task_id":     resolutionTask.ID,
+			"task_number": resolutionTask.TaskNumber,
+		}); err != nil {
+			return nil, err
+		}
+		if err := s.publishTaskDomainEvent(ctx, resolutionTask.OrganizationID, "task.created", normalizeActorTypeForTask(actor.Type), createdByID, map[string]any{
+			"task_id":         resolutionTask.ID,
+			"project_id":      resolutionTask.ProjectID,
+			"task_number":     resolutionTask.TaskNumber,
+			"auto_resolution": true,
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	targetUserID, err := s.resolvePMTargetUser(ctx, blocked.ProjectID)

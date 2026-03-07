@@ -55,7 +55,7 @@ func TestParsePrimaryDeliverableMissingOrMalformedReturnsEmpty(t *testing.T) {
 }
 
 func TestApplyMetadataRoundTripPreservesExistingKeys(t *testing.T) {
-	existing := json.RawMessage(`{"preserve":"yes","count":2}`)
+	existing := ApplyQueueDecompositionMode(json.RawMessage(`{"preserve":"yes","count":2}`), QueueDecompositionModeParallelChildren)
 	plan := Plan{
 		RequiresDecomposition: true,
 		PrimaryDeliverable:    "Primary deliverable",
@@ -78,6 +78,9 @@ func TestApplyMetadataRoundTripPreservesExistingKeys(t *testing.T) {
 	}
 	if decomp["primary_deliverable"] != "Primary deliverable" {
 		t.Fatalf("primary_deliverable = %v, want Primary deliverable", decomp["primary_deliverable"])
+	}
+	if decomp["mode"] != QueueDecompositionModeParallelChildren {
+		t.Fatalf("mode = %v, want %s", decomp["mode"], QueueDecompositionModeParallelChildren)
 	}
 	if decomp["source_description"] != "source description" {
 		t.Fatalf("source_description = %v, want trimmed source description", decomp["source_description"])
@@ -124,7 +127,7 @@ func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 		ParentTaskID: uuid.New(),
 		Title:        "Migration task",
 		Description:  &description,
-		Metadata:     json.RawMessage(`{"decomposition":{"primary_deliverable":"already set"}}`),
+		Metadata:     json.RawMessage(`{"decomposition":{"mode":"parallel_children","primary_deliverable":"already set"}}`),
 	})
 	if err != nil {
 		t.Fatalf("PrepareQueueDecomposition: %v", err)
@@ -134,5 +137,45 @@ func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	}
 	if len(result.ChildDrafts) != 0 {
 		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
+	}
+}
+
+func TestPrepareQueueDecompositionSkipsWithoutExplicitMode(t *testing.T) {
+	description := strings.Join([]string{
+		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
+		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
+		"- Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots.",
+	}, "\n")
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "Migration task",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if result.Applied {
+		t.Fatal("Applied = true, want false without explicit queue decomposition mode")
+	}
+	if len(result.ChildDrafts) != 0 {
+		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
+	}
+}
+
+func TestApplyQueueDecompositionModeRoundTrip(t *testing.T) {
+	metadata := ApplyQueueDecompositionMode(json.RawMessage(`{"preserve":"yes"}`), QueueDecompositionModeParallelChildren)
+
+	if !QueueDecompositionRequested(metadata) {
+		t.Fatal("QueueDecompositionRequested = false, want true")
+	}
+	if got := ParseQueueDecompositionMode(metadata); got != QueueDecompositionModeParallelChildren {
+		t.Fatalf("ParseQueueDecompositionMode = %q, want %q", got, QueueDecompositionModeParallelChildren)
+	}
+
+	cleared := ApplyQueueDecompositionMode(metadata, "")
+	if QueueDecompositionRequested(cleared) {
+		t.Fatal("QueueDecompositionRequested = true after clearing mode, want false")
 	}
 }

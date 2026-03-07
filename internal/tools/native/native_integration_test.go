@@ -3012,6 +3012,140 @@ func TestIntegrationProjectSessionTaskPlanningIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestIntegrationProjectSessionQueueKeepsPlannedTaskSetFlat(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, context.Background(), pool, project.ID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Sam.blog fresh kickoff",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, agent.ID, sessionID)
+
+	plannedTasks := []struct {
+		title       string
+		description string
+	}{
+		{
+			title: "Landing page rebuild",
+			description: strings.Join([]string{
+				"- Redesign the marketing landing page structure, hero narrative, and proof sections for the new launch.",
+				"- Implement the responsive layout, reusable content blocks, and production-ready navigation shell.",
+				"- Validate analytics hooks, SEO metadata, and content QA coverage before release.",
+			}, "\n"),
+		},
+		{
+			title: "Billing integration",
+			description: strings.Join([]string{
+				"- Wire Stripe checkout, billing portal entry points, and subscription lifecycle webhooks into the app.",
+				"- Add entitlement updates, retry-safe webhook handling, and account state transitions for paid plans.",
+				"- Cover failure paths, audit logging, and operator runbooks for billing support incidents.",
+			}, "\n"),
+		},
+		{
+			title: "Analytics foundation",
+			description: strings.Join([]string{
+				"- Define core product and growth events for onboarding, activation, and conversion measurement.",
+				"- Implement the event emission path, dashboard-ready schemas, and warehouse export validation.",
+				"- Verify the baseline dashboards, alert thresholds, and smoke checks for first-run reporting.",
+			}, "\n"),
+		},
+		{
+			title: "Content migration",
+			description: strings.Join([]string{
+				"- Import legacy posts, author data, and canonical URLs into the new content model with parity checks.",
+				"- Rebuild media handling, redirect coverage, and structured content transforms for migrated pages.",
+				"- Validate taxonomy mapping, broken-link scans, and migration sign-off artifacts before cutover.",
+			}, "\n"),
+		},
+		{
+			title: "Launch operations",
+			description: strings.Join([]string{
+				"- Prepare release sequencing, rollback checkpoints, and stakeholder communication for the public launch.",
+				"- Finalize environment readiness, smoke scripts, and incident response contacts across the team.",
+				"- Capture the launch checklist, ownership map, and post-launch monitoring commitments in one place.",
+			}, "\n"),
+		},
+	}
+
+	plannedIDs := make([]uuid.UUID, 0, len(plannedTasks))
+	for _, plannedTask := range plannedTasks {
+		out, execErr := executor.Execute(projectCtx, "task.create", map[string]any{
+			"project_id":       project.ID.String(),
+			"title":            plannedTask.title,
+			"description":      plannedTask.description,
+			"flow_template_id": template.ID.String(),
+		})
+		if execErr != nil {
+			t.Fatalf("first-pass task.create for %q: %v", plannedTask.title, execErr)
+		}
+		plannedIDs = append(plannedIDs, mustUUIDValue(t, out["task"].(map[string]any)["id"]))
+	}
+
+	for idx, plannedTask := range plannedTasks {
+		out, execErr := executor.Execute(projectCtx, "task.create", map[string]any{
+			"project_id":       project.ID.String(),
+			"title":            plannedTask.title,
+			"description":      plannedTask.description,
+			"flow_template_id": template.ID.String(),
+		})
+		if execErr != nil {
+			t.Fatalf("second-pass task.create for %q: %v", plannedTask.title, execErr)
+		}
+		if repeatedID := mustUUIDValue(t, out["task"].(map[string]any)["id"]); repeatedID != plannedIDs[idx] {
+			t.Fatalf("second-pass task id for %q = %s, want %s", plannedTask.title, repeatedID, plannedIDs[idx])
+		}
+	}
+
+	for _, taskID := range plannedIDs {
+		out, execErr := executor.Execute(projectCtx, "task.update", map[string]any{
+			"task_id":     taskID.String(),
+			"work_status": "queued",
+		})
+		if execErr != nil {
+			t.Fatalf("task.update queued for %s: %v", taskID, execErr)
+		}
+		taskOut, ok := out["task"].(map[string]any)
+		if !ok {
+			t.Fatalf("task.update output task = %T, want map[string]any", out["task"])
+		}
+		if taskOut["work_status"] != "queued" {
+			t.Fatalf("queued work_status = %v, want queued", taskOut["work_status"])
+		}
+		if _, hasDecomposition := out["decomposition"]; hasDecomposition {
+			t.Fatalf("queue response unexpectedly included decomposition for %s: %v", taskID, out["decomposition"])
+		}
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	tasks, err := taskRepo.ListByProject(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks: %v", err)
+	}
+	if len(tasks) != len(plannedTasks) {
+		t.Fatalf("project task count after queueing = %d, want %d", len(tasks), len(plannedTasks))
+	}
+
+	for _, task := range tasks {
+		if strings.Contains(task.Title, "(Workstream ") {
+			t.Fatalf("unexpected decomposed workstream task created during kickoff queueing: %q", task.Title)
+		}
+		if task.WorkStatus != "queued" {
+			t.Fatalf("task %q work_status = %q, want queued", task.Title, task.WorkStatus)
+		}
+	}
+}
+
 func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
@@ -3547,10 +3681,24 @@ func makeExecutableProjectFlowTemplate(t *testing.T, ctx context.Context, pool *
 	if err != nil {
 		t.Fatalf("create review node: %v", err)
 	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Complete",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create merge node: %v", err)
+	}
 
 	workNode.NextNodeID = &reviewNode.ID
 	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
 		t.Fatalf("link work node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("link review node: %v", err)
 	}
 
 	template.StartNodeID = &workNode.ID
