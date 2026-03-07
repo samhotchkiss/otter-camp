@@ -2731,6 +2731,94 @@ func TestTurnEngineIntegrationCompletedWorkTurnAdvancesTaskToReview(t *testing.T
 	}
 }
 
+func TestTurnEngineIntegrationSmokeTaskWritesOutputAndAdvancesToReview(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:   fixture.pool,
+		Events: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("flow.NewService: %v", err)
+	}
+	if _, err := flowService.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+	outputRel := "docs/content-strategy/pillar-taxonomy.md"
+	outputAbs := filepath.Join(workspaceRoot, filepath.FromSlash(outputRel))
+	if err := os.MkdirAll(filepath.Dir(outputAbs), 0o755); err != nil {
+		t.Fatalf("mkdir output dir: %v", err)
+	}
+	if err := os.WriteFile(outputAbs, []byte("# Pillar taxonomy\n"), 0o644); err != nil {
+		t.Fatalf("write output file: %v", err)
+	}
+
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant agent: %v", err)
+	}
+
+	_, turnID := mustCreateCompletedWorkTurn(t, ctx, fixture, taskSession.ID, fixture.agent.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": taskSession.ID.String(), "turn_id": turnID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	outputBody, err := os.ReadFile(outputAbs)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+	if !strings.Contains(string(outputBody), "Pillar taxonomy") {
+		t.Fatalf("output file body = %q, want persisted content marker", string(outputBody))
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", updatedTask.WorkStatus)
+	}
+
+	nodeRepo := repo.NewFlowNodeRepo(fixture.pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, *taskRecord.FlowTemplateID)
+	if err != nil {
+		t.Fatalf("GetByTemplateOrdered: %v", err)
+	}
+	if len(nodes) < 2 {
+		t.Fatalf("flow node count = %d, want >= 2", len(nodes))
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[1].ID {
+		t.Fatalf("current_flow_node_id = %v, want review node %s", updatedTask.CurrentFlowNodeID, nodes[1].ID)
+	}
+}
+
 func TestTurnEngineIntegrationDuplicateCompletedWorkSignalDoesNotDuplicateFlowAdvancedEvents(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

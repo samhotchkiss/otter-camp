@@ -31,8 +31,9 @@ Before proceeding with any testing phase:
    - If there's a missing dependency: file it as a new issue or fix it (if ≤2 lines)
    - If Codex isn't running: alert Sam
 4. Once all four directories are empty:
-   - `go build -o bin/ottercamp ./cmd/ottercamp`
-   - Restart server + worker
+   - `./build/verify-restart-readiness.sh`
+   - If the smoke gate fails: stop, file/update the blocking issue, and do NOT restart the full Sam.blog run.
+   - Restart server + worker using the fresh `bin/ottercamp` build produced by the smoke gate
    - Verify no unpushed commits, push if any exist
    - Proceed with testing
 

@@ -385,6 +385,109 @@ func TestProjectViewLiveTaskReloadKeepsOpenTasksInSyncEX292(t *testing.T) {
 	}
 }
 
+func TestSmokeRuntimeTruthProjectTaskAndWorkerSignals(t *testing.T) {
+	t.Parallel()
+
+	projectID := "proj-smoke"
+	taskSessionID := "session-task-11"
+	liveTasks := []SidebarTaskItem{
+		{ID: "task-11", Title: "Worker run still active", WorkStatus: "in_progress", TaskNumber: 11},
+		{ID: "task-14", Title: "Ready for review", WorkStatus: "review", TaskNumber: 14},
+	}
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			if id != projectID {
+				t.Fatalf("LoadProjectDetail projectID = %q, want %q", id, projectID)
+			}
+			return &ProjectDetail{
+				ID:          id,
+				DisplayName: "Sam.blog",
+				Tasks: []SidebarTaskItem{
+					{ID: "task-stale", Title: "Finished earlier", WorkStatus: "done", TaskNumber: 9},
+				},
+				DoneCount: 1,
+			}, nil
+		},
+		LoadProjectTasks: func(_ context.Context, id string) ([]SidebarTaskItem, error) {
+			if id != projectID {
+				t.Fatalf("LoadProjectTasks projectID = %q, want %q", id, projectID)
+			}
+			return liveTasks, nil
+		},
+	})
+	model.workspace.mainView = ViewProject
+	model.workspace.selectedProjectID = projectID
+	model.workspace.nodes["project-"+projectID] = &sidebarNode{
+		ID:        "project-" + projectID,
+		Kind:      sidebarKindProject,
+		ProjectID: projectID,
+		Label:     "Sam.blog",
+	}
+	model.workspace.selectedProject = &ProjectDetail{
+		ID:          projectID,
+		DisplayName: "Sam.blog",
+		Tasks: []SidebarTaskItem{
+			{ID: "task-stale", Title: "Finished earlier", WorkStatus: "done", TaskNumber: 9},
+		},
+		DoneCount: 1,
+	}
+	model.workspace.tasks["task-11"] = &taskRecord{
+		ID:         "task-11",
+		ProjectID:  projectID,
+		TaskNumber: 11,
+		Title:      "Worker run still active",
+		Status:     "in_progress",
+		SessionID:  taskSessionID,
+		AgentName:  "Sam.blog Worker",
+	}
+	model.workspace.selectedTaskID = "task-11"
+	model.activeScope = ScopeTask
+	model.activeSession = taskSessionID
+	model.turnsSynced = true
+
+	updated, cmd := model.Update(WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "task.status_changed",
+		Payload: mustJSON(t, map[string]any{
+			"task_id":    "task-11",
+			"project_id": projectID,
+			"to_status":  "in_progress",
+		}),
+	}})
+	if cmd == nil {
+		t.Fatal("task.status_changed for selected project should trigger a reload command")
+	}
+
+	model = applyImmediateCmdMessages(updated.(Model), cmd)
+
+	rendered := strings.Join(model.renderProjectView(130, 40), "\n")
+	if !strings.Contains(rendered, "OPEN TASKS (2)") {
+		t.Fatalf("project view should show live open task count:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "OC-11: Worker run still active") {
+		t.Fatalf("project view missing live in-progress task:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "OC-14: Ready for review") {
+		t.Fatalf("project view missing live review task:\n%s", rendered)
+	}
+
+	model = pressRealtimeMsg(model, WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "worker.unresponsive",
+		Payload: mustJSON(t, map[string]any{
+			"session_id": taskSessionID,
+			"message":    "Worker appears offline — check that `ottercamp worker` is running.",
+		}),
+	}})
+
+	if got := model.statusMessage; !strings.Contains(got, "ottercamp worker") {
+		t.Fatalf("statusMessage = %q, want worker warning", got)
+	}
+	activity := strings.Join(model.ActivityEntries(), " | ")
+	if !strings.Contains(activity, "worker unresponsive") {
+		t.Fatalf("activity log missing worker warning: %q", activity)
+	}
+}
+
 func TestProjectViewUsesHumanReadableLabelInsteadOfSyntheticIDEX292(t *testing.T) {
 	t.Parallel()
 

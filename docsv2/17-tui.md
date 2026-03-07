@@ -749,6 +749,10 @@ The TUI saves its UI state locally (in `~/.config/ottercamp/tui-state.json` or e
 
 On next launch, this state is restored so the operator picks up where they left off.
 
+### Restart Readiness Gate
+
+Before restarting a live operator session for a full end-to-end run, operators must pass an automated restart-readiness smoke gate. The gate is fail-closed: no restart proceeds until the runtime proves singleton kickoff, live `in_progress` execution state, on-disk task output advancing to `review`, long-running continuation/resume behavior, and TUI reconciliation of project/task/worker truth after live data reloads. The TUI must not keep showing stale zero-open-task state or a false worker-health picture once the latest project/task/session data is available.
+
 ### Graceful Shutdown
 
 Ctrl-C or `:quit` exits the TUI. Before exiting:
