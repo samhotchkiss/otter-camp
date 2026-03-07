@@ -5,6 +5,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -187,6 +188,163 @@ func TestIntegrationFileWriteUsesSlugWorkspacePath(t *testing.T) {
 	}
 	if strings.Contains(expectedPath, orgID.String()) || strings.Contains(expectedPath, project.ID.String()) {
 		t.Fatalf("workspace path should not include UUIDs: %q", expectedPath)
+	}
+}
+
+func TestIntegrationFileWriteRepeatedValidWritesStayDeterministicInTaskWorkspace(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:    pool,
+		DataDir: dataDir,
+	})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	writes := []struct {
+		path    string
+		content string
+	}{
+		{path: "templates/minimal/README.md", content: "# Minimal template"},
+		{path: "templates/minimal/styles.css", content: "body { color: #204a3a; }"},
+		{path: "templates/minimal/index.html", content: "<main>Otter Camp</main>"},
+	}
+
+	for i, write := range writes {
+		out, err := executor.Execute(ctx, "file.write", map[string]any{
+			"path":        write.path,
+			"content":     write.content,
+			"create_dirs": true,
+		})
+		if err != nil {
+			t.Fatalf("file.write %d: %v", i, err)
+		}
+		if got := out["path"]; got != write.path {
+			t.Fatalf("write %d path = %v, want %s", i, got, write.path)
+		}
+		if got := out["byte_size"]; got != len(write.content) {
+			t.Fatalf("write %d byte_size = %v, want %d", i, got, len(write.content))
+		}
+		if got := out["created"]; got != true {
+			t.Fatalf("write %d created = %v, want true", i, got)
+		}
+	}
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	for _, write := range writes {
+		diskPath := filepath.Join(dataDir, "workspaces", projectRecord.Slug, filepath.FromSlash(write.path))
+		body, err := os.ReadFile(diskPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", write.path, err)
+		}
+		if string(body) != write.content {
+			t.Fatalf("%s content = %q, want %q", write.path, string(body), write.content)
+		}
+	}
+}
+
+func TestIntegrationFileWriteSamBlogAlternatingRawPayloadsReturnContentRequired(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:    pool,
+		DataDir: dataDir,
+	})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	attempts := []struct {
+		name        string
+		input       map[string]any
+		wantError   string
+		wantPath    string
+		wantContent string
+	}{
+		{
+			name: "success-1",
+			input: map[string]any{
+				"_raw": `{"path":"scripts/migrate.py","content":"print('migrate')","create_dirs":true`,
+			},
+			wantPath:    "scripts/migrate.py",
+			wantContent: "print('migrate')",
+		},
+		{
+			name: "sam-blog-missing-content-1",
+			input: map[string]any{
+				"_raw": `{"path":"content/posts/stop-preparing-your-kids-for-jobs.md","create_dirs":true}`,
+			},
+			wantError: "content_required",
+			wantPath:  "content/posts/stop-preparing-your-kids-for-jobs.md",
+		},
+		{
+			name: "success-2",
+			input: map[string]any{
+				"_raw": `{"path":"convert_all.py","content":"print('convert all')","create_dirs":true`,
+			},
+			wantPath:    "convert_all.py",
+			wantContent: "print('convert all')",
+		},
+		{
+			name: "sam-blog-missing-content-2",
+			input: map[string]any{
+				"_raw": `{"path":"content/posts/stop-preparing-your-kids-for-jobs.md","create_dirs":true}`,
+			},
+			wantError: "content_required",
+			wantPath:  "content/posts/stop-preparing-your-kids-for-jobs.md",
+		},
+	}
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+
+	for i, attempt := range attempts {
+		out, err := executor.Execute(ctx, "file.write", attempt.input)
+		if err != nil {
+			t.Fatalf("%s file.write: %v", attempt.name, err)
+		}
+		if attempt.wantError != "" {
+			if got := out["error"]; got != attempt.wantError {
+				t.Fatalf("%s error = %v, want %s", attempt.name, got, attempt.wantError)
+			}
+			if got := out["error"]; got == "path_required" {
+				t.Fatalf("%s error = %v, want content_required", attempt.name, got)
+			}
+			message, _ := out["message"].(string)
+			if !strings.Contains(message, "requires content") {
+				t.Fatalf("%s message = %q, want actionable content guidance", attempt.name, message)
+			}
+			diskPath := filepath.Join(dataDir, "workspaces", projectRecord.Slug, filepath.FromSlash(attempt.wantPath))
+			if _, err := os.Stat(diskPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s should not create %s, stat err = %v", attempt.name, diskPath, err)
+			}
+			continue
+		}
+		if got := out["path"]; got != attempt.wantPath {
+			t.Fatalf("attempt %d path = %v, want %s", i, got, attempt.wantPath)
+		}
+		diskPath := filepath.Join(dataDir, "workspaces", projectRecord.Slug, filepath.FromSlash(attempt.wantPath))
+		body, err := os.ReadFile(diskPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", attempt.wantPath, err)
+		}
+		if string(body) != attempt.wantContent {
+			t.Fatalf("%s content = %q, want %q", attempt.wantPath, string(body), attempt.wantContent)
+		}
 	}
 }
 

@@ -390,6 +390,12 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 			"message": "file.write requires a non-empty path. Provide a workspace-relative file path in `path`.",
 		}, nil
 	}
+	if !hasNonNilKey(normalizedInput, "content") {
+		return map[string]any{
+			"error":   "content_required",
+			"message": "file.write requires content. Provide file contents in `content`.",
+		}, nil
+	}
 	createDirs := readBool(normalizedInput, "create_dirs", false)
 	if createDirs {
 		if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {

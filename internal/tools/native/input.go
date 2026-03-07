@@ -28,6 +28,14 @@ func readString(input map[string]any, key string) (string, bool) {
 	}
 }
 
+func hasNonNilKey(input map[string]any, key string) bool {
+	if input == nil {
+		return false
+	}
+	value, ok := input[key]
+	return ok && value != nil
+}
+
 func readBool(input map[string]any, key string, def bool) bool {
 	if input == nil {
 		return def
