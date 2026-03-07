@@ -47,8 +47,12 @@ func (c *RiskClassifier) Evaluate(command string) Classification {
 		segments = []commandSegment{{Text: trimmed}}
 	}
 
+	if pattern, ok := matchDeniedPipeline(segments); ok {
+		return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "command_denied", Pattern: pattern}
+	}
+
 	overall := RiskLow
-	for idx, segment := range segments {
+	for _, segment := range segments {
 		candidate := strings.TrimSpace(segment.Text)
 		if candidate == "" {
 			continue
@@ -56,11 +60,6 @@ func (c *RiskClassifier) Evaluate(command string) Classification {
 
 		if pattern, ok := classifier.matchDeniedInvocation(candidate); ok {
 			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "command_denied", Pattern: pattern}
-		}
-		if segment.Separator == "|" && idx+1 < len(segments) {
-			if pattern, ok := matchDeniedPipeline(candidate, segments[idx+1].Text); ok {
-				return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "command_denied", Pattern: pattern}
-			}
 		}
 		if containsRedirect(candidate) {
 			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "redirect_not_supported"}
@@ -144,10 +143,7 @@ func isDestructiveCommand(command string) bool {
 			return true
 		}
 	}
-	if strings.HasPrefix(command, "dd ") {
-		return true
-	}
-	return false
+	return strings.HasPrefix(command, "dd ")
 }
 
 func modifiesRemote(command string) bool {
@@ -188,17 +184,6 @@ func riskRank(level RiskLevel) int {
 	default:
 		return 0
 	}
-}
-
-func splitCompoundCommands(command string) []string {
-	segments := splitCommandChain(command)
-	parts := make([]string, 0, len(segments))
-	for _, segment := range segments {
-		if text := strings.TrimSpace(segment.Text); text != "" {
-			parts = append(parts, text)
-		}
-	}
-	return parts
 }
 
 func splitCommandChain(command string) []commandSegment {
@@ -381,16 +366,38 @@ func isEnvAssignment(token string) bool {
 	return ok && strings.TrimSpace(name) != ""
 }
 
-func matchDeniedPipeline(left, right string) (string, bool) {
-	leftToken := invokedCommandToken(normalizeCommand(left))
-	rightToken := invokedCommandToken(normalizeCommand(right))
-	switch {
-	case leftToken == "curl" && rightToken == "bash":
-		return "pipeline:curl|bash", true
-	case leftToken == "wget" && rightToken == "sh":
-		return "pipeline:wget|sh", true
+func matchDeniedPipeline(segments []commandSegment) (string, bool) {
+	sourceToken := ""
+	for _, segment := range segments {
+		token := invokedCommandToken(normalizeCommand(segment.Text))
+		if isDeniedPipelineSource(token) && sourceToken == "" {
+			sourceToken = token
+		}
+		if sourceToken != "" && isDeniedPipelineSink(token) {
+			return "pipeline:" + sourceToken + "|" + token, true
+		}
+		if segment.Separator != "|" {
+			sourceToken = ""
+		}
+	}
+	return "", false
+}
+
+func isDeniedPipelineSource(token string) bool {
+	switch token {
+	case "curl", "wget":
+		return true
 	default:
-		return "", false
+		return false
+	}
+}
+
+func isDeniedPipelineSink(token string) bool {
+	switch token {
+	case "bash", "sh", "ash", "dash", "ksh", "zsh":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -100,6 +101,7 @@ type Executor struct {
 	command    commandBuilder
 }
 
+//revive:disable-next-line:exported // Tool contract names intentionally match the cli.execute schema.
 type CLIExecuteInput struct {
 	RunID            uuid.UUID
 	RunStepID        uuid.UUID
@@ -114,6 +116,7 @@ type CLIExecuteInput struct {
 	EnvOverrides     map[string]string
 }
 
+//revive:disable-next-line:exported // Tool contract names intentionally match the cli.execute schema.
 type CLIExecuteOutput struct {
 	ExitCode         int
 	StdoutTruncated  bool
