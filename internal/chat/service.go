@@ -419,7 +419,7 @@ func (s *service) CreateSession(ctx context.Context, input CreateSessionInput) (
 		}
 	}
 	if scopeType == "project_task" && mode == "async" {
-		reusable, err := s.reuseBlankTaskAsyncSession(ctx, orgID, input.ScopeID)
+		reusable, err := s.reuseCanonicalTaskAsyncSession(ctx, orgID, input.ScopeID)
 		if err != nil {
 			return nil, err
 		}
@@ -462,13 +462,14 @@ func (s *service) CreateSession(ctx context.Context, input CreateSessionInput) (
 	return &session, nil
 }
 
-func (s *service) reuseBlankTaskAsyncSession(ctx context.Context, organizationID, taskID uuid.UUID) (*ChatSession, error) {
+func (s *service) reuseCanonicalTaskAsyncSession(ctx context.Context, organizationID, taskID uuid.UUID) (*ChatSession, error) {
 	sessions, err := s.sessions.ListByOrg(ctx, organizationID)
 	if err != nil {
 		return nil, err
 	}
 
 	blanks := make([]repo.ChatSession, 0, 2)
+	var canonical *repo.ChatSession
 	for _, session := range sessions {
 		if session.OrganizationID != organizationID || session.ScopeID != taskID {
 			continue
@@ -482,10 +483,23 @@ func (s *service) reuseBlankTaskAsyncSession(ctx context.Context, organizationID
 		if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
 			continue
 		}
-		if !isBlankTaskAsyncSession(session) {
+		if isBlankTaskAsyncSession(session) {
+			blanks = append(blanks, session)
 			continue
 		}
-		blanks = append(blanks, session)
+		if canonical == nil || taskAsyncSessionMoreRecent(session, *canonical) {
+			candidate := session
+			canonical = &candidate
+		}
+	}
+	if canonical != nil {
+		for _, duplicate := range blanks {
+			if _, err := s.sessions.Close(ctx, duplicate.ID); err != nil && !errors.Is(err, repo.ErrNotFound) {
+				return nil, err
+			}
+		}
+		reusable := ChatSession(*canonical)
+		return &reusable, nil
 	}
 	if len(blanks) == 0 {
 		return nil, nil

@@ -288,6 +288,79 @@ func TestSession_Create_TaskScopeAsyncClosesDuplicateBlankSessions(t *testing.T)
 	}
 }
 
+func TestSession_Create_TaskScopeAsyncReusesCanonicalNonBlankSessionEX294(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	svc := newIntegrationService(t, pool, nil)
+	sessionRepo := repo.NewChatSessionRepo(pool)
+
+	execution := seedChatServiceFlowNodeExecution(t, ctx, pool, org.ID)
+	canonical, err := svc.CreateSession(ctx, CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        execution.TaskID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession canonical: %v", err)
+	}
+	if _, err := sessionRepo.IncrementCounts(ctx, canonical.ID, 0, 1); err != nil {
+		t.Fatalf("IncrementCounts canonical: %v", err)
+	}
+
+	duplicate, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        execution.TaskID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"chat-session-test","attempt":"duplicate-blank"}`),
+	})
+	if err != nil {
+		t.Fatalf("create blank duplicate task session: %v", err)
+	}
+
+	reused, err := svc.CreateSession(ctx, CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        execution.TaskID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession async task scope: %v", err)
+	}
+	if reused.ID != canonical.ID {
+		t.Fatalf("reused session id = %s, want canonical nonblank %s", reused.ID, canonical.ID)
+	}
+
+	duplicateStored, err := sessionRepo.GetByID(ctx, duplicate.ID)
+	if err != nil {
+		t.Fatalf("GetByID blank duplicate: %v", err)
+	}
+	if duplicateStored.Status != "closed" || duplicateStored.ClosedAt == nil {
+		t.Fatalf("blank duplicate session = %+v, want closed with closed_at", duplicateStored)
+	}
+
+	var activeCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE organization_id = $1
+		  AND scope_type = 'project_task'
+		  AND scope_id = $2
+		  AND mode = 'async'
+		  AND status = 'active'
+	`, org.ID, execution.TaskID).Scan(&activeCount); err != nil {
+		t.Fatalf("count active async task sessions: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("active async task sessions = %d, want 1", activeCount)
+	}
+}
+
 func TestSession_PerNodeAsync_AutoCreated(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

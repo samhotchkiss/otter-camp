@@ -539,22 +539,9 @@ func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event e
 		return nil
 	}
 
-	session, err := p.sessions.GetByScopeAndMode(ctx, "project_task", taskRecord.ID, "async")
+	session, err := p.ensureCanonicalTaskAsyncSession(ctx, taskRecord)
 	if err != nil {
 		return err
-	}
-	if session == nil {
-		created, err := p.chats.CreateSession(ctx, chat.CreateSessionInput{
-			OrganizationID: taskRecord.OrganizationID,
-			ScopeType:      "project_task",
-			ScopeID:        taskRecord.ID,
-			Mode:           "async",
-			Metadata:       json.RawMessage(`{"source":"task_queue_processor"}`),
-		})
-		if err != nil {
-			return err
-		}
-		session = created
 	}
 	if session == nil {
 		return fmt.Errorf("task %s missing async session", taskRecord.ID)
@@ -597,6 +584,19 @@ func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event e
 		return nil
 	}
 	return p.dispatchWakeupRun(ctx, result.Run)
+}
+
+func (p *TaskQueueProcessor) ensureCanonicalTaskAsyncSession(ctx context.Context, taskRecord repo.ProjectTask) (*repo.ChatSession, error) {
+	if taskRecord.ID == uuid.Nil {
+		return nil, fmt.Errorf("task id is required")
+	}
+	return p.chats.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: taskRecord.OrganizationID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"task_queue_processor"}`),
+	})
 }
 
 func (p *TaskQueueProcessor) sessionHasKickoffMessage(ctx context.Context, sessionID, runID uuid.UUID) (bool, error) {
@@ -647,18 +647,11 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 
 	switch strings.TrimSpace(executionWakeupKind(runRecord.Metadata)) {
 	case "assigned_task":
-		sessionID := runRecord.SessionID
-		if sessionID == nil || *sessionID == uuid.Nil {
-			session, sessionErr := p.sessions.GetByScopeAndMode(ctx, "project_task", taskRecord.ID, "async")
-			if sessionErr != nil {
-				return sessionErr
-			}
-			if session == nil {
-				return nil
-			}
-			sessionID = &session.ID
+		session, err := p.ensureCanonicalTaskAsyncSession(ctx, taskRecord)
+		if err != nil {
+			return err
 		}
-		if sessionID == nil || *sessionID == uuid.Nil {
+		if session == nil || session.ID == uuid.Nil {
 			return nil
 		}
 		messageMetadata, err := json.Marshal(map[string]any{
@@ -669,7 +662,7 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		return p.appendWakeupKickoff(ctx, runRecord, *sessionID, buildQueueKickoffMessage(taskRecord), messageMetadata)
+		return p.appendWakeupKickoff(ctx, runRecord, session.ID, buildQueueKickoffMessage(taskRecord), messageMetadata)
 	case "flow_current":
 		executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
 		if !ok {
@@ -682,11 +675,11 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		sessionID := execution.SessionID
-		if runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
-			sessionID = runRecord.SessionID
+		session, err := p.ensureCanonicalTaskAsyncSession(ctx, taskRecord)
+		if err != nil {
+			return err
 		}
-		if sessionID == nil || *sessionID == uuid.Nil {
+		if session == nil || session.ID == uuid.Nil {
 			return nil
 		}
 		messageMetadata, err := json.Marshal(map[string]any{
@@ -698,7 +691,7 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		return p.appendWakeupKickoff(ctx, runRecord, *sessionID, buildFlowKickoffMessage(taskRecord, execution), messageMetadata)
+		return p.appendWakeupKickoff(ctx, runRecord, session.ID, buildFlowKickoffMessage(taskRecord, execution), messageMetadata)
 	case "flow_transition":
 		executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
 		if !ok {
@@ -721,11 +714,11 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		sessionID := execution.SessionID
-		if runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
-			sessionID = runRecord.SessionID
+		session, err := p.ensureCanonicalTaskAsyncSession(ctx, taskRecord)
+		if err != nil {
+			return err
 		}
-		if sessionID == nil || *sessionID == uuid.Nil {
+		if session == nil || session.ID == uuid.Nil {
 			return nil
 		}
 		eventType := metadataStringValue(runRecord.Metadata, "flow_event_type")
@@ -740,7 +733,7 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		return p.appendWakeupKickoff(ctx, runRecord, *sessionID, buildFlowTransitionKickoffMessage(taskRecord, node, execution, eventType, rejectionFeedback), messageMetadata)
+		return p.appendWakeupKickoff(ctx, runRecord, session.ID, buildFlowTransitionKickoffMessage(taskRecord, node, execution, eventType, rejectionFeedback), messageMetadata)
 	default:
 		return nil
 	}
