@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -243,6 +244,97 @@ func TestChatTurnRepoCreateForMessageAttemptRepairsCurrentTurnAndReplacesStalePe
 	}
 	if cancelledCount != 1 {
 		t.Fatalf("cancelled stale pending count = %d, want 1", cancelledCount)
+	}
+}
+
+func TestChatTurnRepoCreateForMessageAttemptCancelsDuplicateInProgressTurnsEX305(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedChatFixture(t, ctx, pool)
+
+	sessionRepo := NewChatSessionRepo(pool)
+	messageRepo := NewChatMessageRepo(pool)
+	turnRepo := NewChatTurnRepo(pool)
+	cancelledAt := time.Date(2026, time.March, 7, 10, 15, 0, 0, time.UTC)
+	turnRepo.now = func() time.Time { return cancelledAt }
+
+	startedOld := cancelledAt.Add(-3 * time.Minute)
+	startedNew := cancelledAt.Add(-1 * time.Minute)
+
+	staleTurn, err := turnRepo.Create(ctx, ChatTurn{
+		SessionID:      fixture.session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   fixture.agent.ID,
+		Status:         "in_progress",
+		StartedAt:      &startedOld,
+	})
+	if err != nil {
+		t.Fatalf("create stale in_progress turn: %v", err)
+	}
+	liveTurn, err := turnRepo.Create(ctx, ChatTurn{
+		SessionID:      fixture.session.ID,
+		TurnNumber:     2,
+		RespondingType: "agent",
+		RespondingID:   fixture.agent.ID,
+		Status:         "in_progress",
+		StartedAt:      &startedNew,
+	})
+	if err != nil {
+		t.Fatalf("create canonical in_progress turn: %v", err)
+	}
+	if _, err := sessionRepo.UpdateCurrentTurn(ctx, fixture.session.ID, &staleTurn.ID); err != nil {
+		t.Fatalf("set stale current turn: %v", err)
+	}
+
+	message, err := messageRepo.Create(ctx, ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Content:   "resume work",
+	})
+	if err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+
+	turn, created, err := turnRepo.CreateForMessageAttempt(ctx, fixture.session.ID, fixture.agent.ID, message.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+	if created {
+		t.Fatal("created = true, want false when canonical in_progress turn already exists")
+	}
+	if turn.ID != liveTurn.ID {
+		t.Fatalf("returned turn = %s, want canonical live turn %s", turn.ID, liveTurn.ID)
+	}
+
+	refreshedSession, err := sessionRepo.GetByID(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("GetByID session: %v", err)
+	}
+	if refreshedSession.CurrentTurnID == nil || *refreshedSession.CurrentTurnID != liveTurn.ID {
+		t.Fatalf("current_turn_id = %v, want %s", refreshedSession.CurrentTurnID, liveTurn.ID)
+	}
+
+	staleAfter, err := turnRepo.GetByID(ctx, staleTurn.ID)
+	if err != nil {
+		t.Fatalf("GetByID stale turn: %v", err)
+	}
+	if normalizeChatTurnStatus(staleAfter.Status) != "cancelled" {
+		t.Fatalf("stale turn status = %q, want cancelled", staleAfter.Status)
+	}
+	if staleAfter.CancelRequestedAt == nil || !staleAfter.CancelRequestedAt.Equal(cancelledAt) {
+		t.Fatalf("stale cancel_requested_at = %v, want %s", staleAfter.CancelRequestedAt, cancelledAt)
+	}
+	if staleAfter.CompletedAt == nil || !staleAfter.CompletedAt.Equal(cancelledAt) {
+		t.Fatalf("stale completed_at = %v, want %s", staleAfter.CompletedAt, cancelledAt)
+	}
+
+	liveAfter, err := turnRepo.GetByID(ctx, liveTurn.ID)
+	if err != nil {
+		t.Fatalf("GetByID live turn: %v", err)
+	}
+	if normalizeChatTurnStatus(liveAfter.Status) != "in_progress" {
+		t.Fatalf("live turn status = %q, want in_progress", liveAfter.Status)
 	}
 }
 

@@ -1837,10 +1837,10 @@ func (s *service) currentInProgressTurn(ctx context.Context, sessionID uuid.UUID
 }
 
 func (s *service) reconcileSessionCurrentTurn(ctx context.Context, sessionID uuid.UUID, turns []repo.ChatTurn) (*repo.ChatTurn, error) {
-	current, duplicatePending := repo.CanonicalLiveTurn(turns)
-	if len(duplicatePending) > 0 {
+	current, duplicateTurns := repo.CanonicalLiveTurn(turns)
+	if len(duplicateTurns) > 0 {
 		now := s.clock.Now().UTC()
-		for _, turn := range duplicatePending {
+		for _, turn := range duplicateTurns {
 			if _, err := s.turns.SetCancelled(ctx, turn.ID, now, now); err != nil {
 				return nil, err
 			}

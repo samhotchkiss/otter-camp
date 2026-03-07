@@ -75,6 +75,109 @@ func (r *fakeRows) RawValues() [][]byte { return nil }
 
 func (r *fakeRows) Conn() *pgx.Conn { return nil }
 
+func TestCanonicalLiveTurn(t *testing.T) {
+	base := time.Date(2026, time.March, 7, 9, 0, 0, 0, time.UTC)
+	startedOld := base.Add(-3 * time.Minute)
+	startedNew := base.Add(-1 * time.Minute)
+	startedTie := base.Add(-30 * time.Second)
+
+	turn := func(status string, turnNumber int, createdAt time.Time, startedAt *time.Time) ChatTurn {
+		return ChatTurn{
+			ID:         uuid.New(),
+			Status:     status,
+			TurnNumber: turnNumber,
+			CreatedAt:  createdAt,
+			StartedAt:  startedAt,
+		}
+	}
+
+	pendingOne := turn("pending", 1, base.Add(1*time.Minute), nil)
+	pendingTwo := turn("pending", 2, base.Add(2*time.Minute), nil)
+	pendingThree := turn("pending", 3, base.Add(3*time.Minute), nil)
+	inProgressOne := turn("in_progress", 4, base.Add(4*time.Minute), &startedOld)
+	inProgressTwo := turn("in_progress", 5, base.Add(5*time.Minute), &startedNew)
+	inProgressThree := turn("in_progress", 5, base.Add(6*time.Minute), &startedTie)
+	inProgressFour := turn("in_progress", 5, base.Add(7*time.Minute), &startedTie)
+
+	tests := []struct {
+		name             string
+		turns            []ChatTurn
+		wantCurrentID    uuid.UUID
+		wantCurrentNil   bool
+		wantDuplicateIDs []uuid.UUID
+	}{
+		{
+			name:           "empty input returns nil",
+			wantCurrentNil: true,
+		},
+		{
+			name:          "single pending is canonical",
+			turns:         []ChatTurn{pendingOne},
+			wantCurrentID: pendingOne.ID,
+		},
+		{
+			name:          "single in progress is canonical",
+			turns:         []ChatTurn{inProgressOne},
+			wantCurrentID: inProgressOne.ID,
+		},
+		{
+			name:             "in progress wins over pending",
+			turns:            []ChatTurn{pendingOne, inProgressTwo},
+			wantCurrentID:    inProgressTwo.ID,
+			wantDuplicateIDs: []uuid.UUID{pendingOne.ID},
+		},
+		{
+			name:             "multiple pending keeps oldest and duplicates extras",
+			turns:            []ChatTurn{pendingThree, pendingOne, pendingTwo},
+			wantCurrentID:    pendingOne.ID,
+			wantDuplicateIDs: []uuid.UUID{pendingTwo.ID, pendingThree.ID},
+		},
+		{
+			name:             "multiple in progress keeps newest and duplicates losers",
+			turns:            []ChatTurn{inProgressOne, inProgressTwo, inProgressThree, inProgressFour},
+			wantCurrentID:    inProgressFour.ID,
+			wantDuplicateIDs: []uuid.UUID{inProgressThree.ID, inProgressTwo.ID, inProgressOne.ID},
+		},
+		{
+			name:             "mixed live turns keep in progress and cancel all pending extras",
+			turns:            []ChatTurn{pendingTwo, inProgressOne, pendingOne},
+			wantCurrentID:    inProgressOne.ID,
+			wantDuplicateIDs: []uuid.UUID{pendingOne.ID, pendingTwo.ID},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			current, duplicates := CanonicalLiveTurn(tt.turns)
+			if tt.wantCurrentNil {
+				if current != nil {
+					t.Fatalf("current = %+v, want nil", *current)
+				}
+			} else {
+				if current == nil {
+					t.Fatal("current = nil, want live turn")
+				}
+				if current.ID != tt.wantCurrentID {
+					t.Fatalf("current id = %s, want %s", current.ID, tt.wantCurrentID)
+				}
+			}
+
+			gotDuplicateIDs := make([]uuid.UUID, 0, len(duplicates))
+			for _, duplicate := range duplicates {
+				gotDuplicateIDs = append(gotDuplicateIDs, duplicate.ID)
+			}
+			if len(gotDuplicateIDs) != len(tt.wantDuplicateIDs) {
+				t.Fatalf("duplicate count = %d, want %d (%v)", len(gotDuplicateIDs), len(tt.wantDuplicateIDs), tt.wantDuplicateIDs)
+			}
+			for i := range gotDuplicateIDs {
+				if gotDuplicateIDs[i] != tt.wantDuplicateIDs[i] {
+					t.Fatalf("duplicate ids = %v, want %v", gotDuplicateIDs, tt.wantDuplicateIDs)
+				}
+			}
+		})
+	}
+}
+
 func TestChatMessageRepoUpdateContentFinalMessageReturnsError(t *testing.T) {
 	messageID := uuid.New()
 	content := "do not change"

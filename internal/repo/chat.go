@@ -498,10 +498,11 @@ type ChatTurn struct {
 type ChatTurnRepo struct {
 	pool *pgxpool.Pool
 	db   chatExecutor
+	now  func() time.Time
 }
 
 func NewChatTurnRepo(pool *pgxpool.Pool) *ChatTurnRepo {
-	return &ChatTurnRepo{pool: pool, db: pool}
+	return &ChatTurnRepo{pool: pool, db: pool, now: time.Now}
 }
 
 func CanonicalLiveTurn(turns []ChatTurn) (*ChatTurn, []ChatTurn) {
@@ -553,8 +554,11 @@ func CanonicalLiveTurn(turns []ChatTurn) (*ChatTurn, []ChatTurn) {
 	}
 
 	duplicates := make([]ChatTurn, 0)
-	if len(pending) > 1 {
-		keepPendingID := pending[0].ID
+	if len(inProgress) > 1 {
+		duplicates = append(duplicates, inProgress[1:]...)
+	}
+	if len(pending) > 0 {
+		keepPendingID := uuid.Nil
 		if current != nil && normalizeChatTurnStatus(current.Status) == "pending" {
 			keepPendingID = current.ID
 		}
@@ -606,7 +610,7 @@ func (r *ChatTurnRepo) CreateForMessageAttempt(ctx context.Context, sessionID, a
 		if listErr != nil {
 			return ChatTurn{}, false, listErr
 		}
-		if _, reconcileErr := r.reconcileSessionCurrentTurn(ctx, tx, sessionID, turns); reconcileErr != nil {
+		if _, reconcileErr := r.reconcileSessionCurrentTurn(ctx, tx, sessionID, turns, r.nowUTC()); reconcileErr != nil {
 			return ChatTurn{}, false, reconcileErr
 		}
 		if commitErr := tx.Commit(ctx); commitErr != nil {
@@ -622,7 +626,7 @@ func (r *ChatTurnRepo) CreateForMessageAttempt(ctx context.Context, sessionID, a
 	if err != nil {
 		return ChatTurn{}, false, err
 	}
-	if current, reconcileErr := r.reconcileSessionCurrentTurn(ctx, tx, sessionID, turns); reconcileErr != nil {
+	if current, reconcileErr := r.reconcileSessionCurrentTurn(ctx, tx, sessionID, turns, r.nowUTC()); reconcileErr != nil {
 		return ChatTurn{}, false, reconcileErr
 	} else if current != nil {
 		if normalizeChatTurnStatus(current.Status) == "in_progress" || matchesMessageAttempt(*current, messageID, retryCount) {
@@ -632,7 +636,7 @@ func (r *ChatTurnRepo) CreateForMessageAttempt(ctx context.Context, sessionID, a
 			return *current, false, nil
 		}
 		if normalizeChatTurnStatus(current.Status) == "pending" {
-			now := time.Now().UTC()
+			now := r.nowUTC()
 			if _, err := tx.Exec(ctx, `
 				UPDATE chat_turn
 				SET status = 'cancelled',
@@ -688,7 +692,7 @@ func (r *ChatTurnRepo) CreateForMessageAttempt(ctx context.Context, sessionID, a
 	}
 
 	turns = append(turns, created)
-	if _, err := r.reconcileSessionCurrentTurn(ctx, tx, sessionID, turns); err != nil {
+	if _, err := r.reconcileSessionCurrentTurn(ctx, tx, sessionID, turns, r.nowUTC()); err != nil {
 		return ChatTurn{}, false, err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -731,11 +735,10 @@ func (r *ChatTurnRepo) listBySessionWithExecutor(ctx context.Context, exec chatE
 	return items, nil
 }
 
-func (r *ChatTurnRepo) reconcileSessionCurrentTurn(ctx context.Context, exec chatExecutor, sessionID uuid.UUID, turns []ChatTurn) (*ChatTurn, error) {
-	current, duplicatePending := CanonicalLiveTurn(turns)
-	if len(duplicatePending) > 0 {
-		now := time.Now().UTC()
-		for _, turn := range duplicatePending {
+func (r *ChatTurnRepo) reconcileSessionCurrentTurn(ctx context.Context, exec chatExecutor, sessionID uuid.UUID, turns []ChatTurn, now time.Time) (*ChatTurn, error) {
+	current, duplicateTurns := CanonicalLiveTurn(turns)
+	if len(duplicateTurns) > 0 {
+		for _, turn := range duplicateTurns {
 			if _, err := exec.Exec(ctx, `
 				UPDATE chat_turn
 				SET status = 'cancelled',
@@ -761,6 +764,13 @@ func (r *ChatTurnRepo) reconcileSessionCurrentTurn(ctx context.Context, exec cha
 		return nil, mapDBError(err)
 	}
 	return current, nil
+}
+
+func (r *ChatTurnRepo) nowUTC() time.Time {
+	if r == nil || r.now == nil {
+		return time.Now().UTC()
+	}
+	return r.now().UTC()
 }
 
 func (r *ChatTurnRepo) Create(ctx context.Context, turn ChatTurn) (ChatTurn, error) {
