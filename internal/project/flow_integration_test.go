@@ -229,21 +229,8 @@ func TestDependencyDAG_BlockedAutoResolutionTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByProject tasks: %v", err)
 	}
-	foundResolution := false
-	for _, item := range tasks {
-		if item.ID == taskA.ID || item.ID == taskB.ID {
-			continue
-		}
-		if strings.HasPrefix(item.Title, "Resolve blocker for task "+fx.project.Slug+"-") && item.WorkStatus == "queued" {
-			if item.AssignedAgentID == nil || *item.AssignedAgentID != fx.pmAgent.ID {
-				t.Fatalf("resolution task assigned_agent_id = %v, want %s", item.AssignedAgentID, fx.pmAgent.ID)
-			}
-			foundResolution = true
-			break
-		}
-	}
-	if !foundResolution {
-		t.Fatal("expected auto-created resolution task for cancelled dependency")
+	if len(tasks) != 2 {
+		t.Fatalf("project task count = %d, want 2 without auto-created blocker resolution tasks", len(tasks))
 	}
 
 	inboxItems, err := fx.inboxRepo.ListForUser(ctx, fx.org.ID, fx.pmUser.ID, repo.InboxListOptions{

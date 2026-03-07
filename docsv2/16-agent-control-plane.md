@@ -665,6 +665,7 @@ Mutating operations require idempotency keys. The broker deduplicates requests b
 - If the first request is still in progress, return a "duplicate, in progress" response.
 - If the first request failed, allow the retry (new RunAttempt).
 - Fresh project kickoff follows the same idempotency rule: a retry of the same fresh-start request must bind back to the canonical live project/session path created by the first successful `project.create`, not mint a second active project or parallel planning session.
+- Fresh kickoff retries also preserve the planned task mapping: the explicitly planned workstreams remain one runtime task each unless the planner or flow explicitly requested parallel child-task fan-out.
 - Fresh kickoff and resume are distinct execution modes. Fresh kickoff suppresses archived/closed prior-run transcript context unless the operator explicitly chose resume/recovery; resume/recovery keeps the historical context because continuity is the point.
 
 ### Dead Letter Handling
@@ -683,7 +684,7 @@ The system actively prevents tasks from getting stuck. A background **supervisor
 - Periodically scan for tasks in `in_progress` or `blocked` whose associated runs have failed, timed out, or gone silent.
 - "Silent" means: the agent's last heartbeat is older than the configured threshold (default: 90 seconds (3 missed heartbeats at 30-second intervals) for sync, 5 minutes for async).
 - For stuck tasks: emit a supervisor event, attempt to diagnose (check run status, check model provider health, check worker health), and take recovery action.
-- Recovery actions, in order: (1) start a new run at the same flow node if the failure was transient, (2) file a blocker task if the failure was permanent, (3) escalate to the PM if diagnosis is inconclusive.
+- Recovery actions, in order: (1) start a new run at the same flow node if the failure was transient, (2) mark the task blocked and escalate/notify the PM if the failure was permanent, (3) open a dedicated blocker-resolution task only when the flow/task contract explicitly requires one.
 - Maximum auto-recovery attempts per task per flow node: 3. After that, escalate.
 
 **Queue drain:**
@@ -711,6 +712,7 @@ The system actively prevents tasks from getting stuck. A background **supervisor
 - After max retries, the supervisor takes over (stuck task detection path).
 - Custom retry policies can be set at the project or flow template level: "this deployment step should not auto-retry" or "this data fetch step can retry up to 10 times."
 - For fresh kickoff planning turns, exceeding the bounded prompt/continuation guardrail surfaces one blocker in the session and stops recursive churn. The system does not keep spinning new turns indefinitely.
+- During first-wave kickoff execution, blocker handling must not silently add extra top-level tasks beyond the explicitly planned task set unless the flow/task contract opted into that escalation pattern.
 - For content migration/import turns, bounded continuation uses persisted workspace checkpoints instead of chat-only summaries. The checkpoint records the latest raw/manifests/scripts/outputs on disk, and the next turn starts from that durable state.
 
 **Health heartbeat:**

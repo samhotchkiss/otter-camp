@@ -65,6 +65,7 @@ If Lori needs to create a brand-new PM during bootstrap, that PM candidate is cr
 
 - A **fresh kickoff** means "start this project again as a clean slate." The system creates at most one new live project and one canonical project-scoped planning session for that kickoff request.
 - Repeating or retrying the same fresh kickoff request must reuse that canonical live project/session path. The system must not silently create a second active project or a second parallel project-planning session for the same intended run.
+- Fresh kickoff planning maps each explicitly planned workstream to exactly one runtime task by default. Retries and recovery reuse or repair that same task set; they do not silently fan a planned task into extra top-level `(Workstream N)` siblings unless the planner or flow explicitly requested parallel child tasks.
 - Archived or closed project/session transcripts from prior runs are excluded from fresh-kickoff planning context. They are only reintroduced when the operator explicitly chooses **resume** or **recovery** mode.
 - If fresh kickoff cannot reach initial task creation within the prompt/turn guardrails, the session surfaces one concrete blocker and stops auto-churning.
 
@@ -534,6 +535,7 @@ Flow: [Write Code] → [Code Review] → [Done]
 - **PM during rework**: if a review node rejects work and the flow loops back, the PM may create new subtasks for the rework (or the agent may, based on the reviewer's feedback).
 
 Subtask creation is not a privileged operation. The guard rail is that subtasks are scoped to a flow node execution — they can't exist outside that context.
+Queueing a draft task must not infer extra top-level task fan-out just because the description contains multiple bullets or checklists. Parallel child tasks are only created when the planner or flow explicitly marks that task for decomposition.
 
 ### Subtask Properties
 
@@ -569,9 +571,9 @@ Dependencies govern execution order. They are separate from the task/subtask con
 
 **Cancelled dependencies:**
 
-- If a dependency task is cancelled, the system automatically creates a new resolution task assigned to the PM. This task describes the situation ("OC-3 was cancelled, OC-7 depends on it — resolve this dependency") and has a dependency link to the downstream task.
-- The downstream task stays `blocked` until the PM resolves the new task — by removing the dependency, creating a replacement task, re-scoping the downstream task, or cancelling it too.
-- This follows a core principle: **when project progress is blocked, the system creates a task, not a notification.** Notifications can be missed or dropped. A task persists until the situation is resolved. Any event that requires action to keep the project moving forward must produce a task assigned to the responsible party (usually the PM).
+- If a dependency task is cancelled, the downstream task becomes `blocked` and the PM receives a blocker signal (inbox/supervision) tied to that blocked task.
+- The downstream task stays `blocked` until the PM resolves the dependency situation — by removing the dependency, creating a replacement task, re-scoping the downstream task, or cancelling it too.
+- A separate top-level blocker-resolution task is optional, not automatic. Flows or task metadata can opt into that pattern when a dedicated coordination task is genuinely required, but the default blocker path must not silently enlarge the project's baseline task set.
 
 **Modeling large efforts:**
 

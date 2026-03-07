@@ -20,6 +20,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
@@ -815,7 +816,7 @@ func TestTaskUpdateQueuedOversizedTaskCreatesDecomposedChildWorkUnits(t *testing
 			Description:    &description,
 			WorkStatus:     "draft",
 			FlowTemplateID: &flowTemplateID,
-			Metadata:       json.RawMessage(`{}`),
+			Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 		},
 	}
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
@@ -858,7 +859,7 @@ func TestTaskUpdateQueuedOversizedTaskCreatesDecomposedChildWorkUnits(t *testing
 	}
 }
 
-func TestTaskUpdateQueuedOversizedTaskPublishesTaskCreatedEventsForDecomposedChildren(t *testing.T) {
+func TestTaskUpdateQueuedOversizedTaskSkipsImplicitDecomposition(t *testing.T) {
 	taskID := uuid.New()
 	flowTemplateID := uuid.New()
 	description := strings.Join([]string{
@@ -876,6 +877,52 @@ func TestTaskUpdateQueuedOversizedTaskPublishesTaskCreatedEventsForDecomposedChi
 			WorkStatus:     "draft",
 			FlowTemplateID: &flowTemplateID,
 			Metadata:       json.RawMessage(`{}`),
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: validExecutableTemplateNodeList(flowTemplateID),
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if tasks.createCalls != 0 {
+		t.Fatalf("create calls = %d, want 0 without explicit queue decomposition mode", tasks.createCalls)
+	}
+	if _, ok := out["decomposition"]; ok {
+		t.Fatalf("decomposition output = %v, want omitted without explicit queue decomposition mode", out["decomposition"])
+	}
+	if tasks.task.Description == nil || *tasks.task.Description != description {
+		t.Fatalf("updated description = %v, want original description preserved", tasks.task.Description)
+	}
+}
+
+func TestTaskUpdateQueuedOversizedTaskPublishesTaskCreatedEventsForDecomposedChildren(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := strings.Join([]string{
+		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
+		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
+		"- Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots.",
+	}, "\n")
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			Title:          "Blog migration epic",
+			Description:    &description,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+			Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 		},
 	}
 	publisher := &recordingEventPublisher{}
@@ -947,7 +994,7 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 			Description:    &description,
 			WorkStatus:     "draft",
 			FlowTemplateID: &flowTemplateID,
-			Metadata:       json.RawMessage(`{}`),
+			Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 		},
 		listByProjectTasks: []repo.ProjectTask{
 			{
@@ -958,7 +1005,7 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 				Description:    &description,
 				WorkStatus:     "draft",
 				FlowTemplateID: &flowTemplateID,
-				Metadata:       json.RawMessage(`{}`),
+				Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 			},
 			{
 				ID:             childOneID,

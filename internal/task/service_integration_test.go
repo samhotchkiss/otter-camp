@@ -16,6 +16,7 @@ import (
 
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
@@ -264,7 +265,7 @@ func TestTaskServiceIntegrationRejectsFlowTemplateWithoutReviewNode(t *testing.T
 	}
 }
 
-func TestTaskServiceIntegrationMarkBlockedCreatesResolutionTaskAndInbox(t *testing.T) {
+func TestTaskServiceIntegrationMarkBlockedDoesNotCreateResolutionTaskByDefault(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
@@ -305,22 +306,8 @@ func TestTaskServiceIntegrationMarkBlockedCreatesResolutionTaskAndInbox(t *testi
 	if err != nil {
 		t.Fatalf("ListByProject tasks: %v", err)
 	}
-	var resolution *repo.ProjectTask
-	for i := range tasks {
-		item := tasks[i]
-		if strings.HasPrefix(item.Title, "Resolve blocker for task "+project.Slug+"-") {
-			resolution = &item
-			break
-		}
-	}
-	if resolution == nil {
-		t.Fatalf("resolution task not found in project tasks")
-	}
-	if resolution.AssignedAgentID == nil || *resolution.AssignedAgentID != pmAgent.ID {
-		t.Fatalf("resolution assigned_agent_id = %v, want %s", resolution.AssignedAgentID, pmAgent.ID)
-	}
-	if resolution.WorkStatus != "queued" {
-		t.Fatalf("resolution work_status = %q, want %q", resolution.WorkStatus, "queued")
+	if len(tasks) != 1 {
+		t.Fatalf("project task count = %d, want 1", len(tasks))
 	}
 
 	inboxItems, err := inboxRepo.ListForUser(ctx, org.ID, pmUser.ID, repo.InboxListOptions{
@@ -338,20 +325,65 @@ func TestTaskServiceIntegrationMarkBlockedCreatesResolutionTaskAndInbox(t *testi
 	if _, err := svc.TransitionStatus(ctx, blocked.ID, "queued", Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus blocked->queued: %v", err)
 	}
+}
 
-	afterResolve, err := taskRepo.ListByProject(ctx, project.ID)
+func TestTaskServiceIntegrationMarkBlockedCreatesResolutionTaskWhenPolicyRequiresIt(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "pm-user", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "PM Agent", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Work item",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       ApplyBlockerAutoResolutionTask(json.RawMessage(`{}`), true),
+	})
 	if err != nil {
-		t.Fatalf("ListByProject after resolve: %v", err)
+		t.Fatalf("CreateTask: %v", err)
 	}
-	var foundResolution bool
-	for _, item := range afterResolve {
-		if resolution != nil && item.ID == resolution.ID {
-			foundResolution = true
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+
+	blocked, err := svc.MarkBlocked(ctx, created.ID, "dependency missing", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+	if blocked.WorkStatus != "blocked" {
+		t.Fatalf("blocked work_status = %q, want %q", blocked.WorkStatus, "blocked")
+	}
+
+	tasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject tasks: %v", err)
+	}
+	var resolution *repo.ProjectTask
+	for i := range tasks {
+		item := tasks[i]
+		if strings.HasPrefix(item.Title, "Resolve blocker for task "+project.Slug+"-") {
+			resolution = &item
 			break
 		}
 	}
-	if !foundResolution {
-		t.Fatal("resolution task no longer exists after blocked->queued transition")
+	if resolution == nil {
+		t.Fatalf("resolution task not found in project tasks")
+	}
+	if resolution.AssignedAgentID == nil || *resolution.AssignedAgentID != pmAgent.ID {
+		t.Fatalf("resolution assigned_agent_id = %v, want %s", resolution.AssignedAgentID, pmAgent.ID)
+	}
+	if resolution.WorkStatus != "queued" {
+		t.Fatalf("resolution work_status = %q, want %q", resolution.WorkStatus, "queued")
 	}
 }
 
@@ -465,6 +497,7 @@ func TestTaskServiceIntegrationQueueDecomposesOversizedTaskIntoChildWorkUnits(t 
 		Description:    &description,
 		FlowTemplateID: &template.ID,
 		CreatedByType:  "system",
+		Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
@@ -504,6 +537,55 @@ func TestTaskServiceIntegrationQueueDecomposesOversizedTaskIntoChildWorkUnits(t 
 	}
 	if !strings.Contains(primaryDeliverable, "Migrate all legacy markdown posts") {
 		t.Fatalf("primary_deliverable = %q, want focused deliverable", primaryDeliverable)
+	}
+}
+
+func TestTaskServiceIntegrationQueueSkipsDecompositionWithoutExplicitMode(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	description := strings.Join([]string{
+		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
+		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
+		"- Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots.",
+	}, "\n")
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Blog migration epic",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	queued, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if queued.WorkStatus != "queued" {
+		t.Fatalf("queued work_status = %q, want queued", queued.WorkStatus)
+	}
+	if queued.Description == nil || *queued.Description != description {
+		t.Fatalf("queued description = %v, want original description preserved", queued.Description)
+	}
+
+	var childCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task
+		WHERE project_id = $1
+		  AND metadata->>'decomposition_parent_task_id' = $2
+	`, project.ID, created.ID.String()).Scan(&childCount); err != nil {
+		t.Fatalf("count decomposed child tasks: %v", err)
+	}
+	if childCount != 0 {
+		t.Fatalf("decomposed child task count = %d, want 0", childCount)
 	}
 }
 
@@ -585,9 +667,23 @@ func seedTaskServiceFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpoo
 	if err != nil {
 		t.Fatalf("create review flow node: %v", err)
 	}
+	mergeNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Complete",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create merge flow node: %v", err)
+	}
 	workNode.NextNodeID = &reviewNode.ID
 	if _, err := repo.NewFlowNodeRepo(pool).Update(ctx, workNode); err != nil {
 		t.Fatalf("link flow nodes: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := repo.NewFlowNodeRepo(pool).Update(ctx, reviewNode); err != nil {
+		t.Fatalf("link review to merge node: %v", err)
 	}
 	template.StartNodeID = &workNode.ID
 	updated, err := templateRepo.Update(ctx, template)

@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	metadataKeyDecomposition   = "decomposition"
-	descriptionThresholdChars  = 320
-	maxGeneratedChildWorkUnits = 5
+	metadataKeyDecomposition               = "decomposition"
+	descriptionThresholdChars              = 320
+	maxGeneratedChildWorkUnits             = 5
+	QueueDecompositionModeParallelChildren = "parallel_children"
 )
 
 type Plan struct {
@@ -76,6 +77,9 @@ func Analyze(title string, description *string) Plan {
 
 func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecomposition, error) {
 	if strings.TrimSpace(ParsePrimaryDeliverable(input.Metadata)) != "" {
+		return QueueDecomposition{}, nil
+	}
+	if !QueueDecompositionRequested(input.Metadata) {
 		return QueueDecomposition{}, nil
 	}
 
@@ -149,12 +153,75 @@ func ApplyMetadata(existing json.RawMessage, plan Plan, sourceDescription string
 		childIDs = append(childIDs, childID.String())
 	}
 
+	mode := ParseQueueDecompositionMode(existing)
+	if mode == "" {
+		mode = QueueDecompositionModeParallelChildren
+	}
+
 	payload[metadataKeyDecomposition] = map[string]any{
 		"applied":             true,
+		"mode":                mode,
 		"primary_deliverable": strings.TrimSpace(plan.PrimaryDeliverable),
 		"deliverables":        append([]string(nil), plan.Deliverables...),
 		"source_description":  strings.TrimSpace(sourceDescription),
 		"child_task_ids":      childIDs,
+	}
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return normalizeJSON(existing)
+	}
+	return normalizeJSON(encoded)
+}
+
+func ParseQueueDecompositionMode(metadata json.RawMessage) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return ""
+	}
+	raw, ok := payload[metadataKeyDecomposition]
+	if !ok {
+		return ""
+	}
+	decomp, ok := raw.(map[string]any)
+	if !ok {
+		return ""
+	}
+	mode, _ := decomp["mode"].(string)
+	return normalizeQueueDecompositionMode(mode)
+}
+
+func QueueDecompositionRequested(metadata json.RawMessage) bool {
+	return ParseQueueDecompositionMode(metadata) == QueueDecompositionModeParallelChildren
+}
+
+func ApplyQueueDecompositionMode(existing json.RawMessage, mode string) json.RawMessage {
+	payload := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &payload)
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+
+	decomp, _ := payload[metadataKeyDecomposition].(map[string]any)
+	if decomp == nil {
+		decomp = map[string]any{}
+	}
+
+	if normalized := normalizeQueueDecompositionMode(mode); normalized != "" {
+		decomp["mode"] = normalized
+		payload[metadataKeyDecomposition] = decomp
+	} else {
+		delete(decomp, "mode")
+		if len(decomp) == 0 {
+			delete(payload, metadataKeyDecomposition)
+		} else {
+			payload[metadataKeyDecomposition] = decomp
+		}
 	}
 
 	encoded, err := json.Marshal(payload)
@@ -242,6 +309,15 @@ func strPtr(value string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func normalizeQueueDecompositionMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case QueueDecompositionModeParallelChildren:
+		return QueueDecompositionModeParallelChildren
+	default:
+		return ""
+	}
 }
 
 func normalizeJSON(value json.RawMessage) json.RawMessage {
