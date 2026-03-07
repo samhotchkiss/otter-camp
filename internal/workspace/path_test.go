@@ -1,8 +1,12 @@
 package workspace
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
 func TestResolveDataDir(t *testing.T) {
@@ -93,4 +97,58 @@ func TestProjectRoot(t *testing.T) {
 			t.Fatalf("ProjectRoot = %q, want %q", got, want)
 		}
 	})
+}
+
+func TestGeneralRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got := GeneralRoot("~/otter-data")
+	want := filepath.Join(home, "otter-data", "workspaces", "general")
+	if got != want {
+		t.Fatalf("GeneralRoot = %q, want %q", got, want)
+	}
+}
+
+func TestProjectRootByID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	orgID := uuid.New()
+	projectID := uuid.New()
+
+	t.Run("resolves slug workspace", func(t *testing.T) {
+		got, err := ProjectRootByID(context.Background(), projectLookupStub{
+			project: repo.Project{ID: projectID, OrganizationID: orgID, Slug: "sam-blog"},
+		}, "~/otter-data", orgID, projectID)
+		if err != nil {
+			t.Fatalf("ProjectRootByID: %v", err)
+		}
+
+		want := filepath.Join(home, "otter-data", "workspaces", "sam-blog")
+		if got != want {
+			t.Fatalf("ProjectRootByID = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("rejects organization mismatch", func(t *testing.T) {
+		_, err := ProjectRootByID(context.Background(), projectLookupStub{
+			project: repo.Project{ID: projectID, OrganizationID: uuid.New(), Slug: "sam-blog"},
+		}, "~/otter-data", orgID, projectID)
+		if err == nil {
+			t.Fatal("ProjectRootByID error = nil, want organization mismatch")
+		}
+	})
+}
+
+type projectLookupStub struct {
+	project repo.Project
+	err     error
+}
+
+func (s projectLookupStub) GetByID(_ context.Context, _ uuid.UUID) (repo.Project, error) {
+	if s.err != nil {
+		return repo.Project{}, s.err
+	}
+	return s.project, nil
 }

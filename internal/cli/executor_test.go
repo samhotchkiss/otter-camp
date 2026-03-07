@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -145,6 +146,55 @@ func TestDecodeMapInput(t *testing.T) {
 	}
 	if input.EnvOverrides["A"] != "1" || input.EnvOverrides["B"] != "2" {
 		t.Fatalf("env_overrides = %+v, want A=1 B=2", input.EnvOverrides)
+	}
+}
+
+func TestResolveWorkingDirectoryUsesProjectSlugWorkspace(t *testing.T) {
+	dataDir := t.TempDir()
+	resolvedDataDir, err := filepath.EvalSymlinks(dataDir)
+	if err != nil {
+		t.Fatalf("resolve data dir symlink: %v", err)
+	}
+	orgID := uuid.New()
+	projectID := uuid.New()
+
+	exec := NewExecutor(ExecutorOptions{
+		DataDir:  dataDir,
+		Projects: projectReaderStub{project: repo.Project{ID: projectID, OrganizationID: orgID, Slug: "site-redesign"}},
+	})
+
+	got, err := exec.resolveWorkingDirectory(context.Background(), orgID, CLIExecuteInput{
+		TaskID:    uuid.New(),
+		ProjectID: projectID,
+	})
+	if err != nil {
+		t.Fatalf("resolveWorkingDirectory: %v", err)
+	}
+
+	want := filepath.Join(resolvedDataDir, "workspaces", "site-redesign")
+	if got != want {
+		t.Fatalf("working directory = %q, want %q", got, want)
+	}
+}
+
+func TestResolveWorkingDirectoryRejectsProjectOrganizationMismatch(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+
+	exec := NewExecutor(ExecutorOptions{
+		DataDir:  t.TempDir(),
+		Projects: projectReaderStub{project: repo.Project{ID: projectID, OrganizationID: uuid.New(), Slug: "site-redesign"}},
+	})
+
+	_, err := exec.resolveWorkingDirectory(context.Background(), orgID, CLIExecuteInput{
+		TaskID:    uuid.New(),
+		ProjectID: projectID,
+	})
+	if err == nil {
+		t.Fatal("resolveWorkingDirectory error = nil, want organization mismatch")
+	}
+	if !strings.Contains(err.Error(), "project organization mismatch") {
+		t.Fatalf("resolveWorkingDirectory error = %v, want project organization mismatch", err)
 	}
 }
 

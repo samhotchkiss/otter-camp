@@ -33,6 +33,8 @@ Tools that give agents controlled access to the local execution environment — 
 
 System tools are always available but heavily policy-gated. The capabilities `system.cli.execute` and `system.file.write` (doc 16) gate access to CLI and file write operations.
 
+Within a single task execution there is one workspace contract, not separate per-tool filesystems. `file.read`, `file.list`, `file.search`, `file.write`, `git.*`, and `cli.execute` all resolve the same project workspace root on disk. Task scope determines which project/task binding is allowed to use that root; it does not create a second task-only directory tree. A file or manifest created through one system-tool surface must be immediately visible to the others without path translation or drift.
+
 For long-running content migration/import work, system tools are the primary continuity mechanism: fetched pages, manifests, helper scripts, and migrated outputs are expected to live in workspace files. Continuations should resume from those persisted files and checkpoint manifests, not by replaying large raw blobs through the chat transcript. When persisted scripts/artifacts exist but migrated outputs do not, the next turn should use that checkpointed state to write the first real output file before re-listing workspace state or generating more helper scripts.
 
 ### Category 3: Browser Tools
@@ -192,7 +194,7 @@ Agent requests tool call
   -> Log as chat_message (tool_call + tool_result)
 ```
 
-**Permission check for tier 1**: The check is scope-based, not policy-based. An agent in a project-scoped session can read tasks in that project. An agent in a task-scoped session can read files in that task's workspace. The check answers "is this data within the agent's current scope?" — not "is this agent allowed to read?". All agents can read within their scope. If a tier 1 call requests data outside the agent's scope (e.g., reading a task from another project), it returns an error, not a policy denial.
+**Permission check for tier 1**: The check is scope-based, not policy-based. An agent in a project-scoped session can read tasks in that project. An agent in a task-scoped session can read files in that task's bound project workspace. The check answers "is this data within the agent's current scope?" — not "is this agent allowed to read?". All agents can read within their scope. If a tier 1 call requests data outside the agent's scope (e.g., reading a task from another project), it returns an error, not a policy denial.
 
 ### Tier 2: Control-Plane Tools (Mutations, External, Side Effects)
 

@@ -25,6 +25,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
 	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 const (
@@ -144,7 +145,7 @@ func NewExecutor(opts ExecutorOptions) *Executor {
 		projects:   opts.Projects,
 		secrets:    opts.SecretService,
 		store:      opts.Store,
-		dataDir:    strings.TrimSpace(opts.DataDir),
+		dataDir:    workspace.ResolveDataDir(opts.DataDir),
 		root:       strings.TrimSpace(opts.WorkspaceRoot),
 		now:        opts.Now,
 		risk:       opts.Risk,
@@ -161,9 +162,6 @@ func NewExecutor(opts ExecutorOptions) *Executor {
 	}
 	if instance.projects == nil && opts.Pool != nil {
 		instance.projects = repo.NewProjectRepo(opts.Pool)
-	}
-	if instance.dataDir == "" {
-		instance.dataDir = "./data"
 	}
 	if instance.now == nil {
 		instance.now = func() time.Time { return time.Now().UTC() }
@@ -220,7 +218,7 @@ func (e *Executor) ExecuteCommand(ctx context.Context, input CLIExecuteInput) (C
 		return CLIExecuteOutput{}, err
 	}
 
-	workingDirectory, err := e.resolveWorkingDirectory(orgID, input)
+	workingDirectory, err := e.resolveWorkingDirectory(ctx, orgID, input)
 	if err != nil {
 		return CLIExecuteOutput{}, err
 	}
@@ -513,10 +511,14 @@ func (e *Executor) ExecuteCommand(ctx context.Context, input CLIExecuteInput) (C
 	}, nil
 }
 
-func (e *Executor) resolveWorkingDirectory(orgID uuid.UUID, input CLIExecuteInput) (string, error) {
+func (e *Executor) resolveWorkingDirectory(ctx context.Context, orgID uuid.UUID, input CLIExecuteInput) (string, error) {
 	root := strings.TrimSpace(e.root)
 	if root == "" {
-		root = filepath.Join(e.dataDir, "workspaces", orgID.String(), input.ProjectID.String(), input.TaskID.String())
+		var err error
+		root, err = workspace.ProjectRootByID(ctx, e.projects, e.dataDir, orgID, input.ProjectID)
+		if err != nil {
+			return "", err
+		}
 	}
 	workDir, err := nativetools.NewSessionWorkDir(root)
 	if err != nil {
