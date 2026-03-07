@@ -434,11 +434,13 @@ func TestTaskQueueProcessorIntegrationHighRiskAsyncDecisionPausesTaskEX248(t *te
 	}
 
 	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
 	runRepo := NewRunRepository(fx.pool)
 	inboxRepo := repo.NewInboxItemRepo(fx.pool)
 
 	var (
 		taskRecord repo.ProjectTask
+		execution  repo.FlowNodeExecution
 		artifact   repo.InboxItem
 	)
 	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
@@ -447,8 +449,15 @@ func TestTaskQueueProcessorIntegrationHighRiskAsyncDecisionPausesTaskEX248(t *te
 		if waitErr != nil {
 			return false, waitErr
 		}
-		if taskRecord.WorkStatus != "review" {
+		if taskRecord.WorkStatus != "review" || taskRecord.CurrentFlowNodeID == nil {
 			return false, nil
+		}
+		execution, waitErr = executionRepo.GetActive(ctx, created.ID, *taskRecord.CurrentFlowNodeID)
+		if waitErr != nil {
+			if errors.Is(waitErr, repo.ErrNotFound) {
+				return false, nil
+			}
+			return false, waitErr
 		}
 
 		items, waitErr := inboxRepo.ListBroadcast(ctx, fx.org.ID, repo.InboxListOptions{
@@ -476,14 +485,114 @@ func TestTaskQueueProcessorIntegrationHighRiskAsyncDecisionPausesTaskEX248(t *te
 	if taskRecord.WorkStatus != "review" {
 		t.Fatalf("task work_status = %q, want review", taskRecord.WorkStatus)
 	}
-	if taskRecord.CurrentFlowNodeID != nil {
-		t.Fatalf("task current_flow_node_id = %v, want nil before execution starts", taskRecord.CurrentFlowNodeID)
+	if taskRecord.CurrentFlowNodeID == nil {
+		t.Fatal("task current_flow_node_id = nil, want active flow node while paused in review")
+	}
+	if execution.ID == uuid.Nil {
+		t.Fatal("active flow execution id = nil, want self-healed execution state")
+	}
+	if execution.FlowNodeID != *taskRecord.CurrentFlowNodeID {
+		t.Fatalf("active flow execution node = %s, want %s", execution.FlowNodeID, *taskRecord.CurrentFlowNodeID)
 	}
 	if len(runs) != 0 {
 		t.Fatalf("run count = %d, want 0 for hard-stop task", len(runs))
 	}
 	if artifact.SourceTaskID == nil || *artifact.SourceTaskID != created.ID {
 		t.Fatalf("artifact source_task_id = %v, want %s", artifact.SourceTaskID, created.ID)
+	}
+}
+
+func TestTaskQueueProcessorIntegrationReviewEventSelfHealsMissingExecutionStateEX293(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	template := seedTaskQueueReviewCompletionFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, fx.agent.ID, fx.agent.ID)
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Corrupted review task",
+		Description:     stringPtr("Repair missing flow execution state before keeping this task in review."),
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := taskRepo.UpdateStatus(ctx, created.ID, "review"); err != nil {
+		t.Fatalf("UpdateStatus review: %v", err)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    created.ID.String(),
+		"project_id": fx.project.ID.String(),
+		"to_status":  "review",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fx.bus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: fx.org.ID,
+		EventType:      "task.status_changed",
+		ActorType:      "system",
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("publish task.status_changed review: %v", err)
+	}
+
+	var (
+		taskRecord repo.ProjectTask
+		execution  repo.FlowNodeExecution
+	)
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		var waitErr error
+		taskRecord, waitErr = taskRepo.GetByID(ctx, created.ID)
+		if waitErr != nil {
+			return false, waitErr
+		}
+		if taskRecord.WorkStatus != "review" || taskRecord.CurrentFlowNodeID == nil {
+			return false, nil
+		}
+		execution, waitErr = executionRepo.GetActive(ctx, created.ID, *taskRecord.CurrentFlowNodeID)
+		if waitErr != nil {
+			if errors.Is(waitErr, repo.ErrNotFound) {
+				return false, nil
+			}
+			return false, waitErr
+		}
+		return true, nil
+	})
+
+	runs, err := runRepo.List(ctx, RunListFilter{
+		OrganizationID: fx.org.ID,
+		TaskID:         &created.ID,
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("List runs: %v", err)
+	}
+
+	if taskRecord.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", taskRecord.WorkStatus)
+	}
+	if taskRecord.CurrentFlowNodeID == nil {
+		t.Fatal("task current_flow_node_id = nil after repair")
+	}
+	if execution.ID == uuid.Nil {
+		t.Fatal("active flow execution id = nil after repair")
+	}
+	if execution.FlowNodeID != *taskRecord.CurrentFlowNodeID {
+		t.Fatalf("active flow execution node = %s, want %s", execution.FlowNodeID, *taskRecord.CurrentFlowNodeID)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("run count = %d, want 0 while task remains in review", len(runs))
 	}
 }
 
