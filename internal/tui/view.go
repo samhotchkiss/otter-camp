@@ -1485,54 +1485,31 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		return lines
 	}
 
-	// Open tasks from selectedProject.Tasks (loaded from API)
+	// Open tasks from the best available live source. During restart hydration,
+	// selectedProject detail can arrive before the dedicated project-task reload,
+	// so avoid rendering a false zero-open-task state while fresher task truth is
+	// still arriving through sidebar snapshots or replay-seeded task records.
 	query := normalizedFilterQuery(m.mainFilter)
 	var openTasks []SidebarTaskItem
 	totalUnfilteredOpenTasks := 0 // EX-118: track total open tasks before filter
-	if len(proj.Tasks) > 0 {
-		for _, t := range proj.Tasks {
-			if t.WorkStatus == "done" || t.WorkStatus == "approved" || t.WorkStatus == "cancelled" {
-				continue
-			}
-			totalUnfilteredOpenTasks++
-			taskLabel := t.Title
-			if t.TaskNumber > 0 {
-				taskLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
-			}
-			if !matchesFilter(taskLabel, query) && !matchesFilter(t.WorkStatus, query) {
-				continue
-			}
-			openTasks = append(openTasks, t)
+	openTaskSource, openTasksReady := m.workspace.projectOpenTasks(m.workspace.selectedProjectID)
+	for _, t := range openTaskSource {
+		totalUnfilteredOpenTasks++
+		taskLabel := t.Title
+		if t.TaskNumber > 0 {
+			taskLabel = fmt.Sprintf("OC-%d: %s", t.TaskNumber, t.Title)
 		}
-	} else {
-		// Fall back to sidebar task nodes if API detail not yet available.
-		// EX-156: use child.TaskID (raw UUID) not child.ID (sidebar node ID "task-<uuid>")
-		// so that RequiresHumanReview lookup and loadTaskDetailCmd receive the correct ID.
-		// Also include TaskNumber so the "OC-N:" prefix renders correctly in the list.
-		children := m.workspace.projectChildren(projectNodeID)
-		for _, cid := range children {
-			child := m.workspace.nodes[cid]
-			if child == nil || child.Kind != sidebarKindTask {
-				continue
-			}
-			if child.WorkStatus == "done" || child.WorkStatus == "approved" {
-				continue
-			}
-			totalUnfilteredOpenTasks++
-			taskLabel := child.Label
-			if !matchesFilter(taskLabel, query) && !matchesFilter(child.WorkStatus, query) {
-				continue
-			}
-			openTasks = append(openTasks, SidebarTaskItem{
-				ID:         child.TaskID, // raw UUID, not sidebar node ID
-				Title:      child.Label,
-				WorkStatus: child.WorkStatus,
-				TaskNumber: child.TaskNumber,
-			})
+		if !matchesFilter(taskLabel, query) && !matchesFilter(t.WorkStatus, query) {
+			continue
 		}
+		openTasks = append(openTasks, t)
 	}
 
-	if len(openTasks) == 0 {
+	if !openTasksReady {
+		lines = append(lines, styleLabel.Render("OPEN TASKS"))
+		lines = append(lines, styleMuted.Render("  Loading live tasks…"))
+	}
+	if openTasksReady && len(openTasks) == 0 {
 		lines = append(lines, styleLabel.Render("OPEN TASKS (0)"))
 		// EX-118: distinguish between a genuinely empty task list and a filter with no matches.
 		if query != "" && totalUnfilteredOpenTasks > 0 {

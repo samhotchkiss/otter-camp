@@ -385,6 +385,89 @@ func TestProjectViewLiveTaskReloadKeepsOpenTasksInSyncEX292(t *testing.T) {
 	}
 }
 
+func TestFreshRestartProjectViewPrefersLiveShellAndTaskTruthEX300(t *testing.T) {
+	t.Parallel()
+
+	projectID := "proj-restart"
+	state := DefaultState()
+	state.LastMainView = string(ViewProject)
+	state.LastSelectedProjectID = projectID
+
+	liveTasks := []SidebarTaskItem{
+		{ID: "task-11", Title: "Worker run still active", WorkStatus: "in_progress", TaskNumber: 11},
+		{ID: "task-14", Title: "Ready for review", WorkStatus: "review", TaskNumber: 14},
+	}
+
+	model := NewModelWithRuntime(state, RuntimeHints{})
+	model = pressRealtimeMsg(model, tea.WindowSizeMsg{Width: 130, Height: 40})
+	model.workspace.tasks["task-11"] = &taskRecord{
+		ID:         "task-11",
+		ProjectID:  projectID,
+		Title:      "Worker run still active",
+		Status:     "in_progress",
+		TaskNumber: 11,
+	}
+	model.workspace.tasks["task-14"] = &taskRecord{
+		ID:         "task-14",
+		ProjectID:  projectID,
+		Title:      "Ready for review",
+		Status:     "review",
+		TaskNumber: 14,
+	}
+
+	model = pressRealtimeMsg(model, sidebarDataLoadedMsg{
+		Projects: []SidebarProjectItem{{
+			ID:          projectID,
+			DisplayName: "Sam.blog",
+			Slug:        "sam-blog",
+		}},
+	})
+	model = pressRealtimeMsg(model, projectDetailLoadedMsg{
+		Detail: ProjectDetail{
+			ID: projectID,
+			Tasks: []SidebarTaskItem{
+				{ID: "task-stale", Title: "Finished earlier", WorkStatus: "done", TaskNumber: 9},
+			},
+			DoneCount: 1,
+		},
+	})
+
+	rendered := strings.Join(model.renderProjectView(130, 40), "\n")
+	if !strings.Contains(rendered, "Sam.blog") {
+		t.Fatalf("fresh restart project view should preserve live project label:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Untitled project") {
+		t.Fatalf("fresh restart project view regressed to untitled shell:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "OPEN TASKS (2)") {
+		t.Fatalf("fresh restart project view should use live open-task truth:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "OC-11: Worker run still active") {
+		t.Fatalf("fresh restart project view missing in-progress task:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "OC-14: Ready for review") {
+		t.Fatalf("fresh restart project view missing review task:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "OPEN TASKS (0)") {
+		t.Fatalf("fresh restart project view still shows stale zero state:\n%s", rendered)
+	}
+
+	model = pressRealtimeMsg(model, projectTasksLoadedMsg{
+		ProjectID: projectID,
+		Tasks: append(append([]SidebarTaskItem{}, liveTasks...),
+			SidebarTaskItem{ID: "task-stale", Title: "Finished earlier", WorkStatus: "done", TaskNumber: 9},
+		),
+	})
+
+	rendered = strings.Join(model.renderProjectView(130, 40), "\n")
+	if !strings.Contains(rendered, "OPEN TASKS (2)") {
+		t.Fatalf("project view should stay truthful after first project-task reload:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "OC-11: Worker run still active") || !strings.Contains(rendered, "OC-14: Ready for review") {
+		t.Fatalf("project view lost live task truth after project-task reload:\n%s", rendered)
+	}
+}
+
 func TestSmokeRuntimeTruthProjectTaskAndWorkerSignals(t *testing.T) {
 	t.Parallel()
 
@@ -485,6 +568,39 @@ func TestSmokeRuntimeTruthProjectTaskAndWorkerSignals(t *testing.T) {
 	activity := strings.Join(model.ActivityEntries(), " | ")
 	if !strings.Contains(activity, "worker unresponsive") {
 		t.Fatalf("activity log missing worker warning: %q", activity)
+	}
+}
+
+func TestRuntimeDashboardRefreshClearsStaleRunFailureEX300(t *testing.T) {
+	t.Parallel()
+
+	model := NewModel(DefaultState())
+	model = pressRealtimeMsg(model, tea.WindowSizeMsg{Width: 130, Height: 36})
+
+	model = pressRealtimeMsg(model, WorkspaceEnvelopeMsg{Envelope: EventEnvelope{
+		EventType: "run.failed",
+		Payload: mustJSON(t, map[string]any{
+			"run_id": "run-stale",
+			"reason": "worker crashed before restart",
+		}),
+	}})
+	if !strings.Contains(model.statusMessage, "Run failed") {
+		t.Fatalf("statusMessage = %q, want stale run failure before refresh", model.statusMessage)
+	}
+
+	model = pressRealtimeMsg(model, operatorDashboardLoadedMsg{
+		Data: &OperatorDashboardData{
+			Summary: OperatorDashboardSummary{
+				Health:         "active_healthy",
+				ActiveProjects: 1,
+				ActiveTasks:    2,
+				ActiveRuns:     1,
+			},
+		},
+	})
+
+	if got := model.statusMessage; got != "Runtime healthy — active work is moving and ready for supervision." {
+		t.Fatalf("statusMessage after runtime refresh = %q", got)
 	}
 }
 

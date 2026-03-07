@@ -933,6 +933,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.workspace.activity = appendActivity(m.workspace.activity, "selected project no longer active; context cleared")
 			m.statusMessage = "Selected project is no longer active."
 		}
+		if m.workspace.selectedProjectID != "" {
+			m.workspace.ensureSelectedProjectShell()
+		}
 		activityParts := []string{}
 		if len(projects) > 0 {
 			activityParts = append(activityParts, fmt.Sprintf("%d project(s)", len(projects)))
@@ -958,9 +961,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := loadAgentsCmd(m.runtimeHints); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-		// If restoring to a project view with a persisted project ID, eagerly load project detail
-		// so the project board is ready without requiring an extra sidebar click.
-		if m.workspace.selectedProjectID != "" && m.workspace.selectedProject == nil {
+		// If restoring to a project view with a persisted project ID, always reload
+		// project detail so any shell data from the sidebar is replaced with the
+		// latest project metadata as soon as the request completes.
+		if m.workspace.selectedProjectID != "" {
 			if cmd := loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -1000,9 +1004,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.workspace.showProjectFiles = false
 		}
 		m.workspace.selectedProject = &typed.Detail
-		if node := m.workspace.nodes["project-"+typed.Detail.ID]; node != nil {
-			node.ProjectSlug = strings.TrimSpace(typed.Detail.Slug)
-			node.Label = ResolveProjectLabel(typed.Detail.DisplayName, typed.Detail.Slug, "")
+		m.workspace.ensureSelectedProjectShell()
+		if node := m.workspace.nodes["project-"+typed.Detail.ID]; node != nil && m.workspace.selectedProject != nil {
+			if slug := strings.TrimSpace(m.workspace.selectedProject.Slug); slug != "" {
+				node.ProjectSlug = slug
+			}
+			node.Label = ResolveProjectLabel(
+				m.workspace.selectedProject.DisplayName,
+				m.workspace.selectedProject.Slug,
+				node.Label,
+			)
 		}
 		if liveTasks, ok := m.workspace.projectTaskSnapshot(typed.Detail.ID); ok {
 			m.workspace.selectedProject.Tasks = liveTasks
@@ -1026,6 +1037,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.workspace.setOperatorDashboard(typed.Data)
+		if shouldReplaceStatusWithRuntimeHealth(m.statusMessage) {
+			if headline := runtimeHealthStatusHeadline(typed.Data); headline != "" {
+				m.statusMessage = headline
+			}
+		}
 		return m, nil
 	case settingsLoadedMsg:
 		if typed.Err != nil {
@@ -8234,6 +8250,27 @@ func initialStatusMessage(state UIState, runtime RuntimeHints) string {
 		return base + " Frank jump: Ctrl-G, 0 (outside chat input), or :frank."
 	}
 	return base
+}
+
+func shouldReplaceStatusWithRuntimeHealth(status string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(status))
+	switch {
+	case strings.Contains(trimmed, "run failed"),
+		strings.Contains(trimmed, "dead-lettered"),
+		strings.Contains(trimmed, "supervisor escalation"),
+		strings.Contains(trimmed, "worker appears offline"),
+		strings.Contains(trimmed, "worker unresponsive"):
+		return true
+	default:
+		return false
+	}
+}
+
+func runtimeHealthStatusHeadline(data *OperatorDashboardData) string {
+	if data == nil {
+		return ""
+	}
+	return operatorDashboardHeadline(data.Summary)
 }
 
 // isResolvableSessionAlias returns true for session placeholder strings that
