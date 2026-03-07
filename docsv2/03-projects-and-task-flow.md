@@ -189,7 +189,7 @@ Explicit transition table:
 When a task transitions to `queued`, it enters the scheduling queue. The scheduler manages pickup:
 
 - The scheduler monitors concurrency slots managed by the model gateway (`07-models-and-inference.md`).
-- When a slot opens, the scheduler picks the highest-priority eligible task and first ensures the task has concrete flow execution state for its current/start node. Only after that state exists does it transition the task into `in_progress`, resolve the actor, create an async session, and start a run.
+- When a slot opens, the scheduler picks the highest-priority eligible task and first ensures the task has concrete flow execution state for its current/start node. Only after that state exists does it transition the task into `in_progress`, resolve the actor, resolve or create the canonical task-scoped async session, and start a run. Project-scoped PM sessions may coordinate the work, but they are never the execution container for that task's kickoff or run history.
 - **Dependency-aware scheduling**: a task is only eligible for pickup if all its dependencies are `done`. A task can be `queued` with unresolved dependencies — it sits in the queue but is skipped until dependencies clear. This ensures order of operations without requiring the PM to manually sequence queuing.
 - **Project gate scheduling (`blocks_scope = 'all'`)**: if any task in a project has `blocks_scope = 'all'` and `work_status` not in (`done`, `cancelled`), the scheduler may only start the lowest `task_number` among those gate tasks. No other task in that project may start until that gate task reaches `done` or `cancelled`.
 - Subtasks within a node also go through the scheduler. They are queued as work units and picked up when slots are available, respecting inter-subtask dependencies.
@@ -324,7 +324,7 @@ When an agent discovers an issue that prevents progress — a cross-task conflic
 - The agent's task transitions to `blocked` because it has an unresolved dependency.
 - The new task is assigned to the project manager by default.
 - The PM triages in a project-scoped session: they may resolve it themselves, escalate, or break it into further tasks.
-- That PM triage session is not the task's work log. The task's execution/review transcript stays on task-scoped async sessions so the operator sees the real task history in task detail.
+- That PM triage session is not the task's work log. The task's execution/review transcript stays on the canonical task-scoped async session so the operator sees the real task history in task detail. If duplicate blank task sessions exist, the runtime collapses them back to that single canonical task session before dispatching more work.
 - When the blocking task reaches `done`, the original task's dependency is satisfied and it can resume.
 
 ### Escalation Path

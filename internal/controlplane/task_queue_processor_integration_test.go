@@ -1054,6 +1054,143 @@ func TestTaskQueueProcessorIntegrationInProgressAssignedAgentTaskCreatesTaskSess
 	}
 }
 
+func TestTaskQueueProcessorIntegrationAssignedWakeupIgnoresProjectScopedRunSessionEX294(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	sessionRepo := repo.NewChatSessionRepo(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+	participantRepo := repo.NewChatParticipantRepo(fx.pool)
+
+	projectSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: fx.org.ID,
+		ScopeType:      "project",
+		ScopeID:        fx.project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"task_queue_processor_integration_test"}`),
+	})
+	if err != nil {
+		t.Fatalf("Create project-scoped async session: %v", err)
+	}
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Canonical task session dispatch",
+		Description:     stringPtr("Dispatch task work through the canonical task-scoped session even when a project-scoped PM session exists."),
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	taskSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: fx.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        created.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"task_queue_processor_integration_test","canonical":true}`),
+	})
+	if err != nil {
+		t.Fatalf("Create canonical task session: %v", err)
+	}
+	if _, err := sessionRepo.IncrementCounts(ctx, taskSession.ID, 0, 1); err != nil {
+		t.Fatalf("IncrementCounts canonical task session: %v", err)
+	}
+
+	blankDuplicate, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: fx.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        created.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"task_queue_processor_integration_test","duplicate_blank":true}`),
+	})
+	if err != nil {
+		t.Fatalf("Create blank duplicate task session: %v", err)
+	}
+
+	runRecord := Run{
+		ID:             uuid.New(),
+		OrganizationID: fx.org.ID,
+		ProjectID:      &fx.project.ID,
+		TaskID:         &created.ID,
+		SessionID:      &projectSession.ID,
+		PrincipalType:  "agent",
+		PrincipalID:    fx.agent.ID,
+		Status:         "in_progress",
+		TriggerType:    taskQueueTriggerType,
+		Metadata: buildExecutionWakeupMetadata(nil, executionScope{Type: "task", ID: created.ID}, "task_queue_processor", "assigned_task", map[string]any{
+			"source":   "task_queue_processor",
+			"run_mode": "async",
+		}, "started", nil),
+	}
+
+	if err := fx.processor.dispatchTaskQueueWakeup(ctx, runRecord); err != nil {
+		t.Fatalf("dispatchTaskQueueWakeup: %v", err)
+	}
+
+	taskMessages, err := messageRepo.ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession task session: %v", err)
+	}
+	if !hasTaskQueueKickoffMessage(taskMessages, created.ID) {
+		t.Fatal("expected kickoff message on canonical task session")
+	}
+
+	projectMessages, err := messageRepo.ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project session: %v", err)
+	}
+	for _, message := range projectMessages {
+		if message.Role != "user" || len(message.Metadata) == 0 {
+			continue
+		}
+		var metadata map[string]any
+		if unmarshalErr := json.Unmarshal(message.Metadata, &metadata); unmarshalErr != nil {
+			continue
+		}
+		if metadata["source"] == "task_queue_processor" {
+			t.Fatalf("project-scoped session captured task wakeup: %+v", message)
+		}
+	}
+
+	participants, err := participantRepo.ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession task participants: %v", err)
+	}
+	var foundAgentResponder bool
+	for _, participant := range participants {
+		if participant.ParticipantType == "agent" && participant.ParticipantID == fx.agent.ID {
+			foundAgentResponder = true
+			break
+		}
+	}
+	if !foundAgentResponder {
+		t.Fatal("expected responder participant on canonical task session")
+	}
+
+	duplicateStored, err := sessionRepo.GetByID(ctx, blankDuplicate.ID)
+	if err != nil {
+		t.Fatalf("GetByID blank duplicate: %v", err)
+	}
+	if duplicateStored.Status != "closed" || duplicateStored.ClosedAt == nil {
+		t.Fatalf("blank duplicate task session = %+v, want closed with closed_at", duplicateStored)
+	}
+}
+
 func TestTaskQueueProcessorIntegrationRepeatedInProgressEventsReuseTaskSession(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
@@ -2539,6 +2676,7 @@ type taskQueueProcessorFixture struct {
 	taskCompletedSub   eventbus.Subscription
 	runCancellationSub eventbus.Subscription
 	flowAdvancedSub    eventbus.Subscription
+	processor          *TaskQueueProcessor
 	tasks              tasksvc.TaskService
 	flow               flowsvc.FlowExecutionService
 	org                repo.Organization
@@ -2638,6 +2776,7 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 		taskCompletedSub:   taskCompletedSub,
 		runCancellationSub: runCancellationSub,
 		flowAdvancedSub:    flowAdvancedSub,
+		processor:          processor,
 		tasks:              taskService,
 		flow:               flowService,
 		org:                org,

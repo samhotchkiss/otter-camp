@@ -46,7 +46,7 @@ func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresIrrelevantStatusesAndEven
 	}
 }
 
-func TestTaskQueueProcessorHandleTaskQueuedEventCreatesMissingTaskSessionOnceForInProgressTask(t *testing.T) {
+func TestTaskQueueProcessorHandleTaskQueuedEventCreatesOrReusesCanonicalTaskSessionForInProgressTask(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
 	projectID := uuid.New()
@@ -93,18 +93,19 @@ func TestTaskQueueProcessorHandleTaskQueuedEventCreatesMissingTaskSessionOnceFor
 		t.Fatalf("handleTaskQueuedEvent: %v", err)
 	}
 
-	if len(chatService.createSessionInputs) != 1 {
-		t.Fatalf("CreateSession calls = %d, want 1", len(chatService.createSessionInputs))
+	if len(chatService.createSessionInputs) == 0 {
+		t.Fatal("expected CreateSession to canonicalize a task-scoped async session")
 	}
-	createdInput := chatService.createSessionInputs[0]
-	if createdInput.ScopeType != "project_task" {
-		t.Fatalf("CreateSession scope_type = %q, want project_task", createdInput.ScopeType)
-	}
-	if createdInput.ScopeID != taskID {
-		t.Fatalf("CreateSession scope_id = %s, want %s", createdInput.ScopeID, taskID)
-	}
-	if createdInput.Mode != "async" {
-		t.Fatalf("CreateSession mode = %q, want async", createdInput.Mode)
+	for _, createdInput := range chatService.createSessionInputs {
+		if createdInput.ScopeType != "project_task" {
+			t.Fatalf("CreateSession scope_type = %q, want project_task", createdInput.ScopeType)
+		}
+		if createdInput.ScopeID != taskID {
+			t.Fatalf("CreateSession scope_id = %s, want %s", createdInput.ScopeID, taskID)
+		}
+		if createdInput.Mode != "async" {
+			t.Fatalf("CreateSession mode = %q, want async", createdInput.Mode)
+		}
 	}
 
 	session, err := sessionRepo.GetByScopeAndMode(ctx, "project_task", taskID, "async")
@@ -123,7 +124,7 @@ func TestTaskQueueProcessorHandleTaskQueuedEventCreatesMissingTaskSessionOnceFor
 	}
 }
 
-func TestTaskQueueProcessorHandleTaskQueuedEventRepeatedStartReusesExistingTaskSession(t *testing.T) {
+func TestTaskQueueProcessorHandleTaskQueuedEventRepeatedStartReusesCanonicalTaskSession(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
 	projectID := uuid.New()
@@ -172,8 +173,8 @@ func TestTaskQueueProcessorHandleTaskQueuedEventRepeatedStartReusesExistingTaskS
 		}
 	}
 
-	if len(chatService.createSessionInputs) != 1 {
-		t.Fatalf("CreateSession calls = %d, want 1", len(chatService.createSessionInputs))
+	if len(chatService.createSessionInputs) == 0 {
+		t.Fatal("expected CreateSession to canonicalize the task-scoped async session")
 	}
 	if len(runService.createRunInputs) != 2 {
 		t.Fatalf("CreateRun calls = %d, want 2", len(runService.createRunInputs))
@@ -621,13 +622,18 @@ func TestEnsureAssignedAgentRunAddsParticipantBeforeKickoff(t *testing.T) {
 	sessionID := uuid.New()
 	runID := uuid.New()
 
-	sessionRepo := &fakeTaskQueueSessionRepository{
-		session: &repo.ChatSession{ID: sessionID},
+	canonicalSession := &chat.ChatSession{
+		ID:             sessionID,
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        taskID,
+		Mode:           "async",
+		Status:         "active",
 	}
 	runService := &fakeTaskQueueRunStarter{
 		run: Run{ID: runID, SessionID: &sessionID},
 	}
-	chatService := &fakeTaskQueueChatService{}
+	chatService := &fakeTaskQueueChatService{session: canonicalSession}
 
 	processor := &TaskQueueProcessor{
 		tasks: &fakeTaskQueueTaskRepository{
@@ -638,9 +644,8 @@ func TestEnsureAssignedAgentRunAddsParticipantBeforeKickoff(t *testing.T) {
 				Title:          "Queued task",
 			},
 		},
-		sessions: sessionRepo,
-		runs:     runService,
-		chats:    chatService,
+		runs:  runService,
+		chats: chatService,
 	}
 
 	err := processor.ensureAssignedAgentRun(ctx, eventbus.DomainEvent{ID: uuid.New()}, repo.ProjectTask{
@@ -686,6 +691,14 @@ func TestEnsureAssignedAgentRunIgnoresDuplicateParticipant(t *testing.T) {
 	agentID := uuid.New()
 	sessionID := uuid.New()
 	runID := uuid.New()
+	canonicalSession := &chat.ChatSession{
+		ID:             sessionID,
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        taskID,
+		Mode:           "async",
+		Status:         "active",
+	}
 
 	processor := &TaskQueueProcessor{
 		tasks: &fakeTaskQueueTaskRepository{
@@ -696,13 +709,11 @@ func TestEnsureAssignedAgentRunIgnoresDuplicateParticipant(t *testing.T) {
 				Title:          "Queued task",
 			},
 		},
-		sessions: &fakeTaskQueueSessionRepository{
-			session: &repo.ChatSession{ID: sessionID},
-		},
 		runs: &fakeTaskQueueRunStarter{
 			run: Run{ID: runID, SessionID: &sessionID},
 		},
 		chats: &fakeTaskQueueChatService{
+			session:           canonicalSession,
 			addParticipantErr: chat.ErrAlreadyParticipant,
 		},
 	}
