@@ -116,6 +116,127 @@ EOF
   log "startup-context cache=${CONTEXT_CACHE_MODE} changed=${CONTEXT_CACHE_CHANGED_DOCS}"
 }
 
+write_prompt_file() {
+  {
+    if [[ -n "${CONTEXT_CACHE_PREFACE}" ]]; then
+      printf '%s\n\n' "${CONTEXT_CACHE_PREFACE}"
+    fi
+
+    printf 'Read and follow %s exactly.\n\n' "${DOC_ISSUES_INSTRUCTIONS}"
+
+    cat <<'EOF'
+Primary operating docs:
+EOF
+    printf -- '- %s/build/INSTRUCTIONS.md\n' "${CONTROL_REPO_DIR}"
+    printf -- '- %s/build/CONTEXT.md\n' "${CONTROL_REPO_DIR}"
+    printf -- '- The active task file in %s/02-in-progress\n\n' "${SHARED_ISSUES_DIR}"
+
+    cat <<'EOF'
+Critical workspace rule:
+EOF
+    printf -- '- Perform all git work and code changes in %s only.\n' "${WORKTREE_DIR}"
+    printf -- '- Keep %s anchored to base branch %s when starting each run.\n' "${WORKTREE_DIR}" "${REQUIRED_BASE_BRANCH}"
+    printf -- '- The shared queue is at %s; move task files between lanes there.\n\n' "${SHARED_ISSUES_DIR}"
+
+    cat <<'EOF'
+Lane workflow (strict):
+EOF
+    printf '1. If any task already exists in %s/02-in-progress, resume that task first (do not pull a new task).\n' "${SHARED_ISSUES_DIR}"
+    printf '2. On a fresh run with empty 02-in-progress and 05-completed, start with 001-project-scaffold.md.\n'
+    printf '3. When selecting from %s/01-ready, prioritize tasks that contain a top-level "## Reviewer Required Changes" block before net-new tasks (lowest task number first).\n' "${SHARED_ISSUES_DIR}"
+    printf '4. Claim from %s/01-ready with `%s claim %s <task-file>` (respect Depends on).\n' "${SHARED_ISSUES_DIR}" "${ISSUE_LANE_CLI}" "${SHARED_ISSUES_DIR}"
+    printf '5. Use `%s move %s <src-lane> <dst-lane> <task-file>` for lane transitions; treat `claimed`, `already_claimed`, and `already_completed` as idempotent non-fatal states.\n' "${ISSUE_LANE_CLI}" "${SHARED_ISSUES_DIR}"
+    printf '6. Implement exactly scoped requirements from the task file.\n'
+    printf '7. Run required tests from the task (unit/integration/e2e as specified).\n'
+    printf '8. For CLI tasks, run a CLI smoke check after build.\n'
+    printf '9. For reviewer-rework tasks: treat every item in "## Reviewer Required Changes" as mandatory acceptance criteria, then remove that top-level block once all items are resolved.\n'
+    printf '10. Preserve a concise resolution summary in %s/notes.md (task file, fixes applied, tests run).\n' "${SHARED_ISSUES_DIR}"
+    printf '11. Move completed tasks to %s/03-needs-review.\n\n' "${SHARED_ISSUES_DIR}"
+
+    cat <<'EOF'
+Routing + test conventions:
+- API routes: /v1/*
+- Health routes: /health/live, /health/ready (aliases: /health, /ready)
+- Test reset route: POST /test/reset (test mode only)
+
+Implementation directives:
+- In task 001, initialize go.mod with module path: github.com/samhotchkiss/otter-camp
+- If integration tests require testdb.New(t) and it does not exist yet, complete task 002 first; do not stub around it.
+- Use one branch/PR per task by default.
+EOF
+    printf -- '- Create each task branch from %s and target %s in PRs.\n' "${REQUIRED_BASE_BRANCH}" "${REQUIRED_BASE_BRANCH}"
+    cat <<'EOF'
+- Commit and push each completed task branch to origin.
+EOF
+    printf -- '- Open/update a PR per task targeting branch %s.\n' "${REQUIRED_BASE_BRANCH}"
+    cat <<'EOF'
+- Add or update tests for every implemented task scope (unit/integration/e2e as the task requires); do not skip test authoring silently.
+- Do not treat a task as finished until it is review-ready and pushed.
+- Ignore historical "open blocker" wording in build/DEPENDENCY-GRAPH.md and build/SUMMARY.md; build/ISSUES.md is resolved and task files are authoritative.
+- In thin-spec areas, make reasonable engineering judgments and document them in code comments and task notes; do not block unless a critical invariant would be violated.
+
+Execution policy:
+EOF
+    printf -- '- Continue until no actionable tasks remain in %s/01-ready.\n' "${SHARED_ISSUES_DIR}"
+    printf -- '- If blocked, append clear blocker notes to %s/notes.md, then continue with the next actionable task.\n\n' "${SHARED_ISSUES_DIR}"
+
+    cat <<'EOF'
+Baseline health gate artifacts:
+EOF
+    printf -- '- Baseline test matrix: %s\n' "${BASELINE_MATRIX_FILE}"
+    printf -- '- Flake registry (owner + expiry + evidence): %s\n' "${FLAKE_REGISTRY_FILE}"
+    cat <<'EOF'
+- Treat unmatched build/test failures as task-scope regressions.
+- Treat only active, non-expired registry matches as waived known flakes (always cite flake IDs).
+
+Queue mutation reconciliation protocol:
+- If queue files change externally while you are running, do not stop immediately.
+- Snapshot lane state (`01-ready` through `05-completed`) and identify the affected task.
+EOF
+    printf -- '- Run `%s reconcile %s <src-lane> <dst-lane> <task-file>`.\n' "${ISSUE_LANE_CLI}" "${SHARED_ISSUES_DIR}"
+    cat <<'EOF'
+- Continue automatically on `queue_reconciled`.
+- Escalate only on `queue_conflict_hard_stop` (document why invariants failed).
+
+Command path guardrails:
+- Required pattern: discover -> open.
+EOF
+    printf '  - Discover candidate paths first: `rg --files %s | rg '"'"'<name-or-fragment>'"'"'`.\n' "${WORKTREE_DIR}"
+    cat <<'EOF'
+  - Verify selected path exists: `test -f <path>` (or `ls <path>`).
+  - Only then run `sed/cat` on that file.
+- Command outcome taxonomy (use these exact classes in reasoning and notes):
+  - `lookup_miss`: path/discovery misses
+  - `search_miss`: no-result search/discovery command
+  - `build_or_test_failure`: actual regressions
+  - `infra_failure`: transport/auth/tooling/runtime failures not tied to code correctness
+- Exploratory miss policy:
+  - For discovery commands expected to miss, prefer non-blocking form with `|| true`.
+  - Examples: `rg -n "<pattern>" <path> || true`, `find <dir> -name "<glob>" || true`, `ls <path-that-may-not-exist> || true`.
+  - Never add `|| true` to build/test/verification commands.
+
+Shell quoting guardrails:
+- Never inline markdown payloads in quoted shell one-liners for PRs or notes.
+- For PR descriptions, always use file-backed payloads:
+  - `cat <<'EOF' > /tmp/pr-body.md` ... `EOF`
+  - `gh pr create --body-file /tmp/pr-body.md`
+- For notes appends, always use a single-quoted heredoc delimiter:
+EOF
+    printf '  - `cat <<'"'"'EOF'"'"' >> %s/notes.md` ... `EOF`\n' "${SHARED_ISSUES_DIR}"
+    cat <<'EOF'
+- If any command fails due quoting/substitution, rerun with the safe file/heredoc template.
+
+GitHub transport retry policy:
+- For `git push`, `gh pr create`, and `gh pr edit`, do not call raw commands directly.
+- Use shared retry wrapper:
+  - `scripts/lib/github-retry.sh git push <remote> <refspec>`
+  - `scripts/lib/github-retry.sh gh pr create <args...>`
+  - `scripts/lib/github-retry.sh gh pr edit <args...>`
+- Treat wrapper `action=fail_fast` as non-retryable (auth/permission/invalid args); fix root cause before proceeding.
+EOF
+  } > "${PROMPT_FILE}"
+}
+
 ensure_on_base_branch() {
   if ! git -C "${WORKTREE_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     log "worktree is not a git repository: ${WORKTREE_DIR}"
@@ -415,100 +536,7 @@ fi
 claim_next_ready_task_if_needed
 setup_startup_context_cache
 
-cat > "${PROMPT_FILE}" <<PROMPT
-${CONTEXT_CACHE_PREFACE}
-
-Read and follow ${SHARED_ISSUES_DIR}/instructions.md exactly.
-
-Primary operating docs:
-- ${CONTROL_REPO_DIR}/build/INSTRUCTIONS.md
-- ${CONTROL_REPO_DIR}/build/CONTEXT.md
-- The active task file in ${SHARED_ISSUES_DIR}/02-in-progress
-
-Critical workspace rule:
-- Perform all git work and code changes in ${WORKTREE_DIR} only.
-- Keep ${WORKTREE_DIR} anchored to base branch ${REQUIRED_BASE_BRANCH} when starting each run.
-- The shared queue is at ${SHARED_ISSUES_DIR}; move task files between lanes there.
-
-Lane workflow (strict):
-1. If any task already exists in ${SHARED_ISSUES_DIR}/02-in-progress, resume that task first (do not pull a new task).
-2. On a fresh run with empty 02-in-progress and 05-completed, start with 001-project-scaffold.md.
-3. When selecting from ${SHARED_ISSUES_DIR}/01-ready, prioritize tasks that contain a top-level "## Reviewer Required Changes" block before net-new tasks (lowest task number first).
-4. Claim from ${SHARED_ISSUES_DIR}/01-ready with \`${ISSUE_LANE_CLI} claim ${SHARED_ISSUES_DIR} <task-file>\` (respect Depends on).
-5. Use \`${ISSUE_LANE_CLI} move ${SHARED_ISSUES_DIR} <src-lane> <dst-lane> <task-file>\` for lane transitions; treat \`claimed\`, \`already_claimed\`, and \`already_completed\` as idempotent non-fatal states.
-6. Implement exactly scoped requirements from the task file.
-7. Run required tests from the task (unit/integration/e2e as specified).
-8. For CLI tasks, run a CLI smoke check after build.
-9. For reviewer-rework tasks: treat every item in "## Reviewer Required Changes" as mandatory acceptance criteria, then remove that top-level block once all items are resolved.
-10. Preserve a concise resolution summary in ${SHARED_ISSUES_DIR}/notes.md (task file, fixes applied, tests run).
-11. Move completed tasks to ${SHARED_ISSUES_DIR}/03-needs-review.
-
-Routing + test conventions:
-- API routes: /v1/*
-- Health routes: /health/live, /health/ready (aliases: /health, /ready)
-- Test reset route: POST /test/reset (test mode only)
-
-Implementation directives:
-- In task 001, initialize go.mod with module path: github.com/samhotchkiss/otter-camp
-- If integration tests require testdb.New(t) and it does not exist yet, complete task 002 first; do not stub around it.
-- Use one branch/PR per task by default.
-- Create each task branch from ${REQUIRED_BASE_BRANCH} and target ${REQUIRED_BASE_BRANCH} in PRs.
-- Commit and push each completed task branch to origin.
-- Open/update a PR per task targeting branch ${REQUIRED_BASE_BRANCH}.
-- Add or update tests for every implemented task scope (unit/integration/e2e as the task requires); do not skip test authoring silently.
-- Do not treat a task as finished until it is review-ready and pushed.
-- Ignore historical "open blocker" wording in build/DEPENDENCY-GRAPH.md and build/SUMMARY.md; build/ISSUES.md is resolved and task files are authoritative.
-- In thin-spec areas, make reasonable engineering judgments and document them in code comments and task notes; do not block unless a critical invariant would be violated.
-
-Execution policy:
-- Continue until no actionable tasks remain in ${SHARED_ISSUES_DIR}/01-ready.
-- If blocked, append clear blocker notes to ${SHARED_ISSUES_DIR}/notes.md, then continue with the next actionable task.
-
-Baseline health gate artifacts:
-- Baseline test matrix: ${BASELINE_MATRIX_FILE}
-- Flake registry (owner + expiry + evidence): ${FLAKE_REGISTRY_FILE}
-- Treat unmatched build/test failures as task-scope regressions.
-- Treat only active, non-expired registry matches as waived known flakes (always cite flake IDs).
-
-Queue mutation reconciliation protocol:
-- If queue files change externally while you are running, do not stop immediately.
-- Snapshot lane state (`01-ready` through `05-completed`) and identify the affected task.
-- Run \`${ISSUE_LANE_CLI} reconcile ${SHARED_ISSUES_DIR} <src-lane> <dst-lane> <task-file>\`.
-- Continue automatically on \`queue_reconciled\`.
-- Escalate only on \`queue_conflict_hard_stop\` (document why invariants failed).
-
-Command path guardrails:
-- Required pattern: discover -> open.
-  - Discover candidate paths first: `rg --files ${WORKTREE_DIR} | rg '<name-or-fragment>'`.
-  - Verify selected path exists: `test -f <path>` (or `ls <path>`).
-  - Only then run `sed/cat` on that file.
-- Command outcome taxonomy (use these exact classes in reasoning and notes):
-  - `lookup_miss`: path/discovery misses
-  - `search_miss`: no-result search/discovery command
-  - `build_or_test_failure`: actual regressions
-  - `infra_failure`: transport/auth/tooling/runtime failures not tied to code correctness
-- Exploratory miss policy:
-  - For discovery commands expected to miss, prefer non-blocking form with `|| true`.
-  - Examples: `rg -n "<pattern>" <path> || true`, `find <dir> -name "<glob>" || true`, `ls <path-that-may-not-exist> || true`.
-  - Never add `|| true` to build/test/verification commands.
-
-Shell quoting guardrails:
-- Never inline markdown payloads in quoted shell one-liners for PRs or notes.
-- For PR descriptions, always use file-backed payloads:
-  - `cat <<'EOF' > /tmp/pr-body.md` ... `EOF`
-  - `gh pr create --body-file /tmp/pr-body.md`
-- For notes appends, always use a single-quoted heredoc delimiter:
-  - `cat <<'EOF' >> ${SHARED_ISSUES_DIR}/notes.md` ... `EOF`
-- If any command fails due quoting/substitution, rerun with the safe file/heredoc template.
-
-GitHub transport retry policy:
-- For `git push`, `gh pr create`, and `gh pr edit`, do not call raw commands directly.
-- Use shared retry wrapper:
-  - `scripts/lib/github-retry.sh git push <remote> <refspec>`
-  - `scripts/lib/github-retry.sh gh pr create <args...>`
-  - `scripts/lib/github-retry.sh gh pr edit <args...>`
-- Treat wrapper `action=fail_fast` as non-retryable (auth/permission/invalid args); fix root cause before proceeding.
-PROMPT
+write_prompt_file
 
 RUN_NAME="run-$(date '+%Y%m%d-%H%M%S')"
 RUN_SCRIPT="${STATE_DIR}/${RUN_NAME}.sh"
