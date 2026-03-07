@@ -65,6 +65,52 @@ func TestFileWriteMalformedRawMissingPathReturnsActionableError(t *testing.T) {
 	}
 }
 
+func TestFileWritePathOnlyRawReturnsContentRequired(t *testing.T) {
+	root := t.TempDir()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+
+	out, err := executor.Execute(testExecCtx(), "file.write", map[string]any{
+		"_raw": `{"path":"content/posts/stop-preparing-your-kids-for-jobs.md","create_dirs":true}`,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "content_required" {
+		t.Fatalf("error = %v, want content_required", out["error"])
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "requires content") {
+		t.Fatalf("message = %q, want actionable content guidance", message)
+	}
+	if _, err := os.Stat(filepath.Join(root, "content")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("content directory should not be created on invalid write, stat err = %v", err)
+	}
+}
+
+func TestFileWriteAllowsExplicitEmptyStringContent(t *testing.T) {
+	root := t.TempDir()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+
+	out, err := executor.Execute(testExecCtx(), "file.write", map[string]any{
+		"path":        "docs/empty.txt",
+		"content":     "",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if got := out["byte_size"]; got != 0 {
+		t.Fatalf("byte_size = %v, want 0", got)
+	}
+	body, err := os.ReadFile(filepath.Join(root, "docs", "empty.txt"))
+	if err != nil {
+		t.Fatalf("read empty file: %v", err)
+	}
+	if len(body) != 0 {
+		t.Fatalf("empty file length = %d, want 0", len(body))
+	}
+}
+
 func TestFileEditAmbiguousMatchDoesNotModifyFile(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "dup.txt")

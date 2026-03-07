@@ -43,6 +43,25 @@ func TestNormalizeFileWriteRecoversMalformedRawArguments(t *testing.T) {
 	}
 }
 
+func TestNormalizeFileWriteRecoversPathOnlyRawWithoutInventingContent(t *testing.T) {
+	normalized := Normalize("file.write", map[string]any{
+		"_raw": `{"path":"content/posts/stop-preparing-your-kids-for-jobs.md","create_dirs":true}`,
+	})
+
+	if got := normalized["path"]; got != "content/posts/stop-preparing-your-kids-for-jobs.md" {
+		t.Fatalf("path = %v, want content/posts/stop-preparing-your-kids-for-jobs.md", got)
+	}
+	if got := normalized["create_dirs"]; got != true {
+		t.Fatalf("create_dirs = %v, want true", got)
+	}
+	if _, exists := normalized["content"]; exists {
+		t.Fatalf("unexpected recovered content: %+v", normalized)
+	}
+	if _, exists := normalized["_raw"]; exists {
+		t.Fatal("expected _raw to be removed after normalization")
+	}
+}
+
 func TestNormalizeFileWriteLeavesNilAndEmptyRawUntouched(t *testing.T) {
 	t.Run("nil raw", func(t *testing.T) {
 		normalized := Normalize("file.write", map[string]any{"_raw": nil})
