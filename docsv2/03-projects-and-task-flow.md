@@ -146,6 +146,8 @@ There is no separate approval state machine. Review and approval are handled by 
 - `done`: completed and approved. Terminal.
 - `cancelled`: abandoned. Terminal.
 
+For tasks backed by a flow template, `in_progress` and `review` are runtime-backed states, not cosmetic labels. A task must not enter or remain in either status unless the control plane can point to a concrete `current_flow_node_id` and at least one corresponding `flow_node_execution` row for that task. If execution state is missing, the scheduler/runtime must deterministically repair it before leaving the task active; if it cannot repair the state, the task must fail closed instead of staying active with zero flow lineage.
+
 ### Valid Transitions
 
 ```
@@ -187,10 +189,11 @@ Explicit transition table:
 When a task transitions to `queued`, it enters the scheduling queue. The scheduler manages pickup:
 
 - The scheduler monitors concurrency slots managed by the model gateway (`07-models-and-inference.md`).
-- When a slot opens, the scheduler picks the highest-priority eligible task and kicks off its first flow node — resolving the actor, creating an async session, and starting a run.
+- When a slot opens, the scheduler picks the highest-priority eligible task and first ensures the task has concrete flow execution state for its current/start node. Only after that state exists does it transition the task into `in_progress`, resolve the actor, create an async session, and start a run.
 - **Dependency-aware scheduling**: a task is only eligible for pickup if all its dependencies are `done`. A task can be `queued` with unresolved dependencies — it sits in the queue but is skipped until dependencies clear. This ensures order of operations without requiring the PM to manually sequence queuing.
 - **Project gate scheduling (`blocks_scope = 'all'`)**: if any task in a project has `blocks_scope = 'all'` and `work_status` not in (`done`, `cancelled`), the scheduler may only start the lowest `task_number` among those gate tasks. No other task in that project may start until that gate task reaches `done` or `cancelled`.
 - Subtasks within a node also go through the scheduler. They are queued as work units and picked up when slots are available, respecting inter-subtask dependencies.
+- Review pauses triggered by runtime policy (for example, async hard-stop checkpoints) still require real flow execution lineage. An artifact, chat message, or inbox item by itself must never be treated as sufficient evidence that a task is legitimately in `review`.
 
 ### Priority
 

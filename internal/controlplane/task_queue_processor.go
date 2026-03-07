@@ -50,6 +50,7 @@ type taskQueueStatusTransitioner interface {
 
 type taskQueueFlowStarter interface {
 	StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
+	EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
 }
 
 type taskQueueFlowExecutionRepository interface {
@@ -227,7 +228,7 @@ func (p *TaskQueueProcessor) handleTaskQueuedEvent(ctx context.Context, event ev
 
 func taskStatusStartsAsyncWork(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "queued", "in_progress":
+	case "queued", "in_progress", "review":
 		return true
 	default:
 		return false
@@ -255,7 +256,10 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 
 	status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
 	if status == "queued" {
-		if _, err := p.taskService.TransitionStatus(ctx, taskID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		if _, err := p.ensureTaskFlowExecutionState(ctx, taskRecord); err != nil {
+			return err
+		}
+		if _, err := p.taskService.TransitionStatus(ctx, taskID, "in_progress", tasksvc.Actor{Type: "system"}); err != nil {
 			var transitionErr tasksvc.ErrInvalidStatusTransition
 			if !errors.As(err, &transitionErr) {
 				return err
@@ -270,7 +274,21 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 		}
 	}
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
+		if taskRecord.FlowTemplateID != nil && strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+			_, err := p.ensureTaskFlowExecutionState(ctx, taskRecord)
+			return err
+		}
 		return nil
+	}
+	if _, err := p.ensureTaskFlowExecutionState(ctx, taskRecord); err != nil {
+		return err
+	}
+	taskRecord, err = p.tasks.GetByID(ctx, taskID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 	if paused, err := p.applyAsyncDecisionPolicy(ctx, event, taskRecord); err != nil {
 		return err
@@ -322,7 +340,10 @@ func (p *TaskQueueProcessor) applyAsyncDecisionPolicy(ctx context.Context, event
 	if !decision.PausesTask() {
 		return false, nil
 	}
-	if _, err := p.taskService.TransitionStatus(ctx, taskRecord.ID, "review", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+	if _, err := p.ensureTaskFlowExecutionState(ctx, taskRecord); err != nil {
+		return false, err
+	}
+	if _, err := p.taskService.TransitionStatus(ctx, taskRecord.ID, "review", tasksvc.Actor{Type: "system"}); err != nil {
 		var transitionErr tasksvc.ErrInvalidStatusTransition
 		if !errors.As(err, &transitionErr) {
 			return false, err
@@ -332,6 +353,23 @@ func (p *TaskQueueProcessor) applyAsyncDecisionPolicy(ctx context.Context, event
 		return false, err
 	}
 	return true, nil
+}
+
+func (p *TaskQueueProcessor) ensureTaskFlowExecutionState(ctx context.Context, taskRecord repo.ProjectTask) (*repo.FlowNodeExecution, error) {
+	if taskRecord.FlowTemplateID == nil {
+		return nil, nil
+	}
+	if p.flow != nil {
+		return p.flow.EnsureActiveExecution(ctx, taskRecord.ID)
+	}
+	if taskRecord.CurrentFlowNodeID == nil || p.flowExecutions == nil {
+		return nil, nil
+	}
+	execution, err := p.flowExecutions.GetActive(ctx, taskRecord.ID, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		return nil, err
+	}
+	return &execution, nil
 }
 
 func (p *TaskQueueProcessor) createAsyncDecisionArtifact(ctx context.Context, taskRecord repo.ProjectTask, decision taskplan.AsyncDecision) error {
@@ -437,30 +475,14 @@ func selectNextQueuedTaskUnderProjectGate(tasks []repo.ProjectTask) *repo.Projec
 }
 
 func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask) error {
-	if taskRecord.CurrentFlowNodeID == nil {
-		started, err := p.flow.StartFlow(ctx, taskRecord.ID)
-		if err != nil {
-			return err
-		}
-		if started != nil {
-			taskRecord.CurrentFlowNodeID = &started.FlowNodeID
-		}
-	}
-	if taskRecord.CurrentFlowNodeID == nil {
-		refreshed, err := p.tasks.GetByID(ctx, taskRecord.ID)
-		if err != nil {
-			return err
-		}
-		taskRecord = refreshed
-	}
-	if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {
-		return fmt.Errorf("task %s missing current flow node after StartFlow", taskRecord.ID)
-	}
-
-	execution, err := p.flowExecutions.GetActive(ctx, taskRecord.ID, *taskRecord.CurrentFlowNodeID)
+	execution, err := p.ensureTaskFlowExecutionState(ctx, taskRecord)
 	if err != nil {
 		return err
 	}
+	if execution == nil {
+		return fmt.Errorf("task %s missing active flow execution after EnsureActiveExecution", taskRecord.ID)
+	}
+	taskRecord.CurrentFlowNodeID = &execution.FlowNodeID
 
 	idempotencyKey := fmt.Sprintf("task-queued:flow:%s:%s", taskRecord.ID, event.ID)
 	metadata, err := json.Marshal(map[string]any{

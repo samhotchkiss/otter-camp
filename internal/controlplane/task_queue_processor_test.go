@@ -18,7 +18,7 @@ func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresIrrelevantStatusesAndEven
 
 	payload, err := json.Marshal(map[string]any{
 		"task_id":   uuid.New(),
-		"to_status": "review",
+		"to_status": "done",
 	})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -724,6 +724,7 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 	orgID := uuid.New()
 	projectID := uuid.New()
 	taskID := uuid.New()
+	flowTemplateID := uuid.New()
 	flowNodeID := uuid.New()
 	executionID := uuid.New()
 	agentID := uuid.New()
@@ -737,6 +738,7 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 				ID:             taskID,
 				OrganizationID: orgID,
 				ProjectID:      projectID,
+				FlowTemplateID: &flowTemplateID,
 				Title:          "Flow task",
 			},
 		},
@@ -753,6 +755,7 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 		ID:                taskID,
 		OrganizationID:    orgID,
 		ProjectID:         projectID,
+		FlowTemplateID:    &flowTemplateID,
 		WorkStatus:        "in_progress",
 		Title:             "Flow task",
 		CurrentFlowNodeID: &flowNodeID,
@@ -789,6 +792,7 @@ func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
 	orgID := uuid.New()
 	projectID := uuid.New()
 	taskID := uuid.New()
+	flowTemplateID := uuid.New()
 	flowNodeID := uuid.New()
 	executionID := uuid.New()
 	agentID := uuid.New()
@@ -818,6 +822,7 @@ func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
 				ID:             taskID,
 				OrganizationID: orgID,
 				ProjectID:      projectID,
+				FlowTemplateID: &flowTemplateID,
 				Title:          "Flow task",
 			},
 		},
@@ -834,6 +839,7 @@ func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
 		ID:                taskID,
 		OrganizationID:    orgID,
 		ProjectID:         projectID,
+		FlowTemplateID:    &flowTemplateID,
 		WorkStatus:        "in_progress",
 		Title:             "Flow task",
 		CurrentFlowNodeID: &flowNodeID,

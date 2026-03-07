@@ -97,6 +97,52 @@ func TestUpdateSubtaskStatusTransitions(t *testing.T) {
 	}
 }
 
+func TestEnsureActiveExecutionBackfillsMissingCurrentNodeExecution(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	currentNodeID := uuid.New()
+
+	executions := &fakeExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {},
+		},
+	}
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					ProjectID:         uuid.New(),
+					OrganizationID:    uuid.New(),
+					FlowTemplateID:    &flowTemplateID,
+					CurrentFlowNodeID: &currentNodeID,
+					WorkStatus:        "review",
+				},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				currentNodeID: {ID: currentNodeID, NodeType: "review"},
+			},
+		},
+		executions: executions,
+	}
+
+	activeExecution, err := svc.EnsureActiveExecution(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("EnsureActiveExecution: %v", err)
+	}
+	if activeExecution == nil {
+		t.Fatal("EnsureActiveExecution returned nil execution")
+	}
+	if activeExecution.FlowNodeID != currentNodeID {
+		t.Fatalf("active execution flow_node_id = %s, want %s", activeExecution.FlowNodeID, currentNodeID)
+	}
+	if executions.createCalls != 1 {
+		t.Fatalf("create calls = %d, want 1", executions.createCalls)
+	}
+}
+
 func TestRejectFlowNodeMaxVisitsExceeded(t *testing.T) {
 	taskID := uuid.New()
 	currentNodeID := uuid.New()

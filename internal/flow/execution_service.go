@@ -166,6 +166,7 @@ type Options struct {
 
 type FlowExecutionService interface {
 	StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
+	EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
 	AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error)
 	RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error)
 	RecordNodeCommit(ctx context.Context, taskID uuid.UUID, commitSHA, branchName string) (*repo.FlowNodeExecution, error)
@@ -362,6 +363,29 @@ func (s *service) StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNo
 	}
 
 	return &execution, nil
+}
+
+func (s *service) EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error) {
+	if taskID == uuid.Nil {
+		return nil, ErrTaskIDRequired
+	}
+
+	taskRecord, err := s.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureProjectNotPaused(ctx, taskRecord.ProjectID); err != nil {
+		return nil, err
+	}
+	if taskRecord.FlowTemplateID == nil {
+		return nil, ErrFlowNotStarted
+	}
+
+	_, _, activeExecution, err := s.loadActiveFlowState(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	return &activeExecution, nil
 }
 
 func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error) {
