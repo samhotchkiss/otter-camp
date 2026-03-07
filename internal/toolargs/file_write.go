@@ -15,6 +15,7 @@ var (
 	fileWriteContentPattern    = regexp.MustCompile(`(?s)"content"\s*:\s*"((?:\\.|[^"\\])*)"`)
 	fileWriteEncodingPattern   = regexp.MustCompile(`(?s)"encoding"\s*:\s*"((?:\\.|[^"\\])*)"`)
 	fileWriteCreateDirsPattern = regexp.MustCompile(`(?s)"create_dirs"\s*:\s*(true|false)`)
+	fileWriteLooseKeys         = []string{"path", "content", "contents", "body", "text", "encoding", "create_dirs"}
 )
 
 // Normalize returns a shallow copy of input with tool-specific argument recovery applied.
@@ -58,7 +59,9 @@ func normalizeFileWriteInput(input map[string]any) map[string]any {
 		}
 	}
 	if shouldRecoverString(input, "content") {
-		if recovered, ok := recoverJSONStringField(raw, fileWriteContentPattern); ok {
+		if recovered, ok := recoverFileWriteContent(raw); ok {
+			input["content"] = recovered
+		} else if recovered, ok := recoverJSONStringField(raw, fileWriteContentPattern); ok {
 			input["content"] = recovered
 		}
 	}
@@ -149,7 +152,7 @@ func mergeRecoveredFields(target, recovered map[string]any) {
 	if target == nil || recovered == nil {
 		return
 	}
-	for _, key := range []string{"path", "content", "encoding", "create_dirs"} {
+	for _, key := range []string{"path", "encoding", "create_dirs"} {
 		value, exists := recovered[key]
 		if !exists {
 			continue
@@ -166,6 +169,32 @@ func mergeRecoveredFields(target, recovered map[string]any) {
 		}
 		target[key] = value
 	}
+	if shouldRecoverString(target, "content") {
+		if recoveredValue, ok := lookupRecoveredField(recovered, "content", "contents", "body", "text"); ok {
+			target["content"] = recoveredValue
+		}
+	}
+}
+
+func lookupRecoveredField(recovered map[string]any, keys ...string) (any, bool) {
+	for _, key := range keys {
+		value, exists := recovered[key]
+		if !exists || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if strings.TrimSpace(typed) == "" {
+				continue
+			}
+		default:
+			if strings.TrimSpace(fmt.Sprintf("%v", typed)) == "" {
+				continue
+			}
+		}
+		return value, true
+	}
+	return nil, false
 }
 
 func shouldRecoverString(input map[string]any, key string) bool {
@@ -212,6 +241,107 @@ func recoverJSONBoolField(raw string, pattern *regexp.Regexp) (bool, bool) {
 		return false, false
 	}
 	return parsed, true
+}
+
+func recoverFileWriteContent(raw string) (string, bool) {
+	for _, key := range []string{"content", "contents", "body", "text"} {
+		if recovered, ok := recoverLenientJSONLikeStringField(raw, key); ok {
+			return recovered, true
+		}
+	}
+	return "", false
+}
+
+func recoverLenientJSONLikeStringField(raw, key string) (string, bool) {
+	keyIndex := strings.Index(raw, `"`+key+`"`)
+	if keyIndex < 0 {
+		return "", false
+	}
+	cursor := keyIndex + len(key) + 2
+	for cursor < len(raw) && isJSONWhitespace(raw[cursor]) {
+		cursor++
+	}
+	if cursor >= len(raw) || raw[cursor] != ':' {
+		return "", false
+	}
+	cursor++
+	for cursor < len(raw) && isJSONWhitespace(raw[cursor]) {
+		cursor++
+	}
+	if cursor >= len(raw) {
+		return "", false
+	}
+	if raw[cursor] != '"' {
+		return "", false
+	}
+
+	start := cursor + 1
+	for idx := start; idx < len(raw); idx++ {
+		if raw[idx] != '"' {
+			continue
+		}
+		if !isLikelyFieldTerminator(raw, idx+1) {
+			continue
+		}
+		return decodeRecoveredString(raw[start:idx])
+	}
+	return decodeRecoveredString(strings.TrimRightFunc(raw[start:], func(r rune) bool {
+		return r == '}' || isJSONWhitespace(byte(r))
+	}))
+}
+
+func isLikelyFieldTerminator(raw string, cursor int) bool {
+	for cursor < len(raw) && isJSONWhitespace(raw[cursor]) {
+		cursor++
+	}
+	if cursor >= len(raw) {
+		return true
+	}
+	if raw[cursor] == '}' {
+		return true
+	}
+	if raw[cursor] != ',' {
+		return false
+	}
+	cursor++
+	for cursor < len(raw) && isJSONWhitespace(raw[cursor]) {
+		cursor++
+	}
+	if cursor >= len(raw) {
+		return true
+	}
+	for _, key := range fileWriteLooseKeys {
+		if strings.HasPrefix(raw[cursor:], `"`+key+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
+func decodeRecoveredString(value string) (string, bool) {
+	if strings.TrimSpace(value) == "" {
+		return "", false
+	}
+	if strict, err := strconv.Unquote(`"` + value + `"`); err == nil {
+		return strict, true
+	}
+	replacer := strings.NewReplacer(
+		`\r`, "\r",
+		`\n`, "\n",
+		`\t`, "\t",
+		`\"`, `"`,
+		`\\`, `\`,
+	)
+	return replacer.Replace(value), true
+}
+
+func isJSONWhitespace(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 func cloneMap(input map[string]any) map[string]any {

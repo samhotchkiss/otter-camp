@@ -43,6 +43,38 @@ func TestNormalizeFileWriteRecoversMalformedRawArguments(t *testing.T) {
 	}
 }
 
+func TestNormalizeFileWriteRecoversMalformedContentWithEmbeddedQuotes(t *testing.T) {
+	normalized := Normalize("file.write", map[string]any{
+		"_raw": "{\"path\":\"templates/home.html\",\"content\":\"<section class=\"hero\">\\n  <h1>Sam.blog</h1>\\n</section>\",\"create_dirs\":true}",
+	})
+
+	if got := normalized["path"]; got != "templates/home.html" {
+		t.Fatalf("path = %v, want templates/home.html", got)
+	}
+	if got := normalized["content"]; got != "<section class=\"hero\">\n  <h1>Sam.blog</h1>\n</section>" {
+		t.Fatalf("content = %q, want embedded quotes preserved", got)
+	}
+	if got := normalized["create_dirs"]; got != true {
+		t.Fatalf("create_dirs = %v, want true", got)
+	}
+}
+
+func TestNormalizeFileWriteRecoversContentAliasFromDecodedJSON(t *testing.T) {
+	normalized := Normalize("file.write", map[string]any{
+		"_raw": `{"path":"docs/manifest.md","body":"# Manifest\n","create_dirs":true}`,
+	})
+
+	if got := normalized["path"]; got != "docs/manifest.md" {
+		t.Fatalf("path = %v, want docs/manifest.md", got)
+	}
+	if got := normalized["content"]; got != "# Manifest\n" {
+		t.Fatalf("content = %q, want recovered body alias", got)
+	}
+	if got := normalized["create_dirs"]; got != true {
+		t.Fatalf("create_dirs = %v, want true", got)
+	}
+}
+
 func TestNormalizeFileWriteRecoversPathOnlyRawWithoutInventingContent(t *testing.T) {
 	normalized := Normalize("file.write", map[string]any{
 		"_raw": `{"path":"content/posts/stop-preparing-your-kids-for-jobs.md","create_dirs":true}`,

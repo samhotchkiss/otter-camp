@@ -573,7 +573,7 @@ When an agent emits a tool call during the turn loop:
 4. **Execution**: execute the tool per its tier's path.
 5. **Result formatting**: return the result in a consistent format regardless of tier. The agent does not know or care which tier a tool belongs to.
 
-`file.write` gets one extra normalization pass before validation. If the provider leaves a recoverable `_raw` argument blob behind, the runtime extracts `path`, `content`, `encoding`, and `create_dirs` deterministically instead of spuriously failing with `path_required`. If `path` is still absent after normalization, the runtime returns one actionable validation payload. If `path` is present but `content` is still absent or nil, the runtime returns `content_required` rather than mislabeling the failure as missing-path noise or silently writing an empty file.
+`file.write` gets one extra normalization pass before validation. If the provider leaves a recoverable `_raw` argument blob behind, the runtime extracts `path`, `content`, `encoding`, and `create_dirs` deterministically instead of spuriously failing with `path_required`. Recovery must handle the real write payloads seen in migration/template work, including malformed raw JSON that still contains valid multi-line content with embedded quotes, plus common content aliases such as `body`/`text`/`contents` when the provider serialized the payload under the wrong key. If `path` is still absent after normalization, the runtime returns one actionable validation payload. If `path` is present but `content` is still absent or nil, the runtime returns `content_required` rather than mislabeling the failure as missing-path noise or silently writing an empty file.
 
 ### Error Handling
 

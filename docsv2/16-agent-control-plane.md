@@ -708,7 +708,7 @@ The system actively prevents tasks from getting stuck. A background **supervisor
 - Configurable per capability domain and per flow node.
 - Default: auto-retry on transient failures (provider errors, rate limits, timeouts) with exponential backoff.
 - No auto-retry on permanent failures (policy denial, invalid input, repeated crashes with the same error).
-- Repeated `file.write` validation failures are fingerprinted by the attempted write, so adjacent successful writes do not reset the same missing-path loop inside a task turn.
+- Repeated `file.write` validation failures are fingerprinted by the attempted write, so adjacent successful writes do not reset the same missing-path or missing-content loop inside a task turn. Recoverable raw-argument serialization glitches must be normalized before a failure is counted; only truly content-less repeated writes are allowed to trip the blocker.
 - After max retries, the supervisor takes over (stuck task detection path).
 - Custom retry policies can be set at the project or flow template level: "this deployment step should not auto-retry" or "this data fetch step can retry up to 10 times."
 - For fresh kickoff planning turns, exceeding the bounded prompt/continuation guardrail surfaces one blocker in the session and stops recursive churn. The system does not keep spinning new turns indefinitely.

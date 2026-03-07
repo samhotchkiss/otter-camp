@@ -1094,6 +1094,309 @@ func TestTurnEngineIntegrationFileWriteRecoverRawArgumentsAcrossRepeatedWrites(t
 	}
 }
 
+func TestTurnEngineIntegrationFileWriteRecoversQuotedContentAcrossContentMigrationWrites(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant Frank: %v", err)
+	}
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "persist the migration outputs in small verified batches",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	type expectedWrite struct {
+		id      string
+		path    string
+		content string
+		raw     string
+	}
+	writes := []expectedWrite{
+		{
+			id:   "write-post-1",
+			path: "content/posts/stop-preparing-your-kids-for-jobs.md",
+			content: "---\n" +
+				"title: \"Stop Preparing Your Kids for Jobs\"\n" +
+				"summary: \"Migrated from Sam.blog\"\n" +
+				"---\n" +
+				"First paragraph.\n",
+			raw: `{"path":"content/posts/stop-preparing-your-kids-for-jobs.md","content":"---
+title: "Stop Preparing Your Kids for Jobs"
+summary: "Migrated from Sam.blog"
+---
+First paragraph.
+","create_dirs":true}`,
+		},
+		{
+			id:      "write-post-2",
+			path:    "content/posts/let-kids-be-kids.md",
+			content: "# Let Kids Be Kids\n\nHe said \"ship it\" and kept migrating.\n",
+			raw: `{"path":"content/posts/let-kids-be-kids.md","content":"# Let Kids Be Kids
+
+He said "ship it" and kept migrating.
+","create_dirs":true}`,
+		},
+	}
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			toolCalls := make([]ModelToolCall, 0, len(writes))
+			for _, write := range writes {
+				toolCalls = append(toolCalls, ModelToolCall{
+					ID:   write.id,
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"_raw": write.raw,
+					},
+				})
+			}
+			return ModelResponse{ToolCalls: toolCalls}, nil
+		}
+		return ModelResponse{Content: "migration batch persisted"}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		if dispatched >= len(writes) {
+			t.Fatalf("unexpected extra file.write dispatch: %+v", call)
+		}
+		want := writes[dispatched]
+		if _, exists := call.Arguments["_raw"]; exists {
+			t.Fatalf("expected normalized arguments without _raw: %+v", call.Arguments)
+		}
+		path, _ := call.Arguments["path"].(string)
+		content, _ := call.Arguments["content"].(string)
+		if path != want.path {
+			t.Fatalf("dispatch %d path = %q, want %q", dispatched, path, want.path)
+		}
+		if content != want.content {
+			t.Fatalf("dispatch %d content = %q, want %q", dispatched, content, want.content)
+		}
+		dispatched++
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      path,
+				"byte_size": len(content),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+	if dispatched != len(writes) {
+		t.Fatalf("dispatched writes = %d, want %d", dispatched, len(writes))
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want non-blocked", updatedTask.WorkStatus)
+	}
+	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok && guard.Count > 0 {
+		t.Fatalf("unexpected validation guard after successful migration writes: %+v", guard)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"content_required"`) {
+			t.Fatalf("unexpected content_required tool_result: %s", item.Content)
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			t.Fatalf("unexpected validation loop blocker after successful migration writes: %s", item.Content)
+		}
+	}
+}
+
+func TestTurnEngineIntegrationFileWriteRecoversQuotedContentAcrossTemplateGenerationWrites(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant Frank: %v", err)
+	}
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "generate the first template files and keep going",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	type expectedWrite struct {
+		id      string
+		path    string
+		content string
+		raw     string
+	}
+	writes := []expectedWrite{
+		{
+			id:   "write-home",
+			path: "templates/home.html",
+			content: "<section class=\"hero\">\n" +
+				"  <h1>Sam.blog</h1>\n" +
+				"  <p>Ship the first bold direction.</p>\n" +
+				"</section>\n",
+			raw: `{"path":"templates/home.html","content":"<section class="hero">
+  <h1>Sam.blog</h1>
+  <p>Ship the first bold direction.</p>
+</section>
+","create_dirs":true}`,
+		},
+		{
+			id:      "write-theme",
+			path:    "templates/theme.css",
+			content: ".hero::before { content: \"→\"; }\nbody { font-family: \"Newsreader\", serif; }\n",
+			raw: `{"path":"templates/theme.css","content":".hero::before { content: "→"; }
+body { font-family: "Newsreader", serif; }
+","create_dirs":true}`,
+		},
+	}
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			toolCalls := make([]ModelToolCall, 0, len(writes))
+			for _, write := range writes {
+				toolCalls = append(toolCalls, ModelToolCall{
+					ID:   write.id,
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"_raw": write.raw,
+					},
+				})
+			}
+			return ModelResponse{ToolCalls: toolCalls}, nil
+		}
+		return ModelResponse{Content: "template batch created"}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		if dispatched >= len(writes) {
+			t.Fatalf("unexpected extra file.write dispatch: %+v", call)
+		}
+		want := writes[dispatched]
+		if _, exists := call.Arguments["_raw"]; exists {
+			t.Fatalf("expected normalized arguments without _raw: %+v", call.Arguments)
+		}
+		path, _ := call.Arguments["path"].(string)
+		content, _ := call.Arguments["content"].(string)
+		if path != want.path {
+			t.Fatalf("dispatch %d path = %q, want %q", dispatched, path, want.path)
+		}
+		if content != want.content {
+			t.Fatalf("dispatch %d content = %q, want %q", dispatched, content, want.content)
+		}
+		dispatched++
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      path,
+				"byte_size": len(content),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+	if dispatched != len(writes) {
+		t.Fatalf("dispatched writes = %d, want %d", dispatched, len(writes))
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want non-blocked", updatedTask.WorkStatus)
+	}
+	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok && guard.Count > 0 {
+		t.Fatalf("unexpected validation guard after successful template writes: %+v", guard)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"content_required"`) {
+			t.Fatalf("unexpected content_required tool_result: %s", item.Content)
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			t.Fatalf("unexpected validation loop blocker after successful template writes: %s", item.Content)
+		}
+	}
+}
+
 func TestTurnEngineIntegrationFileWriteMissingPathRetryDoesNotResetAcrossAdjacentSuccessfulWrites(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -1230,6 +1533,152 @@ func TestTurnEngineIntegrationFileWriteMissingPathRetryDoesNotResetAcrossAdjacen
 	}
 	if pathRequiredResults != 3 {
 		t.Fatalf("path_required tool_results = %d, want 3", pathRequiredResults)
+	}
+	if successfulWrites != 2 {
+		t.Fatalf("successful write tool_results = %d, want 2", successfulWrites)
+	}
+	if blockerMessages != 1 {
+		t.Fatalf("validation blocker system messages = %d, want 1", blockerMessages)
+	}
+}
+
+func TestTurnEngineIntegrationFileWriteMissingContentRetryStillBlocksTrulyInvalidCalls(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant Frank: %v", err)
+	}
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "write the outputs and keep going",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	missingContentRaw := map[string]any{"_raw": `{"path":"docs/outline.md","create_dirs":true}`}
+	validCalls := []map[string]any{
+		{"_raw": `{"path":"templates/home.html","content":"<section class="hero">
+  <h1>Sam.blog</h1>
+</section>
+","create_dirs":true}`},
+		{"_raw": `{"path":"content/posts/hello-world.md","content":"# Hello World
+
+He said "ship it".
+","create_dirs":true}`},
+	}
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "missing-1", Name: "file.write", Tier: "tier2", Arguments: missingContentRaw}}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "good-1", Name: "file.write", Tier: "tier2", Arguments: validCalls[0]}}}, nil
+		case 3:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "missing-2", Name: "file.write", Tier: "tier2", Arguments: missingContentRaw}}}, nil
+		case 4:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "good-2", Name: "file.write", Tier: "tier2", Arguments: validCalls[1]}}}, nil
+		default:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "missing-3", Name: "file.write", Tier: "tier2", Arguments: missingContentRaw}}}, nil
+		}
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		content, ok := call.Arguments["content"].(string)
+		if !ok || strings.TrimSpace(content) == "" {
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"error":   "content_required",
+					"message": "file.write requires content. Provide file contents in `content`.",
+				},
+				RunID: &runID,
+			}, nil
+		}
+		path, _ := call.Arguments["path"].(string)
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      path,
+				"byte_size": len(content),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if modelCalls != 5 {
+		t.Fatalf("model calls = %d, want 5 before validation blocker stops retries", modelCalls)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+	guard, ok := parseTaskValidationGuard(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if !guard.Blocked {
+		t.Fatal("expected blocked validation guard")
+	}
+	if guard.FailureCode != "content_required" {
+		t.Fatalf("guard failure_code = %q, want content_required", guard.FailureCode)
+	}
+	if strings.TrimSpace(guard.AttemptFingerprint) == "" {
+		t.Fatal("expected attempt fingerprint on validation guard")
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var contentRequiredResults int
+	var successfulWrites int
+	var blockerMessages int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"content_required"`) {
+			contentRequiredResults++
+		}
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"`) {
+			successfulWrites++
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			blockerMessages++
+		}
+	}
+	if contentRequiredResults != 3 {
+		t.Fatalf("content_required tool_results = %d, want 3", contentRequiredResults)
 	}
 	if successfulWrites != 2 {
 		t.Fatalf("successful write tool_results = %d, want 2", successfulWrites)
