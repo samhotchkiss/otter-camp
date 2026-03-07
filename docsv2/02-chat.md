@@ -132,6 +132,8 @@ Discoverability beyond the sidebar is handled by the command bar (Superhuman-sty
 - Task work, review, and retry transcripts belong on the task's canonical `project_task` async session. Project-scoped sessions are for PM oversight/triage, not for storing task execution history or serving as the execution container for task wakeups.
 - Task dispatch resolves the canonical task-scoped async session before appending a kickoff. If a stale run points at a project-scoped PM/execution session, the runtime repairs back to the task-scoped session instead of continuing there.
 - If retries accidentally create multiple async task sessions for the same task, the runtime deterministically keeps one canonical task session: reuse the current non-blank session when one exists, otherwise reuse the newest blank session, and close the extra blank duplicates.
+- Within one session, `chat_session.current_turn_id` is the canonical live-turn pointer. It must reference the actual live `chat_turn` (`in_progress` if one exists, otherwise the single valid `pending` turn) or be null when no live turn exists.
+- Recovery/retry dispatch must repair stale `current_turn_id` values and cancel or replace stray `pending` turns instead of stacking extra queued turns for the same session.
 - UI clients must preserve the task discussion binding when the operator opens a task from its existing sidebar task chat. If a task detail payload omits `discussion_session_id`, the client falls back to the already-known task-scoped sync session instead of inventing an empty state.
 - Empty-state copy claiming a task has no discussion session is only valid when neither task detail data nor prior task-scoped session context can resolve a sync discussion session.
 

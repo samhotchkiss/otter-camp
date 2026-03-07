@@ -461,6 +461,62 @@ func TestSession_ModeSwitch(t *testing.T) {
 	}
 }
 
+func TestSession_CompleteTurnPromotesQueuedRetryCurrentTurnEX305(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	agent := seedChatServiceAgent(t, ctx, pool, org.ID)
+	svc := newIntegrationService(t, pool, nil)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+
+	turnRepo := repo.NewChatTurnRepo(pool)
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	startedAt := time.Now().UTC().Add(-30 * time.Second)
+	activeTurn, err := turnRepo.Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "in_progress",
+		StartedAt:      &startedAt,
+	})
+	if err != nil {
+		t.Fatalf("create active turn: %v", err)
+	}
+	pendingRetry, err := turnRepo.Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     2,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "pending",
+	})
+	if err != nil {
+		t.Fatalf("create pending retry: %v", err)
+	}
+	if _, err := sessionRepo.UpdateCurrentTurn(ctx, session.ID, &activeTurn.ID); err != nil {
+		t.Fatalf("set current turn: %v", err)
+	}
+
+	if err := svc.CompleteTurn(ctx, activeTurn.ID); err != nil {
+		t.Fatalf("CompleteTurn: %v", err)
+	}
+
+	refreshedSession, err := sessionRepo.GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetByID session: %v", err)
+	}
+	if refreshedSession.CurrentTurnID == nil || *refreshedSession.CurrentTurnID != pendingRetry.ID {
+		t.Fatalf("current_turn_id = %v, want pending retry %s", refreshedSession.CurrentTurnID, pendingRetry.ID)
+	}
+	refreshedRetry, err := turnRepo.GetByID(ctx, pendingRetry.ID)
+	if err != nil {
+		t.Fatalf("GetByID retry turn: %v", err)
+	}
+	if refreshedRetry.Status != "pending" {
+		t.Fatalf("retry turn status = %q, want pending", refreshedRetry.Status)
+	}
+}
+
 func TestSession_CreateTurnBlockedWhileProjectPausedUntilResume(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

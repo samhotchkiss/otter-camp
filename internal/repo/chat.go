@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -503,6 +504,71 @@ func NewChatTurnRepo(pool *pgxpool.Pool) *ChatTurnRepo {
 	return &ChatTurnRepo{pool: pool, db: pool}
 }
 
+func CanonicalLiveTurn(turns []ChatTurn) (*ChatTurn, []ChatTurn) {
+	inProgress := make([]ChatTurn, 0)
+	pending := make([]ChatTurn, 0)
+	for _, turn := range turns {
+		switch normalizeChatTurnStatus(turn.Status) {
+		case "in_progress":
+			inProgress = append(inProgress, turn)
+		case "pending":
+			pending = append(pending, turn)
+		}
+	}
+
+	sort.SliceStable(inProgress, func(i, j int) bool {
+		left := inProgress[i]
+		right := inProgress[j]
+		switch {
+		case left.StartedAt != nil && right.StartedAt != nil && !left.StartedAt.Equal(*right.StartedAt):
+			return left.StartedAt.After(*right.StartedAt)
+		case left.TurnNumber != right.TurnNumber:
+			return left.TurnNumber > right.TurnNumber
+		case !left.CreatedAt.Equal(right.CreatedAt):
+			return left.CreatedAt.After(right.CreatedAt)
+		default:
+			return left.ID.String() > right.ID.String()
+		}
+	})
+	sort.SliceStable(pending, func(i, j int) bool {
+		left := pending[i]
+		right := pending[j]
+		switch {
+		case left.TurnNumber != right.TurnNumber:
+			return left.TurnNumber < right.TurnNumber
+		case !left.CreatedAt.Equal(right.CreatedAt):
+			return left.CreatedAt.Before(right.CreatedAt)
+		default:
+			return left.ID.String() < right.ID.String()
+		}
+	})
+
+	var current *ChatTurn
+	if len(inProgress) > 0 {
+		candidate := inProgress[0]
+		current = &candidate
+	} else if len(pending) > 0 {
+		candidate := pending[0]
+		current = &candidate
+	}
+
+	duplicates := make([]ChatTurn, 0)
+	if len(pending) > 1 {
+		keepPendingID := pending[0].ID
+		if current != nil && normalizeChatTurnStatus(current.Status) == "pending" {
+			keepPendingID = current.ID
+		}
+		for _, turn := range pending {
+			if turn.ID == keepPendingID {
+				continue
+			}
+			duplicates = append(duplicates, turn)
+		}
+	}
+
+	return current, duplicates
+}
+
 func (r *ChatTurnRepo) CreateForMessageAttempt(ctx context.Context, sessionID, agentID, messageID uuid.UUID, retryCount int) (ChatTurn, bool, error) {
 	if r.pool == nil {
 		return ChatTurn{}, false, fmt.Errorf("chat turn repo requires pool for CreateForMessageAttempt")
@@ -536,6 +602,13 @@ func (r *ChatTurnRepo) CreateForMessageAttempt(ctx context.Context, sessionID, a
 		  AND retry_count = $3
 	`, sessionID, messageID, retryCount))
 	if err == nil {
+		turns, listErr := r.listBySessionWithExecutor(ctx, tx, sessionID)
+		if listErr != nil {
+			return ChatTurn{}, false, listErr
+		}
+		if _, reconcileErr := r.reconcileSessionCurrentTurn(ctx, tx, sessionID, turns); reconcileErr != nil {
+			return ChatTurn{}, false, reconcileErr
+		}
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return ChatTurn{}, false, mapDBError(commitErr)
 		}
@@ -545,13 +618,47 @@ func (r *ChatTurnRepo) CreateForMessageAttempt(ctx context.Context, sessionID, a
 		return ChatTurn{}, false, err
 	}
 
+	turns, err := r.listBySessionWithExecutor(ctx, tx, sessionID)
+	if err != nil {
+		return ChatTurn{}, false, err
+	}
+	if current, reconcileErr := r.reconcileSessionCurrentTurn(ctx, tx, sessionID, turns); reconcileErr != nil {
+		return ChatTurn{}, false, reconcileErr
+	} else if current != nil {
+		if normalizeChatTurnStatus(current.Status) == "in_progress" || matchesMessageAttempt(*current, messageID, retryCount) {
+			if commitErr := tx.Commit(ctx); commitErr != nil {
+				return ChatTurn{}, false, mapDBError(commitErr)
+			}
+			return *current, false, nil
+		}
+		if normalizeChatTurnStatus(current.Status) == "pending" {
+			now := time.Now().UTC()
+			if _, err := tx.Exec(ctx, `
+				UPDATE chat_turn
+				SET status = 'cancelled',
+				    cancel_requested_at = $2,
+				    completed_at = $2
+				WHERE id = $1
+			`, current.ID, now); err != nil {
+				return ChatTurn{}, false, mapDBError(err)
+			}
+			for i := range turns {
+				if turns[i].ID != current.ID {
+					continue
+				}
+				turns[i].Status = "cancelled"
+				turns[i].CancelRequestedAt = &now
+				turns[i].CompletedAt = &now
+				break
+			}
+		}
+	}
+
 	nextTurnNumber := 1
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(MAX(turn_number), 0) + 1
-		FROM chat_turn
-		WHERE session_id = $1
-	`, sessionID).Scan(&nextTurnNumber); err != nil {
-		return ChatTurn{}, false, mapDBError(err)
+	for _, turn := range turns {
+		if turn.TurnNumber >= nextTurnNumber {
+			nextTurnNumber = turn.TurnNumber + 1
+		}
 	}
 
 	cycleID := uuid.New()
@@ -580,12 +687,9 @@ func (r *ChatTurnRepo) CreateForMessageAttempt(ctx context.Context, sessionID, a
 		return ChatTurn{}, false, mapDBError(err)
 	}
 
-	if _, err := tx.Exec(ctx, `
-		UPDATE chat_session
-		SET current_turn_id = $2
-		WHERE id = $1
-	`, sessionID, created.ID); err != nil {
-		return ChatTurn{}, false, mapDBError(err)
+	turns = append(turns, created)
+	if _, err := r.reconcileSessionCurrentTurn(ctx, tx, sessionID, turns); err != nil {
+		return ChatTurn{}, false, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE chat_session
@@ -598,6 +702,65 @@ func (r *ChatTurnRepo) CreateForMessageAttempt(ctx context.Context, sessionID, a
 		return ChatTurn{}, false, mapDBError(err)
 	}
 	return created, true, nil
+}
+
+func (r *ChatTurnRepo) listBySessionWithExecutor(ctx context.Context, exec chatExecutor, sessionID uuid.UUID) ([]ChatTurn, error) {
+	rows, err := exec.Query(ctx, `
+		SELECT id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
+		       started_at, completed_at, duration_ms, error_message, stop_reason, trigger_message_id, retry_count, created_at
+		FROM chat_turn
+		WHERE session_id = $1
+		ORDER BY turn_number ASC
+	`, sessionID)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]ChatTurn, 0)
+	for rows.Next() {
+		item, scanErr := scanChatTurn(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
+}
+
+func (r *ChatTurnRepo) reconcileSessionCurrentTurn(ctx context.Context, exec chatExecutor, sessionID uuid.UUID, turns []ChatTurn) (*ChatTurn, error) {
+	current, duplicatePending := CanonicalLiveTurn(turns)
+	if len(duplicatePending) > 0 {
+		now := time.Now().UTC()
+		for _, turn := range duplicatePending {
+			if _, err := exec.Exec(ctx, `
+				UPDATE chat_turn
+				SET status = 'cancelled',
+				    cancel_requested_at = $2,
+				    completed_at = $2
+				WHERE id = $1
+			`, turn.ID, now); err != nil {
+				return nil, mapDBError(err)
+			}
+		}
+	}
+
+	var currentTurnID *uuid.UUID
+	if current != nil {
+		id := current.ID
+		currentTurnID = &id
+	}
+	if _, err := exec.Exec(ctx, `
+		UPDATE chat_session
+		SET current_turn_id = $2
+		WHERE id = $1
+	`, sessionID, currentTurnID); err != nil {
+		return nil, mapDBError(err)
+	}
+	return current, nil
 }
 
 func (r *ChatTurnRepo) Create(ctx context.Context, turn ChatTurn) (ChatTurn, error) {
@@ -776,6 +939,16 @@ func scanChatTurnWithNotFound(row pgx.Row) (ChatTurn, error) {
 		return ChatTurn{}, mapDBError(err)
 	}
 	return item, nil
+}
+
+func normalizeChatTurnStatus(status string) string {
+	return strings.ToLower(strings.TrimSpace(status))
+}
+
+func matchesMessageAttempt(turn ChatTurn, messageID uuid.UUID, retryCount int) bool {
+	return turn.TriggerMessageID != nil &&
+		*turn.TriggerMessageID == messageID &&
+		turn.RetryCount == retryCount
 }
 
 func scanChatTurn(row pgx.Row) (ChatTurn, error) {

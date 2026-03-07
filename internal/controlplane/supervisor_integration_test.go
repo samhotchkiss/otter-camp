@@ -652,6 +652,19 @@ func TestSupervisor_StrandedActiveExecutionRecoveryRestoresLiveTurn(t *testing.T
 	if currentTurn.RespondingID != worker.ID {
 		t.Fatalf("current turn responding_id = %s, want %s", currentTurn.RespondingID, worker.ID)
 	}
+	sessionTurns, err := repo.NewChatTurnRepo(pool).ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	liveTurnCount := 0
+	for _, turn := range sessionTurns {
+		if turn.Status == "pending" || turn.Status == "in_progress" {
+			liveTurnCount++
+		}
+	}
+	if liveTurnCount != 1 {
+		t.Fatalf("live turn count = %d, want 1", liveTurnCount)
+	}
 
 	messages, err := repo.NewChatMessageRepo(pool).ListBySession(ctx, session.ID)
 	if err != nil {

@@ -1303,6 +1303,12 @@ func (s *service) CreateTurn(ctx context.Context, sessionID, agentID uuid.UUID) 
 	if err != nil {
 		return nil, err
 	}
+	if current, err := s.reconcileSessionCurrentTurn(ctx, session.ID, turns); err != nil {
+		return nil, err
+	} else if current != nil {
+		live := ChatTurn(*current)
+		return &live, nil
+	}
 	nextTurnNumber := 1
 	for _, turn := range turns {
 		if turn.TurnNumber >= nextTurnNumber {
@@ -1323,7 +1329,8 @@ func (s *service) CreateTurn(ctx context.Context, sessionID, agentID uuid.UUID) 
 		return nil, err
 	}
 
-	if _, err := s.sessions.UpdateCurrentTurn(ctx, session.ID, &created.ID); err != nil {
+	turns = append(turns, created)
+	if _, err := s.reconcileSessionCurrentTurn(ctx, session.ID, turns); err != nil {
 		return nil, err
 	}
 	if _, err := s.sessions.IncrementCounts(ctx, session.ID, 1, 0); err != nil {
@@ -1343,6 +1350,13 @@ func (s *service) StartTurn(ctx context.Context, turnID uuid.UUID) error {
 	}
 	started, err := s.turns.SetStarted(ctx, turn.ID, s.clock.Now().UTC())
 	if err != nil {
+		return err
+	}
+	turns, err := s.turns.ListBySession(ctx, turn.SessionID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.reconcileSessionCurrentTurn(ctx, turn.SessionID, turns); err != nil {
 		return err
 	}
 
@@ -1380,7 +1394,13 @@ func (s *service) CompleteTurn(ctx context.Context, turnID uuid.UUID) error {
 		return err
 	}
 	metrics.RecordAgentTurn("completed")
-	_, _ = s.sessions.UpdateCurrentTurn(ctx, turn.SessionID, nil)
+	turns, err := s.turns.ListBySession(ctx, turn.SessionID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.reconcileSessionCurrentTurn(ctx, turn.SessionID, turns); err != nil {
+		return err
+	}
 
 	session, err := s.GetSession(ctx, turn.SessionID)
 	if err != nil {
@@ -1446,7 +1466,13 @@ func (s *service) CancelTurn(ctx context.Context, turnID uuid.UUID, reason strin
 		return ErrInvalidStatusTransition
 	}
 
-	_, _ = s.sessions.UpdateCurrentTurn(ctx, turn.SessionID, nil)
+	sessionTurns, err := s.turns.ListBySession(ctx, turn.SessionID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.reconcileSessionCurrentTurn(ctx, turn.SessionID, sessionTurns); err != nil {
+		return err
+	}
 	actorType, actorID := actorFromContext(ctx)
 	for _, cancelled := range cancelledTurns {
 		payload := map[string]any{
@@ -1477,7 +1503,13 @@ func (s *service) FailTurn(ctx context.Context, turnID uuid.UUID, errorMsg strin
 		return err
 	}
 	metrics.RecordAgentTurn("failed")
-	_, _ = s.sessions.UpdateCurrentTurn(ctx, turn.SessionID, nil)
+	turns, err := s.turns.ListBySession(ctx, turn.SessionID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.reconcileSessionCurrentTurn(ctx, turn.SessionID, turns); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1802,6 +1834,28 @@ func (s *service) currentInProgressTurn(ctx context.Context, sessionID uuid.UUID
 		}
 	}
 	return selected, nil
+}
+
+func (s *service) reconcileSessionCurrentTurn(ctx context.Context, sessionID uuid.UUID, turns []repo.ChatTurn) (*repo.ChatTurn, error) {
+	current, duplicatePending := repo.CanonicalLiveTurn(turns)
+	if len(duplicatePending) > 0 {
+		now := s.clock.Now().UTC()
+		for _, turn := range duplicatePending {
+			if _, err := s.turns.SetCancelled(ctx, turn.ID, now, now); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	var currentTurnID *uuid.UUID
+	if current != nil {
+		id := current.ID
+		currentTurnID = &id
+	}
+	if _, err := s.sessions.UpdateCurrentTurn(ctx, sessionID, currentTurnID); err != nil {
+		return nil, err
+	}
+	return current, nil
 }
 
 func (s *service) hasInProgressTurn(ctx context.Context, sessionID uuid.UUID) (bool, error) {
