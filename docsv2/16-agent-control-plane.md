@@ -379,7 +379,7 @@ Capabilities are always evaluated within a scope:
 - **Org-scoped**: `project.read` at org level means the agent can read any project in the org.
 - **Project-scoped**: `project.task.create` at project level means the agent can create tasks in that specific project.
 - **Task-scoped**: `system.file.write` at task level means the agent can write files in that task's workspace.
-- **Task-scoped long-running migrations/imports**: when a task is clearly operating as a content migration/import, prompt-budget rollover is handled by writing a deterministic checkpoint into the task workspace and resuming from that checkpoint boundary. The control plane does not rely on replaying raw fetched content in later turns.
+- **Task-scoped long-running migrations/imports**: when a task is clearly operating as a content migration/import, prompt-budget rollover is handled by writing a deterministic checkpoint into the task workspace and resuming from that checkpoint boundary. The control plane does not rely on replaying raw fetched content in later turns. If the checkpoint contains persisted scripts/artifacts but no migrated outputs yet, the resumed turn must prioritize emitting the first output file from that persisted state before generating more helper scaffolding.
 
 The narrowest scope wins. An agent with org-level `project.read` and no project-level grants can still read all projects. An agent with project-level `system.cli.execute` only for Project A cannot execute commands in Project B's workspace.
 

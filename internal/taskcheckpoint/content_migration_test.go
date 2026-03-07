@@ -242,6 +242,46 @@ func TestIsOutputPathRequiresRecognizedContentDir(t *testing.T) {
 	}
 }
 
+func TestContentMigrationCheckpointGuidancePrioritizesFirstOutput(t *testing.T) {
+	checkpoint := ContentMigrationCheckpoint{
+		CheckpointPath: ".ottercamp/checkpoints/oc-296-content-migration.md",
+		Artifacts: []WorkspaceFile{
+			{Path: "artifacts/raw/post-1.html"},
+		},
+		Scripts: []WorkspaceFile{
+			{Path: "scripts/migrate.py"},
+			{Path: "scrape_posts.py"},
+		},
+	}
+
+	promptLines := strings.Join(PromptStrategyLines(&checkpoint), "\n")
+	if !strings.Contains(promptLines, "no migrated output files are on disk yet") {
+		t.Fatalf("prompt guidance missing no-output directive:\n%s", promptLines)
+	}
+	if !strings.Contains(promptLines, "do not spend the next turn re-listing workspace state") {
+		t.Fatalf("prompt guidance missing anti-loop directive:\n%s", promptLines)
+	}
+	if !strings.Contains(promptLines, "artifacts/raw/post-1.html") {
+		t.Fatalf("prompt guidance missing artifact path:\n%s", promptLines)
+	}
+	if !strings.Contains(promptLines, "scripts/migrate.py") {
+		t.Fatalf("prompt guidance missing script path:\n%s", promptLines)
+	}
+
+	systemMessage := BuildSystemMessage(checkpoint)
+	if !strings.Contains(systemMessage, "no migrated output files are on disk yet") {
+		t.Fatalf("system message missing no-output directive:\n%s", systemMessage)
+	}
+
+	document := BuildCheckpointDocument("Task #296", checkpoint)
+	if !strings.Contains(document, "## Immediate Next Action") {
+		t.Fatalf("checkpoint doc missing immediate next action section:\n%s", document)
+	}
+	if !strings.Contains(document, "write at least one migrated output file") {
+		t.Fatalf("checkpoint doc missing output directive:\n%s", document)
+	}
+}
+
 func mustParseMergedCheckpoint(t *testing.T, merged json.RawMessage) ContentMigrationCheckpoint {
 	t.Helper()
 
