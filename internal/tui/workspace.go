@@ -166,6 +166,7 @@ type workspaceState struct {
 	selectedProject   *ProjectDetail
 
 	tasks                      map[string]*taskRecord
+	projectTaskLists           map[string][]SidebarTaskItem
 	taskOrder                  []string
 	taskSessionIDs             map[string]string
 	sessionToTaskLabel         map[string]string // session UUID → human-readable task label
@@ -230,6 +231,7 @@ func newWorkspaceState() workspaceState {
 		sidebarCursor:      0,
 		sectionCollapsed:   map[sidebarSectionID]bool{},
 		tasks:              map[string]*taskRecord{},
+		projectTaskLists:   map[string][]SidebarTaskItem{},
 		taskOrder:          []string{},
 		taskSessionIDs:     map[string]string{},
 		sessionToTaskLabel: map[string]string{},
@@ -361,6 +363,31 @@ func (w *workspaceState) projectChildren(projectID string) []string {
 		children[i] = k.id
 	}
 	return children
+}
+
+func cloneSidebarTaskItems(tasks []SidebarTaskItem) []SidebarTaskItem {
+	cloned := make([]SidebarTaskItem, len(tasks))
+	copy(cloned, tasks)
+	return cloned
+}
+
+func activeSidebarTaskItems(tasks []SidebarTaskItem) []SidebarTaskItem {
+	active := make([]SidebarTaskItem, 0, len(tasks))
+	for _, task := range tasks {
+		if task.WorkStatus == "done" || task.WorkStatus == "approved" || task.WorkStatus == "cancelled" {
+			continue
+		}
+		active = append(active, task)
+	}
+	return active
+}
+
+func (w *workspaceState) projectTaskSnapshot(projectID string) ([]SidebarTaskItem, bool) {
+	tasks, ok := w.projectTaskLists[strings.TrimSpace(projectID)]
+	if !ok {
+		return nil, false
+	}
+	return cloneSidebarTaskItems(tasks), true
 }
 
 func (w *workspaceState) currentSidebarID() string {
@@ -1334,6 +1361,7 @@ func (w *workspaceState) existingChats() []SidebarChatItem {
 // When expandNode is true the project is also marked as expanded in the sidebar.
 func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskItem, expandNode bool) {
 	nodeID := "project-" + projectID
+	activeTasks := activeSidebarTaskItems(tasks)
 	// Remove existing task nodes for this project
 	for id, node := range w.nodes {
 		if node.Kind == sidebarKindTask && node.ParentID == nodeID {
@@ -1393,6 +1421,19 @@ func (w *workspaceState) setProjectTasks(projectID string, tasks []SidebarTaskIt
 		}
 		return ti.TaskNumber > tj.TaskNumber
 	})
+	w.projectTaskLists[strings.TrimSpace(projectID)] = cloneSidebarTaskItems(activeTasks)
+	if w.selectedProject != nil && strings.EqualFold(strings.TrimSpace(w.selectedProject.ID), strings.TrimSpace(projectID)) {
+		w.selectedProject.Tasks = cloneSidebarTaskItems(activeTasks)
+		if w.pendingProjectCursorTaskID != "" {
+			w.syncProjectCursorToTask(w.pendingProjectCursorTaskID)
+		}
+		openTasks := w.openTasksForProject()
+		if len(openTasks) == 0 {
+			w.projectTaskCursor = 0
+		} else if w.projectTaskCursor >= len(openTasks) {
+			w.projectTaskCursor = len(openTasks) - 1
+		}
+	}
 	// Expand the project node only when explicitly requested by user interaction.
 	if expandNode {
 		if proj, ok := w.nodes[nodeID]; ok {

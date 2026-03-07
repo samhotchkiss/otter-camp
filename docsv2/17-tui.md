@@ -110,6 +110,7 @@ The sidebar mirrors the session sidebar from the web UI spec — the operator's 
 
 - Sessions grouped by scope: org at top, then projects with their task sessions nested.
 - Project labels shown in the sidebar, project view header, dashboard task-board header, and task context must use one shared resolver: `project.display_name` first, then `project.slug`, then a stable generic fallback such as "Untitled project". Raw `Project <id-fragment>` placeholders must not be shown to the operator.
+- Project view open-task counts and task rows must follow the latest project-task reload/event stream. A stale detail snapshot must not keep showing `OPEN TASKS (0)` after live active tasks already exist for that project.
 - A fresh kickoff binds the project row, project session entry, and downstream task/session surfaces to one canonical live project/session path. The TUI must not show one project while the worker is continuing a duplicate or archived session from an earlier run.
 - **Unread indicator** (`*`) on sessions with unseen messages. Bubbles up: if any task in a project has unread, the project entry shows `*` too.
 - Selecting a session (Enter) switches the chat pane to that session. Main content does not change.
@@ -664,6 +665,7 @@ A persistent status bar at the bottom of the terminal shows context and hints:
 - Current navigation context (project > task).
 - Active chat session name and scope.
 - Inbox item count.
+- Worker-offline warnings are only shown when there is no recent worker heartbeat/activity signal; an actively claiming or heartbeat-producing worker must not be labeled offline.
 - Keybinding hints for command palette and help.
 
 The status bar also shows contextual keybinding hints based on the focused panel and current state.
