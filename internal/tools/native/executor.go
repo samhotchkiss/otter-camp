@@ -364,10 +364,6 @@ func resolveDataDir(raw string) string {
 	return workspace.ResolveDataDir(raw)
 }
 
-func expandDataDir(path string) (string, error) {
-	return workspace.ExpandDataDir(path)
-}
-
 func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input map[string]any) (map[string]any, error) {
 	switch strings.TrimSpace(toolName) {
 	case "file.read":

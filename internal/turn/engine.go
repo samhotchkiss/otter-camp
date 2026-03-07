@@ -2827,14 +2827,6 @@ func (e *TurnEngine) watchTurnCancellation(ctx context.Context, rt *turnRuntime)
 	return cancelCtx, cleanup
 }
 
-func (e *TurnEngine) resolveSessionAgent(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {
-	session, err := e.chat.GetSession(ctx, sessionID)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	return e.resolveSessionAgentForSession(ctx, session)
-}
-
 func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session *chat.ChatSession) (uuid.UUID, error) {
 	if session == nil {
 		return uuid.Nil, repo.ErrNotFound
