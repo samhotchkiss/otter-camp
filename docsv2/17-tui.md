@@ -111,6 +111,7 @@ The sidebar mirrors the session sidebar from the web UI spec — the operator's 
 - Sessions grouped by scope: org at top, then projects with their task sessions nested.
 - Project labels shown in the sidebar, project view header, dashboard task-board header, and task context must use one shared resolver: `project.display_name` first, then `project.slug`, then a stable generic fallback such as "Untitled project". Raw `Project <id-fragment>` placeholders must not be shown to the operator.
 - Project view open-task counts and task rows must follow the latest project-task reload/event stream. A stale detail snapshot must not keep showing `OPEN TASKS (0)` after live active tasks already exist for that project.
+- On restart hydration, the project view must seed its header from the best known live project label and must prefer any already-known live task truth over a sparse project-detail payload. Showing `Untitled project` or `OPEN TASKS (0)` is only valid when the current live sources also say that is true.
 - A fresh kickoff binds the project row, project session entry, and downstream task/session surfaces to one canonical live project/session path. The TUI must not show one project while the worker is continuing a duplicate or archived session from an earlier run.
 - The first-wave task list for a fresh kickoff must stay aligned to the explicitly planned task set. Recovery, restart, or blocker handling must not make the TUI suddenly show extra phantom top-level workstreams unless the plan explicitly requested them.
 - **Unread indicator** (`*`) on sessions with unseen messages. Bubbles up: if any task in a project has unread, the project entry shows `*` too.
@@ -753,6 +754,7 @@ On next launch, this state is restored so the operator picks up where they left 
 ### Restart Readiness Gate
 
 Before restarting a live operator session for a full end-to-end run, operators must pass an automated restart-readiness smoke gate. The gate is fail-closed: no restart proceeds until the runtime proves singleton kickoff, live `in_progress` execution state, on-disk task output advancing to `review`, long-running continuation/resume behavior, and TUI reconciliation of project/task/worker truth after live data reloads. The TUI must not keep showing stale zero-open-task state or a false worker-health picture once the latest project/task/session data is available.
+When the control-plane dashboard refresh proves current live work after restart, stale run-failure banner text in the TUI status line must be cleared or replaced with the current runtime-health headline instead of masking the live state.
 
 ### Graceful Shutdown
 

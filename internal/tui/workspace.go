@@ -374,12 +374,80 @@ func cloneSidebarTaskItems(tasks []SidebarTaskItem) []SidebarTaskItem {
 func activeSidebarTaskItems(tasks []SidebarTaskItem) []SidebarTaskItem {
 	active := make([]SidebarTaskItem, 0, len(tasks))
 	for _, task := range tasks {
-		if task.WorkStatus == "done" || task.WorkStatus == "approved" || task.WorkStatus == "cancelled" {
+		if isCompletedTaskStatus(task.WorkStatus) {
 			continue
 		}
 		active = append(active, task)
 	}
 	return active
+}
+
+func isCompletedTaskStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "done", "approved", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortSidebarTaskItems(tasks []SidebarTaskItem) {
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].TaskNumber != tasks[j].TaskNumber {
+			return tasks[i].TaskNumber > tasks[j].TaskNumber
+		}
+		leftTitle := strings.TrimSpace(tasks[i].Title)
+		rightTitle := strings.TrimSpace(tasks[j].Title)
+		if leftTitle != rightTitle {
+			return leftTitle < rightTitle
+		}
+		return tasks[i].ID < tasks[j].ID
+	})
+}
+
+func mergeSidebarTaskItem(current, next SidebarTaskItem) SidebarTaskItem {
+	merged := current
+	if strings.TrimSpace(next.ID) != "" {
+		merged.ID = strings.TrimSpace(next.ID)
+	}
+	if strings.TrimSpace(next.Title) != "" {
+		merged.Title = strings.TrimSpace(next.Title)
+	}
+	if next.TaskNumber > 0 {
+		merged.TaskNumber = next.TaskNumber
+	}
+	if next.Priority > 0 {
+		merged.Priority = next.Priority
+	}
+	if strings.TrimSpace(next.WorkStatus) != "" {
+		merged.WorkStatus = strings.TrimSpace(next.WorkStatus)
+	}
+	return merged
+}
+
+func taskRecordSidebarItem(record *taskRecord) (SidebarTaskItem, bool) {
+	if record == nil {
+		return SidebarTaskItem{}, false
+	}
+	if isCompletedTaskStatus(record.Status) {
+		return SidebarTaskItem{}, false
+	}
+	title := strings.TrimSpace(record.Title)
+	if title == "" {
+		switch {
+		case record.TaskNumber > 0:
+			title = fmt.Sprintf("Task %d", record.TaskNumber)
+		default:
+			title = "Task"
+		}
+	}
+	return SidebarTaskItem{
+		ID:         strings.TrimSpace(record.ID),
+		Title:      title,
+		WorkStatus: strings.TrimSpace(record.Status),
+		TaskNumber: record.TaskNumber,
+		Priority:   record.Priority,
+	}, strings.TrimSpace(record.ID) != ""
 }
 
 func (w *workspaceState) projectTaskSnapshot(projectID string) ([]SidebarTaskItem, bool) {
@@ -388,6 +456,27 @@ func (w *workspaceState) projectTaskSnapshot(projectID string) ([]SidebarTaskIte
 		return nil, false
 	}
 	return cloneSidebarTaskItems(tasks), true
+}
+
+func (w *workspaceState) ensureSelectedProjectShell() {
+	projectID := strings.TrimSpace(w.selectedProjectID)
+	if projectID == "" {
+		return
+	}
+	if w.selectedProject == nil || !strings.EqualFold(strings.TrimSpace(w.selectedProject.ID), projectID) {
+		w.selectedProject = &ProjectDetail{ID: projectID}
+	}
+	if node := w.nodes["project-"+projectID]; node != nil {
+		if cleanProjectDisplayLabel(w.selectedProject.DisplayName) == "" && !isSyntheticProjectIDLabel(node.Label) {
+			w.selectedProject.DisplayName = strings.TrimSpace(node.Label)
+		}
+		if strings.TrimSpace(w.selectedProject.Slug) == "" {
+			w.selectedProject.Slug = strings.TrimSpace(node.ProjectSlug)
+		}
+	}
+	if liveTasks, ok := w.projectTaskSnapshot(projectID); ok {
+		w.selectedProject.Tasks = liveTasks
+	}
 }
 
 func (w *workspaceState) currentSidebarID() string {
@@ -833,19 +922,78 @@ func (w *workspaceState) currentInboxItem() *inboxItem {
 	return &w.inbox[w.inboxCursor]
 }
 
-// openTasksForProject returns the list of non-done tasks from selectedProject.
-// Returns nil when selectedProject is not loaded.
+// openTasksForProject returns the best available live open-task view for the
+// selected project. When no source has loaded yet, it returns nil.
 func (w *workspaceState) openTasksForProject() []SidebarTaskItem {
-	if w.selectedProject == nil {
-		return nil
+	openTasks, _ := w.projectOpenTasks(w.selectedProjectID)
+	return openTasks
+}
+
+func (w *workspaceState) projectOpenTasks(projectID string) ([]SidebarTaskItem, bool) {
+	trimmedProjectID := strings.TrimSpace(projectID)
+	if trimmedProjectID == "" {
+		return nil, false
 	}
-	var result []SidebarTaskItem
-	for _, t := range w.selectedProject.Tasks {
-		if t.WorkStatus != "done" && t.WorkStatus != "approved" && t.WorkStatus != "cancelled" {
-			result = append(result, t)
+	if snapshot, ok := w.projectTaskSnapshot(trimmedProjectID); ok {
+		return activeSidebarTaskItems(snapshot), true
+	}
+
+	candidates := make(map[string]SidebarTaskItem)
+	order := make([]string, 0)
+	addCandidate := func(item SidebarTaskItem) {
+		item.ID = strings.TrimSpace(item.ID)
+		item.Title = strings.TrimSpace(item.Title)
+		item.WorkStatus = strings.TrimSpace(item.WorkStatus)
+		if item.ID == "" || isCompletedTaskStatus(item.WorkStatus) {
+			return
+		}
+		if existing, ok := candidates[item.ID]; ok {
+			candidates[item.ID] = mergeSidebarTaskItem(existing, item)
+			return
+		}
+		candidates[item.ID] = item
+		order = append(order, item.ID)
+	}
+
+	if w.selectedProject != nil && strings.EqualFold(strings.TrimSpace(w.selectedProject.ID), trimmedProjectID) {
+		for _, task := range w.selectedProject.Tasks {
+			addCandidate(task)
 		}
 	}
-	return result
+	for _, childID := range w.projectChildren("project-" + trimmedProjectID) {
+		child := w.nodes[childID]
+		if child == nil || child.Kind != sidebarKindTask {
+			continue
+		}
+		addCandidate(SidebarTaskItem{
+			ID:         strings.TrimSpace(child.TaskID),
+			Title:      strings.TrimSpace(child.Label),
+			WorkStatus: strings.TrimSpace(child.WorkStatus),
+			TaskNumber: child.TaskNumber,
+		})
+	}
+	recordItems := make([]SidebarTaskItem, 0, len(w.tasks))
+	for _, record := range w.tasks {
+		if record == nil || !strings.EqualFold(strings.TrimSpace(record.ProjectID), trimmedProjectID) {
+			continue
+		}
+		if item, ok := taskRecordSidebarItem(record); ok {
+			recordItems = append(recordItems, item)
+		}
+	}
+	sortSidebarTaskItems(recordItems)
+	for _, item := range recordItems {
+		addCandidate(item)
+	}
+	if len(order) == 0 {
+		return nil, false
+	}
+
+	result := make([]SidebarTaskItem, 0, len(order))
+	for _, taskID := range order {
+		result = append(result, candidates[taskID])
+	}
+	return result, true
 }
 
 // navigableTasksForProject returns all tasks the cursor can reach:
@@ -856,15 +1004,11 @@ func (w *workspaceState) navigableTasksForProject() []SidebarTaskItem {
 	if w.selectedProject == nil {
 		return nil
 	}
-	var result []SidebarTaskItem
-	for _, t := range w.selectedProject.Tasks {
-		if t.WorkStatus != "done" && t.WorkStatus != "approved" && t.WorkStatus != "cancelled" {
-			result = append(result, t)
-		}
-	}
+	openTasks, ready := w.projectOpenTasks(w.selectedProjectID)
+	result := append([]SidebarTaskItem(nil), openTasks...)
 	// EX-491: auto-show done tasks when all open tasks are complete,
 	// matching the autoShowDone logic in renderProjectView.
-	autoShowDone := len(result) == 0 && w.selectedProject.DoneCount > 0
+	autoShowDone := ready && len(result) == 0 && w.selectedProject.DoneCount > 0
 	if w.showDoneTasks || autoShowDone {
 		result = append(result, w.selectedProject.DoneTasks...)
 	}
