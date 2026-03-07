@@ -1004,6 +1004,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			node.ProjectSlug = strings.TrimSpace(typed.Detail.Slug)
 			node.Label = ResolveProjectLabel(typed.Detail.DisplayName, typed.Detail.Slug, "")
 		}
+		if liveTasks, ok := m.workspace.projectTaskSnapshot(typed.Detail.ID); ok {
+			m.workspace.selectedProject.Tasks = liveTasks
+		}
 		// Apply any pending cursor request (task opened before project loaded).
 		if m.workspace.pendingProjectCursorTaskID != "" {
 			m.workspace.syncProjectCursorToTask(m.workspace.pendingProjectCursorTaskID)
@@ -9351,15 +9354,15 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			m.workspace.activity = appendActivity(m.workspace.activity,
 				label+": "+statusLabel)
 		}
-		// EX-138: when the task crosses the done boundary in the currently viewed
-		// project, reload the project detail so DoneTasks is populated correctly.
-		// Without this, toggling 'd' after a real-time completion shows an empty
-		// Done section because DoneTasks is only set by a full project detail load.
-		isNowDone := payload.ToStatus == "done" || payload.ToStatus == "approved" || payload.ToStatus == "cancelled"
-		if isNowDone && m.workspace.selectedProject != nil &&
-			m.workspace.selectedProjectID != "" &&
+		// Keep the selected project view in sync with both the full project detail
+		// and the live open-task list whenever a task changes state.
+		if m.workspace.selectedProjectID != "" &&
+			payload.ProjectID != "" &&
 			strings.EqualFold(m.workspace.selectedProjectID, payload.ProjectID) {
-			return loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints)
+			return tea.Batch(
+				loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints),
+				loadProjectTasksCmd(m.workspace.selectedProjectID, m.runtimeHints, false),
+			)
 		}
 		return nil
 	}
@@ -9389,11 +9392,15 @@ func (m *Model) applyWorkspaceCommand(event EventEnvelope) tea.Cmd {
 			}
 		}
 		m.workspace.activity = appendActivity(m.workspace.activity, label+": created")
-		// Reload project detail when the new task belongs to the currently
-		// viewed project so the task list reflects the addition immediately.
+		// Reload both project detail and project tasks when the new task belongs
+		// to the currently viewed project so the live task list reflects the
+		// addition immediately even if the detail response is stale.
 		if m.workspace.selectedProjectID != "" && payload.ProjectID != "" &&
 			strings.EqualFold(m.workspace.selectedProjectID, payload.ProjectID) {
-			return loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints)
+			return tea.Batch(
+				loadProjectDetailCmd(m.workspace.selectedProjectID, m.runtimeHints),
+				loadProjectTasksCmd(m.workspace.selectedProjectID, m.runtimeHints, false),
+			)
 		}
 		return nil
 	}

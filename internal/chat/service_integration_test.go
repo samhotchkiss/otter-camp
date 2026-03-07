@@ -16,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
@@ -243,6 +244,38 @@ func TestChatServiceIntegrationAppendMessageSteerMetadataSkipsUserSentEvent(t *t
 		}
 	case <-time.After(600 * time.Millisecond):
 		// expected: no additional user_sent event
+	}
+}
+
+func TestChatServiceIntegrationRecentWorkerActivitySuppressesOfflineWarningEX292(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+
+	svcIface := newIntegrationService(t, pool, nil)
+	svc, ok := svcIface.(*service)
+	if !ok {
+		t.Fatalf("service type = %T, want *service", svcIface)
+	}
+	session := mustCreateSession(t, ctx, svcIface, org.ID)
+
+	recent := time.Now().UTC()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO job_queue (job_type, status, run_after, created_at, updated_at)
+		VALUES ($1, 'done', $2, $2, $2)
+	`, scheduling.ScheduleTickJobType, recent); err != nil {
+		t.Fatalf("insert schedule tick heartbeat job: %v", err)
+	}
+
+	state, err := svc.loadTurnResponseMonitorState(ctx, session.ID, recent.Add(-30*time.Second))
+	if err != nil {
+		t.Fatalf("loadTurnResponseMonitorState: %v", err)
+	}
+	if !state.recentWorkerActivity {
+		t.Fatal("recent worker activity should be detected from schedule tick heartbeat")
+	}
+	if msg, ok := state.warningMessage(); ok {
+		t.Fatalf("warningMessage = %q, want no offline warning when worker activity is recent", msg)
 	}
 }
 

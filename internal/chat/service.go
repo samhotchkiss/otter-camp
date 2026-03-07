@@ -20,6 +20,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/scheduling"
 )
 
 var (
@@ -35,10 +36,11 @@ var (
 )
 
 const (
-	defaultListLimit  = 50
-	maxListLimit      = 200
-	chatJobPriority   = 50
-	summarizePriority = 60
+	defaultListLimit   = 50
+	maxListLimit       = 200
+	chatJobPriority    = 50
+	summarizePriority  = 60
+	workerHealthWindow = 2 * time.Minute
 )
 
 var messageStatusTransitions = map[string]map[string]struct{}{
@@ -994,32 +996,85 @@ func (s *service) monitorTurnResponse(orgID, sessionID uuid.UUID, msgAt time.Tim
 	defer cancel()
 	time.Sleep(20 * time.Second)
 
-	var hasResponse bool
-	if err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM chat_message
-		  WHERE session_id=$1 AND role='assistant' AND created_at>$2)`,
-		sessionID, msgAt,
-	).Scan(&hasResponse); err != nil || hasResponse {
+	state, err := s.loadTurnResponseMonitorState(ctx, sessionID, msgAt)
+	if err != nil {
 		return
 	}
-
-	var jobPending bool
-	_ = s.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM job_queue
-		  WHERE job_type='agent_turn' AND status='pending'
-		    AND payload->>'session_id'=$1)`,
-		sessionID.String(),
-	).Scan(&jobPending)
-
-	msg := "Worker appears offline — check that `ottercamp worker` is running."
-	if jobPending {
-		msg = "Worker appears offline — job queued but not processing. Run: ottercamp worker"
+	msg, ok := state.warningMessage()
+	if !ok {
+		return
 	}
 
 	_ = s.publishEvent(ctx, orgID, "worker.unresponsive", "system", nil, map[string]any{
 		"session_id": sessionID,
 		"message":    msg,
 	})
+}
+
+type turnResponseMonitorState struct {
+	hasResponse          bool
+	pendingAgentTurn     bool
+	claimedAgentTurn     bool
+	recentWorkerActivity bool
+}
+
+func (s *service) loadTurnResponseMonitorState(ctx context.Context, sessionID uuid.UUID, msgAt time.Time) (turnResponseMonitorState, error) {
+	var state turnResponseMonitorState
+	recentSince := s.clock.Now().UTC().Add(-workerHealthWindow)
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			EXISTS(
+				SELECT 1
+				FROM chat_message
+				WHERE session_id = $1
+				  AND role = 'assistant'
+				  AND created_at > $2
+			),
+			EXISTS(
+				SELECT 1
+				FROM job_queue
+				WHERE job_type = 'agent_turn'
+				  AND status = 'pending'
+				  AND payload->>'session_id' = $3
+			),
+			EXISTS(
+				SELECT 1
+				FROM job_queue
+				WHERE job_type = 'agent_turn'
+				  AND status = 'claimed'
+				  AND payload->>'session_id' = $3
+			),
+			EXISTS(
+				SELECT 1
+				FROM job_queue
+				WHERE (status = 'claimed' AND claimed_at >= $4)
+				   OR (job_type = $5 AND status = 'done' AND updated_at >= $4)
+			) OR EXISTS(
+				SELECT 1
+				FROM run_event
+				WHERE event_type = 'heartbeat'
+				  AND created_at >= $4
+			)
+	`, sessionID, msgAt, sessionID.String(), recentSince, scheduling.ScheduleTickJobType).Scan(
+		&state.hasResponse,
+		&state.pendingAgentTurn,
+		&state.claimedAgentTurn,
+		&state.recentWorkerActivity,
+	)
+	if err != nil {
+		return turnResponseMonitorState{}, err
+	}
+	return state, nil
+}
+
+func (s turnResponseMonitorState) warningMessage() (string, bool) {
+	if s.hasResponse || s.claimedAgentTurn || s.recentWorkerActivity {
+		return "", false
+	}
+	if s.pendingAgentTurn {
+		return "Worker appears offline — job queued but not processing. Run: ottercamp worker", true
+	}
+	return "Worker appears offline — check that `ottercamp worker` is running.", true
 }
 
 func (s *service) ensureProjectNotPausedForSession(ctx context.Context, session *ChatSession) error {

@@ -1398,14 +1398,15 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 			if n == nil || n.Kind != sidebarKindProject {
 				continue
 			}
-			if !matchesFilter(n.Label, query) {
+			projectLabel := ResolveProjectLabel("", strings.TrimSpace(n.ProjectSlug), n.Label)
+			if !matchesFilter(projectLabel, query) {
 				continue
 			}
 			icon := "▸ "
 			if n.Expanded {
 				icon = "▾ "
 			}
-			lines = append(lines, lipgloss.NewStyle().Foreground(colFocus).Bold(true).Render(icon+n.Label))
+			lines = append(lines, lipgloss.NewStyle().Foreground(colFocus).Bold(true).Render(icon+projectLabel))
 		}
 		// EX-232: add a footer hint so users know how to select a project and filter.
 		lines = append(lines, "")
@@ -1420,7 +1421,7 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 	// Title row: project name left, delivery mode right
 	titleText := strings.TrimSpace(m.workspace.projectDisplayName(m.workspace.selectedProjectID))
 	if titleText == "" {
-		titleText = node.Label
+		titleText = ResolveProjectLabel("", strings.TrimSpace(node.ProjectSlug), node.Label)
 	}
 	if proj != nil && strings.TrimSpace(proj.DeliveryMode) != "" {
 		pad := width - len(titleText) - len(proj.DeliveryMode)

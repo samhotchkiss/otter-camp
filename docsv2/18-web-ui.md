@@ -369,6 +369,7 @@ Kanban-style columns by work status: `draft`, `queued`, `in_progress`, `blocked`
 
 - **Cancelled tasks** are not shown by default. Accessible via a "Show cancelled" toggle or filter.
 - **Done tasks** can optionally be hidden via filter to focus on active work.
+- Project task counts, project-view task lists, and project labels must stay bound to the latest live project/task state. The UI must not keep showing zero open tasks or raw internal project-ID fragments once the live project record and task stream are available.
 
 Each card shows at-a-glance information (from ui-spec-for-figma.md Task Board Cards):
 
