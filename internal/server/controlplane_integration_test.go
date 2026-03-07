@@ -509,6 +509,105 @@ func TestOperatorDashboardSummaryAttentionRequiredWhenOnlyBlockedItemsPresent(t 
 	}
 }
 
+func TestOperatorDashboardBlockedSectionIncludesStrandedExecution(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+	stateRepo := controlplane.NewRuntimeStateRepository(testServer.Pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-stranded",
+		DisplayName:    "Ops Dashboard Stranded",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		Slug:           "ops-dashboard-stranded-template",
+		DisplayName:    "Ops Dashboard Stranded Template",
+		Description:    "template for operator dashboard stranded execution tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	createdByID := adminA.ID
+	blockedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Recover stranded worker execution",
+		WorkStatus:     "blocked",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create blocked task: %v", err)
+	}
+
+	state, err := stateRepo.Ensure(ctx, orgA.ID, "task", blockedTask.ID)
+	if err != nil {
+		t.Fatalf("ensure runtime state: %v", err)
+	}
+	lastProgressAt := time.Now().UTC().Add(-7 * time.Minute)
+	if _, err := stateRepo.UpdateMetadata(ctx, state.ID, controlplane.RuntimeStateContract{
+		Status:            "stranded",
+		TaskID:            &blockedTask.ID,
+		LastProgressAt:    &lastProgressAt,
+		LastProgressEvent: "execution_stranded",
+		PendingWakeReason: "no_live_task_turn",
+		ResumeDisposition: "terminal",
+		FailureClass:      "permanent",
+		FailureReason:     "active execution lost live task turn and automatic recovery failed",
+		WakeupSource:      "supervisor",
+		WakeupKind:        "stranded_execution",
+	}.JSON()); err != nil {
+		t.Fatalf("mark runtime stranded: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=6", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	if payload.Summary.BlockedItems != 1 {
+		t.Fatalf("blocked_items=%d want=1 body=%s", payload.Summary.BlockedItems, string(resp.Body))
+	}
+
+	strandedItem := findOperatorDashboardItem(payload.Blocked.Items, "stranded_execution", blockedTask.ID)
+	if strandedItem == nil {
+		t.Fatalf("blocked stranded item missing body=%s", string(resp.Body))
+	}
+	if strandedItem.Status != "stranded" {
+		t.Fatalf("stranded item status=%q want=%q body=%s", strandedItem.Status, "stranded", string(resp.Body))
+	}
+	if !strings.Contains(strandedItem.Summary, "live task turn") {
+		t.Fatalf("stranded item summary=%q want live-task-turn detail body=%s", strandedItem.Summary, string(resp.Body))
+	}
+	if strandedItem.Links.Task != "/v1/tasks/"+blockedTask.ID.String() {
+		t.Fatalf("stranded task link=%q want=%q body=%s", strandedItem.Links.Task, "/v1/tasks/"+blockedTask.ID.String(), string(resp.Body))
+	}
+}
+
 func TestOperatorDashboardSectionTotalCountExceedsReturnedCountWhenLimited(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 

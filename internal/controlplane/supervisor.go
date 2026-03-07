@@ -16,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
 
 const (
@@ -25,6 +26,7 @@ const (
 	createdRunStaleLimit          = 5 * time.Minute
 	orphanedEventSilenceLimit     = 10 * time.Minute
 	pausedTimeoutLimit            = 24 * time.Hour
+	strandedExecutionGraceLimit   = 30 * time.Second
 	urgentBlockerEscalationAfter  = 4 * time.Hour
 	normalBlockerEscalationAfter  = 24 * time.Hour
 	supervisorRecoveryMaxAttempts = 3
@@ -55,6 +57,10 @@ type supervisorChatService interface {
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
 }
 
+type supervisorTaskService interface {
+	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
+}
+
 type SupervisorOptions struct {
 	Pool *pgxpool.Pool
 
@@ -62,6 +68,7 @@ type SupervisorOptions struct {
 	Runs        supervisorRunRepository
 	RunEvents   supervisorRunEventRepository
 	ChatService supervisorChatService
+	TaskService supervisorTaskService
 
 	EventBus eventbus.EventBus
 	Clock    clock.Clock
@@ -78,6 +85,7 @@ type Supervisor struct {
 	events      supervisorRunEventRepository
 	notifier    deadLetterNotifier
 	chatService supervisorChatService
+	taskService supervisorTaskService
 	eventBus    eventbus.EventBus
 	clock       clock.Clock
 	logger      *slog.Logger
@@ -122,6 +130,9 @@ func NewSupervisor(opts SupervisorOptions) (*Supervisor, error) {
 	if opts.ChatService != nil {
 		supervisor.chatService = opts.ChatService
 	}
+	if opts.TaskService != nil {
+		supervisor.taskService = opts.TaskService
+	}
 
 	if internalService, ok := opts.RunService.(*runService); ok {
 		if runRepo, castOK := internalService.runs.(*RunRepository); castOK {
@@ -138,6 +149,16 @@ func NewSupervisor(opts SupervisorOptions) (*Supervisor, error) {
 			}
 		}
 		supervisor.notifier = internalService
+	}
+	if supervisor.taskService == nil && supervisor.pool != nil && supervisor.eventBus != nil {
+		taskService, err := tasksvc.NewService(tasksvc.Options{
+			Pool:     supervisor.pool,
+			EventBus: supervisor.eventBus,
+		})
+		if err != nil {
+			return nil, err
+		}
+		supervisor.taskService = taskService
 	}
 
 	if supervisor.runs == nil {
@@ -218,6 +239,9 @@ func (s *Supervisor) tick(ctx context.Context) error {
 		return err
 	}
 	if err := s.detectStalePaused(ctx); err != nil {
+		return err
+	}
+	if err := s.detectStrandedActiveExecutions(ctx); err != nil {
 		return err
 	}
 	if err := s.detectExpiredBrowserHandoffs(ctx); err != nil {

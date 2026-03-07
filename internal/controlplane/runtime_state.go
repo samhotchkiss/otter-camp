@@ -365,6 +365,8 @@ func normalizeRuntimeContractStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "active":
 		return "active"
+	case "stranded":
+		return "stranded"
 	case "stale":
 		return "stale"
 	case "resumable":
