@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -23,8 +25,10 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 func TestTurnEngineIntegrationFullTurnCycle(t *testing.T) {
@@ -2129,6 +2133,246 @@ func TestTurnEngineIntegrationPromptGuardrailPreventsRunawayInput(t *testing.T) 
 	}
 }
 
+func TestTurnEngineIntegrationContentMigrationContinuationUsesWorkspaceCheckpoint(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	description := "Migrate Sam.blog blog content by scraping source pages, checkpointing manifests, and writing migrated posts incrementally."
+	taskRecord.Title = "Migrate Sam.blog content"
+	taskRecord.Description = &description
+	var err error
+	taskRecord, err = repo.NewProjectTaskRepo(fixture.pool).Update(ctx, taskRecord)
+	if err != nil {
+		t.Fatalf("update task: %v", err)
+	}
+
+	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "continue the content migration")
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	fixture.engine.assembler = assembler
+	fixture.engine.maxToolCalls = 1
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "network.fetch", Tier: "tier1"},
+		{Name: "file.write", Tier: "tier2"},
+	}}
+
+	rawMarker := strings.Repeat("RAW_PAGE_SENTINEL ", 180)
+	prompts := make([]string, 0, 2)
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		prompts = append(prompts, flattenPrompt(req.Prompt))
+		round++
+		if round == 1 {
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "fetch-1", Name: "network.fetch", Tier: "tier1"}}}, nil
+		}
+		return ModelResponse{Content: "resume from the checkpoint"}, nil
+	}
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		rawRel := "artifacts/raw/post-1.html"
+		rawAbs := filepath.Join(workspaceRoot, filepath.FromSlash(rawRel))
+		if err := os.MkdirAll(filepath.Dir(rawAbs), 0o755); err != nil {
+			return ToolResult{}, err
+		}
+		if err := os.WriteFile(rawAbs, []byte(rawMarker), 0o644); err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path": rawRel,
+				"body": rawMarker,
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(prompts) < 2 {
+		t.Fatalf("prompt count = %d, want at least 2 rounds", len(prompts))
+	}
+
+	checkpointRel := taskcheckpoint.CheckpointRelativePath(taskRecord.TaskNumber, taskRecord.ID)
+	secondPrompt := prompts[1]
+	if strings.Contains(secondPrompt, rawMarker) {
+		t.Fatal("continuation prompt replayed raw fetch body instead of checkpointed artifact state")
+	}
+	if !strings.Contains(secondPrompt, checkpointRel) {
+		t.Fatalf("continuation prompt missing checkpoint path %q:\n%s", checkpointRel, secondPrompt)
+	}
+	if !strings.Contains(secondPrompt, "artifacts/raw/post-1.html") {
+		t.Fatalf("continuation prompt missing persisted raw artifact path:\n%s", secondPrompt)
+	}
+
+	checkpointBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(checkpointRel)))
+	if err != nil {
+		t.Fatalf("read checkpoint file: %v", err)
+	}
+	if !strings.Contains(string(checkpointBody), "artifacts/raw/post-1.html") {
+		t.Fatalf("checkpoint file missing raw artifact path:\n%s", string(checkpointBody))
+	}
+}
+
+func TestTurnEngineIntegrationContentMigrationResumeUsesPersistedCheckpointState(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	description := "Import Sam.blog posts from the legacy site, persist manifests, and write migrated markdown files incrementally."
+	taskRecord.Title = "Import Sam.blog posts"
+	taskRecord.Description = &description
+	var err error
+	taskRecord, err = repo.NewProjectTaskRepo(fixture.pool).Update(ctx, taskRecord)
+	if err != nil {
+		t.Fatalf("update task: %v", err)
+	}
+
+	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "start the migration")
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	fixture.engine.assembler = assembler
+	fixture.engine.maxToolCalls = 1
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "network.fetch", Tier: "tier1"},
+		{Name: "file.write", Tier: "tier2"},
+	}}
+
+	rawMarker := strings.Repeat("RAW_PAGE_RESUME_SENTINEL ", 180)
+	outputRel := "content/posts/hello-world.md"
+	prompts := make([]string, 0, 4)
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		prompts = append(prompts, flattenPrompt(req.Prompt))
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "fetch-1", Name: "network.fetch", Tier: "tier1"}}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "write-1",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path":    outputRel,
+					"content": "# Hello World\n",
+				},
+			}}}, nil
+		case 3:
+			return ModelResponse{Content: "first run complete"}, nil
+		default:
+			return ModelResponse{Content: "resumed from persisted checkpoint"}, nil
+		}
+	}
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		rawRel := "artifacts/raw/post-1.html"
+		rawAbs := filepath.Join(workspaceRoot, filepath.FromSlash(rawRel))
+		if err := os.MkdirAll(filepath.Dir(rawAbs), 0o755); err != nil {
+			return ToolResult{}, err
+		}
+		if err := os.WriteFile(rawAbs, []byte(rawMarker), 0o644); err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path": rawRel,
+				"body": rawMarker,
+			},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		target, _ := call.Arguments["path"].(string)
+		content, _ := call.Arguments["content"].(string)
+		targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(target))
+		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+			return ToolResult{}, err
+		}
+		if err := os.WriteFile(targetAbs, []byte(content), 0o644); err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			RunID:      &runID,
+			Output: map[string]any{
+				"path":      target,
+				"byte_size": len(content),
+				"created":   true,
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage first run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(outputRel))); err != nil {
+		t.Fatalf("expected migrated output file on disk: %v", err)
+	}
+
+	authorType := "human_user"
+	resumeMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "resume from the latest checkpoint",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage resume: %v", err)
+	}
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, resumeMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage resume: %v", err)
+	}
+
+	if len(prompts) < 4 {
+		t.Fatalf("prompt count = %d, want at least 4 across both runs", len(prompts))
+	}
+	resumePrompt := prompts[3]
+	checkpointRel := taskcheckpoint.CheckpointRelativePath(taskRecord.TaskNumber, taskRecord.ID)
+	if strings.Contains(resumePrompt, rawMarker) {
+		t.Fatal("resume prompt replayed raw fetch body instead of persisted checkpoint state")
+	}
+	if !strings.Contains(resumePrompt, checkpointRel) {
+		t.Fatalf("resume prompt missing checkpoint path %q:\n%s", checkpointRel, resumePrompt)
+	}
+	if !strings.Contains(resumePrompt, outputRel) {
+		t.Fatalf("resume prompt missing migrated output path %q:\n%s", outputRel, resumePrompt)
+	}
+}
+
 func TestTurnEngineIntegrationCancelDuringTier2RequestsRunCancel(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	runStarted := make(chan uuid.UUID, 1)
@@ -2494,6 +2738,48 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 		dispatcher:  dispatcher,
 		runCanceler: runCanceler,
 	}
+}
+
+func mustCreateTaskSession(t *testing.T, ctx context.Context, fixture *integrationFixture, taskRecord repo.ProjectTask, userPrompt string) (repo.ChatSession, repo.ChatMessage) {
+	t.Helper()
+
+	session, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, session.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant Frank: %v", err)
+	}
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    userPrompt,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage task user prompt: %v", err)
+	}
+	return repo.ChatSession(*session), repo.ChatMessage(*userMessage)
+}
+
+func flattenPrompt(prompt *prompt.AssembledPrompt) string {
+	if prompt == nil {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString(strings.TrimSpace(prompt.SystemPrompt))
+	for _, message := range prompt.Messages {
+		builder.WriteString("\n")
+		builder.WriteString(strings.TrimSpace(message.Content))
+	}
+	return builder.String()
 }
 
 func mustCreateCompletedWorkTurn(t *testing.T, ctx context.Context, fixture *integrationFixture, sessionID, agentID uuid.UUID) (uuid.UUID, uuid.UUID) {

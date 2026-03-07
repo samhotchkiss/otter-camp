@@ -23,6 +23,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/profiles"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 const (
@@ -360,36 +361,7 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 }
 
 func resolveDataDir(raw string) string {
-	dataDir := strings.TrimSpace(raw)
-	if dataDir == "" {
-		dataDir = strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR"))
-	}
-	if dataDir == "" {
-		dataDir = "~/otter-data/"
-	}
-	expanded, err := expandDataDir(dataDir)
-	if err == nil {
-		return expanded
-	}
-	return dataDir
-}
-
-func expandDataDir(path string) (string, error) {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return "", fmt.Errorf("data directory path is required")
-	}
-	if trimmed == "~" || strings.HasPrefix(trimmed, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve user home: %w", err)
-		}
-		if trimmed == "~" {
-			return filepath.Clean(home), nil
-		}
-		return filepath.Clean(filepath.Join(home, trimmed[2:])), nil
-	}
-	return filepath.Clean(trimmed), nil
+	return workspace.ResolveDataDir(raw)
 }
 
 func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input map[string]any) (map[string]any, error) {

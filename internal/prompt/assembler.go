@@ -22,6 +22,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/planningasset"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
@@ -499,6 +500,12 @@ func (a *PromptAssembler) Assemble(ctx context.Context, input AssemblyInput) (*A
 			taskCtx = &contextRow
 		}
 	}
+	if input.HistoryStartID == nil && taskCtx != nil && taskCtx.migrationCheckpoint != nil {
+		if startID := taskcheckpoint.HistoryStartMessageID(taskCtx.migrationCheckpoint); startID != nil {
+			messages = filterPromptMessagesFromID(messages, *startID)
+			summaries = nil
+		}
+	}
 
 	layer1 := buildLayer1(agentRecord)
 	layer2 := a.buildLayer2(ctx, session, agentRecord, input.ToolDescriptors)
@@ -802,6 +809,9 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 				lines = append(lines, "- "+strings.TrimSpace(item))
 			}
 		}
+		if taskCtx.contentMigration {
+			lines = append(lines, taskcheckpoint.PromptStrategyLines(taskCtx.migrationCheckpoint)...)
+		}
 	default:
 		lines = append(lines, "Scope: "+scopeType)
 		lines = append(lines, "Scope ID: "+session.ScopeID.String())
@@ -853,20 +863,22 @@ type taskContextSubtask struct {
 }
 
 type projectTaskContext struct {
-	projectName        string
-	taskTitle          string
-	taskNumber         int
-	taskStatus         string
-	taskDescription    string
-	planningArtifacts  []taskplan.PlannedArtifact
-	acceptanceCriteria []string
-	currentFlowStep    string
-	currentFlowStatus  string
-	completedFlowSteps []string
-	pendingFlowSteps   []string
-	subtasks           []taskContextSubtask
-	dependencies       []string
-	flowNodeID         *uuid.UUID
+	projectName         string
+	taskTitle           string
+	taskNumber          int
+	taskStatus          string
+	taskDescription     string
+	contentMigration    bool
+	migrationCheckpoint *taskcheckpoint.ContentMigrationCheckpoint
+	planningArtifacts   []taskplan.PlannedArtifact
+	acceptanceCriteria  []string
+	currentFlowStep     string
+	currentFlowStatus   string
+	completedFlowSteps  []string
+	pendingFlowSteps    []string
+	subtasks            []taskContextSubtask
+	dependencies        []string
+	flowNodeID          *uuid.UUID
 }
 
 func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uuid.UUID) (projectTaskContext, error) {
@@ -896,6 +908,16 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 	}
 	if out.taskTitle == "" {
 		out.taskTitle = taskRecord.ID.String()
+	}
+	descriptionForHeuristic := (*string)(nil)
+	if strings.TrimSpace(taskDescription) != "" {
+		descriptionForHeuristic = &taskDescription
+	}
+	out.contentMigration = taskcheckpoint.IsContentMigrationTask(taskRecord.Title, descriptionForHeuristic)
+	if out.contentMigration {
+		if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
+			out.migrationCheckpoint = &checkpoint
+		}
 	}
 
 	if a.projects != nil {
