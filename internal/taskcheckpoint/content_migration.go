@@ -242,6 +242,9 @@ func PromptStrategyLines(checkpoint *ContentMigrationCheckpoint) []string {
 	if summary := summarizeFiles("Persisted outputs", checkpoint.Outputs, 3); summary != "" {
 		lines = append(lines, "- "+summary)
 	}
+	for _, line := range immediateNextActionLines(checkpoint) {
+		lines = append(lines, "- "+line)
+	}
 	return lines
 }
 
@@ -261,6 +264,9 @@ func BuildSystemMessage(checkpoint ContentMigrationCheckpoint) string {
 	if summary := summarizeFiles("Outputs", checkpoint.Outputs, 2); summary != "" {
 		parts = append(parts, summary+".")
 	}
+	for _, line := range immediateNextActionLines(&checkpoint) {
+		parts = append(parts, line+".")
+	}
 	parts = append(parts, "Read and update these files directly; do not re-paste fetched page bodies into chat.")
 	return strings.Join(parts, " ")
 }
@@ -278,10 +284,41 @@ func BuildCheckpointDocument(taskLabel string, checkpoint ContentMigrationCheckp
 		"- Keep raw fetches/manifests as files or artifacts and use scripts to transform them.",
 		"- Write migrated output files incrementally during the run.",
 	}
+	if actionLines := immediateNextActionLines(&checkpoint); len(actionLines) > 0 {
+		lines = append(lines, "", "## Immediate Next Action")
+		for _, line := range actionLines {
+			lines = append(lines, "- "+line)
+		}
+	}
 	lines = append(lines, renderCheckpointSection("Artifacts", checkpoint.Artifacts)...)
 	lines = append(lines, renderCheckpointSection("Scripts", checkpoint.Scripts)...)
 	lines = append(lines, renderCheckpointSection("Outputs", checkpoint.Outputs)...)
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func immediateNextActionLines(checkpoint *ContentMigrationCheckpoint) []string {
+	if checkpoint == nil {
+		return nil
+	}
+	if len(checkpoint.Outputs) > 0 {
+		return nil
+	}
+	if len(checkpoint.Artifacts) == 0 && len(checkpoint.Scripts) == 0 {
+		return nil
+	}
+
+	lines := []string{
+		"Checkpoint status: helper scripts and source artifacts already exist, but no migrated output files are on disk yet",
+		"Immediate next step: do not spend the next turn re-listing workspace state or creating replacement helper scripts",
+		"Read the persisted files directly and write at least one migrated output file before fetching more pages or expanding the plan",
+	}
+	if summary := summarizeFiles("Start from artifacts", checkpoint.Artifacts, 2); summary != "" {
+		lines = append(lines, summary)
+	}
+	if summary := summarizeFiles("Reuse scripts", checkpoint.Scripts, 2); summary != "" {
+		lines = append(lines, summary)
+	}
+	return lines
 }
 
 func normalizeTrackedFiles(items []WorkspaceFile) []WorkspaceFile {

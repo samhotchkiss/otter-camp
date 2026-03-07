@@ -33,7 +33,7 @@ Tools that give agents controlled access to the local execution environment — 
 
 System tools are always available but heavily policy-gated. The capabilities `system.cli.execute` and `system.file.write` (doc 16) gate access to CLI and file write operations.
 
-For long-running content migration/import work, system tools are the primary continuity mechanism: fetched pages, manifests, helper scripts, and migrated outputs are expected to live in workspace files. Continuations should resume from those persisted files and checkpoint manifests, not by replaying large raw blobs through the chat transcript.
+For long-running content migration/import work, system tools are the primary continuity mechanism: fetched pages, manifests, helper scripts, and migrated outputs are expected to live in workspace files. Continuations should resume from those persisted files and checkpoint manifests, not by replaying large raw blobs through the chat transcript. When persisted scripts/artifacts exist but migrated outputs do not, the next turn should use that checkpointed state to write the first real output file before re-listing workspace state or generating more helper scripts.
 
 ### Category 3: Browser Tools
 
@@ -125,7 +125,7 @@ The complete set of tools that ship with OtterCamp before any external connectio
 | `git.log` | Get commit history | 1 (read) |
 | `git.commit` | Commit staged changes to the task branch | 2 (mutation) |
 
-For migration/import tasks specifically, `file.write` and `cli.execute` should be used incrementally throughout the run: write raw fetch artifacts/manifests immediately, execute transform scripts against those files, and emit migrated content outputs as they are completed.
+For migration/import tasks specifically, `file.write` and `cli.execute` should be used incrementally throughout the run: write raw fetch artifacts/manifests immediately, execute transform scripts against those files, and emit migrated content outputs as they are completed. After a continuation rollover, existing scripts/artifacts are inputs to the next output-producing step, not a reason to spend another turn re-checking or regenerating scaffolding.
 
 ### Browser Domain
 

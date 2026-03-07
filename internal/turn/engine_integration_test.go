@@ -2373,6 +2373,159 @@ func TestTurnEngineIntegrationContentMigrationResumeUsesPersistedCheckpointState
 	}
 }
 
+func TestTurnEngineIntegrationContentMigrationCheckpointPushesFirstOutputBeforeMoreScaffolding(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	description := "Migrate Sam.blog posts from legacy HTML into markdown, persist helper scripts/manifests, and emit output files incrementally."
+	taskRecord.Title = "Migrate Sam.blog posts"
+	taskRecord.Description = &description
+	var err error
+	taskRecord, err = repo.NewProjectTaskRepo(fixture.pool).Update(ctx, taskRecord)
+	if err != nil {
+		t.Fatalf("update task: %v", err)
+	}
+
+	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "continue the Sam.blog migration")
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	fixture.engine.assembler = assembler
+	fixture.engine.maxToolCalls = 1
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "network.fetch", Tier: "tier1"},
+		{Name: "file.write", Tier: "tier2"},
+	}}
+
+	rawMarker := strings.Repeat("SAM_BLOG_RAW_SENTINEL ", 2200)
+	outputRel := "content/posts/stop-preparing-your-kids-for-jobs.md"
+	prompts := make([]string, 0, 3)
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		flattened := flattenPrompt(req.Prompt)
+		prompts = append(prompts, flattened)
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "fetch-post",
+				Name: "network.fetch",
+				Tier: "tier1",
+			}}}, nil
+		case 2:
+			if strings.Contains(flattened, rawMarker) {
+				t.Fatal("continuation prompt replayed raw fetch body instead of persisted checkpoint state")
+			}
+			checkpointRel := taskcheckpoint.CheckpointRelativePath(taskRecord.TaskNumber, taskRecord.ID)
+			if !strings.Contains(flattened, checkpointRel) {
+				t.Fatalf("continuation prompt missing checkpoint path %q:\n%s", checkpointRel, flattened)
+			}
+			if !strings.Contains(flattened, "no migrated output files are on disk yet") {
+				t.Fatalf("continuation prompt missing first-output directive:\n%s", flattened)
+			}
+			if !strings.Contains(flattened, "do not spend the next turn re-listing workspace state or creating replacement helper scripts") {
+				t.Fatalf("continuation prompt missing anti-loop directive:\n%s", flattened)
+			}
+			if !strings.Contains(flattened, "artifacts/raw/post-1.html") {
+				t.Fatalf("continuation prompt missing raw artifact path:\n%s", flattened)
+			}
+			if !strings.Contains(flattened, "scripts/migrate.py") {
+				t.Fatalf("continuation prompt missing persisted script path:\n%s", flattened)
+			}
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "write-output",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path":    outputRel,
+					"content": "# Stop Preparing Your Kids for Jobs",
+				},
+			}}}, nil
+		default:
+			return ModelResponse{Content: "migration resumed from the checkpoint and emitted the first output"}, nil
+		}
+	}
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		scriptFixtures := map[string]string{
+			"scrape_posts.py":    "print('scrape existing archive')",
+			"scripts/migrate.py": "print('convert persisted posts')",
+		}
+		for rel, body := range scriptFixtures {
+			scriptAbs := filepath.Join(workspaceRoot, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(scriptAbs), 0o755); err != nil {
+				return ToolResult{}, err
+			}
+			if err := os.WriteFile(scriptAbs, []byte(body), 0o644); err != nil {
+				return ToolResult{}, err
+			}
+		}
+		rawRel := "artifacts/raw/post-1.html"
+		rawAbs := filepath.Join(workspaceRoot, filepath.FromSlash(rawRel))
+		if err := os.MkdirAll(filepath.Dir(rawAbs), 0o755); err != nil {
+			return ToolResult{}, err
+		}
+		if err := os.WriteFile(rawAbs, []byte(rawMarker), 0o644); err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path": rawRel,
+				"body": rawMarker,
+			},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		target, _ := call.Arguments["path"].(string)
+		content, _ := call.Arguments["content"].(string)
+		targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(target))
+		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+			return ToolResult{}, err
+		}
+		if err := os.WriteFile(targetAbs, []byte(content), 0o644); err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			RunID:      &runID,
+			Output: map[string]any{
+				"path":      target,
+				"byte_size": len(content),
+				"created":   true,
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if len(prompts) < 2 {
+		t.Fatalf("prompt count = %d, want at least 2 rounds", len(prompts))
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(outputRel))); err != nil {
+		t.Fatalf("expected migrated output file on disk: %v", err)
+	}
+}
+
 func TestTurnEngineIntegrationCancelDuringTier2RequestsRunCancel(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	runStarted := make(chan uuid.UUID, 1)
