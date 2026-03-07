@@ -331,6 +331,10 @@ func (l operatorDashboardLoader) countBlockedItems(ctx context.Context, organiza
 	if err != nil {
 		return 0, err
 	}
+	strandedCount, err := l.countStrandedExecutions(ctx, organizationID)
+	if err != nil {
+		return 0, err
+	}
 	pausedProjects, err := l.countPausedProjects(ctx, organizationID)
 	if err != nil {
 		return 0, err
@@ -339,7 +343,7 @@ func (l operatorDashboardLoader) countBlockedItems(ctx context.Context, organiza
 	if err != nil {
 		return 0, err
 	}
-	return reviewCount + pausedProjects + humanInputCount, nil
+	return reviewCount + strandedCount + pausedProjects + humanInputCount, nil
 }
 
 func (l operatorDashboardLoader) countReviewBlockedTasks(ctx context.Context, organizationID uuid.UUID) (int, error) {
@@ -349,6 +353,21 @@ func (l operatorDashboardLoader) countReviewBlockedTasks(ctx context.Context, or
 		FROM project_task
 		WHERE organization_id = $1
 		  AND (requires_human_review = true OR work_status = 'review')
+	`, organizationID).Scan(&count)
+	return count, err
+}
+
+func (l operatorDashboardLoader) countStrandedExecutions(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	var count int
+	err := l.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM runtime_state rs
+		JOIN project_task t
+		  ON rs.scope_type = 'task'
+		 AND rs.scope_id = t.id
+		WHERE t.organization_id = $1
+		  AND t.work_status = 'blocked'
+		  AND rs.metadata->>'status' = 'stranded'
 	`, organizationID).Scan(&count)
 	return count, err
 }
@@ -780,6 +799,15 @@ func (l operatorDashboardLoader) loadBlockedItems(ctx context.Context, organizat
 		}
 	}
 
+	strandedItems, err := l.loadStrandedExecutionItems(ctx, organizationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	appendItems(strandedItems)
+	if len(items) >= limit {
+		return items, nil
+	}
+
 	reviewItems, err := l.loadReviewBlockedItems(ctx, organizationID, limit)
 	if err != nil {
 		return nil, err
@@ -803,6 +831,76 @@ func (l operatorDashboardLoader) loadBlockedItems(ctx context.Context, organizat
 		return nil, err
 	}
 	appendItems(humanInputItems)
+	return items, nil
+}
+
+func (l operatorDashboardLoader) loadStrandedExecutionItems(ctx context.Context, organizationID uuid.UUID, limit int) ([]operatorDashboardItemResponse, error) {
+	rows, err := l.pool.Query(ctx, `
+		SELECT
+			p.id,
+			p.display_name,
+			t.id,
+			t.task_number,
+			t.title,
+			COALESCE(NULLIF(rs.metadata->>'failure_reason', ''), ''),
+			COALESCE(NULLIF(rs.metadata->>'status', ''), 'stranded'),
+			COALESCE(NULLIF(rs.metadata->>'last_progress_at', '')::timestamptz, rs.updated_at, t.updated_at)
+		FROM runtime_state rs
+		JOIN project_task t
+		  ON rs.scope_type = 'task'
+		 AND rs.scope_id = t.id
+		JOIN project p ON p.id = t.project_id
+		WHERE t.organization_id = $1
+		  AND t.work_status = 'blocked'
+		  AND rs.metadata->>'status' = 'stranded'
+		ORDER BY
+			COALESCE(NULLIF(rs.metadata->>'last_progress_at', '')::timestamptz, rs.updated_at, t.updated_at) DESC,
+			t.id DESC
+		LIMIT $2
+	`, organizationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]operatorDashboardItemResponse, 0, limit)
+	for rows.Next() {
+		var (
+			projectID     uuid.UUID
+			projectLabel  string
+			taskID        uuid.UUID
+			taskNumber    int
+			taskTitle     string
+			failureReason string
+			status        string
+			updatedAt     time.Time
+		)
+		if scanErr := rows.Scan(&projectID, &projectLabel, &taskID, &taskNumber, &taskTitle, &failureReason, &status, &updatedAt); scanErr != nil {
+			return nil, scanErr
+		}
+
+		summary := "execution stranded: automatic recovery failed"
+		if trimmed := strings.TrimSpace(failureReason); trimmed != "" {
+			summary = "execution stranded: " + trimmed
+		}
+		items = append(items, l.newDashboardItem(
+			"stranded_execution",
+			formatTaskLabel(taskNumber, taskTitle),
+			summary,
+			status,
+			updatedAt,
+			0,
+			&projectID,
+			&projectLabel,
+			&taskID,
+			&taskNumber,
+			&taskTitle,
+			nil,
+		))
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
 	return items, nil
 }
 

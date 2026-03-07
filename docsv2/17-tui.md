@@ -282,11 +282,12 @@ The landing view on TUI launch. Quick status overview.
   12m ago  . Agent started "Session management"       OC V2
 ```
 
-- Runtime health summarizes live execution state across the org. It highlights running work, stale tasks/executions, blocked items (including human-input waits), recent failures, and the most recent operator-relevant activity.
+- Runtime health summarizes live execution state across the org. It highlights running work, stale tasks/executions, blocked items (including human-input waits), stranded executions whose live task turn could not be recovered, recent failures, and the most recent operator-relevant activity.
 - The dashboard headline shifts between healthy and attention-required states based on stale work, blockers, or recent failures.
 - Inbox section shows top items with urgency indicators.
 - Project summary shows task counts by status category.
 - Activity feed shows recent events across all projects, including failures, retries, promotions, and completions.
+- When an execution becomes stranded, the blocked list must say so explicitly rather than leaving the task presented as an ordinary active/stale run. The operator needs the task link plus the stranded reason (for example, "no live task turn") in the dashboard row.
 - When runtime targets are present, keys `4`-`9` jump directly into the linked task or project detail from the runtime health list.
 - j/k navigates, Enter drills into the selected item.
 
