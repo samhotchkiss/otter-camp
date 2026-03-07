@@ -357,6 +357,8 @@ The landing page. The operator's starting point on every visit. Shows what needs
 
 The runtime health summary and activity feed update in real time via SSE. New entries appear at the top with a subtle animation, and the dashboard headline reflects whether the system is quietly healthy, actively healthy, or needs attention.
 
+Before a restart-driven full end-to-end run, the shared restart-readiness smoke gate must validate this same REST/SSE contract. Dashboard runtime health, project task counts, and worker warnings in the web UI must agree with control-plane truth; the web UI does not get a looser restart bar than the TUI.
+
 ### Project View
 
 The hub for a single project. Multiple sub-views, organized as tabs or a segmented control within the main content area.
