@@ -520,6 +520,11 @@ func TestCancelTurnCancelsLogicalMessageGroupAndDrainsQueuedDispatches(t *testin
 	otherTurnID := uuid.New()
 
 	cancelled := make(map[uuid.UUID]int)
+	sessionTurns := []repo.ChatTurn{
+		{ID: activeTurnID, SessionID: sessionID, Status: "in_progress", TurnNumber: 1, RetryCount: 0, TriggerMessageID: &messageID},
+		{ID: retryTurnID, SessionID: sessionID, Status: "pending", TurnNumber: 2, RetryCount: 1, TriggerMessageID: &messageID},
+		{ID: otherTurnID, SessionID: sessionID, Status: "completed", TurnNumber: 3},
+	}
 	bus := &fakeEventBus{}
 	enqueuer := &fakeEnqueuer{}
 	svc := newUnitService(t, unitDeps{
@@ -564,14 +569,20 @@ func TestCancelTurnCancelsLogicalMessageGroupAndDrainsQueuedDispatches(t *testin
 				if id != sessionID {
 					t.Fatalf("unexpected session id %s", id)
 				}
-				return []repo.ChatTurn{
-					{ID: activeTurnID, SessionID: sessionID, Status: "in_progress", TurnNumber: 1, RetryCount: 0, TriggerMessageID: &messageID},
-					{ID: retryTurnID, SessionID: sessionID, Status: "pending", TurnNumber: 2, RetryCount: 1, TriggerMessageID: &messageID},
-					{ID: otherTurnID, SessionID: sessionID, Status: "in_progress", TurnNumber: 3},
-				}, nil
+				copied := make([]repo.ChatTurn, len(sessionTurns))
+				copy(copied, sessionTurns)
+				return copied, nil
 			},
 			setCancelledFn: func(_ context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time) (repo.ChatTurn, error) {
 				cancelled[id]++
+				for i := range sessionTurns {
+					if sessionTurns[i].ID != id {
+						continue
+					}
+					sessionTurns[i].Status = "cancelled"
+					sessionTurns[i].CancelRequestedAt = &cancelRequestedAt
+					sessionTurns[i].CompletedAt = &completedAt
+				}
 				return repo.ChatTurn{ID: id, SessionID: sessionID, Status: "cancelled", CancelRequestedAt: &cancelRequestedAt, CompletedAt: &completedAt}, nil
 			},
 		},
