@@ -378,6 +378,7 @@ Capabilities are always evaluated within a scope:
 - **Org-scoped**: `project.read` at org level means the agent can read any project in the org.
 - **Project-scoped**: `project.task.create` at project level means the agent can create tasks in that specific project.
 - **Task-scoped**: `system.file.write` at task level means the agent can write files in that task's workspace.
+- **Task-scoped long-running migrations/imports**: when a task is clearly operating as a content migration/import, prompt-budget rollover is handled by writing a deterministic checkpoint into the task workspace and resuming from that checkpoint boundary. The control plane does not rely on replaying raw fetched content in later turns.
 
 The narrowest scope wins. An agent with org-level `project.read` and no project-level grants can still read all projects. An agent with project-level `system.cli.execute` only for Project A cannot execute commands in Project B's workspace.
 
@@ -707,6 +708,7 @@ The system actively prevents tasks from getting stuck. A background **supervisor
 - After max retries, the supervisor takes over (stuck task detection path).
 - Custom retry policies can be set at the project or flow template level: "this deployment step should not auto-retry" or "this data fetch step can retry up to 10 times."
 - For fresh kickoff planning turns, exceeding the bounded prompt/continuation guardrail surfaces one blocker in the session and stops recursive churn. The system does not keep spinning new turns indefinitely.
+- For content migration/import turns, bounded continuation uses persisted workspace checkpoints instead of chat-only summaries. The checkpoint records the latest raw/manifests/scripts/outputs on disk, and the next turn starts from that durable state.
 
 **Health heartbeat:**
 - Running agents emit periodic heartbeats (default interval: 30 seconds) as RunEvents.

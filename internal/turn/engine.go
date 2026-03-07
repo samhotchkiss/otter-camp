@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -26,8 +28,10 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 const (
@@ -1410,6 +1414,11 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	rt.modelRetryUsed = 0
 	rt.invocationAttempt = 0
 	rt.stopReason = ""
+	if checkpointed, err := e.appendContentMigrationCheckpoint(ctx, rt); err != nil {
+		return err
+	} else if checkpointed {
+		return nil
+	}
 
 	profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "continuation_summary", 0, false)
 	if err != nil {
@@ -1439,6 +1448,86 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	}
 	_, err = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Continuation summary] "+summary)
 	return err
+}
+
+func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if rt == nil || rt.session == nil || rt.turn == nil || e.tasks == nil || e.projects == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !taskcheckpoint.IsContentMigrationTask(taskRecord.Title, taskRecord.Description) {
+		return false, nil
+	}
+
+	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return false, err
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	if err != nil {
+		return false, err
+	}
+	snapshot, err := taskcheckpoint.ScanWorkspace(workspaceRoot)
+	if err != nil {
+		return false, err
+	}
+
+	checkpointPath := taskcheckpoint.CheckpointRelativePath(taskRecord.TaskNumber, taskRecord.ID)
+	checkpointAbs := filepath.Join(workspaceRoot, filepath.FromSlash(checkpointPath))
+	if err := os.MkdirAll(filepath.Dir(checkpointAbs), 0o755); err != nil {
+		return false, err
+	}
+
+	checkpoint := taskcheckpoint.ContentMigrationCheckpoint{
+		Version:        1,
+		CheckpointPath: checkpointPath,
+		UpdatedAt:      e.now().UTC().Format(time.RFC3339Nano),
+		Artifacts:      snapshot.Artifacts,
+		Scripts:        snapshot.Scripts,
+		Outputs:        snapshot.Outputs,
+	}
+	if err := os.WriteFile(checkpointAbs, []byte(taskcheckpoint.BuildCheckpointDocument(buildTaskLabel(taskRecord), checkpoint)), 0o644); err != nil {
+		return false, err
+	}
+
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, taskcheckpoint.BuildSystemMessage(checkpoint))
+	if err != nil {
+		return false, err
+	}
+	checkpoint.HistoryStartMessageID = message.ID.String()
+	mergedMetadata, err := taskcheckpoint.MergeContentMigrationCheckpoint(taskRecord.Metadata, checkpoint)
+	if err != nil {
+		return false, err
+	}
+	taskRecord.Metadata = mergedMetadata
+	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+		return false, err
+	}
+	rt.historyStartID = &message.ID
+	return true, nil
+}
+
+func buildTaskLabel(task repo.ProjectTask) string {
+	title := strings.TrimSpace(task.Title)
+	if task.TaskNumber > 0 && title != "" {
+		return fmt.Sprintf("OC-%d: %s", task.TaskNumber, title)
+	}
+	if task.TaskNumber > 0 {
+		return fmt.Sprintf("OC-%d", task.TaskNumber)
+	}
+	if title != "" {
+		return title
+	}
+	return task.ID.String()
 }
 
 func (e *TurnEngine) requireTurnInProgress(ctx context.Context, rt *turnRuntime) error {
