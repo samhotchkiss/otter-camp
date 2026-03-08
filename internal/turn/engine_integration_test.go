@@ -2402,6 +2402,185 @@ func TestTurnEngineIntegrationRecoveryFileWriteCheckpointPersistsAtConfiguredDat
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryTurnHaltsWhenRecoveredFileWriteDoesNotLandDurablyEX319(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	const targetPath = "docs/content-strategy.md"
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	expectedDraft := strings.TrimRight(`# Content Strategy
+
+## Core Promise
+Sam.blog should publish one durable operating system for thoughtful parents building resilient families and meaningful work.
+
+## Editorial Pillars
+- Family systems that reduce chaos and increase agency.
+- Playbooks that turn values into weekly habits.
+- Essays that connect parenting choices to long-term identity.
+`, "\n")
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls > 1 {
+			t.Fatalf("unexpected extra model call after recovered file.write failed durability check: %d", modelCalls)
+		}
+		return ModelResponse{
+			Content: expectedDraft,
+			ToolCalls: []ModelToolCall{{
+				ID:   "write-recovered",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path": targetPath,
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		dispatched++
+		path := stringValue(call.Arguments["path"])
+		content := stringValue(call.Arguments["content"])
+		if path != targetPath {
+			t.Fatalf("path = %q, want %q", path, targetPath)
+		}
+		if content != expectedDraft {
+			t.Fatalf("content = %q, want recovered draft", content)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      path,
+				"byte_size": len(content),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1 bounded recovery turn", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))); err == nil {
+		t.Fatalf("target file unexpectedly exists at %s", targetPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat target file: %v", err)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if checkpoint.ArtifactPath != artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactRel)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "was not found on disk") {
+		t.Fatalf("checkpoint failure_reason = %q, want missing-file guidance", checkpoint.FailureReason)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
+	}
+
+	artifactBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel)))
+	if err != nil {
+		t.Fatalf("read recovery artifact: %v", err)
+	}
+	artifactText := string(artifactBody)
+	if !strings.Contains(artifactText, "Last Write Failure") {
+		t.Fatalf("artifact missing failure section:\n%s", artifactText)
+	}
+	if !strings.Contains(artifactText, "recovered file.write reported success but docs/content-strategy.md was not found on disk") {
+		t.Fatalf("artifact missing durable failure reason:\n%s", artifactText)
+	}
+	if !strings.Contains(artifactText, expectedDraft) {
+		t.Fatalf("artifact missing recovered draft:\n%s", artifactText)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var recoveredWriteResults int
+	var haltMessages int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"docs/content-strategy.md"`) {
+			recoveredWriteResults++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "did not produce a durable file") {
+			haltMessages++
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			t.Fatalf("unexpected validation blocker message: %s", item.Content)
+		}
+	}
+	if recoveredWriteResults != 1 {
+		t.Fatalf("recovered write tool_results = %d, want 1", recoveredWriteResults)
+	}
+	if haltMessages != 1 {
+		t.Fatalf("durable halt messages = %d, want 1", haltMessages)
+	}
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnBoundsCLIThenFileWriteRetryChainEX312(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

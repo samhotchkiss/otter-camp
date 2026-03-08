@@ -397,6 +397,7 @@ type turnRuntime struct {
 	recoveryTurn        bool
 	recoveryCLIFixes    int
 	recoveryFileFixes   int
+	recoveryFileWrites  map[string]recoveryPopulatedFileWriteState
 	recoveryBlockReason string
 	recoveryQueuedTurn  bool
 }
@@ -404,6 +405,11 @@ type turnRuntime struct {
 type projectIdentity struct {
 	id   uuid.UUID
 	slug string
+}
+
+type recoveryPopulatedFileWriteState struct {
+	TargetPath string
+	Draft      string
 }
 
 type toolValidationFailure struct {
@@ -1906,6 +1912,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if err := e.appendToolResults(ctx, rt, []ToolResult{result}); err != nil {
 			return false, err
 		}
+		recoveryBlocked, recoveryErr := e.handleRecoveryPopulatedFileWriteOutcome(ctx, rt, call, result)
+		if recoveryErr != nil {
+			return false, recoveryErr
+		}
+		if recoveryBlocked {
+			rt.toolCallsUsed++
+			return true, nil
+		}
 		blocked, err := e.handleToolValidationResults(ctx, rt, []ToolCall{call}, []ToolResult{result})
 		if err != nil {
 			return false, err
@@ -1980,6 +1994,13 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 			normalized["create_dirs"] = true
 		}
 		call.Arguments = normalized
+		if rt.recoveryFileWrites == nil {
+			rt.recoveryFileWrites = make(map[string]recoveryPopulatedFileWriteState)
+		}
+		rt.recoveryFileWrites[strings.TrimSpace(call.ID)] = recoveryPopulatedFileWriteState{
+			TargetPath: strings.TrimSpace(targetPath),
+			Draft:      draft,
+		}
 		e.logger.Info("recovery: populated file.write from assistant draft",
 			"session_id", rt.session.ID,
 			"turn_id", rt.turn.ID,
@@ -1990,7 +2011,7 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 
 	if rt.recoveryFileFixes >= recoveryFileWriteRepairBudget {
 		rt.stopReason = stopReasonRecoveryFileRejected
-		artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath)
+		artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, "", "")
 		if artifactErr != nil {
 			e.logger.Warn("recovery: failed to persist file.write artifact",
 				"session_id", rt.session.ID,
@@ -1999,14 +2020,14 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 				"error", artifactErr,
 			)
 		}
-		message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath))
+		message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, ""))
 		if err != nil {
 			return true, true, err
 		}
-		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, message.ID); checkpointErr != nil {
+		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, "", message.ID); checkpointErr != nil {
 			return true, true, checkpointErr
 		}
-		rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath)
+		rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, "")
 		return true, true, nil
 	}
 
@@ -2040,10 +2061,16 @@ func buildRecoveryFileWriteRetryMessage(targetPath string) string {
 	return fmt.Sprintf("[Recovery correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. If you already have the draft text, carry that exact text into the next write instead of emitting another empty-content call.]", path)
 }
 
-func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath string) string {
+func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReason string) string {
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
 		path = "the requested workspace file"
+	}
+	if reason := strings.TrimSpace(failureReason); reason != "" {
+		if strings.TrimSpace(artifactPath) == "" {
+			return fmt.Sprintf("[Recovery turn halted: recovered file.write for `%s` did not produce a durable file. The task is now blocked. Last failure: %s. Resolve that write failure before retrying.]", path, reason)
+		}
+		return fmt.Sprintf("[Recovery turn halted: recovered file.write for `%s` did not produce a durable file. The task is now blocked. Last failure: %s. Resume from `%s` and only retry the final write after resolving that failure.]", path, reason, strings.TrimSpace(artifactPath))
 	}
 	if strings.TrimSpace(artifactPath) == "" {
 		return fmt.Sprintf("[Recovery turn halted: file.write for `%s` was retried without `content` after one correction. The task is now blocked. Resume only after producing the full file body.]", path)
@@ -2055,10 +2082,16 @@ func buildRecoveryCLIExecuteBlockedTaskReason() string {
 	return "recovery halted after cli.execute was retried without command; re-queue only after providing a concrete cli.execute.command string or a populated file.write call"
 }
 
-func buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath string) string {
+func buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureReason string) string {
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
 		path = "the requested workspace file"
+	}
+	if reason := strings.TrimSpace(failureReason); reason != "" {
+		if artifact := strings.TrimSpace(artifactPath); artifact != "" {
+			return fmt.Sprintf("recovery halted after recovered file.write for %s failed: %s; resume from %s and re-queue only after resolving that failure", path, reason, artifact)
+		}
+		return fmt.Sprintf("recovery halted after recovered file.write for %s failed: %s; resolve that write failure before re-queueing", path, reason)
 	}
 	if artifact := strings.TrimSpace(artifactPath); artifact != "" {
 		return fmt.Sprintf("recovery halted after file.write for %s was retried without content; resume from %s and re-queue only after the file body exists", path, artifact)
@@ -2214,7 +2247,7 @@ func looksLikeRecoveryFileDraft(content string) bool {
 	return false
 }
 
-func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *turnRuntime, targetPath string) (string, error) {
+func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *turnRuntime, targetPath, draft, failureReason string) (string, error) {
 	if e == nil || e.tasks == nil || e.projects == nil || rt == nil || rt.session == nil {
 		return "", fmt.Errorf("recovery artifact persistence requires task and project repositories")
 	}
@@ -2246,8 +2279,10 @@ func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *t
 		return "", err
 	}
 
-	draft, _ := e.recoveryFileWriteDraftContent(ctx, rt)
-	document := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetRel, draft, e.now())
+	if strings.TrimSpace(draft) == "" {
+		draft, _ = e.recoveryFileWriteDraftContent(ctx, rt)
+	}
+	document := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetRel, draft, failureReason, e.now())
 	if err := os.WriteFile(artifactAbs, []byte(document), 0o644); err != nil {
 		return "", err
 	}
@@ -2257,7 +2292,7 @@ func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *t
 	return artifactRel, nil
 }
 
-func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt *turnRuntime, targetPath, artifactPath string, messageID uuid.UUID) error {
+func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt *turnRuntime, targetPath, artifactPath, failureReason string, messageID uuid.UUID) error {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return nil
 	}
@@ -2273,6 +2308,7 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
 		TargetPath:            strings.TrimSpace(targetPath),
 		ArtifactPath:          strings.TrimSpace(artifactPath),
+		FailureReason:         strings.TrimSpace(failureReason),
 		HistoryStartMessageID: messageID.String(),
 		HaltTurnID:            rt.turn.ID.String(),
 		UpdatedAt:             e.now().UTC().Format(time.RFC3339Nano),
@@ -2327,6 +2363,124 @@ func (e *TurnEngine) maybeClearRecoveryFileWriteCheckpoint(ctx context.Context, 
 	return true, nil
 }
 
+func (e *TurnEngine) handleRecoveryPopulatedFileWriteOutcome(ctx context.Context, rt *turnRuntime, call ToolCall, result ToolResult) (bool, error) {
+	if rt == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if len(rt.recoveryFileWrites) == 0 {
+		return false, nil
+	}
+	state, ok := rt.recoveryFileWrites[strings.TrimSpace(call.ID)]
+	if !ok {
+		return false, nil
+	}
+	delete(rt.recoveryFileWrites, strings.TrimSpace(call.ID))
+
+	targetPath := strings.TrimSpace(state.TargetPath)
+	if targetPath == "" {
+		targetPath = strings.TrimSpace(stringValue(call.Arguments["path"]))
+	}
+	if targetPath == "" {
+		targetPath = strings.TrimSpace(stringValue(result.Output["path"]))
+	}
+
+	durable, failureReason := e.recoveryPopulatedFileWriteDurableOutcome(ctx, rt, targetPath, result)
+	if durable {
+		return false, nil
+	}
+
+	rt.stopReason = stopReasonRecoveryFileRejected
+	artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, state.Draft, failureReason)
+	if artifactErr != nil {
+		e.logger.Warn("recovery: failed to persist populated file.write artifact",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+			"error", artifactErr,
+		)
+	}
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReason))
+	if err != nil {
+		return true, err
+	}
+	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, failureReason, message.ID); checkpointErr != nil {
+		return true, checkpointErr
+	}
+	rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureReason)
+	return true, nil
+}
+
+func (e *TurnEngine) recoveryPopulatedFileWriteDurableOutcome(ctx context.Context, rt *turnRuntime, targetPath string, result ToolResult) (bool, string) {
+	if failureReason := recoveryFileWriteFailureReason(result); failureReason != "" {
+		return false, failureReason
+	}
+	targetPath = strings.TrimSpace(targetPath)
+	if targetPath == "" {
+		targetPath = strings.TrimSpace(stringValue(result.Output["path"]))
+	}
+	if targetPath == "" {
+		return false, "recovered file.write returned without a target path to verify"
+	}
+	exists, err := e.recoveryFileWriteTargetExists(ctx, rt, targetPath)
+	if err != nil {
+		return false, fmt.Sprintf("could not verify %s on disk after recovered file.write: %v", targetPath, err)
+	}
+	if !exists {
+		return false, fmt.Sprintf("recovered file.write reported success but %s was not found on disk", targetPath)
+	}
+	return true, ""
+}
+
+func recoveryFileWriteFailureReason(result ToolResult) string {
+	if reason := strings.TrimSpace(stripToolFailurePrefix(result.Error, result.Name)); reason != "" {
+		return reason
+	}
+	if code := strings.TrimSpace(toolResultErrorCode(result)); code != "" {
+		if message := strings.TrimSpace(stringValue(result.Output["message"])); message != "" {
+			return message
+		}
+		return code
+	}
+	return ""
+}
+
+func (e *TurnEngine) recoveryFileWriteTargetExists(ctx context.Context, rt *turnRuntime, targetPath string) (bool, error) {
+	if e == nil || e.tasks == nil || e.projects == nil || rt == nil || rt.session == nil {
+		return false, fmt.Errorf("task and project repositories are required")
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false, fmt.Errorf("task scope is required")
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return false, err
+	}
+	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return false, err
+	}
+	workspaceRoot, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+	if err != nil {
+		return false, err
+	}
+	targetAbs, _, err := resolveRecoveryWorkspacePath(workspaceRoot, targetPath)
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Stat(targetAbs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("%s resolved to a directory", targetPath)
+	}
+	return true, nil
+}
+
 func sameWorkspaceRelativePath(left, right string) bool {
 	return filepath.Clean(filepath.FromSlash(strings.TrimSpace(left))) == filepath.Clean(filepath.FromSlash(strings.TrimSpace(right)))
 }
@@ -2363,22 +2517,36 @@ func resolveRecoveryWorkspacePath(root, relOrAbsPath string) (string, string, er
 	return targetAbs, filepath.ToSlash(rel), nil
 }
 
-func buildRecoveryFileWriteArtifactDocument(taskLabel, targetPath, draft string, now time.Time) string {
+func buildRecoveryFileWriteArtifactDocument(taskLabel, targetPath, draft, failureReason string, now time.Time) string {
+	reasonLine := "Reason: Recovery turn retried file.write without concrete content after one bounded correction."
+	if strings.TrimSpace(failureReason) != "" {
+		reasonLine = "Reason: Recovery turn carried assistant draft content into file.write, but the write did not produce a durable target file."
+	}
 	lines := []string{
 		"# Recovery file.write artifact",
 		"",
 		"Task: " + strings.TrimSpace(taskLabel),
 		"Target Path: " + strings.TrimSpace(targetPath),
 		"Generated: " + now.UTC().Format(time.RFC3339Nano),
-		"Reason: Recovery turn retried file.write without concrete content after one bounded correction.",
+		reasonLine,
 		"",
 		"## Resume Instructions",
 		fmt.Sprintf("- Produce the full file body for `%s` before retrying the final `file.write`.", strings.TrimSpace(targetPath)),
 		"- Reuse any draft content captured below instead of starting from scratch.",
 		"",
+	}
+	if reason := strings.TrimSpace(failureReason); reason != "" {
+		lines = append(lines,
+			"## Last Write Failure",
+			"",
+			reason,
+			"",
+		)
+	}
+	lines = append(lines,
 		"## Draft Content",
 		"",
-	}
+	)
 	if strings.TrimSpace(draft) == "" {
 		lines = append(lines, "_No concrete draft content was available in the recovery turn. Replace this section with the intended file body before retrying._")
 		return strings.Join(lines, "\n")
@@ -4070,7 +4238,7 @@ func (e *TurnEngine) ensureRecoveryTurnDurableTaskState(ctx context.Context, rt 
 func buildRecoveryTaskBlockedReason(metadata json.RawMessage, turnID uuid.UUID, stopReason *string) string {
 	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(metadata); ok {
 		if strings.TrimSpace(checkpoint.HaltTurnID) == turnID.String() {
-			return buildRecoveryFileWriteBlockedTaskReason(checkpoint.TargetPath, checkpoint.ArtifactPath)
+			return buildRecoveryFileWriteBlockedTaskReason(checkpoint.TargetPath, checkpoint.ArtifactPath, checkpoint.FailureReason)
 		}
 	}
 	if stopReason == nil {

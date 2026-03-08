@@ -23,6 +23,9 @@ func TestParseRecoveryFileWriteCheckpoint(t *testing.T) {
 	if checkpoint.ArtifactPath != ".ottercamp/recovery/docs/content-strategy.md" {
 		t.Fatalf("artifact_path = %q, want recovery artifact path", checkpoint.ArtifactPath)
 	}
+	if checkpoint.FailureReason != "" {
+		t.Fatalf("failure_reason = %q, want empty default", checkpoint.FailureReason)
+	}
 	if checkpoint.HistoryStartMessageID != messageID.String() {
 		t.Fatalf("history_start_message_id = %q, want %q", checkpoint.HistoryStartMessageID, messageID.String())
 	}
@@ -63,8 +66,9 @@ func TestMergeAndClearRecoveryFileWriteCheckpoint(t *testing.T) {
 
 func TestRecoveryFileWritePromptStrategyLines(t *testing.T) {
 	lines := RecoveryFileWritePromptStrategyLines(&RecoveryFileWriteCheckpoint{
-		TargetPath:   "docs/content-strategy.md",
-		ArtifactPath: ".ottercamp/recovery/docs/content-strategy.md",
+		TargetPath:    "docs/content-strategy.md",
+		ArtifactPath:  ".ottercamp/recovery/docs/content-strategy.md",
+		FailureReason: "recovered file.write reported success but docs/content-strategy.md was not found on disk",
 	})
 	text := strings.Join(lines, "\n")
 	if !strings.Contains(text, "Recovery artifact: .ottercamp/recovery/docs/content-strategy.md") {
@@ -72,5 +76,8 @@ func TestRecoveryFileWritePromptStrategyLines(t *testing.T) {
 	}
 	if !strings.Contains(text, "Target file: docs/content-strategy.md") {
 		t.Fatalf("prompt lines missing target guidance:\n%s", text)
+	}
+	if !strings.Contains(text, "Last write failure: recovered file.write reported success but docs/content-strategy.md was not found on disk") {
+		t.Fatalf("prompt lines missing failure guidance:\n%s", text)
 	}
 }

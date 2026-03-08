@@ -16,6 +16,7 @@ type RecoveryFileWriteCheckpoint struct {
 	Version               int    `json:"version"`
 	TargetPath            string `json:"target_path"`
 	ArtifactPath          string `json:"artifact_path,omitempty"`
+	FailureReason         string `json:"failure_reason,omitempty"`
 	HistoryStartMessageID string `json:"history_start_message_id,omitempty"`
 	HaltTurnID            string `json:"halt_turn_id,omitempty"`
 	UpdatedAt             string `json:"updated_at,omitempty"`
@@ -111,6 +112,10 @@ func RecoveryFileWritePromptStrategyLines(checkpoint *RecoveryFileWriteCheckpoin
 		lines = append(lines, "- Read the persisted recovery artifact before retrying the final file.write.")
 	} else {
 		lines = append(lines, "- No persisted recovery artifact exists for the last halt; do not claim one exists on the next attempt.")
+	}
+	if failure := strings.TrimSpace(checkpoint.FailureReason); failure != "" {
+		lines = append(lines, "- Last write failure: "+failure)
+		lines = append(lines, "- Resolve that failure before retrying the final file.write.")
 	}
 	lines = append(lines, "- If the target file already exists, continue from that durable output instead of restarting the same failed write.")
 	return lines
