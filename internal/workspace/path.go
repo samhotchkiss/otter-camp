@@ -62,6 +62,40 @@ func ProjectRoot(dataDir, projectSlug string) (string, error) {
 	return filepath.Join(ResolveDataDir(dataDir), "workspaces", slug), nil
 }
 
+func LegacyProjectRoot(dataDir, orgSlug, projectSlug string) (string, error) {
+	org := strings.TrimSpace(orgSlug)
+	if org == "" {
+		return "", fmt.Errorf("organization slug is required")
+	}
+	project := strings.TrimSpace(projectSlug)
+	if project == "" {
+		return "", fmt.Errorf("project slug is required")
+	}
+	return filepath.Join(ResolveDataDir(dataDir), "workspaces", org, project), nil
+}
+
+// ProjectCompatibilityRoots returns the canonical flattened project workspace
+// and, when it already exists on disk, the legacy org-nested workspace root.
+func ProjectCompatibilityRoots(dataDir, orgSlug, projectSlug string) ([]string, error) {
+	projectRoot, err := ProjectRoot(dataDir, projectSlug)
+	if err != nil {
+		return nil, err
+	}
+	roots := []string{projectRoot}
+
+	legacyRoot, err := LegacyProjectRoot(dataDir, orgSlug, projectSlug)
+	if err != nil {
+		return roots, nil
+	}
+	if !directoryExists(legacyRoot) {
+		return roots, nil
+	}
+	if samePath(projectRoot, legacyRoot) {
+		return roots, nil
+	}
+	return append(roots, legacyRoot), nil
+}
+
 func ProjectRootByID(ctx context.Context, projects ProjectLookup, dataDir string, organizationID, projectID uuid.UUID) (string, error) {
 	if projects == nil {
 		return "", fmt.Errorf("project repository is required for workspace resolution")
@@ -78,4 +112,13 @@ func ProjectRootByID(ctx context.Context, projects ProjectLookup, dataDir string
 		return "", fmt.Errorf("project organization mismatch")
 	}
 	return ProjectRoot(dataDir, projectRecord.Slug)
+}
+
+func directoryExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func samePath(left, right string) bool {
+	return filepath.Clean(left) == filepath.Clean(right)
 }
