@@ -285,10 +285,11 @@ The landing view on TUI launch. Quick status overview.
 - Runtime health summarizes live execution state across the org. It highlights running work, stale tasks/executions, blocked items (including human-input waits), stranded executions whose live task turn could not be recovered, recent failures, and the most recent operator-relevant activity.
 - The dashboard headline shifts between healthy and attention-required states based on stale work, blockers, or recent failures.
 - Inbox section shows top items with urgency indicators.
-- Project summary shows task counts by status category.
+- Project summary shows task counts by status category, but projects that have exhausted all runnable work must flip from ordinary `active` presentation to `terminal_stalled`.
 - Activity feed shows recent events across all projects, including failures, retries, promotions, and completions.
 - The chat-pane active-turn affordance, task detail execution pane, and runtime-health rows must agree on the same canonical live turn. After recovery or queued retry promotion, the TUI follows the repaired session/runtime truth instead of leaving a stale spinner or stale active-run badge on the prior turn.
 - When an execution becomes stranded, the blocked list must say so explicitly rather than leaving the task presented as an ordinary active/stale run. The operator needs the task link plus the stranded reason (for example, "no live task turn") in the dashboard row.
+- When a whole project is terminally stalled, the blocked list must include a project-level row with status `terminal_stalled` plus the blocking task labels/reasons. A lone review wait is not enough; the row appears only when runnable work and pending jobs are exhausted.
 - Deterministic validation-loop blockers are first-class blocked items. Their row must summarize the failing tool/reason and tell the operator that resuming the task will retry it.
 - When runtime targets are present, keys `4`-`9` jump directly into the linked task or project detail from the runtime health list.
 - j/k navigates, Enter drills into the selected item.
@@ -303,7 +304,7 @@ All projects with summary stats:
 
   Name              Status    Tasks                    Active
   ─────────────────────────────────────────────────────────────
-  OtterCamp V2      active    4 active, 2 blocked      yes
+  OtterCamp V2      terminal_stalled  2 blocked, 1 review  no
   Client Portal     active    2 active, 1 review       yes
   Personal Ops      active    1 active (scheduled)     yes
 ```

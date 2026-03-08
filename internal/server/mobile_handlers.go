@@ -44,12 +44,15 @@ type mobileDashboardInboxItem struct {
 }
 
 type mobileDashboardProjectResponse struct {
-	ID               uuid.UUID                         `json:"id"`
-	Name             string                            `json:"name"`
-	Slug             string                            `json:"slug"`
-	ActiveTaskCount  int                               `json:"active_task_count"`
-	BlockedTaskCount int                               `json:"blocked_task_count"`
-	LatestDeploy     *mobileDashboardLatestDeployState `json:"latest_deploy,omitempty"`
+	ID               uuid.UUID                           `json:"id"`
+	Name             string                              `json:"name"`
+	Slug             string                              `json:"slug"`
+	OperationalState string                              `json:"operational_state"`
+	StateSummary     string                              `json:"state_summary,omitempty"`
+	BlockingTasks    []projectOperationalBlockerResponse `json:"blocking_tasks,omitempty"`
+	ActiveTaskCount  int                                 `json:"active_task_count"`
+	BlockedTaskCount int                                 `json:"blocked_task_count"`
+	LatestDeploy     *mobileDashboardLatestDeployState   `json:"latest_deploy,omitempty"`
 }
 
 type mobileDashboardLatestDeployState struct {
@@ -218,13 +221,22 @@ func (h mobileHandlers) loadDashboardProjects(ctx context.Context, organizationI
 			p.id,
 			p.display_name,
 			p.slug,
+			p.status,
+			COALESCE((p.settings->'pause'->>'is_paused')::boolean, false) AS is_paused,
+			COALESCE(p.settings->'pause'->>'reason', '') AS pause_reason,
 			COALESCE(SUM(CASE WHEN t.work_status IN ('queued', 'in_progress', 'review', 'on_hold') THEN 1 ELSE 0 END), 0) AS active_task_count,
 			COALESCE(SUM(CASE WHEN t.work_status = 'blocked' THEN 1 ELSE 0 END), 0) AS blocked_task_count
 		FROM project p
 		LEFT JOIN project_task t ON t.project_id = p.id
 		WHERE p.organization_id = $1
 		  AND p.id = ANY($2::uuid[])
-		GROUP BY p.id, p.display_name, p.slug
+		GROUP BY
+			p.id,
+			p.display_name,
+			p.slug,
+			p.status,
+			COALESCE((p.settings->'pause'->>'is_paused')::boolean, false),
+			COALESCE(p.settings->'pause'->>'reason', '')
 	`, organizationID, projectIDs)
 	if err != nil {
 		return nil, err
@@ -233,14 +245,45 @@ func (h mobileHandlers) loadDashboardProjects(ctx context.Context, organizationI
 
 	byID := make(map[uuid.UUID]mobileDashboardProjectResponse, len(projectIDs))
 	for rows.Next() {
-		var item mobileDashboardProjectResponse
-		if scanErr := rows.Scan(&item.ID, &item.Name, &item.Slug, &item.ActiveTaskCount, &item.BlockedTaskCount); scanErr != nil {
+		var (
+			item        mobileDashboardProjectResponse
+			status      string
+			isPaused    bool
+			pauseReason string
+		)
+		if scanErr := rows.Scan(&item.ID, &item.Name, &item.Slug, &status, &isPaused, &pauseReason, &item.ActiveTaskCount, &item.BlockedTaskCount); scanErr != nil {
 			return nil, scanErr
+		}
+		item.OperationalState = "active"
+		if strings.TrimSpace(status) != "" && !strings.EqualFold(strings.TrimSpace(status), "active") {
+			item.OperationalState = strings.TrimSpace(status)
+		}
+		if isPaused {
+			item.OperationalState = "paused"
+			item.StateSummary = "project paused"
+			if trimmed := strings.TrimSpace(pauseReason); trimmed != "" {
+				item.StateSummary = "project paused: " + trimmed
+			}
 		}
 		byID[item.ID] = item
 	}
 	if rows.Err() != nil {
 		return nil, rows.Err()
+	}
+
+	stalls, err := projectStallDetector{pool: h.pool}.LoadTerminalProjectStalls(ctx, organizationID, projectIDs, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, stall := range stalls {
+		record, ok := byID[stall.ProjectID]
+		if !ok {
+			continue
+		}
+		record.OperationalState = projectOperationalStateTerminalStalled
+		record.StateSummary = stall.Summary
+		record.BlockingTasks = stall.BlockingTasks
+		byID[stall.ProjectID] = record
 	}
 
 	deployRows, err := h.pool.Query(ctx, `

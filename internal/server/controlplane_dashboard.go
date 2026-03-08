@@ -56,17 +56,18 @@ type operatorDashboardSectionResponse struct {
 }
 
 type operatorDashboardItemResponse struct {
-	Kind            string                        `json:"kind"`
-	Title           string                        `json:"title"`
-	Summary         string                        `json:"summary,omitempty"`
-	Status          string                        `json:"status"`
-	Project         *operatorDashboardRefResponse `json:"project,omitempty"`
-	Task            *operatorDashboardTaskRef     `json:"task,omitempty"`
-	Run             *operatorDashboardRefResponse `json:"run,omitempty"`
-	UpdatedAt       time.Time                     `json:"updated_at"`
-	AgeSeconds      int                           `json:"age_seconds"`
-	StaleForSeconds int                           `json:"stale_for_seconds,omitempty"`
-	Links           operatorDashboardLinks        `json:"links"`
+	Kind            string                              `json:"kind"`
+	Title           string                              `json:"title"`
+	Summary         string                              `json:"summary,omitempty"`
+	Status          string                              `json:"status"`
+	Project         *operatorDashboardRefResponse       `json:"project,omitempty"`
+	Task            *operatorDashboardTaskRef           `json:"task,omitempty"`
+	Run             *operatorDashboardRefResponse       `json:"run,omitempty"`
+	BlockingTasks   []projectOperationalBlockerResponse `json:"blocking_tasks,omitempty"`
+	UpdatedAt       time.Time                           `json:"updated_at"`
+	AgeSeconds      int                                 `json:"age_seconds"`
+	StaleForSeconds int                                 `json:"stale_for_seconds,omitempty"`
+	Links           operatorDashboardLinks              `json:"links"`
 }
 
 type operatorDashboardRefResponse struct {
@@ -327,6 +328,10 @@ func (l operatorDashboardLoader) countStaleExecutions(ctx context.Context, organ
 }
 
 func (l operatorDashboardLoader) countBlockedItems(ctx context.Context, organizationID, userID uuid.UUID) (int, error) {
+	terminalStallCount, err := l.countTerminalProjectStalls(ctx, organizationID)
+	if err != nil {
+		return 0, err
+	}
 	reviewCount, err := l.countReviewBlockedTasks(ctx, organizationID)
 	if err != nil {
 		return 0, err
@@ -347,7 +352,11 @@ func (l operatorDashboardLoader) countBlockedItems(ctx context.Context, organiza
 	if err != nil {
 		return 0, err
 	}
-	return reviewCount + strandedCount + validationBlockedCount + pausedProjects + humanInputCount, nil
+	return terminalStallCount + reviewCount + strandedCount + validationBlockedCount + pausedProjects + humanInputCount, nil
+}
+
+func (l operatorDashboardLoader) countTerminalProjectStalls(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	return projectStallDetector{pool: l.pool}.CountTerminalProjectStalls(ctx, organizationID)
 }
 
 func (l operatorDashboardLoader) countReviewBlockedTasks(ctx context.Context, organizationID uuid.UUID) (int, error) {
@@ -828,7 +837,16 @@ func (l operatorDashboardLoader) loadBlockedItems(ctx context.Context, organizat
 		}
 	}
 
-	strandedItems, err := l.loadStrandedExecutionItems(ctx, organizationID, limit)
+	terminalStallItems, err := l.loadTerminalProjectStallItems(ctx, organizationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	appendItems(terminalStallItems)
+	if len(items) >= limit {
+		return items, nil
+	}
+
+	strandedItems, err := l.loadStrandedExecutionItems(ctx, organizationID, limit-len(items))
 	if err != nil {
 		return nil, err
 	}
@@ -869,6 +887,35 @@ func (l operatorDashboardLoader) loadBlockedItems(ctx context.Context, organizat
 		return nil, err
 	}
 	appendItems(humanInputItems)
+	return items, nil
+}
+
+func (l operatorDashboardLoader) loadTerminalProjectStallItems(ctx context.Context, organizationID uuid.UUID, limit int) ([]operatorDashboardItemResponse, error) {
+	records, err := projectStallDetector{pool: l.pool}.LoadTerminalProjectStalls(ctx, organizationID, nil, limit)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]operatorDashboardItemResponse, 0, len(records))
+	for _, record := range records {
+		projectID := record.ProjectID
+		projectLabel := record.ProjectLabel
+		item := l.newDashboardItem(
+			"terminal_project_stall",
+			projectLabel,
+			record.Summary,
+			projectOperationalStateTerminalStalled,
+			record.UpdatedAt,
+			0,
+			&projectID,
+			&projectLabel,
+			nil,
+			nil,
+			nil,
+			nil,
+		)
+		item.BlockingTasks = record.BlockingTasks
+		items = append(items, item)
+	}
 	return items, nil
 }
 
