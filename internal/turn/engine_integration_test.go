@@ -5982,48 +5982,21 @@ func TestTurnEngineIntegrationRecoveryResumeWriteOnlyCheckpointDirectFix(t *test
 	}}
 
 	firstPromptBlob := ""
-	secondPromptBlob := ""
 	modelCalls := 0
 	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
 		modelCalls++
-		switch modelCalls {
-		case 1:
+		if modelCalls == 1 {
 			firstPromptBlob = flattenPrompt(req.Prompt)
-		case 2:
-			secondPromptBlob = flattenPrompt(req.Prompt)
 		}
-		if len(req.Prompt.ToolDescriptors) != 1 || req.Prompt.ToolDescriptors[0].Name != "file.write" {
-			t.Fatalf("recovery write-only mode toolset = %#v, want only file.write", req.Prompt.ToolDescriptors)
+		if len(req.Prompt.ToolDescriptors) != 0 {
+			t.Fatalf("recovery write-only mode toolset = %#v, want no tools", req.Prompt.ToolDescriptors)
 		}
-		switch modelCalls {
-		case 1:
-			return ModelResponse{
-				Content: "I'll inspect the repo first.",
-				ToolCalls: []ModelToolCall{{
-					ID:   "resume-list",
-					Name: "file.list",
-					Tier: "tier1",
-					Arguments: map[string]any{
-						"path": ".",
-					},
-				}},
-			}, nil
-		case 2:
-			return ModelResponse{
-				Content: repeatedPlaceholder,
-				ToolCalls: []ModelToolCall{{
-					ID:   "resume-write",
-					Name: "file.write",
-					Tier: "tier2",
-					Arguments: map[string]any{
-						"path": targetPath,
-					},
-				}},
-			}, nil
-		default:
+		if modelCalls != 1 {
 			t.Fatalf("unexpected extra model call %d", modelCalls)
-			return ModelResponse{}, nil
 		}
+		return ModelResponse{
+			Content: repeatedPlaceholder,
+		}, nil
 	}
 
 	dispatched := 0
@@ -6037,8 +6010,8 @@ func TestTurnEngineIntegrationRecoveryResumeWriteOnlyCheckpointDirectFix(t *test
 		t.Fatalf("HandleUserMessage write-only checkpoint recovery: %v", err)
 	}
 
-	if modelCalls != 2 {
-		t.Fatalf("model calls = %d, want 2 calls (tool rejection + bounded recovery turn)", modelCalls)
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1 direct body attempt", modelCalls)
 	}
 	if dispatched != 0 {
 		t.Fatalf("tier2 dispatches = %d, want 0", dispatched)
@@ -6049,7 +6022,10 @@ func TestTurnEngineIntegrationRecoveryResumeWriteOnlyCheckpointDirectFix(t *test
 	if !strings.Contains(firstPromptBlob, "Write-only recovery mode is active.") {
 		t.Fatalf("prompt missing write-only recovery instruction:\n%s", firstPromptBlob)
 	}
-	if !strings.Contains(firstPromptBlob, "Your next assistant content must start with the actual body of the target file") {
+	if !strings.Contains(firstPromptBlob, "No tools are available for this turn.") {
+		t.Fatalf("prompt missing no-tools recovery instruction:\n%s", firstPromptBlob)
+	}
+	if !strings.Contains(firstPromptBlob, "Your next assistant content must be only the actual body of the target file") {
 		t.Fatalf("prompt missing direct body instruction:\n%s", firstPromptBlob)
 	}
 	if strings.Contains(firstPromptBlob, targetPlaceholder) {
@@ -6057,9 +6033,6 @@ func TestTurnEngineIntegrationRecoveryResumeWriteOnlyCheckpointDirectFix(t *test
 	}
 	if strings.Contains(firstPromptBlob, artifactPlaceholder) {
 		t.Fatalf("prompt should omit rejected placeholder recovery artifact draft:\n%s", firstPromptBlob)
-	}
-	if strings.Contains(secondPromptBlob, "ORIGINAL KICKOFF CONTEXT SHOULD NOT REAPPEAR") {
-		t.Fatalf("follow-up prompt should stay rooted at checkpoint, not original kickoff:\n%s", secondPromptBlob)
 	}
 
 	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
@@ -6080,17 +6053,10 @@ func TestTurnEngineIntegrationRecoveryResumeWriteOnlyCheckpointDirectFix(t *test
 	if err != nil {
 		t.Fatalf("ListBySession messages: %v", err)
 	}
-	var rejectedToolCalls int
 	for _, message := range messages {
-		if message.Role != "tool_result" {
-			continue
+		if message.Role == "tool_result" {
+			t.Fatalf("unexpected tool_result during text-only recovery: %s", message.Content)
 		}
-		if strings.Contains(message.Content, "file.list is not allowed during write-only recovery") {
-			rejectedToolCalls++
-		}
-	}
-	if rejectedToolCalls != 1 {
-		t.Fatalf("rejected exploratory tool calls = %d, want 1", rejectedToolCalls)
 	}
 }
 
@@ -6233,8 +6199,8 @@ Sam is the practitioner who connects AI systems, parenting, ethics, and craftsma
 	modelCalls := 0
 	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
 		modelCalls++
-		if len(req.Prompt.ToolDescriptors) != 1 || req.Prompt.ToolDescriptors[0].Name != "file.write" {
-			t.Fatalf("recovery write-only mode toolset = %#v, want only file.write", req.Prompt.ToolDescriptors)
+		if len(req.Prompt.ToolDescriptors) != 0 {
+			t.Fatalf("recovery write-only mode toolset = %#v, want no tools", req.Prompt.ToolDescriptors)
 		}
 		return ModelResponse{
 			Content: substantiveDraft,

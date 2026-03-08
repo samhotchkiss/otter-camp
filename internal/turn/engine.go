@@ -1797,7 +1797,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		} else {
 			errMsg := fmt.Sprintf("%s is not available in this turn", rawName)
 			if rt.recoveryDirectWrite {
-				errMsg = fmt.Sprintf("%s is not allowed during write-only recovery; only file.write may be used", rawName)
+				errMsg = fmt.Sprintf("%s is not allowed during write-only recovery; emit only the file body as assistant text and runtime will write the file", rawName)
 			}
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -2700,8 +2700,9 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 	if recoveryResumeRequiresDirectWriteMode(state) {
 		lines = append(lines,
 			"Hard constraint for this resumed turn: do not inspect the workspace again, do not read additional files, and do not narrate intent.",
-			"Write-only recovery mode is active. The only tool available for this turn is `file.write`, and it should be used only for the final target-file write after the full body exists.",
-			"Your next assistant content must start with the actual body of the target file, not with setup, inventory, or statements about what you now understand.",
+			"Write-only recovery mode is active. No tools are available for this turn.",
+			"Your next assistant content must be only the actual body of the target file, not setup, inventory, or statements about what you now understand.",
+			"Runtime will perform the final `file.write` after your assistant text contains the substantive file body.",
 		)
 	}
 
@@ -2788,18 +2789,9 @@ func recoveryResumeHasRepeatedDraftHistory(state recoveryResumeState) bool {
 }
 
 func filterRecoveryDirectWriteToolSet(input []tools.ToolDescriptor) []tools.ToolDescriptor {
-	if len(input) == 0 {
-		return nil
-	}
-	out := make([]tools.ToolDescriptor, 0, 1)
-	for _, item := range input {
-		if strings.EqualFold(strings.TrimSpace(item.Name), "file.write") {
-			out = append(out, item)
-		}
-	}
-	if len(out) != 0 {
-		return out
-	}
+	// Hardened recovery turns must emit body text only. Runtime performs the
+	// final file.write itself once the body is substantive.
+	_ = input
 	return nil
 }
 
