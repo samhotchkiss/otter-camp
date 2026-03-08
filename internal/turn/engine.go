@@ -1760,6 +1760,8 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	// Build reverse map: sanitized API name → original tool name, and tier lookup.
 	apiNameToOriginal := make(map[string]string, len(rt.toolSet))
 	apiNameToTier := make(map[string]string, len(rt.toolSet))
+	originalNameToTier := make(map[string]string, len(rt.toolSet))
+	allowedToolNames := make(map[string]string, len(rt.toolSet)*2)
 	for _, td := range rt.toolSet {
 		apiName := td.APIName
 		if apiName == "" {
@@ -1767,6 +1769,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		apiNameToOriginal[apiName] = td.Name
 		apiNameToTier[apiName] = td.Tier
+		originalNameToTier[td.Name] = td.Tier
+		allowedToolNames[td.Name] = td.Name
+		allowedToolNames[apiName] = td.Name
 	}
 
 	toolCalls := make([]ToolCall, 0, len(calls))
@@ -1777,14 +1782,28 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			id = fmt.Sprintf("tool-%d", i+1)
 		}
 		// Resolve the model-returned name (may be sanitized) back to the original.
-		name := strings.TrimSpace(call.Name)
-		if orig, ok := apiNameToOriginal[name]; ok {
-			name = orig
+		rawName := strings.TrimSpace(call.Name)
+		name := rawName
+		if canonical, ok := allowedToolNames[rawName]; ok {
+			name = canonical
+		} else {
+			errMsg := fmt.Sprintf("%s is not available in this turn", rawName)
+			if rt.recoveryDirectWrite {
+				errMsg = fmt.Sprintf("%s is not allowed during write-only recovery; only file.write may be used", rawName)
+			}
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       rawName,
+				Error:      errMsg,
+			})
+			continue
 		}
 		// Resolve tier from tool set if not provided by model.
 		tier := strings.TrimSpace(strings.ToLower(call.Tier))
 		if tier == "" {
-			if t, ok := apiNameToTier[strings.TrimSpace(call.Name)]; ok {
+			if t, ok := apiNameToTier[rawName]; ok {
+				tier = strings.ToLower(t)
+			} else if t, ok := originalNameToTier[name]; ok {
 				tier = strings.ToLower(t)
 			}
 		}
