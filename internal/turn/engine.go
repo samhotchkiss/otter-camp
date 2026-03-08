@@ -2936,15 +2936,9 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 	if trimmed == "" {
 		return false
 	}
-	if hasStructuredRecoveryFileDraftMarkers(trimmed) || strings.Count(trimmed, "\n") >= 3 || len(trimmed) > 900 {
-		return false
-	}
 
 	lower := strings.ToLower(trimmed)
 	wordCount := len(strings.Fields(trimmed))
-	if containsAny(lower, "the single deliverable", "final deliverable") {
-		return true
-	}
 	hasWriteIntent := containsAny(lower,
 		"let me write",
 		"let me draft",
@@ -2967,8 +2961,38 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"i have what i need",
 		"now that i have",
 	)
+	hasInventoryCue := containsAny(lower,
+		"i have a deep understanding of",
+		"i now have a deep understanding of",
+		"i have a thorough understanding of",
+		"i now have a thorough understanding of",
+		"i have a clear understanding of",
+		"i now have a clear understanding of",
+		"i have a full understanding of",
+		"i now have a full understanding of",
+	)
+	hasInventoryList := strings.Contains(trimmed, "\n- ") || strings.Contains(trimmed, "\n* ") || strings.Contains(trimmed, "\n1. ")
+	hasDeliverableCue := containsAny(lower,
+		"the single deliverable",
+		"final deliverable",
+		"real deliverable",
+		"critical deliverable",
+		"full document",
+		"comprehensive content strategy document",
+		"unblocks ws4",
+		"unblocks the next stage",
+	)
 	if hasWriteIntent && (hasSetupCue || wordCount <= 80) {
 		return true
+	}
+	if (hasSetupCue || hasInventoryCue) && hasInventoryList && (hasWriteIntent || hasDeliverableCue) {
+		return true
+	}
+	if containsAny(lower, "the single deliverable", "final deliverable") {
+		return true
+	}
+	if hasStructuredRecoveryFileDraftMarkers(trimmed) || strings.Count(trimmed, "\n") >= 3 || len(trimmed) > 900 {
+		return false
 	}
 	if wordCount <= 80 && containsAny(lower,
 		"critical deliverable",

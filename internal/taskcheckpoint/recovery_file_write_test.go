@@ -128,3 +128,15 @@ func TestRecoveryFileWriteFailureHistoryDeduplicatesCurrentFailure(t *testing.T)
 		t.Fatalf("failure history[1] = %q, want current failure", history[1])
 	}
 }
+
+func TestNormalizeRecoveryFileWriteCheckpointUpgradesStaleDurableBlockerClass(t *testing.T) {
+	checkpoint := NormalizeRecoveryFileWriteCheckpoint(RecoveryFileWriteCheckpoint{
+		TargetPath:    "docs/content-strategy.md",
+		ArtifactPath:  ".ottercamp/recovery/docs/content-strategy.md",
+		BlockerClass:  RecoveryFileWriteBlockerClassDurableCheckpoint,
+		FailureReason: "repeated intent-only recovery drafts for docs/content-strategy.md across explicit resume attempts; latest assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body",
+	})
+	if checkpoint.BlockerClass != RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint {
+		t.Fatalf("blocker_class = %q, want %q", checkpoint.BlockerClass, RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint)
+	}
+}

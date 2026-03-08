@@ -2408,6 +2408,165 @@ func TestTurnEngineIntegrationClaimedRecoveryResumeRejectsShallowPlaceholderWrit
 	}
 }
 
+func TestTurnEngineIntegrationClaimedRecoveryResumeRejectsInventoryPlaceholderWriteDirectFix(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, recoveryMessage.ID)
+
+	existingTargetBody := "Now I have everything I need. I have a deep understanding of:\n- Sam's 35-post corpus across 5 categories\n- The existing pillar taxonomy\n- Sam's voice, background, and brand positioning\n- The site architecture and technical setup\n- Target outcomes: speaking gigs, consulting, executive recruitment\n\nTime to write the comprehensive content strategy document. This is the real deliverable.\n"
+	if err := os.WriteFile(seed.targetAbs, []byte(existingTargetBody), 0o644); err != nil {
+		t.Fatalf("rewrite prior placeholder target: %v", err)
+	}
+
+	assembler := &fakeAssembler{results: []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: 30}},
+	}}
+	fixture.engine.assembler = assembler
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	const inventoryPlaceholder = "Now I have everything I need. I have a deep understanding of:\n- Sam's 35-post corpus across 5 categories\n- The existing pillar taxonomy (excellent foundation)\n- Sam's voice, background, and brand positioning\n- The site architecture and technical setup\n- Target outcomes: speaking gigs, consulting, executive recruitment\n\nTime to write the comprehensive content strategy document. This is the real deliverable."
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{
+				Content: inventoryPlaceholder,
+				ToolCalls: []ModelToolCall{{
+					ID:   "resume-write",
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"path": seed.targetPath,
+					},
+				}},
+			}, nil
+		default:
+			return ModelResponse{}, fmt.Errorf("unexpected follow-up model call after inventory placeholder write")
+		}
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		t.Fatalf("unexpected tier2 dispatch for inventory placeholder draft: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	worker := jobqueue.New(fixture.pool, nil, jobqueue.Config{})
+	jobID, err := worker.Enqueue(ctx, nil, AgentTurnJobType, defaultAgentTurnJobPriority, AgentTurnPayload{
+		SessionID: taskSession.ID,
+		MessageID: recoveryMessage.ID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueue claimed recovery job: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'integration-worker',
+		    claimed_at = now()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("mark recovery job claimed: %v", err)
+	}
+
+	var payload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&payload); err != nil {
+		t.Fatalf("load claimed recovery payload: %v", err)
+	}
+	claimedJob := jobqueue.Job{
+		ID:      jobID,
+		JobType: AgentTurnJobType,
+		Payload: payload,
+		Status:  "claimed",
+	}
+
+	if err := fixture.engine.HandleTurnJob(ctx, claimedJob); err != nil {
+		t.Fatalf("HandleTurnJob claimed recovery resume: %v", err)
+	}
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1 bounded recovery turn", modelCalls)
+	}
+	if assembler.calls != 1 {
+		t.Fatalf("assemble calls = %d, want 1 because placeholder rejection should halt before dispatch", assembler.calls)
+	}
+	if dispatched != 0 {
+		t.Fatalf("tier2 dispatches = %d, want 0", dispatched)
+	}
+
+	outputBody, err := os.ReadFile(seed.targetAbs)
+	if err != nil {
+		t.Fatalf("read target file after claimed recovery resume: %v", err)
+	}
+	if string(outputBody) != existingTargetBody {
+		t.Fatalf("target file was clobbered:\n%s", string(outputBody))
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != seed.targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, seed.targetPath)
+	}
+	if checkpoint.ArtifactPath != seed.artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, seed.artifactRel)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "intent to write the deliverable") {
+		t.Fatalf("checkpoint failure_reason = %q, want inventory-placeholder rejection guidance", checkpoint.FailureReason)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
+	}
+
+	artifactBody, err := os.ReadFile(seed.artifactAbs)
+	if err != nil {
+		t.Fatalf("read recovery artifact: %v", err)
+	}
+	artifactText := string(artifactBody)
+	if !strings.Contains(artifactText, inventoryPlaceholder) {
+		t.Fatalf("artifact missing rejected inventory placeholder draft:\n%s", artifactText)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnPersistsCheckpointForRepeatedEmptyCLIExecuteWithFileContextEX321(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

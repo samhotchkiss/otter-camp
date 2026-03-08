@@ -106,9 +106,7 @@ func NormalizeRecoveryFileWriteCheckpoint(checkpoint RecoveryFileWriteCheckpoint
 	checkpoint.HistoryStartMessageID = strings.TrimSpace(checkpoint.HistoryStartMessageID)
 	checkpoint.HaltTurnID = strings.TrimSpace(checkpoint.HaltTurnID)
 	checkpoint.UpdatedAt = strings.TrimSpace(checkpoint.UpdatedAt)
-	if checkpoint.BlockerClass == "" {
-		checkpoint.BlockerClass = RecoveryFileWriteBlockerClass(&checkpoint)
-	}
+	checkpoint.BlockerClass = RecoveryFileWriteBlockerClass(&checkpoint)
 	return checkpoint
 }
 
@@ -116,14 +114,14 @@ func RecoveryFileWriteBlockerClass(checkpoint *RecoveryFileWriteCheckpoint) stri
 	if checkpoint == nil {
 		return ""
 	}
+	if RecoveryFileWriteFailureIsRepeatedDraftReject(checkpoint.FailureReason) {
+		return RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint
+	}
 	switch strings.TrimSpace(checkpoint.BlockerClass) {
 	case RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint:
 		return RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint
 	case RecoveryFileWriteBlockerClassDurableCheckpoint:
 		return RecoveryFileWriteBlockerClassDurableCheckpoint
-	}
-	if RecoveryFileWriteFailureIsRepeatedDraftReject(checkpoint.FailureReason) {
-		return RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint
 	}
 	if strings.TrimSpace(checkpoint.TargetPath) != "" ||
 		strings.TrimSpace(checkpoint.ArtifactPath) != "" ||

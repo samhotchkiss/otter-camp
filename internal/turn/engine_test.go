@@ -2478,6 +2478,17 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects inventory-style placeholder progress narration",
+			content: "Now I have everything I need. I have a deep understanding of:\n" +
+				"- Sam's 35-post corpus across 5 categories\n" +
+				"- The existing pillar taxonomy\n" +
+				"- Sam's voice, background, and brand positioning\n" +
+				"- The site architecture and technical setup\n" +
+				"- Target outcomes: speaking gigs, consulting, executive recruitment\n\n" +
+				"Time to write the comprehensive content strategy document. This is the real deliverable.",
+			want: "intent to write the deliverable",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
