@@ -6028,6 +6028,12 @@ func TestTurnEngineIntegrationRecoveryResumeWriteOnlyCheckpointDirectFix(t *test
 	if !strings.Contains(firstPromptBlob, "Your next assistant content must be only the actual body of the target file") {
 		t.Fatalf("prompt missing direct body instruction:\n%s", firstPromptBlob)
 	}
+	if !strings.Contains(firstPromptBlob, "Start work on task: "+taskRecord.Title) {
+		t.Fatalf("prompt missing task brief:\n%s", firstPromptBlob)
+	}
+	if !strings.Contains(firstPromptBlob, "Task contract:") {
+		t.Fatalf("prompt missing task contract section:\n%s", firstPromptBlob)
+	}
 	if strings.Contains(firstPromptBlob, targetPlaceholder) {
 		t.Fatalf("prompt should omit rejected placeholder target draft:\n%s", firstPromptBlob)
 	}

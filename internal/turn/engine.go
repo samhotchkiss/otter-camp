@@ -2536,6 +2536,7 @@ func (e *TurnEngine) recoveryFileWriteCheckpointCandidate(ctx context.Context, r
 }
 
 type recoveryResumeState struct {
+	taskBrief                   string
 	targetPath                  string
 	targetDraft                 string
 	targetDraftRejectedReason   string
@@ -2581,6 +2582,7 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 	}
 
 	state := recoveryResumeState{
+		taskBrief:           e.recoveryResumeTaskBrief(ctx, rt),
 		targetPath:          strings.TrimSpace(checkpoint.TargetPath),
 		artifactPath:        strings.TrimSpace(checkpoint.ArtifactPath),
 		blockerClass:        taskcheckpoint.RecoveryFileWriteBlockerClass(checkpoint),
@@ -2609,6 +2611,32 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		return recoveryResumeState{}, false
 	}
 	return state, true
+}
+
+func (e *TurnEngine) recoveryResumeTaskBrief(ctx context.Context, rt *turnRuntime) string {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return ""
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return ""
+	}
+	title := strings.TrimSpace(taskRecord.Title)
+	if title == "" {
+		title = "Untitled task"
+	}
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.TrimSpace(*taskRecord.Description)
+	}
+	if description == "" {
+		return "Start work on task: " + title
+	}
+	return "Start work on task: " + title + "\n\nTask description:\n" + description
 }
 
 func recoveryResumeDraftForPrompt(failureReason, targetPath, draft string) (string, string) {
@@ -2684,6 +2712,14 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 		"[Recovery resume state]",
 		"Resume order: target file draft, then recovery artifact draft, then checkpoint metadata/failure reason.",
 		"Continue from the durable drafts below instead of asking which task to resume.",
+	}
+	if brief := strings.TrimSpace(state.taskBrief); brief != "" {
+		lines = append(lines,
+			"Task contract:",
+			"```text",
+			brief,
+			"```",
+		)
 	}
 	if blockerClass := strings.TrimSpace(state.blockerClass); blockerClass != "" {
 		lines = append(lines, "Checkpoint blocker class: "+blockerClass)
