@@ -46,6 +46,7 @@ func TestKeyToolSchemasExposeRequiredParameters(t *testing.T) {
 		{name: "agent.assign_project", requiredKeys: []string{"agent_id", "project_id", "role"}, propertyKeys: []string{"agent_id", "project_id", "role"}},
 		{name: "flow.list_templates", propertyKeys: []string{"project_id"}},
 		{name: "file.write", requiredKeys: []string{"path", "content"}, propertyKeys: []string{"path", "content"}},
+		{name: "cli.execute", requiredKeys: []string{"command"}, propertyKeys: []string{"command", "working_directory", "timeout_seconds", "env_overrides"}},
 		{name: "git.diff", propertyKeys: []string{"ref", "staged", "file_path"}},
 		{name: "browser.navigate", requiredKeys: []string{"url"}, propertyKeys: []string{"url"}},
 	}

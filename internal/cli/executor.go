@@ -25,6 +25,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
+	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
@@ -771,6 +772,7 @@ func decodeMapInput(input map[string]any) (CLIExecuteInput, error) {
 	if input == nil {
 		return CLIExecuteInput{}, ErrInvalidInputType
 	}
+	input = toolargs.Normalize("cli.execute", input)
 
 	getUUID := func(keys ...string) (uuid.UUID, error) {
 		for _, key := range keys {

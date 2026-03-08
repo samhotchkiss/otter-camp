@@ -150,6 +150,41 @@ func TestDecodeMapInput(t *testing.T) {
 	}
 }
 
+func TestDecodeMapInputRecoversCLIExecuteAliases(t *testing.T) {
+	runID := uuid.New()
+	runStepID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	agentID := uuid.New()
+	orgID := uuid.New()
+
+	input, err := decodeMapInput(map[string]any{
+		"run_id":          runID.String(),
+		"run_step_id":     runStepID.String(),
+		"task_id":         taskID.String(),
+		"project_id":      projectID.String(),
+		"agent_id":        agentID.String(),
+		"organization_id": orgID.String(),
+		"_raw":            `{"cmd":"cat <<'EOF' > docs/strategy.md\n# Strategy\nEOF","working_dir":"docs","timeout_ms":1200,"env":{"MODE":"test"}}`,
+	})
+	if err != nil {
+		t.Fatalf("decodeMapInput: %v", err)
+	}
+
+	if input.Command != "cat <<'EOF' > docs/strategy.md\n# Strategy\nEOF" {
+		t.Fatalf("command = %q, want recovered heredoc command", input.Command)
+	}
+	if input.WorkingDirectory == nil || *input.WorkingDirectory != "docs" {
+		t.Fatalf("working_directory = %v, want docs", input.WorkingDirectory)
+	}
+	if input.TimeoutSeconds == nil || *input.TimeoutSeconds != 2 {
+		t.Fatalf("timeout_seconds = %v, want 2", input.TimeoutSeconds)
+	}
+	if input.EnvOverrides["MODE"] != "test" {
+		t.Fatalf("env_overrides = %+v, want MODE=test", input.EnvOverrides)
+	}
+}
+
 func TestResolveWorkingDirectoryUsesProjectSlugWorkspace(t *testing.T) {
 	dataDir := t.TempDir()
 	resolvedDataDir, err := filepath.EvalSymlinks(dataDir)

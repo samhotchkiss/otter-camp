@@ -86,14 +86,14 @@ func TestRiskClassifierSudoDenied(t *testing.T) {
 	}
 }
 
-func TestRiskClassifierRedirectDenied(t *testing.T) {
+func TestRiskClassifierRedirectAllowedAndClassifiedAsMutation(t *testing.T) {
 	classifier := NewRiskClassifier()
 	result := classifier.Evaluate("echo hello > /tmp/out.txt")
-	if !result.Denied {
-		t.Fatal("expected redirect command to be denied")
+	if result.Denied {
+		t.Fatalf("redirect command denied unexpectedly: %+v", result)
 	}
-	if result.ErrorCode != "redirect_not_supported" {
-		t.Fatalf("error_code = %q, want redirect_not_supported", result.ErrorCode)
+	if result.RiskLevel != RiskMedium {
+		t.Fatalf("risk_level = %q, want %q", result.RiskLevel, RiskMedium)
 	}
 }
 

@@ -66,7 +66,7 @@ CLI and browser tool calls originate within the turn loop (doc 02). The agent re
 The agent sends a structured command request. The system evaluates policy, executes the command in a sandboxed environment, streams output back, and captures results.
 
 ```
-Agent requests: cli.execute({command: "go test ./...", working_dir: "."})
+Agent requests: cli.execute({command: "go test ./...", working_directory: "."})
 │
 ├─ Control plane: policy evaluation
 │   ├─ Check system.cli.execute capability for this agent
@@ -98,9 +98,11 @@ Agent requests: cli.execute({command: "go test ./...", working_dir: "."})
 The agent's tool call includes:
 
 - `command` (required): the command string to execute.
-- `working_dir` (optional): relative path within the project repo. Defaults to repo root.
-- `timeout_ms` (optional): per-command timeout override, capped by the project's max. Defaults to the project's configured timeout.
-- `env` (optional): additional environment variables the agent wants set. Subject to filtering — the agent cannot override restricted variables.
+- `working_directory` (optional): relative path within the project repo. Defaults to repo root.
+- `timeout_seconds` (optional): per-command timeout override, capped by the project's max. Defaults to the project's configured timeout.
+- `env_overrides` (optional): additional environment variables the agent wants set. Subject to filtering — the agent cannot override restricted variables.
+
+For compatibility with provider/tool-call serialization glitches, the runtime normalizes legacy alias keys (`working_dir`, `cwd`, `timeout_ms`, `env`) and `_raw` payload blobs onto those canonical fields before validation. If the `_raw` payload is just a shell string, it is treated as `command`.
 
 ### Execution Output
 
@@ -130,13 +132,14 @@ The agent receives the complete output when the command finishes. The human (if 
 - **Tool result inline limit**: stdout and stderr are included inline up to a configurable size (default: 50KB each). Beyond that, output is truncated in the tool result and the full output is stored as a RunArtifact.
 - **Total capture limit**: maximum total output captured per command (default: 10MB). Beyond that, the oldest output is dropped and only the tail is preserved. This prevents a runaway process from filling storage.
 - The agent is told when output is truncated and given an artifact reference to access the full content.
+- File-production recovery commands may use shell redirection (`>`, `>>`) and heredoc patterns so long as they stay within the task's workspace contract.
 
 ## CLI Sandboxing
 
 ### Working Directory
 
 - Every CLI command executes within the project's git repo, checked out to the agent's task branch.
-- The `working_dir` parameter is resolved relative to the repo root. Path traversal (`../`) that would escape the repo is rejected.
+- The `working_directory` parameter is resolved relative to the repo root. Path traversal (`../`) that would escape the repo is rejected.
 - Agents cannot access other projects' repos, the host filesystem outside the project repo, or OtterCamp's own configuration/data directories.
 - For projects without a repo (edge case — all projects are git repos per doc 03, but the repo may be empty), commands execute in a temporary directory.
 

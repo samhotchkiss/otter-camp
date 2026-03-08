@@ -24,6 +24,8 @@ func Normalize(toolName string, input map[string]any) map[string]any {
 	switch canonicalToolName(toolName) {
 	case "file.write":
 		return normalizeFileWriteInput(cloned)
+	case "cli.execute":
+		return normalizeCLIExecuteInput(cloned)
 	default:
 		return cloned
 	}
@@ -36,6 +38,8 @@ func AttemptFingerprint(toolName string, input map[string]any) string {
 	switch name {
 	case "file.write":
 		return fileWriteAttemptFingerprint(input, normalized)
+	case "cli.execute":
+		return cliExecuteAttemptFingerprint(input, normalized)
 	default:
 		return strings.ToLower(name)
 	}
@@ -117,6 +121,8 @@ func canonicalToolName(toolName string) string {
 	switch trimmed {
 	case "file_write":
 		return "file.write"
+	case "cli_execute":
+		return "cli.execute"
 	default:
 		return trimmed
 	}
@@ -253,6 +259,10 @@ func recoverFileWriteContent(raw string) (string, bool) {
 }
 
 func recoverLenientJSONLikeStringField(raw, key string) (string, bool) {
+	return recoverLenientJSONLikeStringFieldWithKeys(raw, key, fileWriteLooseKeys)
+}
+
+func recoverLenientJSONLikeStringFieldWithKeys(raw, key string, looseKeys []string) (string, bool) {
 	keyIndex := strings.Index(raw, `"`+key+`"`)
 	if keyIndex < 0 {
 		return "", false
@@ -280,7 +290,7 @@ func recoverLenientJSONLikeStringField(raw, key string) (string, bool) {
 		if raw[idx] != '"' {
 			continue
 		}
-		if !isLikelyFieldTerminator(raw, idx+1) {
+		if !isLikelyFieldTerminatorWithKeys(raw, idx+1, looseKeys) {
 			continue
 		}
 		return decodeRecoveredString(raw[start:idx])
@@ -291,6 +301,10 @@ func recoverLenientJSONLikeStringField(raw, key string) (string, bool) {
 }
 
 func isLikelyFieldTerminator(raw string, cursor int) bool {
+	return isLikelyFieldTerminatorWithKeys(raw, cursor, fileWriteLooseKeys)
+}
+
+func isLikelyFieldTerminatorWithKeys(raw string, cursor int, looseKeys []string) bool {
 	for cursor < len(raw) && isJSONWhitespace(raw[cursor]) {
 		cursor++
 	}
@@ -310,7 +324,7 @@ func isLikelyFieldTerminator(raw string, cursor int) bool {
 	if cursor >= len(raw) {
 		return true
 	}
-	for _, key := range fileWriteLooseKeys {
+	for _, key := range looseKeys {
 		if strings.HasPrefix(raw[cursor:], `"`+key+`"`) {
 			return true
 		}

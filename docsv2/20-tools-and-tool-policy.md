@@ -123,13 +123,13 @@ The complete set of tools that ship with OtterCamp before any external connectio
 | `file.search` | Search file contents in the project workspace (grep/ripgrep equivalent) | 1 (read) |
 | `file.write` | Write or update a file in the project workspace | 2 (mutation) |
 | `file.delete` | Delete a file from the project workspace | 2 (mutation) |
-| `cli.execute` | Execute a shell command in the project workspace sandbox | 2 (mutation) |
+| `cli.execute` | Execute a shell command in the project workspace sandbox; relative file output via `>`, `>>`, and heredoc is supported | 2 (mutation) |
 | `git.status` | Get git status of the project workspace | 1 (read) |
 | `git.diff` | Get diff of working changes or between refs | 1 (read) |
 | `git.log` | Get commit history | 1 (read) |
 | `git.commit` | Commit staged changes to the task branch | 2 (mutation) |
 
-For migration/import tasks specifically, `file.write` and `cli.execute` should be used incrementally throughout the run: write raw fetch artifacts/manifests immediately, execute transform scripts against those files, and emit migrated content outputs as they are completed. After a continuation rollover, existing scripts/artifacts are inputs to the next output-producing step, not a reason to spend another turn re-checking or regenerating scaffolding.
+For migration/import tasks specifically, `file.write` and `cli.execute` should be used incrementally throughout the run: write raw fetch artifacts/manifests immediately, execute transform scripts against those files, and emit migrated content outputs as they are completed. After a continuation rollover, existing scripts/artifacts are inputs to the next output-producing step, not a reason to spend another turn re-checking or regenerating scaffolding. When file tools are temporarily unavailable or malformed, supported `cli.execute` recovery for file production includes shell redirection and heredoc patterns that write into the same shared workspace root.
 
 ### Browser Domain
 
@@ -578,6 +578,8 @@ When an agent emits a tool call during the turn loop:
 5. **Result formatting**: return the result in a consistent format regardless of tier. The agent does not know or care which tier a tool belongs to.
 
 `file.write` gets one extra normalization pass before validation. If the provider leaves a recoverable `_raw` argument blob behind, the runtime extracts `path`, `content`, `encoding`, and `create_dirs` deterministically instead of spuriously failing with `path_required`. Recovery must handle the real write payloads seen in migration/template work, including malformed raw JSON that still contains valid multi-line content with embedded quotes, plus common content aliases such as `body`/`text`/`contents` when the provider serialized the payload under the wrong key. If `path` is still absent after normalization, the runtime returns one actionable validation payload. If `path` is present but `content` is still absent or nil, the runtime returns `content_required` rather than mislabeling the failure as missing-path noise or silently writing an empty file.
+
+`cli.execute` gets the same recovery treatment before validation. If the provider emits `_raw`, uses legacy alias keys such as `cmd`, `script`, `working_dir`, `cwd`, `timeout_ms`, or `env`, or serializes the tool call as a bare shell string, the runtime normalizes that payload onto the canonical `command`, `working_directory`, `timeout_seconds`, and `env_overrides` fields before the executor validates it. Valid recovery commands must not fail with `command_required` solely because the model serialized the payload poorly.
 
 ### Error Handling
 
