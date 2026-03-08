@@ -538,6 +538,7 @@ func TestMobileDashboardAggregation(t *testing.T) {
 
 	projectRepo := repo.NewProjectRepo(testServer.Pool)
 	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
 	environmentRepo := repo.NewProjectEnvironmentRepo(testServer.Pool)
 	inboxRepo := repo.NewInboxItemRepo(testServer.Pool)
 	sessionRepo := repo.NewChatSessionRepo(testServer.Pool)
@@ -555,13 +556,28 @@ func TestMobileDashboardAggregation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &adminUser.OrganizationID,
+		ProjectID:      &project.ID,
+		Slug:           "mobile-dashboard-template",
+		DisplayName:    "Mobile Dashboard Template",
+		Description:    "template for mobile dashboard integration tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminUser.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
 
 	createdByID := adminUser.ID
 	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
 		OrganizationID: adminUser.OrganizationID,
 		ProjectID:      project.ID,
-		Title:          "Active task",
-		WorkStatus:     "in_progress",
+		Title:          "Review task",
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
 		CreatedByType:  "human_user",
 		CreatedByID:    &createdByID,
 	}); err != nil {
@@ -572,6 +588,7 @@ func TestMobileDashboardAggregation(t *testing.T) {
 		ProjectID:      project.ID,
 		Title:          "Blocked task",
 		WorkStatus:     "blocked",
+		FlowTemplateID: &template.ID,
 		CreatedByType:  "human_user",
 		CreatedByID:    &createdByID,
 	}); err != nil {
@@ -668,11 +685,128 @@ func TestMobileDashboardAggregation(t *testing.T) {
 	if got := intValue(jsonPathValue(t, resp.Body, "data", "projects", "0", "blocked_task_count")); got != 1 {
 		t.Fatalf("blocked_task_count = %d, want 1 body=%s", got, string(resp.Body))
 	}
+	if got := jsonPathString(t, resp.Body, "data", "projects", "0", "operational_state"); got != projectOperationalStateTerminalStalled {
+		t.Fatalf("operational_state = %q, want %q body=%s", got, projectOperationalStateTerminalStalled, string(resp.Body))
+	}
 	if got := jsonPathString(t, resp.Body, "data", "projects", "0", "latest_deploy", "status"); got != "deployed" {
 		t.Fatalf("latest_deploy.status = %q, want %q body=%s", got, "deployed", string(resp.Body))
 	}
 	if got := intValue(jsonPathValue(t, resp.Body, "data", "recent_sessions", "0", "unread_message_count")); got != 1 {
 		t.Fatalf("recent_sessions unread_message_count = %d, want 1 body=%s", got, string(resp.Body))
+	}
+}
+
+func TestMobileDashboardProjectsSurfaceTerminalStallState(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, adminUser, _ := newAuthTestServer(t, "standard")
+	defer testServer.Close()
+
+	token := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	ctx := context.Background()
+
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	inboxRepo := repo.NewInboxItemRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: adminUser.OrganizationID,
+		Slug:           "mobile-terminal-stall",
+		DisplayName:    "Mobile Terminal Stall",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminUser.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &adminUser.OrganizationID,
+		ProjectID:      &project.ID,
+		Slug:           "mobile-terminal-stall-template",
+		DisplayName:    "Mobile Terminal Stall Template",
+		Description:    "template for terminal stall mobile dashboard tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminUser.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	createdByID := adminUser.ID
+	blockedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: adminUser.OrganizationID,
+		ProjectID:      project.ID,
+		Title:          "Resolve missing dependency",
+		WorkStatus:     "blocked",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create blocked task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: adminUser.OrganizationID,
+		ProjectID:      project.ID,
+		Title:          "Review release notes",
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	}); err != nil {
+		t.Fatalf("create review task: %v", err)
+	}
+	if _, err := inboxRepo.Create(ctx, repo.InboxItem{
+		OrganizationID:  adminUser.OrganizationID,
+		TargetUserID:    &adminUser.ID,
+		ItemType:        "blocker_filed",
+		SourceProjectID: &project.ID,
+		SourceTaskID:    &blockedTask.ID,
+		CreatedByType:   "system",
+		Title:           "Blocker filed",
+		ActionPayload:   json.RawMessage(`{"reason":"dependency unavailable"}`),
+	}); err != nil {
+		t.Fatalf("create blocker inbox item: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/mobile/dashboard?project_ids="+project.ID.String()+"&inbox_limit=10", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	if got := jsonPathString(t, resp.Body, "data", "projects", "0", "operational_state"); got != projectOperationalStateTerminalStalled {
+		t.Fatalf("operational_state = %q, want %q body=%s", got, projectOperationalStateTerminalStalled, string(resp.Body))
+	}
+	if got := jsonPathString(t, resp.Body, "data", "projects", "0", "state_summary"); !strings.Contains(got, "terminal stall") {
+		t.Fatalf("state_summary = %q, want terminal stall body=%s", got, string(resp.Body))
+	}
+
+	var payload struct {
+		Data struct {
+			Projects []mobileDashboardProjectResponse `json:"projects"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body, &payload); err != nil {
+		t.Fatalf("decode mobile dashboard: %v body=%s", err, string(resp.Body))
+	}
+	if len(payload.Data.Projects) != 1 {
+		t.Fatalf("projects len = %d, want 1 body=%s", len(payload.Data.Projects), string(resp.Body))
+	}
+	blockers := payload.Data.Projects[0].BlockingTasks
+	if len(blockers) != 2 {
+		t.Fatalf("blocking_tasks len = %d, want 2 body=%s", len(blockers), string(resp.Body))
+	}
+	if blockers[0].Reason != "dependency unavailable" {
+		t.Fatalf("blocking_tasks[0].reason = %q, want %q body=%s", blockers[0].Reason, "dependency unavailable", string(resp.Body))
+	}
+	if blockers[1].Reason != "waiting for review" {
+		t.Fatalf("blocking_tasks[1].reason = %q, want %q body=%s", blockers[1].Reason, "waiting for review", string(resp.Body))
 	}
 }
 

@@ -695,6 +695,7 @@ The system actively prevents tasks from getting stuck. A background **supervisor
 - Eligible = `queued` + all dependencies resolved + not at concurrency limit for its required model provider.
 - Priority ordering: sync sessions first, then by task priority (urgent > high > normal > low), then FIFO within the same priority.
 - No task should sit waiting when capacity is available. The queue is checked on every slot release, not on a timer.
+- If there are no active runs, no eligible queued tasks, and no project-scoped pending/claimed jobs left, the control plane must stop presenting the project as healthy active work. When the only remaining live tasks are `blocked`/`review` and at least one blocker remains, dashboards surface the project as `terminal_stalled` and list the blocking tasks plus their reasons.
 
 **Orphaned run recovery:**
 - Detect runs that started (`in_progress`) but never completed: no RunEvents for longer than the run timeout + a grace period (default: 2x the run timeout).

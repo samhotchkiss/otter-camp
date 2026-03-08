@@ -589,8 +589,13 @@ func TestOperatorDashboardBlockedSectionIncludesStrandedExecution(t *testing.T) 
 	}
 
 	payload := decodeOperatorDashboardResponse(t, resp.Body)
-	if payload.Summary.BlockedItems != 1 {
-		t.Fatalf("blocked_items=%d want=1 body=%s", payload.Summary.BlockedItems, string(resp.Body))
+	if payload.Summary.BlockedItems != 2 {
+		t.Fatalf("blocked_items=%d want=2 body=%s", payload.Summary.BlockedItems, string(resp.Body))
+	}
+
+	stallItem := findOperatorDashboardItem(payload.Blocked.Items, "terminal_project_stall", project.ID)
+	if stallItem == nil {
+		t.Fatalf("terminal stalled project item missing body=%s", string(resp.Body))
 	}
 
 	strandedItem := findOperatorDashboardItem(payload.Blocked.Items, "stranded_execution", blockedTask.ID)
@@ -605,6 +610,246 @@ func TestOperatorDashboardBlockedSectionIncludesStrandedExecution(t *testing.T) 
 	}
 	if strandedItem.Links.Task != "/v1/tasks/"+blockedTask.ID.String() {
 		t.Fatalf("stranded task link=%q want=%q body=%s", strandedItem.Links.Task, "/v1/tasks/"+blockedTask.ID.String(), string(resp.Body))
+	}
+}
+
+func TestOperatorDashboardBlockedSectionIncludesTerminalProjectStallWithBlockingReasons(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	inboxRepo := repo.NewInboxItemRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-terminal-stall",
+		DisplayName:    "Ops Dashboard Terminal Stall",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ops-dashboard-terminal-stall-template",
+		DisplayName:    "Ops Dashboard Terminal Stall Template",
+		Description:    "template for terminal stall dashboard tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	createdByID := adminA.ID
+	reviewTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Review final deliverable",
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create review task: %v", err)
+	}
+	blockedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Resolve missing dependency",
+		WorkStatus:     "blocked",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create blocked task: %v", err)
+	}
+	validationBlockedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Retry blocked CLI turn",
+		WorkStatus:     "blocked",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+		Metadata: json.RawMessage(`{
+			"agent_turn_validation_guard": {
+				"blocked": true,
+				"tool_name": "cli.execute",
+				"failure_reason": "command is required",
+				"failure_code": "command_required"
+			}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("create validation blocked task: %v", err)
+	}
+
+	blockerPayload := json.RawMessage(`{"reason":"dependency unavailable"}`)
+	if _, err := inboxRepo.Create(ctx, repo.InboxItem{
+		OrganizationID:  orgA.ID,
+		TargetUserID:    &adminA.ID,
+		ItemType:        "blocker_filed",
+		SourceProjectID: &project.ID,
+		SourceTaskID:    &blockedTask.ID,
+		CreatedByType:   "system",
+		Title:           "Blocker filed",
+		ActionPayload:   blockerPayload,
+	}); err != nil {
+		t.Fatalf("create blocker inbox item: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=12", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	stallItem := findOperatorDashboardItem(payload.Blocked.Items, "terminal_project_stall", project.ID)
+	if stallItem == nil {
+		t.Fatalf("terminal stalled project item missing body=%s", string(resp.Body))
+	}
+	if stallItem.Status != projectOperationalStateTerminalStalled {
+		t.Fatalf("stall item status=%q want=%q body=%s", stallItem.Status, projectOperationalStateTerminalStalled, string(resp.Body))
+	}
+	if stallItem.Links.Project != "/v1/projects/"+project.ID.String() {
+		t.Fatalf("stall project link=%q want=%q body=%s", stallItem.Links.Project, "/v1/projects/"+project.ID.String(), string(resp.Body))
+	}
+	if !strings.Contains(stallItem.Summary, "no active runs or pending jobs remain") {
+		t.Fatalf("stall summary=%q want pending-job detail body=%s", stallItem.Summary, string(resp.Body))
+	}
+
+	blockedReason := findProjectOperationalBlocker(stallItem.BlockingTasks, blockedTask.ID)
+	if blockedReason == nil || blockedReason.Reason != "dependency unavailable" {
+		t.Fatalf("blocked task reason=%v want dependency unavailable body=%s", blockedReason, string(resp.Body))
+	}
+	reviewReason := findProjectOperationalBlocker(stallItem.BlockingTasks, reviewTask.ID)
+	if reviewReason == nil || reviewReason.Reason != "waiting for review" {
+		t.Fatalf("review task reason=%v want waiting for review body=%s", reviewReason, string(resp.Body))
+	}
+	validationReason := findProjectOperationalBlocker(stallItem.BlockingTasks, validationBlockedTask.ID)
+	if validationReason == nil || !strings.Contains(validationReason.Reason, "validation loop blocked") {
+		t.Fatalf("validation task reason=%v want validation blocker detail body=%s", validationReason, string(resp.Body))
+	}
+}
+
+func TestOperatorDashboardDoesNotMarkProjectStalledWhenProjectScopedPendingWorkExists(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	inboxRepo := repo.NewInboxItemRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+
+	createBlockedProject := func(slug string) (repo.Project, repo.FlowTemplate, repo.ProjectTask) {
+		project, err := projectRepo.Create(ctx, repo.Project{
+			OrganizationID: orgA.ID,
+			Slug:           slug,
+			DisplayName:    slug,
+			DeliveryMode:   "gated",
+			CreatedByType:  "human_user",
+			CreatedByID:    adminA.ID,
+		})
+		if err != nil {
+			t.Fatalf("create project %q: %v", slug, err)
+		}
+		template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+			OrganizationID: &orgA.ID,
+			ProjectID:      &project.ID,
+			Slug:           slug + "-template",
+			DisplayName:    slug + " Template",
+			Description:    "template for terminal stall guard tests",
+			IsCurrent:      true,
+			Version:        1,
+			CreatedByType:  "human_user",
+			CreatedByID:    adminA.ID,
+		})
+		if err != nil {
+			t.Fatalf("create flow template for %q: %v", slug, err)
+		}
+		createdByID := adminA.ID
+		blockedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: orgA.ID,
+			ProjectID:      project.ID,
+			Title:          "Blocked task",
+			WorkStatus:     "blocked",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "human_user",
+			CreatedByID:    &createdByID,
+		})
+		if err != nil {
+			t.Fatalf("create blocked task for %q: %v", slug, err)
+		}
+		if _, err := inboxRepo.Create(ctx, repo.InboxItem{
+			OrganizationID:  orgA.ID,
+			TargetUserID:    &adminA.ID,
+			ItemType:        "blocker_filed",
+			SourceProjectID: &project.ID,
+			SourceTaskID:    &blockedTask.ID,
+			CreatedByType:   "system",
+			Title:           "Blocker filed",
+			ActionPayload:   json.RawMessage(`{"reason":"dependency unavailable"}`),
+		}); err != nil {
+			t.Fatalf("create blocker inbox item for %q: %v", slug, err)
+		}
+		return project, template, blockedTask
+	}
+
+	projectWithRunnableQueue, runnableTemplate, _ := createBlockedProject("ops-dashboard-runnable-queued")
+	createdByID := adminA.ID
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      projectWithRunnableQueue.ID,
+		Title:          "Queued follow-up",
+		WorkStatus:     "queued",
+		FlowTemplateID: &runnableTemplate.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	}); err != nil {
+		t.Fatalf("create queued task: %v", err)
+	}
+
+	projectWithPendingJob, _, blockedTaskWithPendingJob := createBlockedProject("ops-dashboard-pending-job")
+	if _, err := testServer.Pool.Exec(ctx, `
+		INSERT INTO job_queue (job_type, payload, status)
+		VALUES ('test.project.pending', $1::jsonb, 'pending')
+	`, json.RawMessage(`{"project_id":"`+projectWithPendingJob.ID.String()+`","task_id":"`+blockedTaskWithPendingJob.ID.String()+`"}`)); err != nil {
+		t.Fatalf("insert pending project job: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=12", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	if item := findOperatorDashboardItem(payload.Blocked.Items, "terminal_project_stall", projectWithRunnableQueue.ID); item != nil {
+		t.Fatalf("queued-work project unexpectedly marked stalled body=%s", string(resp.Body))
+	}
+	if item := findOperatorDashboardItem(payload.Blocked.Items, "terminal_project_stall", projectWithPendingJob.ID); item != nil {
+		t.Fatalf("pending-job project unexpectedly marked stalled body=%s", string(resp.Body))
 	}
 }
 
@@ -918,6 +1163,16 @@ func findOperatorDashboardItem(items []operatorDashboardItemResponse, kind strin
 		case item.Task != nil && item.Task.ID == id:
 			return item
 		case item.Project != nil && item.Project.ID == id:
+			return item
+		}
+	}
+	return nil
+}
+
+func findProjectOperationalBlocker(items []projectOperationalBlockerResponse, taskID uuid.UUID) *projectOperationalBlockerResponse {
+	for i := range items {
+		item := &items[i]
+		if item.ID == taskID {
 			return item
 		}
 	}

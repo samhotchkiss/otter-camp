@@ -635,6 +635,7 @@ create table project (
 ```
 
 - `slug` is a short, unique identifier for the project within the org (e.g., `oc`, `cp`). Assigned at project creation — the PM proposes one, must be unique within the org. Used as the prefix for all task numbering (`OC-1`, `OC-2`, etc.).
+- `project.status` stays coarse-grained (`active` or `archived`). Operator-facing surfaces compute a separate operational state on top of it. When a project has no active run, no eligible queued task, no project-scoped pending/claimed job, and its remaining live tasks are only `blocked`/`review` with at least one true blocker, the project is surfaced as `terminal_stalled` with the blocking task reasons. This is a derived state, not a third persisted `project.status` enum.
 
 ### flow_template
 
