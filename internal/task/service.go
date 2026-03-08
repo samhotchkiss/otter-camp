@@ -620,7 +620,14 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 		return nil, err
 	}
 
-	decision := classifyTaskResumeDecision(taskRecord, s.loadLatestBlockedTaskReason(ctx, taskRecord.ID))
+	blockerReason := s.loadLatestBlockedTaskReason(ctx, taskRecord.ID)
+	checkpointRebuilt := false
+	taskRecord, checkpointRebuilt, err = s.maybeRepairDurableRecoveryCheckpoint(ctx, taskRecord, blockerReason)
+	if err != nil {
+		return nil, err
+	}
+
+	decision := classifyTaskResumeDecision(taskRecord, blockerReason)
 	if !decision.resumable {
 		return nil, TaskResumeBlockedStateError{
 			BlockerClass:  decision.blockerClass,
@@ -639,6 +646,9 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 	payload := map[string]any{
 		"recovery_action":        RecoveryActionResumeBlockedTask,
 		"recovery_blocker_class": decision.blockerClass,
+	}
+	if checkpointRebuilt {
+		payload["recovery_checkpoint_rebuilt"] = true
 	}
 	if reason := strings.TrimSpace(decision.blockerReason); reason != "" {
 		payload["previous_blocker_reason"] = reason

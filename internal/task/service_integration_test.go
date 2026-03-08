@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +23,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 func TestTaskServiceIntegrationStatusLifecycleAndEvents(t *testing.T) {
@@ -593,6 +596,101 @@ func TestTaskServiceIntegrationResumeDurableRecoveryCheckpointQueuesRecoveryEX32
 	}
 }
 
+func TestTaskServiceIntegrationResumeMissingDurableRecoveryCheckpointRepairsFromWorkspaceEX325(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "resume-repair-pm", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "Resume Repair PM", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Repair missing durable checkpoint",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+
+	const (
+		targetPath    = "docs/content-strategy.md"
+		artifactPath  = ".ottercamp/recovery/docs/content-strategy.md"
+		failureReason = "assistant draft for docs/content-strategy.md described tool-recovery troubleshooting instead of the file body"
+	)
+	targetBody := "# Content Strategy\n\n- Focus the first launch on migration-safe editorial workflows.\n"
+	writeTaskRecoveryWorkspaceFiles(t, project.Slug, targetPath, artifactPath, targetBody, failureReason)
+
+	blockerReason := "recovery halted after assistant draft for docs/content-strategy.md described tool-recovery troubleshooting instead of the file body; resume from .ottercamp/recovery/docs/content-strategy.md and re-queue only after concrete content exists"
+	if _, err := svc.MarkBlocked(ctx, created.ID, blockerReason, Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	blocked, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID blocked task: %v", err)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(blocked.Metadata); ok {
+		t.Fatalf("expected blocked task to start without checkpoint metadata, metadata=%s", string(blocked.Metadata))
+	}
+
+	resumed, err := svc.ResumeValidationBlockedTask(ctx, created.ID, Actor{Type: "human_user", ID: pmUser.ID})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumed.Metadata)
+	if !ok {
+		t.Fatalf("expected repaired durable recovery checkpoint, metadata=%s", string(resumed.Metadata))
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if checkpoint.ArtifactPath != artifactPath {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactPath)
+	}
+	if checkpoint.FailureReason != failureReason {
+		t.Fatalf("checkpoint failure_reason = %q, want %q", checkpoint.FailureReason, failureReason)
+	}
+
+	var payload []byte
+	if err := pool.QueryRow(ctx, `
+		SELECT payload
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, created.ID).Scan(&payload); err != nil {
+		t.Fatalf("load latest task event: %v", err)
+	}
+	var eventPayload map[string]any
+	if err := json.Unmarshal(payload, &eventPayload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_blocker_class"])); got != RecoveryBlockerClassDurableRecoveryCheckpoint {
+		t.Fatalf("recovery_blocker_class = %q, want %q", got, RecoveryBlockerClassDurableRecoveryCheckpoint)
+	}
+	if got, ok := eventPayload["recovery_checkpoint_rebuilt"].(bool); !ok || !got {
+		t.Fatalf("recovery_checkpoint_rebuilt = %v, want true", eventPayload["recovery_checkpoint_rebuilt"])
+	}
+}
+
 func TestTaskServiceIntegrationMergeQueueOrderingAndDequeue(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -806,6 +904,46 @@ func newTaskIntegrationService(t *testing.T, pool *pgxpool.Pool) TaskService {
 		t.Fatalf("NewService: %v", err)
 	}
 	return svc
+}
+
+func writeTaskRecoveryWorkspaceFiles(t *testing.T, projectSlug, targetPath, artifactPath, targetBody, failureReason string) {
+	t.Helper()
+
+	root, err := workspace.ProjectRoot("", projectSlug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+	targetAbs := filepath.Join(root, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetBody), 0o644); err != nil {
+		t.Fatalf("write target file: %v", err)
+	}
+
+	artifactAbs := filepath.Join(root, filepath.FromSlash(artifactPath))
+	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	artifactBody := strings.Join([]string{
+		"# Recovery file.write artifact",
+		"",
+		"Task: WS3",
+		"Target Path: " + targetPath,
+		"Generated: " + time.Now().UTC().Format(time.RFC3339Nano),
+		"Reason: Recovery turn halted with a durable file-output checkpoint instead of retrying without a concrete final write.",
+		"",
+		"## Last Write Failure",
+		"",
+		failureReason,
+		"",
+		"## Draft Content",
+		"",
+		strings.TrimRight(targetBody, "\n"),
+	}, "\n")
+	if err := os.WriteFile(artifactAbs, []byte(artifactBody), 0o644); err != nil {
+		t.Fatalf("write artifact file: %v", err)
+	}
 }
 
 func seedTaskServiceOrgProject(t *testing.T, ctx context.Context, pool *pgxpool.Pool, settings json.RawMessage) (repo.Organization, repo.Project) {
