@@ -2307,6 +2307,84 @@ func (e *TurnEngine) currentRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	return &checkpoint, true
 }
 
+func hasRecoveryFileWriteCheckpointState(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) bool {
+	return strings.TrimSpace(checkpoint.TargetPath) != "" ||
+		strings.TrimSpace(checkpoint.ArtifactPath) != "" ||
+		strings.TrimSpace(checkpoint.FailureReason) != "" ||
+		strings.TrimSpace(checkpoint.HistoryStartMessageID) != "" ||
+		strings.TrimSpace(checkpoint.HaltTurnID) != ""
+}
+
+func recoveryCheckpointFromMessageMetadata(metadata json.RawMessage, fallbackReason string) (taskcheckpoint.RecoveryFileWriteCheckpoint, bool) {
+	decoded := messageMetadataMap(metadata)
+	if !tasksvc.IsRecoveryResumeAction(stringValue(decoded["recovery_action"])) {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
+	}
+
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    strings.TrimSpace(stringValue(decoded["recovery_checkpoint_target_path"])),
+		ArtifactPath:  strings.TrimSpace(stringValue(decoded["recovery_checkpoint_artifact_path"])),
+		FailureReason: strings.TrimSpace(stringValue(decoded["recovery_checkpoint_failure_reason"])),
+	}
+	if checkpoint.TargetPath == "" {
+		if targetPath, ok := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); ok {
+			checkpoint.TargetPath = targetPath
+		}
+	}
+	if strings.TrimSpace(checkpoint.TargetPath) == "" && strings.TrimSpace(checkpoint.ArtifactPath) == "" {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
+	}
+	if checkpoint.FailureReason == "" {
+		checkpoint.FailureReason = strings.TrimSpace(fallbackReason)
+	}
+	if !hasRecoveryFileWriteCheckpointState(checkpoint) {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
+	}
+	return checkpoint, true
+}
+
+func (e *TurnEngine) recoveryCheckpointFromInitialMessageMetadata(ctx context.Context, rt *turnRuntime, fallbackReason string) (*taskcheckpoint.RecoveryFileWriteCheckpoint, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.initialMessageID == uuid.Nil {
+		return nil, false
+	}
+	message, err := e.messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil {
+		return nil, false
+	}
+	checkpoint, ok := recoveryCheckpointFromMessageMetadata(message.Metadata, fallbackReason)
+	if !ok {
+		return nil, false
+	}
+	return &checkpoint, true
+}
+
+func (e *TurnEngine) recoveryFileWriteCheckpointCandidate(ctx context.Context, rt *turnRuntime, fallbackReason string) (*taskcheckpoint.RecoveryFileWriteCheckpoint, bool) {
+	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok && hasRecoveryFileWriteCheckpointState(*checkpoint) {
+		candidate := *checkpoint
+		if strings.TrimSpace(candidate.TargetPath) == "" {
+			if targetPath, targetOK := recoveryTargetPathFromArtifact(candidate.ArtifactPath); targetOK {
+				candidate.TargetPath = targetPath
+			}
+		}
+		if strings.TrimSpace(candidate.FailureReason) == "" {
+			candidate.FailureReason = strings.TrimSpace(fallbackReason)
+		}
+		return &candidate, true
+	}
+	if checkpoint, ok := e.recoveryCheckpointFromInitialMessageMetadata(ctx, rt, fallbackReason); ok {
+		return checkpoint, true
+	}
+	targetPath, _, ok := e.recoveryFileOutputContext(ctx, rt)
+	if !ok || strings.TrimSpace(targetPath) == "" {
+		return nil, false
+	}
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    strings.TrimSpace(targetPath),
+		FailureReason: strings.TrimSpace(fallbackReason),
+	}
+	return &checkpoint, true
+}
+
 type recoveryResumeState struct {
 	targetPath    string
 	targetDraft   string
@@ -2337,7 +2415,7 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 }
 
 func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntime) (recoveryResumeState, bool) {
-	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	checkpoint, ok := e.recoveryFileWriteCheckpointCandidate(ctx, rt, "")
 	if !ok {
 		return recoveryResumeState{}, false
 	}
@@ -2553,6 +2631,19 @@ func recoveryTargetPathFromToolOutput(output map[string]any) (string, bool) {
 		return strings.TrimPrefix(normalized, prefix), true
 	}
 	return normalized, false
+}
+
+func recoveryTargetPathFromArtifact(artifactPath string) (string, bool) {
+	normalized := filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(artifactPath))))
+	prefix := recoveryArtifactDir + "/"
+	if !strings.HasPrefix(normalized, prefix) || len(normalized) <= len(prefix) {
+		return "", false
+	}
+	targetPath := strings.TrimPrefix(normalized, prefix)
+	if targetPath == "" || targetPath == "." || targetPath == ".." || strings.HasPrefix(targetPath, "../") {
+		return "", false
+	}
+	return targetPath, true
 }
 
 func (e *TurnEngine) hasQueuedAgentTurnForSession(ctx context.Context, sessionID uuid.UUID, excludeJobID *uuid.UUID) (bool, error) {
@@ -3747,7 +3838,7 @@ func (e *TurnEngine) handleRecoveryContinuationDepthBlocker(ctx context.Context,
 		return false, nil
 	}
 
-	checkpoint, _ := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	checkpoint, _ := e.recoveryFileWriteCheckpointCandidate(ctx, rt, reason)
 	queued, err := e.hasQueuedAgentTurnForSession(ctx, rt.session.ID, rt.currentJobID)
 	if err != nil {
 		return true, err
@@ -3762,8 +3853,18 @@ func (e *TurnEngine) handleRecoveryContinuationDepthBlocker(ctx context.Context,
 		rt.recoveryBlockReason = buildRecoveryContinuationBlockedTaskReason(reason, checkpoint)
 	}
 
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryContinuationBlockedMessage(reason, checkpoint, queued)); err != nil {
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryContinuationBlockedMessage(reason, checkpoint, queued))
+	if err != nil {
 		return true, err
+	}
+	if checkpoint != nil {
+		failureReason := strings.TrimSpace(checkpoint.FailureReason)
+		if failureReason == "" {
+			failureReason = strings.TrimSpace(reason)
+		}
+		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, checkpoint.TargetPath, checkpoint.ArtifactPath, failureReason, message.ID); checkpointErr != nil {
+			return true, checkpointErr
+		}
 	}
 	if err := e.completeTurn(ctx, rt); err != nil {
 		return true, err
