@@ -23,6 +23,9 @@ func TestParseRecoveryFileWriteCheckpoint(t *testing.T) {
 	if checkpoint.ArtifactPath != ".ottercamp/recovery/docs/content-strategy.md" {
 		t.Fatalf("artifact_path = %q, want recovery artifact path", checkpoint.ArtifactPath)
 	}
+	if checkpoint.BlockerClass != RecoveryFileWriteBlockerClassDurableCheckpoint {
+		t.Fatalf("blocker_class = %q, want %q", checkpoint.BlockerClass, RecoveryFileWriteBlockerClassDurableCheckpoint)
+	}
 	if checkpoint.FailureReason != "" {
 		t.Fatalf("failure_reason = %q, want empty default", checkpoint.FailureReason)
 	}
@@ -84,9 +87,10 @@ func TestRecoveryFileWritePromptStrategyLines(t *testing.T) {
 
 func TestRecoveryFileWritePromptStrategyLinesHardensRejectedDraftResume(t *testing.T) {
 	lines := RecoveryFileWritePromptStrategyLines(&RecoveryFileWriteCheckpoint{
-		TargetPath:    "docs/content-strategy.md",
-		ArtifactPath:  ".ottercamp/recovery/docs/content-strategy.md",
-		FailureReason: "repeated intent-only recovery drafts for docs/content-strategy.md across explicit resume attempts; latest assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body",
+		TargetPath:          "docs/content-strategy.md",
+		ArtifactPath:        ".ottercamp/recovery/docs/content-strategy.md",
+		FailureReason:       "repeated intent-only recovery drafts for docs/content-strategy.md across explicit resume attempts; latest assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body",
+		PriorFailureReasons: []string{"assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body"},
 	})
 	text := strings.Join(lines, "\n")
 	if !strings.Contains(text, "rejected a non-substantive draft") {
@@ -97,5 +101,30 @@ func TestRecoveryFileWritePromptStrategyLinesHardensRejectedDraftResume(t *testi
 	}
 	if !strings.Contains(text, "hardened blocker state") {
 		t.Fatalf("prompt lines missing repeated-draft blocker guidance:\n%s", text)
+	}
+	if !strings.Contains(text, "Prior recovery failure history") {
+		t.Fatalf("prompt lines missing prior failure history:\n%s", text)
+	}
+}
+
+func TestRecoveryFileWriteFailureHistoryDeduplicatesCurrentFailure(t *testing.T) {
+	checkpoint := NormalizeRecoveryFileWriteCheckpoint(RecoveryFileWriteCheckpoint{
+		TargetPath:          "docs/content-strategy.md",
+		ArtifactPath:        ".ottercamp/recovery/docs/content-strategy.md",
+		FailureReason:       "repeated intent-only recovery drafts for docs/content-strategy.md across explicit resume attempts; latest assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body",
+		PriorFailureReasons: []string{"assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body", "assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body"},
+	})
+	if checkpoint.BlockerClass != RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint {
+		t.Fatalf("blocker_class = %q, want %q", checkpoint.BlockerClass, RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint)
+	}
+	history := RecoveryFileWriteFailureHistory(&checkpoint)
+	if len(history) != 2 {
+		t.Fatalf("failure history len = %d, want 2 history=%v", len(history), history)
+	}
+	if history[0] != "assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body" {
+		t.Fatalf("failure history[0] = %q, want prior failure", history[0])
+	}
+	if history[1] != checkpoint.FailureReason {
+		t.Fatalf("failure history[1] = %q, want current failure", history[1])
 	}
 }

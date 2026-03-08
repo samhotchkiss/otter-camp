@@ -17,6 +17,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
@@ -661,14 +662,8 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 	}
 	if checkpoint := decision.checkpoint; checkpoint != nil {
 		payload["recovery_checkpoint_present"] = true
-		if targetPath := strings.TrimSpace(checkpoint.TargetPath); targetPath != "" {
-			payload["recovery_checkpoint_target_path"] = targetPath
-		}
-		if artifactPath := strings.TrimSpace(checkpoint.ArtifactPath); artifactPath != "" {
-			payload["recovery_checkpoint_artifact_path"] = artifactPath
-		}
-		if failureReason := strings.TrimSpace(checkpoint.FailureReason); failureReason != "" {
-			payload["recovery_checkpoint_failure_reason"] = failureReason
+		for key, value := range recoveryCheckpointPayload(*checkpoint) {
+			payload[key] = value
 		}
 	}
 	return s.transitionTaskRecord(ctx, taskRecord, "queued", actor, payload, false)
@@ -1016,9 +1011,21 @@ func (s *service) RejectTask(ctx context.Context, taskID, actedByUserID uuid.UUI
 }
 
 func (s *service) MarkBlocked(ctx context.Context, taskID uuid.UUID, reason string, actor Actor) (*ProjectTask, error) {
-	blocked, err := s.transitionStatus(ctx, taskID, "blocked", actor, map[string]any{
+	taskRecord, err := s.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := map[string]any{
 		"blocker_reason": strings.TrimSpace(reason),
-	}, false)
+	}
+	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+		for key, value := range recoveryCheckpointPayload(checkpoint) {
+			payload[key] = value
+		}
+	}
+
+	blocked, err := s.transitionTaskRecord(ctx, taskRecord, "blocked", actor, payload, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1627,6 +1634,27 @@ func pointerString(value string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func recoveryCheckpointPayload(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) map[string]any {
+	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
+	payload := map[string]any{}
+	if blockerClass := taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpoint); blockerClass != "" {
+		payload["recovery_blocker_class"] = blockerClass
+	}
+	if targetPath := strings.TrimSpace(checkpoint.TargetPath); targetPath != "" {
+		payload["recovery_checkpoint_target_path"] = targetPath
+	}
+	if artifactPath := strings.TrimSpace(checkpoint.ArtifactPath); artifactPath != "" {
+		payload["recovery_checkpoint_artifact_path"] = artifactPath
+	}
+	if failureReason := strings.TrimSpace(checkpoint.FailureReason); failureReason != "" {
+		payload["recovery_checkpoint_failure_reason"] = failureReason
+	}
+	if len(checkpoint.PriorFailureReasons) != 0 {
+		payload["recovery_checkpoint_prior_failure_reasons"] = append([]string(nil), checkpoint.PriorFailureReasons...)
+	}
+	return payload
 }
 
 func uuidStrings(ids []uuid.UUID) []string {

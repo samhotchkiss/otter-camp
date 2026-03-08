@@ -5400,7 +5400,7 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
 		t.Fatalf("mkdir artifact dir: %v", err)
 	}
-	artifactDoc := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetPath, artifactDraft, priorFailureReason, time.Now().UTC())
+	artifactDoc := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetPath, artifactDraft, priorFailureReason, nil, time.Now().UTC())
 	if err := os.WriteFile(artifactAbs, []byte(artifactDoc), 0o644); err != nil {
 		t.Fatalf("write recovery artifact: %v", err)
 	}
@@ -5567,8 +5567,39 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	if checkpoint.ArtifactPath != artifactRel {
 		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactRel)
 	}
+	if checkpoint.BlockerClass != taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint {
+		t.Fatalf("checkpoint blocker_class = %q, want %q", checkpoint.BlockerClass, taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint)
+	}
 	if !strings.Contains(checkpoint.FailureReason, "repeated intent-only recovery drafts for docs/content-strategy.md") {
 		t.Fatalf("checkpoint failure_reason = %q, want repeated intent-only blocker", checkpoint.FailureReason)
+	}
+	if len(checkpoint.PriorFailureReasons) != 1 || checkpoint.PriorFailureReasons[0] != priorFailureReason {
+		t.Fatalf("checkpoint prior_failure_reasons = %v, want [%q]", checkpoint.PriorFailureReasons, priorFailureReason)
+	}
+
+	var blockedPayloadRaw []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, taskRecord.ID).Scan(&blockedPayloadRaw); err != nil {
+		t.Fatalf("load blocked task payload: %v", err)
+	}
+	var blockedPayload map[string]any
+	if err := json.Unmarshal(blockedPayloadRaw, &blockedPayload); err != nil {
+		t.Fatalf("unmarshal blocked task payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", blockedPayload["to_status"])); got != "blocked" {
+		t.Fatalf("blocked payload to_status = %q, want blocked", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", blockedPayload["recovery_blocker_class"])); got != tasksvc.RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint {
+		t.Fatalf("blocked payload recovery_blocker_class = %q, want %q", got, tasksvc.RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint)
+	}
+	if got := anyStrings(blockedPayload["recovery_checkpoint_prior_failure_reasons"]); len(got) != 1 || got[0] != priorFailureReason {
+		t.Fatalf("blocked payload prior_failure_reasons = %v, want [%q]", got, priorFailureReason)
 	}
 
 	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
@@ -5621,6 +5652,266 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	}
 	if toolResults != 0 {
 		t.Fatalf("file.write tool_results = %d, want 0", toolResults)
+	}
+
+	resumedAgain, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask after hardened blocker: %v", err)
+	}
+	if resumedAgain.WorkStatus != "queued" {
+		t.Fatalf("resumedAgain work_status = %q, want queued", resumedAgain.WorkStatus)
+	}
+	resumedAgainCheckpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumedAgain.Metadata)
+	if !ok {
+		t.Fatalf("expected checkpoint after hardened resume, metadata=%s", string(resumedAgain.Metadata))
+	}
+	if resumedAgainCheckpoint.BlockerClass != taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint {
+		t.Fatalf("resumedAgain checkpoint blocker_class = %q, want %q", resumedAgainCheckpoint.BlockerClass, taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint)
+	}
+	if len(resumedAgainCheckpoint.PriorFailureReasons) != 1 || resumedAgainCheckpoint.PriorFailureReasons[0] != priorFailureReason {
+		t.Fatalf("resumedAgain checkpoint prior_failure_reasons = %v, want [%q]", resumedAgainCheckpoint.PriorFailureReasons, priorFailureReason)
+	}
+
+	var resumePayloadRaw []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, taskRecord.ID).Scan(&resumePayloadRaw); err != nil {
+		t.Fatalf("load resume payload after hardened blocker: %v", err)
+	}
+	var resumePayload map[string]any
+	if err := json.Unmarshal(resumePayloadRaw, &resumePayload); err != nil {
+		t.Fatalf("unmarshal resume payload after hardened blocker: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", resumePayload["to_status"])); got != "queued" {
+		t.Fatalf("resume payload to_status = %q, want queued", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", resumePayload["recovery_blocker_class"])); got != tasksvc.RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint {
+		t.Fatalf("resume payload recovery_blocker_class = %q, want %q", got, tasksvc.RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint)
+	}
+	if got := anyStrings(resumePayload["recovery_checkpoint_prior_failure_reasons"]); len(got) != 1 || got[0] != priorFailureReason {
+		t.Fatalf("resume payload prior_failure_reasons = %v, want [%q]", got, priorFailureReason)
+	}
+}
+
+func TestTurnEngineIntegrationRepeatedIntentRecoveryLegacyStopReasonFallbackStillPersistsHardenedBlockerEX330(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	if _, err := fixture.pool.Exec(ctx, `
+		ALTER TABLE chat_turn
+			DROP CONSTRAINT IF EXISTS chat_turn_stop_reason_check;
+		ALTER TABLE chat_turn
+			ADD CONSTRAINT chat_turn_stop_reason_check
+			CHECK (
+				stop_reason IS NULL
+				OR stop_reason IN (
+					'max_tool_calls',
+					'max_duration',
+					'user_cancelled',
+					'user_steered',
+					'model_error',
+					'session_closed',
+					'validation_loop_blocked'
+				)
+			);
+	`); err != nil {
+		t.Fatalf("set legacy chat_turn stop_reason constraint: %v", err)
+	}
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, initialUserMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	const targetPath = "docs/content-strategy.md"
+	const priorPlaceholder = "Excellent. I now have a thorough understanding of the strategic direction for Sam.blog. Let me write the full document now."
+	const priorFailureReason = "assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body"
+	const repeatedPlaceholder = "Ready to draft the comprehensive content strategy for Sam.blog. This is the deliverable that unblocks WS4 and sets the strategic direction for the project."
+
+	artifactDraft := strings.TrimSpace(`# Content Strategy
+
+## Core Promise
+Sam.blog publishes one durable operating system for thoughtful parents building resilient families and meaningful work.
+`)
+
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(priorPlaceholder), 0o644); err != nil {
+		t.Fatalf("write placeholder target draft: %v", err)
+	}
+
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	artifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
+	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	artifactDoc := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetPath, artifactDraft, priorFailureReason, nil, time.Now().UTC())
+	if err := os.WriteFile(artifactAbs, []byte(artifactDoc), 0o644); err != nil {
+		t.Fatalf("write recovery artifact: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task before checkpoint seed: %v", err)
+	}
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(currentTask.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:            targetPath,
+		ArtifactPath:          artifactRel,
+		FailureReason:         priorFailureReason,
+		HistoryStartMessageID: initialUserMessage.ID.String(),
+		HaltTurnID:            uuid.NewString(),
+		UpdatedAt:             time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	currentTask.Metadata = checkpointMetadata
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update task with recovery checkpoint: %v", err)
+	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	blockerReason := "recovery halted after assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body; resume from .ottercamp/recovery/docs/content-strategy.md and re-queue only after concrete content exists"
+	if _, err := taskService.MarkBlocked(ctx, taskRecord.ID, blockerReason, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+	if _, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+
+	resumedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	resumedTask.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
+		t.Fatalf("Update resumed task in_progress: %v", err)
+	}
+
+	authorType := "human_user"
+	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(taskRecord),
+		Metadata: mustJSON(t, map[string]any{
+			"source":                    "task_queue_processor",
+			"recovery_action":           "resume_validation_blocked_task",
+			"validation_tool_name":      "cli.execute",
+			"validation_failure_code":   "command_required",
+			"validation_failure_reason": "command is required",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage recovery kickoff: %v", err)
+	}
+
+	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	fixture.engine.assembler = assembler
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{
+			Content: repeatedPlaceholder,
+			ToolCalls: []ModelToolCall{{
+				ID:   "resume-write",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path": targetPath,
+				},
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		t.Fatalf("unexpected tier2 dispatch for legacy repeated intent-only recovery draft: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage legacy repeated intent-only recovery resume: %v", err)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
+	}
+	lastTurn := turns[len(turns)-1]
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != "model_error" {
+		t.Fatalf("legacy stop_reason = %q, want model_error fallback", gotStopReason)
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after legacy repeated intent-only recovery draft: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatalf("expected checkpoint metadata after legacy repeated recovery draft, metadata=%s", string(updatedTask.Metadata))
+	}
+	if checkpoint.BlockerClass != taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint {
+		t.Fatalf("checkpoint blocker_class = %q, want %q", checkpoint.BlockerClass, taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint)
+	}
+	if len(checkpoint.PriorFailureReasons) != 1 || checkpoint.PriorFailureReasons[0] != priorFailureReason {
+		t.Fatalf("checkpoint prior_failure_reasons = %v, want [%q]", checkpoint.PriorFailureReasons, priorFailureReason)
+	}
+
+	var blockedPayloadRaw []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, taskRecord.ID).Scan(&blockedPayloadRaw); err != nil {
+		t.Fatalf("load legacy blocked payload: %v", err)
+	}
+	var blockedPayload map[string]any
+	if err := json.Unmarshal(blockedPayloadRaw, &blockedPayload); err != nil {
+		t.Fatalf("unmarshal legacy blocked payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", blockedPayload["recovery_blocker_class"])); got != tasksvc.RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint {
+		t.Fatalf("legacy blocked payload recovery_blocker_class = %q, want %q", got, tasksvc.RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint)
+	}
+	if got := anyStrings(blockedPayload["recovery_checkpoint_prior_failure_reasons"]); len(got) != 1 || got[0] != priorFailureReason {
+		t.Fatalf("legacy blocked payload prior_failure_reasons = %v, want [%q]", got, priorFailureReason)
 	}
 }
 
@@ -7074,7 +7365,7 @@ Sam.blog should publish one durable operating system for thoughtful parents buil
 	if err := os.MkdirAll(filepath.Dir(seed.artifactAbs), 0o755); err != nil {
 		t.Fatalf("mkdir artifact dir: %v", err)
 	}
-	artifactDoc := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), seed.targetPath, seed.artifactDraft, seed.failureReason, time.Now().UTC())
+	artifactDoc := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), seed.targetPath, seed.artifactDraft, seed.failureReason, nil, time.Now().UTC())
 	if err := os.WriteFile(seed.artifactAbs, []byte(artifactDoc), 0o644); err != nil {
 		t.Fatalf("write recovery artifact: %v", err)
 	}
