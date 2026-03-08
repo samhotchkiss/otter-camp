@@ -263,8 +263,11 @@ func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn
 	turnRepo := repo.NewChatTurnRepo(fx.pool)
 
 	var (
-		session *repo.ChatSession
-		turns   []repo.ChatTurn
+		session       *repo.ChatSession
+		turns         []repo.ChatTurn
+		kickoffMeta   map[string]any
+		foundKickoff  bool
+		foundResponse bool
 	)
 	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
 		current, err := taskRepo.GetByID(ctx, created.ID)
@@ -290,13 +293,15 @@ func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn
 		if err != nil {
 			return false, err
 		}
-		foundKickoff := false
-		foundResponse := false
+		foundKickoff = false
+		foundResponse = false
+		kickoffMeta = nil
 		for _, message := range messages {
 			if message.Role == "user" && len(message.Metadata) > 0 {
 				var metadata map[string]any
 				if err := json.Unmarshal(message.Metadata, &metadata); err == nil && metadata["source"] == "task_queue_processor" {
 					foundKickoff = true
+					kickoffMeta = metadata
 				}
 			}
 			if message.Role == "assistant" && message.Status == "final" && message.Content == "Task started." {
@@ -325,6 +330,15 @@ func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn
 	}
 	if turns[len(turns)-1].Status != "completed" {
 		t.Fatalf("latest turn status = %q, want completed", turns[len(turns)-1].Status)
+	}
+	if kickoffMeta == nil {
+		t.Fatal("expected kickoff metadata after validation resume")
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", kickoffMeta["recovery_action"])); got != "resume_validation_blocked_task" {
+		t.Fatalf("kickoff recovery_action = %q, want %q", got, "resume_validation_blocked_task")
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", kickoffMeta["validation_failure_code"])); got != "command_required" {
+		t.Fatalf("kickoff validation_failure_code = %q, want %q", got, "command_required")
 	}
 }
 

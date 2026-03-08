@@ -59,6 +59,7 @@ const (
 	stopReasonRecoveryCLIRejected   = "model_error"
 	stopReasonRecoveryFileRejected  = "recovery_content_required"
 	stopReasonValidationBlocked     = "validation_loop_blocked"
+	recoveryActionValidationResume  = "resume_validation_blocked_task"
 	workerPromptTokenGuardrail      = 32000
 	defaultPromptTokenGuardrail     = 64000
 	validationLoopBlockThreshold    = 3
@@ -2674,10 +2675,13 @@ func isRecoveryResumeMessage(message repo.ChatMessage) bool {
 	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 		return false
 	}
+	metadata := messageMetadataMap(message.Metadata)
+	if strings.EqualFold(strings.TrimSpace(stringValue(metadata["recovery_action"])), recoveryActionValidationResume) {
+		return true
+	}
 	if strings.EqualFold(strings.TrimSpace(message.Content), "supervisor recovery: resume task") {
 		return true
 	}
-	metadata := messageMetadataMap(message.Metadata)
 	if strings.ToLower(stringValue(metadata["source"])) != "supervisor" {
 		return false
 	}
