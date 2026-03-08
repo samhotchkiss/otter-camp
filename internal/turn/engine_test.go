@@ -2465,6 +2465,17 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "tool-recovery troubleshooting",
 		},
 		{
+			name: "rejects intent narration placeholder",
+			content: "Now I have everything I need. Let me write the comprehensive content strategy document. " +
+				"This needs to be the single deliverable that unblocks WS4 and serves as the strategic foundation for Sam.blog.",
+			want: "intent to write the deliverable",
+		},
+		{
+			name:    "accepts first-person file body",
+			content: "I will write at dawn because the house is quiet and the work still matters.",
+			want:    "",
+		},
+		{
 			name: "accepts substantive draft body",
 			content: `# Content Strategy
 
