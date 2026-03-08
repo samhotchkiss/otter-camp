@@ -1226,6 +1226,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		chunkSeq := int64(0)
 		response, err := e.callMainModel(ctx, rt, profile, assembled, assistantMessage, &chunkSeq)
 		if err != nil {
+			if handled, handleErr := e.handleTaskScopedProviderAuthFailure(ctx, rt, err); handled {
+				return handleErr
+			}
 			if errors.Is(err, context.Canceled) {
 				return e.handleCancellation(ctx, rt)
 			}
@@ -2099,6 +2102,43 @@ func (e *TurnEngine) hasQueuedAgentTurnForSession(ctx context.Context, sessionID
 		return false, err
 	}
 	return queued, nil
+}
+
+func (e *TurnEngine) handleTaskScopedProviderAuthFailure(ctx context.Context, rt *turnRuntime, cause error) (bool, error) {
+	if rt == nil || rt.turn == nil || rt.session == nil || !errors.Is(cause, ErrAuthFailed) {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+
+	rt.stopReason = stopReasonRecoveryCLIRejected
+	rt.recoveryBlockReason = buildProviderAuthBlockedTaskReason(rt.recoveryTurn)
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProviderAuthRejectedMessage(rt.recoveryTurn)); err != nil {
+		return true, err
+	}
+	if err := e.ensureRecoveryTurnDurableTaskState(ctx, rt); err != nil {
+		return true, err
+	}
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func buildProviderAuthRejectedMessage(recoveryTurn bool) string {
+	prefix := "Task turn halted"
+	if recoveryTurn {
+		prefix = "Recovery turn halted"
+	}
+	return fmt.Sprintf("[%s: provider authentication failed and no healthy enabled fallback connection could continue the work. The task is now blocked. Fix or disable the failing provider credential, then resume the task.]", prefix)
+}
+
+func buildProviderAuthBlockedTaskReason(recoveryTurn bool) string {
+	if recoveryTurn {
+		return "recovery halted after provider authentication failed on every eligible model connection; fix or disable the failing credential before resuming the task"
+	}
+	return "task blocked after provider authentication failed on every eligible model connection; fix or disable the failing credential before re-queueing the task"
 }
 
 func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turnRuntime) (string, bool) {
@@ -3964,7 +4004,10 @@ func shouldSuppressAutoContinuationForStopReason(stopReason *string) bool {
 }
 
 func (e *TurnEngine) ensureRecoveryTurnDurableTaskState(ctx context.Context, rt *turnRuntime) error {
-	if e == nil || e.tasks == nil || rt == nil || !rt.recoveryTurn || rt.session == nil || rt.turn == nil {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return nil
+	}
+	if !rt.recoveryTurn && strings.TrimSpace(rt.recoveryBlockReason) == "" {
 		return nil
 	}
 	if rt.recoveryQueuedTurn {
@@ -3986,6 +4029,9 @@ func (e *TurnEngine) ensureRecoveryTurnDurableTaskState(ctx context.Context, rt 
 	}
 
 	if reason == "" {
+		if !rt.recoveryTurn {
+			return nil
+		}
 		if !shouldSuppressAutoContinuationForStopReason(rt.turn.StopReason) {
 			return nil
 		}

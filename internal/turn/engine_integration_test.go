@@ -2169,6 +2169,72 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnFallsBackStopReasonForLegacyC
 	}
 }
 
+func TestTurnEngineIntegrationTaskQueueRecoveryTurnBlocksOnProviderAuthFailureEX318(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{}, ErrAuthFailed
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1 bounded auth failure", modelCalls)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded turn", len(turns))
+	}
+	lastTurn := turns[0]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != stopReasonRecoveryCLIRejected {
+		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryCLIRejected)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var haltMessages int
+	for _, item := range messages {
+		if item.Role == "system" && strings.Contains(item.Content, "provider authentication failed and no healthy enabled fallback connection could continue the work") {
+			haltMessages++
+		}
+	}
+	if haltMessages != 1 {
+		t.Fatalf("provider auth halt messages = %d, want 1", haltMessages)
+	}
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0 after bounded auth halt", fixture.model.continuationSummaryCalls)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryFileWriteCheckpointPersistsAtConfiguredDataDirAndGuidesNextAttemptEX315(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

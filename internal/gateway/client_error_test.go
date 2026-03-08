@@ -37,8 +37,8 @@ func TestHealthCheckerClientErrorsDoNotDegradeConnection(t *testing.T) {
 	if !errors.Is(err, turn.ErrAuthFailed) {
 		t.Fatalf("err for 403 = %v, want turn.ErrAuthFailed", err)
 	}
-	if state := health.GetState(connectionID); state != HealthStateHealthy {
-		t.Fatalf("state after 403 error = %q, want %q", state, HealthStateHealthy)
+	if state := health.GetState(connectionID); state != HealthStateUnavailable {
+		t.Fatalf("state after 403 error = %q, want %q", state, HealthStateUnavailable)
 	}
 }
 

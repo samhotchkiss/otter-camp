@@ -73,6 +73,7 @@ type taskQueueRunStarter interface {
 	CreateExecutionWakeup(ctx context.Context, input executionWakeupInput) (executionWakeupResult, error)
 	StartRun(ctx context.Context, runID uuid.UUID) error
 	CompleteRun(ctx context.Context, runID uuid.UUID, output json.RawMessage) error
+	FailRun(ctx context.Context, runID uuid.UUID, reason, failureClass string) error
 	ConfirmCancelled(ctx context.Context, runID uuid.UUID) error
 	GetRun(ctx context.Context, runID uuid.UUID) (Run, error)
 	ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]Run, error)
@@ -843,9 +844,9 @@ func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNod
 	return base + "\n\nFlow node execution: " + execution.ID.String()
 }
 
-// SubscribeTaskCompleted subscribes to task terminal status events and completes
-// any in_progress scheduler runs for the task. This ensures scheduler runs created
-// by ensureFlowRun are properly closed when the task finishes via flow.advance.
+// SubscribeTaskCompleted subscribes to task status events that should settle
+// tracking runs. Terminal task outcomes complete or retire runtime state; blocked
+// outcomes fail the active tracking runs so supervisor recovery does not churn.
 func (p *TaskQueueProcessor) SubscribeTaskCompleted(orgID *uuid.UUID) eventbus.Subscription {
 	return p.events.Subscribe(taskCompletedConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
 		return p.handleTaskCompletedEvent(ctx, event)
@@ -858,16 +859,17 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 	}
 
 	var payload struct {
-		TaskID    uuid.UUID `json:"task_id"`
-		ProjectID uuid.UUID `json:"project_id"`
-		ToStatus  string    `json:"to_status"`
+		TaskID        uuid.UUID `json:"task_id"`
+		ProjectID     uuid.UUID `json:"project_id"`
+		ToStatus      string    `json:"to_status"`
+		BlockerReason string    `json:"blocker_reason"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return nil
 	}
 
 	toStatus := strings.ToLower(strings.TrimSpace(payload.ToStatus))
-	if toStatus != "done" && toStatus != "cancelled" {
+	if toStatus != "done" && toStatus != "cancelled" && toStatus != "blocked" {
 		return nil
 	}
 	if payload.TaskID == uuid.Nil || event.OrganizationID == uuid.Nil {
@@ -875,9 +877,18 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 	}
 
 	for _, triggerType := range []string{taskQueueTriggerType, taskSupervisorTriggerType} {
-		// Complete any in_progress tracking runs for this task.
+		// Complete terminal task tracking runs, or fail them permanently when the
+		// task moved to blocked so recovery does not keep waking the same work.
 		if runs, err := p.runs.ListRunsByTask(ctx, event.OrganizationID, payload.TaskID, "in_progress", triggerType); err == nil {
 			for _, r := range runs {
+				if toStatus == "blocked" {
+					reason := strings.TrimSpace(payload.BlockerReason)
+					if reason == "" {
+						reason = "task blocked"
+					}
+					_ = p.runs.FailRun(ctx, r.ID, reason, string(FailureClassPermanent))
+					continue
+				}
 				_ = p.runs.CompleteRun(ctx, r.ID, json.RawMessage(`{"source":"task_completed_handler","task_status":"`+toStatus+`"}`))
 			}
 		}
@@ -887,6 +898,9 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 				_ = p.runs.ConfirmCancelled(ctx, r.ID)
 			}
 		}
+	}
+	if toStatus == "blocked" {
+		return nil
 	}
 	if err := p.runs.RetireRuntimeStateForTask(ctx, payload.TaskID, toStatus); err != nil {
 		return err
@@ -1059,10 +1073,20 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") || session.ScopeID == uuid.Nil {
 		return nil
 	}
+	taskRecord, err := p.tasks.GetByID(ctx, session.ScopeID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 
 	result, err := p.runs.ReleaseExecutionOwner(ctx, session.ScopeID, session.ID, event.EventType)
 	if err != nil {
 		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
+		return nil
 	}
 	if !result.shouldDispatch() {
 		return nil
