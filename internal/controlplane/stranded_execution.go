@@ -12,6 +12,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 )
 
 const (
@@ -122,6 +123,13 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 		JOIN project_task t ON t.id = e.task_id
 		LEFT JOIN chat_session s ON s.id = e.session_id
 		LEFT JOIN chat_turn turn_row ON turn_row.id = s.current_turn_id
+		LEFT JOIN LATERAL (
+			SELECT ct.id, ct.status
+			FROM chat_turn ct
+			WHERE ct.session_id = s.id
+			ORDER BY ct.turn_number DESC, ct.created_at DESC, ct.id DESC
+			LIMIT 1
+		) latest_turn ON true
 		LEFT JOIN runtime_state rs
 		  ON rs.scope_type = 'task'
 		 AND rs.scope_id = t.id
@@ -147,6 +155,13 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 			OR COALESCE(turn_row.status, '') NOT IN ('pending', 'in_progress')
 		  )
 		  AND COALESCE(s.last_message_at, s.updated_at, t.updated_at, e.started_at) < $1
+	`
+	query += `
+		  AND NOT (
+			latest_turn.id IS NOT NULL
+			AND COALESCE(latest_turn.status, '') = 'completed'
+			AND COALESCE(t.metadata->'` + taskcheckpoint.RecoveryFileWriteMetadataKey + `'->>'halt_turn_id', '') = latest_turn.id::text
+		  )
 	`
 
 	args := []any{cutoff.UTC()}

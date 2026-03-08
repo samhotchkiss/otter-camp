@@ -289,7 +289,8 @@ type ProfileResolver interface {
 }
 
 type Options struct {
-	Pool *pgxpool.Pool
+	Pool    *pgxpool.Pool
+	DataDir string
 
 	Chat          ChatService
 	ToolResolver  ToolResolver
@@ -330,6 +331,7 @@ type Options struct {
 }
 
 type TurnEngine struct {
+	dataDir       string
 	chat          ChatService
 	toolResolver  ToolResolver
 	assembler     PromptAssembler
@@ -537,6 +539,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	}
 
 	return &TurnEngine{
+		dataDir:               strings.TrimSpace(opts.DataDir),
 		chat:                  opts.Chat,
 		toolResolver:          opts.ToolResolver,
 		assembler:             opts.Assembler,
@@ -1471,7 +1474,7 @@ func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *t
 	if err != nil {
 		return false, err
 	}
-	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	workspaceRoot, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
 	if err != nil {
 		return false, err
 	}
@@ -1981,8 +1984,12 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 				"error", artifactErr,
 			)
 		}
-		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath)); err != nil {
+		message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath))
+		if err != nil {
 			return true, true, err
+		}
+		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, message.ID); checkpointErr != nil {
+			return true, true, checkpointErr
 		}
 		return true, true, nil
 	}
@@ -2118,7 +2125,7 @@ func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *t
 	if err != nil {
 		return "", err
 	}
-	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	workspaceRoot, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
 	if err != nil {
 		return "", err
 	}
@@ -2138,7 +2145,84 @@ func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *t
 	if err := os.WriteFile(artifactAbs, []byte(document), 0o644); err != nil {
 		return "", err
 	}
+	if _, err := os.Stat(artifactAbs); err != nil {
+		return "", err
+	}
 	return artifactRel, nil
+}
+
+func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt *turnRuntime, targetPath, artifactPath string, messageID uuid.UUID) error {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return nil
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return err
+	}
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:            strings.TrimSpace(targetPath),
+		ArtifactPath:          strings.TrimSpace(artifactPath),
+		HistoryStartMessageID: messageID.String(),
+		HaltTurnID:            rt.turn.ID.String(),
+		UpdatedAt:             e.now().UTC().Format(time.RFC3339Nano),
+	}
+	merged, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, checkpoint)
+	if err != nil {
+		return err
+	}
+	taskRecord.Metadata = merged
+	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+		return err
+	}
+	rt.historyStartID = &messageID
+	return nil
+}
+
+func (e *TurnEngine) maybeClearRecoveryFileWriteCheckpoint(ctx context.Context, rt *turnRuntime, result ToolResult) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.write") || strings.TrimSpace(result.Error) != "" {
+		return false, nil
+	}
+	writtenPath := strings.TrimSpace(stringValue(result.Output["path"]))
+	if writtenPath == "" {
+		return false, nil
+	}
+
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return false, err
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		return false, nil
+	}
+	if !sameWorkspaceRelativePath(checkpoint.TargetPath, writtenPath) {
+		return false, nil
+	}
+	cleared, err := taskcheckpoint.ClearRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if err != nil {
+		return false, err
+	}
+	taskRecord.Metadata = cleared
+	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func sameWorkspaceRelativePath(left, right string) bool {
+	return filepath.Clean(filepath.FromSlash(strings.TrimSpace(left))) == filepath.Clean(filepath.FromSlash(strings.TrimSpace(right)))
 }
 
 func resolveRecoveryWorkspacePath(root, relOrAbsPath string) (string, string, error) {
@@ -2265,6 +2349,11 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, instruction); err != nil {
 				return err
 			}
+		}
+		if cleared, clearErr := e.maybeClearRecoveryFileWriteCheckpoint(ctx, rt, result); clearErr != nil {
+			return clearErr
+		} else if cleared {
+			rt.historyStartID = nil
 		}
 	}
 	return nil

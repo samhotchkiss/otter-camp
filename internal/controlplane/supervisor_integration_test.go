@@ -15,6 +15,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
@@ -688,6 +689,174 @@ func TestSupervisor_StrandedActiveExecutionRecoveryRestoresLiveTurn(t *testing.T
 	}
 	if refreshedExecution.Status != "active" {
 		t.Fatalf("execution status = %q, want active", refreshedExecution.Status)
+	}
+}
+
+func TestSupervisor_StrandedActiveExecutionSkipsUnresolvedRecoveryCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord := seedRunProject(t, ctx, pool, org.ID)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Recovery Worker")
+	template, node := seedSupervisorFlowTemplateNode(t, ctx, pool, org.ID, projectRecord.ID, nil, nil)
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         projectRecord.ID,
+		Title:             "Recover stranded execution",
+		WorkStatus:        "in_progress",
+		CurrentFlowNodeID: &node.ID,
+		FlowTemplateID:    &template.ID,
+		AssignedAgentID:   &worker.ID,
+		CreatedByType:     "system",
+		CreatedByID:       nil,
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("chat.NewService: %v", err)
+	}
+	session, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"supervisor_integration"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := chatService.AddParticipant(ctx, session.ID, "agent", worker.ID, "responder"); err != nil {
+		t.Fatalf("AddParticipant: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  node.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	turn, err := chatService.CreateTurn(ctx, session.ID, worker.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := chatService.StartTurn(ctx, turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	if _, err := chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "system",
+		Content:   "[Recovery turn halted: file.write for `docs/content-strategy.md` was retried without `content` after one correction. Resume from `.ottercamp/recovery/docs/content-strategy.md` and only retry the final write after the file body exists.]",
+	}); err != nil {
+		t.Fatalf("AppendMessage recovery halt: %v", err)
+	}
+	stopReason := "model_error"
+	if _, err := repo.NewChatTurnRepo(pool).SetStopReason(ctx, turn.ID, &stopReason); err != nil {
+		t.Fatalf("SetStopReason: %v", err)
+	}
+	if err := chatService.CompleteTurn(ctx, turn.ID); err != nil {
+		t.Fatalf("CompleteTurn: %v", err)
+	}
+
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:            "docs/content-strategy.md",
+		ArtifactPath:          ".ottercamp/recovery/docs/content-strategy.md",
+		HistoryStartMessageID: uuid.NewString(),
+		HaltTurnID:            turn.ID.String(),
+		UpdatedAt:             time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRecord.Metadata = checkpointMetadata
+	if _, err := repo.NewProjectTaskRepo(pool).Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update task checkpoint metadata: %v", err)
+	}
+
+	staleAt := time.Now().UTC().Add(-5 * time.Minute)
+	backdateStrandedExecutionFixture(t, ctx, pool, taskRecord.ID, session.ID, execution.ID, staleAt)
+
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:        pool,
+		RunService:  runService,
+		ChatService: chatService,
+		EventBus:    bus,
+		Logger:      newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectStrandedActiveExecutions(ctx); err != nil {
+		t.Fatalf("detectStrandedActiveExecutions: %v", err)
+	}
+
+	var recoveryCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM run
+		WHERE task_id = $1
+		  AND trigger_type = 'supervisor'
+		  AND metadata->>'stranded_execution' = 'true'
+	`, taskRecord.ID).Scan(&recoveryCount); err != nil {
+		t.Fatalf("count stranded recovery runs: %v", err)
+	}
+	if recoveryCount != 0 {
+		t.Fatalf("stranded recovery runs = %d, want 0 while unresolved recovery checkpoint is current", recoveryCount)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	}
+
+	updatedExecution, err := repo.NewFlowNodeExecutionRepo(pool).GetByID(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("GetByID execution: %v", err)
+	}
+	if updatedExecution.Status != "active" {
+		t.Fatalf("execution status = %q, want active", updatedExecution.Status)
+	}
+
+	updatedSession, err := repo.NewChatSessionRepo(pool).GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetByID session: %v", err)
+	}
+	if updatedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil after halted turn completed", *updatedSession.CurrentTurnID)
+	}
+
+	haltedTurn, err := repo.NewChatTurnRepo(pool).GetByID(ctx, turn.ID)
+	if err != nil {
+		t.Fatalf("GetByID halted turn: %v", err)
+	}
+	if haltedTurn.Status != "completed" {
+		t.Fatalf("halted turn status = %q, want completed", haltedTurn.Status)
 	}
 }
 
