@@ -373,28 +373,29 @@ type TurnEngine struct {
 }
 
 type turnRuntime struct {
-	session           *chat.ChatSession
-	agent             repo.Agent
-	turn              *chat.ChatTurn
-	initialMessageID  uuid.UUID
-	runID             *uuid.UUID
-	runStepID         *uuid.UUID
-	runAttemptID      *uuid.UUID
-	startedAt         time.Time
-	toolCallsUsed     int
-	activeTier2RunID  *uuid.UUID
-	activeTier2RunMu  sync.RWMutex
-	modelRetryUsed    int
-	invocationAttempt int
-	toolSet           []tools.ToolDescriptor
-	stopReason        string
-	projectIdentity   *projectIdentity
-	historyStartID    *uuid.UUID
-	disableMemory     bool
-	freshKickoff      bool
-	recoveryTurn      bool
-	recoveryCLIFixes  int
-	recoveryFileFixes int
+	session             *chat.ChatSession
+	agent               repo.Agent
+	turn                *chat.ChatTurn
+	initialMessageID    uuid.UUID
+	runID               *uuid.UUID
+	runStepID           *uuid.UUID
+	runAttemptID        *uuid.UUID
+	startedAt           time.Time
+	toolCallsUsed       int
+	activeTier2RunID    *uuid.UUID
+	activeTier2RunMu    sync.RWMutex
+	modelRetryUsed      int
+	invocationAttempt   int
+	toolSet             []tools.ToolDescriptor
+	stopReason          string
+	projectIdentity     *projectIdentity
+	historyStartID      *uuid.UUID
+	disableMemory       bool
+	freshKickoff        bool
+	recoveryTurn        bool
+	recoveryCLIFixes    int
+	recoveryFileFixes   int
+	recoveryBlockReason string
 }
 
 type projectIdentity struct {
@@ -1300,12 +1301,12 @@ func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
 					"turn_id", rt.turn.ID,
 				)
 				rt.turn = current
-				return nil
+				return e.ensureRecoveryTurnDurableTaskState(ctx, rt)
 			}
 		}
 		return e.describeTurnTransitionError(ctx, rt.turn.ID, "completeTurn CompleteTurn", "in_progress->completed", err)
 	}
-	return nil
+	return e.ensureRecoveryTurnDurableTaskState(ctx, rt)
 }
 
 func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
@@ -1919,6 +1920,7 @@ func (e *TurnEngine) handleRecoveryCLIExecuteWithoutCommand(ctx context.Context,
 	}
 	if rt.recoveryCLIFixes >= recoveryCLIRepairBudget {
 		rt.stopReason = stopReasonRecoveryCLIRejected
+		rt.recoveryBlockReason = buildRecoveryCLIExecuteBlockedTaskReason()
 		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryCLIExecuteRejectedMessage()); err != nil {
 			return true, true, err
 		}
@@ -1946,7 +1948,7 @@ func buildRecoveryCLIExecuteRetryMessage() string {
 }
 
 func buildRecoveryCLIExecuteRejectedMessage() string {
-	return "[Recovery turn halted: cli.execute was retried without `command` after one correction. This turn ended without re-blocking the task. Resume only after providing a full `cli.execute.command` string or a populated `file.write` call.]"
+	return "[Recovery turn halted: cli.execute was retried without `command` after one correction. The task is now blocked. Resume only after providing a full `cli.execute.command` string or a populated `file.write` call.]"
 }
 
 func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
@@ -1991,6 +1993,7 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, message.ID); checkpointErr != nil {
 			return true, true, checkpointErr
 		}
+		rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath)
 		return true, true, nil
 	}
 
@@ -2030,9 +2033,24 @@ func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath string) stri
 		path = "the requested workspace file"
 	}
 	if strings.TrimSpace(artifactPath) == "" {
-		return fmt.Sprintf("[Recovery turn halted: file.write for `%s` was retried without `content` after one correction. This turn ended before the deterministic validation blocker could fire again. Resume only after producing the full file body.]", path)
+		return fmt.Sprintf("[Recovery turn halted: file.write for `%s` was retried without `content` after one correction. The task is now blocked. Resume only after producing the full file body.]", path)
 	}
-	return fmt.Sprintf("[Recovery turn halted: file.write for `%s` was retried without `content` after one correction. Resume from `%s` and only retry the final write after the file body exists.]", path, strings.TrimSpace(artifactPath))
+	return fmt.Sprintf("[Recovery turn halted: file.write for `%s` was retried without `content` after one correction. The task is now blocked. Resume from `%s` and only retry the final write after the file body exists.]", path, strings.TrimSpace(artifactPath))
+}
+
+func buildRecoveryCLIExecuteBlockedTaskReason() string {
+	return "recovery halted after cli.execute was retried without command; re-queue only after providing a concrete cli.execute.command string or a populated file.write call"
+}
+
+func buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	if artifact := strings.TrimSpace(artifactPath); artifact != "" {
+		return fmt.Sprintf("recovery halted after file.write for %s was retried without content; resume from %s and re-queue only after the file body exists", path, artifact)
+	}
+	return fmt.Sprintf("recovery halted after file.write for %s was retried without content; re-queue only after producing the full file body", path)
 }
 
 func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turnRuntime) (string, bool) {
@@ -3824,6 +3842,73 @@ func shouldSuppressAutoContinuationForStopReason(stopReason *string) bool {
 	default:
 		return false
 	}
+}
+
+func (e *TurnEngine) ensureRecoveryTurnDurableTaskState(ctx context.Context, rt *turnRuntime) error {
+	if e == nil || e.tasks == nil || rt == nil || !rt.recoveryTurn || rt.session == nil || rt.turn == nil {
+		return nil
+	}
+
+	reason := strings.TrimSpace(rt.recoveryBlockReason)
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	if reason == "" {
+		if !shouldSuppressAutoContinuationForStopReason(rt.turn.StopReason) {
+			return nil
+		}
+		reason = buildRecoveryTaskBlockedReason(taskRecord.Metadata, rt.turn.ID, rt.turn.StopReason)
+	}
+	if reason == "" {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
+		return nil
+	}
+
+	if e.taskTransitions != nil {
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus == "blocked" || nextStatus == "done" || nextStatus == "cancelled" {
+						return nil
+					}
+				}
+			}
+			return err
+		}
+		return nil
+	}
+
+	taskRecord.WorkStatus = "blocked"
+	taskRecord.CompletedAt = nil
+	_, err = e.tasks.Update(ctx, taskRecord)
+	return err
+}
+
+func buildRecoveryTaskBlockedReason(metadata json.RawMessage, turnID uuid.UUID, stopReason *string) string {
+	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(metadata); ok {
+		if strings.TrimSpace(checkpoint.HaltTurnID) == turnID.String() {
+			return buildRecoveryFileWriteBlockedTaskReason(checkpoint.TargetPath, checkpoint.ArtifactPath)
+		}
+	}
+	if stopReason == nil {
+		return ""
+	}
+	return fmt.Sprintf("recovery halted without a queued continuation (stop_reason=%s); inspect the last recovery turn before re-queueing the task", strings.TrimSpace(*stopReason))
 }
 
 func consecutiveAutoTurnsSinceLatestUser(turns []repo.ChatTurn, messages []repo.ChatMessage, latestUserSequence int64) int {

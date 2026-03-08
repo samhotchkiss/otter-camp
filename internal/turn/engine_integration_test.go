@@ -1032,6 +1032,14 @@ func TestTurnEngineIntegrationResumeValidationBlockedTaskStopsSuppression(t *tes
 	if _, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("ResumeValidationBlockedTask: %v", err)
 	}
+	resumedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	resumedTask.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
+		t.Fatalf("Update resumed task in_progress: %v", err)
+	}
 
 	authorType := "human_user"
 	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
@@ -1422,8 +1430,8 @@ func TestTurnEngineIntegrationRecoveryTurnBoundsRepeatedEmptyCLIExecuteWithoutRe
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus == "blocked" {
-		t.Fatalf("task work_status = %q, want bounded non-blocked failure", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
 	}
 	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
 		t.Fatalf("unexpected validation guard persisted: %+v", guard)
@@ -1454,6 +1462,7 @@ func TestTurnEngineIntegrationRecoveryTurnBoundsRepeatedEmptyCLIExecuteWithoutRe
 	}
 	var correctionMessages int
 	var haltMessages int
+	var blockedGuidanceMessages int
 	for _, item := range messages {
 		if item.Role == "tool_result" && strings.Contains(item.Content, "command is required") {
 			t.Fatalf("unexpected command_required tool_result: %s", item.Content)
@@ -1464,6 +1473,9 @@ func TestTurnEngineIntegrationRecoveryTurnBoundsRepeatedEmptyCLIExecuteWithoutRe
 		if item.Role == "system" && strings.Contains(item.Content, "Recovery turn halted: cli.execute was retried without `command` after one correction.") {
 			haltMessages++
 		}
+		if item.Role == "system" && strings.Contains(item.Content, "The task is now blocked.") {
+			blockedGuidanceMessages++
+		}
 		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
 			t.Fatalf("unexpected validation blocker message: %s", item.Content)
 		}
@@ -1473,6 +1485,9 @@ func TestTurnEngineIntegrationRecoveryTurnBoundsRepeatedEmptyCLIExecuteWithoutRe
 	}
 	if haltMessages != 1 {
 		t.Fatalf("recovery halt messages = %d, want 1", haltMessages)
+	}
+	if blockedGuidanceMessages != 1 {
+		t.Fatalf("blocked guidance messages = %d, want 1", blockedGuidanceMessages)
 	}
 }
 
@@ -1787,8 +1802,8 @@ func TestTurnEngineIntegrationRecoveryTurnPersistsArtifactAfterRepeatedEmptyFile
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus == "blocked" {
-		t.Fatalf("task work_status = %q, want bounded non-blocked halt", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
 	}
 	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
 		t.Fatalf("unexpected validation guard persisted: %+v", guard)
@@ -1812,8 +1827,20 @@ func TestTurnEngineIntegrationRecoveryTurnPersistsArtifactAfterRepeatedEmptyFile
 	if gotStopReason != stopReasonRecoveryFileRejected {
 		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
 	}
-
 	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if checkpoint.ArtifactPath != artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactRel)
+	}
+	if checkpoint.HaltTurnID != lastTurn.ID.String() {
+		t.Fatalf("checkpoint halt_turn_id = %q, want %q", checkpoint.HaltTurnID, lastTurn.ID)
+	}
 	artifactBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel)))
 	if err != nil {
 		t.Fatalf("read recovery artifact: %v", err)
@@ -1832,6 +1859,7 @@ func TestTurnEngineIntegrationRecoveryTurnPersistsArtifactAfterRepeatedEmptyFile
 	}
 	var correctionMessages int
 	var haltMessages int
+	var blockedGuidanceMessages int
 	for _, item := range messages {
 		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"content_required"`) {
 			t.Fatalf("unexpected content_required tool_result: %s", item.Content)
@@ -1842,6 +1870,9 @@ func TestTurnEngineIntegrationRecoveryTurnPersistsArtifactAfterRepeatedEmptyFile
 		if item.Role == "system" && strings.Contains(item.Content, "Resume from `.ottercamp/recovery/docs/content-strategy.md`") {
 			haltMessages++
 		}
+		if item.Role == "system" && strings.Contains(item.Content, "The task is now blocked.") {
+			blockedGuidanceMessages++
+		}
 		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
 			t.Fatalf("unexpected validation blocker message: %s", item.Content)
 		}
@@ -1851,6 +1882,9 @@ func TestTurnEngineIntegrationRecoveryTurnPersistsArtifactAfterRepeatedEmptyFile
 	}
 	if haltMessages != 1 {
 		t.Fatalf("file.write recovery halt messages = %d, want 1", haltMessages)
+	}
+	if blockedGuidanceMessages != 1 {
+		t.Fatalf("blocked guidance messages = %d, want 1", blockedGuidanceMessages)
 	}
 }
 
@@ -1908,8 +1942,8 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnPersistsArtifactAfterRepeated
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus == "blocked" {
-		t.Fatalf("task work_status = %q, want bounded non-blocked halt", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
 	}
 	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
 		t.Fatalf("unexpected validation guard persisted: %+v", guard)
@@ -1933,8 +1967,20 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnPersistsArtifactAfterRepeated
 	if gotStopReason != stopReasonRecoveryFileRejected {
 		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
 	}
-
 	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if checkpoint.ArtifactPath != artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactRel)
+	}
+	if checkpoint.HaltTurnID != lastTurn.ID.String() {
+		t.Fatalf("checkpoint halt_turn_id = %q, want %q", checkpoint.HaltTurnID, lastTurn.ID)
+	}
 	artifactBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel)))
 	if err != nil {
 		t.Fatalf("read recovery artifact: %v", err)
@@ -1953,6 +1999,7 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnPersistsArtifactAfterRepeated
 	}
 	var correctionMessages int
 	var haltMessages int
+	var blockedGuidanceMessages int
 	for _, item := range messages {
 		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"content_required"`) {
 			t.Fatalf("unexpected content_required tool_result: %s", item.Content)
@@ -1963,6 +2010,9 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnPersistsArtifactAfterRepeated
 		if item.Role == "system" && strings.Contains(item.Content, "Resume from `.ottercamp/recovery/docs/content-strategy.md`") {
 			haltMessages++
 		}
+		if item.Role == "system" && strings.Contains(item.Content, "The task is now blocked.") {
+			blockedGuidanceMessages++
+		}
 		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
 			t.Fatalf("unexpected validation blocker message: %s", item.Content)
 		}
@@ -1972,6 +2022,9 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnPersistsArtifactAfterRepeated
 	}
 	if haltMessages != 1 {
 		t.Fatalf("file.write recovery halt messages = %d, want 1", haltMessages)
+	}
+	if blockedGuidanceMessages != 1 {
+		t.Fatalf("blocked guidance messages = %d, want 1", blockedGuidanceMessages)
 	}
 }
 
@@ -2030,8 +2083,8 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnFallsBackStopReasonForLegacyC
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus == "blocked" {
-		t.Fatalf("task work_status = %q, want bounded non-blocked halt", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
 	}
 	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
 		t.Fatalf("unexpected validation guard persisted: %+v", guard)
@@ -2055,8 +2108,20 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnFallsBackStopReasonForLegacyC
 	if gotStopReason != stopReasonRecoveryFileFallback {
 		t.Fatalf("turn stop_reason = %q, want %q legacy fallback", gotStopReason, stopReasonRecoveryFileFallback)
 	}
-
 	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if checkpoint.ArtifactPath != artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactRel)
+	}
+	if checkpoint.HaltTurnID != lastTurn.ID.String() {
+		t.Fatalf("checkpoint halt_turn_id = %q, want %q", checkpoint.HaltTurnID, lastTurn.ID)
+	}
 	artifactBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel)))
 	if err != nil {
 		t.Fatalf("read recovery artifact: %v", err)
@@ -2075,6 +2140,7 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnFallsBackStopReasonForLegacyC
 	}
 	var correctionMessages int
 	var haltMessages int
+	var blockedGuidanceMessages int
 	for _, item := range messages {
 		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"content_required"`) {
 			t.Fatalf("unexpected content_required tool_result: %s", item.Content)
@@ -2085,6 +2151,9 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnFallsBackStopReasonForLegacyC
 		if item.Role == "system" && strings.Contains(item.Content, "Resume from `.ottercamp/recovery/docs/content-strategy.md`") {
 			haltMessages++
 		}
+		if item.Role == "system" && strings.Contains(item.Content, "The task is now blocked.") {
+			blockedGuidanceMessages++
+		}
 		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
 			t.Fatalf("unexpected validation blocker message: %s", item.Content)
 		}
@@ -2094,6 +2163,9 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnFallsBackStopReasonForLegacyC
 	}
 	if haltMessages != 1 {
 		t.Fatalf("file.write recovery halt messages = %d, want 1", haltMessages)
+	}
+	if blockedGuidanceMessages != 1 {
+		t.Fatalf("blocked guidance messages = %d, want 1", blockedGuidanceMessages)
 	}
 }
 
@@ -4844,6 +4916,14 @@ func mustCreateRecoveredValidationTaskSessionWithKickoff(
 	}
 	if _, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	resumedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	resumedTask.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
+		t.Fatalf("Update resumed task in_progress: %v", err)
 	}
 
 	authorType := "human_user"
