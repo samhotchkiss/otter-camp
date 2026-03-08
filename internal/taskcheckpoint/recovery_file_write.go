@@ -95,6 +95,28 @@ func RecoveryFileWriteHistoryStartMessageID(checkpoint *RecoveryFileWriteCheckpo
 	return &id
 }
 
+func RecoveryFileWriteFailureRejectsDraft(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "instead of the file body") ||
+		strings.Contains(lower, "repeated non-substantive recovery drafts") ||
+		strings.Contains(lower, "repeated intent-only recovery drafts")
+}
+
+func RecoveryFileWriteFailureIsIntentOnly(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(lower, "intent to write the deliverable") ||
+		strings.Contains(lower, "repeated intent-only recovery drafts")
+}
+
+func RecoveryFileWriteFailureIsRepeatedDraftReject(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(lower, "repeated non-substantive recovery drafts") ||
+		strings.Contains(lower, "repeated intent-only recovery drafts")
+}
+
 func RecoveryFileWritePromptStrategyLines(checkpoint *RecoveryFileWriteCheckpoint) []string {
 	lines := []string{
 		"Recovery Execution Strategy:",
@@ -116,6 +138,15 @@ func RecoveryFileWritePromptStrategyLines(checkpoint *RecoveryFileWriteCheckpoin
 	if failure := strings.TrimSpace(checkpoint.FailureReason); failure != "" {
 		lines = append(lines, "- Last write failure: "+failure)
 		lines = append(lines, "- Resolve that failure before retrying the final file.write.")
+		if RecoveryFileWriteFailureRejectsDraft(failure) {
+			lines = append(lines,
+				"- The prior recovery halt already rejected a non-substantive draft; do not reuse rejected placeholder narration from the target or artifact as the next draft.",
+				"- The next attempt must begin with the substantive file body for the target path, not progress narration or a description of intent to write it.",
+			)
+			if RecoveryFileWriteFailureIsRepeatedDraftReject(failure) {
+				lines = append(lines, "- Repeated non-substantive recovery drafts are a hardened blocker state; do not expect a generic retry loop to make progress.")
+			}
+		}
 	}
 	lines = append(lines, "- If the target file already exists, continue from that durable output instead of restarting the same failed write.")
 	return lines
