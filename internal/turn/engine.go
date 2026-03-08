@@ -2321,9 +2321,12 @@ func (e *TurnEngine) currentRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 }
 
 func hasRecoveryFileWriteCheckpointState(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) bool {
-	return strings.TrimSpace(checkpoint.TargetPath) != "" ||
+	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
+	return taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpoint) != "" ||
+		strings.TrimSpace(checkpoint.TargetPath) != "" ||
 		strings.TrimSpace(checkpoint.ArtifactPath) != "" ||
 		strings.TrimSpace(checkpoint.FailureReason) != "" ||
+		len(checkpoint.PriorFailureReasons) != 0 ||
 		strings.TrimSpace(checkpoint.HistoryStartMessageID) != "" ||
 		strings.TrimSpace(checkpoint.HaltTurnID) != ""
 }
@@ -2335,9 +2338,11 @@ func recoveryCheckpointFromMessageMetadata(metadata json.RawMessage, fallbackRea
 	}
 
 	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
-		TargetPath:    strings.TrimSpace(stringValue(decoded["recovery_checkpoint_target_path"])),
-		ArtifactPath:  strings.TrimSpace(stringValue(decoded["recovery_checkpoint_artifact_path"])),
-		FailureReason: strings.TrimSpace(stringValue(decoded["recovery_checkpoint_failure_reason"])),
+		TargetPath:          strings.TrimSpace(stringValue(decoded["recovery_checkpoint_target_path"])),
+		ArtifactPath:        strings.TrimSpace(stringValue(decoded["recovery_checkpoint_artifact_path"])),
+		BlockerClass:        strings.TrimSpace(stringValue(decoded["recovery_blocker_class"])),
+		FailureReason:       strings.TrimSpace(stringValue(decoded["recovery_checkpoint_failure_reason"])),
+		PriorFailureReasons: anyStrings(decoded["recovery_checkpoint_prior_failure_reasons"]),
 	}
 	if checkpoint.TargetPath == "" {
 		if targetPath, ok := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); ok {
@@ -2350,6 +2355,7 @@ func recoveryCheckpointFromMessageMetadata(metadata json.RawMessage, fallbackRea
 	if checkpoint.FailureReason == "" {
 		checkpoint.FailureReason = strings.TrimSpace(fallbackReason)
 	}
+	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	if !hasRecoveryFileWriteCheckpointState(checkpoint) {
 		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
 	}
@@ -2405,7 +2411,9 @@ type recoveryResumeState struct {
 	artifactPath                string
 	artifactDraft               string
 	artifactDraftRejectedReason string
+	blockerClass                string
 	failureReason               string
+	priorFailureReasons         []string
 }
 
 func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRuntime, preserveInitialMessage bool) (bool, error) {
@@ -2436,9 +2444,11 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 	}
 
 	state := recoveryResumeState{
-		targetPath:    strings.TrimSpace(checkpoint.TargetPath),
-		artifactPath:  strings.TrimSpace(checkpoint.ArtifactPath),
-		failureReason: strings.TrimSpace(checkpoint.FailureReason),
+		targetPath:          strings.TrimSpace(checkpoint.TargetPath),
+		artifactPath:        strings.TrimSpace(checkpoint.ArtifactPath),
+		blockerClass:        taskcheckpoint.RecoveryFileWriteBlockerClass(checkpoint),
+		failureReason:       strings.TrimSpace(checkpoint.FailureReason),
+		priorFailureReasons: append([]string(nil), checkpoint.PriorFailureReasons...),
 	}
 	if draft, found := e.readRecoveryWorkspaceText(ctx, rt, state.targetPath); found {
 		state.targetDraft, state.targetDraftRejectedReason = recoveryResumeDraftForPrompt(state.failureReason, state.targetPath, draft)
@@ -2456,7 +2466,9 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		strings.TrimSpace(state.artifactPath) == "" &&
 		strings.TrimSpace(state.artifactDraft) == "" &&
 		strings.TrimSpace(state.artifactDraftRejectedReason) == "" &&
-		strings.TrimSpace(state.failureReason) == "" {
+		strings.TrimSpace(state.failureReason) == "" &&
+		strings.TrimSpace(state.blockerClass) == "" &&
+		len(state.priorFailureReasons) == 0 {
 		return recoveryResumeState{}, false
 	}
 	return state, true
@@ -2536,6 +2548,9 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 		"Resume order: target file draft, then recovery artifact draft, then checkpoint metadata/failure reason.",
 		"Continue from the durable drafts below instead of asking which task to resume.",
 	}
+	if blockerClass := strings.TrimSpace(state.blockerClass); blockerClass != "" {
+		lines = append(lines, "Checkpoint blocker class: "+blockerClass)
+	}
 	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
 		lines = append(lines,
 			"Prior recovery failure rejected a non-substantive draft. Treat rejected placeholder text as invalid context, not as the draft to continue.",
@@ -2589,6 +2604,9 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 	if reason := strings.TrimSpace(state.failureReason); reason != "" {
 		lines = append(lines, "Checkpoint failure reason: "+reason)
 	}
+	if len(state.priorFailureReasons) != 0 {
+		lines = append(lines, "Prior recovery failure history: "+strings.Join(state.priorFailureReasons, " | "))
+	}
 	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) &&
 		strings.TrimSpace(state.targetDraft) == "" &&
 		strings.TrimSpace(state.artifactDraft) == "" {
@@ -2630,7 +2648,14 @@ func truncateRecoveryResumeExcerpt(text string, limit int) (string, bool) {
 func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRuntime) (string, string, bool) {
 	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
 		if targetPath := strings.TrimSpace(checkpoint.TargetPath); targetPath != "" {
-			return targetPath, "", true
+			if draft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
+				return targetPath, draft, true
+			}
+			if artifactPath := strings.TrimSpace(checkpoint.ArtifactPath); artifactPath != "" {
+				if draft, found := e.readRecoveryWorkspaceText(ctx, rt, artifactPath); found {
+					return targetPath, recoveryArtifactDraftContent(draft), true
+				}
+			}
 		}
 	}
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
@@ -2996,6 +3021,32 @@ func (e *TurnEngine) strengthenRecoveryDraftRejectFailureReason(ctx context.Cont
 	return fmt.Sprintf("repeated non-substantive recovery drafts for %s across explicit resume attempts; latest %s", path, current)
 }
 
+func (e *TurnEngine) recoveryCheckpointPriorFailureReasons(ctx context.Context, rt *turnRuntime, currentReason string) []string {
+	if e == nil || rt == nil {
+		return nil
+	}
+	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	if !ok {
+		return nil
+	}
+	reasons := append([]string(nil), taskcheckpoint.RecoveryFileWriteFailureHistory(checkpoint)...)
+	current := strings.TrimSpace(currentReason)
+	if len(reasons) == 0 {
+		return nil
+	}
+	filtered := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if strings.TrimSpace(reason) == "" || reason == current {
+			continue
+		}
+		filtered = append(filtered, reason)
+	}
+	normalized := taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(taskcheckpoint.RecoveryFileWriteCheckpoint{
+		PriorFailureReasons: filtered,
+	})
+	return append([]string(nil), normalized.PriorFailureReasons...)
+}
+
 func containsAny(haystack string, needles ...string) bool {
 	for _, needle := range needles {
 		if needle == "" {
@@ -3039,7 +3090,8 @@ func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *t
 	if strings.TrimSpace(draft) == "" {
 		draft, _, _ = e.recoveryFileWriteDraftContent(ctx, rt, targetPath)
 	}
-	document := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetRel, draft, failureReason, e.now())
+	priorFailureReasons := e.recoveryCheckpointPriorFailureReasons(ctx, rt, failureReason)
+	document := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetRel, draft, failureReason, priorFailureReasons, e.now())
 	for _, root := range workspaceRoots {
 		artifactAbs := filepath.Join(root, filepath.FromSlash(artifactRel))
 		if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
@@ -3090,10 +3142,12 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	if err != nil {
 		return err
 	}
+	priorFailureReasons := e.recoveryCheckpointPriorFailureReasons(ctx, rt, failureReason)
 	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
 		TargetPath:            strings.TrimSpace(targetPath),
 		ArtifactPath:          strings.TrimSpace(artifactPath),
 		FailureReason:         strings.TrimSpace(failureReason),
+		PriorFailureReasons:   priorFailureReasons,
 		HistoryStartMessageID: messageID.String(),
 		HaltTurnID:            rt.turn.ID.String(),
 		UpdatedAt:             e.now().UTC().Format(time.RFC3339Nano),
@@ -3319,7 +3373,7 @@ func resolveRecoveryWorkspacePath(root, relOrAbsPath string) (string, string, er
 	return targetAbs, filepath.ToSlash(rel), nil
 }
 
-func buildRecoveryFileWriteArtifactDocument(taskLabel, targetPath, draft, failureReason string, now time.Time) string {
+func buildRecoveryFileWriteArtifactDocument(taskLabel, targetPath, draft, failureReason string, priorFailureReasons []string, now time.Time) string {
 	reasonLine := "Reason: Recovery turn retried file.write without concrete content after one bounded correction."
 	if reason := strings.TrimSpace(failureReason); reason != "" {
 		reasonLine = "Reason: Recovery turn halted with a durable file-output checkpoint instead of retrying without a concrete final write."
@@ -3347,6 +3401,13 @@ func buildRecoveryFileWriteArtifactDocument(taskLabel, targetPath, draft, failur
 			reason,
 			"",
 		)
+	}
+	if len(priorFailureReasons) != 0 {
+		lines = append(lines, "## Prior Failure History", "")
+		for _, reason := range priorFailureReasons {
+			lines = append(lines, "- "+strings.TrimSpace(reason))
+		}
+		lines = append(lines, "")
 	}
 	lines = append(lines,
 		"## Draft Content",
@@ -5190,6 +5251,37 @@ func anyString(raw any) string {
 		return typed.String()
 	default:
 		return fmt.Sprintf("%v", raw)
+	}
+}
+
+func anyStrings(raw any) []string {
+	switch typed := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			trimmed := strings.TrimSpace(anyString(item))
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

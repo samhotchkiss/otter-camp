@@ -1280,6 +1280,37 @@ func valueAsString(value any) string {
 	}
 }
 
+func valueAsStrings(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			trimmed := strings.TrimSpace(valueAsString(item))
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func metadataStringValue(metadata json.RawMessage, key string) string {
 	if len(metadata) == 0 || !json.Valid(metadata) {
 		return ""
@@ -1329,6 +1360,9 @@ func appendValidationRecoveryMetadata(payload map[string]any, eventPayload json.
 			payload[key] = value
 		}
 	}
+	if values := valueAsStrings(decoded["recovery_checkpoint_prior_failure_reasons"]); len(values) != 0 {
+		payload["recovery_checkpoint_prior_failure_reasons"] = values
+	}
 }
 
 func appendWakeupRecoveryMetadata(payload map[string]any, metadata json.RawMessage) {
@@ -1351,6 +1385,14 @@ func appendWakeupRecoveryMetadata(payload map[string]any, metadata json.RawMessa
 	} {
 		if value := metadataStringValue(metadata, key); value != "" {
 			payload[key] = value
+		}
+	}
+	if len(metadata) != 0 && json.Valid(metadata) {
+		var decoded map[string]any
+		if err := json.Unmarshal(metadata, &decoded); err == nil {
+			if values := valueAsStrings(decoded["recovery_checkpoint_prior_failure_reasons"]); len(values) != 0 {
+				payload["recovery_checkpoint_prior_failure_reasons"] = values
+			}
 		}
 	}
 }

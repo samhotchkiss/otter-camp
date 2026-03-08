@@ -23,10 +23,11 @@ const (
 	// handling compatible while the resume surface broadens beyond validation loops.
 	RecoveryActionResumeBlockedTask = "resume_validation_blocked_task"
 
-	RecoveryBlockerClassNotBlocked                   = "not_blocked"
-	RecoveryBlockerClassValidationLoop               = "deterministic_validation_loop"
-	RecoveryBlockerClassDurableRecoveryCheckpoint    = "durable_recovery_checkpoint"
-	RecoveryBlockerClassBlockedWithoutResumableState = "blocked_without_resumable_state"
+	RecoveryBlockerClassNotBlocked                               = "not_blocked"
+	RecoveryBlockerClassValidationLoop                           = "deterministic_validation_loop"
+	RecoveryBlockerClassDurableRecoveryCheckpoint                = taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint
+	RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint = taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint
+	RecoveryBlockerClassBlockedWithoutResumableState             = "blocked_without_resumable_state"
 
 	recoveryArtifactPathPrefix = ".ottercamp/recovery/"
 )
@@ -89,9 +90,13 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 	}
 	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok && hasDurableRecoveryCheckpoint(checkpoint) {
 		checkpointCopy := checkpoint
+		blockerClass := taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpointCopy)
+		if blockerClass == "" {
+			blockerClass = RecoveryBlockerClassDurableRecoveryCheckpoint
+		}
 		return taskResumeDecision{
 			resumable:     true,
-			blockerClass:  RecoveryBlockerClassDurableRecoveryCheckpoint,
+			blockerClass:  blockerClass,
 			blockerReason: strings.TrimSpace(blockerReason),
 			checkpoint:    &checkpointCopy,
 		}
@@ -103,9 +108,12 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 }
 
 func hasDurableRecoveryCheckpoint(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) bool {
-	return strings.TrimSpace(checkpoint.TargetPath) != "" ||
+	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
+	return taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpoint) != "" ||
+		strings.TrimSpace(checkpoint.TargetPath) != "" ||
 		strings.TrimSpace(checkpoint.ArtifactPath) != "" ||
 		strings.TrimSpace(checkpoint.FailureReason) != "" ||
+		len(checkpoint.PriorFailureReasons) != 0 ||
 		strings.TrimSpace(checkpoint.HistoryStartMessageID) != "" ||
 		strings.TrimSpace(checkpoint.HaltTurnID) != ""
 }
@@ -174,12 +182,12 @@ func (s *service) rebuildDurableRecoveryCheckpointFromWorkspace(ctx context.Cont
 	if s != nil && s.clock != nil {
 		updatedAt = s.clock.Now().UTC()
 	}
-	return taskcheckpoint.RecoveryFileWriteCheckpoint{
+	return taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(taskcheckpoint.RecoveryFileWriteCheckpoint{
 		TargetPath:    targetPath,
 		ArtifactPath:  artifactPath,
 		FailureReason: recoveryArtifactFailureReason(artifactDocument),
 		UpdatedAt:     updatedAt.Format(time.RFC3339Nano),
-	}, true, nil
+	}), true, nil
 }
 
 func (s *service) rebuildDurableRecoveryCheckpointFromSessionState(ctx context.Context, taskRecord repo.ProjectTask, blockerReason string) (taskcheckpoint.RecoveryFileWriteCheckpoint, bool, error) {
@@ -231,6 +239,7 @@ func (s *service) rebuildDurableRecoveryCheckpointFromSessionState(ctx context.C
 		updatedAt = s.clock.Now().UTC()
 	}
 	checkpoint.UpdatedAt = updatedAt.Format(time.RFC3339Nano)
+	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	if !hasDurableRecoveryCheckpoint(checkpoint) {
 		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, nil
 	}
@@ -295,6 +304,7 @@ func recoveryCheckpointFromSessionMessages(messages []repo.ChatMessage, blockerR
 	if !hasDurableRecoveryCheckpoint(checkpoint) {
 		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
 	}
+	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	return checkpoint, true
 }
 
@@ -311,9 +321,11 @@ func recoveryCheckpointFromMessageMetadata(metadata json.RawMessage, blockerReas
 	}
 
 	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
-		TargetPath:    strings.TrimSpace(anyString(payload["recovery_checkpoint_target_path"])),
-		ArtifactPath:  strings.TrimSpace(anyString(payload["recovery_checkpoint_artifact_path"])),
-		FailureReason: strings.TrimSpace(anyString(payload["recovery_checkpoint_failure_reason"])),
+		TargetPath:          strings.TrimSpace(anyString(payload["recovery_checkpoint_target_path"])),
+		ArtifactPath:        strings.TrimSpace(anyString(payload["recovery_checkpoint_artifact_path"])),
+		BlockerClass:        strings.TrimSpace(anyString(payload["recovery_blocker_class"])),
+		FailureReason:       strings.TrimSpace(anyString(payload["recovery_checkpoint_failure_reason"])),
+		PriorFailureReasons: anyStrings(payload["recovery_checkpoint_prior_failure_reasons"]),
 	}
 	if strings.TrimSpace(checkpoint.TargetPath) == "" {
 		if targetPath, ok := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); ok {
@@ -329,6 +341,7 @@ func recoveryCheckpointFromMessageMetadata(metadata json.RawMessage, blockerReas
 	if !hasDurableRecoveryCheckpoint(checkpoint) {
 		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
 	}
+	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	return checkpoint, true
 }
 
@@ -400,6 +413,37 @@ func anyString(value any) string {
 		return typed.String()
 	default:
 		return fmt.Sprintf("%v", value)
+	}
+}
+
+func anyStrings(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			trimmed := strings.TrimSpace(anyString(item))
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

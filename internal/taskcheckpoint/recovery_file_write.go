@@ -8,18 +8,22 @@ import (
 )
 
 const (
-	RecoveryFileWriteMetadataKey       = "recovery_file_write_checkpoint"
-	recoveryFileWriteCheckpointVersion = 1
+	RecoveryFileWriteMetadataKey                                  = "recovery_file_write_checkpoint"
+	recoveryFileWriteCheckpointVersion                            = 1
+	RecoveryFileWriteBlockerClassDurableCheckpoint                = "durable_recovery_checkpoint"
+	RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint = "repeated_non_substantive_recovery_checkpoint"
 )
 
 type RecoveryFileWriteCheckpoint struct {
-	Version               int    `json:"version"`
-	TargetPath            string `json:"target_path"`
-	ArtifactPath          string `json:"artifact_path,omitempty"`
-	FailureReason         string `json:"failure_reason,omitempty"`
-	HistoryStartMessageID string `json:"history_start_message_id,omitempty"`
-	HaltTurnID            string `json:"halt_turn_id,omitempty"`
-	UpdatedAt             string `json:"updated_at,omitempty"`
+	Version               int      `json:"version"`
+	TargetPath            string   `json:"target_path"`
+	ArtifactPath          string   `json:"artifact_path,omitempty"`
+	BlockerClass          string   `json:"blocker_class,omitempty"`
+	FailureReason         string   `json:"failure_reason,omitempty"`
+	PriorFailureReasons   []string `json:"prior_failure_reasons,omitempty"`
+	HistoryStartMessageID string   `json:"history_start_message_id,omitempty"`
+	HaltTurnID            string   `json:"halt_turn_id,omitempty"`
+	UpdatedAt             string   `json:"updated_at,omitempty"`
 }
 
 func ParseRecoveryFileWriteCheckpoint(metadata json.RawMessage) (RecoveryFileWriteCheckpoint, bool) {
@@ -38,10 +42,7 @@ func ParseRecoveryFileWriteCheckpoint(metadata json.RawMessage) (RecoveryFileWri
 	if err := json.Unmarshal(raw, &checkpoint); err != nil {
 		return RecoveryFileWriteCheckpoint{}, false
 	}
-	if checkpoint.Version <= 0 {
-		checkpoint.Version = recoveryFileWriteCheckpointVersion
-	}
-	return checkpoint, true
+	return NormalizeRecoveryFileWriteCheckpoint(checkpoint), true
 }
 
 func MergeRecoveryFileWriteCheckpoint(metadata json.RawMessage, checkpoint RecoveryFileWriteCheckpoint) (json.RawMessage, error) {
@@ -54,9 +55,7 @@ func MergeRecoveryFileWriteCheckpoint(metadata json.RawMessage, checkpoint Recov
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	if checkpoint.Version <= 0 {
-		checkpoint.Version = recoveryFileWriteCheckpointVersion
-	}
+	checkpoint = NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	payload[RecoveryFileWriteMetadataKey] = checkpoint
 	merged, err := json.Marshal(payload)
 	if err != nil {
@@ -93,6 +92,88 @@ func RecoveryFileWriteHistoryStartMessageID(checkpoint *RecoveryFileWriteCheckpo
 		return nil
 	}
 	return &id
+}
+
+func NormalizeRecoveryFileWriteCheckpoint(checkpoint RecoveryFileWriteCheckpoint) RecoveryFileWriteCheckpoint {
+	if checkpoint.Version <= 0 {
+		checkpoint.Version = recoveryFileWriteCheckpointVersion
+	}
+	checkpoint.TargetPath = strings.TrimSpace(checkpoint.TargetPath)
+	checkpoint.ArtifactPath = strings.TrimSpace(checkpoint.ArtifactPath)
+	checkpoint.BlockerClass = strings.TrimSpace(checkpoint.BlockerClass)
+	checkpoint.FailureReason = strings.TrimSpace(checkpoint.FailureReason)
+	checkpoint.PriorFailureReasons = normalizeRecoveryFailureReasons(checkpoint.PriorFailureReasons)
+	checkpoint.HistoryStartMessageID = strings.TrimSpace(checkpoint.HistoryStartMessageID)
+	checkpoint.HaltTurnID = strings.TrimSpace(checkpoint.HaltTurnID)
+	checkpoint.UpdatedAt = strings.TrimSpace(checkpoint.UpdatedAt)
+	if checkpoint.BlockerClass == "" {
+		checkpoint.BlockerClass = RecoveryFileWriteBlockerClass(&checkpoint)
+	}
+	return checkpoint
+}
+
+func RecoveryFileWriteBlockerClass(checkpoint *RecoveryFileWriteCheckpoint) string {
+	if checkpoint == nil {
+		return ""
+	}
+	switch strings.TrimSpace(checkpoint.BlockerClass) {
+	case RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint:
+		return RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint
+	case RecoveryFileWriteBlockerClassDurableCheckpoint:
+		return RecoveryFileWriteBlockerClassDurableCheckpoint
+	}
+	if RecoveryFileWriteFailureIsRepeatedDraftReject(checkpoint.FailureReason) {
+		return RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint
+	}
+	if strings.TrimSpace(checkpoint.TargetPath) != "" ||
+		strings.TrimSpace(checkpoint.ArtifactPath) != "" ||
+		strings.TrimSpace(checkpoint.FailureReason) != "" ||
+		strings.TrimSpace(checkpoint.HistoryStartMessageID) != "" ||
+		strings.TrimSpace(checkpoint.HaltTurnID) != "" ||
+		len(normalizeRecoveryFailureReasons(checkpoint.PriorFailureReasons)) > 0 {
+		return RecoveryFileWriteBlockerClassDurableCheckpoint
+	}
+	return ""
+}
+
+func RecoveryFileWriteFailureHistory(checkpoint *RecoveryFileWriteCheckpoint) []string {
+	if checkpoint == nil {
+		return nil
+	}
+	history := append([]string(nil), normalizeRecoveryFailureReasons(checkpoint.PriorFailureReasons)...)
+	current := strings.TrimSpace(checkpoint.FailureReason)
+	if current == "" {
+		return history
+	}
+	for _, existing := range history {
+		if existing == current {
+			return history
+		}
+	}
+	return append(history, current)
+}
+
+func normalizeRecoveryFailureReasons(reasons []string) []string {
+	if len(reasons) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(reasons))
+	normalized := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		trimmed := strings.TrimSpace(reason)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func RecoveryFileWriteFailureRejectsDraft(reason string) bool {
@@ -138,6 +219,9 @@ func RecoveryFileWritePromptStrategyLines(checkpoint *RecoveryFileWriteCheckpoin
 	if failure := strings.TrimSpace(checkpoint.FailureReason); failure != "" {
 		lines = append(lines, "- Last write failure: "+failure)
 		lines = append(lines, "- Resolve that failure before retrying the final file.write.")
+		if history := RecoveryFileWriteFailureHistory(checkpoint); len(history) > 1 {
+			lines = append(lines, "- Prior recovery failure history: "+strings.Join(history[:len(history)-1], " | "))
+		}
 		if RecoveryFileWriteFailureRejectsDraft(failure) {
 			lines = append(lines,
 				"- The prior recovery halt already rejected a non-substantive draft; do not reuse rejected placeholder narration from the target or artifact as the next draft.",
