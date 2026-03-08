@@ -3,6 +3,7 @@
 package turn
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
@@ -961,6 +963,100 @@ func TestTurnEngineIntegrationRepeatedMalformedFileWritePayloadBlocksTask(t *tes
 	}
 	if !foundBlockerMessage {
 		t.Fatal("missing validation loop blocker system message")
+	}
+}
+
+func TestTurnEngineIntegrationResumeValidationBlockedTaskStopsSuppression(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	var logBuffer bytes.Buffer
+	fixture.engine.logger = slog.New(slog.NewTextHandler(&logBuffer, nil))
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	guardedMetadata, err := tasksvc.MergeValidationGuardMetadata(currentTask.Metadata, tasksvc.ValidationGuardState{
+		InitialMessageID:   userMessage.ID.String(),
+		Fingerprint:        "cli.execute:command_required",
+		AttemptFingerprint: "cli.execute:command_required:attempt",
+		ToolName:           "cli.execute",
+		FailureClass:       "tool_validation",
+		FailureCode:        "command_required",
+		FailureReason:      "command is required",
+		Count:              validationLoopBlockThreshold,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	currentTask.Metadata = guardedMetadata
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update guarded task: %v", err)
+	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if _, err := taskService.MarkBlocked(ctx, taskRecord.ID, "deterministic tool validation loop blocked after 3 identical failures: cli.execute (command is required)", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	enqueued, err := fixture.engine.enqueueAgentTurnIfActive(ctx, &taskSession, AgentTurnPayload{
+		SessionID: taskSession.ID,
+		MessageID: userMessage.ID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueueAgentTurnIfActive blocked: %v", err)
+	}
+	if enqueued {
+		t.Fatal("expected blocked task enqueue to be suppressed")
+	}
+	if !strings.Contains(logBuffer.String(), "skipping agent turn enqueue for blocked validation loop") {
+		t.Fatalf("expected suppression log, got %q", logBuffer.String())
+	}
+
+	logBuffer.Reset()
+	if _, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+
+	authorType := "human_user"
+	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "supervisor recovery: resume task",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage recovery: %v", err)
+	}
+
+	enqueued, err = fixture.engine.enqueueAgentTurnIfActive(ctx, &taskSession, AgentTurnPayload{
+		SessionID: taskSession.ID,
+		MessageID: recoveryMessage.ID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueueAgentTurnIfActive recovered: %v", err)
+	}
+	if !enqueued {
+		t.Fatal("expected recovered task to enqueue a fresh agent turn")
+	}
+	if strings.Contains(logBuffer.String(), "skipping agent turn enqueue for blocked validation loop") {
+		t.Fatalf("unexpected suppression log after recovery: %q", logBuffer.String())
 	}
 }
 

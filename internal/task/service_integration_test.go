@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -384,6 +385,103 @@ func TestTaskServiceIntegrationMarkBlockedCreatesResolutionTaskWhenPolicyRequire
 	}
 	if resolution.WorkStatus != "queued" {
 		t.Fatalf("resolution work_status = %q, want %q", resolution.WorkStatus, "queued")
+	}
+}
+
+func TestTaskServiceIntegrationResumeValidationBlockedTaskClearsGuardAndQueuesRecovery(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "pm-user", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "PM Agent", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Validation blocked task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	guardedMetadata, err := MergeValidationGuardMetadata(taskRecord.Metadata, ValidationGuardState{
+		InitialMessageID:   uuid.NewString(),
+		Fingerprint:        "cli.execute:command_required",
+		AttemptFingerprint: "cli.execute:command_required:attempt",
+		ToolName:           "cli.execute",
+		FailureClass:       "tool_validation",
+		FailureCode:        "command_required",
+		FailureReason:      "command is required",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	taskRecord.Metadata = guardedMetadata
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update guarded task: %v", err)
+	}
+	if _, err := svc.MarkBlocked(ctx, created.ID, "deterministic tool validation loop blocked after 3 identical failures: cli.execute (command is required)", Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	resumed, err := svc.ResumeValidationBlockedTask(ctx, created.ID, Actor{Type: "human_user", ID: pmUser.ID})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+	if _, ok := ParseValidationGuard(resumed.Metadata); ok {
+		t.Fatalf("expected validation guard to be cleared, metadata=%s", string(resumed.Metadata))
+	}
+
+	var (
+		eventType string
+		payload   []byte
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT event_type, payload
+		FROM project_task_event
+		WHERE task_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, created.ID).Scan(&eventType, &payload); err != nil {
+		t.Fatalf("load latest task event: %v", err)
+	}
+	if eventType != "status.changed" {
+		t.Fatalf("latest event_type = %q, want status.changed", eventType)
+	}
+	var eventPayload map[string]any
+	if err := json.Unmarshal(payload, &eventPayload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["to_status"])); got != "queued" {
+		t.Fatalf("to_status = %q, want queued", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_action"])); got != "resume_validation_blocked_task" {
+		t.Fatalf("recovery_action = %q, want resume_validation_blocked_task", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["validation_failure_code"])); got != "command_required" {
+		t.Fatalf("validation_failure_code = %q, want command_required", got)
 	}
 }
 

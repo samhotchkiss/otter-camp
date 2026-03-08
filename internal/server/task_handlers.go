@@ -174,6 +174,7 @@ func (r *TaskRouteRegistrar) RegisterRoutes(router chi.Router) {
 	router.Get("/tasks/{id}", r.handlers.getTask)
 	router.With(middleware.RequireRole("member")).Patch("/tasks/{id}", r.handlers.patchTask)
 	router.With(middleware.RequireRole("member")).Post("/tasks/{id}/queue", r.handlers.queueTask)
+	router.With(middleware.RequireRole("member")).Post("/tasks/{id}/resume", r.handlers.resumeTask)
 	router.With(middleware.RequireRole("member")).Post("/tasks/{id}/cancel", r.handlers.cancelTask)
 	router.With(middleware.RequireRole("member")).Post("/tasks/{id}/advance-flow", r.handlers.advanceFlow)
 	router.With(middleware.RequireRole("member")).Post("/tasks/{id}/reject-flow", r.handlers.rejectFlow)
@@ -889,6 +890,34 @@ func (h taskHandlers) cancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, err := h.taskService.TransitionStatus(r.Context(), taskID, "cancelled", tasksvc.Actor{Type: "human_user", ID: principal.UserID})
+	if err != nil {
+		h.respondTaskError(responder, w, err)
+		return
+	}
+	responder.JSON(w, http.StatusOK, h.toTaskResponse(r.Context(), *updated))
+}
+
+func (h taskHandlers) resumeTask(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.taskService == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "task service unavailable")
+		return
+	}
+
+	taskID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid task id")
+		return
+	}
+	if _, ok := h.getTaskForOrg(r.Context(), taskID, principal.OrganizationID, responder, w); !ok {
+		return
+	}
+
+	updated, err := h.taskService.ResumeValidationBlockedTask(r.Context(), taskID, tasksvc.Actor{Type: "human_user", ID: principal.UserID})
 	if err != nil {
 		h.respondTaskError(responder, w, err)
 		return
@@ -2801,6 +2830,7 @@ func mapTaskError(err error) (int, string, string) {
 		errors.Is(err, tasksvc.ErrSourceTaskRequired),
 		errors.Is(err, tasksvc.ErrSourceProjectIDRequired),
 		errors.Is(err, tasksvc.ErrTransitionTargetRequired),
+		errors.Is(err, tasksvc.ErrValidationRecoveryRequired),
 		errors.Is(err, tasksvc.ErrFlowTemplateRequired),
 		errors.Is(err, tasksvc.ErrFlowTemplateReviewRequired),
 		errors.Is(err, tasksvc.ErrProjectGateBlockingQueue),

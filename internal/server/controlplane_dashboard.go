@@ -335,6 +335,10 @@ func (l operatorDashboardLoader) countBlockedItems(ctx context.Context, organiza
 	if err != nil {
 		return 0, err
 	}
+	validationBlockedCount, err := l.countValidationBlockedTasks(ctx, organizationID)
+	if err != nil {
+		return 0, err
+	}
 	pausedProjects, err := l.countPausedProjects(ctx, organizationID)
 	if err != nil {
 		return 0, err
@@ -343,7 +347,7 @@ func (l operatorDashboardLoader) countBlockedItems(ctx context.Context, organiza
 	if err != nil {
 		return 0, err
 	}
-	return reviewCount + strandedCount + pausedProjects + humanInputCount, nil
+	return reviewCount + strandedCount + validationBlockedCount + pausedProjects + humanInputCount, nil
 }
 
 func (l operatorDashboardLoader) countReviewBlockedTasks(ctx context.Context, organizationID uuid.UUID) (int, error) {
@@ -372,6 +376,22 @@ func (l operatorDashboardLoader) countStrandedExecutions(ctx context.Context, or
 	return count, err
 }
 
+func (l operatorDashboardLoader) countValidationBlockedTasks(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	var count int
+	err := l.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task t
+		LEFT JOIN runtime_state rs
+		  ON rs.scope_type = 'task'
+		 AND rs.scope_id = t.id
+		WHERE t.organization_id = $1
+		  AND t.work_status = 'blocked'
+		  AND COALESCE((t.metadata->'agent_turn_validation_guard'->>'blocked')::boolean, false)
+		  AND COALESCE(NULLIF(rs.metadata->>'status', ''), '') <> 'stranded'
+	`, organizationID).Scan(&count)
+	return count, err
+}
+
 func (l operatorDashboardLoader) countPausedProjects(ctx context.Context, organizationID uuid.UUID) (int, error) {
 	var count int
 	err := l.pool.QueryRow(ctx, `
@@ -392,6 +412,15 @@ func (l operatorDashboardLoader) countHumanInputItems(ctx context.Context, organ
 		  AND target_user_id = $2
 		  AND is_acted = false
 		  AND item_type IN ('human_approval_required', 'draft_action_review', 'browser_handoff', 'blocker_filed', 'system_alert')
+		  AND NOT (
+			item_type = 'blocker_filed'
+			AND EXISTS (
+				SELECT 1
+				FROM project_task t
+				WHERE t.id = inbox_item.source_task_id
+				  AND COALESCE((t.metadata->'agent_turn_validation_guard'->>'blocked')::boolean, false)
+			)
+		  )
 	`, organizationID, userID).Scan(&count)
 	return count, err
 }
@@ -808,6 +837,15 @@ func (l operatorDashboardLoader) loadBlockedItems(ctx context.Context, organizat
 		return items, nil
 	}
 
+	validationItems, err := l.loadValidationBlockedItems(ctx, organizationID, limit-len(items))
+	if err != nil {
+		return nil, err
+	}
+	appendItems(validationItems)
+	if len(items) >= limit {
+		return items, nil
+	}
+
 	reviewItems, err := l.loadReviewBlockedItems(ctx, organizationID, limit)
 	if err != nil {
 		return nil, err
@@ -888,6 +926,72 @@ func (l operatorDashboardLoader) loadStrandedExecutionItems(ctx context.Context,
 			formatTaskLabel(taskNumber, taskTitle),
 			summary,
 			status,
+			updatedAt,
+			0,
+			&projectID,
+			&projectLabel,
+			&taskID,
+			&taskNumber,
+			&taskTitle,
+			nil,
+		))
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return items, nil
+}
+
+func (l operatorDashboardLoader) loadValidationBlockedItems(ctx context.Context, organizationID uuid.UUID, limit int) ([]operatorDashboardItemResponse, error) {
+	rows, err := l.pool.Query(ctx, `
+		SELECT
+			p.id,
+			p.display_name,
+			t.id,
+			t.task_number,
+			t.title,
+			COALESCE(NULLIF(t.metadata->'agent_turn_validation_guard'->>'tool_name', ''), ''),
+			COALESCE(NULLIF(t.metadata->'agent_turn_validation_guard'->>'failure_reason', ''), ''),
+			COALESCE(NULLIF(t.metadata->'agent_turn_validation_guard'->>'failure_code', ''), ''),
+			t.updated_at
+		FROM project_task t
+		JOIN project p ON p.id = t.project_id
+		LEFT JOIN runtime_state rs
+		  ON rs.scope_type = 'task'
+		 AND rs.scope_id = t.id
+		WHERE t.organization_id = $1
+		  AND t.work_status = 'blocked'
+		  AND COALESCE((t.metadata->'agent_turn_validation_guard'->>'blocked')::boolean, false)
+		  AND COALESCE(NULLIF(rs.metadata->>'status', ''), '') <> 'stranded'
+		ORDER BY t.updated_at DESC, t.id DESC
+		LIMIT $2
+	`, organizationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]operatorDashboardItemResponse, 0, limit)
+	for rows.Next() {
+		var (
+			projectID     uuid.UUID
+			projectLabel  string
+			taskID        uuid.UUID
+			taskNumber    int
+			taskTitle     string
+			toolName      string
+			failureReason string
+			failureCode   string
+			updatedAt     time.Time
+		)
+		if scanErr := rows.Scan(&projectID, &projectLabel, &taskID, &taskNumber, &taskTitle, &toolName, &failureReason, &failureCode, &updatedAt); scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, l.newDashboardItem(
+			"validation_blocked",
+			formatTaskLabel(taskNumber, taskTitle),
+			buildValidationBlockedSummary(toolName, failureReason, failureCode),
+			"blocked",
 			updatedAt,
 			0,
 			&projectID,
@@ -1033,6 +1137,15 @@ func (l operatorDashboardLoader) loadHumanInputItems(ctx context.Context, organi
 		  AND i.target_user_id = $2
 		  AND i.is_acted = false
 		  AND i.item_type IN ('human_approval_required', 'draft_action_review', 'browser_handoff', 'blocker_filed', 'system_alert')
+		  AND NOT (
+			i.item_type = 'blocker_filed'
+			AND EXISTS (
+				SELECT 1
+				FROM project_task blocked_task
+				WHERE blocked_task.id = i.source_task_id
+				  AND COALESCE((blocked_task.metadata->'agent_turn_validation_guard'->>'blocked')::boolean, false)
+			)
+		  )
 		ORDER BY i.created_at DESC, i.id DESC
 		LIMIT $3
 	`, organizationID, userID, limit)
@@ -1276,6 +1389,25 @@ func runEventSummary(eventType string, detail *string) string {
 		return label + ": " + trimmed
 	}
 	return label
+}
+
+func buildValidationBlockedSummary(toolName, failureReason, failureCode string) string {
+	reason := strings.TrimSpace(failureReason)
+	if reason == "" {
+		reason = strings.TrimSpace(failureCode)
+	}
+	toolName = strings.TrimSpace(toolName)
+
+	summary := "validation loop blocked"
+	switch {
+	case toolName != "" && reason != "":
+		summary = fmt.Sprintf("validation loop blocked: %s (%s)", toolName, reason)
+	case toolName != "":
+		summary = fmt.Sprintf("validation loop blocked: %s", toolName)
+	case reason != "":
+		summary = fmt.Sprintf("validation loop blocked: %s", reason)
+	}
+	return summary + ". Resume task to retry."
 }
 
 func formatTaskLabel(taskNumber int, title string) string {

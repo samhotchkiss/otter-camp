@@ -60,7 +60,6 @@ const (
 	workerPromptTokenGuardrail      = 32000
 	defaultPromptTokenGuardrail     = 64000
 	validationLoopBlockThreshold    = 3
-	taskValidationGuardMetadataKey  = "agent_turn_validation_guard"
 	validationLoopSuppressionReason = "validation_loop_blocked"
 )
 
@@ -400,21 +399,7 @@ type toolValidationFailure struct {
 	AttemptFingerprint string
 }
 
-type taskValidationGuardState struct {
-	InitialMessageID   string `json:"initial_message_id"`
-	Fingerprint        string `json:"fingerprint"`
-	AttemptFingerprint string `json:"attempt_fingerprint,omitempty"`
-	ToolName           string `json:"tool_name"`
-	FailureClass       string `json:"failure_class"`
-	FailureCode        string `json:"failure_code"`
-	FailureReason      string `json:"failure_reason"`
-	Count              int    `json:"count"`
-	BlockThreshold     int    `json:"block_threshold"`
-	Blocked            bool   `json:"blocked"`
-	FirstSeenAt        string `json:"first_seen_at,omitempty"`
-	LastSeenAt         string `json:"last_seen_at,omitempty"`
-	LastTurnID         string `json:"last_turn_id,omitempty"`
-}
+type taskValidationGuardState = tasksvc.ValidationGuardState
 
 func NewEngine(opts Options) (*TurnEngine, error) {
 	needsPool := opts.Messages == nil || opts.Turns == nil || opts.Sessions == nil ||
@@ -2200,58 +2185,22 @@ func isToolValidationCode(code string) bool {
 }
 
 func parseTaskValidationGuard(metadata json.RawMessage) (taskValidationGuardState, bool) {
-	if len(metadata) == 0 || !json.Valid(metadata) {
-		return taskValidationGuardState{}, false
-	}
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(metadata, &payload); err != nil {
-		return taskValidationGuardState{}, false
-	}
-	raw, ok := payload[taskValidationGuardMetadataKey]
-	if !ok || len(raw) == 0 || string(raw) == "null" {
-		return taskValidationGuardState{}, false
-	}
-	var state taskValidationGuardState
-	if err := json.Unmarshal(raw, &state); err != nil {
+	state, ok := tasksvc.ParseValidationGuard(metadata)
+	if !ok {
 		return taskValidationGuardState{}, false
 	}
 	if state.BlockThreshold <= 0 {
 		state.BlockThreshold = validationLoopBlockThreshold
 	}
-	return state, state.Count > 0 || state.Blocked
+	return state, true
 }
 
 func mergeTaskValidationGuardMetadata(metadata json.RawMessage, state taskValidationGuardState) (json.RawMessage, error) {
-	payload := map[string]any{}
-	if len(metadata) != 0 && json.Valid(metadata) {
-		if err := json.Unmarshal(metadata, &payload); err != nil {
-			return nil, err
-		}
-	}
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	payload[taskValidationGuardMetadataKey] = state
-	merged, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	return json.RawMessage(merged), nil
+	return tasksvc.MergeValidationGuardMetadata(metadata, tasksvc.ValidationGuardState(state))
 }
 
 func clearTaskValidationGuardMetadata(metadata json.RawMessage) (json.RawMessage, error) {
-	payload := map[string]any{}
-	if len(metadata) != 0 && json.Valid(metadata) {
-		if err := json.Unmarshal(metadata, &payload); err != nil {
-			return nil, err
-		}
-	}
-	delete(payload, taskValidationGuardMetadataKey)
-	merged, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	return json.RawMessage(merged), nil
+	return tasksvc.ClearValidationGuardMetadata(metadata)
 }
 
 func nextTaskValidationGuardState(current taskValidationGuardState, initialMessageID, turnID uuid.UUID, failure toolValidationFailure, now time.Time) (taskValidationGuardState, bool) {

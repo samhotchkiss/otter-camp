@@ -85,6 +85,18 @@ func TestRunTaskQueueRequiresValidTaskID(t *testing.T) {
 	}
 }
 
+func TestRunTaskResumeRequiresValidTaskID(t *testing.T) {
+	code, _, stderr := captureCommandOutput(t, func() int {
+		return runTaskResume([]string{"not-a-uuid"})
+	})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "task resume requires a valid task id") {
+		t.Fatalf("stderr = %q, want id validation", stderr)
+	}
+}
+
 func TestRunOrgCreateRequiresName(t *testing.T) {
 	code, _, stderr := captureCommandOutput(t, func() int {
 		return runOrgCreate([]string{})
@@ -130,5 +142,30 @@ func TestRunAgentListAcceptsTrailingGlobalConnectionFlags(t *testing.T) {
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0 stderr=%q", code, stderr)
+	}
+}
+
+func TestRunTaskResumeCallsResumeEndpoint(t *testing.T) {
+	taskID := "11111111-1111-1111-1111-111111111111"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/tasks/"+taskID+"/resume" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1/tasks/"+taskID+"/resume")
+		}
+		if got := strings.TrimSpace(r.Header.Get("X-API-Key")); got != "resume-key" {
+			t.Fatalf("X-API-Key = %q, want %q", got, "resume-key")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"` + taskID + `","task_number":7,"title":"Resume task","work_status":"queued"}}`))
+	}))
+	defer server.Close()
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runTaskResume([]string{"--server-url", server.URL, "--api-key", "resume-key", "--output", "quiet", taskID})
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 stderr=%q", code, stderr)
+	}
+	if got := strings.TrimSpace(stdout); got != taskID {
+		t.Fatalf("stdout = %q, want %q", got, taskID)
 	}
 }

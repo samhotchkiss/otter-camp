@@ -107,6 +107,8 @@ type taskRecord struct {
 	PlanningChecklist        []string
 	PlanningMissing          []string
 	PlanningOverrideReason   string
+	BlockedReason            string
+	RecoveryHint             string
 	FlowSteps                []FlowStep
 	SubtaskItems             []SubtaskItem
 	Dependencies             []TaskDependency

@@ -119,6 +119,8 @@ func runTaskCommand(args []string) int {
 		return runTaskCreate(args[1:])
 	case "queue":
 		return runTaskQueue(args[1:])
+	case "resume":
+		return runTaskResume(args[1:])
 	case "cancel":
 		return runTaskCancel(args[1:])
 	default:
@@ -520,6 +522,10 @@ func runTaskQueue(args []string) int {
 	return runTaskTransition(args, "queue")
 }
 
+func runTaskResume(args []string) int {
+	return runTaskTransition(args, "resume")
+}
+
 func runTaskCancel(args []string) int {
 	return runTaskTransition(args, "cancel")
 }
@@ -790,7 +796,7 @@ func printProjectUsage(w *os.File) {
 }
 
 func printTaskUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp task <list|create|queue|cancel> [flags]")
+	fmt.Fprintln(w, "usage: ottercamp task <list|create|queue|resume|cancel> [flags]")
 }
 
 func printOrgUsage(w *os.File) {

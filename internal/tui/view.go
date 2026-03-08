@@ -1872,6 +1872,12 @@ func (m Model) renderTaskView(width, maxLines int) []string {
 	if task.RequiresHumanReview {
 		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  ⚠  Human review required"))
 	}
+	if strings.TrimSpace(task.BlockedReason) != "" {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colWarning).Render("  Blocker: "+task.BlockedReason))
+	}
+	if strings.TrimSpace(task.RecoveryHint) != "" {
+		lines = append(lines, styleMuted.Render("  Recovery: "+task.RecoveryHint))
+	}
 	if task.PlanningPlaybook != "" {
 		formatPlanningLabel := func(value string) string {
 			value = strings.TrimSpace(strings.ReplaceAll(value, "_", " "))

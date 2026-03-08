@@ -1109,6 +1109,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rec.PlanningMissing = append([]string(nil), typed.Detail.PlanningMissing...)
 		rec.PlanningOverrideReason = typed.Detail.PlanningOverrideReason
 		rec.RequiresHumanReview = typed.Detail.RequiresHumanReview
+		rec.BlockedReason = typed.Detail.BlockedReason
+		rec.RecoveryHint = typed.Detail.RecoveryHint
 		rec.BranchName = typed.Detail.BranchName
 		rec.FlowSteps = typed.Detail.FlowSteps
 		rec.SubtaskItems = typed.Detail.SubtaskItems
@@ -1131,12 +1133,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					to, _ := ev.Payload["to_status"].(string)
 					planningStatus, _ := ev.Payload["planning_process_status"].(string)
 					overrideReason, _ := ev.Payload["planning_override_reason"].(string)
+					recoveryAction, _ := ev.Payload["recovery_action"].(string)
 					line = fmt.Sprintf("%s  %s → %s (%s)", ts, from, to, actor)
 					if strings.TrimSpace(planningStatus) != "" {
 						line += fmt.Sprintf(" · planning %s", planningStatus)
 						if strings.TrimSpace(overrideReason) != "" {
 							line += ": " + overrideReason
 						}
+					}
+					if strings.TrimSpace(recoveryAction) != "" {
+						line += " · validation recovery"
 					}
 				case "flow.advanced":
 					target := rec.flowNodeName(ev.FlowNodeID)

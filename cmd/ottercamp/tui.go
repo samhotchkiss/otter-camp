@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
 	clitools "github.com/samhotchkiss/otter-camp/internal/cli"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	tuiapp "github.com/samhotchkiss/otter-camp/internal/tui"
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
@@ -1023,6 +1024,28 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 		}
 		if report.ProcessStatus == taskplan.ProcessStatusOverridden && plan.Override != nil {
 			item.PlanningOverrideReason = strings.TrimSpace(plan.Override.Reason)
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(d.WorkStatus), "blocked") {
+		if guard, ok := tasksvc.ParseValidationGuard(d.Metadata); ok && guard.Blocked {
+			item.BlockedReason = strings.TrimSpace(guard.FailureReason)
+			if item.BlockedReason == "" {
+				item.BlockedReason = strings.TrimSpace(guard.FailureCode)
+			}
+			if toolName := strings.TrimSpace(guard.ToolName); toolName != "" {
+				switch {
+				case item.BlockedReason != "":
+					item.BlockedReason = toolName + " (" + item.BlockedReason + ")"
+				default:
+					item.BlockedReason = toolName
+				}
+			}
+			if item.BlockedReason != "" {
+				item.BlockedReason = "Deterministic validation loop blocked: " + item.BlockedReason
+			} else {
+				item.BlockedReason = "Deterministic validation loop blocked."
+			}
+			item.RecoveryHint = "Resume with: ottercamp task resume " + strings.TrimSpace(taskID)
 		}
 	}
 	if d.AssignedAgentID != "" {

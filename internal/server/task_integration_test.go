@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -131,6 +132,73 @@ func TestTaskHTTPQueueRequiresFlowTemplate(t *testing.T) {
 	}
 	if got := jsonPathString(t, queued.Body, "error", "message"); got != "task requires a flow template before it can be queued" {
 		t.Fatalf("queue error message = %q, want %q body=%s", got, "task requires a flow template before it can be queued", string(queued.Body))
+	}
+}
+
+func TestTaskHTTPResumeClearsValidationGuardAndQueuesTask(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-resume-validation", false)
+	pmAgent := seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	graph := seedTaskFlowGraph(t, testServer.Pool, org.ID, project.ID, pmAgent.ID, adminUser.ID, true)
+	taskRecord := seedTaskForFlowTemplate(t, testServer.Pool, org.ID, project.ID, graph.Template.ID, graph.Work.ID, "blocked")
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+
+	guardedMetadata, err := tasksvc.MergeValidationGuardMetadata(taskRecord.Metadata, tasksvc.ValidationGuardState{
+		InitialMessageID:   uuid.NewString(),
+		Fingerprint:        "cli.execute:command_required",
+		AttemptFingerprint: "cli.execute:command_required:attempt",
+		ToolName:           "cli.execute",
+		FailureClass:       "tool_validation",
+		FailureCode:        "command_required",
+		FailureReason:      "command is required",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	taskRecord.Metadata = guardedMetadata
+	if _, err := taskRepo.Update(context.Background(), taskRecord); err != nil {
+		t.Fatalf("Update blocked task: %v", err)
+	}
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	resumed := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/resume", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if resumed.StatusCode != http.StatusOK {
+		t.Fatalf("resume status = %d, want %d body=%s", resumed.StatusCode, http.StatusOK, string(resumed.Body))
+	}
+	if got := jsonPathString(t, resumed.Body, "data", "work_status"); got != "queued" {
+		t.Fatalf("resume work_status = %q, want queued body=%s", got, string(resumed.Body))
+	}
+
+	refreshed, err := taskRepo.GetByID(context.Background(), taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	if _, ok := tasksvc.ParseValidationGuard(refreshed.Metadata); ok {
+		t.Fatalf("expected validation guard to be cleared, metadata=%s", string(refreshed.Metadata))
+	}
+
+	var payload []byte
+	if err := testServer.Pool.QueryRow(context.Background(), `
+		SELECT payload
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, taskRecord.ID).Scan(&payload); err != nil {
+		t.Fatalf("load status.changed payload: %v", err)
+	}
+	var eventPayload map[string]any
+	if err := json.Unmarshal(payload, &eventPayload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_action"])); got != "resume_validation_blocked_task" {
+		t.Fatalf("recovery_action = %q, want resume_validation_blocked_task", got)
 	}
 }
 

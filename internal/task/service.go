@@ -50,6 +50,7 @@ var (
 	ErrBrowserHandoffUnavailable  = errors.New("browser handoff service unavailable")
 	ErrActiveFlowRequired         = errors.New("task requires an active flow to be in_progress")
 	ErrFlowServiceUnavailable     = errors.New("flow service unavailable")
+	ErrValidationRecoveryRequired = errors.New("task is not blocked by a deterministic validation loop")
 )
 
 var validStatusTransitions = map[string]map[string]struct{}{
@@ -189,6 +190,7 @@ type CreateInboxItemRequest struct {
 type TaskService interface {
 	CreateTask(ctx context.Context, req CreateTaskRequest) (*ProjectTask, error)
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor) (*ProjectTask, error)
+	ResumeValidationBlockedTask(ctx context.Context, taskID uuid.UUID, actor Actor) (*ProjectTask, error)
 	RequestHumanApproval(ctx context.Context, taskID uuid.UUID) (*InboxItem, error)
 	ApproveTask(ctx context.Context, taskID, actedByUserID uuid.UUID) (*ProjectTask, error)
 	RejectTask(ctx context.Context, taskID, actedByUserID uuid.UUID, reason string) (*ProjectTask, error)
@@ -486,7 +488,10 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if err != nil {
 		return nil, err
 	}
+	return s.transitionTaskRecord(ctx, taskRecord, toStatus, actor, extraPayload, approvalOverride)
+}
 
+func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.ProjectTask, toStatus string, actor Actor, extraPayload map[string]any, approvalOverride bool) (*ProjectTask, error) {
 	from := normalizeStatus(taskRecord.WorkStatus)
 	target := normalizeStatus(toStatus)
 	if target == "" {
@@ -604,6 +609,40 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	}
 
 	return &updated, nil
+}
+
+func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.UUID, actor Actor) (*ProjectTask, error) {
+	if taskID == uuid.Nil {
+		return nil, ErrTaskIDRequired
+	}
+
+	taskRecord, err := s.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		return nil, ErrValidationRecoveryRequired
+	}
+	guard, ok := ParseValidationGuard(taskRecord.Metadata)
+	if !ok || !guard.Blocked {
+		return nil, ErrValidationRecoveryRequired
+	}
+
+	cleared, err := ClearValidationGuardMetadata(taskRecord.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	taskRecord.Metadata = cleared
+
+	payload := map[string]any{
+		"recovery_action":           "resume_validation_blocked_task",
+		"cleared_validation_guard":  true,
+		"validation_tool_name":      strings.TrimSpace(guard.ToolName),
+		"validation_failure_code":   strings.TrimSpace(guard.FailureCode),
+		"validation_failure_reason": strings.TrimSpace(guard.FailureReason),
+	}
+	return s.transitionTaskRecord(ctx, taskRecord, "queued", actor, payload, false)
 }
 
 type queueDecompositionResult struct {

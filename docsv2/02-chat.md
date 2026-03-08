@@ -638,6 +638,14 @@ An async agent works for 10 turns, then waits hours for a blocker to resolve. Wh
 
 No special handling needed for gaps. The existing model handles it.
 
+### Deterministic Validation-Loop Recovery
+
+When a task turn repeatedly fails the same deterministic tool validation (for example `file.write content_required` or `cli.execute command_required`), the runtime persists a task-scoped validation guard in task metadata and moves the task to `blocked`.
+
+- While that guard remains blocked, ordinary task-session wakeups are suppressed so the system does not churn forever on the same invalid loop.
+- Recovery is explicit, not automatic. An operator or automated supervisor must resume the blocked task through the product surface, which clears the validation guard, records an auditable recovery event, and re-queues the task.
+- The resumed task starts a fresh async turn on the task's canonical async session. Recovery does not require direct database edits.
+
 ### Session-Level Recovery
 
 If a session is irrecoverably broken (agent stuck in a loop, corrupted state, nonsensical context):

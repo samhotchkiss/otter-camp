@@ -199,7 +199,9 @@ type TaskDetailItem struct {
 	PlanningChecklist        []string
 	PlanningMissing          []string
 	PlanningOverrideReason   string
-	RequiresHumanReview      bool   // whether this task requires human review
+	RequiresHumanReview      bool // whether this task requires human review
+	BlockedReason            string
+	RecoveryHint             string
 	BranchName               string // git branch name, if any
 	FlowSteps                []FlowStep
 	SubtaskItems             []SubtaskItem

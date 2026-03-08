@@ -205,6 +205,129 @@ func TestTaskQueueProcessorIntegrationQueuedFlowTaskStartsFlowAndRun(t *testing.
 	}
 }
 
+func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
+	defer stopTurnRuntime()
+
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Resume validation blocked task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	guardedMetadata, err := tasksvc.MergeValidationGuardMetadata(taskRecord.Metadata, tasksvc.ValidationGuardState{
+		InitialMessageID:   uuid.NewString(),
+		Fingerprint:        "cli.execute:command_required",
+		AttemptFingerprint: "cli.execute:command_required:attempt",
+		ToolName:           "cli.execute",
+		FailureClass:       "tool_validation",
+		FailureCode:        "command_required",
+		FailureReason:      "command is required",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	taskRecord.Metadata = guardedMetadata
+	taskRecord.WorkStatus = "blocked"
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update blocked task: %v", err)
+	}
+
+	if _, err := fx.tasks.ResumeValidationBlockedTask(ctx, created.ID, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+
+	sessionRepo := repo.NewChatSessionRepo(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+	turnRepo := repo.NewChatTurnRepo(fx.pool)
+
+	var (
+		session *repo.ChatSession
+		turns   []repo.ChatTurn
+	)
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		current, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if current.WorkStatus != "in_progress" {
+			return false, nil
+		}
+		if _, ok := tasksvc.ParseValidationGuard(current.Metadata); ok {
+			return false, fmt.Errorf("validation guard still present after resume")
+		}
+
+		session, err = sessionRepo.GetByScopeAndMode(ctx, "project_task", created.ID, "async")
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+
+		messages, err := messageRepo.ListBySession(ctx, session.ID)
+		if err != nil {
+			return false, err
+		}
+		foundKickoff := false
+		foundResponse := false
+		for _, message := range messages {
+			if message.Role == "user" && len(message.Metadata) > 0 {
+				var metadata map[string]any
+				if err := json.Unmarshal(message.Metadata, &metadata); err == nil && metadata["source"] == "task_queue_processor" {
+					foundKickoff = true
+				}
+			}
+			if message.Role == "assistant" && message.Status == "final" && message.Content == "Task started." {
+				foundResponse = true
+			}
+		}
+		if !foundKickoff || !foundResponse {
+			return false, nil
+		}
+
+		turns, err = turnRepo.ListBySession(ctx, session.ID)
+		if err != nil {
+			return false, err
+		}
+		if len(turns) == 0 {
+			return false, nil
+		}
+		return turns[len(turns)-1].Status == "completed", nil
+	})
+
+	if session == nil || session.ID == uuid.Nil {
+		t.Fatal("expected canonical async task session after resume")
+	}
+	if len(turns) == 0 {
+		t.Fatal("expected a fresh task turn after resume")
+	}
+	if turns[len(turns)-1].Status != "completed" {
+		t.Fatalf("latest turn status = %q, want completed", turns[len(turns)-1].Status)
+	}
+}
+
 func TestTaskQueueProcessorIntegrationQueueRejectsNonGateTaskWhileOutstandingGateExistsEX256(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
@@ -3370,6 +3493,14 @@ func startTaskQueueTurnRuntime(t *testing.T, ctx context.Context, pool *pgxpool.
 			return repo.ErrNotFound
 		}
 
+		turn, err := chatService.CreateTurn(ctx, payload.SessionID, responderID)
+		if err != nil {
+			return err
+		}
+		if err := chatService.StartTurn(ctx, turn.ID); err != nil {
+			return err
+		}
+
 		authorType := "agent"
 		message, err := chatService.AppendMessage(ctx, chat.AppendMessageInput{
 			SessionID:  payload.SessionID,
@@ -3384,7 +3515,10 @@ func startTaskQueueTurnRuntime(t *testing.T, ctx context.Context, pool *pgxpool.
 		if err := chatService.UpdateMessageStatus(ctx, message.ID, "streaming", ""); err != nil {
 			return err
 		}
-		return chatService.UpdateMessageStatus(ctx, message.ID, "final", "")
+		if err := chatService.UpdateMessageStatus(ctx, message.ID, "final", ""); err != nil {
+			return err
+		}
+		return chatService.CompleteTurn(ctx, turn.ID)
 	})
 
 	runCtx, cancel := context.WithCancel(ctx)

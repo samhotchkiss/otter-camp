@@ -501,6 +501,11 @@ func (f *fakeTaskService) TransitionStatus(_ context.Context, _ uuid.UUID, _ str
 	return &tasksvc.ProjectTask{}, nil
 }
 
+func (f *fakeTaskService) ResumeValidationBlockedTask(_ context.Context, _ uuid.UUID, _ tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+	f.transitionCalls++
+	return &tasksvc.ProjectTask{}, nil
+}
+
 func (f *fakeTaskService) RequestHumanApproval(context.Context, uuid.UUID) (*tasksvc.InboxItem, error) {
 	return nil, nil
 }

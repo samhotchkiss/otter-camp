@@ -97,6 +97,29 @@ func TestTransitionStatusInvalidReturnsTypedError(t *testing.T) {
 	}
 }
 
+func TestResumeValidationBlockedTaskRequiresBlockedGuard(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "blocked",
+				Title:          "Blocked task",
+				CreatedByType:  "system",
+				Metadata:       json.RawMessage(`{}`),
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	_, err := svc.ResumeValidationBlockedTask(context.Background(), taskID, Actor{Type: "system"})
+	if !errors.Is(err, ErrValidationRecoveryRequired) {
+		t.Fatalf("ResumeValidationBlockedTask err = %v, want ErrValidationRecoveryRequired", err)
+	}
+}
+
 func TestTransitionStatusCompletedAtBehavior(t *testing.T) {
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 	taskID := uuid.New()
