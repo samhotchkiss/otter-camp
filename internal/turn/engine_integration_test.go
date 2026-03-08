@@ -1748,6 +1748,181 @@ Ship one flagship essay each week, one supporting checklist, and one short proof
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryTurnRejectsToolRepairNarrationDraftEX320(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "cli.execute", Tier: "tier2"},
+		{Name: "file.write", Tier: "tier2"},
+	}}
+
+	const targetPath = "docs/content-strategy.md"
+	const repairedNarration = "I can see the problem clearly from the conversation history. " +
+		"Every `file_write` call has been emitted **without the `content` parameter populated**. " +
+		"The system then captures nearby prose text as a fallback. I need to pass the full document text as the explicit `content` parameter value. Let me do this now."
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{
+				Content: "I understand the problem now. My `file_write` calls have consistently been emitted without the `content` parameter populated. Let me use `cli_execute` with a heredoc to write the file instead.",
+				ToolCalls: []ModelToolCall{{
+					ID:   "recovery-cli",
+					Name: "cli_execute",
+					Tier: "tier2",
+				}},
+			}, nil
+		case 2:
+			return ModelResponse{
+				Content: repairedNarration,
+				ToolCalls: []ModelToolCall{{
+					ID:   "recovery-write",
+					Name: "file_write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"path": targetPath,
+					},
+				}},
+			}, nil
+		default:
+			t.Fatalf("unexpected extra model call after rejecting tool-repair narration draft: %d", modelCalls)
+			return ModelResponse{}, nil
+		}
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		t.Fatalf("unexpected tier2 dispatch for rejected recovery draft: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+	if dispatched != 0 {
+		t.Fatalf("tier2 dispatches = %d, want 0", dispatched)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))); err == nil {
+		t.Fatalf("target file unexpectedly exists at %s", targetPath)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat target file: %v", err)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if checkpoint.ArtifactPath != artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactRel)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "tool-recovery troubleshooting") {
+		t.Fatalf("checkpoint failure_reason = %q, want repair-narration guidance", checkpoint.FailureReason)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
+	}
+
+	artifactBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel)))
+	if err != nil {
+		t.Fatalf("read recovery artifact: %v", err)
+	}
+	artifactText := string(artifactBody)
+	if !strings.Contains(artifactText, repairedNarration) {
+		t.Fatalf("artifact missing rejected draft:\n%s", artifactText)
+	}
+	if !strings.Contains(artifactText, "tool-recovery troubleshooting") {
+		t.Fatalf("artifact missing repair-narration failure reason:\n%s", artifactText)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var cliCorrections int
+	var fileWriteCorrections int
+	var haltMessages int
+	var toolResults int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"docs/content-strategy.md"`) {
+			toolResults++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: cli.execute was emitted without `command`") {
+			cliCorrections++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: file.write for `docs/content-strategy.md` was emitted without `content`") {
+			fileWriteCorrections++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "tool-recovery troubleshooting instead of the file body") {
+			haltMessages++
+		}
+	}
+	if cliCorrections != 1 {
+		t.Fatalf("cli recovery correction messages = %d, want 1", cliCorrections)
+	}
+	if fileWriteCorrections != 0 {
+		t.Fatalf("file.write recovery correction messages = %d, want 0", fileWriteCorrections)
+	}
+	if haltMessages != 1 {
+		t.Fatalf("repair-narration halt messages = %d, want 1", haltMessages)
+	}
+	if toolResults != 0 {
+		t.Fatalf("file.write tool_results = %d, want 0", toolResults)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnPersistsArtifactAfterRepeatedEmptyFileWriteEX312(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

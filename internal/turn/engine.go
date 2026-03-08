@@ -1988,7 +1988,7 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 		return false, false, nil
 	}
 
-	if draft, ok := e.recoveryFileWriteDraftContent(ctx, rt); ok {
+	if draft, rejectReason, ok := e.recoveryFileWriteDraftContent(ctx, rt, targetPath); ok {
 		normalized["content"] = draft
 		if _, exists := normalized["create_dirs"]; !exists {
 			normalized["create_dirs"] = true
@@ -2007,6 +2007,26 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 			"path", targetPath,
 		)
 		return false, false, nil
+	} else if strings.TrimSpace(rejectReason) != "" {
+		rt.stopReason = stopReasonRecoveryFileRejected
+		artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, draft, rejectReason)
+		if artifactErr != nil {
+			e.logger.Warn("recovery: failed to persist rejected file.write draft artifact",
+				"session_id", rt.session.ID,
+				"turn_id", rt.turn.ID,
+				"path", targetPath,
+				"error", artifactErr,
+			)
+		}
+		message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, rejectReason))
+		if err != nil {
+			return true, true, err
+		}
+		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, rejectReason, message.ID); checkpointErr != nil {
+			return true, true, checkpointErr
+		}
+		rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, rejectReason)
+		return true, true, nil
 	}
 
 	if rt.recoveryFileFixes >= recoveryFileWriteRepairBudget {
@@ -2174,7 +2194,24 @@ func buildProviderAuthBlockedTaskReason(recoveryTurn bool) string {
 	return "task blocked after provider authentication failed on every eligible model connection; fix or disable the failing credential before re-queueing the task"
 }
 
-func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turnRuntime) (string, bool) {
+func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", "", false
+	}
+	draft, ok := e.latestRecoveryAssistantDraftContent(ctx, rt)
+	if !ok {
+		return "", "", false
+	}
+	if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" {
+		return draft, reason, false
+	}
+	if !looksLikeRecoveryFileDraft(draft) {
+		return "", "", false
+	}
+	return draft, "", true
+}
+
+func (e *TurnEngine) latestRecoveryAssistantDraftContent(ctx context.Context, rt *turnRuntime) (string, bool) {
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return "", false
 	}
@@ -2183,7 +2220,7 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 		return "", false
 	}
 	draft := latestNonEmptyAssistantFinalForTurn(messages, rt.turn.ID)
-	if draft == nil || !looksLikeRecoveryFileDraft(draft.Content) {
+	if draft == nil {
 		return "", false
 	}
 	return draft.Content, true
@@ -2247,6 +2284,59 @@ func looksLikeRecoveryFileDraft(content string) bool {
 	return false
 }
 
+func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+	lower := strings.ToLower(trimmed)
+	if !containsAny(lower,
+		"i understand the problem",
+		"i can see the problem",
+		"let me ",
+		"i need to ",
+		"my `file_write`",
+		"my `file.write`",
+		"my file_write",
+		"my file.write",
+	) {
+		return ""
+	}
+	if !containsAny(lower,
+		"file_write",
+		"file.write",
+		"cli_execute",
+		"cli.execute",
+		"conversation history",
+		"content parameter",
+		"path parameter",
+		"tool call",
+		"tool calls",
+		"invocation",
+		"invocations",
+		"fallback",
+	) {
+		return ""
+	}
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	return fmt.Sprintf("assistant draft for %s described tool-recovery troubleshooting instead of the file body", path)
+}
+
+func containsAny(haystack string, needles ...string) bool {
+	for _, needle := range needles {
+		if needle == "" {
+			continue
+		}
+		if strings.Contains(haystack, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *turnRuntime, targetPath, draft, failureReason string) (string, error) {
 	if e == nil || e.tasks == nil || e.projects == nil || rt == nil || rt.session == nil {
 		return "", fmt.Errorf("recovery artifact persistence requires task and project repositories")
@@ -2280,7 +2370,7 @@ func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *t
 	}
 
 	if strings.TrimSpace(draft) == "" {
-		draft, _ = e.recoveryFileWriteDraftContent(ctx, rt)
+		draft, _, _ = e.recoveryFileWriteDraftContent(ctx, rt, targetPath)
 	}
 	document := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetRel, draft, failureReason, e.now())
 	if err := os.WriteFile(artifactAbs, []byte(document), 0o644); err != nil {

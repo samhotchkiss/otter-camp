@@ -2449,6 +2449,51 @@ func TestHandleUserMessageSkipsBlockedValidationLoop(t *testing.T) {
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
+	const targetPath = "docs/content-strategy.md"
+
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "rejects tool repair narration",
+			content: "I can see the problem clearly from the conversation history. " +
+				"Every `file_write` call has been emitted without the `content` parameter populated. " +
+				"Let me do this now.",
+			want: "tool-recovery troubleshooting",
+		},
+		{
+			name: "accepts substantive draft body",
+			content: `# Content Strategy
+
+## Core Promise
+Sam.blog should publish one durable operating system for thoughtful parents building resilient families and meaningful work.
+`,
+			want: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := recoveryFileWriteDraftRejectReason(tc.content, targetPath)
+			if tc.want == "" {
+				if got != "" {
+					t.Fatalf("recoveryFileWriteDraftRejectReason() = %q, want empty", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("recoveryFileWriteDraftRejectReason() = %q, want contains %q", got, tc.want)
+			}
+			if !strings.Contains(got, targetPath) {
+				t.Fatalf("recoveryFileWriteDraftRejectReason() = %q, want target path", got)
+			}
+		})
+	}
+}
+
 type unitFixture struct {
 	engine        *TurnEngine
 	events        *fakeEventBus
