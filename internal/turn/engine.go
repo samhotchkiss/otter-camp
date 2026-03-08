@@ -2857,11 +2857,12 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 	if trimmed == "" {
 		return false
 	}
-	if hasStructuredRecoveryFileDraftMarkers(trimmed) || strings.Count(trimmed, "\n") >= 3 || len(trimmed) > 600 {
+	if hasStructuredRecoveryFileDraftMarkers(trimmed) || strings.Count(trimmed, "\n") >= 3 || len(trimmed) > 900 {
 		return false
 	}
 
 	lower := strings.ToLower(trimmed)
+	wordCount := len(strings.Fields(trimmed))
 	if containsAny(lower, "the single deliverable", "final deliverable") {
 		return true
 	}
@@ -2870,6 +2871,10 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"let me draft",
 		"i'm going to write",
 		"i am going to write",
+		"time to write",
+		"time to draft",
+		"ready to write",
+		"ready to draft",
 		"write the full",
 		"write the comprehensive",
 		"draft the full",
@@ -2883,7 +2888,23 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"i have what i need",
 		"now that i have",
 	)
-	if hasWriteIntent && hasSetupCue {
+	if hasWriteIntent && (hasSetupCue || wordCount <= 80) {
+		return true
+	}
+	if wordCount <= 80 && containsAny(lower,
+		"critical deliverable",
+		"deliverable that unblocks",
+		"deliverable for",
+		"unblocks",
+		"strategic foundation",
+		"foundation for",
+	) && containsAny(lower,
+		"deliverable",
+		"document",
+		"strategy",
+		"write",
+		"draft",
+	) {
 		return true
 	}
 	if containsAny(lower, "this needs to be") && containsAny(lower,
