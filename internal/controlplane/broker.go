@@ -503,8 +503,19 @@ func (b *ToolBroker) resolveExecutionBinding(ctx context.Context, agent repo.Age
 	switch binding.scopeType {
 	case "project":
 		projectID := session.ScopeID
-		if binding.projectID == nil {
-			binding.projectID = &projectID
+		binding.projectID = &projectID
+		if binding.taskID != nil && *binding.taskID != uuid.Nil {
+			taskProjectID, resolveErr := b.resolveTaskProjectID(ctx, agent.OrganizationID, *binding.taskID)
+			switch {
+			case resolveErr == nil && taskProjectID == projectID:
+				// Preserve same-project task binding for task-bound work resumed through a project session.
+			case resolveErr == nil:
+				binding.taskID = nil
+			case isTaskScopeBindingInvariant(resolveErr):
+				binding.taskID = nil
+			default:
+				return executionBinding{}, resolveErr
+			}
 		}
 	case "project_task":
 		if session.ScopeID == uuid.Nil {
@@ -592,6 +603,13 @@ func taskScopeBindingInvariantError(detail string) error {
 		return fmt.Errorf("%s: %s", taskScopeBindingInvariantPrefix, trimmed)
 	}
 	return fmt.Errorf("%s", taskScopeBindingInvariantPrefix)
+}
+
+func isTaskScopeBindingInvariant(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(err.Error()), taskScopeBindingInvariantPrefix)
 }
 
 func copyUUIDPointer(id *uuid.UUID) *uuid.UUID {

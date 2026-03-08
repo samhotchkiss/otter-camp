@@ -3146,6 +3146,120 @@ func TestIntegrationProjectSessionQueueKeepsPlannedTaskSetFlat(t *testing.T) {
 	}
 }
 
+func TestIntegrationProjectSessionPlanningIgnoresStaleCrossProjectTaskBinding(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	staleProject := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
+	staleTask := testutil.MakeTask(t, pool, staleProject.ID, testutil.MakeTaskOptions{})
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Sam.blog fresh kickoff",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+
+	projectExecCtx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &actor.ID,
+		SessionID:      &sessionID,
+		ProjectID:      &staleProject.ID,
+		TaskID:         &staleTask.ID,
+	})
+
+	if _, err := executor.Execute(projectExecCtx, "agent.assign_project", map[string]any{
+		"agent_id":   assignee.ID.String(),
+		"project_id": project.ID.String(),
+		"role":       "pm",
+	}); err != nil {
+		t.Fatalf("agent.assign_project: %v", err)
+	}
+
+	templateOut, err := executor.Execute(projectExecCtx, "flow.create_template", map[string]any{
+		"project_id": project.ID.String(),
+		"name":       "Fresh Kickoff Flow",
+		"nodes": []any{
+			map[string]any{"display_name": "Work", "node_type": "work"},
+			map[string]any{"display_name": "Review", "node_type": "review", "requires_human_review": true},
+			map[string]any{"display_name": "Merge", "node_type": "merge"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("flow.create_template: %v", err)
+	}
+	templateID := nestedUUID(t, templateOut, "template", "id")
+
+	taskOut, err := executor.Execute(projectExecCtx, "task.create", map[string]any{
+		"project_id":       project.ID.String(),
+		"title":            "Sam.blog kickoff planning",
+		"description":      "Assign staffing, create workstreams, and bind the kickoff flow template.",
+		"flow_template_id": templateID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	taskID := nestedUUID(t, taskOut, "task", "id")
+
+	createdTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("load created task: %v", err)
+	}
+	if createdTask.ProjectID != project.ID {
+		t.Fatalf("created task project_id = %s, want %s", createdTask.ProjectID, project.ID)
+	}
+	if createdTask.FlowTemplateID == nil || *createdTask.FlowTemplateID != templateID {
+		t.Fatalf("created task flow_template_id = %v, want %s", createdTask.FlowTemplateID, templateID)
+	}
+
+	var assignmentCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM agent_project_assignment
+		WHERE project_id = $1
+		  AND agent_id = $2
+		  AND is_active = true
+	`, project.ID, assignee.ID).Scan(&assignmentCount); err != nil {
+		t.Fatalf("count project assignments: %v", err)
+	}
+	if assignmentCount != 1 {
+		t.Fatalf("project assignment count = %d, want 1", assignmentCount)
+	}
+
+	var templateCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_template
+		WHERE project_id = $1
+	`, project.ID).Scan(&templateCount); err != nil {
+		t.Fatalf("count flow templates: %v", err)
+	}
+	if templateCount != 1 {
+		t.Fatalf("project flow template count = %d, want 1", templateCount)
+	}
+
+	var taskCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task
+		WHERE project_id = $1
+		  AND title = 'Sam.blog kickoff planning'
+	`, project.ID).Scan(&taskCount); err != nil {
+		t.Fatalf("count project tasks: %v", err)
+	}
+	if taskCount != 1 {
+		t.Fatalf("project task count = %d, want 1", taskCount)
+	}
+}
+
 func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
