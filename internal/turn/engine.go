@@ -905,7 +905,14 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 type workCompletionSignal struct {
 	commitSHA      string
 	filesCommitted int
+	targetPath     string
 }
+
+const (
+	completedWorkSignalMetadataKey       = "completed_work_signal"
+	completedWorkSignalMetadataTargetKey = "completed_work_target_path"
+	completedWorkSignalRecoveryFileWrite = "recovery_file_write"
+)
 
 func (e *TurnEngine) handleCompletedWorkTurn(ctx context.Context, taskRecord repo.ProjectTask, agentID uuid.UUID, messages []repo.ChatMessage, turnID uuid.UUID) (bool, error) {
 	if e.flowAdvancer == nil || taskRecord.ID == uuid.Nil || agentID == uuid.Nil {
@@ -3411,42 +3418,43 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	return nil
 }
 
-func (e *TurnEngine) maybeClearRecoveryFileWriteCheckpoint(ctx context.Context, rt *turnRuntime, result ToolResult) (bool, error) {
+func (e *TurnEngine) maybeClearRecoveryFileWriteCheckpoint(ctx context.Context, rt *turnRuntime, result ToolResult) (*taskcheckpoint.RecoveryFileWriteCheckpoint, bool, error) {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
-		return false, nil
+		return nil, false, nil
 	}
 	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.write") || strings.TrimSpace(result.Error) != "" {
-		return false, nil
+		return nil, false, nil
 	}
 	writtenPath := strings.TrimSpace(stringValue(result.Output["path"]))
 	if writtenPath == "" {
-		return false, nil
+		return nil, false, nil
 	}
 
 	taskID := resolveTaskID(rt.session)
 	if taskID == nil || *taskID == uuid.Nil {
-		return false, nil
+		return nil, false, nil
 	}
 	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
 	if !ok {
-		return false, nil
+		return nil, false, nil
 	}
 	if !sameWorkspaceRelativePath(checkpoint.TargetPath, writtenPath) {
-		return false, nil
+		return nil, false, nil
 	}
 	cleared, err := taskcheckpoint.ClearRecoveryFileWriteCheckpoint(taskRecord.Metadata)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	taskRecord.Metadata = cleared
 	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
-		return false, err
+		return nil, false, err
 	}
-	return true, nil
+	checkpointCopy := checkpoint
+	return &checkpointCopy, true, nil
 }
 
 func (e *TurnEngine) handleRecoveryPopulatedFileWriteOutcome(ctx context.Context, rt *turnRuntime, call ToolCall, result ToolResult) (bool, error) {
@@ -3737,9 +3745,14 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 				return err
 			}
 		}
-		if cleared, clearErr := e.maybeClearRecoveryFileWriteCheckpoint(ctx, rt, result); clearErr != nil {
+		if checkpoint, cleared, clearErr := e.maybeClearRecoveryFileWriteCheckpoint(ctx, rt, result); clearErr != nil {
 			return clearErr
 		} else if cleared {
+			if meta, metaErr := buildCompletedRecoveryWriteMetadata(message.Metadata, checkpoint.TargetPath); metaErr != nil {
+				return metaErr
+			} else if _, err := e.messages.UpdateMetadata(ctx, message.ID, meta); err != nil {
+				return err
+			}
 			rt.historyStartID = nil
 		}
 	}
@@ -5442,6 +5455,11 @@ func completedWorkSignalFromMessages(messages []repo.ChatMessage, turnID uuid.UU
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
 			continue
 		}
+		if targetPath, ok := completedRecoveryWriteTargetFromMetadata(message.Metadata); ok {
+			latest = workCompletionSignal{targetPath: targetPath}
+			found = true
+			continue
+		}
 		toolName, output, errText, ok := parseToolResultMessage(message.Content)
 		if !ok || strings.TrimSpace(errText) != "" {
 			continue
@@ -5464,6 +5482,25 @@ func completedWorkSignalFromMessages(messages []repo.ChatMessage, turnID uuid.UU
 		found = true
 	}
 	return latest, found
+}
+
+func buildCompletedRecoveryWriteMetadata(metadata json.RawMessage, targetPath string) (json.RawMessage, error) {
+	merged := messageMetadataMap(metadata)
+	merged[completedWorkSignalMetadataKey] = completedWorkSignalRecoveryFileWrite
+	merged[completedWorkSignalMetadataTargetKey] = strings.TrimSpace(targetPath)
+	return json.Marshal(merged)
+}
+
+func completedRecoveryWriteTargetFromMetadata(metadata json.RawMessage) (string, bool) {
+	decoded := messageMetadataMap(metadata)
+	if !strings.EqualFold(strings.TrimSpace(stringValue(decoded[completedWorkSignalMetadataKey])), completedWorkSignalRecoveryFileWrite) {
+		return "", false
+	}
+	targetPath := strings.TrimSpace(stringValue(decoded[completedWorkSignalMetadataTargetKey]))
+	if targetPath == "" {
+		return "", false
+	}
+	return targetPath, true
 }
 
 func parseToolResultMessage(content string) (string, map[string]any, string, bool) {

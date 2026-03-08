@@ -7629,6 +7629,156 @@ func TestTurnEngineIntegrationCompletedWorkTurnAdvancesTaskToReview(t *testing.T
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryTargetWriteAdvancesTaskToReview(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:   fixture.pool,
+		Events: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("flow.NewService: %v", err)
+	}
+	if _, err := flowService.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant agent: %v", err)
+	}
+
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "resume from the recovery checkpoint and finish the file",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage user: %v", err)
+	}
+
+	turn, err := fixture.chatService.CreateTurn(ctx, taskSession.ID, fixture.agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chatService.StartTurn(ctx, turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	assistantType := "agent"
+	assistantMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		TurnID:     &turn.ID,
+		AuthorType: &assistantType,
+		AuthorID:   &fixture.agent.ID,
+		Role:       "assistant",
+		Content:    "# Content Strategy — Sam.blog\n\nRecovered substantive strategy body.\n",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage assistant: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, assistantMessage.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus assistant: %v", err)
+	}
+
+	recoveryMeta, err := buildCompletedRecoveryWriteMetadata(nil, "docs/content-strategy.md")
+	if err != nil {
+		t.Fatalf("buildCompletedRecoveryWriteMetadata: %v", err)
+	}
+	fileResult, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: taskSession.ID,
+		TurnID:    &turn.ID,
+		Role:      "tool_result",
+		Content:   string(mustJSON(t, map[string]any{"tool_name": "file.write", "output": map[string]any{"path": "docs/content-strategy.md", "byte_size": 64, "created": false}})),
+		Metadata:  recoveryMeta,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage file tool_result: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, fileResult.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus file tool_result: %v", err)
+	}
+
+	if err := fixture.chatService.CompleteTurn(ctx, turn.ID); err != nil {
+		t.Fatalf("CompleteTurn: %v", err)
+	}
+
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": taskSession.ID.String(), "turn_id": turn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", updatedTask.WorkStatus)
+	}
+
+	if updatedTask.CurrentFlowNodeID == nil {
+		t.Fatal("expected current flow node after advance")
+	}
+	nodeRepo := repo.NewFlowNodeRepo(fixture.pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, *taskRecord.FlowTemplateID)
+	if err != nil {
+		t.Fatalf("GetByTemplateOrdered: %v", err)
+	}
+	if len(nodes) < 2 {
+		t.Fatalf("flow node count = %d, want >= 2", len(nodes))
+	}
+	if *updatedTask.CurrentFlowNodeID != nodes[1].ID {
+		t.Fatalf("current_flow_node_id = %s, want review node %s", updatedTask.CurrentFlowNodeID.String(), nodes[1].ID)
+	}
+
+	var flowAdvancedEvents int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'flow.advanced'
+		  AND payload->>'task_id' = $2
+	`, fixture.org.ID, taskRecord.ID.String()).Scan(&flowAdvancedEvents); err != nil {
+		t.Fatalf("count flow.advanced events: %v", err)
+	}
+	if flowAdvancedEvents != 1 {
+		t.Fatalf("flow.advanced events = %d, want 1", flowAdvancedEvents)
+	}
+
+	var queuedAgentTurnJobs int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND payload->>'session_id' = $1
+		  AND payload->>'message_id' = $2
+	`, taskSession.ID.String(), userMessage.ID.String()).Scan(&queuedAgentTurnJobs); err != nil {
+		t.Fatalf("count queued agent_turn jobs: %v", err)
+	}
+	if queuedAgentTurnJobs != 0 {
+		t.Fatalf("queued agent_turn jobs = %d, want 0", queuedAgentTurnJobs)
+	}
+}
+
 func TestTurnEngineIntegrationSmokeTaskWritesOutputAndAdvancesToReview(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

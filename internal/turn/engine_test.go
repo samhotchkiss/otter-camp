@@ -778,6 +778,83 @@ func TestHandleTurnCompletedEventAdvancesFlowFromSuccessfulGitCommit(t *testing.
 	}
 }
 
+func TestHandleTurnCompletedEventAdvancesFlowFromSuccessfulRecoveryTargetWrite(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.flowAdvancer.tasks = taskRepo
+	fixture.engine.flowAdvancer = fixture.flowAdvancer
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Recovered strategy written.")
+	meta, err := buildCompletedRecoveryWriteMetadata(nil, "docs/content-strategy.md")
+	if err != nil {
+		t.Fatalf("buildCompletedRecoveryWriteMetadata: %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"tool_name": "file.write",
+		"output": map[string]any{
+			"path":      "docs/content-strategy.md",
+			"byte_size": 512,
+			"created":   false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal tool result: %v", err)
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   string(raw),
+		Metadata:  meta,
+	})
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if fixture.flowAdvancer.recordNodeCommitCalls != 0 {
+		t.Fatalf("record node commit calls = %d, want 0", fixture.flowAdvancer.recordNodeCommitCalls)
+	}
+	if fixture.flowAdvancer.advanceFlowCalls != 1 {
+		t.Fatalf("advance flow calls = %d, want 1", fixture.flowAdvancer.advanceFlowCalls)
+	}
+	updatedTask, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review after successful recovery target write", updatedTask.WorkStatus)
+	}
+}
+
 func TestHandleTurnCompletedEventDuplicateCompletionSignalAdvancesExactlyOnce(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 
