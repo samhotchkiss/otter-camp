@@ -56,11 +56,13 @@ const (
 	defaultCancelConsumerPrefix     = "turn-engine.cancel"
 	stopReasonMaxToolCalls          = "max_tool_calls"
 	stopReasonMaxDuration           = "max_duration"
+	stopReasonRecoveryCLIRejected   = "model_error"
 	stopReasonValidationBlocked     = "validation_loop_blocked"
 	workerPromptTokenGuardrail      = 32000
 	defaultPromptTokenGuardrail     = 64000
 	validationLoopBlockThreshold    = 3
 	validationLoopSuppressionReason = "validation_loop_blocked"
+	recoveryCLIRepairBudget         = 1
 )
 
 var (
@@ -383,6 +385,8 @@ type turnRuntime struct {
 	historyStartID    *uuid.UUID
 	disableMemory     bool
 	freshKickoff      bool
+	recoveryTurn      bool
+	recoveryCLIFixes  int
 }
 
 type projectIdentity struct {
@@ -1007,6 +1011,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		runStepID:        runStepIDFromMetadata(message.Metadata),
 		runAttemptID:     runAttemptIDFromMetadata(message.Metadata),
 		startedAt:        e.turnStartTime(turn),
+		recoveryTurn:     isRecoveryResumeMessage(message),
 	}
 	runtime.projectIdentity = e.loadProjectIdentityForMessage(ctx, sessionID, messageID)
 	if isFreshKickoffRequest(session, message) {
@@ -1806,6 +1811,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
 			return true, nil
 		}
+		handled, stop, err := e.handleRecoveryCLIExecuteWithoutCommand(ctx, rt, call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 
 		var runID *uuid.UUID
 		result, err := e.dispatcher.DispatchTier2(ctx, call, func(id uuid.UUID) {
@@ -1835,6 +1850,45 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	}
 
 	return false, nil
+}
+
+func (e *TurnEngine) handleRecoveryCLIExecuteWithoutCommand(ctx context.Context, rt *turnRuntime, call ToolCall) (bool, bool, error) {
+	if rt == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
+		return false, false, nil
+	}
+	if !isRecoveryCLIExecuteWithoutCommand(call) {
+		return false, false, nil
+	}
+	if rt.recoveryCLIFixes >= recoveryCLIRepairBudget {
+		rt.stopReason = stopReasonRecoveryCLIRejected
+		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryCLIExecuteRejectedMessage()); err != nil {
+			return true, true, err
+		}
+		return true, true, nil
+	}
+	rt.recoveryCLIFixes++
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryCLIExecuteRetryMessage()); err != nil {
+		return true, false, err
+	}
+	return true, false, nil
+}
+
+func isRecoveryCLIExecuteWithoutCommand(call ToolCall) bool {
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "cli.execute") {
+		return false
+	}
+	if hasRawToolArguments(call) {
+		return false
+	}
+	return stringValue(call.Arguments["command"]) == ""
+}
+
+func buildRecoveryCLIExecuteRetryMessage() string {
+	return "[Recovery correction: cli.execute was emitted without `command`. Retry only with a non-empty `cli.execute.command` string. For file output, use one full shell command such as:\ncat > docs/target.md <<'EOF'\n...full file contents...\nEOF\nReplace `docs/target.md` with the exact workspace-relative task path. If you cannot provide the full command yet, draft the content first or use `file.write` with populated `path` and `content`.]"
+}
+
+func buildRecoveryCLIExecuteRejectedMessage() string {
+	return "[Recovery turn halted: cli.execute was retried without `command` after one correction. This turn ended without re-blocking the task. Resume only after providing a full `cli.execute.command` string or a populated `file.write` call.]"
 }
 
 func (e *TurnEngine) dispatchTier1Concurrent(ctx context.Context, calls []ToolCall) ([]ToolResult, error) {
@@ -2346,6 +2400,32 @@ func isFreshKickoffRequest(session *chat.ChatSession, message repo.ChatMessage) 
 		return true
 	}
 	return strings.Contains(text, "restart") && (strings.Contains(text, "fresh") || strings.Contains(text, "from scratch") || strings.Contains(text, "clean slate") || strings.Contains(text, "start over") || strings.Contains(text, "new run"))
+}
+
+func isRecoveryResumeMessage(message repo.ChatMessage) bool {
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(message.Content), "supervisor recovery: resume task") {
+		return true
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	if strings.ToLower(stringValue(metadata["source"])) != "supervisor" {
+		return false
+	}
+	text := strings.ToLower(normalizeInstructionText(message.Content))
+	return strings.Contains(text, "resume") && strings.Contains(text, "task")
+}
+
+func messageMetadataMap(metadata json.RawMessage) map[string]any {
+	if len(metadata) == 0 {
+		return map[string]any{}
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(metadata, &decoded); err != nil || decoded == nil {
+		return map[string]any{}
+	}
+	return decoded
 }
 
 func (e *TurnEngine) handleFreshKickoffBlocker(ctx context.Context, rt *turnRuntime, reason string) (bool, error) {

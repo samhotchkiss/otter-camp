@@ -946,8 +946,8 @@ func TestTurnEngineIntegrationRepeatedMalformedFileWritePayloadBlocksTask(t *tes
 	if err != nil {
 		t.Fatalf("ListByProject: %v", err)
 	}
-	if len(projectTasks) < 2 {
-		t.Fatalf("project task count = %d, want at least 2 after blocker resolution task creation", len(projectTasks))
+	if len(projectTasks) != 1 {
+		t.Fatalf("project task count = %d, want 1 without auto-created blocker resolution task", len(projectTasks))
 	}
 
 	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
@@ -1277,6 +1277,302 @@ func TestTurnEngineIntegrationRecoversMalformedCLIExecuteRawArgsForFileOutputEX3
 		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
 			t.Fatalf("unexpected validation blocker message: %s", item.Content)
 		}
+	}
+}
+
+func TestTurnEngineIntegrationRecoveryTurnRepairsEmptyCLIExecuteBeforeDispatchEX311(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "cli.execute", Tier: "tier2"}}}
+
+	const expectedCommand = "cat > docs/content-strategy.md <<'EOF'\n# Content Strategy\n- Unify Sam's expertise into one durable editorial system.\nEOF"
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{
+				Content: "I'll compose the strategy and write it via cli_execute in one shot.",
+				ToolCalls: []ModelToolCall{{
+					ID:   "repair-1",
+					Name: "cli_execute",
+					Tier: "tier2",
+				}},
+			}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "cli-1",
+				Name: "cli_execute",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"command": expectedCommand,
+				},
+			}}}, nil
+		default:
+			return ModelResponse{Content: "strategy recovered"}, nil
+		}
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		dispatched++
+		if command := stringValue(call.Arguments["command"]); command != expectedCommand {
+			t.Fatalf("command = %q, want %q", command, expectedCommand)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      "docs/content-strategy.md",
+				"byte_size": 96,
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+
+	if modelCalls != 3 {
+		t.Fatalf("model calls = %d, want 3", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want not blocked", updatedTask.WorkStatus)
+	}
+	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
+		t.Fatalf("unexpected validation guard persisted: %+v", guard)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var correctionMessages int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, "command is required") {
+			t.Fatalf("unexpected command_required tool_result: %s", item.Content)
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: cli.execute was emitted without `command`") {
+			correctionMessages++
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			t.Fatalf("unexpected validation blocker message: %s", item.Content)
+		}
+	}
+	if correctionMessages != 1 {
+		t.Fatalf("recovery correction messages = %d, want 1", correctionMessages)
+	}
+}
+
+func TestTurnEngineIntegrationRecoveryTurnBoundsRepeatedEmptyCLIExecuteWithoutReblockingEX311(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "cli.execute", Tier: "tier2"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{
+			Content: fmt.Sprintf("attempt %d", modelCalls),
+			ToolCalls: []ModelToolCall{{
+				ID:   fmt.Sprintf("empty-%d", modelCalls),
+				Name: "cli_execute",
+				Tier: "tier2",
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		t.Fatalf("unexpected tier2 dispatch for malformed recovery call: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want bounded non-blocked failure", updatedTask.WorkStatus)
+	}
+	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
+		t.Fatalf("unexpected validation guard persisted: %+v", guard)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) == 0 {
+		t.Fatal("expected recovery turn")
+	}
+	lastTurn := turns[len(turns)-1]
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if got := gotStopReason; got != stopReasonRecoveryCLIRejected {
+		t.Fatalf("turn stop_reason = %q, want %q", got, stopReasonRecoveryCLIRejected)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var correctionMessages int
+	var haltMessages int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, "command is required") {
+			t.Fatalf("unexpected command_required tool_result: %s", item.Content)
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: cli.execute was emitted without `command`") {
+			correctionMessages++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery turn halted: cli.execute was retried without `command` after one correction.") {
+			haltMessages++
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			t.Fatalf("unexpected validation blocker message: %s", item.Content)
+		}
+	}
+	if correctionMessages != 1 {
+		t.Fatalf("recovery correction messages = %d, want 1", correctionMessages)
+	}
+	if haltMessages != 1 {
+		t.Fatalf("recovery halt messages = %d, want 1", haltMessages)
+	}
+}
+
+func TestTurnEngineIntegrationNonRecoveryEmptyCLIExecuteStillBlocksEX311(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "write the strategy via cli.execute")
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "cli.execute", Tier: "tier2"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{
+			Content: "I'll use cli_execute.",
+			ToolCalls: []ModelToolCall{{
+				ID:   fmt.Sprintf("bad-%d", modelCalls),
+				Name: "cli_execute",
+				Tier: "tier2",
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		dispatched++
+		if got := stringValue(call.Arguments["command"]); got != "" {
+			t.Fatalf("command = %q, want empty malformed call", got)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Error:      "command is required",
+			RunID:      &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if modelCalls != 3 {
+		t.Fatalf("model calls = %d, want 3 before validation blocker stops retries", modelCalls)
+	}
+	if dispatched != 3 {
+		t.Fatalf("tier2 dispatches = %d, want 3", dispatched)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+	guard, ok := parseTaskValidationGuard(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if !guard.Blocked {
+		t.Fatal("expected blocked validation guard")
+	}
+	if guard.Count != validationLoopBlockThreshold {
+		t.Fatalf("guard count = %d, want %d", guard.Count, validationLoopBlockThreshold)
+	}
+	if guard.ToolName != "cli.execute" {
+		t.Fatalf("guard tool_name = %q, want cli.execute", guard.ToolName)
+	}
+	if guard.FailureCode != "command_is_required" {
+		t.Fatalf("guard failure_code = %q, want command_is_required", guard.FailureCode)
+	}
+	if strings.TrimSpace(guard.AttemptFingerprint) == "" {
+		t.Fatal("expected attempt fingerprint on validation guard")
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var commandRequiredResults int
+	var blockerMessages int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, "command is required") {
+			commandRequiredResults++
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			blockerMessages++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: cli.execute was emitted without `command`") {
+			t.Fatalf("unexpected recovery correction in non-recovery turn: %s", item.Content)
+		}
+	}
+	if commandRequiredResults != 3 {
+		t.Fatalf("command_required tool_results = %d, want 3", commandRequiredResults)
+	}
+	if blockerMessages != 1 {
+		t.Fatalf("validation blocker system messages = %d, want 1", blockerMessages)
 	}
 }
 
@@ -3643,6 +3939,65 @@ func mustCreateTaskSession(t *testing.T, ctx context.Context, fixture *integrati
 		t.Fatalf("AppendMessage task user prompt: %v", err)
 	}
 	return repo.ChatSession(*session), repo.ChatMessage(*userMessage)
+}
+
+func mustCreateRecoveredValidationTaskSession(t *testing.T, ctx context.Context, fixture *integrationFixture, taskRecord repo.ProjectTask) (repo.ChatSession, repo.ChatMessage) {
+	t.Helper()
+
+	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	guardedMetadata, err := tasksvc.MergeValidationGuardMetadata(currentTask.Metadata, tasksvc.ValidationGuardState{
+		InitialMessageID:   userMessage.ID.String(),
+		Fingerprint:        "cli.execute:command_is_required",
+		AttemptFingerprint: "cli.execute:command_is_required:attempt",
+		ToolName:           "cli.execute",
+		FailureClass:       "tool_validation",
+		FailureCode:        "command_is_required",
+		FailureReason:      "command is required",
+		Count:              validationLoopBlockThreshold,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	currentTask.Metadata = guardedMetadata
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update guarded task: %v", err)
+	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if _, err := taskService.MarkBlocked(ctx, taskRecord.ID, "deterministic tool validation loop blocked after 3 identical failures: cli.execute (command is required)", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+	if _, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+
+	authorType := "human_user"
+	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "supervisor recovery: resume task",
+		Metadata:   mustJSON(t, map[string]any{"source": "supervisor", "stranded_execution": true}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage recovery: %v", err)
+	}
+	return taskSession, repo.ChatMessage(*recoveryMessage)
 }
 
 func flattenPrompt(prompt *prompt.AssembledPrompt) string {
