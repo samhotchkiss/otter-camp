@@ -39,6 +39,8 @@ Within a single task execution there is one workspace contract, not separate per
 
 For long-running content migration/import work, system tools are the primary continuity mechanism: fetched pages, manifests, helper scripts, and migrated outputs are expected to live in workspace files. Continuations should resume from those persisted files and checkpoint manifests, not by replaying large raw blobs through the chat transcript. When persisted scripts/artifacts exist but migrated outputs do not, the next turn should use that checkpointed state to write the first real output file before re-listing workspace state or generating more helper scripts.
 
+For resumed file-output recovery, the runtime must distinguish a real deliverable body from placeholder narration before treating `file.write` as progress. Substantive output means the candidate content materially advances the target file itself: concrete sections, lists, prose, code, or other body text that could reasonably remain on disk as the deliverable. Placeholder narration does not count, even when it is grammatically valid or longer than a one-line stub. Phrases that mainly announce the next step or the file's importance, such as "time to write the document", "this is the critical deliverable that unblocks the next stage", or similar setup/progress narration, must be rejected and preserved in the recovery checkpoint artifact instead of overwriting the target file as if useful work had landed.
+
 ### Category 3: Browser Tools
 
 Tools for web interaction — navigating pages, clicking elements, extracting content, capturing screenshots. Browser tools run in isolated browser contexts per run/session (doc 11).

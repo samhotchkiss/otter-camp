@@ -2224,6 +2224,190 @@ func TestTurnEngineIntegrationRecoveryResumeRejectsPlaceholderNarrationDraftEX32
 	}
 }
 
+func TestTurnEngineIntegrationClaimedRecoveryResumeRejectsShallowPlaceholderWriteEX328(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, recoveryMessage.ID)
+
+	existingTargetBody := "Time to write the comprehensive content strategy document.\nThis is the critical deliverable that unblocks WS4.\n"
+	if err := os.WriteFile(seed.targetAbs, []byte(existingTargetBody), 0o644); err != nil {
+		t.Fatalf("rewrite prior placeholder target: %v", err)
+	}
+
+	assembler := &fakeAssembler{results: []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: 30}},
+	}}
+	fixture.engine.assembler = assembler
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	const shallowPlaceholder = "Time to write the comprehensive content strategy document for Sam.blog. This is the critical deliverable that unblocks WS4. The next step is to capture the audience, the pillars, the tone, and the publishing cadence so the rest of the project can move forward."
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{
+				Content: shallowPlaceholder,
+				ToolCalls: []ModelToolCall{{
+					ID:   "resume-write",
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"path": seed.targetPath,
+					},
+				}},
+			}, nil
+		default:
+			return ModelResponse{}, fmt.Errorf("unexpected follow-up model call after shallow placeholder write")
+		}
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		t.Fatalf("unexpected tier2 dispatch for shallow placeholder draft: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	worker := jobqueue.New(fixture.pool, nil, jobqueue.Config{})
+	jobID, err := worker.Enqueue(ctx, nil, AgentTurnJobType, defaultAgentTurnJobPriority, AgentTurnPayload{
+		SessionID: taskSession.ID,
+		MessageID: recoveryMessage.ID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueue claimed recovery job: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'integration-worker',
+		    claimed_at = now()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("mark recovery job claimed: %v", err)
+	}
+
+	var payload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&payload); err != nil {
+		t.Fatalf("load claimed recovery payload: %v", err)
+	}
+	claimedJob := jobqueue.Job{
+		ID:      jobID,
+		JobType: AgentTurnJobType,
+		Payload: payload,
+		Status:  "claimed",
+	}
+
+	if err := fixture.engine.HandleTurnJob(ctx, claimedJob); err != nil {
+		t.Fatalf("HandleTurnJob claimed recovery resume: %v", err)
+	}
+
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1 bounded recovery turn", modelCalls)
+	}
+	if assembler.calls != 1 {
+		t.Fatalf("assemble calls = %d, want 1 because placeholder rejection should halt before dispatch", assembler.calls)
+	}
+	if dispatched != 0 {
+		t.Fatalf("tier2 dispatches = %d, want 0", dispatched)
+	}
+
+	outputBody, err := os.ReadFile(seed.targetAbs)
+	if err != nil {
+		t.Fatalf("read target file after claimed recovery resume: %v", err)
+	}
+	if string(outputBody) != existingTargetBody {
+		t.Fatalf("target file was clobbered:\n%s", string(outputBody))
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != seed.targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, seed.targetPath)
+	}
+	if checkpoint.ArtifactPath != seed.artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, seed.artifactRel)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "intent to write the deliverable") {
+		t.Fatalf("checkpoint failure_reason = %q, want shallow-placeholder rejection guidance", checkpoint.FailureReason)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
+	}
+
+	artifactBody, err := os.ReadFile(seed.artifactAbs)
+	if err != nil {
+		t.Fatalf("read recovery artifact: %v", err)
+	}
+	artifactText := string(artifactBody)
+	if !strings.Contains(artifactText, shallowPlaceholder) {
+		t.Fatalf("artifact missing rejected shallow placeholder draft:\n%s", artifactText)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var haltMessages int
+	var toolResults int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"docs/content-strategy.md"`) {
+			toolResults++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "intent to write the deliverable instead of the file body") {
+			haltMessages++
+		}
+	}
+	if haltMessages != 1 {
+		t.Fatalf("placeholder halt messages = %d, want 1", haltMessages)
+	}
+	if toolResults != 0 {
+		t.Fatalf("file.write tool_results = %d, want 0", toolResults)
+	}
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnPersistsCheckpointForRepeatedEmptyCLIExecuteWithFileContextEX321(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
