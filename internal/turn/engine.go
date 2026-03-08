@@ -57,12 +57,15 @@ const (
 	stopReasonMaxToolCalls          = "max_tool_calls"
 	stopReasonMaxDuration           = "max_duration"
 	stopReasonRecoveryCLIRejected   = "model_error"
+	stopReasonRecoveryFileRejected  = "recovery_content_required"
 	stopReasonValidationBlocked     = "validation_loop_blocked"
 	workerPromptTokenGuardrail      = 32000
 	defaultPromptTokenGuardrail     = 64000
 	validationLoopBlockThreshold    = 3
 	validationLoopSuppressionReason = "validation_loop_blocked"
 	recoveryCLIRepairBudget         = 1
+	recoveryFileWriteRepairBudget   = 1
+	recoveryArtifactDir             = ".ottercamp/recovery"
 )
 
 var (
@@ -387,6 +390,7 @@ type turnRuntime struct {
 	freshKickoff      bool
 	recoveryTurn      bool
 	recoveryCLIFixes  int
+	recoveryFileFixes int
 }
 
 type projectIdentity struct {
@@ -810,6 +814,9 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	}
 	latestCompleted := latestCompletedTurn(turns)
 	if latestCompleted == nil || latestCompleted.ID != payload.TurnID {
+		return nil
+	}
+	if shouldSuppressAutoContinuationForStopReason(latestCompleted.StopReason) {
 		return nil
 	}
 
@@ -1821,6 +1828,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return false, nil
 		}
+		handled, stop, err = e.handleRecoveryFileWriteWithoutContent(ctx, rt, &call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 
 		var runID *uuid.UUID
 		result, err := e.dispatcher.DispatchTier2(ctx, call, func(id uuid.UUID) {
@@ -1889,6 +1906,257 @@ func buildRecoveryCLIExecuteRetryMessage() string {
 
 func buildRecoveryCLIExecuteRejectedMessage() string {
 	return "[Recovery turn halted: cli.execute was retried without `command` after one correction. This turn ended without re-blocking the task. Resume only after providing a full `cli.execute.command` string or a populated `file.write` call.]"
+}
+
+func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
+	if rt == nil || call == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
+		return false, false, nil
+	}
+
+	normalized, targetPath, ok := recoveryFileWriteMissingContent(*call)
+	if !ok {
+		return false, false, nil
+	}
+
+	if draft, ok := e.recoveryFileWriteDraftContent(ctx, rt); ok {
+		normalized["content"] = draft
+		if _, exists := normalized["create_dirs"]; !exists {
+			normalized["create_dirs"] = true
+		}
+		call.Arguments = normalized
+		e.logger.Info("recovery: populated file.write from assistant draft",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+		)
+		return false, false, nil
+	}
+
+	if rt.recoveryFileFixes >= recoveryFileWriteRepairBudget {
+		rt.stopReason = stopReasonRecoveryFileRejected
+		artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath)
+		if artifactErr != nil {
+			e.logger.Warn("recovery: failed to persist file.write artifact",
+				"session_id", rt.session.ID,
+				"turn_id", rt.turn.ID,
+				"path", targetPath,
+				"error", artifactErr,
+			)
+		}
+		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath)); err != nil {
+			return true, true, err
+		}
+		return true, true, nil
+	}
+
+	rt.recoveryFileFixes++
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRetryMessage(targetPath)); err != nil {
+		return true, false, err
+	}
+	return true, false, nil
+}
+
+func recoveryFileWriteMissingContent(call ToolCall) (map[string]any, string, bool) {
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.write") {
+		return nil, "", false
+	}
+	normalized := toolargs.Normalize("file.write", call.Arguments)
+	targetPath := strings.TrimSpace(stringValue(normalized["path"]))
+	if targetPath == "" {
+		return nil, "", false
+	}
+	if strings.TrimSpace(stringValue(normalized["content"])) != "" {
+		return nil, "", false
+	}
+	return normalized, targetPath, true
+}
+
+func buildRecoveryFileWriteRetryMessage(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	return fmt.Sprintf("[Recovery correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. If you already have the draft text, carry that exact text into the next write instead of emitting another empty-content call.]", path)
+}
+
+func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	if strings.TrimSpace(artifactPath) == "" {
+		return fmt.Sprintf("[Recovery turn halted: file.write for `%s` was retried without `content` after one correction. This turn ended before the deterministic validation blocker could fire again. Resume only after producing the full file body.]", path)
+	}
+	return fmt.Sprintf("[Recovery turn halted: file.write for `%s` was retried without `content` after one correction. Resume from `%s` and only retry the final write after the file body exists.]", path, strings.TrimSpace(artifactPath))
+}
+
+func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turnRuntime) (string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", false
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return "", false
+	}
+	draft := latestNonEmptyAssistantFinalForTurn(messages, rt.turn.ID)
+	if draft == nil || !looksLikeRecoveryFileDraft(draft.Content) {
+		return "", false
+	}
+	return draft.Content, true
+}
+
+func latestNonEmptyAssistantFinalForTurn(messages []repo.ChatMessage, turnID uuid.UUID) *repo.ChatMessage {
+	var latest *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Status), "final") {
+			continue
+		}
+		if strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		if latest == nil || message.SequenceNumber > latest.SequenceNumber {
+			copyMessage := message
+			latest = &copyMessage
+		}
+	}
+	return latest
+}
+
+func looksLikeRecoveryFileDraft(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, prefix := range []string{
+		"i'll ",
+		"i will ",
+		"i am going to ",
+		"attempt ",
+		"trying ",
+		"using ",
+		"let me ",
+	} {
+		if strings.HasPrefix(lower, prefix) && len(trimmed) < 240 {
+			return false
+		}
+	}
+	if len(trimmed) >= 180 {
+		return true
+	}
+	if strings.Count(trimmed, "\n") >= 3 {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "---") || strings.HasPrefix(trimmed, "<") || strings.HasPrefix(trimmed, "{") {
+		return len(trimmed) >= 60
+	}
+	if strings.Contains(trimmed, "\n- ") || strings.Contains(trimmed, "\n## ") {
+		return len(trimmed) >= 60
+	}
+	return false
+}
+
+func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *turnRuntime, targetPath string) (string, error) {
+	if e == nil || e.tasks == nil || e.projects == nil || rt == nil || rt.session == nil {
+		return "", fmt.Errorf("recovery artifact persistence requires task and project repositories")
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return "", fmt.Errorf("recovery artifact persistence requires task scope")
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return "", err
+	}
+	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	if err != nil {
+		return "", err
+	}
+	_, targetRel, err := resolveRecoveryWorkspacePath(workspaceRoot, targetPath)
+	if err != nil {
+		return "", err
+	}
+
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetRel)))
+	artifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
+	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+		return "", err
+	}
+
+	draft, _ := e.recoveryFileWriteDraftContent(ctx, rt)
+	document := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetRel, draft, e.now())
+	if err := os.WriteFile(artifactAbs, []byte(document), 0o644); err != nil {
+		return "", err
+	}
+	return artifactRel, nil
+}
+
+func resolveRecoveryWorkspacePath(root, relOrAbsPath string) (string, string, error) {
+	trimmedRoot := strings.TrimSpace(root)
+	trimmedPath := strings.TrimSpace(relOrAbsPath)
+	if trimmedRoot == "" {
+		return "", "", fmt.Errorf("workspace root is required")
+	}
+	if trimmedPath == "" {
+		return "", "", fmt.Errorf("target path is required")
+	}
+
+	rootAbs, err := filepath.Abs(trimmedRoot)
+	if err != nil {
+		return "", "", err
+	}
+
+	candidate := filepath.Clean(filepath.FromSlash(trimmedPath))
+	targetAbs := candidate
+	if !filepath.IsAbs(targetAbs) {
+		targetAbs = filepath.Join(rootAbs, candidate)
+	}
+	targetAbs = filepath.Clean(targetAbs)
+
+	rel, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil {
+		return "", "", err
+	}
+	if rel == "." || rel == "" || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("path traversal is not allowed")
+	}
+	return targetAbs, filepath.ToSlash(rel), nil
+}
+
+func buildRecoveryFileWriteArtifactDocument(taskLabel, targetPath, draft string, now time.Time) string {
+	lines := []string{
+		"# Recovery file.write artifact",
+		"",
+		"Task: " + strings.TrimSpace(taskLabel),
+		"Target Path: " + strings.TrimSpace(targetPath),
+		"Generated: " + now.UTC().Format(time.RFC3339Nano),
+		"Reason: Recovery turn retried file.write without concrete content after one bounded correction.",
+		"",
+		"## Resume Instructions",
+		fmt.Sprintf("- Produce the full file body for `%s` before retrying the final `file.write`.", strings.TrimSpace(targetPath)),
+		"- Reuse any draft content captured below instead of starting from scratch.",
+		"",
+		"## Draft Content",
+		"",
+	}
+	if strings.TrimSpace(draft) == "" {
+		lines = append(lines, "_No concrete draft content was available in the recovery turn. Replace this section with the intended file body before retrying._")
+		return strings.Join(lines, "\n")
+	}
+	lines = append(lines, strings.TrimRight(draft, "\n"))
+	return strings.Join(lines, "\n")
 }
 
 func (e *TurnEngine) dispatchTier1Concurrent(ctx context.Context, calls []ToolCall) ([]ToolResult, error) {
@@ -3414,6 +3682,18 @@ func latestAssistantFinalForTurn(messages []repo.ChatMessage, turnID uuid.UUID) 
 		}
 	}
 	return latest
+}
+
+func shouldSuppressAutoContinuationForStopReason(stopReason *string) bool {
+	if stopReason == nil {
+		return false
+	}
+	switch strings.TrimSpace(*stopReason) {
+	case stopReasonRecoveryCLIRejected, stopReasonRecoveryFileRejected:
+		return true
+	default:
+		return false
+	}
 }
 
 func consecutiveAutoTurnsSinceLatestUser(turns []repo.ChatTurn, messages []repo.ChatMessage, latestUserSequence int64) int {
