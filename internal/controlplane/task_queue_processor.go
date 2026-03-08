@@ -28,7 +28,6 @@ const (
 	taskQueueTriggerType            = "scheduler"
 	taskSupervisorTriggerType       = "supervisor"
 	asyncDecisionPolicyName         = "async_forward_progress"
-	resumeValidationBlockedAction   = "resume_validation_blocked_task"
 )
 
 type taskQueueEventSubscriber interface {
@@ -1313,14 +1312,18 @@ func appendValidationRecoveryMetadata(payload map[string]any, eventPayload json.
 		return
 	}
 	action := strings.TrimSpace(valueAsString(decoded["recovery_action"]))
-	if action != resumeValidationBlockedAction {
+	if !tasksvc.IsRecoveryResumeAction(action) {
 		return
 	}
 	payload["recovery_action"] = action
 	for _, key := range []string{
+		"recovery_blocker_class",
 		"validation_tool_name",
 		"validation_failure_code",
 		"validation_failure_reason",
+		"recovery_checkpoint_target_path",
+		"recovery_checkpoint_artifact_path",
+		"recovery_checkpoint_failure_reason",
 	} {
 		if value := strings.TrimSpace(valueAsString(decoded[key])); value != "" {
 			payload[key] = value
@@ -1333,14 +1336,18 @@ func appendWakeupRecoveryMetadata(payload map[string]any, metadata json.RawMessa
 		return
 	}
 	action := metadataStringValue(metadata, "recovery_action")
-	if action != resumeValidationBlockedAction {
+	if !tasksvc.IsRecoveryResumeAction(action) {
 		return
 	}
 	payload["recovery_action"] = action
 	for _, key := range []string{
+		"recovery_blocker_class",
 		"validation_tool_name",
 		"validation_failure_code",
 		"validation_failure_reason",
+		"recovery_checkpoint_target_path",
+		"recovery_checkpoint_artifact_path",
+		"recovery_checkpoint_failure_reason",
 	} {
 		if value := metadataStringValue(metadata, key); value != "" {
 			payload[key] = value

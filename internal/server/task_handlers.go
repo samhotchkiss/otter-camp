@@ -2811,6 +2811,11 @@ func (h taskHandlers) respondTaskError(responder api.Responder, w http.ResponseW
 }
 
 func mapTaskError(err error) (int, string, string) {
+	var resumeErr tasksvc.TaskResumeBlockedStateError
+	if errors.As(err, &resumeErr) {
+		return http.StatusUnprocessableEntity, resumeErr.Code(), resumeErr.Error()
+	}
+
 	switch {
 	case errors.Is(err, repo.ErrNotFound):
 		return http.StatusNotFound, api.ErrCodeNotFound, "resource not found"
@@ -2830,7 +2835,6 @@ func mapTaskError(err error) (int, string, string) {
 		errors.Is(err, tasksvc.ErrSourceTaskRequired),
 		errors.Is(err, tasksvc.ErrSourceProjectIDRequired),
 		errors.Is(err, tasksvc.ErrTransitionTargetRequired),
-		errors.Is(err, tasksvc.ErrValidationRecoveryRequired),
 		errors.Is(err, tasksvc.ErrFlowTemplateRequired),
 		errors.Is(err, tasksvc.ErrFlowTemplateReviewRequired),
 		errors.Is(err, tasksvc.ErrProjectGateBlockingQueue),

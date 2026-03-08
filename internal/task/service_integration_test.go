@@ -11,12 +11,14 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -482,6 +484,112 @@ func TestTaskServiceIntegrationResumeValidationBlockedTaskClearsGuardAndQueuesRe
 	}
 	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["validation_failure_code"])); got != "command_required" {
 		t.Fatalf("validation_failure_code = %q, want command_required", got)
+	}
+}
+
+func TestTaskServiceIntegrationResumeDurableRecoveryCheckpointQueuesRecoveryEX324(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "pm-user", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "PM Agent", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Recovery checkpoint blocked task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	targetPath := "docs/content-strategy.md"
+	artifactPath := ".ottercamp/recovery/docs/content-strategy.md"
+	failureReason := "assistant draft for docs/content-strategy.md described tool-recovery troubleshooting instead of the file body"
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		ArtifactPath:  artifactPath,
+		FailureReason: failureReason,
+		HaltTurnID:    uuid.NewString(),
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRecord.Metadata = checkpointMetadata
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update checkpointed task: %v", err)
+	}
+	blockerReason := "recovery halted after assistant draft for docs/content-strategy.md described tool-recovery troubleshooting instead of the file body; resume from .ottercamp/recovery/docs/content-strategy.md and re-queue only after concrete content exists"
+	if _, err := svc.MarkBlocked(ctx, created.ID, blockerReason, Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	resumed, err := svc.ResumeValidationBlockedTask(ctx, created.ID, Actor{Type: "human_user", ID: pmUser.ID})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumed.Metadata)
+	if !ok {
+		t.Fatalf("expected durable recovery checkpoint to remain after resume, metadata=%s", string(resumed.Metadata))
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if checkpoint.ArtifactPath != artifactPath {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactPath)
+	}
+
+	var (
+		eventType string
+		payload   []byte
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT event_type, payload
+		FROM project_task_event
+		WHERE task_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, created.ID).Scan(&eventType, &payload); err != nil {
+		t.Fatalf("load latest task event: %v", err)
+	}
+	if eventType != "status.changed" {
+		t.Fatalf("latest event_type = %q, want status.changed", eventType)
+	}
+	var eventPayload map[string]any
+	if err := json.Unmarshal(payload, &eventPayload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_action"])); got != RecoveryActionResumeBlockedTask {
+		t.Fatalf("recovery_action = %q, want %q", got, RecoveryActionResumeBlockedTask)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_blocker_class"])); got != RecoveryBlockerClassDurableRecoveryCheckpoint {
+		t.Fatalf("recovery_blocker_class = %q, want %q", got, RecoveryBlockerClassDurableRecoveryCheckpoint)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_checkpoint_target_path"])); got != targetPath {
+		t.Fatalf("recovery_checkpoint_target_path = %q, want %q", got, targetPath)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_checkpoint_artifact_path"])); got != artifactPath {
+		t.Fatalf("recovery_checkpoint_artifact_path = %q, want %q", got, artifactPath)
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -199,6 +200,110 @@ func TestTaskHTTPResumeClearsValidationGuardAndQueuesTask(t *testing.T) {
 	}
 	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_action"])); got != "resume_validation_blocked_task" {
 		t.Fatalf("recovery_action = %q, want resume_validation_blocked_task", got)
+	}
+}
+
+func TestTaskHTTPResumeBlockedTaskWithDurableRecoveryCheckpointEX324(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-resume-recovery-checkpoint", false)
+	pmAgent := seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	graph := seedTaskFlowGraph(t, testServer.Pool, org.ID, project.ID, pmAgent.ID, adminUser.ID, true)
+	taskRecord := seedTaskForFlowTemplate(t, testServer.Pool, org.ID, project.ID, graph.Template.ID, graph.Work.ID, "blocked")
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+
+	targetPath := "docs/content-strategy.md"
+	artifactPath := ".ottercamp/recovery/docs/content-strategy.md"
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		ArtifactPath:  artifactPath,
+		FailureReason: "assistant draft for docs/content-strategy.md described tool-recovery troubleshooting instead of the file body",
+		HaltTurnID:    uuid.NewString(),
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRecord.Metadata = checkpointMetadata
+	if _, err := taskRepo.Update(context.Background(), taskRecord); err != nil {
+		t.Fatalf("Update blocked task: %v", err)
+	}
+	blockerReason := "recovery halted after assistant draft for docs/content-strategy.md described tool-recovery troubleshooting instead of the file body; resume from .ottercamp/recovery/docs/content-strategy.md and re-queue only after concrete content exists"
+	recordBlockedTaskStatusEvent(t, testServer.Pool, taskRecord.ID, project.ID, blockerReason)
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	resumed := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/resume", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if resumed.StatusCode != http.StatusOK {
+		t.Fatalf("resume status = %d, want %d body=%s", resumed.StatusCode, http.StatusOK, string(resumed.Body))
+	}
+	if got := jsonPathString(t, resumed.Body, "data", "work_status"); got != "queued" {
+		t.Fatalf("resume work_status = %q, want queued body=%s", got, string(resumed.Body))
+	}
+
+	refreshed, err := taskRepo.GetByID(context.Background(), taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(refreshed.Metadata)
+	if !ok {
+		t.Fatalf("expected recovery checkpoint to remain after resume, metadata=%s", string(refreshed.Metadata))
+	}
+	if checkpoint.ArtifactPath != artifactPath {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactPath)
+	}
+
+	var payload []byte
+	if err := testServer.Pool.QueryRow(context.Background(), `
+		SELECT payload
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, taskRecord.ID).Scan(&payload); err != nil {
+		t.Fatalf("load status.changed payload: %v", err)
+	}
+	var eventPayload map[string]any
+	if err := json.Unmarshal(payload, &eventPayload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_action"])); got != tasksvc.RecoveryActionResumeBlockedTask {
+		t.Fatalf("recovery_action = %q, want %q", got, tasksvc.RecoveryActionResumeBlockedTask)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_blocker_class"])); got != tasksvc.RecoveryBlockerClassDurableRecoveryCheckpoint {
+		t.Fatalf("recovery_blocker_class = %q, want %q", got, tasksvc.RecoveryBlockerClassDurableRecoveryCheckpoint)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["previous_blocker_reason"])); got != blockerReason {
+		t.Fatalf("previous_blocker_reason = %q, want %q", got, blockerReason)
+	}
+}
+
+func TestTaskHTTPResumeBlockedTaskRejectsStoredNonResumableStateEX324(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-resume-nonresumable", false)
+	pmAgent := seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	graph := seedTaskFlowGraph(t, testServer.Pool, org.ID, project.ID, pmAgent.ID, adminUser.ID, true)
+	taskRecord := seedTaskForFlowTemplate(t, testServer.Pool, org.ID, project.ID, graph.Template.ID, graph.Work.ID, "blocked")
+	recordBlockedTaskStatusEvent(t, testServer.Pool, taskRecord.ID, project.ID, "dependency missing")
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	resumed := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/resume", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if resumed.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("resume status = %d, want %d body=%s", resumed.StatusCode, http.StatusUnprocessableEntity, string(resumed.Body))
+	}
+	wantCode := tasksvc.TaskResumeErrorCodeForBlockerClass(tasksvc.RecoveryBlockerClassBlockedWithoutResumableState)
+	if got := jsonPathString(t, resumed.Body, "error", "code"); got != wantCode {
+		t.Fatalf("resume error code = %q, want %q body=%s", got, wantCode, string(resumed.Body))
+	}
+	message := jsonPathString(t, resumed.Body, "error", "message")
+	if !strings.Contains(message, tasksvc.RecoveryBlockerClassBlockedWithoutResumableState) {
+		t.Fatalf("resume error message = %q, want blocker class", message)
+	}
+	if !strings.Contains(message, "dependency missing") {
+		t.Fatalf("resume error message = %q, want stored blocker reason", message)
 	}
 }
 
@@ -902,6 +1007,32 @@ func newTaskTestServer(t *testing.T) (*authIntegrationServer, repo.Organization,
 
 	ts := httptest.NewServer(handler)
 	return &authIntegrationServer{URL: ts.URL, Pool: pool, ts: ts}, org, adminUser, memberUser
+}
+
+func recordBlockedTaskStatusEvent(t *testing.T, pool *pgxpool.Pool, taskID, projectID uuid.UUID, reason string) {
+	t.Helper()
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":        taskID.String(),
+		"project_id":     projectID.String(),
+		"from_status":    "in_progress",
+		"to_status":      "blocked",
+		"blocker_reason": strings.TrimSpace(reason),
+	})
+	if err != nil {
+		t.Fatalf("marshal blocked task payload: %v", err)
+	}
+
+	_, err = repo.NewProjectTaskEventRepo(pool).Record(context.Background(), repo.ProjectTaskEvent{
+		TaskID:    taskID,
+		ProjectID: projectID,
+		EventType: "status.changed",
+		ActorType: "system",
+		Payload:   payload,
+	})
+	if err != nil {
+		t.Fatalf("record blocked task event: %v", err)
+	}
 }
 
 func seedTaskProject(t *testing.T, pool *pgxpool.Pool, orgID, createdByID uuid.UUID, slug string, requiresHumanReview bool) repo.Project {
