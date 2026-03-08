@@ -408,6 +408,7 @@ type turnRuntime struct {
 	recoveryFileWrites  map[string]recoveryPopulatedFileWriteState
 	recoveryBlockReason string
 	recoveryQueuedTurn  bool
+	recoveryDirectWrite bool
 }
 
 type projectIdentity struct {
@@ -1153,6 +1154,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		toolSet, err := e.toolResolver.GetSessionToolSet(ctx, rt.session.ID, rt.agent.ID)
 		if err != nil {
 			return fmt.Errorf("getSessionToolSet: %w", err)
+		}
+		if rt.recoveryDirectWrite {
+			toolSet = filterRecoveryDirectWriteToolSet(toolSet)
 		}
 		rt.toolSet = toolSet
 
@@ -2428,6 +2432,12 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 	if err != nil {
 		return false, err
 	}
+	if recoveryResumeRequiresDirectWriteMode(state) {
+		rt.disableMemory = true
+		rt.recoveryDirectWrite = true
+		rt.historyStartID = &message.ID
+		return true, nil
+	}
 	if preserveInitialMessage && rt.initialMessageID != uuid.Nil {
 		initial := rt.initialMessageID
 		rt.historyStartID = &initial
@@ -2560,6 +2570,13 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 			lines = append(lines, "Repeated non-substantive drafts are already a hardened blocker state for this checkpoint.")
 		}
 	}
+	if recoveryResumeRequiresDirectWriteMode(state) {
+		lines = append(lines,
+			"Hard constraint for this resumed turn: do not inspect the workspace again, do not read additional files, and do not narrate intent.",
+			"Write-only recovery mode is active. The only tool available for this turn is `file.write`, and it should be used only for the final target-file write after the full body exists.",
+			"Your next assistant content must start with the actual body of the target file, not with setup, inventory, or statements about what you now understand.",
+		)
+	}
 
 	if target := strings.TrimSpace(state.targetPath); target != "" {
 		lines = append(lines, "Target file: "+target)
@@ -2616,6 +2633,35 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 		lines = append(lines, "If the target file is only a stub but the recovery artifact is fuller, merge the fuller artifact content into the target before retrying the final write.")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func recoveryResumeRequiresDirectWriteMode(state recoveryResumeState) bool {
+	if strings.TrimSpace(state.targetPath) == "" {
+		return false
+	}
+	if strings.TrimSpace(state.blockerClass) != taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint {
+		return false
+	}
+	if !taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
+		return false
+	}
+	return strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == ""
+}
+
+func filterRecoveryDirectWriteToolSet(input []tools.ToolDescriptor) []tools.ToolDescriptor {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]tools.ToolDescriptor, 0, 1)
+	for _, item := range input {
+		if strings.EqualFold(strings.TrimSpace(item.Name), "file.write") {
+			out = append(out, item)
+		}
+	}
+	if len(out) != 0 {
+		return out
+	}
+	return nil
 }
 
 func recoveryArtifactDraftContent(document string) string {
