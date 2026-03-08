@@ -1433,10 +1433,13 @@ func TestTurnEngineIntegrationRecoveryTurnBoundsRepeatedEmptyCLIExecuteWithoutRe
 	if err != nil {
 		t.Fatalf("ListBySession turns: %v", err)
 	}
-	if len(turns) == 0 {
-		t.Fatal("expected recovery turn")
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
 	}
 	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
 	gotStopReason := ""
 	if lastTurn.StopReason != nil {
 		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
@@ -1795,10 +1798,13 @@ func TestTurnEngineIntegrationRecoveryTurnPersistsArtifactAfterRepeatedEmptyFile
 	if err != nil {
 		t.Fatalf("ListBySession turns: %v", err)
 	}
-	if len(turns) == 0 {
-		t.Fatal("expected recovery turn")
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
 	}
 	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
 	gotStopReason := ""
 	if lastTurn.StopReason != nil {
 		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
@@ -1913,16 +1919,141 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnPersistsArtifactAfterRepeated
 	if err != nil {
 		t.Fatalf("ListBySession turns: %v", err)
 	}
-	if len(turns) == 0 {
-		t.Fatal("expected recovery turn")
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
 	}
 	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
 	gotStopReason := ""
 	if lastTurn.StopReason != nil {
 		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
 	}
 	if gotStopReason != stopReasonRecoveryFileRejected {
 		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
+	}
+
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	artifactBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel)))
+	if err != nil {
+		t.Fatalf("read recovery artifact: %v", err)
+	}
+	artifactText := string(artifactBody)
+	if !strings.Contains(artifactText, "Target Path: "+targetPath) {
+		t.Fatalf("artifact missing target path:\n%s", artifactText)
+	}
+	if !strings.Contains(artifactText, "No concrete draft content was available") {
+		t.Fatalf("artifact missing empty-draft placeholder:\n%s", artifactText)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var correctionMessages int
+	var haltMessages int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"content_required"`) {
+			t.Fatalf("unexpected content_required tool_result: %s", item.Content)
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: file.write for `docs/content-strategy.md` was emitted without `content`") {
+			correctionMessages++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Resume from `.ottercamp/recovery/docs/content-strategy.md`") {
+			haltMessages++
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			t.Fatalf("unexpected validation blocker message: %s", item.Content)
+		}
+	}
+	if correctionMessages != 1 {
+		t.Fatalf("file.write recovery correction messages = %d, want 1", correctionMessages)
+	}
+	if haltMessages != 1 {
+		t.Fatalf("file.write recovery halt messages = %d, want 1", haltMessages)
+	}
+}
+
+func TestTurnEngineIntegrationTaskQueueRecoveryTurnFallsBackStopReasonForLegacyConstraintEX314(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+	forceLegacyChatTurnStopReasonConstraint(t, ctx, fixture.pool)
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	const targetPath = "docs/content-strategy.md"
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{
+			Content: "I'll write it next.",
+			ToolCalls: []ModelToolCall{{
+				ID:   fmt.Sprintf("legacy-empty-write-%d", modelCalls),
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path": targetPath,
+				},
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		t.Fatalf("unexpected tier2 dispatch for legacy empty-content recovery write: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery with legacy constraint: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want bounded non-blocked halt", updatedTask.WorkStatus)
+	}
+	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
+		t.Fatalf("unexpected validation guard persisted: %+v", guard)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != stopReasonRecoveryFileFallback {
+		t.Fatalf("turn stop_reason = %q, want %q legacy fallback", gotStopReason, stopReasonRecoveryFileFallback)
 	}
 
 	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
@@ -4576,6 +4707,35 @@ func buildTaskQueueKickoffMessageForTest(taskRecord repo.ProjectTask) string {
 		return "Start work on task: " + title
 	}
 	return "Start work on task: " + title + "\n\nTask description:\n" + description
+}
+
+func forceLegacyChatTurnStopReasonConstraint(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		ALTER TABLE chat_turn
+			DROP CONSTRAINT IF EXISTS chat_turn_stop_reason_check
+	`); err != nil {
+		t.Fatalf("drop chat_turn stop_reason constraint: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		ALTER TABLE chat_turn
+			ADD CONSTRAINT chat_turn_stop_reason_check
+			CHECK (
+				stop_reason IS NULL
+				OR stop_reason IN (
+					'max_tool_calls',
+					'max_duration',
+					'user_cancelled',
+					'user_steered',
+					'model_error',
+					'session_closed',
+					'validation_loop_blocked'
+				)
+			)
+	`); err != nil {
+		t.Fatalf("add legacy chat_turn stop_reason constraint: %v", err)
+	}
 }
 
 func flattenPrompt(prompt *prompt.AssembledPrompt) string {
