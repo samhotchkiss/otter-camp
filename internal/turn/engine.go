@@ -1946,6 +1946,9 @@ func (e *TurnEngine) handleRecoveryCLIExecuteWithoutCommand(ctx context.Context,
 		return false, false, nil
 	}
 	if rt.recoveryCLIFixes >= recoveryCLIRepairBudget {
+		if halted, err := e.haltRecoveryCLIExecuteWithoutCommand(ctx, rt); halted {
+			return true, true, err
+		}
 		rt.stopReason = stopReasonRecoveryCLIRejected
 		rt.recoveryBlockReason = buildRecoveryCLIExecuteBlockedTaskReason()
 		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryCLIExecuteRejectedMessage()); err != nil {
@@ -1976,6 +1979,77 @@ func buildRecoveryCLIExecuteRetryMessage() string {
 
 func buildRecoveryCLIExecuteRejectedMessage() string {
 	return "[Recovery turn halted: cli.execute was retried without `command` after one correction. The task is now blocked. Resume only after providing a full `cli.execute.command` string or a populated `file.write` call.]"
+}
+
+func (e *TurnEngine) haltRecoveryCLIExecuteWithoutCommand(ctx context.Context, rt *turnRuntime) (bool, error) {
+	targetPath, historyDraft, ok := e.recoveryFileOutputContext(ctx, rt)
+	if !ok {
+		return false, nil
+	}
+
+	artifactDraft := strings.TrimSpace(historyDraft)
+	failureReason := buildRecoveryCLIExecuteFileOutputFailureReason(targetPath)
+	if currentDraft, draftOK := e.latestRecoveryAssistantDraftContent(ctx, rt); draftOK {
+		switch rejectReason := recoveryFileWriteDraftRejectReason(currentDraft, targetPath); {
+		case strings.TrimSpace(rejectReason) != "":
+			failureReason = buildRecoveryCLIExecuteRejectedDraftFailureReason(targetPath, rejectReason)
+			if artifactDraft == "" {
+				artifactDraft = strings.TrimSpace(currentDraft)
+			}
+		case looksLikeRecoveryFileDraft(currentDraft):
+			artifactDraft = strings.TrimSpace(currentDraft)
+		case artifactDraft == "":
+			artifactDraft = strings.TrimSpace(currentDraft)
+		}
+	}
+
+	rt.stopReason = stopReasonRecoveryFileRejected
+	artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, artifactDraft, failureReason)
+	if artifactErr != nil {
+		e.logger.Warn("recovery: failed to persist cli.execute file-output artifact",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+			"error", artifactErr,
+		)
+	}
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryCLIExecuteFileOutputRejectedMessage(targetPath, artifactPath, failureReason))
+	if err != nil {
+		return true, err
+	}
+	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, failureReason, message.ID); checkpointErr != nil {
+		return true, checkpointErr
+	}
+	rt.recoveryBlockReason = buildRecoveryCLIExecuteFileOutputBlockedTaskReason(targetPath, artifactPath, failureReason)
+	return true, nil
+}
+
+func buildRecoveryCLIExecuteFileOutputFailureReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	return fmt.Sprintf("cli.execute for %s was retried without `command` after one bounded correction; persist the full file body before retrying the final workspace mutation", path)
+}
+
+func buildRecoveryCLIExecuteRejectedDraftFailureReason(targetPath, rejectReason string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	return fmt.Sprintf("cli.execute for %s was retried without `command` after one bounded correction; %s", path, strings.TrimSpace(rejectReason))
+}
+
+func buildRecoveryCLIExecuteFileOutputRejectedMessage(targetPath, artifactPath, failureReason string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	reason := strings.TrimSpace(failureReason)
+	if strings.TrimSpace(artifactPath) == "" {
+		return fmt.Sprintf("[Recovery turn halted: cli.execute for `%s` was retried without `command` after one correction. The task is now blocked. Last recovery failure: %s. Produce the full file body and a concrete `cli.execute.command` string or populated `file.write` call before retrying.]", path, reason)
+	}
+	return fmt.Sprintf("[Recovery turn halted: cli.execute for `%s` was retried without `command` after one correction. The task is now blocked. Last recovery failure: %s. Resume from `%s` and only retry file mutation after the full file body and a concrete `cli.execute.command` string or populated `file.write` call exist.]", path, reason, strings.TrimSpace(artifactPath))
 }
 
 func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
@@ -2102,6 +2176,18 @@ func buildRecoveryCLIExecuteBlockedTaskReason() string {
 	return "recovery halted after cli.execute was retried without command; re-queue only after providing a concrete cli.execute.command string or a populated file.write call"
 }
 
+func buildRecoveryCLIExecuteFileOutputBlockedTaskReason(targetPath, artifactPath, failureReason string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	reason := strings.TrimSpace(failureReason)
+	if artifact := strings.TrimSpace(artifactPath); artifact != "" {
+		return fmt.Sprintf("recovery halted after cli.execute for %s was retried without command: %s; resume from %s and re-queue only after the full file body and a concrete cli.execute.command string or populated file.write call exist", path, reason, artifact)
+	}
+	return fmt.Sprintf("recovery halted after cli.execute for %s was retried without command: %s; re-queue only after the full file body and a concrete cli.execute.command string or populated file.write call exist", path, reason)
+}
+
 func buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureReason string) string {
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
@@ -2136,6 +2222,66 @@ func (e *TurnEngine) currentRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 		return nil, false
 	}
 	return &checkpoint, true
+}
+
+func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRuntime) (string, string, bool) {
+	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
+		if targetPath := strings.TrimSpace(checkpoint.TargetPath); targetPath != "" {
+			return targetPath, "", true
+		}
+	}
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", "", false
+	}
+
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return "", "", false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.TurnID != nil && *message.TurnID == rt.turn.ID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.read", "file.write", "cli.execute":
+		default:
+			continue
+		}
+		targetPath, usedArtifactPath := recoveryTargetPathFromToolOutput(output)
+		if targetPath == "" {
+			continue
+		}
+		draft := ""
+		if strings.EqualFold(strings.TrimSpace(toolName), "file.read") && !usedArtifactPath {
+			draft = strings.TrimSpace(anyString(output["content"]))
+		}
+		return targetPath, draft, true
+	}
+	return "", "", false
+}
+
+func recoveryTargetPathFromToolOutput(output map[string]any) (string, bool) {
+	if output == nil {
+		return "", false
+	}
+	rawPath := strings.TrimSpace(anyString(output["path"]))
+	if rawPath == "" {
+		return "", false
+	}
+	normalized := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rawPath)))
+	prefix := recoveryArtifactDir + "/"
+	if strings.HasPrefix(normalized, prefix) && len(normalized) > len(prefix) {
+		return strings.TrimPrefix(normalized, prefix), true
+	}
+	return normalized, false
 }
 
 func (e *TurnEngine) hasQueuedAgentTurnForSession(ctx context.Context, sessionID uuid.UUID) (bool, error) {
@@ -2609,8 +2755,11 @@ func resolveRecoveryWorkspacePath(root, relOrAbsPath string) (string, string, er
 
 func buildRecoveryFileWriteArtifactDocument(taskLabel, targetPath, draft, failureReason string, now time.Time) string {
 	reasonLine := "Reason: Recovery turn retried file.write without concrete content after one bounded correction."
-	if strings.TrimSpace(failureReason) != "" {
-		reasonLine = "Reason: Recovery turn carried assistant draft content into file.write, but the write did not produce a durable target file."
+	if reason := strings.TrimSpace(failureReason); reason != "" {
+		reasonLine = "Reason: Recovery turn halted with a durable file-output checkpoint instead of retrying without a concrete final write."
+		if strings.Contains(reason, "was not found on disk") || strings.Contains(reason, "could not verify") {
+			reasonLine = "Reason: Recovery turn carried assistant draft content into file.write, but the write did not produce a durable target file."
+		}
 	}
 	lines := []string{
 		"# Recovery file.write artifact",
@@ -2621,7 +2770,7 @@ func buildRecoveryFileWriteArtifactDocument(taskLabel, targetPath, draft, failur
 		reasonLine,
 		"",
 		"## Resume Instructions",
-		fmt.Sprintf("- Produce the full file body for `%s` before retrying the final `file.write`.", strings.TrimSpace(targetPath)),
+		fmt.Sprintf("- Produce the full file body for `%s` before retrying the final workspace file mutation.", strings.TrimSpace(targetPath)),
 		"- Reuse any draft content captured below instead of starting from scratch.",
 		"",
 	}
