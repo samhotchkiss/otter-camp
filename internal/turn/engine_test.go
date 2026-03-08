@@ -22,6 +22,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
 
@@ -2526,6 +2527,19 @@ Sam.blog should publish one durable operating system for thoughtful parents buil
 				t.Fatalf("recoveryFileWriteDraftRejectReason() = %q, want target path", got)
 			}
 		})
+	}
+}
+
+func TestRecoveryResumeRequiresDirectWriteModeFromRepeatedHistory(t *testing.T) {
+	state := recoveryResumeState{
+		targetPath:          "docs/content-strategy.md",
+		artifactPath:        ".ottercamp/recovery/docs/content-strategy.md",
+		blockerClass:        taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+		failureReason:       "recovery turn retried file.write without concrete content after one bounded correction",
+		priorFailureReasons: []string{"repeated intent-only recovery drafts for docs/content-strategy.md across explicit resume attempts; latest assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body"},
+	}
+	if !recoveryResumeRequiresDirectWriteMode(state) {
+		t.Fatal("expected durable checkpoint with repeated prior failure history to require direct-write recovery mode")
 	}
 }
 

@@ -2766,13 +2766,25 @@ func recoveryResumeRequiresDirectWriteMode(state recoveryResumeState) bool {
 	if strings.TrimSpace(state.targetPath) == "" {
 		return false
 	}
-	if strings.TrimSpace(state.blockerClass) != taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint {
-		return false
-	}
-	if !taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
+	if !recoveryResumeHasRepeatedDraftHistory(state) {
 		return false
 	}
 	return strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == ""
+}
+
+func recoveryResumeHasRepeatedDraftHistory(state recoveryResumeState) bool {
+	if strings.TrimSpace(state.blockerClass) == taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint {
+		return true
+	}
+	if taskcheckpoint.RecoveryFileWriteFailureIsRepeatedDraftReject(state.failureReason) {
+		return true
+	}
+	for _, reason := range state.priorFailureReasons {
+		if taskcheckpoint.RecoveryFileWriteFailureIsRepeatedDraftReject(reason) {
+			return true
+		}
+	}
+	return false
 }
 
 func filterRecoveryDirectWriteToolSet(input []tools.ToolDescriptor) []tools.ToolDescriptor {

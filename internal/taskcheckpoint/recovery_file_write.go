@@ -117,6 +117,11 @@ func RecoveryFileWriteBlockerClass(checkpoint *RecoveryFileWriteCheckpoint) stri
 	if RecoveryFileWriteFailureIsRepeatedDraftReject(checkpoint.FailureReason) {
 		return RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint
 	}
+	for _, reason := range normalizeRecoveryFailureReasons(checkpoint.PriorFailureReasons) {
+		if RecoveryFileWriteFailureIsRepeatedDraftReject(reason) {
+			return RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint
+		}
+	}
 	switch strings.TrimSpace(checkpoint.BlockerClass) {
 	case RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint:
 		return RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint
