@@ -2097,6 +2097,173 @@ func TestTurnEngineIntegrationTaskQueueRecoveryTurnFallsBackStopReasonForLegacyC
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryFileWriteCheckpointPersistsAtConfiguredDataDirAndGuidesNextAttemptEX315(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	t.Setenv("OTTERCAMP_DATA_DIR", "")
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	fixture.engine.assembler = assembler
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	const targetPath = "docs/content-strategy.md"
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	prompts := make([]string, 0, 4)
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		prompts = append(prompts, flattenPrompt(req.Prompt))
+		modelCalls++
+		switch modelCalls {
+		case 1, 2:
+			return ModelResponse{
+				Content: "I'll write it next.",
+				ToolCalls: []ModelToolCall{{
+					ID:   fmt.Sprintf("empty-write-%d", modelCalls),
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"path": targetPath,
+					},
+				}},
+			}, nil
+		case 3:
+			return ModelResponse{
+				Content: "Recovered draft ready.",
+				ToolCalls: []ModelToolCall{{
+					ID:   "recovered-write",
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"path":    targetPath,
+						"content": "# Content Strategy\n\nRecovered from checkpoint.\n",
+					},
+				}},
+			}, nil
+		default:
+			return ModelResponse{Content: "Recovered file written."}, nil
+		}
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		target, _ := call.Arguments["path"].(string)
+		content, _ := call.Arguments["content"].(string)
+		if strings.TrimSpace(content) == "" {
+			t.Fatalf("unexpected tier2 dispatch for empty-content recovery write: %+v", call)
+		}
+		targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(target))
+		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+			return ToolResult{}, err
+		}
+		if err := os.WriteFile(targetAbs, []byte(content), 0o644); err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			RunID:      &runID,
+			Output: map[string]any{
+				"path":      target,
+				"byte_size": len(content),
+				"created":   true,
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery halt: %v", err)
+	}
+
+	artifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
+	if _, err := os.Stat(artifactAbs); err != nil {
+		t.Fatalf("expected recovery artifact in configured data dir: %v", err)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after halt: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected persisted recovery file.write checkpoint")
+	}
+	if checkpoint.ArtifactPath != artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactRel)
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if strings.TrimSpace(checkpoint.HistoryStartMessageID) == "" {
+		t.Fatal("expected checkpoint history_start_message_id")
+	}
+
+	authorType := "human_user"
+	resumeMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "resume from the recovery checkpoint and finish the file",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage resume: %v", err)
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, resumeMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage resume: %v", err)
+	}
+
+	if len(prompts) < 3 {
+		t.Fatalf("prompt count = %d, want at least 3", len(prompts))
+	}
+	resumePrompt := prompts[2]
+	if !strings.Contains(resumePrompt, "Recovery Execution Strategy:") {
+		t.Fatalf("resume prompt missing recovery strategy:\n%s", resumePrompt)
+	}
+	if !strings.Contains(resumePrompt, "Recovery artifact: "+artifactRel) {
+		t.Fatalf("resume prompt missing recovery artifact path %q:\n%s", artifactRel, resumePrompt)
+	}
+	if !strings.Contains(resumePrompt, "Target file: "+targetPath) {
+		t.Fatalf("resume prompt missing target path %q:\n%s", targetPath, resumePrompt)
+	}
+
+	outputBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(targetPath)))
+	if err != nil {
+		t.Fatalf("read recovered output: %v", err)
+	}
+	if !strings.Contains(string(outputBody), "Recovered from checkpoint.") {
+		t.Fatalf("recovered output missing checkpoint content:\n%s", string(outputBody))
+	}
+
+	finalTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after recovery write: %v", err)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(finalTask.Metadata); ok {
+		t.Fatal("expected recovery checkpoint to clear after successful file.write")
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnBoundsCLIThenFileWriteRetryChainEX312(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

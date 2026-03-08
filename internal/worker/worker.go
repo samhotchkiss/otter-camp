@@ -412,6 +412,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 	turnEngine, err := turn.NewEngine(turn.Options{
 		Pool:          pool.Raw(),
+		DataDir:       strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR")),
 		Chat:          chatService,
 		ToolResolver:  toolResolver,
 		Assembler:     promptAssembler,

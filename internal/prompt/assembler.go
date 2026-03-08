@@ -500,7 +500,12 @@ func (a *PromptAssembler) Assemble(ctx context.Context, input AssemblyInput) (*A
 			taskCtx = &contextRow
 		}
 	}
-	if input.HistoryStartID == nil && taskCtx != nil && taskCtx.migrationCheckpoint != nil {
+	if input.HistoryStartID == nil && taskCtx != nil && taskCtx.recoveryCheckpoint != nil {
+		if startID := taskcheckpoint.RecoveryFileWriteHistoryStartMessageID(taskCtx.recoveryCheckpoint); startID != nil {
+			messages = filterPromptMessagesFromID(messages, *startID)
+			summaries = nil
+		}
+	} else if input.HistoryStartID == nil && taskCtx != nil && taskCtx.migrationCheckpoint != nil {
 		if startID := taskcheckpoint.HistoryStartMessageID(taskCtx.migrationCheckpoint); startID != nil {
 			messages = filterPromptMessagesFromID(messages, *startID)
 			summaries = nil
@@ -812,6 +817,9 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 		if taskCtx.contentMigration {
 			lines = append(lines, taskcheckpoint.PromptStrategyLines(taskCtx.migrationCheckpoint)...)
 		}
+		if taskCtx.recoveryCheckpoint != nil {
+			lines = append(lines, taskcheckpoint.RecoveryFileWritePromptStrategyLines(taskCtx.recoveryCheckpoint)...)
+		}
 	default:
 		lines = append(lines, "Scope: "+scopeType)
 		lines = append(lines, "Scope ID: "+session.ScopeID.String())
@@ -870,6 +878,7 @@ type projectTaskContext struct {
 	taskDescription     string
 	contentMigration    bool
 	migrationCheckpoint *taskcheckpoint.ContentMigrationCheckpoint
+	recoveryCheckpoint  *taskcheckpoint.RecoveryFileWriteCheckpoint
 	planningArtifacts   []taskplan.PlannedArtifact
 	acceptanceCriteria  []string
 	currentFlowStep     string
@@ -918,6 +927,9 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 		if checkpoint, ok := taskcheckpoint.ParseContentMigrationCheckpoint(taskRecord.Metadata); ok {
 			out.migrationCheckpoint = &checkpoint
 		}
+	}
+	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+		out.recoveryCheckpoint = &checkpoint
 	}
 
 	if a.projects != nil {
