@@ -3566,6 +3566,35 @@ func appendToolResultMessage(t *testing.T, fixture *unitFixture, turnID uuid.UUI
 	})
 }
 
+func TestShouldSuppressAutoContinuationForStopReasonIncludesRecoveryFallback(t *testing.T) {
+	t.Parallel()
+
+	recoveryFileRejected := stopReasonRecoveryFileRejected
+	legacyFallback := stopReasonRecoveryFileFallback
+	validationBlocked := stopReasonValidationBlocked
+
+	tests := []struct {
+		name       string
+		stopReason *string
+		want       bool
+	}{
+		{name: "nil", stopReason: nil, want: false},
+		{name: "preferred recovery file stop reason", stopReason: &recoveryFileRejected, want: true},
+		{name: "legacy recovery fallback stop reason", stopReason: &legacyFallback, want: true},
+		{name: "validation blocked", stopReason: &validationBlocked, want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldSuppressAutoContinuationForStopReason(tc.stopReason); got != tc.want {
+				t.Fatalf("shouldSuppressAutoContinuationForStopReason(%v) = %t, want %t", tc.stopReason, got, tc.want)
+			}
+		})
+	}
+}
+
 func mustRawJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)

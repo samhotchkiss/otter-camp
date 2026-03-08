@@ -58,6 +58,7 @@ const (
 	stopReasonMaxDuration           = "max_duration"
 	stopReasonRecoveryCLIRejected   = "model_error"
 	stopReasonRecoveryFileRejected  = "recovery_content_required"
+	stopReasonRecoveryFileFallback  = stopReasonRecoveryCLIRejected
 	stopReasonValidationBlocked     = "validation_loop_blocked"
 	recoveryActionValidationResume  = "resume_validation_blocked_task"
 	workerPromptTokenGuardrail      = 32000
@@ -1616,10 +1617,46 @@ func (e *TurnEngine) recordStopReason(ctx context.Context, rt *turnRuntime) erro
 	}
 	updated, err := e.turns.SetStopReason(ctx, rt.turn.ID, &reason)
 	if err != nil {
-		return err
+		fallbackReason, fallbackOK := compatibleStopReasonFallback(reason)
+		if !fallbackOK || !isChatTurnStopReasonConstraintError(err) {
+			return err
+		}
+		updated, fallbackErr := e.turns.SetStopReason(ctx, rt.turn.ID, &fallbackReason)
+		if fallbackErr != nil {
+			return fmt.Errorf("persist stop_reason %q failed and fallback %q also failed: %w", reason, fallbackReason, fallbackErr)
+		}
+		sessionID := uuid.Nil
+		if rt.session != nil {
+			sessionID = rt.session.ID
+		}
+		e.logger.Warn("turn stop_reason fell back to legacy-compatible value",
+			"session_id", sessionID,
+			"turn_id", rt.turn.ID,
+			"preferred_stop_reason", reason,
+			"fallback_stop_reason", fallbackReason,
+		)
+		rt.stopReason = fallbackReason
+		rt.turn.StopReason = updated.StopReason
+		return nil
 	}
 	rt.turn.StopReason = updated.StopReason
 	return nil
+}
+
+func compatibleStopReasonFallback(reason string) (string, bool) {
+	switch strings.TrimSpace(reason) {
+	case stopReasonRecoveryFileRejected:
+		return stopReasonRecoveryFileFallback, true
+	default:
+		return "", false
+	}
+}
+
+func isChatTurnStopReasonConstraintError(err error) bool {
+	if err == nil || !errors.Is(err, repo.ErrConflict) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "chat_turn_stop_reason_check")
 }
 
 func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, assembled *prompt.AssembledPrompt) (bool, error) {
