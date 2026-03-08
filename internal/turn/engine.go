@@ -1912,6 +1912,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return false, nil
 		}
+		handled, stop, err = e.handleRecoveryRejectedFileWriteContent(ctx, rt, &call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 		handled, stop, err = e.handleRecoveryFileWriteWithoutContent(ctx, rt, &call)
 		if err != nil {
 			return false, err
@@ -2075,6 +2085,24 @@ func buildRecoveryCLIExecuteFileOutputRejectedMessage(targetPath, artifactPath, 
 	return fmt.Sprintf("[Recovery turn halted: cli.execute for `%s` was retried without `command` after one correction. The task is now blocked. Last recovery failure: %s. Resume from `%s` and only retry file mutation after the full file body and a concrete `cli.execute.command` string or populated `file.write` call exist.]", path, reason, strings.TrimSpace(artifactPath))
 }
 
+func (e *TurnEngine) handleRecoveryRejectedFileWriteContent(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
+	if rt == nil || call == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
+		return false, false, nil
+	}
+
+	normalized, targetPath, draft, ok := recoveryFileWriteWithContent(*call)
+	if !ok {
+		return false, false, nil
+	}
+	call.Arguments = normalized
+
+	rejectReason := recoveryFileWriteDraftRejectReason(draft, targetPath)
+	if strings.TrimSpace(rejectReason) == "" {
+		return false, false, nil
+	}
+	return e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
+}
+
 func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
 	if rt == nil || call == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
 		return false, false, nil
@@ -2105,25 +2133,7 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 		)
 		return false, false, nil
 	} else if strings.TrimSpace(rejectReason) != "" {
-		rt.stopReason = stopReasonRecoveryFileRejected
-		artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, draft, rejectReason)
-		if artifactErr != nil {
-			e.logger.Warn("recovery: failed to persist rejected file.write draft artifact",
-				"session_id", rt.session.ID,
-				"turn_id", rt.turn.ID,
-				"path", targetPath,
-				"error", artifactErr,
-			)
-		}
-		message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, rejectReason))
-		if err != nil {
-			return true, true, err
-		}
-		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, rejectReason, message.ID); checkpointErr != nil {
-			return true, true, checkpointErr
-		}
-		rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, rejectReason)
-		return true, true, nil
+		return e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
 	}
 
 	if rt.recoveryFileFixes >= recoveryFileWriteRepairBudget {
@@ -2155,6 +2165,28 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 	return true, false, nil
 }
 
+func (e *TurnEngine) haltRejectedRecoveryFileWrite(ctx context.Context, rt *turnRuntime, targetPath, draft, failureReason string) (bool, bool, error) {
+	rt.stopReason = stopReasonRecoveryFileRejected
+	artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, draft, failureReason)
+	if artifactErr != nil {
+		e.logger.Warn("recovery: failed to persist rejected file.write artifact",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+			"error", artifactErr,
+		)
+	}
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReason))
+	if err != nil {
+		return true, true, err
+	}
+	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, failureReason, message.ID); checkpointErr != nil {
+		return true, true, checkpointErr
+	}
+	rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureReason)
+	return true, true, nil
+}
+
 func recoveryFileWriteMissingContent(call ToolCall) (map[string]any, string, bool) {
 	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.write") {
 		return nil, "", false
@@ -2168,6 +2200,22 @@ func recoveryFileWriteMissingContent(call ToolCall) (map[string]any, string, boo
 		return nil, "", false
 	}
 	return normalized, targetPath, true
+}
+
+func recoveryFileWriteWithContent(call ToolCall) (map[string]any, string, string, bool) {
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.write") {
+		return nil, "", "", false
+	}
+	normalized := toolargs.Normalize("file.write", call.Arguments)
+	targetPath := strings.TrimSpace(stringValue(normalized["path"]))
+	if targetPath == "" {
+		return nil, "", "", false
+	}
+	content := stringValue(normalized["content"])
+	if strings.TrimSpace(content) == "" {
+		return nil, "", "", false
+	}
+	return normalized, targetPath, content, true
 }
 
 func buildRecoveryFileWriteRetryMessage(targetPath string) string {
@@ -2184,6 +2232,12 @@ func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReas
 		path = "the requested workspace file"
 	}
 	if reason := strings.TrimSpace(failureReason); reason != "" {
+		if isRecoveryDraftRejectFailureReason(reason) {
+			if strings.TrimSpace(artifactPath) == "" {
+				return fmt.Sprintf("[Recovery turn halted: recovered file.write for `%s` rejected a non-substantive draft. The task is now blocked. Last failure: %s. Produce the concrete file body before retrying.]", path, reason)
+			}
+			return fmt.Sprintf("[Recovery turn halted: recovered file.write for `%s` rejected a non-substantive draft. The task is now blocked. Last failure: %s. Resume from `%s` and only retry the final write after the full file body exists.]", path, reason, strings.TrimSpace(artifactPath))
+		}
 		if strings.TrimSpace(artifactPath) == "" {
 			return fmt.Sprintf("[Recovery turn halted: recovered file.write for `%s` did not produce a durable file. The task is now blocked. Last failure: %s. Resolve that write failure before retrying.]", path, reason)
 		}
@@ -2217,6 +2271,12 @@ func buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureRe
 		path = "the requested workspace file"
 	}
 	if reason := strings.TrimSpace(failureReason); reason != "" {
+		if isRecoveryDraftRejectFailureReason(reason) {
+			if artifact := strings.TrimSpace(artifactPath); artifact != "" {
+				return fmt.Sprintf("recovery halted after %s; resume from %s and re-queue only after concrete content exists", reason, artifact)
+			}
+			return fmt.Sprintf("recovery halted after %s; re-queue only after concrete content exists", reason)
+		}
 		if artifact := strings.TrimSpace(artifactPath); artifact != "" {
 			return fmt.Sprintf("recovery halted after recovered file.write for %s failed: %s; resume from %s and re-queue only after resolving that failure", path, reason, artifact)
 		}
@@ -2644,16 +2704,7 @@ func looksLikeRecoveryFileDraft(content string) bool {
 	if len(trimmed) >= 180 {
 		return true
 	}
-	if strings.Count(trimmed, "\n") >= 3 {
-		return true
-	}
-	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "---") || strings.HasPrefix(trimmed, "<") || strings.HasPrefix(trimmed, "{") {
-		return len(trimmed) >= 60
-	}
-	if strings.Contains(trimmed, "\n- ") || strings.Contains(trimmed, "\n## ") {
-		return len(trimmed) >= 60
-	}
-	return false
+	return hasStructuredRecoveryFileDraftMarkers(trimmed)
 }
 
 func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
@@ -2662,7 +2713,11 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return ""
 	}
 	lower := strings.ToLower(trimmed)
-	if !containsAny(lower,
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	if containsAny(lower,
 		"i understand the problem",
 		"i can see the problem",
 		"let me ",
@@ -2671,10 +2726,7 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"my `file.write`",
 		"my file_write",
 		"my file.write",
-	) {
-		return ""
-	}
-	if !containsAny(lower,
+	) && containsAny(lower,
 		"file_write",
 		"file.write",
 		"cli_execute",
@@ -2688,13 +2740,76 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"invocations",
 		"fallback",
 	) {
-		return ""
+		return fmt.Sprintf("assistant draft for %s described tool-recovery troubleshooting instead of the file body", path)
 	}
-	path := strings.TrimSpace(targetPath)
-	if path == "" {
-		path = "the requested workspace file"
+	if looksLikeRecoveryIntentNarrationPlaceholder(trimmed) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
-	return fmt.Sprintf("assistant draft for %s described tool-recovery troubleshooting instead of the file body", path)
+	return ""
+}
+
+func hasStructuredRecoveryFileDraftMarkers(trimmed string) bool {
+	if strings.Count(trimmed, "\n") >= 3 {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "---") || strings.HasPrefix(trimmed, "<") || strings.HasPrefix(trimmed, "{") {
+		return len(trimmed) >= 60
+	}
+	if strings.Contains(trimmed, "\n- ") || strings.Contains(trimmed, "\n## ") || strings.Contains(trimmed, "\n1. ") {
+		return len(trimmed) >= 60
+	}
+	return false
+}
+
+func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	if hasStructuredRecoveryFileDraftMarkers(trimmed) || strings.Count(trimmed, "\n") >= 3 || len(trimmed) > 600 {
+		return false
+	}
+
+	lower := strings.ToLower(trimmed)
+	if containsAny(lower, "the single deliverable", "final deliverable") {
+		return true
+	}
+	hasWriteIntent := containsAny(lower,
+		"let me write",
+		"let me draft",
+		"i'm going to write",
+		"i am going to write",
+		"write the full",
+		"write the comprehensive",
+		"draft the full",
+		"draft the comprehensive",
+	)
+	hasSetupCue := containsAny(lower,
+		"now i have everything i need",
+		"i now have everything i need",
+		"i have everything i need",
+		"i have enough context",
+		"i have what i need",
+		"now that i have",
+	)
+	if hasWriteIntent && hasSetupCue {
+		return true
+	}
+	if containsAny(lower, "this needs to be") && containsAny(lower,
+		"deliverable",
+		"unblock",
+		"task",
+		"strategic foundation",
+		"foundation for",
+	) {
+		return true
+	}
+	return false
+}
+
+func isRecoveryDraftRejectFailureReason(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(lower, "assistant draft for ") && strings.Contains(lower, "instead of the file body")
 }
 
 func containsAny(haystack string, needles ...string) bool {

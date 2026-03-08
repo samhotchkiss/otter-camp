@@ -2054,6 +2054,175 @@ func TestTurnEngineIntegrationRecoveryTurnRejectsToolRepairNarrationDraftEX320(t
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryResumeRejectsPlaceholderNarrationDraftEX326(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, recoveryMessage.ID)
+
+	existingTargetBody := strings.TrimSpace(`# Content Strategy
+
+## Durable Anchor
+- Keep the on-disk strategy intact until a new substantive draft exists.
+`) + "\n"
+	if err := os.WriteFile(seed.targetAbs, []byte(existingTargetBody), 0o644); err != nil {
+		t.Fatalf("rewrite durable target draft: %v", err)
+	}
+
+	assembler := &fakeAssembler{results: []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: 30}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+	}}
+	fixture.engine.assembler = assembler
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	const placeholderNarration = "Now I have everything I need. Let me write the comprehensive content strategy document. This needs to be the single deliverable that unblocks WS4 and serves as the strategic foundation for Sam.blog."
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls > 1 {
+			t.Fatalf("unexpected extra model call after rejecting placeholder draft: %d", modelCalls)
+		}
+		return ModelResponse{
+			Content: placeholderNarration,
+			ToolCalls: []ModelToolCall{{
+				ID:   "resume-write",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path": seed.targetPath,
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		t.Fatalf("unexpected tier2 dispatch for rejected placeholder draft: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery resume: %v", err)
+	}
+
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1", modelCalls)
+	}
+	if assembler.calls != 1 {
+		t.Fatalf("assemble calls = %d, want 1 because placeholder rejection should halt before continuation guardrails", assembler.calls)
+	}
+	if dispatched != 0 {
+		t.Fatalf("tier2 dispatches = %d, want 0", dispatched)
+	}
+
+	outputBody, err := os.ReadFile(seed.targetAbs)
+	if err != nil {
+		t.Fatalf("read durable target file: %v", err)
+	}
+	if string(outputBody) != existingTargetBody {
+		t.Fatalf("target file was clobbered:\n%s", string(outputBody))
+	}
+	if strings.Contains(string(outputBody), "Let me write the comprehensive content strategy document") {
+		t.Fatalf("target file still contains placeholder narration:\n%s", string(outputBody))
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != seed.targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, seed.targetPath)
+	}
+	if checkpoint.ArtifactPath != seed.artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, seed.artifactRel)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "intent to write the deliverable") {
+		t.Fatalf("checkpoint failure_reason = %q, want placeholder rejection guidance", checkpoint.FailureReason)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
+	}
+
+	artifactBody, err := os.ReadFile(seed.artifactAbs)
+	if err != nil {
+		t.Fatalf("read recovery artifact: %v", err)
+	}
+	artifactText := string(artifactBody)
+	if !strings.Contains(artifactText, placeholderNarration) {
+		t.Fatalf("artifact missing rejected placeholder draft:\n%s", artifactText)
+	}
+	if !strings.Contains(artifactText, "intent to write the deliverable") {
+		t.Fatalf("artifact missing placeholder failure reason:\n%s", artifactText)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var haltMessages int
+	var toolResults int
+	var continuationMessages int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"docs/content-strategy.md"`) {
+			toolResults++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "intent to write the deliverable instead of the file body") {
+			haltMessages++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Prompt input exceeded 64000-token guardrail - continuing in a new turn.") {
+			continuationMessages++
+		}
+	}
+	if haltMessages != 1 {
+		t.Fatalf("placeholder halt messages = %d, want 1", haltMessages)
+	}
+	if toolResults != 0 {
+		t.Fatalf("file.write tool_results = %d, want 0", toolResults)
+	}
+	if continuationMessages != 0 {
+		t.Fatalf("continuation guardrail messages = %d, want 0 after placeholder rejection", continuationMessages)
+	}
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnPersistsCheckpointForRepeatedEmptyCLIExecuteWithFileContextEX321(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
