@@ -2427,7 +2427,7 @@ func TestHandleUserMessageSkipsBlockedValidationLoop(t *testing.T) {
 		},
 	}
 
-	if err := fixture.engine.handleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID, nil, 0); err != nil {
+	if err := fixture.engine.handleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID, nil, 0, nil); err != nil {
 		t.Fatalf("handleUserMessage: %v", err)
 	}
 	if got := len(fixture.chat.turnOrder); got != 0 {

@@ -69,6 +69,7 @@ const (
 	recoveryCLIRepairBudget         = 1
 	recoveryFileWriteRepairBudget   = 1
 	recoveryArtifactDir             = ".ottercamp/recovery"
+	recoveryResumeExcerptChars      = 3000
 )
 
 var (
@@ -385,6 +386,7 @@ type turnRuntime struct {
 	agent               repo.Agent
 	turn                *chat.ChatTurn
 	initialMessageID    uuid.UUID
+	currentJobID        *uuid.UUID
 	runID               *uuid.UUID
 	runStepID           *uuid.UUID
 	runAttemptID        *uuid.UUID
@@ -646,7 +648,7 @@ func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error 
 			return nil
 		}
 	}
-	return e.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount)
+	return e.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &job.ID)
 }
 
 func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.DomainEvent) error {
@@ -924,7 +926,7 @@ func (e *TurnEngine) handleCompletedWorkTurn(ctx context.Context, taskRecord rep
 }
 
 func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID) error {
-	return e.handleUserMessage(ctx, sessionID, messageID, nil, 0)
+	return e.handleUserMessage(ctx, sessionID, messageID, nil, 0, nil)
 }
 
 func (e *TurnEngine) startInboundMessageTurn(ctx context.Context, turn repo.ChatTurn) (*chat.ChatTurn, bool, error) {
@@ -954,7 +956,7 @@ func (e *TurnEngine) startInboundMessageTurn(ctx context.Context, turn repo.Chat
 	return startedTurn, true, nil
 }
 
-func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID, routedAgentID *uuid.UUID, retryCount int) error {
+func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID, routedAgentID *uuid.UUID, retryCount int, currentJobID *uuid.UUID) error {
 	if sessionID == uuid.Nil || messageID == uuid.Nil {
 		return fmt.Errorf("session_id and message_id are required")
 	}
@@ -1040,6 +1042,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		agent:            agent,
 		turn:             turn,
 		initialMessageID: messageID,
+		currentJobID:     cloneUUIDPointer(currentJobID),
 		runID:            runIDFromMetadata(message.Metadata),
 		runStepID:        runStepIDFromMetadata(message.Metadata),
 		runAttemptID:     runAttemptIDFromMetadata(message.Metadata),
@@ -1125,6 +1128,11 @@ func (e *TurnEngine) handleRateLimitedTurnFailure(
 func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 	if err := e.requireTurnInProgress(ctx, rt); err != nil {
 		return err
+	}
+	if rt != nil && rt.recoveryTurn && rt.historyStartID == nil {
+		if _, err := e.appendRecoveryResumeState(ctx, rt, true); err != nil {
+			return err
+		}
 	}
 
 	continuations := 0
@@ -1449,6 +1457,11 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	if checkpointed, err := e.appendContentMigrationCheckpoint(ctx, rt); err != nil {
 		return err
 	} else if checkpointed {
+		return nil
+	}
+	if resumed, err := e.appendRecoveryResumeState(ctx, rt, false); err != nil {
+		return err
+	} else if resumed {
 		return nil
 	}
 
@@ -2234,6 +2247,194 @@ func (e *TurnEngine) currentRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	return &checkpoint, true
 }
 
+type recoveryResumeState struct {
+	targetPath    string
+	targetDraft   string
+	artifactPath  string
+	artifactDraft string
+	failureReason string
+}
+
+func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRuntime, preserveInitialMessage bool) (bool, error) {
+	if rt == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	state, ok := e.loadRecoveryResumeState(ctx, rt)
+	if !ok {
+		return false, nil
+	}
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryResumeStateMessage(state))
+	if err != nil {
+		return false, err
+	}
+	if preserveInitialMessage && rt.initialMessageID != uuid.Nil {
+		initial := rt.initialMessageID
+		rt.historyStartID = &initial
+		return true, nil
+	}
+	rt.historyStartID = &message.ID
+	return true, nil
+}
+
+func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntime) (recoveryResumeState, bool) {
+	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	if !ok {
+		return recoveryResumeState{}, false
+	}
+
+	state := recoveryResumeState{
+		targetPath:    strings.TrimSpace(checkpoint.TargetPath),
+		artifactPath:  strings.TrimSpace(checkpoint.ArtifactPath),
+		failureReason: strings.TrimSpace(checkpoint.FailureReason),
+	}
+	if draft, found := e.readRecoveryWorkspaceText(ctx, rt, state.targetPath); found {
+		state.targetDraft = strings.TrimSpace(draft)
+	}
+	if artifactBody, found := e.readRecoveryWorkspaceText(ctx, rt, state.artifactPath); found {
+		state.artifactDraft = strings.TrimSpace(recoveryArtifactDraftContent(artifactBody))
+	}
+	if strings.TrimSpace(state.targetPath) == "" &&
+		strings.TrimSpace(state.targetDraft) == "" &&
+		strings.TrimSpace(state.artifactPath) == "" &&
+		strings.TrimSpace(state.artifactDraft) == "" &&
+		strings.TrimSpace(state.failureReason) == "" {
+		return recoveryResumeState{}, false
+	}
+	return state, true
+}
+
+func (e *TurnEngine) readRecoveryWorkspaceText(ctx context.Context, rt *turnRuntime, relPath string) (string, bool) {
+	trimmed := strings.TrimSpace(relPath)
+	if trimmed == "" {
+		return "", false
+	}
+	roots, err := e.recoveryWorkspaceRoots(ctx, rt)
+	if err != nil || len(roots) == 0 {
+		return "", false
+	}
+
+	var firstExisting string
+	for _, root := range roots {
+		absPath, _, resolveErr := resolveRecoveryWorkspacePath(root, trimmed)
+		if resolveErr != nil {
+			continue
+		}
+		body, readErr := os.ReadFile(absPath)
+		if readErr != nil {
+			continue
+		}
+		text := string(body)
+		if strings.TrimSpace(text) != "" {
+			return text, true
+		}
+		if firstExisting == "" {
+			firstExisting = text
+		}
+	}
+	if firstExisting != "" {
+		return firstExisting, true
+	}
+	return "", false
+}
+
+func (e *TurnEngine) recoveryWorkspaceRoots(ctx context.Context, rt *turnRuntime) ([]string, error) {
+	if e == nil || e.tasks == nil || e.projects == nil || rt == nil || rt.session == nil {
+		return nil, fmt.Errorf("recovery workspace roots require task scope repositories")
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return nil, fmt.Errorf("recovery workspace roots require task scope")
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return nil, err
+	}
+	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	return e.projectWorkspaceRoots(ctx, taskRecord.OrganizationID, projectRecord)
+}
+
+func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
+	lines := []string{
+		"[Recovery resume state]",
+		"Resume order: target file draft, then recovery artifact draft, then checkpoint metadata/failure reason.",
+		"Continue from the durable drafts below instead of asking which task to resume.",
+	}
+
+	if target := strings.TrimSpace(state.targetPath); target != "" {
+		lines = append(lines, "Target file: "+target)
+		if draft := strings.TrimSpace(state.targetDraft); draft != "" {
+			excerpt, truncated := truncateRecoveryResumeExcerpt(draft, recoveryResumeExcerptChars)
+			lines = append(lines,
+				"Existing target file draft:",
+				"```text",
+				excerpt,
+				"```",
+			)
+			if truncated {
+				lines = append(lines, "_Target file excerpt truncated for prompt budget._")
+			}
+		} else {
+			lines = append(lines, "Existing target file draft: (not found on disk)")
+		}
+	}
+
+	if artifact := strings.TrimSpace(state.artifactPath); artifact != "" {
+		lines = append(lines, "Recovery artifact: "+artifact)
+		if draft := strings.TrimSpace(state.artifactDraft); draft != "" {
+			excerpt, truncated := truncateRecoveryResumeExcerpt(draft, recoveryResumeExcerptChars)
+			lines = append(lines,
+				"Recovery artifact draft:",
+				"```text",
+				excerpt,
+				"```",
+			)
+			if truncated {
+				lines = append(lines, "_Recovery artifact excerpt truncated for prompt budget._")
+			}
+		} else {
+			lines = append(lines, "Recovery artifact draft: (not found on disk)")
+		}
+	}
+
+	if reason := strings.TrimSpace(state.failureReason); reason != "" {
+		lines = append(lines, "Checkpoint failure reason: "+reason)
+	}
+	if strings.TrimSpace(state.targetDraft) != "" && strings.TrimSpace(state.artifactDraft) != "" {
+		lines = append(lines, "If the target file is only a stub but the recovery artifact is fuller, merge the fuller artifact content into the target before retrying the final write.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func recoveryArtifactDraftContent(document string) string {
+	trimmed := strings.TrimSpace(document)
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.SplitN(trimmed, "\n## Draft Content\n", 2)
+	if len(parts) == 2 {
+		return strings.TrimSpace(parts[1])
+	}
+	return trimmed
+}
+
+func truncateRecoveryResumeExcerpt(text string, limit int) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || limit <= 0 || len(trimmed) <= limit {
+		return trimmed, false
+	}
+	cut := strings.TrimSpace(trimmed[:limit])
+	if idx := strings.LastIndex(cut, "\n"); idx >= limit/2 {
+		cut = strings.TrimSpace(cut[:idx])
+	}
+	if cut == "" {
+		cut = strings.TrimSpace(trimmed[:limit])
+	}
+	return cut + "\n[truncated]", true
+}
+
 func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRuntime) (string, string, bool) {
 	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
 		if targetPath := strings.TrimSpace(checkpoint.TargetPath); targetPath != "" {
@@ -2294,11 +2495,26 @@ func recoveryTargetPathFromToolOutput(output map[string]any) (string, bool) {
 	return normalized, false
 }
 
-func (e *TurnEngine) hasQueuedAgentTurnForSession(ctx context.Context, sessionID uuid.UUID) (bool, error) {
+func (e *TurnEngine) hasQueuedAgentTurnForSession(ctx context.Context, sessionID uuid.UUID, excludeJobID *uuid.UUID) (bool, error) {
 	if e == nil || e.pool == nil || sessionID == uuid.Nil {
 		return false, nil
 	}
 	var queued bool
+	if excludeJobID != nil && *excludeJobID != uuid.Nil {
+		if err := e.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM job_queue
+				WHERE job_type = $1
+				  AND status IN ('pending', 'claimed')
+				  AND payload->>'session_id' = $2
+				  AND id <> $3
+			)
+		`, AgentTurnJobType, sessionID.String(), *excludeJobID).Scan(&queued); err != nil {
+			return false, err
+		}
+		return queued, nil
+	}
 	if err := e.pool.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1
@@ -3417,7 +3633,7 @@ func (e *TurnEngine) handleRecoveryContinuationDepthBlocker(ctx context.Context,
 	}
 
 	checkpoint, _ := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
-	queued, err := e.hasQueuedAgentTurnForSession(ctx, rt.session.ID)
+	queued, err := e.hasQueuedAgentTurnForSession(ctx, rt.session.ID, rt.currentJobID)
 	if err != nil {
 		return true, err
 	}

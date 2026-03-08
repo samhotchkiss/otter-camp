@@ -3151,6 +3151,121 @@ func TestTurnEngineIntegrationRecoveryFileWriteCheckpointPersistsAtConfiguredDat
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryResumeSeedsDurableDiskContextEX323(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, recoveryMessage.ID)
+
+	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	fixture.engine.assembler = assembler
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	promptBlob := ""
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			promptBlob = flattenPrompt(req.Prompt)
+			return ModelResponse{
+				Content: "Continuing from the durable recovery drafts.",
+				ToolCalls: []ModelToolCall{{
+					ID:   "resume-final-write",
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"path": seed.targetPath,
+						"content": strings.TrimSpace(`# Content Strategy
+
+## Core Promise
+Sam.blog publishes one durable operating system for thoughtful parents building resilient families and meaningful work.
+
+## Editorial Pillars
+- Practical family systems with clear routines and agency.
+- Honest work, craft, and stewardship stories grounded in lived experience.
+- Measured experiments that turn reflection into repeatable operating habits.
+`) + "\n",
+					},
+				}},
+			}, nil
+		}
+		return ModelResponse{Content: "Recovered document written."}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		target, _ := call.Arguments["path"].(string)
+		content, _ := call.Arguments["content"].(string)
+		targetAbs := filepath.Join(seed.workspaceRoot, filepath.FromSlash(target))
+		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+			return ToolResult{}, err
+		}
+		if err := os.WriteFile(targetAbs, []byte(content), 0o644); err != nil {
+			return ToolResult{}, err
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			RunID:      &runID,
+			Output: map[string]any{
+				"path":      target,
+				"byte_size": len(content),
+				"created":   true,
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery resume: %v", err)
+	}
+
+	if !strings.Contains(promptBlob, "[Recovery resume state]") {
+		t.Fatalf("prompt missing recovery resume state:\n%s", promptBlob)
+	}
+	if !strings.Contains(promptBlob, "Resume order: target file draft, then recovery artifact draft, then checkpoint metadata/failure reason.") {
+		t.Fatalf("prompt missing durable resume order:\n%s", promptBlob)
+	}
+	if !strings.Contains(promptBlob, seed.targetDraft) {
+		t.Fatalf("prompt missing target draft content:\n%s", promptBlob)
+	}
+	if !strings.Contains(promptBlob, seed.artifactDraft) {
+		t.Fatalf("prompt missing recovery artifact draft:\n%s", promptBlob)
+	}
+	if !strings.Contains(promptBlob, seed.failureReason) {
+		t.Fatalf("prompt missing checkpoint failure reason:\n%s", promptBlob)
+	}
+
+	outputBody, err := os.ReadFile(seed.targetAbs)
+	if err != nil {
+		t.Fatalf("read final output: %v", err)
+	}
+	if strings.Contains(string(outputBody), "Let me write the full document now.") {
+		t.Fatalf("target file still contains low-value stub instead of substantive output:\n%s", string(outputBody))
+	}
+	if !strings.Contains(string(outputBody), "Sam.blog publishes one durable operating system") {
+		t.Fatalf("final output missing substantive recovered content:\n%s", string(outputBody))
+	}
+
+	finalTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after durable resume: %v", err)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(finalTask.Metadata); ok {
+		t.Fatal("expected recovery checkpoint to clear after durable recovery resume")
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnHaltsWhenRecoveredFileWriteDoesNotLandDurablyEX319(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -4355,7 +4470,7 @@ func TestTurnEngineIntegrationFreshKickoffRetryKeepsSingleProjectAndSession(t *t
 	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err == nil || !strings.Contains(err.Error(), "simulated_fresh_kickoff_retry") {
 		t.Fatalf("first HandleUserMessage error = %v, want simulated retry failure", err)
 	}
-	if err := fixture.engine.handleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID, nil, 1); err != nil {
+	if err := fixture.engine.handleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID, nil, 1, nil); err != nil {
 		t.Fatalf("retry handleUserMessage: %v", err)
 	}
 
@@ -4710,6 +4825,128 @@ func TestTurnEngineIntegrationRecoveryTurnKeepsQueuedContinuationAfterGuardrailC
 	}
 	if queuedMessages != 1 {
 		t.Fatalf("queued continuation messages = %d, want 1", queuedMessages)
+	}
+}
+
+func TestTurnEngineIntegrationRecoveryGuardrailDoesNotCountCurrentClaimedJobAsQueuedWakeupEX323(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	_ = mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, recoveryMessage.ID)
+	fixture.engine.assembler = &fakeAssembler{results: []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+	}}
+
+	worker := jobqueue.New(fixture.pool, nil, jobqueue.Config{})
+	jobID, err := worker.Enqueue(ctx, nil, AgentTurnJobType, defaultAgentTurnJobPriority, AgentTurnPayload{
+		SessionID: taskSession.ID,
+		MessageID: recoveryMessage.ID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueue claimed recovery job: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'integration-worker',
+		    claimed_at = now()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("mark recovery job claimed: %v", err)
+	}
+
+	var payload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&payload); err != nil {
+		t.Fatalf("load claimed recovery payload: %v", err)
+	}
+	claimedJob := jobqueue.Job{
+		ID:      jobID,
+		JobType: AgentTurnJobType,
+		Payload: payload,
+		Status:  "claimed",
+	}
+
+	if err := fixture.engine.HandleTurnJob(ctx, claimedJob); err != nil {
+		t.Fatalf("HandleTurnJob recovery continuation depth: %v", err)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after claimed recovery run: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	var extraQueuedJobs int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = $1
+		  AND status IN ('pending', 'claimed')
+		  AND payload->>'session_id' = $2
+		  AND id <> $3
+	`, AgentTurnJobType, taskSession.ID.String(), jobID).Scan(&extraQueuedJobs); err != nil {
+		t.Fatalf("count extra queued recovery jobs: %v", err)
+	}
+	if extraQueuedJobs != 0 {
+		t.Fatalf("extra queued recovery jobs = %d, want 0", extraQueuedJobs)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var queuedMessages int
+	var blockedMessages int
+	var resumeStateMessages int
+	var continuationSummaries int
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, "follow-on wakeup is already queued") {
+			queuedMessages++
+		}
+		if strings.Contains(message.Content, "The task is now blocked.") {
+			blockedMessages++
+		}
+		if strings.Contains(message.Content, "[Recovery resume state]") {
+			resumeStateMessages++
+		}
+		if strings.Contains(message.Content, "[Continuation summary]") {
+			continuationSummaries++
+		}
+	}
+	if queuedMessages != 0 {
+		t.Fatalf("queued continuation messages = %d, want 0 when only the current claimed job exists", queuedMessages)
+	}
+	if blockedMessages != 1 {
+		t.Fatalf("blocked guidance messages = %d, want 1", blockedMessages)
+	}
+	if continuationSummaries != 0 {
+		t.Fatalf("continuation summary messages = %d, want 0 for artifact-seeded recovery continuations", continuationSummaries)
+	}
+	if resumeStateMessages != 4 {
+		t.Fatalf("recovery resume state messages = %d, want 4 bounded turns", resumeStateMessages)
+	}
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0 for artifact-seeded recovery continuations", fixture.model.continuationSummaryCalls)
 	}
 }
 
@@ -5981,6 +6218,93 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 		dispatcher:  dispatcher,
 		runCanceler: runCanceler,
 	}
+}
+
+type persistedRecoveryResumeFixture struct {
+	workspaceRoot string
+	targetPath    string
+	targetAbs     string
+	targetDraft   string
+	artifactRel   string
+	artifactAbs   string
+	artifactDraft string
+	failureReason string
+}
+
+func mustPersistRecoveryResumeFixture(
+	t *testing.T,
+	ctx context.Context,
+	fixture *integrationFixture,
+	taskRecord repo.ProjectTask,
+	historyStartMessageID uuid.UUID,
+) persistedRecoveryResumeFixture {
+	t.Helper()
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, taskRecord.ProjectID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(fixture.engine.dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	seed := persistedRecoveryResumeFixture{
+		workspaceRoot: workspaceRoot,
+		targetPath:    "docs/content-strategy.md",
+		targetDraft:   "Excellent. I now have a thorough understanding of the strategic direction for Sam.blog. Let me write the full document now.",
+		artifactDraft: strings.TrimSpace(`# Content Strategy
+
+## Core Promise
+Sam.blog should publish one durable operating system for thoughtful parents building resilient families and meaningful work.
+
+## Editorial Pillars
+- Family systems that reduce chaos and increase agency.
+- Honest stories about work, stewardship, and craft.
+- Experiments and operating notes that turn reflection into repeatable practice.
+`),
+		failureReason: "assistant draft for docs/content-strategy.md described tool-recovery troubleshooting instead of the file body",
+	}
+	seed.targetAbs = filepath.Join(workspaceRoot, filepath.FromSlash(seed.targetPath))
+	seed.artifactRel = filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(seed.targetPath)))
+	seed.artifactAbs = filepath.Join(workspaceRoot, filepath.FromSlash(seed.artifactRel))
+
+	if err := os.MkdirAll(filepath.Dir(seed.targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(seed.targetAbs, []byte(seed.targetDraft), 0o644); err != nil {
+		t.Fatalf("write target draft: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(seed.artifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	artifactDoc := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), seed.targetPath, seed.artifactDraft, seed.failureReason, time.Now().UTC())
+	if err := os.WriteFile(seed.artifactAbs, []byte(artifactDoc), 0o644); err != nil {
+		t.Fatalf("write recovery artifact: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task before checkpoint seed: %v", err)
+	}
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(currentTask.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:            seed.targetPath,
+		ArtifactPath:          seed.artifactRel,
+		FailureReason:         seed.failureReason,
+		HistoryStartMessageID: historyStartMessageID.String(),
+		HaltTurnID:            uuid.NewString(),
+		UpdatedAt:             time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	currentTask.Metadata = checkpointMetadata
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update task with recovery checkpoint: %v", err)
+	}
+
+	return seed
 }
 
 func mustCreateTaskSession(t *testing.T, ctx context.Context, fixture *integrationFixture, taskRecord repo.ProjectTask, userPrompt string) (repo.ChatSession, repo.ChatMessage) {
