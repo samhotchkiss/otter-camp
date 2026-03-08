@@ -57,6 +57,7 @@ const (
 	stopReasonMaxToolCalls          = "max_tool_calls"
 	stopReasonMaxDuration           = "max_duration"
 	stopReasonRecoveryCLIRejected   = "model_error"
+	stopReasonRecoveryContinuation  = stopReasonRecoveryCLIRejected
 	stopReasonRecoveryFileRejected  = "recovery_content_required"
 	stopReasonRecoveryFileFallback  = stopReasonRecoveryCLIRejected
 	stopReasonValidationBlocked     = "validation_loop_blocked"
@@ -331,6 +332,7 @@ type Options struct {
 }
 
 type TurnEngine struct {
+	pool          *pgxpool.Pool
 	dataDir       string
 	chat          ChatService
 	toolResolver  ToolResolver
@@ -396,6 +398,7 @@ type turnRuntime struct {
 	recoveryCLIFixes    int
 	recoveryFileFixes   int
 	recoveryBlockReason string
+	recoveryQueuedTurn  bool
 }
 
 type projectIdentity struct {
@@ -540,6 +543,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	}
 
 	return &TurnEngine{
+		pool:                  opts.Pool,
 		dataDir:               strings.TrimSpace(opts.DataDir),
 		chat:                  opts.Chat,
 		toolResolver:          opts.ToolResolver,
@@ -1151,6 +1155,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 				if handled, handleErr := e.handleFreshKickoffBlocker(ctx, rt, "prompt context remained too large before the kickoff could reach initial task creation"); handled {
 					return handleErr
 				}
+				if handled, handleErr := e.handleRecoveryContinuationDepthBlocker(ctx, rt, buildRecoveryContinuationDepthReason("prompt context remained too large")); handled {
+					return handleErr
+				}
 				return fmt.Errorf("context compression continuation depth exceeded")
 			}
 			rt.stopReason = ""
@@ -1166,6 +1173,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			continuations++
 			if continuations > maxContinuationTurnDepth {
 				if handled, handleErr := e.handleFreshKickoffBlocker(ctx, rt, fmt.Sprintf("prompt input kept exceeding the %d-token guardrail before the kickoff could reach initial task creation", guardrail)); handled {
+					return handleErr
+				}
+				if handled, handleErr := e.handleRecoveryContinuationDepthBlocker(ctx, rt, buildRecoveryContinuationDepthReason(fmt.Sprintf("prompt input kept exceeding the %d-token guardrail", guardrail))); handled {
 					return handleErr
 				}
 				return fmt.Errorf("agent turn prompt exceeded guardrail continuation depth")
@@ -2053,6 +2063,44 @@ func buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath string) st
 	return fmt.Sprintf("recovery halted after file.write for %s was retried without content; re-queue only after producing the full file body", path)
 }
 
+func (e *TurnEngine) currentRecoveryFileWriteCheckpoint(ctx context.Context, rt *turnRuntime) (*taskcheckpoint.RecoveryFileWriteCheckpoint, bool) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return nil, false
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return nil, false
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return nil, false
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		return nil, false
+	}
+	return &checkpoint, true
+}
+
+func (e *TurnEngine) hasQueuedAgentTurnForSession(ctx context.Context, sessionID uuid.UUID) (bool, error) {
+	if e == nil || e.pool == nil || sessionID == uuid.Nil {
+		return false, nil
+	}
+	var queued bool
+	if err := e.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM job_queue
+			WHERE job_type = $1
+			  AND status IN ('pending', 'claimed')
+			  AND payload->>'session_id' = $2
+		)
+	`, AgentTurnJobType, sessionID.String()).Scan(&queued); err != nil {
+		return false, err
+	}
+	return queued, nil
+}
+
 func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turnRuntime) (string, bool) {
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return "", false
@@ -2855,6 +2903,77 @@ func (e *TurnEngine) handleFreshKickoffBlocker(ctx context.Context, rt *turnRunt
 		return true, err
 	}
 	return true, nil
+}
+
+func buildRecoveryContinuationDepthReason(detail string) string {
+	trimmed := strings.TrimSpace(detail)
+	if trimmed == "" {
+		trimmed = "prompt recovery could not progress within the continuation guardrails"
+	}
+	return fmt.Sprintf("%s across %d continuation turns", trimmed, maxContinuationTurnDepth)
+}
+
+func (e *TurnEngine) handleRecoveryContinuationDepthBlocker(ctx context.Context, rt *turnRuntime, reason string) (bool, error) {
+	if rt == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+
+	checkpoint, _ := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	queued, err := e.hasQueuedAgentTurnForSession(ctx, rt.session.ID)
+	if err != nil {
+		return true, err
+	}
+
+	rt.stopReason = stopReasonRecoveryContinuation
+	if queued {
+		rt.recoveryQueuedTurn = true
+		rt.recoveryBlockReason = ""
+	} else {
+		rt.recoveryQueuedTurn = false
+		rt.recoveryBlockReason = buildRecoveryContinuationBlockedTaskReason(reason, checkpoint)
+	}
+
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryContinuationBlockedMessage(reason, checkpoint, queued)); err != nil {
+		return true, err
+	}
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func buildRecoveryContinuationBlockedMessage(reason string, checkpoint *taskcheckpoint.RecoveryFileWriteCheckpoint, queued bool) string {
+	trimmedReason := strings.TrimSpace(reason)
+	if trimmedReason == "" {
+		trimmedReason = "prompt recovery could not progress within the continuation guardrails"
+	}
+	if queued {
+		if checkpoint != nil && strings.TrimSpace(checkpoint.ArtifactPath) != "" {
+			return fmt.Sprintf("[Recovery turn halted: %s. A follow-on wakeup is already queued, so the task remains in progress. Resume from `%s` and narrow the next recovery attempt before retrying the final write.]", trimmedReason, strings.TrimSpace(checkpoint.ArtifactPath))
+		}
+		return fmt.Sprintf("[Recovery turn halted: %s. A follow-on wakeup is already queued, so the task remains in progress. Narrow the next recovery attempt before retrying.]", trimmedReason)
+	}
+	if checkpoint != nil && strings.TrimSpace(checkpoint.ArtifactPath) != "" {
+		return fmt.Sprintf("[Recovery turn halted: %s. The task is now blocked. Resume from `%s` and narrow the next recovery attempt before re-queueing.]", trimmedReason, strings.TrimSpace(checkpoint.ArtifactPath))
+	}
+	if checkpoint != nil && strings.TrimSpace(checkpoint.TargetPath) != "" {
+		return fmt.Sprintf("[Recovery turn halted: %s. The task is now blocked. Continue from `%s` only after narrowing the next recovery attempt and producing the concrete file body before re-queueing.]", trimmedReason, strings.TrimSpace(checkpoint.TargetPath))
+	}
+	return fmt.Sprintf("[Recovery turn halted: %s. The task is now blocked. Narrow the next recovery attempt or split the work before re-queueing.]", trimmedReason)
+}
+
+func buildRecoveryContinuationBlockedTaskReason(reason string, checkpoint *taskcheckpoint.RecoveryFileWriteCheckpoint) string {
+	trimmedReason := strings.TrimSpace(reason)
+	if trimmedReason == "" {
+		trimmedReason = "prompt recovery could not progress within the continuation guardrails"
+	}
+	if checkpoint != nil && strings.TrimSpace(checkpoint.ArtifactPath) != "" {
+		return fmt.Sprintf("recovery halted after %s; resume from %s and narrow the next recovery attempt before re-queueing", trimmedReason, strings.TrimSpace(checkpoint.ArtifactPath))
+	}
+	if checkpoint != nil && strings.TrimSpace(checkpoint.TargetPath) != "" {
+		return fmt.Sprintf("recovery halted after %s; continue from %s only after narrowing the next recovery attempt and producing the concrete file body before re-queueing", trimmedReason, strings.TrimSpace(checkpoint.TargetPath))
+	}
+	return fmt.Sprintf("recovery halted after %s; narrow the next recovery attempt or split the work before re-queueing", trimmedReason)
 }
 
 func parseProjectIdentityFromToolResult(result ToolResult) (*projectIdentity, bool) {
@@ -3846,6 +3965,9 @@ func shouldSuppressAutoContinuationForStopReason(stopReason *string) bool {
 
 func (e *TurnEngine) ensureRecoveryTurnDurableTaskState(ctx context.Context, rt *turnRuntime) error {
 	if e == nil || e.tasks == nil || rt == nil || !rt.recoveryTurn || rt.session == nil || rt.turn == nil {
+		return nil
+	}
+	if rt.recoveryQueuedTurn {
 		return nil
 	}
 

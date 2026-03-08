@@ -2417,8 +2417,8 @@ func TestTurnEngineIntegrationRecoveryTurnBoundsCLIThenFileWriteRetryChainEX312(
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus == "blocked" {
-		t.Fatalf("task work_status = %q, want bounded non-blocked halt", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
 	}
 	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
 		t.Fatalf("unexpected validation guard persisted: %+v", guard)
@@ -2452,6 +2452,7 @@ func TestTurnEngineIntegrationRecoveryTurnBoundsCLIThenFileWriteRetryChainEX312(
 	var cliCorrections int
 	var fileCorrections int
 	var haltMessages int
+	var blockedGuidanceMessages int
 	for _, item := range messages {
 		if item.Role == "tool_result" && strings.Contains(item.Content, "command is required") {
 			t.Fatalf("unexpected command_required tool_result: %s", item.Content)
@@ -2468,6 +2469,9 @@ func TestTurnEngineIntegrationRecoveryTurnBoundsCLIThenFileWriteRetryChainEX312(
 		if item.Role == "system" && strings.Contains(item.Content, "Resume from `.ottercamp/recovery/docs/content-strategy.md`") {
 			haltMessages++
 		}
+		if item.Role == "system" && strings.Contains(item.Content, "The task is now blocked.") {
+			blockedGuidanceMessages++
+		}
 		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
 			t.Fatalf("unexpected validation blocker message: %s", item.Content)
 		}
@@ -2480,6 +2484,9 @@ func TestTurnEngineIntegrationRecoveryTurnBoundsCLIThenFileWriteRetryChainEX312(
 	}
 	if haltMessages != 1 {
 		t.Fatalf("file.write recovery halt messages = %d, want 1", haltMessages)
+	}
+	if blockedGuidanceMessages != 1 {
+		t.Fatalf("blocked guidance messages = %d, want 1", blockedGuidanceMessages)
 	}
 }
 
@@ -3546,6 +3553,169 @@ func TestTurnEngineIntegrationFreshKickoffCompressionLimitSurfacesSingleBlocker(
 	}
 	if continuationCount != 3 {
 		t.Fatalf("continuation notice count = %d, want 3 before blocker", continuationCount)
+	}
+}
+
+func TestTurnEngineIntegrationRecoveryTurnBlocksAfterGuardrailContinuationDepthEX317(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	fixture.engine.assembler = &fakeAssembler{results: []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+	}}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery continuation depth: %v", err)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata); ok {
+		t.Fatal("unexpected recovery checkpoint metadata")
+	}
+
+	runnableJobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, taskSession.ID)
+	if runnableJobs != 0 {
+		t.Fatalf("runnable agent_turn jobs = %d, want 0", runnableJobs)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 4 {
+		t.Fatalf("turn count = %d, want 4 bounded continuation turns", len(turns))
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("final turn status = %q, want completed", lastTurn.Status)
+	}
+	if lastTurn.StopReason == nil || *lastTurn.StopReason != stopReasonRecoveryContinuation {
+		t.Fatalf("final turn stop_reason = %v, want %q", lastTurn.StopReason, stopReasonRecoveryContinuation)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var continuationMessages int
+	var blockedMessages int
+	var queuedMessages int
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, "Prompt input exceeded 64000-token guardrail - continuing in a new turn.") {
+			continuationMessages++
+		}
+		if strings.Contains(message.Content, "The task is now blocked.") {
+			blockedMessages++
+		}
+		if strings.Contains(message.Content, "follow-on wakeup is already queued") {
+			queuedMessages++
+		}
+	}
+	if continuationMessages != 3 {
+		t.Fatalf("continuation notice count = %d, want 3", continuationMessages)
+	}
+	if blockedMessages != 1 {
+		t.Fatalf("blocked guidance messages = %d, want 1", blockedMessages)
+	}
+	if queuedMessages != 0 {
+		t.Fatalf("queued continuation messages = %d, want 0", queuedMessages)
+	}
+}
+
+func TestTurnEngineIntegrationRecoveryTurnKeepsQueuedContinuationAfterGuardrailContinuationDepthEX318(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	fixture.engine.assembler = &fakeAssembler{results: []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+	}}
+
+	if _, err := fixture.engine.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, defaultAgentTurnJobPriority, AgentTurnPayload{
+		SessionID: taskSession.ID,
+		MessageID: recoveryMessage.ID,
+	}, nil); err != nil {
+		t.Fatalf("enqueue queued continuation: %v", err)
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery continuation depth with queued wakeup: %v", err)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress with queued continuation", updatedTask.WorkStatus)
+	}
+
+	runnableJobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, taskSession.ID)
+	if runnableJobs != 1 {
+		t.Fatalf("runnable agent_turn jobs = %d, want 1 queued continuation", runnableJobs)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 4 {
+		t.Fatalf("turn count = %d, want 4 bounded continuation turns", len(turns))
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("final turn status = %q, want completed", lastTurn.Status)
+	}
+	if lastTurn.StopReason == nil || *lastTurn.StopReason != stopReasonRecoveryContinuation {
+		t.Fatalf("final turn stop_reason = %v, want %q", lastTurn.StopReason, stopReasonRecoveryContinuation)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var blockedMessages int
+	var queuedMessages int
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, "The task is now blocked.") {
+			blockedMessages++
+		}
+		if strings.Contains(message.Content, "follow-on wakeup is already queued") {
+			queuedMessages++
+		}
+	}
+	if blockedMessages != 0 {
+		t.Fatalf("blocked guidance messages = %d, want 0", blockedMessages)
+	}
+	if queuedMessages != 1 {
+		t.Fatalf("queued continuation messages = %d, want 1", queuedMessages)
 	}
 }
 
@@ -4996,6 +5166,22 @@ func flattenPrompt(prompt *prompt.AssembledPrompt) string {
 		builder.WriteString(strings.TrimSpace(message.Content))
 	}
 	return builder.String()
+}
+
+func countRunnableAgentTurnJobsForSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sessionID uuid.UUID) int {
+	t.Helper()
+
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status IN ('pending', 'claimed')
+		  AND payload->>'session_id' = $1
+	`, sessionID.String()).Scan(&count); err != nil {
+		t.Fatalf("count runnable agent_turn jobs: %v", err)
+	}
+	return count
 }
 
 func mustCreateCompletedWorkTurn(t *testing.T, ctx context.Context, fixture *integrationFixture, sessionID, agentID uuid.UUID) (uuid.UUID, uuid.UUID) {
