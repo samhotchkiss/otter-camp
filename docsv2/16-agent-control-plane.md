@@ -214,6 +214,8 @@ The principal is determined by the chat layer before the action reaches the brok
 - **Agent turn in sync session**: principal is the agent. `delegated_by` is set to the human who is in the session, since the human's presence implies oversight.
 - **Human-initiated action via chat**: principal is the human. The agent is the executor, but the human is the accountable party.
 
+Project-scoped sessions are canonical for project-level actions: if a resumed run carries stale task bindings from some other execution, the control plane must re-anchor `project_id` from the live project session and clear `task_id` unless that task still belongs to the same project. Task-scoped invariants only apply when the live session itself is `project_task`.
+
 ### Delegation and Authority
 
 When a human says "go ahead, deploy that" in a sync session, the agent's subsequent actions carry `delegated_by` pointing to the human. This matters for policy evaluation — some capabilities may only be available when a human has explicitly delegated.

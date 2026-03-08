@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -314,6 +315,109 @@ func TestToolBrokerDispatchTaskSessionBindingInvariantBlocksCLI(t *testing.T) {
 	}
 }
 
+func TestToolBrokerDispatchProjectSessionClearsStaleTaskBindingBeforeNativeExecution(t *testing.T) {
+	agentID := uuid.New()
+	orgID := uuid.New()
+	runID := uuid.New()
+	sessionID := uuid.New()
+	projectID := uuid.New()
+	staleProjectID := uuid.New()
+	staleTaskID := uuid.New()
+	nativeExec := &fakeNativeExecutor{output: map[string]any{"ok": true}}
+
+	broker, err := NewToolBroker(ToolBrokerOptions{
+		Executions: newFakeToolExecutionRepo(),
+		Runs: &brokerFakeRunRepo{byID: map[uuid.UUID]Run{
+			runID: {ID: runID, OrganizationID: orgID, ProjectID: &staleProjectID, TaskID: &staleTaskID},
+		}},
+		Agents: &brokerFakeAgentRepo{byID: map[uuid.UUID]repo.Agent{
+			agentID: {ID: agentID, OrganizationID: orgID},
+		}},
+		ToolDefinitions: &brokerFakeToolDefinitionRepo{byName: map[string]repo.ToolDefinition{
+			"file.read": {Name: "file.read", ToolDomain: "native", ToolTier: "tier1"},
+		}},
+		Sessions: &brokerFakeSessionRepo{byID: map[uuid.UUID]repo.ChatSession{
+			sessionID: {ID: sessionID, OrganizationID: orgID, ScopeType: "project", ScopeID: projectID},
+		}},
+		Tasks: &brokerFakeTaskRepo{byID: map[uuid.UUID]repo.ProjectTask{
+			staleTaskID: {ID: staleTaskID, OrganizationID: orgID, ProjectID: staleProjectID},
+		}},
+		Native: nativeExec,
+	})
+	if err != nil {
+		t.Fatalf("NewToolBroker: %v", err)
+	}
+
+	_, err = broker.Dispatch(context.Background(), DispatchInput{
+		RunID:     &runID,
+		SessionID: &sessionID,
+		AgentID:   agentID,
+		ToolName:  "file.read",
+		ToolTier:  "tier1",
+		Input:     map[string]any{"path": "README.md"},
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if nativeExec.lastExecCtx.ProjectID == nil || *nativeExec.lastExecCtx.ProjectID != projectID {
+		t.Fatalf("project_id = %v, want %s", nativeExec.lastExecCtx.ProjectID, projectID)
+	}
+	if nativeExec.lastExecCtx.TaskID != nil {
+		t.Fatalf("task_id = %v, want nil after clearing stale cross-project task binding", nativeExec.lastExecCtx.TaskID)
+	}
+}
+
+func TestToolBrokerDispatchProjectSessionPreservesSameProjectTaskBinding(t *testing.T) {
+	agentID := uuid.New()
+	orgID := uuid.New()
+	runID := uuid.New()
+	sessionID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nativeExec := &fakeNativeExecutor{output: map[string]any{"ok": true}}
+
+	broker, err := NewToolBroker(ToolBrokerOptions{
+		Executions: newFakeToolExecutionRepo(),
+		Runs: &brokerFakeRunRepo{byID: map[uuid.UUID]Run{
+			runID: {ID: runID, OrganizationID: orgID, ProjectID: &projectID, TaskID: &taskID},
+		}},
+		Agents: &brokerFakeAgentRepo{byID: map[uuid.UUID]repo.Agent{
+			agentID: {ID: agentID, OrganizationID: orgID},
+		}},
+		ToolDefinitions: &brokerFakeToolDefinitionRepo{byName: map[string]repo.ToolDefinition{
+			"file.read": {Name: "file.read", ToolDomain: "native", ToolTier: "tier1"},
+		}},
+		Sessions: &brokerFakeSessionRepo{byID: map[uuid.UUID]repo.ChatSession{
+			sessionID: {ID: sessionID, OrganizationID: orgID, ScopeType: "project", ScopeID: projectID},
+		}},
+		Tasks: &brokerFakeTaskRepo{byID: map[uuid.UUID]repo.ProjectTask{
+			taskID: {ID: taskID, OrganizationID: orgID, ProjectID: projectID},
+		}},
+		Native: nativeExec,
+	})
+	if err != nil {
+		t.Fatalf("NewToolBroker: %v", err)
+	}
+
+	_, err = broker.Dispatch(context.Background(), DispatchInput{
+		RunID:     &runID,
+		SessionID: &sessionID,
+		AgentID:   agentID,
+		ToolName:  "file.read",
+		ToolTier:  "tier1",
+		Input:     map[string]any{"path": "README.md"},
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if nativeExec.lastExecCtx.ProjectID == nil || *nativeExec.lastExecCtx.ProjectID != projectID {
+		t.Fatalf("project_id = %v, want %s", nativeExec.lastExecCtx.ProjectID, projectID)
+	}
+	if nativeExec.lastExecCtx.TaskID == nil || *nativeExec.lastExecCtx.TaskID != taskID {
+		t.Fatalf("task_id = %v, want %s", nativeExec.lastExecCtx.TaskID, taskID)
+	}
+}
+
 func mustNewTestBroker(t *testing.T, execRepo *fakeToolExecutionRepo, agentID uuid.UUID, agent repo.Agent, definition repo.ToolDefinition) *ToolBroker {
 	t.Helper()
 	broker, err := NewToolBroker(ToolBrokerOptions{
@@ -442,14 +546,18 @@ func (f *fakeCapabilityPolicy) EvaluateCapability(_ context.Context, _ uuid.UUID
 }
 
 type fakeNativeExecutor struct {
-	output map[string]any
-	err    error
+	output      map[string]any
+	err         error
+	lastExecCtx mcp.ExecutionContext
+	lastInput   map[string]any
 }
 
-func (f *fakeNativeExecutor) Execute(_ context.Context, _ string, _ map[string]any) (map[string]any, error) {
+func (f *fakeNativeExecutor) Execute(ctx context.Context, _ string, input map[string]any) (map[string]any, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
+	f.lastExecCtx = mcp.ExecutionContextFromContext(ctx)
+	f.lastInput = cloneMap(input)
 	if f.output == nil {
 		return map[string]any{}, nil
 	}

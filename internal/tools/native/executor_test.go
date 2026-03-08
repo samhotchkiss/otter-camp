@@ -200,6 +200,65 @@ func TestWorkspaceForContextTaskScopeRequiresTaskBinding(t *testing.T) {
 	}
 }
 
+func TestWorkspaceForContextProjectScopeClearsStaleCrossProjectTaskBinding(t *testing.T) {
+	dataDir := t.TempDir()
+	resolvedDataDir, err := filepath.EvalSymlinks(dataDir)
+	if err != nil {
+		t.Fatalf("resolve data dir symlink: %v", err)
+	}
+	orgID := uuid.New()
+	projectID := uuid.New()
+	staleProjectID := uuid.New()
+	staleTaskID := uuid.New()
+	sessionID := uuid.New()
+
+	exec := NewExecutor(ExecutorOptions{DataDir: dataDir})
+	exec.organizations = &stubOrgRepo{
+		byID: map[uuid.UUID]repo.Organization{
+			orgID: {ID: orgID, Slug: "acme"},
+		},
+	}
+	exec.projects = &stubProjectRepo{
+		byID: map[uuid.UUID]repo.Project{
+			projectID:      {ID: projectID, OrganizationID: orgID, Slug: "kickoff-project"},
+			staleProjectID: {ID: staleProjectID, OrganizationID: orgID, Slug: "stale-project"},
+		},
+	}
+	exec.tasks = &stubTaskRepo{
+		byID: map[uuid.UUID]repo.ProjectTask{
+			staleTaskID: {ID: staleTaskID, OrganizationID: orgID, ProjectID: staleProjectID},
+		},
+	}
+	exec.chatSessions = &stubChatSessionRepo{
+		byID: map[uuid.UUID]repo.ChatSession{
+			sessionID: {ID: sessionID, OrganizationID: orgID, ScopeType: "project", ScopeID: projectID},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		ProjectID:      &staleProjectID,
+		TaskID:         &staleTaskID,
+	})
+
+	wd, scope, err := exec.workspaceForContext(ctx)
+	if err != nil {
+		t.Fatalf("workspaceForContext: %v", err)
+	}
+
+	want := filepath.Join(resolvedDataDir, "workspaces", "kickoff-project")
+	if wd.Root() != want {
+		t.Fatalf("workspace root = %q, want %q", wd.Root(), want)
+	}
+	if scope.projectID == nil || *scope.projectID != projectID {
+		t.Fatalf("scope.projectID = %v, want %s", scope.projectID, projectID)
+	}
+	if scope.taskID != nil {
+		t.Fatalf("scope.taskID = %v, want nil after clearing stale cross-project task binding", scope.taskID)
+	}
+}
+
 type stubOrgRepo struct {
 	byID map[uuid.UUID]repo.Organization
 }

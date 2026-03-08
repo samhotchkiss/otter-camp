@@ -198,6 +198,8 @@ Agent requests tool call
 
 **Permission check for tier 1**: The check is scope-based, not policy-based. An agent in a project-scoped session can read tasks in that project. An agent in a task-scoped session can read files in that task's bound project workspace. The check answers "is this data within the agent's current scope?" — not "is this agent allowed to read?". All agents can read within their scope. If a tier 1 call requests data outside the agent's scope (e.g., reading a task from another project), it returns an error, not a policy denial.
 
+Session scope is the canonical source of truth. If a project-scoped session resumes with stale task binding from some other run, the broker/native executors must re-anchor to the live session project and drop the stale task binding instead of enforcing task-scoped invariants. Same-project task bindings may still be preserved when the execution is genuinely task-bound inside that project.
+
 ### Tier 2: Control-Plane Tools (Mutations, External, Side Effects)
 
 These change state or reach outside OtterCamp. Full control plane path (doc 16): policy evaluation (allow/deny), execution via broker, RunStep audit trail, artifact capture.
