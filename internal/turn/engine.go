@@ -2964,13 +2964,20 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 	hasInventoryCue := containsAny(lower,
 		"i have a deep understanding of",
 		"i now have a deep understanding of",
+		"now i have a deep understanding of",
 		"i have a thorough understanding of",
 		"i now have a thorough understanding of",
+		"now i have a thorough understanding of",
 		"i have a clear understanding of",
 		"i now have a clear understanding of",
+		"now i have a clear understanding of",
 		"i have a full understanding of",
 		"i now have a full understanding of",
+		"now i have a full understanding of",
 	)
+	hasGeneralizedUnderstandingCue := hasWriteIntent &&
+		containsAny(lower, "i have ", "i now have ", "now i have ") &&
+		strings.Contains(lower, "understanding of")
 	hasInventoryList := strings.Contains(trimmed, "\n- ") || strings.Contains(trimmed, "\n* ") || strings.Contains(trimmed, "\n1. ")
 	hasDeliverableCue := containsAny(lower,
 		"the single deliverable",
@@ -2983,6 +2990,9 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"unblocks the next stage",
 	)
 	if hasWriteIntent && (hasSetupCue || wordCount <= 80) {
+		return true
+	}
+	if hasGeneralizedUnderstandingCue && wordCount <= 140 {
 		return true
 	}
 	if (hasSetupCue || hasInventoryCue) && hasInventoryList && (hasWriteIntent || hasDeliverableCue) {
