@@ -28,6 +28,7 @@ const (
 	taskQueueTriggerType            = "scheduler"
 	taskSupervisorTriggerType       = "supervisor"
 	asyncDecisionPolicyName         = "async_forward_progress"
+	resumeValidationBlockedAction   = "resume_validation_blocked_task"
 )
 
 type taskQueueEventSubscriber interface {
@@ -495,6 +496,15 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 	if err != nil {
 		return err
 	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return err
+	}
+	appendValidationRecoveryMetadata(payload, event.Payload)
+	metadata, err = json.Marshal(payload)
+	if err != nil {
+		return err
+	}
 
 	principalType := "system"
 	principalID := uuid.Nil
@@ -502,6 +512,14 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 		principalType = "agent"
 		principalID = *taskRecord.AssignedAgentID
 	}
+
+	wakeupPayload := map[string]any{
+		"source":                 "task_queue_processor",
+		"task_status_event_id":   event.ID.String(),
+		"flow_node_execution_id": execution.ID.String(),
+		"run_mode":               "async",
+	}
+	appendValidationRecoveryMetadata(wakeupPayload, event.Payload)
 
 	result, err := p.runs.CreateExecutionWakeup(ctx, executionWakeupInput{
 		CreateRunInput: CreateRunInput{
@@ -516,14 +534,9 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 			IdempotencyKey: &idempotencyKey,
 			Metadata:       metadata,
 		},
-		WakeupSource: "task_queue_processor",
-		WakeupKind:   "flow_current",
-		WakeupPayload: map[string]any{
-			"source":                 "task_queue_processor",
-			"task_status_event_id":   event.ID.String(),
-			"flow_node_execution_id": execution.ID.String(),
-			"run_mode":               "async",
-		},
+		WakeupSource:  "task_queue_processor",
+		WakeupKind:    "flow_current",
+		WakeupPayload: wakeupPayload,
 	})
 	if err != nil {
 		return err
@@ -556,6 +569,22 @@ func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event e
 	if err != nil {
 		return err
 	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return err
+	}
+	appendValidationRecoveryMetadata(payload, event.Payload)
+	metadata, err = json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	wakeupPayload := map[string]any{
+		"source":               "task_queue_processor",
+		"task_status_event_id": event.ID.String(),
+		"run_mode":             "async",
+	}
+	appendValidationRecoveryMetadata(wakeupPayload, event.Payload)
 
 	result, err := p.runs.CreateExecutionWakeup(ctx, executionWakeupInput{
 		CreateRunInput: CreateRunInput{
@@ -569,13 +598,9 @@ func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event e
 			IdempotencyKey: &idempotencyKey,
 			Metadata:       metadata,
 		},
-		WakeupSource: "task_queue_processor",
-		WakeupKind:   "assigned_task",
-		WakeupPayload: map[string]any{
-			"source":               "task_queue_processor",
-			"task_status_event_id": event.ID.String(),
-			"run_mode":             "async",
-		},
+		WakeupSource:  "task_queue_processor",
+		WakeupKind:    "assigned_task",
+		WakeupPayload: wakeupPayload,
 	})
 	if err != nil {
 		return err
@@ -662,6 +687,15 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
+		var payload map[string]any
+		if err := json.Unmarshal(messageMetadata, &payload); err != nil {
+			return err
+		}
+		appendWakeupRecoveryMetadata(payload, runRecord.Metadata)
+		messageMetadata, err = json.Marshal(payload)
+		if err != nil {
+			return err
+		}
 		return p.appendWakeupKickoff(ctx, runRecord, session.ID, buildQueueKickoffMessage(taskRecord), messageMetadata)
 	case "flow_current":
 		executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
@@ -688,6 +722,15 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 			"task_id":                taskRecord.ID.String(),
 			"flow_node_execution_id": execution.ID.String(),
 		})
+		if err != nil {
+			return err
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(messageMetadata, &payload); err != nil {
+			return err
+		}
+		appendWakeupRecoveryMetadata(payload, runRecord.Metadata)
+		messageMetadata, err = json.Marshal(payload)
 		if err != nil {
 			return err
 		}
@@ -1235,4 +1278,48 @@ func metadataUUIDValue(metadata json.RawMessage, key string) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return parsed, true
+}
+
+func appendValidationRecoveryMetadata(payload map[string]any, eventPayload json.RawMessage) {
+	if payload == nil || len(eventPayload) == 0 || !json.Valid(eventPayload) {
+		return
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(eventPayload, &decoded); err != nil {
+		return
+	}
+	action := strings.TrimSpace(valueAsString(decoded["recovery_action"]))
+	if action != resumeValidationBlockedAction {
+		return
+	}
+	payload["recovery_action"] = action
+	for _, key := range []string{
+		"validation_tool_name",
+		"validation_failure_code",
+		"validation_failure_reason",
+	} {
+		if value := strings.TrimSpace(valueAsString(decoded[key])); value != "" {
+			payload[key] = value
+		}
+	}
+}
+
+func appendWakeupRecoveryMetadata(payload map[string]any, metadata json.RawMessage) {
+	if payload == nil {
+		return
+	}
+	action := metadataStringValue(metadata, "recovery_action")
+	if action != resumeValidationBlockedAction {
+		return
+	}
+	payload["recovery_action"] = action
+	for _, key := range []string{
+		"validation_tool_name",
+		"validation_failure_code",
+		"validation_failure_reason",
+	} {
+		if value := metadataStringValue(metadata, key); value != "" {
+			payload[key] = value
+		}
+	}
 }

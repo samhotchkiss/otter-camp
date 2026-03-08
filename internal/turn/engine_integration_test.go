@@ -1848,6 +1848,124 @@ func TestTurnEngineIntegrationRecoveryTurnPersistsArtifactAfterRepeatedEmptyFile
 	}
 }
 
+func TestTurnEngineIntegrationTaskQueueRecoveryTurnPersistsArtifactAfterRepeatedEmptyFileWriteEX313(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	const targetPath = "docs/content-strategy.md"
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{
+			Content: "I'll write it next.",
+			ToolCalls: []ModelToolCall{{
+				ID:   fmt.Sprintf("empty-write-%d", modelCalls),
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path": targetPath,
+				},
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		t.Fatalf("unexpected tier2 dispatch for empty-content recovery write: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want bounded non-blocked halt", updatedTask.WorkStatus)
+	}
+	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
+		t.Fatalf("unexpected validation guard persisted: %+v", guard)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) == 0 {
+		t.Fatal("expected recovery turn")
+	}
+	lastTurn := turns[len(turns)-1]
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
+	}
+
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	artifactBody, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel)))
+	if err != nil {
+		t.Fatalf("read recovery artifact: %v", err)
+	}
+	artifactText := string(artifactBody)
+	if !strings.Contains(artifactText, "Target Path: "+targetPath) {
+		t.Fatalf("artifact missing target path:\n%s", artifactText)
+	}
+	if !strings.Contains(artifactText, "No concrete draft content was available") {
+		t.Fatalf("artifact missing empty-draft placeholder:\n%s", artifactText)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var correctionMessages int
+	var haltMessages int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"content_required"`) {
+			t.Fatalf("unexpected content_required tool_result: %s", item.Content)
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: file.write for `docs/content-strategy.md` was emitted without `content`") {
+			correctionMessages++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Resume from `.ottercamp/recovery/docs/content-strategy.md`") {
+			haltMessages++
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			t.Fatalf("unexpected validation blocker message: %s", item.Content)
+		}
+	}
+	if correctionMessages != 1 {
+		t.Fatalf("file.write recovery correction messages = %d, want 1", correctionMessages)
+	}
+	if haltMessages != 1 {
+		t.Fatalf("file.write recovery halt messages = %d, want 1", haltMessages)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnBoundsCLIThenFileWriteRetryChainEX312(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -4362,6 +4480,32 @@ func mustCreateTaskSession(t *testing.T, ctx context.Context, fixture *integrati
 
 func mustCreateRecoveredValidationTaskSession(t *testing.T, ctx context.Context, fixture *integrationFixture, taskRecord repo.ProjectTask) (repo.ChatSession, repo.ChatMessage) {
 	t.Helper()
+	return mustCreateRecoveredValidationTaskSessionWithKickoff(t, ctx, fixture, taskRecord, "supervisor recovery: resume task", map[string]any{
+		"source":             "supervisor",
+		"stranded_execution": true,
+	})
+}
+
+func mustCreateTaskQueueRecoveredValidationTaskSession(t *testing.T, ctx context.Context, fixture *integrationFixture, taskRecord repo.ProjectTask) (repo.ChatSession, repo.ChatMessage) {
+	t.Helper()
+	return mustCreateRecoveredValidationTaskSessionWithKickoff(t, ctx, fixture, taskRecord, buildTaskQueueKickoffMessageForTest(taskRecord), map[string]any{
+		"source":                    "task_queue_processor",
+		"recovery_action":           "resume_validation_blocked_task",
+		"validation_tool_name":      "cli.execute",
+		"validation_failure_code":   "command_required",
+		"validation_failure_reason": "command is required",
+	})
+}
+
+func mustCreateRecoveredValidationTaskSessionWithKickoff(
+	t *testing.T,
+	ctx context.Context,
+	fixture *integrationFixture,
+	taskRecord repo.ProjectTask,
+	kickoffContent string,
+	kickoffMetadata map[string]any,
+) (repo.ChatSession, repo.ChatMessage) {
+	t.Helper()
 
 	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
 
@@ -4410,13 +4554,28 @@ func mustCreateRecoveredValidationTaskSession(t *testing.T, ctx context.Context,
 		AuthorType: &authorType,
 		AuthorID:   &fixture.user.ID,
 		Role:       "user",
-		Content:    "supervisor recovery: resume task",
-		Metadata:   mustJSON(t, map[string]any{"source": "supervisor", "stranded_execution": true}),
+		Content:    kickoffContent,
+		Metadata:   mustJSON(t, kickoffMetadata),
 	})
 	if err != nil {
 		t.Fatalf("AppendMessage recovery: %v", err)
 	}
 	return taskSession, repo.ChatMessage(*recoveryMessage)
+}
+
+func buildTaskQueueKickoffMessageForTest(taskRecord repo.ProjectTask) string {
+	title := strings.TrimSpace(taskRecord.Title)
+	if title == "" {
+		title = "Untitled task"
+	}
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.TrimSpace(*taskRecord.Description)
+	}
+	if description == "" {
+		return "Start work on task: " + title
+	}
+	return "Start work on task: " + title + "\n\nTask description:\n" + description
 }
 
 func flattenPrompt(prompt *prompt.AssembledPrompt) string {
