@@ -81,3 +81,21 @@ func TestRecoveryFileWritePromptStrategyLines(t *testing.T) {
 		t.Fatalf("prompt lines missing failure guidance:\n%s", text)
 	}
 }
+
+func TestRecoveryFileWritePromptStrategyLinesHardensRejectedDraftResume(t *testing.T) {
+	lines := RecoveryFileWritePromptStrategyLines(&RecoveryFileWriteCheckpoint{
+		TargetPath:    "docs/content-strategy.md",
+		ArtifactPath:  ".ottercamp/recovery/docs/content-strategy.md",
+		FailureReason: "repeated intent-only recovery drafts for docs/content-strategy.md across explicit resume attempts; latest assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body",
+	})
+	text := strings.Join(lines, "\n")
+	if !strings.Contains(text, "rejected a non-substantive draft") {
+		t.Fatalf("prompt lines missing rejected-draft hardening:\n%s", text)
+	}
+	if !strings.Contains(text, "must begin with the substantive file body") {
+		t.Fatalf("prompt lines missing substantive-file-body instruction:\n%s", text)
+	}
+	if !strings.Contains(text, "hardened blocker state") {
+		t.Fatalf("prompt lines missing repeated-draft blocker guidance:\n%s", text)
+	}
+}

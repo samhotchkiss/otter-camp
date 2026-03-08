@@ -2166,6 +2166,7 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 }
 
 func (e *TurnEngine) haltRejectedRecoveryFileWrite(ctx context.Context, rt *turnRuntime, targetPath, draft, failureReason string) (bool, bool, error) {
+	failureReason = e.strengthenRecoveryDraftRejectFailureReason(ctx, rt, targetPath, failureReason)
 	rt.stopReason = stopReasonRecoveryFileRejected
 	artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, draft, failureReason)
 	if artifactErr != nil {
@@ -2232,7 +2233,13 @@ func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReas
 		path = "the requested workspace file"
 	}
 	if reason := strings.TrimSpace(failureReason); reason != "" {
-		if isRecoveryDraftRejectFailureReason(reason) {
+		if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(reason) {
+			if taskcheckpoint.RecoveryFileWriteFailureIsRepeatedDraftReject(reason) {
+				if strings.TrimSpace(artifactPath) == "" {
+					return fmt.Sprintf("[Recovery turn halted: recovered file.write for `%s` produced another non-substantive draft after the prior checkpoint already rejected placeholder narration. The task is now blocked with a hardened recovery checkpoint. Last failure: %s. Retry only when the next attempt can write the concrete file body instead of another plan to write it.]", path, reason)
+				}
+				return fmt.Sprintf("[Recovery turn halted: recovered file.write for `%s` produced another non-substantive draft after the prior checkpoint already rejected placeholder narration. The task is now blocked with a hardened recovery checkpoint. Last failure: %s. Resume from `%s` only when the next attempt can write the concrete file body instead of another placeholder.]", path, reason, strings.TrimSpace(artifactPath))
+			}
 			if strings.TrimSpace(artifactPath) == "" {
 				return fmt.Sprintf("[Recovery turn halted: recovered file.write for `%s` rejected a non-substantive draft. The task is now blocked. Last failure: %s. Produce the concrete file body before retrying.]", path, reason)
 			}
@@ -2271,7 +2278,13 @@ func buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureRe
 		path = "the requested workspace file"
 	}
 	if reason := strings.TrimSpace(failureReason); reason != "" {
-		if isRecoveryDraftRejectFailureReason(reason) {
+		if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(reason) {
+			if taskcheckpoint.RecoveryFileWriteFailureIsRepeatedDraftReject(reason) {
+				if artifact := strings.TrimSpace(artifactPath); artifact != "" {
+					return fmt.Sprintf("recovery halted after repeated non-substantive drafts for %s; resume from %s and re-queue only when the next attempt can write the concrete file body instead of another placeholder", path, artifact)
+				}
+				return fmt.Sprintf("recovery halted after repeated non-substantive drafts for %s; re-queue only when the next attempt can write the concrete file body instead of another placeholder", path)
+			}
 			if artifact := strings.TrimSpace(artifactPath); artifact != "" {
 				return fmt.Sprintf("recovery halted after %s; resume from %s and re-queue only after concrete content exists", reason, artifact)
 			}
@@ -2386,11 +2399,13 @@ func (e *TurnEngine) recoveryFileWriteCheckpointCandidate(ctx context.Context, r
 }
 
 type recoveryResumeState struct {
-	targetPath    string
-	targetDraft   string
-	artifactPath  string
-	artifactDraft string
-	failureReason string
+	targetPath                  string
+	targetDraft                 string
+	targetDraftRejectedReason   string
+	artifactPath                string
+	artifactDraft               string
+	artifactDraftRejectedReason string
+	failureReason               string
 }
 
 func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRuntime, preserveInitialMessage bool) (bool, error) {
@@ -2426,19 +2441,40 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		failureReason: strings.TrimSpace(checkpoint.FailureReason),
 	}
 	if draft, found := e.readRecoveryWorkspaceText(ctx, rt, state.targetPath); found {
-		state.targetDraft = strings.TrimSpace(draft)
+		state.targetDraft, state.targetDraftRejectedReason = recoveryResumeDraftForPrompt(state.failureReason, state.targetPath, draft)
 	}
 	if artifactBody, found := e.readRecoveryWorkspaceText(ctx, rt, state.artifactPath); found {
-		state.artifactDraft = strings.TrimSpace(recoveryArtifactDraftContent(artifactBody))
+		state.artifactDraft, state.artifactDraftRejectedReason = recoveryResumeDraftForPrompt(
+			state.failureReason,
+			state.targetPath,
+			recoveryArtifactDraftContent(artifactBody),
+		)
 	}
 	if strings.TrimSpace(state.targetPath) == "" &&
 		strings.TrimSpace(state.targetDraft) == "" &&
+		strings.TrimSpace(state.targetDraftRejectedReason) == "" &&
 		strings.TrimSpace(state.artifactPath) == "" &&
 		strings.TrimSpace(state.artifactDraft) == "" &&
+		strings.TrimSpace(state.artifactDraftRejectedReason) == "" &&
 		strings.TrimSpace(state.failureReason) == "" {
 		return recoveryResumeState{}, false
 	}
 	return state, true
+}
+
+func recoveryResumeDraftForPrompt(failureReason, targetPath, draft string) (string, string) {
+	trimmed := strings.TrimSpace(draft)
+	if trimmed == "" {
+		return "", ""
+	}
+	if !taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(failureReason) {
+		return trimmed, ""
+	}
+	rejectReason := strings.TrimSpace(recoveryFileWriteDraftRejectReason(trimmed, targetPath))
+	if rejectReason == "" {
+		return trimmed, ""
+	}
+	return "", rejectReason
 }
 
 func (e *TurnEngine) readRecoveryWorkspaceText(ctx context.Context, rt *turnRuntime, relPath string) (string, bool) {
@@ -2500,6 +2536,15 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 		"Resume order: target file draft, then recovery artifact draft, then checkpoint metadata/failure reason.",
 		"Continue from the durable drafts below instead of asking which task to resume.",
 	}
+	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
+		lines = append(lines,
+			"Prior recovery failure rejected a non-substantive draft. Treat rejected placeholder text as invalid context, not as the draft to continue.",
+			"Next attempt rule: begin with the substantive file body for the target path, not progress narration or intent-to-write filler.",
+		)
+		if taskcheckpoint.RecoveryFileWriteFailureIsRepeatedDraftReject(state.failureReason) {
+			lines = append(lines, "Repeated non-substantive drafts are already a hardened blocker state for this checkpoint.")
+		}
+	}
 
 	if target := strings.TrimSpace(state.targetPath); target != "" {
 		lines = append(lines, "Target file: "+target)
@@ -2514,6 +2559,8 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 			if truncated {
 				lines = append(lines, "_Target file excerpt truncated for prompt budget._")
 			}
+		} else if strings.TrimSpace(state.targetDraftRejectedReason) != "" {
+			lines = append(lines, "Existing target file draft: omitted because it matches the previously rejected non-substantive pattern.")
 		} else {
 			lines = append(lines, "Existing target file draft: (not found on disk)")
 		}
@@ -2532,6 +2579,8 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 			if truncated {
 				lines = append(lines, "_Recovery artifact excerpt truncated for prompt budget._")
 			}
+		} else if strings.TrimSpace(state.artifactDraftRejectedReason) != "" {
+			lines = append(lines, "Recovery artifact draft: omitted because it only preserved the rejected non-substantive placeholder.")
 		} else {
 			lines = append(lines, "Recovery artifact draft: (not found on disk)")
 		}
@@ -2539,6 +2588,11 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 
 	if reason := strings.TrimSpace(state.failureReason); reason != "" {
 		lines = append(lines, "Checkpoint failure reason: "+reason)
+	}
+	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) &&
+		strings.TrimSpace(state.targetDraft) == "" &&
+		strings.TrimSpace(state.artifactDraft) == "" {
+		lines = append(lines, "No substantive durable draft is currently available on disk. The next attempt must write the real file body from scratch rather than restating the plan to do so.")
 	}
 	if strings.TrimSpace(state.targetDraft) != "" && strings.TrimSpace(state.artifactDraft) != "" {
 		lines = append(lines, "If the target file is only a stub but the recovery artifact is fuller, merge the fuller artifact content into the target before retrying the final write.")
@@ -2919,9 +2973,27 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 	return false
 }
 
-func isRecoveryDraftRejectFailureReason(reason string) bool {
-	lower := strings.ToLower(strings.TrimSpace(reason))
-	return strings.Contains(lower, "assistant draft for ") && strings.Contains(lower, "instead of the file body")
+func (e *TurnEngine) strengthenRecoveryDraftRejectFailureReason(ctx context.Context, rt *turnRuntime, targetPath, currentReason string) string {
+	current := strings.TrimSpace(currentReason)
+	if current == "" || !taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(current) {
+		return current
+	}
+	priorReason := ""
+	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
+		priorReason = strings.TrimSpace(checkpoint.FailureReason)
+	}
+	if !taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(priorReason) {
+		return current
+	}
+
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	if taskcheckpoint.RecoveryFileWriteFailureIsIntentOnly(priorReason) && taskcheckpoint.RecoveryFileWriteFailureIsIntentOnly(current) {
+		return fmt.Sprintf("repeated intent-only recovery drafts for %s across explicit resume attempts; latest %s", path, current)
+	}
+	return fmt.Sprintf("repeated non-substantive recovery drafts for %s across explicit resume attempts; latest %s", path, current)
 }
 
 func containsAny(haystack string, needles ...string) bool {

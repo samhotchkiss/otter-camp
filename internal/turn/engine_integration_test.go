@@ -3590,8 +3590,11 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	if !strings.Contains(promptBlob, "Resume order: target file draft, then recovery artifact draft, then checkpoint metadata/failure reason.") {
 		t.Fatalf("prompt missing durable resume order:\n%s", promptBlob)
 	}
-	if !strings.Contains(promptBlob, seed.targetDraft) {
-		t.Fatalf("prompt missing target draft content:\n%s", promptBlob)
+	if strings.Contains(promptBlob, seed.targetDraft) {
+		t.Fatalf("prompt should omit rejected placeholder target draft:\n%s", promptBlob)
+	}
+	if !strings.Contains(promptBlob, "Existing target file draft: omitted because it matches the previously rejected non-substantive pattern.") {
+		t.Fatalf("prompt missing rejected target-draft omission guidance:\n%s", promptBlob)
 	}
 	if !strings.Contains(promptBlob, seed.artifactDraft) {
 		t.Fatalf("prompt missing recovery artifact draft:\n%s", promptBlob)
@@ -5344,6 +5347,280 @@ func TestTurnEngineIntegrationRecoveryTurnPreservesResumableStateAfterGuardrailC
 	}
 	if resumedCheckpoint.TargetPath != targetPath {
 		t.Fatalf("resumed checkpoint target_path = %q, want %q", resumedCheckpoint.TargetPath, targetPath)
+	}
+}
+
+func TestTurnEngineIntegrationRecoveryResumeHardensRepeatedIntentOnlyDraftEX329(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, initialUserMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	const targetPath = "docs/content-strategy.md"
+	const priorPlaceholder = "Excellent. I now have a thorough understanding of the strategic direction for Sam.blog. Let me write the full document now."
+	const priorFailureReason = "assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body"
+	const repeatedPlaceholder = "Ready to draft the comprehensive content strategy for Sam.blog. This is the deliverable that unblocks WS4 and sets the strategic direction for the project."
+
+	artifactDraft := strings.TrimSpace(`# Content Strategy
+
+## Core Promise
+Sam.blog publishes one durable operating system for thoughtful parents building resilient families and meaningful work.
+
+## Editorial Pillars
+- Family systems that reduce chaos and increase agency.
+- Honest stories about work, stewardship, and craft.
+- Experiments that turn reflection into repeatable practice.
+`)
+
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(priorPlaceholder), 0o644); err != nil {
+		t.Fatalf("write placeholder target draft: %v", err)
+	}
+
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	artifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
+	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	artifactDoc := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetPath, artifactDraft, priorFailureReason, time.Now().UTC())
+	if err := os.WriteFile(artifactAbs, []byte(artifactDoc), 0o644); err != nil {
+		t.Fatalf("write recovery artifact: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task before checkpoint seed: %v", err)
+	}
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(currentTask.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:            targetPath,
+		ArtifactPath:          artifactRel,
+		FailureReason:         priorFailureReason,
+		HistoryStartMessageID: initialUserMessage.ID.String(),
+		HaltTurnID:            uuid.NewString(),
+		UpdatedAt:             time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	currentTask.Metadata = checkpointMetadata
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update task with recovery checkpoint: %v", err)
+	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	blockerReason := "recovery halted after assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body; resume from .ottercamp/recovery/docs/content-strategy.md and re-queue only after concrete content exists"
+	if _, err := taskService.MarkBlocked(ctx, taskRecord.ID, blockerReason, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+	resumed, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+	resumedCheckpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumed.Metadata)
+	if !ok {
+		t.Fatalf("expected checkpoint to remain after resume, metadata=%s", string(resumed.Metadata))
+	}
+	if resumedCheckpoint.FailureReason != priorFailureReason {
+		t.Fatalf("resumed checkpoint failure_reason = %q, want %q", resumedCheckpoint.FailureReason, priorFailureReason)
+	}
+	if resumedCheckpoint.ArtifactPath != artifactRel {
+		t.Fatalf("resumed checkpoint artifact_path = %q, want %q", resumedCheckpoint.ArtifactPath, artifactRel)
+	}
+
+	resumedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	resumedTask.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
+		t.Fatalf("Update resumed task in_progress: %v", err)
+	}
+
+	authorType := "human_user"
+	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(taskRecord),
+		Metadata: mustJSON(t, map[string]any{
+			"source":                    "task_queue_processor",
+			"recovery_action":           "resume_validation_blocked_task",
+			"validation_tool_name":      "cli.execute",
+			"validation_failure_code":   "command_required",
+			"validation_failure_reason": "command is required",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage recovery kickoff: %v", err)
+	}
+
+	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	fixture.engine.assembler = assembler
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	promptBlob := ""
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls > 1 {
+			return ModelResponse{}, fmt.Errorf("unexpected follow-up model call after repeated intent-only recovery draft")
+		}
+		promptBlob = flattenPrompt(req.Prompt)
+		return ModelResponse{
+			Content: repeatedPlaceholder,
+			ToolCalls: []ModelToolCall{{
+				ID:   "resume-write",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path": targetPath,
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		t.Fatalf("unexpected tier2 dispatch for repeated intent-only recovery draft: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage repeated intent-only recovery resume: %v", err)
+	}
+
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1 bounded recovery turn", modelCalls)
+	}
+	if dispatched != 0 {
+		t.Fatalf("tier2 dispatches = %d, want 0", dispatched)
+	}
+	if strings.Contains(promptBlob, priorPlaceholder) {
+		t.Fatalf("prompt should omit rejected placeholder target draft:\n%s", promptBlob)
+	}
+	if !strings.Contains(promptBlob, artifactDraft) {
+		t.Fatalf("prompt missing substantive recovery artifact draft:\n%s", promptBlob)
+	}
+	if !strings.Contains(promptBlob, "Prior recovery failure rejected a non-substantive draft.") {
+		t.Fatalf("prompt missing hardened recovery contract:\n%s", promptBlob)
+	}
+	if !strings.Contains(promptBlob, "Existing target file draft: omitted because it matches the previously rejected non-substantive pattern.") {
+		t.Fatalf("prompt missing rejected target-draft omission guidance:\n%s", promptBlob)
+	}
+
+	outputBody, err := os.ReadFile(targetAbs)
+	if err != nil {
+		t.Fatalf("read target file after repeated intent-only recovery draft: %v", err)
+	}
+	if string(outputBody) != priorPlaceholder {
+		t.Fatalf("target file changed unexpectedly:\n%s", string(outputBody))
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after repeated intent-only recovery draft: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatalf("expected repeated intent-only recovery checkpoint metadata, metadata=%s", string(updatedTask.Metadata))
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if checkpoint.ArtifactPath != artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactRel)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "repeated intent-only recovery drafts for docs/content-strategy.md") {
+		t.Fatalf("checkpoint failure_reason = %q, want repeated intent-only blocker", checkpoint.FailureReason)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
+	}
+	lastTurn := turns[len(turns)-1]
+	if lastTurn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
+	}
+	gotStopReason := ""
+	if lastTurn.StopReason != nil {
+		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
+	}
+	if gotStopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
+	}
+
+	artifactBody, err := os.ReadFile(artifactAbs)
+	if err != nil {
+		t.Fatalf("read repeated recovery artifact: %v", err)
+	}
+	artifactText := string(artifactBody)
+	if !strings.Contains(artifactText, repeatedPlaceholder) {
+		t.Fatalf("artifact missing repeated rejected placeholder draft:\n%s", artifactText)
+	}
+	if !strings.Contains(artifactText, "repeated intent-only recovery drafts for docs/content-strategy.md") {
+		t.Fatalf("artifact missing hardened repeated-intent blocker reason:\n%s", artifactText)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var haltMessages int
+	var toolResults int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"docs/content-strategy.md"`) {
+			toolResults++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "hardened recovery checkpoint") {
+			haltMessages++
+		}
+	}
+	if haltMessages != 1 {
+		t.Fatalf("hardened halt messages = %d, want 1", haltMessages)
+	}
+	if toolResults != 0 {
+		t.Fatalf("file.write tool_results = %d, want 0", toolResults)
 	}
 }
 
