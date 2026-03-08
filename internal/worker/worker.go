@@ -195,6 +195,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		CreateExecutionWakeup(ctx context.Context, input controlplane.ExecutionWakeupInput) (controlplane.ExecutionWakeupResult, error)
 		StartRun(ctx context.Context, runID uuid.UUID) error
 		CompleteRun(ctx context.Context, runID uuid.UUID, output json.RawMessage) error
+		FailRun(ctx context.Context, runID uuid.UUID, reason, failureClass string) error
 		ConfirmCancelled(ctx context.Context, runID uuid.UUID) error
 		GetRun(ctx context.Context, runID uuid.UUID) (controlplane.Run, error)
 		ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]controlplane.Run, error)
