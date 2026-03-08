@@ -21,22 +21,10 @@ type Classification struct {
 	Pattern   string
 }
 
-type RiskClassifier struct {
-	denylist []string
-}
+type RiskClassifier struct{}
 
 func NewRiskClassifier() *RiskClassifier {
-	return &RiskClassifier{denylist: []string{
-		"rm -rf /",
-		"sudo",
-		"su",
-		"passwd",
-		"chmod 777",
-		"curl * | bash",
-		"wget * | sh",
-		"eval",
-		"exec",
-	}}
+	return &RiskClassifier{}
 }
 
 func (c *RiskClassifier) Classify(command string) RiskLevel {
@@ -54,30 +42,30 @@ func (c *RiskClassifier) Evaluate(command string) Classification {
 		classifier = NewRiskClassifier()
 	}
 
-	parts := splitCompoundCommands(trimmed)
-	if len(parts) == 0 {
-		parts = []string{trimmed}
+	segments := splitCommandChain(trimmed)
+	if len(segments) == 0 {
+		segments = []commandSegment{{Text: trimmed}}
 	}
 
-	if pattern, ok := classifier.matchDenylist(trimmed); ok {
+	if pattern, ok := matchDeniedPipeline(segments); ok {
 		return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "command_denied", Pattern: pattern}
 	}
 
 	overall := RiskLow
-	for _, part := range parts {
-		candidate := strings.TrimSpace(part)
+	for _, segment := range segments {
+		candidate := strings.TrimSpace(segment.Text)
 		if candidate == "" {
 			continue
 		}
 
+		if pattern, ok := classifier.matchDeniedInvocation(candidate); ok {
+			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "command_denied", Pattern: pattern}
+		}
 		if containsRedirect(candidate) {
 			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "redirect_not_supported"}
 		}
 		if hasShellInjection(candidate) {
 			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "command_denied", Pattern: "shell_injection"}
-		}
-		if pattern, ok := classifier.matchDenylist(candidate); ok {
-			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "command_denied", Pattern: pattern}
 		}
 		if denied, code := deniedGitPush(candidate); denied {
 			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: code}
@@ -87,6 +75,11 @@ func (c *RiskClassifier) Evaluate(command string) Classification {
 	}
 
 	return Classification{RiskLevel: overall}
+}
+
+type commandSegment struct {
+	Text      string
+	Separator string
 }
 
 func classifySingle(command string) RiskLevel {
@@ -150,10 +143,7 @@ func isDestructiveCommand(command string) bool {
 			return true
 		}
 	}
-	if strings.HasPrefix(command, "dd ") {
-		return true
-	}
-	return false
+	return strings.HasPrefix(command, "dd ")
 }
 
 func modifiesRemote(command string) bool {
@@ -196,8 +186,8 @@ func riskRank(level RiskLevel) int {
 	}
 }
 
-func splitCompoundCommands(command string) []string {
-	parts := make([]string, 0)
+func splitCommandChain(command string) []commandSegment {
+	segments := make([]commandSegment, 0)
 	start := 0
 	inSingle := false
 	inDouble := false
@@ -269,7 +259,10 @@ func splitCompoundCommands(command string) []string {
 
 		piece := strings.TrimSpace(command[start:i])
 		if piece != "" {
-			parts = append(parts, piece)
+			segments = append(segments, commandSegment{
+				Text:      piece,
+				Separator: string(bytes[i : i+separatorWidth]),
+			})
 		}
 		start = i + separatorWidth
 		if separatorWidth == 2 {
@@ -279,9 +272,9 @@ func splitCompoundCommands(command string) []string {
 
 	last := strings.TrimSpace(command[start:])
 	if last != "" {
-		parts = append(parts, last)
+		segments = append(segments, commandSegment{Text: last})
 	}
-	return parts
+	return segments
 }
 
 func deniedGitPush(command string) (bool, string) {
@@ -317,12 +310,19 @@ func deniedGitPush(command string) (bool, string) {
 	return false, ""
 }
 
-func (c *RiskClassifier) matchDenylist(command string) (string, bool) {
+func (c *RiskClassifier) matchDeniedInvocation(command string) (string, bool) {
 	normalized := normalizeCommand(command)
-	for _, pattern := range c.denylist {
-		n := normalizeCommand(pattern)
-		if wildcardContains(normalized, n) {
-			return pattern, true
+	commandToken := invokedCommandToken(normalized)
+	switch commandToken {
+	case "sudo", "su", "passwd", "eval", "exec":
+		return "command_token:" + commandToken, true
+	case "rm":
+		if strings.Contains(normalized, " -rf ") && strings.Contains(normalized, " /") {
+			return "invocation:rm -rf /", true
+		}
+	case "chmod":
+		if strings.Contains(normalized, " 777") {
+			return "invocation:chmod 777", true
 		}
 	}
 	return "", false
@@ -333,24 +333,72 @@ func normalizeCommand(command string) string {
 	return whitespace.ReplaceAllString(strings.ToLower(strings.TrimSpace(command)), " ")
 }
 
-func wildcardContains(text, pattern string) bool {
-	if !strings.Contains(pattern, "*") {
-		return strings.Contains(text, pattern)
+func invokedCommandToken(command string) string {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return ""
 	}
 
-	parts := strings.Split(pattern, "*")
 	idx := 0
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		next := strings.Index(text[idx:], part)
-		if next < 0 {
-			return false
-		}
-		idx += next + len(part)
+	for idx < len(fields) && isEnvAssignment(fields[idx]) {
+		idx++
 	}
-	return true
+	if idx >= len(fields) {
+		return ""
+	}
+	if fields[idx] == "env" {
+		idx++
+		for idx < len(fields) && (strings.HasPrefix(fields[idx], "-") || isEnvAssignment(fields[idx])) {
+			idx++
+		}
+	}
+	if idx >= len(fields) {
+		return ""
+	}
+	return fields[idx]
+}
+
+func isEnvAssignment(token string) bool {
+	if strings.HasPrefix(token, "-") {
+		return false
+	}
+	name, _, ok := strings.Cut(token, "=")
+	return ok && strings.TrimSpace(name) != ""
+}
+
+func matchDeniedPipeline(segments []commandSegment) (string, bool) {
+	sourceToken := ""
+	for _, segment := range segments {
+		token := invokedCommandToken(normalizeCommand(segment.Text))
+		if isDeniedPipelineSource(token) && sourceToken == "" {
+			sourceToken = token
+		}
+		if sourceToken != "" && isDeniedPipelineSink(token) {
+			return "pipeline:" + sourceToken + "|" + token, true
+		}
+		if segment.Separator != "|" {
+			sourceToken = ""
+		}
+	}
+	return "", false
+}
+
+func isDeniedPipelineSource(token string) bool {
+	switch token {
+	case "curl", "wget":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDeniedPipelineSink(token string) bool {
+	switch token {
+	case "bash", "sh", "ash", "dash", "ksh", "zsh":
+		return true
+	default:
+		return false
+	}
 }
 
 func hasShellInjection(command string) bool {

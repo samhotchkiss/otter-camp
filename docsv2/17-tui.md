@@ -287,6 +287,7 @@ The landing view on TUI launch. Quick status overview.
 - Inbox section shows top items with urgency indicators.
 - Project summary shows task counts by status category.
 - Activity feed shows recent events across all projects, including failures, retries, promotions, and completions.
+- The chat-pane active-turn affordance, task detail execution pane, and runtime-health rows must agree on the same canonical live turn. After recovery or queued retry promotion, the TUI follows the repaired session/runtime truth instead of leaving a stale spinner or stale active-run badge on the prior turn.
 - When an execution becomes stranded, the blocked list must say so explicitly rather than leaving the task presented as an ordinary active/stale run. The operator needs the task link plus the stranded reason (for example, "no live task turn") in the dashboard row.
 - Deterministic validation-loop blockers are first-class blocked items. Their row must summarize the failing tool/reason and tell the operator that resuming the task will retry it.
 - When runtime targets are present, keys `4`-`9` jump directly into the linked task or project detail from the runtime health list.

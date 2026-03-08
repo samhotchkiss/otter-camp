@@ -35,6 +35,8 @@ System tools are always available but heavily policy-gated. The capabilities `sy
 
 Within a single task execution there is one workspace contract, not separate per-tool filesystems. `file.read`, `file.list`, `file.search`, `file.write`, `git.*`, and `cli.execute` all resolve the same project workspace root on disk. Task scope determines which project/task binding is allowed to use that root; it does not create a second task-only directory tree. A file or manifest created through one system-tool surface must be immediately visible to the others without path translation or drift.
 
+`cli.execute` hard denies are invocation-aware. Dangerous command tokens and dangerous pipelines such as `sudo`, `su`, `eval`, `exec`, or `curl ... | bash` are matched on the actual command path outside quoted payload text. Benign arguments or encoded payloads that merely contain substrings like `su` are not denied just because those bytes appear inside otherwise-safe command content.
+
 For long-running content migration/import work, system tools are the primary continuity mechanism: fetched pages, manifests, helper scripts, and migrated outputs are expected to live in workspace files. Continuations should resume from those persisted files and checkpoint manifests, not by replaying large raw blobs through the chat transcript. When persisted scripts/artifacts exist but migrated outputs do not, the next turn should use that checkpointed state to write the first real output file before re-listing workspace state or generating more helper scripts.
 
 ### Category 3: Browser Tools
