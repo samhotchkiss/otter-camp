@@ -1748,6 +1748,137 @@ Ship one flagship essay each week, one supporting checklist, and one short proof
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryTurnAcceptsLegacyWorkspaceWriteAsDurableEX322(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+	legacyWorkspaceRoot, err := workspace.LegacyProjectRoot(dataDir, fixture.org.Slug, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("legacy workspace root: %v", err)
+	}
+	if err := os.MkdirAll(legacyWorkspaceRoot, 0o755); err != nil {
+		t.Fatalf("mkdir legacy workspace root: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	const targetPath = "docs/content-strategy.md"
+	expectedDraft := strings.TrimRight(`# Content Strategy
+
+## Core Promise
+Sam.blog should publish one durable operating system for thoughtful parents building resilient families and meaningful work.
+
+## Editorial Pillars
+- Family systems that reduce chaos and increase agency.
+- Playbooks that turn values into weekly habits.
+- Essays that connect parenting choices to long-term identity.
+`, "\n")
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls > 2 {
+			t.Fatalf("unexpected extra model call after durable legacy workspace write: %d", modelCalls)
+		}
+		if modelCalls == 2 {
+			return ModelResponse{Content: "legacy workspace write recovered"}, nil
+		}
+		return ModelResponse{
+			Content: expectedDraft,
+			ToolCalls: []ModelToolCall{{
+				ID:   "write-recovered",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path": targetPath,
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	legacyTargetAbs := filepath.Join(legacyWorkspaceRoot, filepath.FromSlash(targetPath))
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		dispatched++
+		path := stringValue(call.Arguments["path"])
+		content := stringValue(call.Arguments["content"])
+		if path != targetPath {
+			t.Fatalf("path = %q, want %q", path, targetPath)
+		}
+		if content != expectedDraft {
+			t.Fatalf("content = %q, want recovered draft", content)
+		}
+		if err := os.MkdirAll(filepath.Dir(legacyTargetAbs), 0o755); err != nil {
+			t.Fatalf("mkdir legacy target dir: %v", err)
+		}
+		if err := os.WriteFile(legacyTargetAbs, []byte(content), 0o644); err != nil {
+			t.Fatalf("write legacy target file: %v", err)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      path,
+				"byte_size": len(content),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+
+	body, err := os.ReadFile(legacyTargetAbs)
+	if err != nil {
+		t.Fatalf("read legacy target file: %v", err)
+	}
+	if string(body) != expectedDraft {
+		t.Fatalf("legacy target file body = %q, want recovered draft", string(body))
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))); err == nil {
+		t.Fatalf("target file unexpectedly exists in flattened workspace root")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat flattened workspace target: %v", err)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want not blocked", updatedTask.WorkStatus)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata); ok {
+		t.Fatal("unexpected recovery checkpoint after durable legacy workspace write")
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnRejectsToolRepairNarrationDraftEX320(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -2168,6 +2299,201 @@ func TestTurnEngineIntegrationRecoveryTurnPersistsCheckpointForRepeatedEmptyCLIE
 	}
 	if haltMessages != 1 {
 		t.Fatalf("recovery halt messages = %d, want 1", haltMessages)
+	}
+}
+
+func TestTurnEngineIntegrationRecoveryTurnMirrorsArtifactIntoLegacyWorkspaceRootEX322(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, initialUserMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+	legacyWorkspaceRoot, err := workspace.LegacyProjectRoot(dataDir, fixture.org.Slug, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("legacy workspace root: %v", err)
+	}
+
+	const targetPath = "docs/content-strategy.md"
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	historicDraft := "I can see the problem clearly from the conversation history. Every `file_write` call has been emitted **without the `content` parameter populated**. The system then captures nearby prose text as a fallback. I need to pass the full document text as the explicit `content` parameter value. Let me do this now."
+
+	legacyTargetAbs := filepath.Join(legacyWorkspaceRoot, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(legacyTargetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir legacy target dir: %v", err)
+	}
+	if err := os.WriteFile(legacyTargetAbs, []byte(historicDraft), 0o644); err != nil {
+		t.Fatalf("write legacy historic target: %v", err)
+	}
+	legacyArtifactAbs := filepath.Join(legacyWorkspaceRoot, filepath.FromSlash(artifactRel))
+	if err := os.MkdirAll(filepath.Dir(legacyArtifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir legacy artifact dir: %v", err)
+	}
+	if err := os.WriteFile(legacyArtifactAbs, []byte("stale artifact"), 0o644); err != nil {
+		t.Fatalf("write stale legacy artifact: %v", err)
+	}
+
+	priorTurn, err := fixture.chatService.CreateTurn(ctx, taskSession.ID, fixture.agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn prior recovery: %v", err)
+	}
+	if err := fixture.chatService.StartTurn(ctx, priorTurn.ID); err != nil {
+		t.Fatalf("StartTurn prior recovery: %v", err)
+	}
+	assistantType := "agent"
+	assistantMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		TurnID:     &priorTurn.ID,
+		AuthorType: &assistantType,
+		AuthorID:   &fixture.agent.ID,
+		Role:       "assistant",
+		Content:    historicDraft,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage prior assistant: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, assistantMessage.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus prior assistant: %v", err)
+	}
+	fileWriteResult, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: taskSession.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "tool_result",
+		Content:   string(mustJSON(t, map[string]any{"tool_name": "file.write", "output": map[string]any{"path": targetPath, "byte_size": len(historicDraft), "created": false}})),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage prior file.write tool_result: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, fileWriteResult.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus prior file.write tool_result: %v", err)
+	}
+	fileReadResult, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: taskSession.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "tool_result",
+		Content:   string(mustJSON(t, map[string]any{"tool_name": "file.read", "output": map[string]any{"path": targetPath, "content": historicDraft, "encoding": "utf8", "truncated": false, "byte_size": len(historicDraft)}})),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage prior file.read tool_result: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, fileReadResult.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus prior file.read tool_result: %v", err)
+	}
+	if err := fixture.chatService.CompleteTurn(ctx, priorTurn.ID); err != nil {
+		t.Fatalf("CompleteTurn prior recovery: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	guardedMetadata, err := tasksvc.MergeValidationGuardMetadata(currentTask.Metadata, tasksvc.ValidationGuardState{
+		InitialMessageID:   initialUserMessage.ID.String(),
+		Fingerprint:        "cli.execute:command_is_required",
+		AttemptFingerprint: "cli.execute:command_is_required:attempt",
+		ToolName:           "cli.execute",
+		FailureClass:       "tool_validation",
+		FailureCode:        "command_is_required",
+		FailureReason:      "command is required",
+		Count:              validationLoopBlockThreshold,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	currentTask.Metadata = guardedMetadata
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update guarded task: %v", err)
+	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if _, err := taskService.MarkBlocked(ctx, taskRecord.ID, "deterministic tool validation loop blocked after 3 identical failures: cli.execute (command is required)", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+	if _, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	resumedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	resumedTask.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
+		t.Fatalf("Update resumed task in_progress: %v", err)
+	}
+
+	authorType := "human_user"
+	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "supervisor recovery: resume task",
+		Metadata:   mustJSON(t, map[string]any{"source": "supervisor", "stranded_execution": true}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage recovery: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "cli.execute", Tier: "tier2"}}}
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{
+			Content: "The `file_write` tool keeps failing because the `content` parameter isn't being populated. Let me use `cli_execute` with a heredoc instead — this is the reliable fallback path.",
+			ToolCalls: []ModelToolCall{{
+				ID:   fmt.Sprintf("empty-cli-%d", modelCalls),
+				Name: "cli_execute",
+				Tier: "tier2",
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		t.Fatalf("unexpected tier2 dispatch for empty cli recovery: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+
+	flatArtifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
+	if _, err := os.Stat(flatArtifactAbs); err != nil {
+		t.Fatalf("expected recovery artifact in flattened workspace root: %v", err)
+	}
+	if _, err := os.Stat(legacyArtifactAbs); err != nil {
+		t.Fatalf("expected recovery artifact in legacy workspace root: %v", err)
+	}
+	legacyArtifactBody, err := os.ReadFile(legacyArtifactAbs)
+	if err != nil {
+		t.Fatalf("read legacy recovery artifact: %v", err)
+	}
+	if !strings.Contains(string(legacyArtifactBody), historicDraft) {
+		t.Fatalf("legacy recovery artifact missing historic draft:\n%s", string(legacyArtifactBody))
 	}
 }
 

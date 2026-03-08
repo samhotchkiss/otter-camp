@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -95,6 +96,63 @@ func TestProjectRoot(t *testing.T) {
 		want := filepath.Join(home, "otter-data", "workspaces", "sam-blog")
 		if got != want {
 			t.Fatalf("ProjectRoot = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestLegacyProjectRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := LegacyProjectRoot("~/otter-data", "default", "sam-blog")
+	if err != nil {
+		t.Fatalf("LegacyProjectRoot: %v", err)
+	}
+
+	want := filepath.Join(home, "otter-data", "workspaces", "default", "sam-blog")
+	if got != want {
+		t.Fatalf("LegacyProjectRoot = %q, want %q", got, want)
+	}
+}
+
+func TestProjectCompatibilityRoots(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dataDir := "~/otter-data"
+	flatRoot := filepath.Join(home, "otter-data", "workspaces", "sam-blog")
+	legacyRoot := filepath.Join(home, "otter-data", "workspaces", "default", "sam-blog")
+
+	t.Run("flat root only when no legacy root exists", func(t *testing.T) {
+		roots, err := ProjectCompatibilityRoots(dataDir, "default", "sam-blog")
+		if err != nil {
+			t.Fatalf("ProjectCompatibilityRoots: %v", err)
+		}
+		if len(roots) != 1 {
+			t.Fatalf("root count = %d, want 1", len(roots))
+		}
+		if roots[0] != flatRoot {
+			t.Fatalf("roots[0] = %q, want %q", roots[0], flatRoot)
+		}
+	})
+
+	t.Run("includes legacy root when it already exists", func(t *testing.T) {
+		if err := os.MkdirAll(legacyRoot, 0o755); err != nil {
+			t.Fatalf("mkdir legacy root: %v", err)
+		}
+
+		roots, err := ProjectCompatibilityRoots(dataDir, "default", "sam-blog")
+		if err != nil {
+			t.Fatalf("ProjectCompatibilityRoots: %v", err)
+		}
+		if len(roots) != 2 {
+			t.Fatalf("root count = %d, want 2", len(roots))
+		}
+		if roots[0] != flatRoot {
+			t.Fatalf("roots[0] = %q, want %q", roots[0], flatRoot)
+		}
+		if roots[1] != legacyRoot {
+			t.Fatalf("roots[1] = %q, want %q", roots[1], legacyRoot)
 		}
 	})
 }

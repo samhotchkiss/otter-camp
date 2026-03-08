@@ -276,6 +276,10 @@ type projectRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
 }
 
+type organizationRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Organization, error)
+}
+
 type memorySourceRepository interface {
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.MemorySource, error)
 }
@@ -316,6 +320,7 @@ type Options struct {
 	FlowAdvancer    flowAdvancer
 	Assignments     assignmentRepository
 	Projects        projectRepository
+	Organizations   organizationRepository
 	MemorySources   memorySourceRepository
 	Memories        memoryRepository
 
@@ -357,6 +362,7 @@ type TurnEngine struct {
 	flowAdvancer    flowAdvancer
 	assignments     assignmentRepository
 	projects        projectRepository
+	organizations   organizationRepository
 	sources         memorySourceRepository
 	memories        memoryRepository
 
@@ -474,6 +480,9 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	if opts.Projects == nil {
 		opts.Projects = repo.NewProjectRepo(opts.Pool)
 	}
+	if opts.Organizations == nil && opts.Pool != nil {
+		opts.Organizations = repo.NewOrgRepo(opts.Pool)
+	}
 	if opts.FlowNodes == nil && opts.Pool != nil {
 		opts.FlowNodes = repo.NewFlowNodeRepo(opts.Pool)
 	}
@@ -573,6 +582,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		flowAdvancer:          opts.FlowAdvancer,
 		assignments:           opts.Assignments,
 		projects:              opts.Projects,
+		organizations:         opts.Organizations,
 		sources:               opts.MemorySources,
 		memories:              opts.Memories,
 		defaultModelProfileID: opts.DefaultModelProfileID,
@@ -2500,32 +2510,56 @@ func (e *TurnEngine) persistRecoveryFileWriteArtifact(ctx context.Context, rt *t
 	if err != nil {
 		return "", err
 	}
-	workspaceRoot, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+	workspaceRoots, err := e.projectWorkspaceRoots(ctx, taskRecord.OrganizationID, projectRecord)
 	if err != nil {
 		return "", err
 	}
+	workspaceRoot := workspaceRoots[0]
 	_, targetRel, err := resolveRecoveryWorkspacePath(workspaceRoot, targetPath)
 	if err != nil {
 		return "", err
 	}
 
 	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetRel)))
-	artifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
-	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
-		return "", err
-	}
-
 	if strings.TrimSpace(draft) == "" {
 		draft, _, _ = e.recoveryFileWriteDraftContent(ctx, rt, targetPath)
 	}
 	document := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetRel, draft, failureReason, e.now())
-	if err := os.WriteFile(artifactAbs, []byte(document), 0o644); err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(artifactAbs); err != nil {
-		return "", err
+	for _, root := range workspaceRoots {
+		artifactAbs := filepath.Join(root, filepath.FromSlash(artifactRel))
+		if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(artifactAbs, []byte(document), 0o644); err != nil {
+			return "", err
+		}
+		if _, err := os.Stat(artifactAbs); err != nil {
+			return "", err
+		}
 	}
 	return artifactRel, nil
+}
+
+func (e *TurnEngine) projectWorkspaceRoots(ctx context.Context, organizationID uuid.UUID, projectRecord repo.Project) ([]string, error) {
+	projectRoot, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+	if err != nil {
+		return nil, err
+	}
+	if e == nil || e.organizations == nil || organizationID == uuid.Nil {
+		return []string{projectRoot}, nil
+	}
+	orgRecord, err := e.organizations.GetByID(ctx, organizationID)
+	if err != nil {
+		return []string{projectRoot}, nil
+	}
+	roots, err := workspace.ProjectCompatibilityRoots(e.dataDir, orgRecord.Slug, projectRecord.Slug)
+	if err != nil {
+		return nil, err
+	}
+	if len(roots) == 0 {
+		return []string{projectRoot}, nil
+	}
+	return roots, nil
 }
 
 func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt *turnRuntime, targetPath, artifactPath, failureReason string, messageID uuid.UUID) error {
@@ -2696,25 +2730,42 @@ func (e *TurnEngine) recoveryFileWriteTargetExists(ctx context.Context, rt *turn
 	if err != nil {
 		return false, err
 	}
-	workspaceRoot, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+	workspaceRoots, err := e.projectWorkspaceRoots(ctx, taskRecord.OrganizationID, projectRecord)
 	if err != nil {
 		return false, err
 	}
-	targetAbs, _, err := resolveRecoveryWorkspacePath(workspaceRoot, targetPath)
-	if err != nil {
-		return false, err
-	}
-	info, err := os.Stat(targetAbs)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
+	var resolutionErr error
+	for _, root := range workspaceRoots {
+		targetAbs, _, err := resolveRecoveryWorkspacePath(root, targetPath)
+		if err != nil {
+			if resolutionErr == nil {
+				resolutionErr = err
+			}
+			continue
 		}
-		return false, err
+
+		info, err := os.Stat(targetAbs)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if resolutionErr == nil {
+				resolutionErr = err
+			}
+			continue
+		}
+		if info.IsDir() {
+			if resolutionErr == nil {
+				resolutionErr = fmt.Errorf("%s resolved to a directory", targetPath)
+			}
+			continue
+		}
+		return true, nil
 	}
-	if info.IsDir() {
-		return false, fmt.Errorf("%s resolved to a directory", targetPath)
+	if resolutionErr != nil {
+		return false, resolutionErr
 	}
-	return true, nil
+	return false, nil
 }
 
 func sameWorkspaceRelativePath(left, right string) bool {
