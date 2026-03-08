@@ -585,6 +585,8 @@ When an agent emits a tool call during the turn loop:
 
 Supervisor-style recovery turns get one extra guardrail: if the provider emits `cli.execute` with no recoverable `command` at all, the turn runtime rejects that call before dispatch, injects one exact heredoc-style correction message back into the same turn, and gives the model one bounded retry. A second empty-command retry halts the turn with a diagnosable recovery message instead of burning through the deterministic validation blocker budget and immediately re-blocking the task.
 
+Supervisor-style recovery turns apply the same bounded pattern to `file.write` when a concrete target `path` exists but `content` is still empty. The runtime first looks for a substantive assistant draft already produced in the same turn and, if found, carries that draft directly into the write so document-generation tasks can still produce the artifact. If no draft exists yet, the runtime injects one correction that requires the full file body before another mutation attempt. A second empty-content retry halts the turn, persists a resumable recovery artifact under `.ottercamp/recovery/...`, and avoids falling straight back into the deterministic `content_required` blocker cycle.
+
 ### Error Handling
 
 Tool call errors are returned as tool results, not as exceptions. The agent sees the error and can adapt:
