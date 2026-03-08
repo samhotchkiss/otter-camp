@@ -97,7 +97,7 @@ func TestTransitionStatusInvalidReturnsTypedError(t *testing.T) {
 	}
 }
 
-func TestResumeValidationBlockedTaskRequiresBlockedGuard(t *testing.T) {
+func TestResumeValidationBlockedTaskRequiresResumableBlockedState(t *testing.T) {
 	taskID := uuid.New()
 	taskRepo := &fakeTaskRepo{
 		tasks: map[uuid.UUID]repo.ProjectTask{
@@ -115,8 +115,39 @@ func TestResumeValidationBlockedTaskRequiresBlockedGuard(t *testing.T) {
 
 	svc := newUnitService(taskRepo)
 	_, err := svc.ResumeValidationBlockedTask(context.Background(), taskID, Actor{Type: "system"})
-	if !errors.Is(err, ErrValidationRecoveryRequired) {
-		t.Fatalf("ResumeValidationBlockedTask err = %v, want ErrValidationRecoveryRequired", err)
+	var resumeErr TaskResumeBlockedStateError
+	if !errors.As(err, &resumeErr) {
+		t.Fatalf("ResumeValidationBlockedTask err = %v, want TaskResumeBlockedStateError", err)
+	}
+	if resumeErr.BlockerClass != RecoveryBlockerClassBlockedWithoutResumableState {
+		t.Fatalf("resume blocker_class = %q, want %q", resumeErr.BlockerClass, RecoveryBlockerClassBlockedWithoutResumableState)
+	}
+}
+
+func TestResumeValidationBlockedTaskRejectsNonBlockedTask(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "in_progress",
+				Title:          "Active task",
+				CreatedByType:  "system",
+				Metadata:       json.RawMessage(`{}`),
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	_, err := svc.ResumeValidationBlockedTask(context.Background(), taskID, Actor{Type: "system"})
+	var resumeErr TaskResumeBlockedStateError
+	if !errors.As(err, &resumeErr) {
+		t.Fatalf("ResumeValidationBlockedTask err = %v, want TaskResumeBlockedStateError", err)
+	}
+	if resumeErr.BlockerClass != RecoveryBlockerClassNotBlocked {
+		t.Fatalf("resume blocker_class = %q, want %q", resumeErr.BlockerClass, RecoveryBlockerClassNotBlocked)
 	}
 }
 

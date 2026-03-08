@@ -23,6 +23,7 @@ import (
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -339,6 +340,143 @@ func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn
 	}
 	if got := strings.TrimSpace(fmt.Sprintf("%v", kickoffMeta["validation_failure_code"])); got != "command_required" {
 		t.Fatalf("kickoff validation_failure_code = %q, want %q", got, "command_required")
+	}
+}
+
+func TestTaskQueueProcessorIntegrationResumeDurableRecoveryCheckpointCreatesFollowOnTurnEX324(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
+	defer stopTurnRuntime()
+
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Resume durable checkpoint task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	targetPath := "docs/content-strategy.md"
+	artifactPath := ".ottercamp/recovery/docs/content-strategy.md"
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		ArtifactPath:  artifactPath,
+		FailureReason: "assistant draft for docs/content-strategy.md described tool-recovery troubleshooting instead of the file body",
+		HaltTurnID:    uuid.NewString(),
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRecord.Metadata = checkpointMetadata
+	taskRecord.WorkStatus = "blocked"
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update blocked task: %v", err)
+	}
+
+	if _, err := fx.tasks.ResumeValidationBlockedTask(ctx, created.ID, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+
+	sessionRepo := repo.NewChatSessionRepo(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+	turnRepo := repo.NewChatTurnRepo(fx.pool)
+
+	var (
+		session       *repo.ChatSession
+		turns         []repo.ChatTurn
+		kickoffMeta   map[string]any
+		foundKickoff  bool
+		foundResponse bool
+	)
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		current, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if current.WorkStatus != "in_progress" {
+			return false, nil
+		}
+		if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(current.Metadata); !ok || checkpoint.ArtifactPath != artifactPath {
+			return false, fmt.Errorf("durable recovery checkpoint missing after resume")
+		}
+
+		session, err = sessionRepo.GetByScopeAndMode(ctx, "project_task", created.ID, "async")
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+
+		messages, err := messageRepo.ListBySession(ctx, session.ID)
+		if err != nil {
+			return false, err
+		}
+		foundKickoff = false
+		foundResponse = false
+		kickoffMeta = nil
+		for _, message := range messages {
+			if message.Role == "user" && len(message.Metadata) > 0 {
+				var metadata map[string]any
+				if err := json.Unmarshal(message.Metadata, &metadata); err == nil && metadata["source"] == "task_queue_processor" {
+					foundKickoff = true
+					kickoffMeta = metadata
+				}
+			}
+			if message.Role == "assistant" && message.Status == "final" && message.Content == "Task started." {
+				foundResponse = true
+			}
+		}
+		if !foundKickoff || !foundResponse {
+			return false, nil
+		}
+
+		turns, err = turnRepo.ListBySession(ctx, session.ID)
+		if err != nil {
+			return false, err
+		}
+		if len(turns) == 0 {
+			return false, nil
+		}
+		return turns[len(turns)-1].Status == "completed", nil
+	})
+
+	if session == nil || session.ID == uuid.Nil {
+		t.Fatal("expected canonical async task session after checkpoint resume")
+	}
+	if len(turns) == 0 {
+		t.Fatal("expected a fresh task turn after checkpoint resume")
+	}
+	if turns[len(turns)-1].Status != "completed" {
+		t.Fatalf("latest turn status = %q, want completed", turns[len(turns)-1].Status)
+	}
+	if kickoffMeta == nil {
+		t.Fatal("expected kickoff metadata after checkpoint resume")
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", kickoffMeta["recovery_action"])); got != tasksvc.RecoveryActionResumeBlockedTask {
+		t.Fatalf("kickoff recovery_action = %q, want %q", got, tasksvc.RecoveryActionResumeBlockedTask)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", kickoffMeta["recovery_blocker_class"])); got != tasksvc.RecoveryBlockerClassDurableRecoveryCheckpoint {
+		t.Fatalf("kickoff recovery_blocker_class = %q, want %q", got, tasksvc.RecoveryBlockerClassDurableRecoveryCheckpoint)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", kickoffMeta["recovery_checkpoint_artifact_path"])); got != artifactPath {
+		t.Fatalf("kickoff recovery_checkpoint_artifact_path = %q, want %q", got, artifactPath)
 	}
 }
 

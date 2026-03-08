@@ -50,7 +50,6 @@ var (
 	ErrBrowserHandoffUnavailable  = errors.New("browser handoff service unavailable")
 	ErrActiveFlowRequired         = errors.New("task requires an active flow to be in_progress")
 	ErrFlowServiceUnavailable     = errors.New("flow service unavailable")
-	ErrValidationRecoveryRequired = errors.New("task is not blocked by a deterministic validation loop")
 )
 
 var validStatusTransitions = map[string]map[string]struct{}{
@@ -621,28 +620,72 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 		return nil, err
 	}
 
-	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
-		return nil, ErrValidationRecoveryRequired
-	}
-	guard, ok := ParseValidationGuard(taskRecord.Metadata)
-	if !ok || !guard.Blocked {
-		return nil, ErrValidationRecoveryRequired
+	decision := classifyTaskResumeDecision(taskRecord, s.loadLatestBlockedTaskReason(ctx, taskRecord.ID))
+	if !decision.resumable {
+		return nil, TaskResumeBlockedStateError{
+			BlockerClass:  decision.blockerClass,
+			BlockerReason: decision.blockerReason,
+		}
 	}
 
-	cleared, err := ClearValidationGuardMetadata(taskRecord.Metadata)
-	if err != nil {
-		return nil, err
+	if decision.clearValidationGuard {
+		cleared, clearErr := ClearValidationGuardMetadata(taskRecord.Metadata)
+		if clearErr != nil {
+			return nil, clearErr
+		}
+		taskRecord.Metadata = cleared
 	}
-	taskRecord.Metadata = cleared
 
 	payload := map[string]any{
-		"recovery_action":           "resume_validation_blocked_task",
-		"cleared_validation_guard":  true,
-		"validation_tool_name":      strings.TrimSpace(guard.ToolName),
-		"validation_failure_code":   strings.TrimSpace(guard.FailureCode),
-		"validation_failure_reason": strings.TrimSpace(guard.FailureReason),
+		"recovery_action":        RecoveryActionResumeBlockedTask,
+		"recovery_blocker_class": decision.blockerClass,
+	}
+	if reason := strings.TrimSpace(decision.blockerReason); reason != "" {
+		payload["previous_blocker_reason"] = reason
+	}
+	if guard := decision.validationGuard; guard != nil {
+		payload["cleared_validation_guard"] = true
+		payload["validation_tool_name"] = strings.TrimSpace(guard.ToolName)
+		payload["validation_failure_code"] = strings.TrimSpace(guard.FailureCode)
+		payload["validation_failure_reason"] = strings.TrimSpace(guard.FailureReason)
+	}
+	if checkpoint := decision.checkpoint; checkpoint != nil {
+		payload["recovery_checkpoint_present"] = true
+		if targetPath := strings.TrimSpace(checkpoint.TargetPath); targetPath != "" {
+			payload["recovery_checkpoint_target_path"] = targetPath
+		}
+		if artifactPath := strings.TrimSpace(checkpoint.ArtifactPath); artifactPath != "" {
+			payload["recovery_checkpoint_artifact_path"] = artifactPath
+		}
+		if failureReason := strings.TrimSpace(checkpoint.FailureReason); failureReason != "" {
+			payload["recovery_checkpoint_failure_reason"] = failureReason
+		}
 	}
 	return s.transitionTaskRecord(ctx, taskRecord, "queued", actor, payload, false)
+}
+
+func (s *service) loadLatestBlockedTaskReason(ctx context.Context, taskID uuid.UUID) string {
+	if s == nil || s.pool == nil || taskID == uuid.Nil {
+		return ""
+	}
+
+	var reason string
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(payload->>'blocker_reason', '')
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		  AND COALESCE(payload->>'to_status', '') = 'blocked'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, taskID).Scan(&reason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ""
+	}
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(reason)
 }
 
 type queueDecompositionResult struct {
