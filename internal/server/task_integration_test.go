@@ -442,6 +442,85 @@ func TestTaskHTTPResumeBlockedTaskRepairsDurableCheckpointFromWorkspaceEX325(t *
 	}
 }
 
+func TestTaskHTTPResumeBlockedTaskRepairsCheckpointFromRecoverySessionStateEX327(t *testing.T) {
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-resume-recovery-session-state", false)
+	pmAgent := seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	graph := seedTaskFlowGraph(t, testServer.Pool, org.ID, project.ID, pmAgent.ID, adminUser.ID, true)
+	taskRecord := seedTaskForFlowTemplate(t, testServer.Pool, org.ID, project.ID, graph.Template.ID, graph.Work.ID, "blocked")
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+
+	const (
+		targetPath      = "docs/content-strategy.md"
+		placeholderBody = "Now I have everything I need. Let me write the comprehensive content strategy document. This needs to be the single deliverable that unblocks WS4 and serves as the strategic foundation for Sam.blog.\n"
+	)
+	writeServerTaskTargetFile(t, project.Slug, targetPath, placeholderBody)
+	seedRecoverySessionHistory(t, testServer.Pool, org.ID, taskRecord.ID, adminUser.ID, pmAgent.ID, targetPath, placeholderBody)
+
+	blockerReason := "recovery halted after prompt input kept exceeding the 64000-token guardrail across 3 continuation turns; narrow the next recovery attempt or split the work before re-queueing"
+	recordBlockedTaskStatusEvent(t, testServer.Pool, taskRecord.ID, project.ID, blockerReason)
+
+	refreshedBefore, err := taskRepo.GetByID(context.Background(), taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID blocked task: %v", err)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(refreshedBefore.Metadata); ok {
+		t.Fatalf("expected blocked task to start without checkpoint metadata, metadata=%s", string(refreshedBefore.Metadata))
+	}
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	resumed := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/resume", map[string]any{}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if resumed.StatusCode != http.StatusOK {
+		t.Fatalf("resume status = %d, want %d body=%s", resumed.StatusCode, http.StatusOK, string(resumed.Body))
+	}
+	if got := jsonPathString(t, resumed.Body, "data", "work_status"); got != "queued" {
+		t.Fatalf("resume work_status = %q, want queued body=%s", got, string(resumed.Body))
+	}
+
+	refreshedAfter, err := taskRepo.GetByID(context.Background(), taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(refreshedAfter.Metadata)
+	if !ok {
+		t.Fatalf("expected repaired recovery checkpoint after resume, metadata=%s", string(refreshedAfter.Metadata))
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "prompt input kept exceeding the 64000-token guardrail across 3 continuation turns") {
+		t.Fatalf("checkpoint failure_reason = %q, want continuation-depth blocker", checkpoint.FailureReason)
+	}
+
+	var payload []byte
+	if err := testServer.Pool.QueryRow(context.Background(), `
+		SELECT payload
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, taskRecord.ID).Scan(&payload); err != nil {
+		t.Fatalf("load latest status.changed payload: %v", err)
+	}
+	var eventPayload map[string]any
+	if err := json.Unmarshal(payload, &eventPayload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_blocker_class"])); got != tasksvc.RecoveryBlockerClassDurableRecoveryCheckpoint {
+		t.Fatalf("recovery_blocker_class = %q, want %q", got, tasksvc.RecoveryBlockerClassDurableRecoveryCheckpoint)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_checkpoint_target_path"])); got != targetPath {
+		t.Fatalf("recovery_checkpoint_target_path = %q, want %q", got, targetPath)
+	}
+	if got, ok := eventPayload["recovery_checkpoint_rebuilt"].(bool); !ok || !got {
+		t.Fatalf("recovery_checkpoint_rebuilt = %v, want true", eventPayload["recovery_checkpoint_rebuilt"])
+	}
+}
+
 func TestTaskHTTPResumeBlockedTaskRejectsStoredNonResumableStateEX324(t *testing.T) {
 	testServer, org, adminUser, _ := newTaskTestServer(t)
 	defer testServer.Close()
@@ -1236,6 +1315,126 @@ func writeServerTaskRecoveryWorkspaceFiles(t *testing.T, projectSlug, targetPath
 	if err := os.WriteFile(artifactAbs, []byte(artifactBody), 0o644); err != nil {
 		t.Fatalf("write artifact file: %v", err)
 	}
+}
+
+func writeServerTaskTargetFile(t *testing.T, projectSlug, targetPath, targetBody string) {
+	t.Helper()
+
+	root, err := workspace.ProjectRoot("", projectSlug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+	targetAbs := filepath.Join(root, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetBody), 0o644); err != nil {
+		t.Fatalf("write target file: %v", err)
+	}
+}
+
+func seedRecoverySessionHistory(t *testing.T, pool *pgxpool.Pool, orgID, taskID, userID, agentID uuid.UUID, targetPath, draft string) {
+	t.Helper()
+
+	ctx := context.Background()
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	turnRepo := repo.NewChatTurnRepo(pool)
+	messageRepo := repo.NewChatMessageRepo(pool)
+
+	title := "task-recovery"
+	session, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        taskID,
+		Mode:           "async",
+		Status:         "active",
+		Title:          &title,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create recovery session: %v", err)
+	}
+
+	authorType := "human_user"
+	kickoffMetadata, err := json.Marshal(map[string]any{
+		"source":          "task_queue_processor",
+		"recovery_action": tasksvc.RecoveryActionResumeBlockedTask,
+	})
+	if err != nil {
+		t.Fatalf("marshal recovery kickoff metadata: %v", err)
+	}
+	if _, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &userID,
+		Role:       "user",
+		Content:    "Start work on task: WS3",
+		Status:     "final",
+		Metadata:   kickoffMetadata,
+	}); err != nil {
+		t.Fatalf("create recovery kickoff message: %v", err)
+	}
+
+	turn, err := turnRepo.Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agentID,
+		Status:           "pending",
+		TriggerMessageID: nil,
+	})
+	if err != nil {
+		t.Fatalf("create recovery turn: %v", err)
+	}
+	if _, err := turnRepo.SetStarted(ctx, turn.ID, time.Now().UTC()); err != nil {
+		t.Fatalf("start recovery turn: %v", err)
+	}
+
+	assistantType := "agent"
+	if _, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID:  session.ID,
+		TurnID:     &turn.ID,
+		AuthorType: &assistantType,
+		AuthorID:   &agentID,
+		Role:       "assistant",
+		Content:    draft,
+		Status:     "final",
+		Metadata:   json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("create recovery assistant message: %v", err)
+	}
+	if _, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "tool_result",
+		Content:   mustMarshalRecoveryToolResult(t, targetPath, draft),
+		Status:    "final",
+		Metadata:  json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("create recovery file.write result: %v", err)
+	}
+	if _, err := turnRepo.SetCompleted(ctx, turn.ID, time.Now().UTC(), 10); err != nil {
+		t.Fatalf("complete recovery turn: %v", err)
+	}
+}
+
+func mustMarshalRecoveryToolResult(t *testing.T, targetPath, draft string) string {
+	t.Helper()
+
+	payload, err := json.Marshal(map[string]any{
+		"tool_name": "file.write",
+		"output": map[string]any{
+			"path":      targetPath,
+			"byte_size": len(draft),
+			"created":   false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal recovery tool_result: %v", err)
+	}
+	return string(payload)
 }
 
 func seedTaskProject(t *testing.T, pool *pgxpool.Pool, orgID, createdByID uuid.UUID, slug string, requiresHumanReview bool) repo.Project {

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -4915,6 +4916,22 @@ func TestTurnEngineIntegrationRecoveryTurnBlocksAfterGuardrailContinuationDepthE
 	if queuedMessages != 0 {
 		t.Fatalf("queued continuation messages = %d, want 0", queuedMessages)
 	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	_, err = taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"})
+	var resumeErr tasksvc.TaskResumeBlockedStateError
+	if !errors.As(err, &resumeErr) {
+		t.Fatalf("ResumeValidationBlockedTask err = %v, want TaskResumeBlockedStateError", err)
+	}
+	if resumeErr.BlockerClass != tasksvc.RecoveryBlockerClassBlockedWithoutResumableState {
+		t.Fatalf("resume blocker_class = %q, want %q", resumeErr.BlockerClass, tasksvc.RecoveryBlockerClassBlockedWithoutResumableState)
+	}
 }
 
 func TestTurnEngineIntegrationRecoveryTurnKeepsQueuedContinuationAfterGuardrailContinuationDepthEX318(t *testing.T) {
@@ -4994,6 +5011,155 @@ func TestTurnEngineIntegrationRecoveryTurnKeepsQueuedContinuationAfterGuardrailC
 	}
 	if queuedMessages != 1 {
 		t.Fatalf("queued continuation messages = %d, want 1", queuedMessages)
+	}
+}
+
+func TestTurnEngineIntegrationRecoveryTurnPreservesResumableStateAfterGuardrailContinuationDepthEX327(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	const targetPath = "docs/content-strategy.md"
+	const placeholderDraft = "Now I have everything I need. Let me write the comprehensive content strategy document. This needs to be the single deliverable that unblocks WS4 and serves as the strategic foundation for Sam.blog."
+
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(placeholderDraft), 0o644); err != nil {
+		t.Fatalf("write placeholder target: %v", err)
+	}
+
+	priorTurn, err := fixture.chatService.CreateTurn(ctx, taskSession.ID, fixture.agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn prior recovery: %v", err)
+	}
+	if err := fixture.chatService.StartTurn(ctx, priorTurn.ID); err != nil {
+		t.Fatalf("StartTurn prior recovery: %v", err)
+	}
+	assistantType := "agent"
+	assistantMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		TurnID:     &priorTurn.ID,
+		AuthorType: &assistantType,
+		AuthorID:   &fixture.agent.ID,
+		Role:       "assistant",
+		Content:    placeholderDraft,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage prior assistant: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, assistantMessage.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus prior assistant: %v", err)
+	}
+	fileWriteResult, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: taskSession.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "tool_result",
+		Content:   string(mustJSON(t, map[string]any{"tool_name": "file.write", "output": map[string]any{"path": targetPath, "byte_size": len(placeholderDraft), "created": false}})),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage prior file.write tool_result: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, fileWriteResult.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus prior file.write tool_result: %v", err)
+	}
+	if err := fixture.chatService.CompleteTurn(ctx, priorTurn.ID); err != nil {
+		t.Fatalf("CompleteTurn prior recovery: %v", err)
+	}
+
+	fixture.engine.assembler = &fakeAssembler{results: []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+	}}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery continuation depth: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatalf("expected recovery checkpoint metadata, metadata=%s", string(updatedTask.Metadata))
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "prompt input kept exceeding the 64000-token guardrail across 3 continuation turns") {
+		t.Fatalf("checkpoint failure_reason = %q, want continuation-depth guidance", checkpoint.FailureReason)
+	}
+
+	outputBody, err := os.ReadFile(targetAbs)
+	if err != nil {
+		t.Fatalf("read placeholder target: %v", err)
+	}
+	if string(outputBody) != placeholderDraft {
+		t.Fatalf("target file changed unexpectedly:\n%s", string(outputBody))
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var blockedMessages int
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, "Continue from `docs/content-strategy.md`") {
+			blockedMessages++
+		}
+	}
+	if blockedMessages != 1 {
+		t.Fatalf("blocked guidance messages = %d, want 1 with target-path recovery guidance", blockedMessages)
+	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	resumed, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+	resumedCheckpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumed.Metadata)
+	if !ok {
+		t.Fatalf("expected checkpoint to remain after resume, metadata=%s", string(resumed.Metadata))
+	}
+	if resumedCheckpoint.TargetPath != targetPath {
+		t.Fatalf("resumed checkpoint target_path = %q, want %q", resumedCheckpoint.TargetPath, targetPath)
 	}
 }
 

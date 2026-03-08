@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
@@ -117,6 +119,12 @@ func (s *service) maybeRepairDurableRecoveryCheckpoint(ctx context.Context, task
 	}
 
 	checkpoint, ok, err := s.rebuildDurableRecoveryCheckpointFromWorkspace(ctx, taskRecord, blockerReason)
+	if err != nil {
+		return taskRecord, false, err
+	}
+	if !ok {
+		checkpoint, ok, err = s.rebuildDurableRecoveryCheckpointFromSessionState(ctx, taskRecord, blockerReason)
+	}
 	if err != nil || !ok {
 		return taskRecord, false, err
 	}
@@ -172,6 +180,227 @@ func (s *service) rebuildDurableRecoveryCheckpointFromWorkspace(ctx context.Cont
 		FailureReason: recoveryArtifactFailureReason(artifactDocument),
 		UpdatedAt:     updatedAt.Format(time.RFC3339Nano),
 	}, true, nil
+}
+
+func (s *service) rebuildDurableRecoveryCheckpointFromSessionState(ctx context.Context, taskRecord repo.ProjectTask, blockerReason string) (taskcheckpoint.RecoveryFileWriteCheckpoint, bool, error) {
+	if s == nil || s.pool == nil {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, nil
+	}
+
+	sessionID, ok, err := s.latestTaskRecoverySessionID(ctx, taskRecord.ID)
+	if err != nil || !ok {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, err
+	}
+
+	messages, err := repo.NewChatMessageRepo(s.pool).ListBySession(ctx, sessionID)
+	if err != nil {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, err
+	}
+
+	checkpoint, ok := recoveryCheckpointFromSessionMessages(messages, blockerReason)
+	if !ok {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, nil
+	}
+
+	roots, err := s.recoveryWorkspaceRoots(ctx, taskRecord)
+	if err != nil {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, err
+	}
+	if strings.TrimSpace(checkpoint.ArtifactPath) == "" && strings.TrimSpace(checkpoint.TargetPath) != "" {
+		candidateArtifact := filepath.ToSlash(filepath.Join(strings.TrimSuffix(recoveryArtifactPathPrefix, "/"), filepath.FromSlash(checkpoint.TargetPath)))
+		exists, existsErr := recoveryWorkspaceFileExists(roots, candidateArtifact)
+		if existsErr != nil {
+			return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, existsErr
+		}
+		if exists {
+			checkpoint.ArtifactPath = candidateArtifact
+		}
+	}
+	if strings.TrimSpace(checkpoint.FailureReason) == "" && strings.TrimSpace(checkpoint.ArtifactPath) != "" {
+		artifactDocument, artifactExists, readErr := readRecoveryWorkspaceFile(roots, checkpoint.ArtifactPath)
+		if readErr != nil {
+			return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, readErr
+		}
+		if artifactExists {
+			checkpoint.FailureReason = recoveryArtifactFailureReason(artifactDocument)
+		}
+	}
+
+	updatedAt := time.Now().UTC()
+	if s.clock != nil {
+		updatedAt = s.clock.Now().UTC()
+	}
+	checkpoint.UpdatedAt = updatedAt.Format(time.RFC3339Nano)
+	if !hasDurableRecoveryCheckpoint(checkpoint) {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, nil
+	}
+	return checkpoint, true, nil
+}
+
+func (s *service) latestTaskRecoverySessionID(ctx context.Context, taskID uuid.UUID) (uuid.UUID, bool, error) {
+	if s == nil || s.pool == nil || taskID == uuid.Nil {
+		return uuid.Nil, false, nil
+	}
+
+	var sessionID uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		SELECT id
+		FROM chat_session
+		WHERE scope_type = 'project_task'
+		  AND scope_id = $1
+		  AND mode = 'async'
+		ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at DESC, id DESC
+		LIMIT 1
+	`, taskID).Scan(&sessionID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, err
+	}
+	return sessionID, sessionID != uuid.Nil, nil
+}
+
+func recoveryCheckpointFromSessionMessages(messages []repo.ChatMessage, blockerReason string) (taskcheckpoint.RecoveryFileWriteCheckpoint, bool) {
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		candidate, ok := recoveryCheckpointFromMessageMetadata(message.Metadata, blockerReason)
+		if !ok {
+			continue
+		}
+		checkpoint = candidate
+		checkpoint.HistoryStartMessageID = message.ID.String()
+		break
+	}
+	if strings.TrimSpace(checkpoint.TargetPath) == "" {
+		if targetPath, ok := recoveryCheckpointTargetPathFromMessages(messages); ok {
+			checkpoint.TargetPath = targetPath
+		}
+	}
+	if strings.TrimSpace(checkpoint.TargetPath) == "" {
+		if targetPath, ok := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); ok {
+			checkpoint.TargetPath = targetPath
+		}
+	}
+	if strings.TrimSpace(checkpoint.TargetPath) == "" && strings.TrimSpace(checkpoint.ArtifactPath) == "" {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
+	}
+	if strings.TrimSpace(checkpoint.FailureReason) == "" {
+		checkpoint.FailureReason = strings.TrimSpace(blockerReason)
+	}
+	if !hasDurableRecoveryCheckpoint(checkpoint) {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
+	}
+	return checkpoint, true
+}
+
+func recoveryCheckpointFromMessageMetadata(metadata json.RawMessage, blockerReason string) (taskcheckpoint.RecoveryFileWriteCheckpoint, bool) {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil || payload == nil {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
+	}
+	if !IsRecoveryResumeAction(anyString(payload["recovery_action"])) {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
+	}
+
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    strings.TrimSpace(anyString(payload["recovery_checkpoint_target_path"])),
+		ArtifactPath:  strings.TrimSpace(anyString(payload["recovery_checkpoint_artifact_path"])),
+		FailureReason: strings.TrimSpace(anyString(payload["recovery_checkpoint_failure_reason"])),
+	}
+	if strings.TrimSpace(checkpoint.TargetPath) == "" {
+		if targetPath, ok := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); ok {
+			checkpoint.TargetPath = targetPath
+		}
+	}
+	if strings.TrimSpace(checkpoint.TargetPath) == "" && strings.TrimSpace(checkpoint.ArtifactPath) == "" {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
+	}
+	if strings.TrimSpace(checkpoint.FailureReason) == "" {
+		checkpoint.FailureReason = strings.TrimSpace(blockerReason)
+	}
+	if !hasDurableRecoveryCheckpoint(checkpoint) {
+		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false
+	}
+	return checkpoint, true
+}
+
+func recoveryCheckpointTargetPathFromMessages(messages []repo.ChatMessage) (string, bool) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.read", "file.write", "cli.execute":
+		default:
+			continue
+		}
+		targetPath, _ := recoveryTargetPathFromToolOutput(output)
+		if strings.TrimSpace(targetPath) != "" {
+			return targetPath, true
+		}
+	}
+	return "", false
+}
+
+func parseToolResultMessage(content string) (string, map[string]any, string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return "", nil, "", false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil || payload == nil {
+		return "", nil, "", false
+	}
+	toolName := strings.TrimSpace(anyString(payload["tool_name"]))
+	if toolName == "" {
+		return "", nil, "", false
+	}
+	output, _ := payload["output"].(map[string]any)
+	errText := strings.TrimSpace(anyString(payload["error"]))
+	return toolName, output, errText, true
+}
+
+func recoveryTargetPathFromToolOutput(output map[string]any) (string, bool) {
+	if output == nil {
+		return "", false
+	}
+	rawPath := strings.TrimSpace(anyString(output["path"]))
+	if rawPath == "" {
+		return "", false
+	}
+	normalized := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rawPath)))
+	prefix := strings.TrimSuffix(recoveryArtifactPathPrefix, "/") + "/"
+	if strings.HasPrefix(normalized, prefix) && len(normalized) > len(prefix) {
+		return strings.TrimPrefix(normalized, prefix), true
+	}
+	return normalized, false
+}
+
+func anyString(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return fmt.Sprintf("%v", value)
+	}
 }
 
 func (s *service) recoveryWorkspaceRoots(ctx context.Context, taskRecord repo.ProjectTask) ([]string, error) {
