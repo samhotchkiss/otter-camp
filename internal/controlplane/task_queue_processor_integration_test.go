@@ -1191,6 +1191,106 @@ func TestTaskQueueProcessorIntegrationInProgressAssignedAgentTaskCreatesTaskSess
 	}
 }
 
+func TestTaskQueueProcessorIntegrationBlockedTaskFailsTrackingRunAndMarksRuntimeTerminalEX318(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	runRepo := NewRunRepository(fx.pool)
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Provider auth blocked task",
+		Description:     stringPtr("Bounded auth failure should stop runtime truthfully."),
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	var runRecord Run
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.WorkStatus != "in_progress" {
+			return false, nil
+		}
+
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		for _, candidate := range runs {
+			if candidate.Status == "in_progress" {
+				runRecord = candidate
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+
+	blockReason := "provider authentication failed on every eligible model connection"
+	if _, err := fx.tasks.MarkBlocked(ctx, created.ID, blockReason, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		updatedRun, err := runRepo.Get(ctx, runRecord.ID)
+		if err != nil {
+			return false, err
+		}
+		if updatedRun.Status != "failed" {
+			return false, nil
+		}
+		contract := loadTaskRuntimeState(t, ctx, fx.pool, created.ID).Contract()
+		return contract.Status == "terminal", nil
+	})
+
+	updatedRun, err := runRepo.Get(ctx, runRecord.ID)
+	if err != nil {
+		t.Fatalf("Get run: %v", err)
+	}
+	if updatedRun.Status != "failed" {
+		t.Fatalf("run status = %q, want failed", updatedRun.Status)
+	}
+	if updatedRun.FailureClass == nil || *updatedRun.FailureClass != string(FailureClassPermanent) {
+		t.Fatalf("failure_class = %v, want %q", updatedRun.FailureClass, FailureClassPermanent)
+	}
+	if updatedRun.FailureReason == nil || *updatedRun.FailureReason != blockReason {
+		t.Fatalf("failure_reason = %v, want %q", updatedRun.FailureReason, blockReason)
+	}
+
+	contract := loadTaskRuntimeState(t, ctx, fx.pool, created.ID).Contract()
+	if contract.Status != "terminal" {
+		t.Fatalf("runtime status = %q, want terminal", contract.Status)
+	}
+	if contract.ResumeDisposition != "terminal" {
+		t.Fatalf("runtime resume_disposition = %q, want terminal", contract.ResumeDisposition)
+	}
+	if contract.FailureClass != string(FailureClassPermanent) {
+		t.Fatalf("runtime failure_class = %q, want %q", contract.FailureClass, FailureClassPermanent)
+	}
+	if contract.FailureReason != blockReason {
+		t.Fatalf("runtime failure_reason = %q, want %q", contract.FailureReason, blockReason)
+	}
+}
+
 func TestTaskQueueProcessorIntegrationAssignedWakeupIgnoresProjectScopedRunSessionEX294(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)

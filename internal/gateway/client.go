@@ -264,6 +264,9 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 			g.recordSpan(orgID, req, provider, connection, invocation.ID, startedAt, stream, callErr)
 			mapped, retryable := g.mapProviderError(connection.ID, callErr)
 			lastErr = mapped
+			if errors.Is(mapped, turn.ErrAuthFailed) {
+				continue
+			}
 			if !retryable {
 				return turn.ModelResponse{}, mapped
 			}
@@ -472,6 +475,7 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 			g.health.MarkUnavailable(connectionID)
 			return fmt.Errorf("%w", turn.ErrAuthFailed), false
 		case http.StatusForbidden:
+			g.health.MarkUnavailable(connectionID)
 			return fmt.Errorf("%w", turn.ErrAuthFailed), false
 		case http.StatusTooManyRequests:
 			slog.Warn("provider rate limited", "connection_id", connectionID, "retry_after", providerErr.RetryAfter, "detail", providerErr.Err)

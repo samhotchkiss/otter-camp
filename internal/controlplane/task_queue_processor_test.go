@@ -574,6 +574,68 @@ func TestTaskQueueProcessorHandleTaskCompletedEventCompletesSupervisorAndCancell
 	}
 }
 
+func TestTaskQueueProcessorHandleTaskCompletedEventFailsBlockedTrackingRuns(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	taskID := uuid.New()
+	schedulerRunID := uuid.New()
+	supervisorRunID := uuid.New()
+	cancellingRunID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{
+		listRunsByTaskResponses: map[string][]Run{
+			"in_progress|scheduler": {
+				{ID: schedulerRunID, TriggerType: "scheduler", Status: "in_progress"},
+			},
+			"in_progress|supervisor": {
+				{ID: supervisorRunID, TriggerType: "supervisor", Status: "in_progress"},
+			},
+			"cancelling|scheduler": {
+				{ID: cancellingRunID, TriggerType: "scheduler", Status: "cancelling"},
+			},
+		},
+	}
+	processor := &TaskQueueProcessor{runs: runService}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":        taskID,
+		"to_status":      "blocked",
+		"blocker_reason": "provider authentication failed",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "task.status_changed",
+		Payload:        payload,
+	}
+	if err := processor.handleTaskCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("handleTaskCompletedEvent: %v", err)
+	}
+
+	if len(runService.completeRunCalls) != 0 {
+		t.Fatalf("CompleteRun calls = %+v, want none for blocked task", runService.completeRunCalls)
+	}
+	if len(runService.failRunCalls) != 2 {
+		t.Fatalf("FailRun calls = %d, want 2", len(runService.failRunCalls))
+	}
+	for _, call := range runService.failRunCalls {
+		if call.failureClass != string(FailureClassPermanent) {
+			t.Fatalf("failureClass = %q, want %q", call.failureClass, FailureClassPermanent)
+		}
+		if call.reason != "provider authentication failed" {
+			t.Fatalf("reason = %q, want blocker reason", call.reason)
+		}
+	}
+	if len(runService.confirmCancelledCalls) != 1 || runService.confirmCancelledCalls[0] != cancellingRunID {
+		t.Fatalf("ConfirmCancelled calls = %+v, want run %s", runService.confirmCancelledCalls, cancellingRunID)
+	}
+	if len(runService.retireRuntimeTaskCalls) != 0 {
+		t.Fatalf("RetireRuntimeStateForTask calls = %+v, want none for blocked task", runService.retireRuntimeTaskCalls)
+	}
+}
+
 func TestTaskQueueProcessorHandleRunCancellationRequestedEventAutoConfirmsSchedulerAndSupervisor(t *testing.T) {
 	ctx := context.Background()
 	schedulerRunID := uuid.New()
@@ -967,11 +1029,13 @@ type fakeTaskQueueRunStarter struct {
 	createErr               error
 	startErr                error
 	completeErr             error
+	failErr                 error
 	confirmCancelledErr     error
 	getRunErr               error
 	runByID                 map[uuid.UUID]Run
 	listRunsByTaskResponses map[string][]Run
 	completeRunCalls        []completeRunCall
+	failRunCalls            []failRunCall
 	confirmCancelledCalls   []uuid.UUID
 	listRunsByTaskCalls     []listRunsByTaskCall
 	releaseExecutionCalls   []releaseExecutionCall
@@ -986,6 +1050,12 @@ type fakeTaskQueueRunStarter struct {
 type completeRunCall struct {
 	runID  uuid.UUID
 	output json.RawMessage
+}
+
+type failRunCall struct {
+	runID        uuid.UUID
+	reason       string
+	failureClass string
 }
 
 type listRunsByTaskCall struct {
@@ -1108,6 +1178,18 @@ func (f *fakeTaskQueueRunStarter) CompleteRun(_ context.Context, runID uuid.UUID
 	})
 	if f.completeErr != nil {
 		return f.completeErr
+	}
+	return nil
+}
+
+func (f *fakeTaskQueueRunStarter) FailRun(_ context.Context, runID uuid.UUID, reason, failureClass string) error {
+	f.failRunCalls = append(f.failRunCalls, failRunCall{
+		runID:        runID,
+		reason:       reason,
+		failureClass: failureClass,
+	})
+	if f.failErr != nil {
+		return f.failErr
 	}
 	return nil
 }

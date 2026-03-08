@@ -419,6 +419,152 @@ func TestLiveModelGatewayMapsAuthErrors(t *testing.T) {
 	}
 }
 
+func TestLiveModelGatewayFailsOverAfterAuthFailure(t *testing.T) {
+	t.Setenv("OTTERCAMP_MASTER_KEY", base64.StdEncoding.EncodeToString(testMasterKey()))
+	t.Setenv("OTTERCAMP_MASTER_KEY_FILE", "")
+	t.Setenv("OTTERCAMP_KMS_KEY_ID", "")
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+	invocationRepo := repo.NewModelInvocationRepo(pool)
+	secretSvc := secret.NewService(repo.NewSecretRepo(pool))
+
+	org := mustCreateOrg(t, ctx, orgRepo, repo.Organization{
+		Slug:        "live-gateway-auth-failover-org",
+		DisplayName: "Live Gateway Auth Failover Org",
+	})
+	if err := secretSvc.Set(ctx, org.ID, "auth-key-primary", "Auth Key Primary", "", "sk-primary", secret.Principal{Type: "human", ID: uuid.Nil}); err != nil {
+		t.Fatalf("set primary secret: %v", err)
+	}
+	if err := secretSvc.Set(ctx, org.ID, "auth-key-secondary", "Auth Key Secondary", "", "sk-secondary", secret.Principal{Type: "human", ID: uuid.Nil}); err != nil {
+		t.Fatalf("set secondary secret: %v", err)
+	}
+
+	authFailServer := testutil.MockProviderServer(t, testutil.MockProviderFixture{
+		Handlers: []testutil.MockHandler{{
+			StatusCode: http.StatusUnauthorized,
+			Body:       `{"error":"invalid_api_key"}`,
+		}},
+	})
+	successServer := testutil.MockProviderServer(t, testutil.MockProviderFixture{
+		Handlers: []testutil.MockHandler{{
+			StatusCode: http.StatusOK,
+			Headers: map[string]string{
+				"Content-Type": "text/event-stream",
+			},
+			Body: strings.Join([]string{
+				`data: {"choices":[{"delta":{"content":"Recovered "}}]}`,
+				"",
+				`data: {"choices":[{"delta":{"content":"response"}}]}`,
+				"",
+				`data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}`,
+				"",
+				"data: [DONE]",
+				"",
+			}, "\n"),
+		}},
+	})
+
+	provider := mustCreateProvider(t, ctx, providerRepo, repo.ModelProvider{
+		Slug:        "openai-auth-failover",
+		DisplayName: "OpenAI",
+		APIBaseURL:  authFailServer,
+		IsEnabled:   true,
+	})
+	primary := mustCreateConnection(t, ctx, connectionRepo, repo.ProviderConnection{
+		OrganizationID:     org.ID,
+		ProviderID:         provider.ID,
+		DisplayName:        "OpenAI Primary",
+		APIKeyRef:          "ref:auth-key-primary",
+		APIBaseURLOverride: &authFailServer,
+		FailoverPriority:   1,
+		MaxConcurrent:      1,
+		IsEnabled:          true,
+	})
+	secondary := mustCreateConnection(t, ctx, connectionRepo, repo.ProviderConnection{
+		OrganizationID:     org.ID,
+		ProviderID:         provider.ID,
+		DisplayName:        "OpenAI Secondary",
+		APIKeyRef:          "ref:auth-key-secondary",
+		APIBaseURLOverride: &successServer,
+		FailoverPriority:   2,
+		MaxConcurrent:      1,
+		IsEnabled:          true,
+	})
+
+	orgID := org.ID
+	profile, err := profileRepo.Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    "high-capability",
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          provider.ID,
+		ModelName:           "gpt-4o-mini",
+		DisplayName:         "High Capability",
+		ContextWindowTokens: 128000,
+		MaxOutputTokens:     2048,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
+	})
+	if err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+
+	health := NewHealthChecker()
+	gw, err := NewLiveModelGateway(LiveModelGatewayOptions{
+		Router:      NewRouter(profileRepo, connectionRepo, health),
+		Providers:   providerRepo,
+		Secrets:     secretSvc,
+		Invocations: invocationRepo,
+		Health:      health,
+	})
+	if err != nil {
+		t.Fatalf("NewLiveModelGateway: %v", err)
+	}
+
+	response, err := gw.StreamComplete(ctx, turn.ModelRequest{
+		OrganizationID: org.ID,
+		Purpose:        "agent_turn",
+		Profile:        profile,
+		HumanMessages:  []string{"hello"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("StreamComplete: %v", err)
+	}
+	if response.Content != "Recovered response" {
+		t.Fatalf("response.Content = %q, want %q", response.Content, "Recovered response")
+	}
+	if state := health.GetState(primary.ID); state != HealthStateUnavailable {
+		t.Fatalf("primary connection health = %q, want %q", state, HealthStateUnavailable)
+	}
+
+	rows, err := invocationRepo.ListByOrg(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("ListByOrg: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("invocation rows = %d, want 2", len(rows))
+	}
+	if rows[0].ProviderConnectionID == nil || *rows[0].ProviderConnectionID != secondary.ID {
+		t.Fatalf("latest provider_connection_id = %v, want %s", rows[0].ProviderConnectionID, secondary.ID)
+	}
+	if rows[0].Status != "completed" {
+		t.Fatalf("latest status = %q, want completed", rows[0].Status)
+	}
+	if rows[1].ProviderConnectionID == nil || *rows[1].ProviderConnectionID != primary.ID {
+		t.Fatalf("failed provider_connection_id = %v, want %s", rows[1].ProviderConnectionID, primary.ID)
+	}
+	if rows[1].Status != "failed" {
+		t.Fatalf("failed status = %q, want failed", rows[1].Status)
+	}
+}
+
 func TestLiveModelGatewayCompleteAnthropicSubscriptionAuth(t *testing.T) {
 	t.Setenv("OTTERCAMP_MASTER_KEY", base64.StdEncoding.EncodeToString(testMasterKey()))
 	t.Setenv("OTTERCAMP_MASTER_KEY_FILE", "")
