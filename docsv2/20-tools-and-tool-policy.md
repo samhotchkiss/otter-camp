@@ -583,6 +583,8 @@ When an agent emits a tool call during the turn loop:
 
 `cli.execute` gets the same recovery treatment before validation. If the provider emits `_raw`, uses legacy alias keys such as `cmd`, `script`, `working_dir`, `cwd`, `timeout_ms`, or `env`, or serializes the tool call as a bare shell string, the runtime normalizes that payload onto the canonical `command`, `working_directory`, `timeout_seconds`, and `env_overrides` fields before the executor validates it. Valid recovery commands must not fail with `command_required` solely because the model serialized the payload poorly.
 
+Supervisor-style recovery turns get one extra guardrail: if the provider emits `cli.execute` with no recoverable `command` at all, the turn runtime rejects that call before dispatch, injects one exact heredoc-style correction message back into the same turn, and gives the model one bounded retry. A second empty-command retry halts the turn with a diagnosable recovery message instead of burning through the deterministic validation blocker budget and immediately re-blocking the task.
+
 ### Error Handling
 
 Tool call errors are returned as tool results, not as exceptions. The agent sees the error and can adapt:
