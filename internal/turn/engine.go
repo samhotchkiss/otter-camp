@@ -1281,6 +1281,14 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			if _, err := e.messages.UpdateStatus(ctx, assistantMessage.ID, "final", ""); err != nil {
 				return fmt.Errorf("no-tool →final (msg status=%s): %w", currentMessage.Status, err)
 			}
+			if handled, err := e.handleRecoveryDirectWriteAssistantBody(ctx, rt, strings.TrimSpace(response.Content)); err != nil {
+				return fmt.Errorf("recovery direct write: %w", err)
+			} else if handled {
+				if err := e.completeTurn(ctx, rt); err != nil {
+					return fmt.Errorf("recovery direct write completeTurn: %w", err)
+				}
+				return nil
+			}
 			if _, err := e.handleToolValidationResults(ctx, rt, nil, nil); err != nil {
 				return fmt.Errorf("clear validation guard: %w", err)
 			}
@@ -1992,6 +2000,106 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	}
 
 	return false, nil
+}
+
+func (e *TurnEngine) handleRecoveryDirectWriteAssistantBody(ctx context.Context, rt *turnRuntime, content string) (bool, error) {
+	if rt == nil || !rt.recoveryDirectWrite || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	if !ok {
+		return false, nil
+	}
+	targetPath := strings.TrimSpace(checkpoint.TargetPath)
+	if targetPath == "" {
+		return false, nil
+	}
+
+	draft := strings.TrimSpace(content)
+	if rejectReason := recoveryFileWriteDraftRejectReason(draft, targetPath); strings.TrimSpace(rejectReason) != "" {
+		_, _, err := e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
+		return true, err
+	}
+	if !looksLikeRecoveryFileDraft(draft) {
+		rt.stopReason = stopReasonRecoveryFileRejected
+		artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, draft, "")
+		if artifactErr != nil {
+			e.logger.Warn("recovery: failed to persist direct-write artifact",
+				"session_id", rt.session.ID,
+				"turn_id", rt.turn.ID,
+				"path", targetPath,
+				"error", artifactErr,
+			)
+		}
+		message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, ""))
+		if err != nil {
+			return true, err
+		}
+		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, "", message.ID); checkpointErr != nil {
+			return true, checkpointErr
+		}
+		rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, "")
+		return true, nil
+	}
+
+	callID := fmt.Sprintf("recovery-direct-write-%s", rt.turn.ID.String())
+	call := ToolCall{
+		ID:   callID,
+		Name: "file.write",
+		Tier: "tier2",
+		Arguments: map[string]any{
+			"path":            targetPath,
+			"content":         draft,
+			"create_dirs":     true,
+			"organization_id": rt.session.OrganizationID.String(),
+			"session_id":      rt.session.ID.String(),
+			"turn_id":         rt.turn.ID.String(),
+			"agent_id":        rt.agent.ID.String(),
+		},
+	}
+	if rt.projectIdentity != nil && rt.projectIdentity.id != uuid.Nil {
+		call.Arguments["project_id"] = rt.projectIdentity.id.String()
+	}
+	if taskID := resolveTaskID(rt.session); taskID != nil && *taskID != uuid.Nil {
+		call.Arguments["task_id"] = taskID.String()
+	}
+	if rt.recoveryFileWrites == nil {
+		rt.recoveryFileWrites = make(map[string]recoveryPopulatedFileWriteState)
+	}
+	rt.recoveryFileWrites[callID] = recoveryPopulatedFileWriteState{
+		TargetPath: targetPath,
+		Draft:      draft,
+	}
+
+	var runID *uuid.UUID
+	result, err := e.dispatcher.DispatchTier2(ctx, call, func(id uuid.UUID) {
+		runID = &id
+		rt.setActiveTier2Run(id)
+	})
+	rt.clearActiveTier2Run()
+	if err != nil {
+		result = ToolResult{ToolCallID: call.ID, Name: call.Name, Error: fmt.Sprintf("%s failed: %s", call.Name, err.Error()), RunID: runID}
+	}
+	if err := e.appendToolResults(ctx, rt, []ToolResult{result}); err != nil {
+		return true, err
+	}
+	recoveryBlocked, recoveryErr := e.handleRecoveryPopulatedFileWriteOutcome(ctx, rt, call, result)
+	if recoveryErr != nil {
+		return true, recoveryErr
+	}
+	if recoveryBlocked {
+		rt.toolCallsUsed++
+		return true, nil
+	}
+	blocked, err := e.handleToolValidationResults(ctx, rt, []ToolCall{call}, []ToolResult{result})
+	if err != nil {
+		return true, err
+	}
+	rt.toolCallsUsed++
+	if blocked {
+		return true, nil
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) handleRecoveryCLIExecuteWithoutCommand(ctx context.Context, rt *turnRuntime, call ToolCall) (bool, bool, error) {
