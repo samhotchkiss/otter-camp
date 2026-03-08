@@ -61,9 +61,6 @@ func (c *RiskClassifier) Evaluate(command string) Classification {
 		if pattern, ok := classifier.matchDeniedInvocation(candidate); ok {
 			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "command_denied", Pattern: pattern}
 		}
-		if containsRedirect(candidate) {
-			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "redirect_not_supported"}
-		}
 		if hasShellInjection(candidate) {
 			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: "command_denied", Pattern: "shell_injection"}
 		}
@@ -71,6 +68,9 @@ func (c *RiskClassifier) Evaluate(command string) Classification {
 			return Classification{RiskLevel: RiskCritical, Denied: true, ErrorCode: code}
 		}
 
+		if containsRedirect(candidate) {
+			overall = maxRiskLevel(overall, RiskMedium)
+		}
 		overall = maxRiskLevel(overall, classifySingle(candidate))
 	}
 

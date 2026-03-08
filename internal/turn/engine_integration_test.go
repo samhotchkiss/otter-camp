@@ -1190,6 +1190,96 @@ func TestTurnEngineIntegrationFileWriteRecoverRawArgumentsAcrossRepeatedWrites(t
 	}
 }
 
+func TestTurnEngineIntegrationRecoversMalformedCLIExecuteRawArgsForFileOutputEX307(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "recover by writing the template through cli.execute")
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "cli.execute", Tier: "tier2"}}}
+
+	const expectedCommand = "mkdir -p templates && cat <<'EOF' > templates/index.html\n<main>Recovered</main>\nEOF"
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "cli-1",
+				Name: "cli.execute",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"_raw": `{"cmd":"mkdir -p templates && cat <<'EOF' > templates/index.html\n<main>Recovered</main>\nEOF","working_dir":"."`,
+				},
+			}}}, nil
+		}
+		return ModelResponse{Content: "template recovered"}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		dispatched++
+		if _, exists := call.Arguments["_raw"]; exists {
+			t.Fatalf("expected normalized arguments without _raw: %+v", call.Arguments)
+		}
+		command, _ := call.Arguments["command"].(string)
+		if command != expectedCommand {
+			t.Fatalf("command = %q, want %q", command, expectedCommand)
+		}
+		if workingDirectory, _ := call.Arguments["working_directory"].(string); workingDirectory != "." {
+			t.Fatalf("working_directory = %q, want .", workingDirectory)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"exit_code":   0,
+				"duration_ms": 1,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want not blocked", updatedTask.WorkStatus)
+	}
+	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
+		t.Fatalf("unexpected validation guard persisted: %+v", guard)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, "command is required") {
+			t.Fatalf("unexpected command_required tool_result: %s", item.Content)
+		}
+		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+			t.Fatalf("unexpected validation blocker message: %s", item.Content)
+		}
+	}
+}
+
 func TestTurnEngineIntegrationFileWriteRecoversQuotedContentAcrossContentMigrationWrites(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

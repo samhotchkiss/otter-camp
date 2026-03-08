@@ -319,6 +319,49 @@ func TestIntegrationTaskScopedCLIExecuteWritesVisibleToFileToolsEX303(t *testing
 	}
 }
 
+func TestIntegrationTaskScopedCLIExecuteRecoveryWritesTemplateAndStrategyFilesEX307(t *testing.T) {
+	fixture := newTaskWorkspaceFixture(t)
+
+	tests := []struct {
+		name  string
+		input map[string]any
+		path  string
+		want  string
+	}{
+		{
+			name:  "template via raw alias heredoc",
+			input: fixture.cliRawInput(`{"cmd":"mkdir -p templates && cat <<'EOF' > templates/index.html\n<main>Recovered</main>\nEOF","working_dir":"."}`),
+			path:  "templates/index.html",
+			want:  "<main>Recovered</main>\n",
+		},
+		{
+			name: "strategy doc via canonical command heredoc",
+			input: fixture.cliInput(`mkdir -p docs && cat <<'EOF' > docs/strategy.md
+# Recovery Plan
+- Produce the file through cli.execute
+EOF`),
+			path: "docs/strategy.md",
+			want: "# Recovery Plan\n- Produce the file through cli.execute\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := fixture.nativeExecutor.Execute(fixture.ctx, "cli.execute", tc.input); err != nil {
+				t.Fatalf("cli.execute: %v", err)
+			}
+
+			readOut, err := fixture.nativeExecutor.Execute(fixture.ctx, "file.read", map[string]any{"path": tc.path})
+			if err != nil {
+				t.Fatalf("file.read: %v", err)
+			}
+			if got := readOut["content"]; got != tc.want {
+				t.Fatalf("file.read content = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIntegrationTaskWorkspaceRecoveryCheckpointStaysOnOneRootEX303(t *testing.T) {
 	fixture := newTaskWorkspaceFixture(t)
 	manifest := `{"phase":"transform","status":"resume-ready"}`
@@ -671,6 +714,18 @@ func (f taskWorkspaceFixture) cliInput(command string) map[string]any {
 		"agent_id":        f.agentID.String(),
 		"organization_id": f.orgID.String(),
 		"command":         command,
+	}
+}
+
+func (f taskWorkspaceFixture) cliRawInput(raw string) map[string]any {
+	return map[string]any{
+		"run_id":          f.runID.String(),
+		"run_step_id":     f.runStepID.String(),
+		"task_id":         f.taskID.String(),
+		"project_id":      f.projectID.String(),
+		"agent_id":        f.agentID.String(),
+		"organization_id": f.orgID.String(),
+		"_raw":            raw,
 	}
 }
 
