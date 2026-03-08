@@ -2527,6 +2527,54 @@ func TestHandleUserMessageSkipsBlockedValidationLoop(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageSkipsNonDispatchableTaskState(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Reviewed task",
+				WorkStatus:     "review",
+			},
+		},
+	}
+
+	if err := fixture.engine.handleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID, nil, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage: %v", err)
+	}
+	if got := len(fixture.chat.turnOrder); got != 0 {
+		t.Fatalf("created turns = %d, want 0", got)
+	}
+	updatedMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID message: %v", err)
+	}
+	if !chat.AgentTurnDispatchCancelled(updatedMessage.Metadata) {
+		t.Fatal("expected message dispatch to be cancelled for non-dispatchable task state")
+	}
+
+	enqueued, err := fixture.engine.enqueueAgentTurnIfActive(context.Background(), fixture.session, AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueueAgentTurnIfActive: %v", err)
+	}
+	if enqueued {
+		t.Fatal("expected enqueue to be suppressed")
+	}
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent turn jobs = %d, want 0", len(jobs))
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 	const targetPath = "docs/content-strategy.md"
 

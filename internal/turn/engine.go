@@ -1003,6 +1003,15 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		e.logger.Info("skipping cancelled agent turn dispatch", "session_id", sessionID, "message_id", messageID)
 		return nil
 	}
+	if allowed, reason, allowErr := e.taskAllowsAgentTurnDispatch(ctx, session); allowErr != nil {
+		return allowErr
+	} else if !allowed {
+		if merged, mergeErr := chat.MergeAgentTurnDispatchCancelledMetadata(message.Metadata, reason, e.now()); mergeErr == nil {
+			_, _ = e.messages.UpdateMetadata(ctx, message.ID, merged)
+		}
+		e.logger.Info("skipping agent turn for non-dispatchable task state", "session_id", sessionID, "message_id", messageID, "reason", reason)
+		return nil
+	}
 	cancelled, err := e.logicalMessageCancelled(ctx, sessionID, messageID)
 	if err != nil {
 		return err
@@ -5810,6 +5819,15 @@ func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat
 	if err != nil {
 		return false, err
 	}
+	if allowed, reason, allowErr := e.taskAllowsAgentTurnDispatch(ctx, session); allowErr != nil {
+		return false, allowErr
+	} else if !allowed {
+		if merged, mergeErr := chat.MergeAgentTurnDispatchCancelledMetadata(message.Metadata, reason, e.now()); mergeErr == nil {
+			_, _ = e.messages.UpdateMetadata(ctx, message.ID, merged)
+		}
+		e.logger.Info("skipping enqueue for non-dispatchable task state", "session_id", payload.SessionID, "message_id", payload.MessageID, "reason", reason)
+		return false, nil
+	}
 	if chat.AgentTurnDispatchCancelled(message.Metadata) {
 		e.logger.Info("skipping enqueue for cancelled agent turn dispatch", "session_id", payload.SessionID, "message_id", payload.MessageID)
 		return false, nil
@@ -5826,6 +5844,44 @@ func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat
 		return false, err
 	}
 	return true, nil
+}
+
+func (e *TurnEngine) taskAllowsAgentTurnDispatch(ctx context.Context, session *chat.ChatSession) (bool, string, error) {
+	if session == nil || !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") || e.tasks == nil {
+		return true, "", nil
+	}
+	taskID := resolveTaskID(session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return true, "", nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return false, "task no longer exists", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
+	switch status {
+	case "queued":
+		return true, "", nil
+	case "in_progress":
+		if taskRecord.CurrentFlowNodeID != nil && e.flowNodes != nil {
+			node, nodeErr := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+			if errors.Is(nodeErr, repo.ErrNotFound) {
+				return false, "task current flow node no longer exists", nil
+			}
+			if nodeErr != nil {
+				return false, "", nodeErr
+			}
+			if !strings.EqualFold(strings.TrimSpace(node.NodeType), "work") {
+				return false, fmt.Sprintf("task is no longer on a work node (node_type=%s)", strings.TrimSpace(node.NodeType)), nil
+			}
+		}
+		return true, "", nil
+	default:
+		return false, fmt.Sprintf("task status %s is not dispatchable", status), nil
+	}
 }
 
 func (e *TurnEngine) logValidationLoopSuppressed(message string, session *chat.ChatSession, messageID uuid.UUID, guard taskValidationGuardState) {
