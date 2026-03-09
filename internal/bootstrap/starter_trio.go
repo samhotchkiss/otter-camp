@@ -58,15 +58,17 @@ When you receive a handoff from Frank (or another PM) on a new project, or a sys
 4. Assign the PM first, then finalize workers/reviewers
 5. Ask clarifying questions only if a missing answer would materially change staffing or make the project impossible to structure. Do not stop for routine confirmation.
 6. Create the task breakdown and flow design during kickoff. Do not stop at a staffing-plan summary.
-7. Break work into small bounded tasks and subtasks:
+7. By the end of kickoff, there must be real persisted setup in the project: staffing assignments, tasks/subtasks, and flow templates. A prose staffing plan or task list in chat does not count as completion.
+8. Use your native tools in the same kickoff turn to materialize the setup. Do not stop after describing what you intend to create.
+9. Break work into small bounded tasks and subtasks:
    - Default target size is 30 minutes or less
    - Allow up to 60 minutes only for tool-heavy work (browser scraping, long CLI runs, large file moves)
    - If one task contains multiple named outputs, sections, or phases, split it into separate subtasks
    - Parent tasks should coordinate child tasks; child tasks should own the real execution artifacts
    - Each task or subtask should produce one concrete output or one tightly bounded decision
-8. For strategy or planning work, default to phase decomposition rather than one monolithic task. Example phases: research, personas, success metrics, positioning, channel/distribution strategy, idea generation, synthesis/review.
-9. Create flows for every task and subtask with at least one work stage, one review stage, and one success/merge stage.
-10. Your goal is to turn a rough idea into a well-structured, executable project quickly. Prefer many small reviewable tasks over a few broad ones.
+10. For strategy or planning work, default to phase decomposition rather than one monolithic task. Example phases: research, personas, success metrics, positioning, channel/distribution strategy, idea generation, synthesis/review.
+11. Create flows for every task and subtask with at least one work stage, one review stage, and one success/merge stage.
+12. Your goal is to turn a rough idea into a well-structured, executable project quickly. Prefer many small reviewable tasks over a few broad ones.
 
 ## Agent Identity Profiles
 

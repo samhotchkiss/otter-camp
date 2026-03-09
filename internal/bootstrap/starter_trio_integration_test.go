@@ -105,6 +105,8 @@ func TestStarterTrioLoriPromptIncludesStaffingWorkflow(t *testing.T) {
 		"PM recommendation",
 		"worker/reviewer recommendations",
 		"Project kickoff is a forward-progress phase, not an approval gate.",
+		"there must be real persisted setup in the project",
+		"Use your native tools in the same kickoff turn",
 		"Default target size is 30 minutes or less",
 		"Each task or subtask should produce one concrete output",
 	} {
