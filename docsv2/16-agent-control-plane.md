@@ -1263,6 +1263,8 @@ The capability model in this doc defines what permissions are needed. The tool r
 
 - **Model invocations are owned by doc 07.** The `model_invocation` table is defined in doc 07 and carries `run_id`, `run_step_id`, and `run_attempt_id` FK columns for control plane context. A model invocation can belong to a run (control plane action), a chat turn (conversation), or both. The usage dashboard needs a unified view across both.
 
+- **Post-Sam.blog hard validation uses a mixed operational project, not another site rebuild.** After the initial Sam.blog proof, the default next validation candidate is `Speaker Pipeline Ops`. It intentionally exercises research, scoring/schema design, structured docs, automation/scripts, and reporting/review loops so the control plane is validated against mixed deliverable types instead of overfitting to another web rebuild.
+
 ## Open Questions
 
 _None currently outstanding._
