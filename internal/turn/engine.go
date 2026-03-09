@@ -43,6 +43,7 @@ const (
 	defaultMaxToolCalls                       = 75
 	defaultSyncMaxDuration                    = 5 * time.Minute
 	defaultAsyncMaxDuration                   = 30 * time.Minute
+	defaultProjectBootstrapTurnTimeout        = 90 * time.Second
 	defaultListeningEvalDelay                 = 500 * time.Millisecond
 	defaultAutoContinueDelay                  = 2 * time.Second
 	defaultModelRetryBudget                   = 3
@@ -91,10 +92,11 @@ const (
 )
 
 var (
-	ErrModelTransient = errors.New("transient model failure")
-	errTurnDeferred   = errors.New("turn deferred")
-	errTurnCancelled  = errors.New("turn cancelled")
-	errTurnPaused     = errors.New("turn paused")
+	ErrModelTransient           = errors.New("transient model failure")
+	errTurnDeferred             = errors.New("turn deferred")
+	errTurnCancelled            = errors.New("turn cancelled")
+	errTurnPaused               = errors.New("turn paused")
+	errProjectBootstrapWatchdog = errors.New("project bootstrap watchdog timeout")
 )
 
 type AgentTurnPayload struct {
@@ -348,16 +350,17 @@ type Options struct {
 	MemorySources   memorySourceRepository
 	Memories        memoryRepository
 
-	DefaultModelProfileID *string
-	MaxToolCalls          int
-	SyncMaxDuration       time.Duration
-	AsyncMaxDuration      time.Duration
-	ListeningEvalDelay    time.Duration
-	ModelRetryBudget      int
-	JobPriority           int
-	Now                   func() time.Time
-	Sleep                 func(context.Context, time.Duration) error
-	Logger                *slog.Logger
+	DefaultModelProfileID       *string
+	MaxToolCalls                int
+	SyncMaxDuration             time.Duration
+	AsyncMaxDuration            time.Duration
+	ProjectBootstrapTurnTimeout time.Duration
+	ListeningEvalDelay          time.Duration
+	ModelRetryBudget            int
+	JobPriority                 int
+	Now                         func() time.Time
+	Sleep                       func(context.Context, time.Duration) error
+	Logger                      *slog.Logger
 }
 
 type TurnEngine struct {
@@ -391,18 +394,19 @@ type TurnEngine struct {
 	sources         memorySourceRepository
 	memories        memoryRepository
 
-	defaultModelProfileID *string
-	maxToolCalls          int
-	syncMaxDuration       time.Duration
-	asyncMaxDuration      time.Duration
-	listeningEvalDelay    time.Duration
-	modelRetryBudget      int
-	jobPriority           int
-	now                   func() time.Time
-	sleep                 func(context.Context, time.Duration) error
-	logger                *slog.Logger
-	cancelConsumerName    string
-	rollupUpdater         *model.RollupUpdater
+	defaultModelProfileID       *string
+	maxToolCalls                int
+	syncMaxDuration             time.Duration
+	asyncMaxDuration            time.Duration
+	projectBootstrapTurnTimeout time.Duration
+	listeningEvalDelay          time.Duration
+	modelRetryBudget            int
+	jobPriority                 int
+	now                         func() time.Time
+	sleep                       func(context.Context, time.Duration) error
+	logger                      *slog.Logger
+	cancelConsumerName          string
+	rollupUpdater               *model.RollupUpdater
 }
 
 type turnRuntime struct {
@@ -556,6 +560,9 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	if opts.AsyncMaxDuration <= 0 {
 		opts.AsyncMaxDuration = defaultAsyncMaxDuration
 	}
+	if opts.ProjectBootstrapTurnTimeout <= 0 {
+		opts.ProjectBootstrapTurnTimeout = defaultProjectBootstrapTurnTimeout
+	}
 	if opts.ListeningEvalDelay <= 0 {
 		opts.ListeningEvalDelay = defaultListeningEvalDelay
 	}
@@ -587,46 +594,47 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	}
 
 	return &TurnEngine{
-		pool:                  opts.Pool,
-		dataDir:               strings.TrimSpace(opts.DataDir),
-		chat:                  opts.Chat,
-		toolResolver:          opts.ToolResolver,
-		assembler:             opts.Assembler,
-		summarization:         opts.Summarization,
-		models:                opts.ModelGateway,
-		dispatcher:            opts.Dispatcher,
-		runCanceler:           opts.RunCanceler,
-		events:                opts.Events,
-		enqueuer:              opts.Enqueuer,
-		invocations:           opts.Invocations,
-		profiles:              opts.ModelProfiles,
-		resolver:              opts.Profiles,
-		messages:              opts.Messages,
-		turns:                 opts.Turns,
-		sessions:              opts.Sessions,
-		agents:                opts.Agents,
-		tasks:                 opts.Tasks,
-		taskTransitions:       opts.TaskTransitions,
-		flowNodes:             opts.FlowNodes,
-		flowAdvancer:          opts.FlowAdvancer,
-		assignments:           opts.Assignments,
-		projects:              opts.Projects,
-		environments:          opts.Environments,
-		organizations:         opts.Organizations,
-		sources:               opts.MemorySources,
-		memories:              opts.Memories,
-		defaultModelProfileID: opts.DefaultModelProfileID,
-		maxToolCalls:          opts.MaxToolCalls,
-		syncMaxDuration:       opts.SyncMaxDuration,
-		asyncMaxDuration:      opts.AsyncMaxDuration,
-		listeningEvalDelay:    opts.ListeningEvalDelay,
-		modelRetryBudget:      opts.ModelRetryBudget,
-		jobPriority:           opts.JobPriority,
-		now:                   opts.Now,
-		sleep:                 opts.Sleep,
-		logger:                opts.Logger,
-		cancelConsumerName:    defaultCancelConsumerPrefix + "." + uuid.NewString(),
-		rollupUpdater:         rollupUpdater,
+		pool:                        opts.Pool,
+		dataDir:                     strings.TrimSpace(opts.DataDir),
+		chat:                        opts.Chat,
+		toolResolver:                opts.ToolResolver,
+		assembler:                   opts.Assembler,
+		summarization:               opts.Summarization,
+		models:                      opts.ModelGateway,
+		dispatcher:                  opts.Dispatcher,
+		runCanceler:                 opts.RunCanceler,
+		events:                      opts.Events,
+		enqueuer:                    opts.Enqueuer,
+		invocations:                 opts.Invocations,
+		profiles:                    opts.ModelProfiles,
+		resolver:                    opts.Profiles,
+		messages:                    opts.Messages,
+		turns:                       opts.Turns,
+		sessions:                    opts.Sessions,
+		agents:                      opts.Agents,
+		tasks:                       opts.Tasks,
+		taskTransitions:             opts.TaskTransitions,
+		flowNodes:                   opts.FlowNodes,
+		flowAdvancer:                opts.FlowAdvancer,
+		assignments:                 opts.Assignments,
+		projects:                    opts.Projects,
+		environments:                opts.Environments,
+		organizations:               opts.Organizations,
+		sources:                     opts.MemorySources,
+		memories:                    opts.Memories,
+		defaultModelProfileID:       opts.DefaultModelProfileID,
+		maxToolCalls:                opts.MaxToolCalls,
+		syncMaxDuration:             opts.SyncMaxDuration,
+		asyncMaxDuration:            opts.AsyncMaxDuration,
+		projectBootstrapTurnTimeout: opts.ProjectBootstrapTurnTimeout,
+		listeningEvalDelay:          opts.ListeningEvalDelay,
+		modelRetryBudget:            opts.ModelRetryBudget,
+		jobPriority:                 opts.JobPriority,
+		now:                         opts.Now,
+		sleep:                       opts.Sleep,
+		logger:                      opts.Logger,
+		cancelConsumerName:          defaultCancelConsumerPrefix + "." + uuid.NewString(),
+		rollupUpdater:               rollupUpdater,
 	}, nil
 }
 
@@ -1127,6 +1135,30 @@ type projectBootstrapState struct {
 	FailedAt                 *time.Time `json:"failed_at,omitempty"`
 }
 
+type projectBootstrapWatchdog struct {
+	Timeout   time.Duration
+	Remaining time.Duration
+}
+
+type projectBootstrapTimeoutError struct {
+	InvocationID uuid.UUID
+	Timeout      time.Duration
+}
+
+func (e *projectBootstrapTimeoutError) Error() string {
+	if e == nil {
+		return errProjectBootstrapWatchdog.Error()
+	}
+	if e.Timeout <= 0 {
+		return "project bootstrap watchdog timed out while waiting for setup materialization"
+	}
+	return fmt.Sprintf("project bootstrap watchdog timed out after %s while waiting for setup materialization", e.Timeout.String())
+}
+
+func (e *projectBootstrapTimeoutError) Is(target error) bool {
+	return target == errProjectBootstrapWatchdog
+}
+
 func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID uuid.UUID) (projectBootstrapProgress, error) {
 	progress := projectBootstrapProgress{ValidationStatus: projectBootstrapValidationPending}
 	if e == nil || e.pool == nil || projectID == uuid.Nil {
@@ -1458,6 +1490,25 @@ func buildProjectBootstrapFailureReason(autoTurnCount int) string {
 	return fmt.Sprintf("bootstrap setup stalled after %d consecutive follow-on turns without creating project assignments, scoped tasks, and flow templates", autoTurnCount)
 }
 
+func buildProjectBootstrapWatchdogFailureReason(timeoutErr *projectBootstrapTimeoutError) string {
+	timeout := defaultProjectBootstrapTurnTimeout
+	invocationID := uuid.Nil
+	if timeoutErr != nil {
+		if timeoutErr.Timeout > 0 {
+			timeout = timeoutErr.Timeout
+		}
+		invocationID = timeoutErr.InvocationID
+	}
+	reason := fmt.Sprintf(
+		"bootstrap setup watchdog timed out after %s with zero persisted project assignments, scoped tasks, or flow templates",
+		timeout.String(),
+	)
+	if invocationID != uuid.Nil {
+		reason += fmt.Sprintf("; model invocation %s remained in_flight", invocationID)
+	}
+	return reason
+}
+
 func buildProjectBootstrapGuardrailFailureReason(detail string) string {
 	trimmed := strings.TrimSpace(detail)
 	if trimmed == "" {
@@ -1635,6 +1686,16 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	err = e.runTurn(cancelCtx, runtime)
 	if err == nil || errors.Is(err, errTurnDeferred) || errors.Is(err, errTurnCancelled) || errors.Is(err, errTurnPaused) {
 		return nil
+	}
+	var bootstrapTimeoutErr *projectBootstrapTimeoutError
+	if errors.As(err, &bootstrapTimeoutErr) {
+		handled, handleErr := e.handleProjectBootstrapWatchdogTimeout(ctx, runtime, bootstrapTimeoutErr)
+		if handleErr != nil {
+			return handleErr
+		}
+		if handled {
+			return nil
+		}
 	}
 	if errors.Is(err, ErrRateLimited) {
 		handled, handleErr := e.handleRateLimitedTurnFailure(ctx, runtime, messageID, routedAgentID, retryCount, err)
@@ -4621,6 +4682,123 @@ func (e *TurnEngine) handleProjectBootstrapGuardrailFailure(ctx context.Context,
 	return true, nil
 }
 
+func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, rt *turnRuntime, timeoutErr *projectBootstrapTimeoutError) (bool, error) {
+	if rt == nil || rt.turn == nil || rt.session == nil || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
+	if err != nil {
+		return true, err
+	}
+	if progress.BootstrapTaskID == uuid.Nil || !progress.BootstrapTaskOutstanding || progress.Materialized() {
+		return false, nil
+	}
+
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	now := e.now().UTC()
+	workflowMessageID := rt.initialMessageID
+	if e.messages != nil && rt.initialMessageID != uuid.Nil {
+		message, getErr := e.messages.GetByID(ctx, rt.initialMessageID)
+		if getErr != nil && !errors.Is(getErr, repo.ErrNotFound) {
+			return true, getErr
+		}
+		if getErr == nil {
+			workflowMessageID = projectBootstrapWorkflowMessageID(&message)
+		}
+	}
+	if strings.TrimSpace(state.InitialMessageID) == "" && workflowMessageID != uuid.Nil {
+		state.InitialMessageID = workflowMessageID.String()
+	}
+	if state.StartedAt == nil {
+		startedAt := rt.startedAt.UTC()
+		state.StartedAt = &startedAt
+	}
+	state.Status = projectBootstrapStatusFailed
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	state.LastTurnID = rt.turn.ID.String()
+	if rt.agent.ID != uuid.Nil {
+		state.LastResponderID = rt.agent.ID.String()
+	}
+	state.AssignmentCount = progress.AssignmentCount
+	state.PlannedTaskCount = progress.PlannedTaskCount
+	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
+	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
+	state.ValidationStatus = progress.ValidationStatus
+	state.ValidationFailureClass = progress.ValidationFailureClass
+	state.ValidationFailureReason = progress.ValidationFailureReason
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = &now
+	state.FailureClass = projectBootstrapFailureStalled
+	state.FailureReason = buildProjectBootstrapWatchdogFailureReason(timeoutErr)
+	rt.stopReason = stopReasonMaxDuration
+
+	if err := e.recordStopReason(ctx, rt); err != nil {
+		return true, err
+	}
+	if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
+		return true, err
+	}
+	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, state.FailureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
+		return true, failErr
+	}
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapFailureMessage(state.FailureReason)); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) projectBootstrapStreamWatchdog(ctx context.Context, rt *turnRuntime) (projectBootstrapWatchdog, bool, error) {
+	if e == nil || rt == nil || rt.session == nil || rt.session.ScopeID == uuid.Nil || e.projectBootstrapTurnTimeout <= 0 {
+		return projectBootstrapWatchdog{}, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return projectBootstrapWatchdog{}, false, nil
+	}
+	if e.messages == nil || rt.initialMessageID == uuid.Nil {
+		return projectBootstrapWatchdog{}, false, nil
+	}
+
+	initialMessage, err := e.messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return projectBootstrapWatchdog{}, false, nil
+		}
+		return projectBootstrapWatchdog{}, false, err
+	}
+	messageSource := strings.TrimSpace(stringValue(messageMetadataMap(initialMessage.Metadata)["source"]))
+	bootstrapState := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if !strings.EqualFold(messageSource, projectBootstrapSource) && bootstrapState.Status != projectBootstrapStatusActive {
+		return projectBootstrapWatchdog{}, false, nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
+	if err != nil {
+		return projectBootstrapWatchdog{}, false, err
+	}
+	if progress.BootstrapTaskID == uuid.Nil || !progress.BootstrapTaskOutstanding || progress.Materialized() || progress.ValidationFailed() {
+		return projectBootstrapWatchdog{}, false, nil
+	}
+	if progress.AssignmentCount != 0 || progress.PlannedTaskCount != 0 || progress.PlannedFlowTemplateCount != 0 {
+		return projectBootstrapWatchdog{}, false, nil
+	}
+
+	elapsed := e.now().UTC().Sub(rt.startedAt)
+	remaining := e.projectBootstrapTurnTimeout - elapsed
+	if remaining <= 0 {
+		remaining = time.Millisecond
+	}
+	return projectBootstrapWatchdog{
+		Timeout:   e.projectBootstrapTurnTimeout,
+		Remaining: remaining,
+	}, true, nil
+}
+
 func buildRecoveryContinuationDepthReason(detail string) string {
 	trimmed := strings.TrimSpace(detail)
 	if trimmed == "" {
@@ -4934,8 +5112,17 @@ func (e *TurnEngine) callMainModel(
 		streamingMarked := false
 		builder := strings.Builder{}
 		lastSteerPollChunks := 0
+		streamCtx := ctx
+		watchdog, watchdogActive, err := e.projectBootstrapStreamWatchdog(ctx, rt)
+		if err != nil {
+			return ModelResponse{}, err
+		}
+		cancelWatchdog := func() {}
+		if watchdogActive {
+			streamCtx, cancelWatchdog = context.WithTimeoutCause(ctx, watchdog.Remaining, errProjectBootstrapWatchdog)
+		}
 
-		response, callErr := e.models.StreamComplete(ctx, ModelRequest{
+		response, callErr := e.models.StreamComplete(streamCtx, ModelRequest{
 			OrganizationID: rt.session.OrganizationID,
 			SessionID:      rt.session.ID,
 			TurnID:         rt.turn.ID,
@@ -4977,8 +5164,20 @@ func (e *TurnEngine) callMainModel(
 			}
 			return nil
 		})
+		cancelWatchdog()
 
 		if callErr != nil {
+			if watchdogActive && errors.Is(callErr, context.DeadlineExceeded) && errors.Is(context.Cause(streamCtx), errProjectBootstrapWatchdog) {
+				timeoutErr := &projectBootstrapTimeoutError{
+					InvocationID: invocation.ID,
+					Timeout:      watchdog.Timeout,
+				}
+				errorCode := stringPtr("bootstrap_watchdog_timeout")
+				errorText := stringPtr(timeoutErr.Error())
+				_, _ = e.invocations.UpdateStatus(ctx, invocation.ID, "failed", errorCode, errorText)
+				_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", timeoutErr.Error())
+				return ModelResponse{}, timeoutErr
+			}
 			errorCode := stringPtr("model_error")
 			errorText := stringPtr(callErr.Error())
 			_, _ = e.invocations.UpdateStatus(ctx, invocation.ID, "failed", errorCode, errorText)

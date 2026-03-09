@@ -7051,6 +7051,315 @@ func TestTurnEngineIntegrationProjectBootstrapFailsExplicitlyAfterRepeatedNoProg
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapWatchdogFailsHungInFlightTurnAndReleasesClaim(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and setup for this new project.")
+
+	fixture.engine.projectBootstrapTurnTimeout = 40 * time.Millisecond
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	followOnStarted := make(chan struct{}, 1)
+	fixture.model.streamFn = func(ctx context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			select {
+			case followOnStarted <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			return ModelResponse{}, ctx.Err()
+		default:
+			return ModelResponse{Content: "unexpected bootstrap watchdog call"}, nil
+		}
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT id
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND payload->>'session_id' = $1
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1
+	`, projectSession.ID.String()).Scan(&jobID); err != nil {
+		t.Fatalf("load pending bootstrap job: %v", err)
+	}
+
+	worker := jobqueue.New(fixture.pool, slog.New(slog.NewTextHandler(io.Discard, nil)), jobqueue.Config{
+		WorkerID:             "bootstrap-watchdog-worker",
+		PollInterval:         5 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+	worker.Register(AgentTurnJobType, fixture.engine.HandleTurnJob)
+	workerCtx, cancelWorker := context.WithCancel(ctx)
+	defer cancelWorker()
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		_ = worker.Start(workerCtx)
+	}()
+	defer func() {
+		cancelWorker()
+		_ = worker.Stop()
+		<-workerDone
+	}()
+
+	select {
+	case <-followOnStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for watchdog bootstrap turn to start")
+	}
+
+	waitForJobStatus(t, fixture.pool, jobID, "done", 3*time.Second)
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after watchdog timeout failure", jobs)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	if storedSession.CurrentTurnID != nil {
+		t.Fatalf("project session current_turn_id = %v, want nil after watchdog timeout failure", storedSession.CurrentTurnID)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.FailureClass != projectBootstrapFailureStalled {
+		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureStalled)
+	}
+	if !strings.Contains(bootstrapState.FailureReason, "watchdog timed out") {
+		t.Fatalf("bootstrap failure_reason = %q, want watchdog timeout detail", bootstrapState.FailureReason)
+	}
+	if bootstrapState.AssignmentCount != 0 || bootstrapState.PlannedTaskCount != 0 || bootstrapState.PlannedFlowTemplateCount != 0 {
+		t.Fatalf("bootstrap progress after watchdog timeout = %+v, want zero persisted setup counts", bootstrapState)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	failedTurn := turns[len(turns)-1]
+	if failedTurn.Status != "failed" {
+		t.Fatalf("watchdog bootstrap turn status = %q, want failed", failedTurn.Status)
+	}
+	if failedTurn.StopReason == nil || *failedTurn.StopReason != stopReasonMaxDuration {
+		t.Fatalf("watchdog bootstrap turn stop_reason = %v, want %q", failedTurn.StopReason, stopReasonMaxDuration)
+	}
+
+	invocations, err := repo.NewModelInvocationRepo(fixture.pool).ListBySession(ctx, fixture.org.ID, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession invocations: %v", err)
+	}
+	var failedInvocation *repo.ModelInvocation
+	for i := range invocations {
+		item := invocations[i]
+		if item.TurnID != nil && *item.TurnID == failedTurn.ID {
+			failedInvocation = &item
+			break
+		}
+	}
+	if failedInvocation == nil {
+		t.Fatal("expected model invocation row for watchdog-timed bootstrap turn")
+	}
+	if failedInvocation.Status != "failed" {
+		t.Fatalf("watchdog invocation status = %q, want failed", failedInvocation.Status)
+	}
+	if failedInvocation.ErrorCode == nil || *failedInvocation.ErrorCode != "bootstrap_watchdog_timeout" {
+		t.Fatalf("watchdog invocation error_code = %v, want bootstrap_watchdog_timeout", failedInvocation.ErrorCode)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	var failureMessages int
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, "watchdog timed out") {
+			failureMessages++
+		}
+	}
+	if failureMessages != 1 {
+		t.Fatalf("watchdog bootstrap failure system messages = %d, want 1", failureMessages)
+	}
+}
+
+func TestTurnEngineIntegrationProjectBootstrapRecoversAfterWatchdogFailure(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: staff the project, create initial tasks, and attach flow templates.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.projectBootstrapTurnTimeout = 40 * time.Millisecond
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(ctx context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			<-ctx.Done()
+			return ModelResponse{}, ctx.Err()
+		case 3:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-retry-after-timeout",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is now persisted after the retry."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		}); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		description := "Initial scoped bootstrap workstream"
+		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "Define the first execution slice",
+			Description:    &description,
+			WorkStatus:     "queued",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":      pmAgent.ID.String(),
+				"task_id":          taskRecord.ID.String(),
+				"flow_template_id": template.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage watchdog-timed bootstrap follow-on: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session after watchdog failure: %v", err)
+	}
+	failedState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if failedState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status after watchdog failure = %q, want %q", failedState.Status, projectBootstrapStatusFailed)
+	}
+	if failedState.FailureClass != projectBootstrapFailureStalled {
+		t.Fatalf("bootstrap failure_class after watchdog failure = %q, want %q", failedState.FailureClass, projectBootstrapFailureStalled)
+	}
+
+	continuationMessage, err := fixture.engine.appendProjectBootstrapContinuationMessage(ctx, projectSession.ID, lori.ID, failedState.InitialMessageID, failedState.AutoTurnCount)
+	if err != nil {
+		t.Fatalf("appendProjectBootstrapContinuationMessage retry: %v", err)
+	}
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, continuationMessage.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage retry bootstrap turn: %v", err)
+	}
+
+	retryTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": retryTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent retry bootstrap turn: %v", err)
+	}
+
+	storedSession, err = repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session after retry: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusCompleted {
+		t.Fatalf("bootstrap status after watchdog recovery = %q, want %q", bootstrapState.Status, projectBootstrapStatusCompleted)
+	}
+	if bootstrapState.ValidationStatus != projectBootstrapValidationPassed {
+		t.Fatalf("bootstrap validation_status after watchdog recovery = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationPassed)
+	}
+	if bootstrapState.FailureClass != "" {
+		t.Fatalf("bootstrap failure_class after watchdog recovery = %q, want empty", bootstrapState.FailureClass)
+	}
+	if bootstrapState.FailureReason != "" {
+		t.Fatalf("bootstrap failure_reason after watchdog recovery = %q, want empty", bootstrapState.FailureReason)
+	}
+	if bootstrapState.AssignmentCount == 0 || bootstrapState.PlannedTaskCount == 0 || bootstrapState.PlannedFlowTemplateCount == 0 {
+		t.Fatalf("bootstrap completed state after watchdog recovery missing persisted counts: %+v", bootstrapState)
+	}
+	if bootstrapState.FirstWaveTaskCount == 0 {
+		t.Fatalf("bootstrap first_wave_task_count after watchdog recovery = %d, want > 0", bootstrapState.FirstWaveTaskCount)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap agent_turn jobs after watchdog recovery = %d, want 0", jobs)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsExplicitlyOnGuardrailLoop(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -8803,6 +9112,32 @@ func waitForTurnID(t *testing.T, pool *pgxpool.Pool, sessionID uuid.UUID) uuid.U
 	}
 	t.Fatal("timed out waiting for turn")
 	return uuid.Nil
+}
+
+func waitForJobStatus(t *testing.T, pool *pgxpool.Pool, jobID uuid.UUID, want string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var status string
+		if err := pool.QueryRow(context.Background(), `
+			SELECT status
+			FROM job_queue
+			WHERE id = $1
+		`, jobID).Scan(&status); err == nil && status == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var status string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT status
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status); err != nil {
+		t.Fatalf("query job status: %v", err)
+	}
+	t.Fatalf("job %s status = %q, want %q", jobID, status, want)
 }
 
 func mustJSON(t *testing.T, value any) []byte {
