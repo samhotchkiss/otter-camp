@@ -6755,6 +6755,91 @@ func TestTurnEngineIntegrationProjectBootstrapFailsExplicitlyAfterRepeatedNoProg
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapFailsExplicitlyOnGuardrailLoop(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and setup for this new project.")
+
+	fixture.engine.assembler = &fakeAssembler{results: []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+	}}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage project bootstrap guardrail loop: %v", err)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after guardrail bootstrap failure", jobs)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.FailureClass != projectBootstrapFailureGuardrail {
+		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureGuardrail)
+	}
+	if !strings.Contains(bootstrapState.FailureReason, "prompt input kept exceeding the 64000-token guardrail across 3 continuation turns") {
+		t.Fatalf("bootstrap failure_reason = %q, want continuation-depth guardrail guidance", bootstrapState.FailureReason)
+	}
+	if bootstrapState.AutoTurnCount != 0 {
+		t.Fatalf("bootstrap auto_turn_count = %d, want 0 for same-turn guardrail failure", bootstrapState.AutoTurnCount)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 4 {
+		t.Fatalf("turn count = %d, want 4 bounded continuation turns", len(turns))
+	}
+	if turns[len(turns)-1].Status != "completed" {
+		t.Fatalf("final turn status = %q, want completed", turns[len(turns)-1].Status)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	var continuationMessages int
+	var failureMessages int
+	var genericFailureMessages int
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, "Prompt input exceeded 64000-token guardrail - continuing in a new turn.") {
+			continuationMessages++
+		}
+		if strings.Contains(message.Content, "Project bootstrap failed:") {
+			failureMessages++
+		}
+		if strings.Contains(message.Content, "[Turn failed:") {
+			genericFailureMessages++
+		}
+	}
+	if continuationMessages != 3 {
+		t.Fatalf("continuation notice count = %d, want 3", continuationMessages)
+	}
+	if failureMessages != 1 {
+		t.Fatalf("bootstrap failure system messages = %d, want 1", failureMessages)
+	}
+	if genericFailureMessages != 0 {
+		t.Fatalf("generic turn failure system messages = %d, want 0", genericFailureMessages)
+	}
+}
+
 func TestTurnEngineIntegrationKickoffSummaryCarriesOriginatingWorkstreams(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

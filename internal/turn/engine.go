@@ -78,6 +78,7 @@ const (
 	projectBootstrapStatusCompleted           = "completed"
 	projectBootstrapStatusFailed              = "failed"
 	projectBootstrapFailureStalled            = "stalled"
+	projectBootstrapFailureGuardrail          = "guardrail_loop"
 	projectBootstrapFailureMissingAssignments = "missing_assignments"
 	projectBootstrapFailureCompoundParent     = "compound_parent_missing_children"
 	projectBootstrapFailureFirstWaveFlow      = "first_wave_flow_invalid"
@@ -1417,6 +1418,14 @@ func buildProjectBootstrapFailureReason(autoTurnCount int) string {
 	return fmt.Sprintf("bootstrap setup stalled after %d consecutive follow-on turns without creating project assignments, scoped tasks, and flow templates", autoTurnCount)
 }
 
+func buildProjectBootstrapGuardrailFailureReason(detail string) string {
+	trimmed := strings.TrimSpace(detail)
+	if trimmed == "" {
+		trimmed = "bounded prompt/continuation guardrails exhausted before persisted setup was created"
+	}
+	return fmt.Sprintf("bootstrap setup hit continuation-depth guardrails before creating project assignments, scoped tasks, and flow templates: %s", trimmed)
+}
+
 func buildProjectBootstrapFailureMessage(reason string) string {
 	trimmed := strings.TrimSpace(reason)
 	if trimmed == "" {
@@ -1703,6 +1712,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 				if handled, handleErr := e.handleFreshKickoffBlocker(ctx, rt, "prompt context remained too large before the kickoff could reach initial task creation"); handled {
 					return handleErr
 				}
+				if handled, handleErr := e.handleProjectBootstrapGuardrailFailure(ctx, rt, buildRecoveryContinuationDepthReason("prompt context remained too large")); handled {
+					return handleErr
+				}
 				if handled, handleErr := e.handleRecoveryContinuationDepthBlocker(ctx, rt, buildRecoveryContinuationDepthReason("prompt context remained too large")); handled {
 					return handleErr
 				}
@@ -1721,6 +1733,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			continuations++
 			if continuations > maxContinuationTurnDepth {
 				if handled, handleErr := e.handleFreshKickoffBlocker(ctx, rt, fmt.Sprintf("prompt input kept exceeding the %d-token guardrail before the kickoff could reach initial task creation", guardrail)); handled {
+					return handleErr
+				}
+				if handled, handleErr := e.handleProjectBootstrapGuardrailFailure(ctx, rt, buildRecoveryContinuationDepthReason(fmt.Sprintf("prompt input kept exceeding the %d-token guardrail", guardrail))); handled {
 					return handleErr
 				}
 				if handled, handleErr := e.handleRecoveryContinuationDepthBlocker(ctx, rt, buildRecoveryContinuationDepthReason(fmt.Sprintf("prompt input kept exceeding the %d-token guardrail", guardrail))); handled {
@@ -4495,6 +4510,69 @@ func (e *TurnEngine) handleFreshKickoffBlocker(ctx context.Context, rt *turnRunt
 		return false, nil
 	}
 	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildFreshKickoffBlockerMessage(rt.projectIdentity, reason)); err != nil {
+		return true, err
+	}
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) handleProjectBootstrapGuardrailFailure(ctx context.Context, rt *turnRuntime, reason string) (bool, error) {
+	if rt == nil || rt.turn == nil || rt.session == nil || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
+	if err != nil {
+		return true, err
+	}
+	if progress.BootstrapTaskID == uuid.Nil || !progress.BootstrapTaskOutstanding || progress.Materialized() {
+		return false, nil
+	}
+
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	now := e.now().UTC()
+	workflowMessageID := rt.initialMessageID
+	if e.messages != nil && rt.initialMessageID != uuid.Nil {
+		message, getErr := e.messages.GetByID(ctx, rt.initialMessageID)
+		if getErr != nil && !errors.Is(getErr, repo.ErrNotFound) {
+			return true, getErr
+		}
+		if getErr == nil {
+			workflowMessageID = projectBootstrapWorkflowMessageID(&message)
+		}
+	}
+	if strings.TrimSpace(state.InitialMessageID) == "" && workflowMessageID != uuid.Nil {
+		state.InitialMessageID = workflowMessageID.String()
+	}
+	if state.StartedAt == nil {
+		state.StartedAt = &now
+	}
+	state.Status = projectBootstrapStatusFailed
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	state.LastTurnID = rt.turn.ID.String()
+	if rt.agent.ID != uuid.Nil {
+		state.LastResponderID = rt.agent.ID.String()
+	}
+	state.AutoTurnCount = 0
+	state.AssignmentCount = progress.AssignmentCount
+	state.PlannedTaskCount = progress.PlannedTaskCount
+	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = &now
+	state.FailureClass = projectBootstrapFailureGuardrail
+	state.FailureReason = buildProjectBootstrapGuardrailFailureReason(reason)
+
+	if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
+		return true, err
+	}
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapFailureMessage(state.FailureReason)); err != nil {
 		return true, err
 	}
 	if err := e.completeTurn(ctx, rt); err != nil {
