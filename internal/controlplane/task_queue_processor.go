@@ -811,7 +811,7 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 }
 
 func (p *TaskQueueProcessor) bindRunSessionIfNeeded(ctx context.Context, runRecord Run, sessionID uuid.UUID) (Run, error) {
-	if sessionID == uuid.Nil || runRecord.ID == uuid.Nil {
+	if p == nil || p.runs == nil || sessionID == uuid.Nil || runRecord.ID == uuid.Nil {
 		return runRecord, nil
 	}
 	if runRecord.SessionID != nil && *runRecord.SessionID == sessionID {
@@ -832,6 +832,25 @@ func (p *TaskQueueProcessor) ensureFlowNodeExecutionSession(ctx context.Context,
 		if err != nil && !errors.Is(err, repo.ErrNotFound) {
 			return nil, err
 		}
+	}
+	if execution.SessionID != nil && *execution.SessionID != uuid.Nil {
+		if p.chats != nil {
+			session, err := p.chats.GetSession(ctx, *execution.SessionID)
+			if err == nil && session != nil {
+				return session, nil
+			}
+			if err != nil && !errors.Is(err, repo.ErrNotFound) {
+				return nil, err
+			}
+		}
+		return &chat.ChatSession{
+			ID:             *execution.SessionID,
+			OrganizationID: taskRecord.OrganizationID,
+			ScopeType:      "project_task",
+			ScopeID:        taskRecord.ID,
+			Mode:           "async",
+			Status:         "active",
+		}, nil
 	}
 	return p.ensureCanonicalTaskAsyncSession(ctx, taskRecord)
 }

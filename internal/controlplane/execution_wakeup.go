@@ -322,6 +322,10 @@ func (s *runService) activeWakeupRunStale(ctx context.Context, runRecord Run) (b
 }
 
 func (s *runService) clearActiveWakeupState(ctx context.Context, state RuntimeState, activeRun *Run) error {
+	_, err := s.runtime.ClearActive(ctx, state.ID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
 	if activeRun != nil && activeRun.ID != uuid.Nil {
 		if _, terminal := runTerminalStatuses[activeRun.Status]; !terminal {
 			if err := s.FailRun(ctx, activeRun.ID, "execution owner stale handoff", "transient"); err != nil && !errors.Is(err, ErrInvalidTransition) {
@@ -329,11 +333,7 @@ func (s *runService) clearActiveWakeupState(ctx context.Context, state RuntimeSt
 			}
 		}
 	}
-	_, err := s.runtime.ClearActive(ctx, state.ID)
-	if errors.Is(err, ErrNotFound) {
-		return nil
-	}
-	return err
+	return nil
 }
 
 func (s *runService) findDeferredWakeup(

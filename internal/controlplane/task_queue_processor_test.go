@@ -1698,6 +1698,11 @@ func (f *fakeTaskQueueRunStarter) CreateRun(_ context.Context, input CreateRunIn
 	if len(run.Metadata) == 0 {
 		run.Metadata = append(json.RawMessage(nil), input.Metadata...)
 	}
+	if f.runByID == nil {
+		f.runByID = map[uuid.UUID]Run{}
+	}
+	f.runByID[run.ID] = run
+	f.run = run
 	if f.dedupeByIdempotency && input.IdempotencyKey != nil {
 		f.uniqueCreateRunCount++
 		f.idempotentRuns[*input.IdempotencyKey] = run
