@@ -2689,9 +2689,6 @@ func recoveryResumeDraftForPrompt(failureReason, targetPath, draft string) (stri
 	if trimmed == "" {
 		return "", ""
 	}
-	if !taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(failureReason) {
-		return trimmed, ""
-	}
 	rejectReason := strings.TrimSpace(recoveryFileWriteDraftRejectReason(trimmed, targetPath))
 	if rejectReason == "" {
 		return trimmed, ""
@@ -2849,6 +2846,9 @@ func recoveryResumeRequiresDirectWriteMode(state recoveryResumeState) bool {
 		return false
 	}
 	if recoveryResumeHasRepeatedDraftHistory(state) {
+		return true
+	}
+	if strings.TrimSpace(state.targetDraft) != "" && strings.TrimSpace(state.artifactDraftRejectedReason) != "" {
 		return true
 	}
 	if strings.TrimSpace(state.targetDraft) != "" || strings.TrimSpace(state.artifactDraft) != "" {

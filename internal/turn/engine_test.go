@@ -3249,6 +3249,35 @@ func TestRecoveryResumeRequiresDirectWriteModeWhenStoredDraftsAreRejectedLiveWS4
 	}
 }
 
+func TestRecoveryResumeDraftForPromptRejectsPlaceholderArtifactWithoutRejectedFailureReason(t *testing.T) {
+	const (
+		targetPath    = "docs/blog-post-ideas.md"
+		failureReason = "deterministic tool validation loop blocked after 3 identical failures: file.write (content_required)"
+		artifactDraft = "Now I have a thorough understanding of the review feedback, the content strategy, existing content, and what needs to be fixed. Let me now write the complete, corrected `docs/blog-post-ideas.md` file addressing all of Vivian's must-fix items."
+	)
+
+	filtered, rejectReason := recoveryResumeDraftForPrompt(failureReason, targetPath, artifactDraft)
+	if filtered != "" {
+		t.Fatalf("filtered draft = %q, want empty", filtered)
+	}
+	if rejectReason == "" {
+		t.Fatal("expected placeholder artifact draft to be rejected even for validation-loop checkpoints")
+	}
+}
+
+func TestRecoveryResumeRequiresDirectWriteModeWithSubstantiveTargetAndRejectedArtifactDraft(t *testing.T) {
+	state := recoveryResumeState{
+		targetPath:                  "docs/blog-post-ideas.md",
+		targetDraft:                 "# Sam.blog — 20 Blog Post Concepts\n\n## Post 1\n- A real completed deliverable body\n" + strings.Repeat("Supporting detail line.\n", 80),
+		artifactPath:                ".ottercamp/recovery/docs/blog-post-ideas.md",
+		failureReason:               "deterministic tool validation loop blocked after 3 identical failures: file.write (content_required)",
+		artifactDraftRejectedReason: "assistant draft for docs/blog-post-ideas.md described intent to write the deliverable instead of the file body",
+	}
+	if !recoveryResumeRequiresDirectWriteMode(state) {
+		t.Fatal("expected substantive target + rejected artifact draft to force direct-write recovery mode")
+	}
+}
+
 type unitFixture struct {
 	engine        *TurnEngine
 	events        *fakeEventBus
