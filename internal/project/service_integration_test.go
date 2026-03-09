@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -16,6 +17,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 func TestProjectServiceCreateGetBySlugAndUniqueness(t *testing.T) {
@@ -108,6 +110,55 @@ func TestProjectServiceCreatePublishesStaffingNeededEvent(t *testing.T) {
 	}
 	if staffingCount < 1 {
 		t.Fatalf("project.staffing_needed count = %d, want >= 1", staffingCount)
+	}
+}
+
+func TestProjectServiceCreateBindsCanonicalWorkspaceEnvironment(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	orgRepo := repo.NewOrgRepo(pool)
+	environmentRepo := repo.NewProjectEnvironmentRepo(pool)
+
+	org, err := orgRepo.Create(ctx, repo.Organization{Slug: "proj-svc-repo-bind-" + uuid.NewString()[:8], DisplayName: "Repo Binding Org"})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	created, err := svc.Create(ctx, CreateProjectRequest{
+		OrganizationID: org.ID,
+		Slug:           "canonical-repo-binding",
+		DisplayName:    "Canonical Repo Binding",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	environments, err := environmentRepo.ListByProject(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListByProject environments: %v", err)
+	}
+	if len(environments) != 1 {
+		t.Fatalf("project environment count = %d, want 1", len(environments))
+	}
+
+	wantRepoPath, err := workspace.ProjectRoot("", created.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	if got := strings.TrimSpace(pointerValue(environments[0].RepoPath)); got != wantRepoPath {
+		t.Fatalf("repo_path = %q, want %q", got, wantRepoPath)
+	}
+	if environments[0].Name != "workspace" {
+		t.Fatalf("environment name = %q, want workspace", environments[0].Name)
+	}
+	if environments[0].TargetBranch != "main" {
+		t.Fatalf("target_branch = %q, want main", environments[0].TargetBranch)
+	}
+	if !environments[0].IsActive {
+		t.Fatal("project environment is_active = false, want true")
 	}
 }
 

@@ -673,6 +673,7 @@ Mutating operations require idempotency keys. The broker deduplicates requests b
 - If the first request is still in progress, return a "duplicate, in progress" response.
 - If the first request failed, allow the retry (new RunAttempt).
 - Fresh project kickoff follows the same idempotency rule: a retry of the same fresh-start request must bind back to the canonical live project/session path created by the first successful `project.create`, not mint a second active project or parallel planning session.
+- That same kickoff path must also reuse or repair the canonical project repo/workspace binding before parent or child `task.create` calls continue, so retries do not strand the project in a draft-only task tree because repo resolution disappeared between setup steps.
 - Fresh kickoff retries also preserve the planned task mapping: the explicitly planned workstreams remain one runtime task each unless the planner or flow explicitly requested parallel child-task fan-out.
 - Fresh kickoff and resume are distinct execution modes. Fresh kickoff suppresses archived/closed prior-run transcript context unless the operator explicitly chose resume/recovery; resume/recovery keeps the historical context because continuity is the point.
 

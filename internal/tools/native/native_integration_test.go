@@ -28,6 +28,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/testutil"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 func TestIntegrationFileReadRoundTripAndTraversal(t *testing.T) {
@@ -590,11 +591,11 @@ func TestIntegrationTaskCreateSubjectiveMultiOptionUsesReviewRefinementPlanning(
 	if err != nil {
 		t.Fatalf("load template nodes: %v", err)
 	}
-	if len(nodes) != 3 {
-		t.Fatalf("template node count = %d, want 3", len(nodes))
+	if len(nodes) != 4 {
+		t.Fatalf("template node count = %d, want 4", len(nodes))
 	}
-	if nodes[0].DisplayName != "Generation" || nodes[1].DisplayName != "Internal Review" || nodes[2].DisplayName != "Human Review" {
-		t.Fatalf("unexpected node sequence = [%s %s %s]", nodes[0].DisplayName, nodes[1].DisplayName, nodes[2].DisplayName)
+	if nodes[0].DisplayName != "Generation" || nodes[1].DisplayName != "Internal Review" || nodes[2].DisplayName != "Human Review" || nodes[3].DisplayName != "Complete" {
+		t.Fatalf("unexpected node sequence = [%s %s %s %s]", nodes[0].DisplayName, nodes[1].DisplayName, nodes[2].DisplayName, nodes[3].DisplayName)
 	}
 }
 
@@ -721,6 +722,9 @@ func TestIntegrationDelegatedCreativeWorkflowUsesInternalReviewWithoutHumanCheck
 	}
 	if _, err := flowService.AdvanceFlow(ctx, firstTaskID, flowsvc.Actor{Type: "agent", ID: reviewer.ID}); err != nil {
 		t.Fatalf("AdvanceFlow internal review: %v", err)
+	}
+	if _, err := flowService.AdvanceFlow(ctx, firstTaskID, flowsvc.Actor{Type: "agent", ID: reviewer.ID}); err != nil {
+		t.Fatalf("AdvanceFlow completion: %v", err)
 	}
 
 	completedTask, err := taskRepo.GetByID(ctx, firstTaskID)
@@ -3127,6 +3131,74 @@ func TestIntegrationProjectSessionQueueKeepsPlannedTaskSetFlat(t *testing.T) {
 	}
 }
 
+func TestIntegrationProjectKickoffTaskCreateBindsCanonicalRepoBeforeTaskTree(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: orgID,
+		Slug:           "kickoff-repo-" + uuid.NewString()[:8],
+		DisplayName:    "Kickoff Repo Binding",
+		DeliveryMode:   "gated",
+		CreatedByType:  "agent",
+		CreatedByID:    actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	dataDir := t.TempDir()
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Sam.blog fresh kickoff",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	for _, title := range []string{"Kickoff parent workstream", "Kickoff child task"} {
+		if _, err := executor.Execute(projectCtx, "task.create", map[string]any{
+			"project_id": project.ID.String(),
+			"title":      title,
+		}); err != nil {
+			t.Fatalf("task.create %q: %v", title, err)
+		}
+	}
+
+	environments, err := repo.NewProjectEnvironmentRepo(pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject environments: %v", err)
+	}
+	if len(environments) != 1 {
+		t.Fatalf("project environment count = %d, want 1", len(environments))
+	}
+
+	wantRepoPath, err := workspace.ProjectRoot(dataDir, project.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	if got := strings.TrimSpace(derefString(environments[0].RepoPath)); got != wantRepoPath {
+		t.Fatalf("repo_path = %q, want %q", got, wantRepoPath)
+	}
+	if environments[0].TargetBranch != "main" {
+		t.Fatalf("target_branch = %q, want main", environments[0].TargetBranch)
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject tasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("project task count = %d, want 2", len(tasks))
+	}
+}
+
 func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -3336,6 +3408,7 @@ func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 
 	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
 		FlowTemplateID: &template.ID,
+		WorkStatus:     "in_progress",
 		CreatedByType:  "system",
 		CreatedByID: func() *uuid.UUID {
 			value := uuid.Nil
@@ -3401,6 +3474,7 @@ func TestIntegrationFlowAdvanceBackfillsMissingExecutionFromTaskScope(t *testing
 
 	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
 		FlowTemplateID: &template.ID,
+		WorkStatus:     "in_progress",
 		CreatedByType:  "system",
 		CreatedByID: func() *uuid.UUID {
 			value := uuid.Nil
@@ -3453,10 +3527,10 @@ func TestIntegrationFlowAdvanceBackfillsMissingExecutionFromTaskScope(t *testing
 		t.Fatalf("list executions: %v", err)
 	}
 	var (
-		backfilledExecutionID      uuid.UUID
-		foundBackfilledCompleted   bool
-		foundBackfilledSession     bool
-		foundNextActiveWithSession bool
+		backfilledExecutionSessionID uuid.UUID
+		foundBackfilledCompleted     bool
+		foundBackfilledSession       bool
+		foundNextActiveWithSession   bool
 	)
 	for _, execution := range executions {
 		switch execution.FlowNodeID {
@@ -3470,7 +3544,7 @@ func TestIntegrationFlowAdvanceBackfillsMissingExecutionFromTaskScope(t *testing
 			if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
 				t.Fatalf("current node execution session_id = %v, want non-nil", execution.SessionID)
 			}
-			backfilledExecutionID = execution.ID
+			backfilledExecutionSessionID = *execution.SessionID
 			foundBackfilledCompleted = true
 			foundBackfilledSession = true
 		case nodes[1].ID:
@@ -3496,15 +3570,15 @@ func TestIntegrationFlowAdvanceBackfillsMissingExecutionFromTaskScope(t *testing
 	if err := pool.QueryRow(context.Background(), `
 		SELECT COUNT(*)
 		FROM chat_session
-		WHERE organization_id = $1
+		WHERE id = $1
+		  AND organization_id = $2
 		  AND scope_type = 'project_task'
-		  AND scope_id = $2
-		  AND metadata->>'flow_node_execution_id' = $3
-	`, orgID, task.ID, backfilledExecutionID.String()).Scan(&sessionCount); err != nil {
-		t.Fatalf("count chat_session rows for backfilled execution: %v", err)
+		  AND scope_id = $3
+	`, backfilledExecutionSessionID, orgID, task.ID).Scan(&sessionCount); err != nil {
+		t.Fatalf("count chat_session rows for backfilled task session: %v", err)
 	}
 	if sessionCount < 1 {
-		t.Fatalf("chat_session rows for backfilled execution = %d, want >= 1", sessionCount)
+		t.Fatalf("chat_session rows for backfilled task session = %d, want >= 1", sessionCount)
 	}
 }
 
@@ -3521,8 +3595,8 @@ func TestIntegrationFlowAdvanceTerminalPublishesStatusChangedDomainEvent(t *test
 	if err != nil {
 		t.Fatalf("list flow nodes: %v", err)
 	}
-	if len(nodes) != 2 {
-		t.Fatalf("nodes count = %d, want 2", len(nodes))
+	if len(nodes) != 3 {
+		t.Fatalf("nodes count = %d, want 3", len(nodes))
 	}
 
 	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
@@ -3535,7 +3609,7 @@ func TestIntegrationFlowAdvanceTerminalPublishesStatusChangedDomainEvent(t *test
 		}(),
 	})
 	taskRepo := repo.NewProjectTaskRepo(pool)
-	if _, err := taskRepo.SetFlowNode(context.Background(), task.ID, &nodes[1].ID); err != nil {
+	if _, err := taskRepo.SetFlowNode(context.Background(), task.ID, &nodes[2].ID); err != nil {
 		t.Fatalf("set task current flow node: %v", err)
 	}
 
@@ -3548,9 +3622,17 @@ func TestIntegrationFlowAdvanceTerminalPublishesStatusChangedDomainEvent(t *test
 	}); err != nil {
 		t.Fatalf("create completed work execution: %v", err)
 	}
-	execution, err := executionRepo.Create(context.Background(), repo.FlowNodeExecution{
+	if _, err := executionRepo.Create(context.Background(), repo.FlowNodeExecution{
 		TaskID:      task.ID,
 		FlowNodeID:  nodes[1].ID,
+		VisitNumber: 1,
+		Status:      "completed",
+	}); err != nil {
+		t.Fatalf("create completed review execution: %v", err)
+	}
+	execution, err := executionRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  nodes[2].ID,
 		VisitNumber: 1,
 		Status:      "active",
 	})
@@ -3789,6 +3871,16 @@ func seedReviewRefinementSystemTemplate(t *testing.T, ctx context.Context, pool 
 	if err != nil {
 		t.Fatalf("create human review node: %v", err)
 	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Complete",
+		NodeType:       "merge",
+		Position:       4,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create merge node: %v", err)
+	}
 
 	generation.NextNodeID = &internalReview.ID
 	if _, err := nodeRepo.Update(ctx, generation); err != nil {
@@ -3797,6 +3889,10 @@ func seedReviewRefinementSystemTemplate(t *testing.T, ctx context.Context, pool 
 	internalReview.NextNodeID = &humanReview.ID
 	if _, err := nodeRepo.Update(ctx, internalReview); err != nil {
 		t.Fatalf("link internal review node: %v", err)
+	}
+	humanReview.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(ctx, humanReview); err != nil {
+		t.Fatalf("link human review node: %v", err)
 	}
 
 	template.StartNodeID = &generation.ID
@@ -3921,10 +4017,24 @@ func seedInternalReviewSystemTemplate(t *testing.T, ctx context.Context, pool *p
 	if err != nil {
 		t.Fatalf("create internal review node: %v", err)
 	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Complete",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create merge node: %v", err)
+	}
 
 	workNode.NextNodeID = &internalReview.ID
 	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
 		t.Fatalf("link work node: %v", err)
+	}
+	internalReview.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(ctx, internalReview); err != nil {
+		t.Fatalf("link internal review node: %v", err)
 	}
 
 	template.StartNodeID = &workNode.ID

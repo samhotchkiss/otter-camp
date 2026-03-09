@@ -259,9 +259,11 @@ type agentRepository interface {
 }
 
 type Options struct {
-	Pool *pgxpool.Pool
+	Pool    *pgxpool.Pool
+	DataDir string
 
 	Projects         projectRepository
+	Environments     RepoBindingEnvironmentRepository
 	Templates        flowTemplateRepository
 	Nodes            flowNodeRepository
 	Schedules        taskScheduleRepository
@@ -275,9 +277,11 @@ type Options struct {
 }
 
 type service struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	dataDir string
 
 	projects         projectRepository
+	environments     RepoBindingEnvironmentRepository
 	templates        flowTemplateRepository
 	nodes            flowNodeRepository
 	schedules        taskScheduleRepository
@@ -304,6 +308,7 @@ func NewService(opts Options) (ProjectService, error) {
 
 	svc := &service{
 		pool:       opts.Pool,
+		dataDir:    opts.DataDir,
 		events:     opts.Events,
 		clock:      opts.Clock,
 		cronParser: scheduling.NewCronParser(),
@@ -315,6 +320,11 @@ func NewService(opts Options) (ProjectService, error) {
 		svc.projects = opts.Projects
 	} else {
 		svc.projects = repo.NewProjectRepo(opts.Pool)
+	}
+	if opts.Environments != nil {
+		svc.environments = opts.Environments
+	} else {
+		svc.environments = repo.NewProjectEnvironmentRepo(opts.Pool)
 	}
 	if opts.Templates != nil {
 		svc.templates = opts.Templates
@@ -406,6 +416,9 @@ func (s *service) Create(ctx context.Context, req CreateProjectRequest) (*Projec
 		return nil, ErrSlugTaken
 	}
 	if err != nil {
+		return nil, err
+	}
+	if _, _, err := EnsureCanonicalRepoBinding(ctx, s.environments, s.dataDir, created); err != nil {
 		return nil, err
 	}
 	if bootstrapErr := s.createBootstrapGate(ctx, created, createdByType, createdByID); bootstrapErr != nil {
