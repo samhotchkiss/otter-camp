@@ -28,6 +28,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 )
@@ -165,6 +166,11 @@ type planningProcessInputResult struct {
 	applied bool
 	plan    taskplan.Plan
 	report  taskplan.ValidationReport
+}
+
+type parentOrchestrationInputResult struct {
+	applied bool
+	state   taskorchestration.ParentState
 }
 
 func readPlanningArtifactsInput(input map[string]any) ([]taskplan.ArtifactEvidence, bool, error) {
@@ -311,6 +317,146 @@ func applyPlanningProcessInput(existing json.RawMessage, input map[string]any, a
 		plan:    plan,
 		report:  report,
 	}, nil
+}
+
+func readChildOutputVerificationsInput(input map[string]any, now time.Time) ([]taskorchestration.ChildVerification, bool, error) {
+	if input == nil {
+		return nil, false, nil
+	}
+	raw, ok := input["child_output_verifications"]
+	if !ok {
+		return nil, false, nil
+	}
+	if raw == nil {
+		return nil, true, nil
+	}
+
+	parseItem := func(item map[string]any) (taskorchestration.ChildVerification, error) {
+		taskID, ok := readUUID(item, "task_id")
+		if !ok || taskID == uuid.Nil {
+			return taskorchestration.ChildVerification{}, errors.New("child_output_verifications items must include task_id")
+		}
+		summary := readStringValue(item["summary"])
+		if summary == "" {
+			return taskorchestration.ChildVerification{}, errors.New("child_output_verifications items must include summary")
+		}
+		return taskorchestration.NewChildVerification(taskID, summary, now), nil
+	}
+
+	switch typed := raw.(type) {
+	case []map[string]any:
+		out := make([]taskorchestration.ChildVerification, 0, len(typed))
+		for _, item := range typed {
+			parsed, err := parseItem(item)
+			if err != nil {
+				return nil, false, err
+			}
+			out = append(out, parsed)
+		}
+		return out, true, nil
+	case []any:
+		out := make([]taskorchestration.ChildVerification, 0, len(typed))
+		for _, rawItem := range typed {
+			item, ok := rawItem.(map[string]any)
+			if !ok {
+				return nil, false, errors.New("child_output_verifications items must be objects")
+			}
+			parsed, err := parseItem(item)
+			if err != nil {
+				return nil, false, err
+			}
+			out = append(out, parsed)
+		}
+		return out, true, nil
+	default:
+		return nil, false, errors.New("child_output_verifications must be an array")
+	}
+}
+
+func readIntegrationCheckInput(input map[string]any, now time.Time) (*taskorchestration.IntegrationCheck, bool, error) {
+	if input == nil {
+		return nil, false, nil
+	}
+	raw, ok := input["integration_check"]
+	if !ok {
+		return nil, false, nil
+	}
+	if raw == nil {
+		return nil, true, nil
+	}
+	item, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false, errors.New("integration_check must be an object")
+	}
+	status := readStringValue(item["status"])
+	summary := readStringValue(item["summary"])
+	if status == "" || summary == "" {
+		return nil, false, errors.New("integration_check must include status and summary")
+	}
+	parsed := taskorchestration.NewIntegrationCheck(status, summary, now)
+	if parsed == nil {
+		return nil, false, errors.New("integration_check.status must be passed or failed")
+	}
+	return parsed, true, nil
+}
+
+func readOutcomeAssessmentInput(input map[string]any, now time.Time) (*taskorchestration.OutcomeAssessment, bool, error) {
+	if input == nil {
+		return nil, false, nil
+	}
+	raw, ok := input["outcome_assessment"]
+	if !ok {
+		return nil, false, nil
+	}
+	if raw == nil {
+		return nil, true, nil
+	}
+	item, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false, errors.New("outcome_assessment must be an object")
+	}
+	summary := readStringValue(item["summary"])
+	if summary == "" {
+		return nil, false, errors.New("outcome_assessment must include summary")
+	}
+	satisfiedRaw, ok := item["satisfied"]
+	if !ok {
+		return nil, false, errors.New("outcome_assessment must include satisfied")
+	}
+	satisfied, ok := satisfiedRaw.(bool)
+	if !ok {
+		return nil, false, errors.New("outcome_assessment.satisfied must be a boolean")
+	}
+	return taskorchestration.NewOutcomeAssessment(satisfied, summary, now), true, nil
+}
+
+func applyParentOrchestrationInput(existing json.RawMessage, input map[string]any, now time.Time) (json.RawMessage, parentOrchestrationInputResult, error) {
+	childVerifications, hasChildVerifications, err := readChildOutputVerificationsInput(input, now)
+	if err != nil {
+		return nil, parentOrchestrationInputResult{}, err
+	}
+	integrationCheck, hasIntegrationCheck, err := readIntegrationCheckInput(input, now)
+	if err != nil {
+		return nil, parentOrchestrationInputResult{}, err
+	}
+	outcomeAssessment, hasOutcomeAssessment, err := readOutcomeAssessmentInput(input, now)
+	if err != nil {
+		return nil, parentOrchestrationInputResult{}, err
+	}
+	if !hasChildVerifications && !hasIntegrationCheck && !hasOutcomeAssessment {
+		return existing, parentOrchestrationInputResult{}, nil
+	}
+
+	updated, err := taskorchestration.Apply(existing, taskorchestration.Update{
+		ChildVerifications: childVerifications,
+		IntegrationCheck:   integrationCheck,
+		OutcomeAssessment:  outcomeAssessment,
+	})
+	if err != nil {
+		return nil, parentOrchestrationInputResult{}, err
+	}
+	state, _ := taskorchestration.Parse(updated)
+	return updated, parentOrchestrationInputResult{applied: true, state: state}, nil
 }
 
 func decodePathStrings(ctx context.Context, wd SessionWorkDir, baseDir string, rawPaths []string) ([]string, error) {
@@ -933,6 +1079,21 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	if value, ok := readString(input, "description"); ok {
 		description = &value
 	}
+	var parentTask *repo.ProjectTask
+	parentTaskID, hasParentTaskID := readUUID(input, "parent_task_id")
+	if hasParentTaskID && parentTaskID != uuid.Nil {
+		loadedParent, err := e.tasks.GetByID(ctx, parentTaskID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return map[string]any{"error": "parent_task_not_found"}, nil
+			}
+			return nil, err
+		}
+		if loadedParent.ProjectID != projectID {
+			return map[string]any{"error": "parent_task_project_mismatch"}, nil
+		}
+		parentTask = &loadedParent
+	}
 	var flowTemplateID *uuid.UUID
 	if value, ok := readUUID(input, "flow_template_id"); ok && value != uuid.Nil {
 		if err := e.validateExecutableFlowTemplate(ctx, value); err != nil {
@@ -952,9 +1113,16 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		blocksScope = normalized
 	}
 	requiresHumanReview := readBool(input, "requires_human_review", false)
+	if parentTask != nil && !hasNonNilKey(input, "requires_human_review") {
+		requiresHumanReview = parentTask.RequiresHumanReview
+	}
 	metadata, policyErr := applyReviewPolicyInput(json.RawMessage(`{}`), input)
 	if policyErr != nil {
 		return map[string]any{"error": policyErr.Error()}, nil
+	}
+	if parentTask != nil && flowTemplateID == nil && parentTask.FlowTemplateID != nil && *parentTask.FlowTemplateID != uuid.Nil {
+		inheritedFlowTemplateID := *parentTask.FlowTemplateID
+		flowTemplateID = &inheritedFlowTemplateID
 	}
 	planning, resolvedFlowTemplateID, enrichedMetadata, err := e.applyReviewRefinementPlanning(
 		ctx,
@@ -968,6 +1136,10 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	if err != nil {
 		return nil, err
 	}
+	if parentTask != nil && resolvedFlowTemplateID == nil && parentTask.FlowTemplateID != nil && *parentTask.FlowTemplateID != uuid.Nil {
+		inheritedFlowTemplateID := *parentTask.FlowTemplateID
+		resolvedFlowTemplateID = &inheritedFlowTemplateID
+	}
 	actor := actorFromContext(ctx)
 	if metadataWithProcess, processUpdate, processErr := applyPlanningProcessInput(enrichedMetadata, input, actor); processErr != nil {
 		if errors.Is(processErr, taskplan.ErrPlanningStateRequired) || errors.Is(processErr, taskplan.ErrPlanningOverrideNotNeeded) {
@@ -977,6 +1149,28 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	} else if processUpdate.applied {
 		enrichedMetadata = metadataWithProcess
 		planning = processUpdate.plan
+	}
+	if parentTask != nil {
+		preparedChild, decompErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+			ParentTaskID: parentTask.ID,
+			Title:        title,
+			Description:  description,
+			Metadata:     enrichedMetadata,
+		})
+		if decompErr != nil {
+			if errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) {
+				return map[string]any{"error": decompErr.Error()}, nil
+			}
+			return nil, decompErr
+		}
+		if preparedChild.Applied {
+			return map[string]any{"error": "parent integration follow-on tasks must already be bounded before they are created"}, nil
+		}
+		children, childErr := e.listDecompositionChildren(ctx, *parentTask)
+		if childErr != nil {
+			return nil, childErr
+		}
+		enrichedMetadata = taskdecomp.ApplyChildMetadata(enrichedMetadata, parentTask.ID, nextManualChildWorkstreamIndex(*parentTask, children))
 	}
 	desiredTask := repo.ProjectTask{
 		OrganizationID:      scope.organizationID,
@@ -988,7 +1182,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		RequiresHumanReview: requiresHumanReview,
 		Metadata:            enrichedMetadata,
 	}
-	if scope.projectID != nil && *scope.projectID == projectID {
+	if parentTask == nil && scope.projectID != nil && *scope.projectID == projectID {
 		reused, reusedExisting, reuseErr := e.findReusableProjectScopedTask(ctx, desiredTask)
 		if reuseErr != nil {
 			return nil, reuseErr
@@ -1036,6 +1230,14 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	})
 	if err != nil {
 		return nil, err
+	}
+	if parentTask != nil {
+		parentTask.Metadata = taskdecomp.AppendChildTaskID(parentTask.Metadata, created.ID)
+		updatedParent, updateErr := e.tasks.Update(ctx, *parentTask)
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		parentTask = &updatedParent
 	}
 	if planning.HasSelection() {
 		created, planning, err = e.syncPlanningArtifacts(ctx, created, actor)
@@ -1110,11 +1312,17 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	} else if _, ok := input["review_policy"]; ok {
 		current.Metadata = metadata
 	}
+	if metadataWithParent, parentUpdate, parentErr := applyParentOrchestrationInput(current.Metadata, input, time.Now().UTC()); parentErr != nil {
+		return map[string]any{"error": parentErr.Error()}, nil
+	} else if parentUpdate.applied {
+		current.Metadata = metadataWithParent
+	}
 	previousStatus := strings.TrimSpace(current.WorkStatus)
 	statusChanged := false
 	decomposition := queueDecompositionResult{}
 	planning := taskplan.Plan{}
 	actor := actorFromContext(ctx)
+	var extraStatusPayload map[string]any
 	if status, ok := readString(input, "work_status"); ok && status != "" {
 		if current.FlowTemplateID == nil &&
 			strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
@@ -1187,6 +1395,21 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		if strings.EqualFold(strings.TrimSpace(status), "in_progress") && len(executableChildren) > 0 {
 			return map[string]any{"error": taskOrchestrationOnlyMessage}, nil
 		}
+		if parentTaskID := taskdecomp.ParseParentTaskID(current.Metadata); parentTaskID != uuid.Nil &&
+			strings.EqualFold(strings.TrimSpace(previousStatus), "done") &&
+			strings.EqualFold(strings.TrimSpace(status), "queued") {
+			reopenFeedback, hasFeedback := readString(input, "reopen_feedback")
+			if !hasFeedback || strings.TrimSpace(reopenFeedback) == "" {
+				return map[string]any{"error": "reopen_feedback is required when reopening a completed child task"}, nil
+			}
+			current.Description = appendReopenFeedback(current.Description, parentTaskID, reopenFeedback)
+			extraStatusPayload = map[string]any{
+				"parent_task_id":              parentTaskID,
+				"parent_integration_feedback": strings.TrimSpace(reopenFeedback),
+			}
+		} else if _, hasFeedback := input["reopen_feedback"]; hasFeedback {
+			return map[string]any{"error": "reopen_feedback can only be used when reopening a completed child task"}, nil
+		}
 		if strings.EqualFold(strings.TrimSpace(status), "done") {
 			if _, validationErr := e.validateTaskDoneTransition(ctx, current); validationErr != nil {
 				return map[string]any{"error": validationErr.Error()}, nil
@@ -1220,12 +1443,18 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	if statusChanged {
 		eventTask := current
 		eventTask.WorkStatus = previousStatus
-		var extraStatusPayload map[string]any
 		if strings.EqualFold(strings.TrimSpace(updated.WorkStatus), "done") {
 			if report, reportErr := taskplan.CompletionReport(updated.Metadata); reportErr != nil {
-				return nil, reportErr
+				if !errors.Is(reportErr, taskplan.ErrPlanningArtifactContractIncomplete) {
+					return nil, reportErr
+				}
 			} else {
-				extraStatusPayload = report.Payload()
+				if extraStatusPayload == nil {
+					extraStatusPayload = map[string]any{}
+				}
+				for key, value := range report.Payload() {
+					extraStatusPayload[key] = value
+				}
 			}
 		}
 		if err := e.publishTaskStatusEvents(ctx, nil, eventTask, strings.TrimSpace(updated.WorkStatus), extraStatusPayload); err != nil {
@@ -1292,6 +1521,13 @@ func (e *NativeToolExecutor) projectHasActivePM(ctx context.Context, projectID u
 }
 
 func (e *NativeToolExecutor) validateTaskDoneTransition(ctx context.Context, taskRecord repo.ProjectTask) (taskplan.ValidationReport, error) {
+	children, err := e.listDecompositionChildren(ctx, taskRecord)
+	if err != nil {
+		return taskplan.ValidationReport{}, err
+	}
+	if err := taskorchestration.ValidateCompletion(taskRecord, children); err != nil {
+		return taskplan.ValidationReport{}, err
+	}
 	if taskRecord.FlowTemplateID == nil || taskRecord.CurrentFlowNodeID == nil {
 		return taskplan.ValidationReport{}, errors.New(taskDoneTerminalNodeMessage)
 	}
@@ -1722,6 +1958,40 @@ func decompositionWorkstreamIndex(task repo.ProjectTask, parentTaskID uuid.UUID)
 		return 0, false
 	}
 	return index, true
+}
+
+func nextManualChildWorkstreamIndex(parentTask repo.ProjectTask, children []repo.ProjectTask) int {
+	maxIndex := 1
+	for _, child := range children {
+		index, ok := decompositionWorkstreamIndex(child, parentTask.ID)
+		if ok && index > maxIndex {
+			maxIndex = index
+		}
+	}
+	return maxIndex + 1
+}
+
+func appendReopenFeedback(description *string, parentTaskID uuid.UUID, feedback string) *string {
+	feedback = strings.TrimSpace(feedback)
+	if feedback == "" {
+		return description
+	}
+	header := "Integration feedback"
+	if parentTaskID != uuid.Nil {
+		header = fmt.Sprintf("Integration feedback from parent %s", parentTaskID)
+	}
+	block := header + ":\n- " + feedback
+
+	current := strings.TrimSpace(derefString(description))
+	if current == "" {
+		return &block
+	}
+	if strings.Contains(current, block) {
+		updated := current
+		return &updated
+	}
+	updated := current + "\n\n" + block
+	return &updated
 }
 
 func (e *NativeToolExecutor) listDecompositionChildren(ctx context.Context, parentTask repo.ProjectTask) ([]repo.ProjectTask, error) {

@@ -24,6 +24,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
@@ -795,6 +796,32 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 				lines = append(lines, "- "+strings.TrimSpace(step))
 			}
 		}
+		if len(taskCtx.childTasks) > 0 {
+			lines = append(lines, "Child Tasks:")
+			for _, item := range taskCtx.childTasks {
+				if strings.TrimSpace(item.title) == "" {
+					continue
+				}
+				status := strings.TrimSpace(item.status)
+				if status == "" {
+					status = "draft"
+				}
+				line := fmt.Sprintf("- [%s] %s", status, strings.TrimSpace(item.title))
+				if item.verified {
+					line += " (verified)"
+				}
+				lines = append(lines, line)
+			}
+		}
+		if len(taskCtx.parentGate) > 0 {
+			lines = append(lines, "Parent Completion Gate:")
+			for _, item := range taskCtx.parentGate {
+				if strings.TrimSpace(item) == "" {
+					continue
+				}
+				lines = append(lines, "- "+strings.TrimSpace(item))
+			}
+		}
 		if len(taskCtx.subtasks) > 0 {
 			lines = append(lines, "Subtasks:")
 			for _, item := range taskCtx.subtasks {
@@ -870,6 +897,12 @@ type taskContextSubtask struct {
 	status string
 }
 
+type taskContextChildTask struct {
+	title    string
+	status   string
+	verified bool
+}
+
 type projectTaskContext struct {
 	projectName         string
 	taskTitle           string
@@ -885,6 +918,8 @@ type projectTaskContext struct {
 	currentFlowStatus   string
 	completedFlowSteps  []string
 	pendingFlowSteps    []string
+	childTasks          []taskContextChildTask
+	parentGate          []string
 	subtasks            []taskContextSubtask
 	dependencies        []string
 	flowNodeID          *uuid.UUID
@@ -912,6 +947,8 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 		flowNodeID:         taskRecord.CurrentFlowNodeID,
 		completedFlowSteps: make([]string, 0),
 		pendingFlowSteps:   make([]string, 0),
+		childTasks:         make([]taskContextChildTask, 0),
+		parentGate:         make([]string, 0),
 		subtasks:           make([]taskContextSubtask, 0),
 		dependencies:       make([]string, 0),
 	}
@@ -940,6 +977,38 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 	}
 	if out.projectName == "" {
 		out.projectName = taskRecord.ProjectID.String()
+	}
+	childIDs := taskdecomp.ParseChildTaskIDs(taskRecord.Metadata)
+	if len(childIDs) > 0 && a.tasks != nil {
+		childTasks := make([]repo.ProjectTask, 0, len(childIDs))
+		seen := map[uuid.UUID]struct{}{}
+		for _, childID := range childIDs {
+			if childID == uuid.Nil {
+				continue
+			}
+			if _, ok := seen[childID]; ok {
+				continue
+			}
+			seen[childID] = struct{}{}
+			childTask, childErr := a.tasks.GetByID(ctx, childID)
+			if childErr != nil {
+				continue
+			}
+			childTasks = append(childTasks, childTask)
+		}
+		parentStatus := taskorchestration.Evaluate(taskRecord, childTasks)
+		for _, child := range parentStatus.Children {
+			title := strings.TrimSpace(child.Label)
+			if title == "" {
+				title = child.TaskID.String()
+			}
+			out.childTasks = append(out.childTasks, taskContextChildTask{
+				title:    title,
+				status:   child.Status,
+				verified: child.Verified,
+			})
+		}
+		out.parentGate = append(out.parentGate, parentStatus.Missing...)
 	}
 
 	executionStatusByNode := map[uuid.UUID]string{}

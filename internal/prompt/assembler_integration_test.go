@@ -11,11 +11,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/planningasset"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -354,6 +357,101 @@ func TestPromptAssemblerIntegrationTaskContextUsesDecomposedPrimaryDeliverable(t
 	}
 	if strings.Contains(assembled.SystemPrompt, "Rebuild taxonomy alignment for tags and categories.") {
 		t.Fatalf("prompt includes unrelated decomposed workstream context: %s", assembled.SystemPrompt)
+	}
+}
+
+func TestPromptAssemblerIntegrationParentTaskShowsChildGateStatus(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org := createPromptOrg(t, ctx, pool)
+	project := createPromptProject(t, ctx, pool, org.ID)
+	agent := createPromptAgent(t, ctx, pool, org.ID, "task agent")
+
+	template := createPromptFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	workNode := createPromptFlowNode(t, ctx, pool, template.ID, "Work", 1)
+	reviewNode := createPromptFlowNode(t, ctx, pool, template.ID, "Review", 2)
+	mergeNode := createPromptFlowNode(t, ctx, pool, template.ID, "Complete", 3)
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := repo.NewFlowNodeRepo(pool).Update(ctx, workNode); err != nil {
+		t.Fatalf("link work node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := repo.NewFlowNodeRepo(pool).Update(ctx, reviewNode); err != nil {
+		t.Fatalf("link review node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := repo.NewFlowTemplateRepo(pool).Update(ctx, template); err != nil {
+		t.Fatalf("set flow start node: %v", err)
+	}
+
+	parentTask := createPromptTask(t, ctx, pool, org.ID, project.ID, template.ID, mergeNode.ID)
+	childOne, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Landing page child",
+		Description:    ptrString("Finalize the landing page polish."),
+		WorkStatus:     "done",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    ptrUUID(uuid.Nil),
+		Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentTask.ID, 2),
+	})
+	if err != nil {
+		t.Fatalf("create child one: %v", err)
+	}
+	childTwo, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Billing child",
+		Description:    ptrString("Finalize the billing path."),
+		WorkStatus:     "done",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    ptrUUID(uuid.Nil),
+		Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentTask.ID, 3),
+	})
+	if err != nil {
+		t.Fatalf("create child two: %v", err)
+	}
+
+	parentTask.Metadata = taskdecomp.ApplyMetadata(parentTask.Metadata, taskdecomp.Plan{
+		RequiresDecomposition: true,
+		PrimaryDeliverable:    "Verify the combined launch output.",
+		Deliverables:          []string{"Verify the combined launch output.", "Landing page child", "Billing child"},
+	}, "Verify the combined launch output.", []uuid.UUID{childOne.ID, childTwo.ID})
+	parentTask.Metadata, err = taskorchestration.Apply(parentTask.Metadata, taskorchestration.Update{
+		ChildVerifications: []taskorchestration.ChildVerification{
+			taskorchestration.NewChildVerification(childOne.ID, "Verified the landing page child output.", time.Now().UTC()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Apply parent orchestration metadata: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).Update(ctx, parentTask); err != nil {
+		t.Fatalf("update parent task: %v", err)
+	}
+
+	session := createPromptSession(t, ctx, pool, org.ID, "project_task", parentTask.ID)
+	seedPromptMessages(t, ctx, pool, session.ID, 1)
+
+	assembler, err := NewPromptAssembler(AssemblerOptions{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	assembled, err := assembler.Assemble(ctx, AssemblyInput{SessionID: session.ID, AgentID: agent.ID})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+
+	if !strings.Contains(assembled.SystemPrompt, "Child Tasks:") || !strings.Contains(assembled.SystemPrompt, "Landing page child") {
+		t.Fatalf("prompt missing child task list:\n%s", assembled.SystemPrompt)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "(verified)") {
+		t.Fatalf("prompt missing verified child marker:\n%s", assembled.SystemPrompt)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Parent Completion Gate:") || !strings.Contains(assembled.SystemPrompt, "verify child outputs") {
+		t.Fatalf("prompt missing parent completion gate:\n%s", assembled.SystemPrompt)
 	}
 }
 

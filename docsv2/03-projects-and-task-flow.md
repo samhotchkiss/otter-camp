@@ -67,6 +67,8 @@ If Lori needs to create a brand-new PM during bootstrap, that PM candidate is cr
 - Repeating or retrying the same fresh kickoff request must reuse that canonical live project/session path. The system must not silently create a second active project or a second parallel project-planning session for the same intended run.
 - Fresh kickoff planning maps each explicitly planned workstream to one runtime parent task by default. Retries and recovery reuse or repair that same task set; they do not silently fan a planned workstream into unrelated extra top-level siblings. If bounded-size validation determines that a planned workstream bundles multiple named outputs, sections, or phases, that parent must be decomposed into persisted child tasks before queueing.
 - When a planned workstream is decomposed into persisted child tasks, the parent workstream becomes orchestration-only. The first queued/executing wave must be the bounded child tasks, and kickoff remains incomplete if the parent is the only queued work item.
+- A parent workstream only reaches `done` after every required child task is complete, the parent has recorded explicit verification of each relevant child output, the combined integration/end-to-end check has passed, and the stated parent outcome is satisfied. Prompt wording is not enough; this is a runtime validation contract.
+- If parent-level integration fails, the parent does not absorb the missing work itself. It reopens a completed child task with specific feedback or creates a new bounded child task for the missing slice, then waits for that child work to finish before trying the parent integration gate again.
 - Archived or closed project/session transcripts from prior runs are excluded from fresh-kickoff planning context. They are only reintroduced when the operator explicitly chooses **resume** or **recovery** mode.
 - If fresh kickoff cannot reach initial task creation within the prompt/turn guardrails, the session surfaces one concrete blocker and stops auto-churning.
 
@@ -538,6 +540,7 @@ Flow: [Write Code] → [Code Review] → [Done]
 Subtask creation is not a privileged operation. The guard rail is that subtasks are scoped to a flow node execution — they can't exist outside that context.
 Queueing a draft task must not infer extra top-level task fan-out from a simple checklist attached to one concrete deliverable. But if bounded-size validation finds multiple named outputs, sections, or phases in the task contract, the system must decompose that parent into persisted child tasks before queueing so execution starts with small reviewable units.
 If decomposition produces parallel child tasks, the parent task stays coordination-only and must not enter `queued` or `in_progress` while executable children still exist.
+Once those child tasks exist, the parent task is an orchestration and integration gate only. It may verify child outputs together, run integration/end-to-end checks, reopen child tasks with concrete feedback, or spawn new bounded child tasks for newly discovered gaps. It must not fall back into a broad production-work loop or mark itself complete without the explicit parent-level verification record above.
 
 ### Subtask Properties
 

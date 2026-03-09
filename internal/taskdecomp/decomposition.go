@@ -270,6 +270,70 @@ func ApplyMetadata(existing json.RawMessage, plan Plan, sourceDescription string
 	return normalizeJSON(encoded)
 }
 
+func ApplyChildMetadata(existing json.RawMessage, parentTaskID uuid.UUID, workstreamIndex int) json.RawMessage {
+	payload := metadataObject(existing)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if parentTaskID != uuid.Nil {
+		payload["decomposition_parent_task_id"] = parentTaskID.String()
+	}
+	if workstreamIndex > 0 {
+		payload["workstream_index"] = workstreamIndex
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return normalizeJSON(existing)
+	}
+	return normalizeJSON(encoded)
+}
+
+func AppendChildTaskID(existing json.RawMessage, childTaskID uuid.UUID) json.RawMessage {
+	if childTaskID == uuid.Nil {
+		return normalizeJSON(existing)
+	}
+
+	payload := metadataObject(existing)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+
+	decomp, _ := payload[metadataKeyDecomposition].(map[string]any)
+	if decomp == nil {
+		decomp = map[string]any{}
+	}
+	decomp["applied"] = true
+	decomp["orchestration_only"] = true
+	if normalized := normalizeQueueDecompositionMode(fmt.Sprintf("%v", decomp["mode"])); normalized != "" {
+		decomp["mode"] = normalized
+	} else {
+		decomp["mode"] = QueueDecompositionModeParallelChildren
+	}
+
+	childIDs := make([]string, 0, 1)
+	seen := map[string]struct{}{}
+	for _, existingChildID := range ParseChildTaskIDs(existing) {
+		value := existingChildID.String()
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		childIDs = append(childIDs, value)
+	}
+	value := childTaskID.String()
+	if _, ok := seen[value]; !ok {
+		childIDs = append(childIDs, value)
+	}
+	decomp["child_task_ids"] = childIDs
+	payload[metadataKeyDecomposition] = decomp
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return normalizeJSON(existing)
+	}
+	return normalizeJSON(encoded)
+}
+
 func ParseQueueDecompositionMode(metadata json.RawMessage) string {
 	decomp := decompositionObject(metadata)
 	if decomp == nil {

@@ -22,6 +22,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
@@ -857,6 +858,91 @@ func TestTaskServiceIntegrationQueueKeepsParentDraftAndQueuesChildWorkUnits(t *t
 	}
 }
 
+func TestTaskServiceIntegrationParentDoneRequiresVerificationAndIntegration(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	description := strings.Join([]string{
+		"- Finalize the landing page launch checklist.",
+		"- Verify the billing handoff and checkout path.",
+		"- Validate analytics coverage across the launch funnel.",
+	}, "\n")
+	parent, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Launch integration gate",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	queued, err := svc.TransitionStatus(ctx, parent.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	parentRecord, err := taskRepo.GetByID(ctx, queued.ID)
+	if err != nil {
+		t.Fatalf("GetByID parent: %v", err)
+	}
+	childIDs := taskdecomp.ParseChildTaskIDs(parentRecord.Metadata)
+	if len(childIDs) < 2 {
+		t.Fatalf("child task ids len = %d, want >= 2", len(childIDs))
+	}
+
+	children := make([]repo.ProjectTask, 0, len(childIDs))
+	for _, childID := range childIDs {
+		child, getErr := taskRepo.GetByID(ctx, childID)
+		if getErr != nil {
+			t.Fatalf("GetByID child %s: %v", childID, getErr)
+		}
+		child.WorkStatus = "done"
+		if _, updateErr := taskRepo.Update(ctx, child); updateErr != nil {
+			t.Fatalf("Update child %s: %v", childID, updateErr)
+		}
+		children = append(children, child)
+	}
+
+	markTaskReadyForDone(t, ctx, pool, parentRecord.ID, template.ID)
+	if _, err := svc.TransitionStatus(ctx, parentRecord.ID, "done", Actor{Type: "agent", ID: uuid.New()}); !errors.Is(err, taskorchestration.ErrParentCompletionRequirements) {
+		t.Fatalf("TransitionStatus done err = %v, want ErrParentCompletionRequirements", err)
+	}
+
+	parentRecord, err = taskRepo.GetByID(ctx, parentRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID parent after failed done: %v", err)
+	}
+	now := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
+	verifications := make([]taskorchestration.ChildVerification, 0, len(children))
+	for _, child := range children {
+		verifications = append(verifications, taskorchestration.NewChildVerification(child.ID, "Verified "+child.Title+" against the parent outcome.", now))
+	}
+	parentRecord.Metadata, err = taskorchestration.Apply(parentRecord.Metadata, taskorchestration.Update{
+		ChildVerifications: verifications,
+		IntegrationCheck:   taskorchestration.NewIntegrationCheck("passed", "Ran the combined launch smoke test across landing, billing, and analytics.", now),
+		OutcomeAssessment:  taskorchestration.NewOutcomeAssessment(true, "The launch integration gate outcome is satisfied.", now),
+	})
+	if err != nil {
+		t.Fatalf("Apply parent orchestration metadata: %v", err)
+	}
+	if _, err := taskRepo.Update(ctx, parentRecord); err != nil {
+		t.Fatalf("Update parent metadata: %v", err)
+	}
+
+	completed, err := svc.TransitionStatus(ctx, parentRecord.ID, "done", Actor{Type: "agent", ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("TransitionStatus done after verification: %v", err)
+	}
+	if completed.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", completed.WorkStatus)
+	}
+}
+
 func TestTaskServiceIntegrationQueueRejectsOversizedUnsplittableWork(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -894,6 +980,44 @@ func newTaskIntegrationService(t *testing.T, pool *pgxpool.Pool) TaskService {
 		t.Fatalf("NewService: %v", err)
 	}
 	return svc
+}
+
+func markTaskReadyForDone(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID, flowTemplateID uuid.UUID) {
+	t.Helper()
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	taskRecord, err := taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+
+	nodes, err := repo.NewFlowNodeRepo(pool).GetByTemplateOrdered(ctx, flowTemplateID)
+	if err != nil {
+		t.Fatalf("GetByTemplateOrdered: %v", err)
+	}
+	if len(nodes) == 0 {
+		t.Fatal("flow nodes len = 0, want > 0")
+	}
+
+	terminalNode := nodes[len(nodes)-1]
+	taskRecord.FlowTemplateID = &flowTemplateID
+	taskRecord.CurrentFlowNodeID = &terminalNode.ID
+	taskRecord.WorkStatus = "review"
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update task terminal state: %v", err)
+	}
+
+	execRepo := repo.NewFlowNodeExecutionRepo(pool)
+	for _, node := range nodes {
+		if _, err := execRepo.Create(ctx, repo.FlowNodeExecution{
+			TaskID:      taskID,
+			FlowNodeID:  node.ID,
+			VisitNumber: 1,
+			Status:      "completed",
+		}); err != nil {
+			t.Fatalf("Create flow execution for node %s: %v", node.ID, err)
+		}
+	}
 }
 
 func writeTaskRecoveryWorkspaceFiles(t *testing.T, projectSlug, targetPath, artifactPath, targetBody, failureReason string) {

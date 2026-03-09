@@ -205,6 +205,37 @@ func TestParseDecompositionReferences(t *testing.T) {
 	}
 }
 
+func TestApplyChildMetadataSetsParentReference(t *testing.T) {
+	parentID := uuid.New()
+	metadata := ApplyChildMetadata(json.RawMessage(`{"preserve":"yes"}`), parentID, 4)
+
+	if got := ParseParentTaskID(metadata); got != parentID {
+		t.Fatalf("ParseParentTaskID = %s, want %s", got, parentID)
+	}
+	if got, ok := ParseWorkstreamIndex(metadata); !ok || got != 4 {
+		t.Fatalf("ParseWorkstreamIndex = (%d, %t), want (4, true)", got, ok)
+	}
+}
+
+func TestAppendChildTaskIDPreservesExistingChildIDs(t *testing.T) {
+	firstChildID := uuid.New()
+	secondChildID := uuid.New()
+	metadata := ApplyMetadata(json.RawMessage(`{"preserve":"yes"}`), Plan{
+		RequiresDecomposition: true,
+		PrimaryDeliverable:    "Primary",
+		Deliverables:          []string{"Primary", "Child"},
+	}, "source", []uuid.UUID{firstChildID})
+
+	updated := AppendChildTaskID(metadata, secondChildID)
+	childIDs := ParseChildTaskIDs(updated)
+	if len(childIDs) != 2 {
+		t.Fatalf("ParseChildTaskIDs len = %d, want 2", len(childIDs))
+	}
+	if childIDs[0] != firstChildID || childIDs[1] != secondChildID {
+		t.Fatalf("ParseChildTaskIDs = %v, want [%s %s]", childIDs, firstChildID, secondChildID)
+	}
+}
+
 func TestApplyQueueDecompositionModeRoundTrip(t *testing.T) {
 	metadata := ApplyQueueDecompositionMode(json.RawMessage(`{"preserve":"yes"}`), QueueDecompositionModeParallelChildren)
 
