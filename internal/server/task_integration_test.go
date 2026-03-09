@@ -114,6 +114,77 @@ func TestTaskHTTPCreateQueueReviewDecisionLifecycle(t *testing.T) {
 	}
 }
 
+func TestTaskHTTPReviewDecisionFlowBackedApproveUsesAdvanceFlowEX331(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-review-flow-approve", false)
+	pmAgent := seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	graph := seedTaskFlowGraph(t, testServer.Pool, org.ID, project.ID, pmAgent.ID, adminUser.ID, true)
+	taskRecord := seedTaskForFlowTemplate(t, testServer.Pool, org.ID, project.ID, graph.Template.ID, graph.Review.ID, "review")
+	seedActiveReviewExecutionState(t, testServer.Pool, org.ID, taskRecord.ID, graph, pmAgent.ID)
+	seedTaskReviewInboxItem(t, testServer.Pool, org.ID, project.ID, taskRecord.ID, adminUser.ID)
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	approved := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/review-decision", map[string]any{
+		"decision": "approve",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if approved.StatusCode != http.StatusOK {
+		t.Fatalf("review decision status = %d, want %d body=%s", approved.StatusCode, http.StatusOK, string(approved.Body))
+	}
+	if got := jsonPathString(t, approved.Body, "data", "work_status"); got != "in_progress" {
+		t.Fatalf("work_status = %q, want in_progress body=%s", got, string(approved.Body))
+	}
+	if got := jsonPathString(t, approved.Body, "data", "current_flow_node_id"); got != graph.Done.ID.String() {
+		t.Fatalf("current_flow_node_id = %q, want %s body=%s", got, graph.Done.ID, string(approved.Body))
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(testServer.Pool).GetActive(context.Background(), taskRecord.ID, graph.Done.ID)
+	if err != nil {
+		t.Fatalf("GetActive done execution: %v", err)
+	}
+	if execution.Status != "active" {
+		t.Fatalf("done execution status = %q, want active", execution.Status)
+	}
+}
+
+func TestTaskHTTPReviewDecisionFlowBackedRejectUsesRejectFlowEX331(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-review-flow-reject", false)
+	pmAgent := seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	graph := seedTaskFlowGraph(t, testServer.Pool, org.ID, project.ID, pmAgent.ID, adminUser.ID, true)
+	taskRecord := seedTaskForFlowTemplate(t, testServer.Pool, org.ID, project.ID, graph.Template.ID, graph.Review.ID, "review")
+	seedActiveReviewExecutionState(t, testServer.Pool, org.ID, taskRecord.ID, graph, pmAgent.ID)
+	seedTaskReviewInboxItem(t, testServer.Pool, org.ID, project.ID, taskRecord.ID, adminUser.ID)
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	rejected := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/review-decision", map[string]any{
+		"decision": "reject",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if rejected.StatusCode != http.StatusOK {
+		t.Fatalf("review decision status = %d, want %d body=%s", rejected.StatusCode, http.StatusOK, string(rejected.Body))
+	}
+	if got := jsonPathString(t, rejected.Body, "data", "work_status"); got != "in_progress" {
+		t.Fatalf("work_status = %q, want in_progress body=%s", got, string(rejected.Body))
+	}
+	if got := jsonPathString(t, rejected.Body, "data", "current_flow_node_id"); got != graph.Work.ID.String() {
+		t.Fatalf("current_flow_node_id = %q, want %s body=%s", got, graph.Work.ID, string(rejected.Body))
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(testServer.Pool).GetActive(context.Background(), taskRecord.ID, graph.Work.ID)
+	if err != nil {
+		t.Fatalf("GetActive work execution: %v", err)
+	}
+	if execution.Status != "active" {
+		t.Fatalf("work execution status = %q, want active", execution.Status)
+	}
+	if execution.VisitNumber != 2 {
+		t.Fatalf("work execution visit_number = %d, want 2", execution.VisitNumber)
+	}
+}
+
 func TestTaskHTTPQueueRequiresFlowTemplate(t *testing.T) {
 	testServer, org, adminUser, _ := newTaskTestServer(t)
 	defer testServer.Close()
@@ -1859,6 +1930,72 @@ func seedTaskForFlowTemplate(t *testing.T, pool *pgxpool.Pool, orgID, projectID,
 		t.Fatalf("set visualization task current node: %v", err)
 	}
 	return taskRecord
+}
+
+func seedActiveReviewExecutionState(t *testing.T, pool *pgxpool.Pool, orgID, taskID uuid.UUID, graph seededTaskFlowGraph, workActorID uuid.UUID) {
+	t.Helper()
+
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	execRepo := repo.NewFlowNodeExecutionRepo(pool)
+
+	workSession := createTaskFlowSession(t, sessionRepo, orgID, taskID, "work")
+	reviewSession := createTaskFlowSession(t, sessionRepo, orgID, taskID, "review")
+
+	workMetadata, err := json.Marshal(map[string]any{
+		"completed_by": map[string]any{
+			"type": "agent",
+			"id":   workActorID.String(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal work metadata: %v", err)
+	}
+
+	workCompletedAt := time.Now().UTC().Add(-time.Minute)
+	if _, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskID,
+		FlowNodeID:  graph.Work.ID,
+		VisitNumber: 1,
+		Status:      "completed",
+		SessionID:   &workSession.ID,
+		StartedAt:   workCompletedAt.Add(-time.Minute),
+		CompletedAt: &workCompletedAt,
+		Metadata:    workMetadata,
+	}); err != nil {
+		t.Fatalf("create completed work execution: %v", err)
+	}
+
+	if _, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskID,
+		FlowNodeID:  graph.Review.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &reviewSession.ID,
+		StartedAt:   time.Now().UTC(),
+		Metadata:    json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("create active review execution: %v", err)
+	}
+}
+
+func seedTaskReviewInboxItem(t *testing.T, pool *pgxpool.Pool, orgID, projectID, taskID, targetUserID uuid.UUID) {
+	t.Helper()
+
+	body := "Task review required"
+	_, err := repo.NewInboxItemRepo(pool).Create(context.Background(), repo.InboxItem{
+		OrganizationID:  orgID,
+		TargetUserID:    &targetUserID,
+		ItemType:        "task_review",
+		SourceProjectID: &projectID,
+		SourceTaskID:    &taskID,
+		CreatedByType:   "system",
+		Title:           "Task review required",
+		Body:            &body,
+		ActionPayload:   json.RawMessage(`{"action":"review"}`),
+	})
+	if err != nil {
+		t.Fatalf("create task review inbox: %v", err)
+	}
 }
 
 func createTaskFlowSession(t *testing.T, sessionRepo *repo.ChatSessionRepo, orgID, taskID uuid.UUID, mode string) repo.ChatSession {

@@ -1100,21 +1100,59 @@ func (h taskHandlers) reviewDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := "done"
-	if decision == "reject" {
-		status = "in_progress"
+	useFlowReviewDecision := false
+	if taskRecord.FlowTemplateID != nil && taskRecord.CurrentFlowNodeID != nil && h.flowNodes != nil {
+		currentNode, err := h.flowNodes.GetByID(r.Context(), *taskRecord.CurrentFlowNodeID)
+		if err != nil {
+			h.respondTaskError(responder, w, err)
+			return
+		}
+		useFlowReviewDecision = strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review")
 	}
-	updated, err := h.taskService.TransitionStatus(r.Context(), taskID, status, tasksvc.Actor{Type: "human_user", ID: principal.UserID})
-	if err != nil {
-		h.respondTaskError(responder, w, err)
-		return
+
+	var updated repo.ProjectTask
+	if useFlowReviewDecision {
+		if h.flowService == nil {
+			responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "flow service unavailable")
+			return
+		}
+		actor := flowsvc.Actor{Type: "human_user", ID: principal.UserID}
+		if decision == "approve" {
+			_, err = h.flowService.AdvanceFlow(r.Context(), taskID, actor)
+		} else {
+			_, err = h.flowService.RejectFlowNode(r.Context(), taskID, actor)
+		}
+		if err != nil {
+			if errors.Is(err, flowsvc.ErrFlowNotStarted) || errors.Is(err, repo.ErrNotFound) {
+				responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+				return
+			}
+			h.respondTaskError(responder, w, err)
+			return
+		}
+		updated, err = h.tasks.GetByID(r.Context(), taskID)
+		if err != nil {
+			h.respondTaskError(responder, w, err)
+			return
+		}
+	} else {
+		status := "done"
+		if decision == "reject" {
+			status = "in_progress"
+		}
+		refreshed, err := h.taskService.TransitionStatus(r.Context(), taskID, status, tasksvc.Actor{Type: "human_user", ID: principal.UserID})
+		if err != nil {
+			h.respondTaskError(responder, w, err)
+			return
+		}
+		updated = *refreshed
 	}
 
 	if pendingItem != nil && h.inbox != nil && !pendingItem.IsActed {
 		_, _ = h.inbox.MarkActed(r.Context(), pendingItem.ID, principal.UserID)
 	}
 
-	responder.JSON(w, http.StatusOK, h.toTaskResponse(r.Context(), *updated))
+	responder.JSON(w, http.StatusOK, h.toTaskResponse(r.Context(), updated))
 }
 
 func (h taskHandlers) getTaskFlow(w http.ResponseWriter, r *http.Request) {
