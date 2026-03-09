@@ -21,6 +21,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
+	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/model"
@@ -36,48 +37,54 @@ import (
 )
 
 const (
-	AgentTurnJobType                = "agent_turn"
-	defaultAgentTurnJobPriority     = 70
-	defaultMaxToolCalls             = 75
-	defaultSyncMaxDuration          = 5 * time.Minute
-	defaultAsyncMaxDuration         = 30 * time.Minute
-	defaultListeningEvalDelay       = 500 * time.Millisecond
-	defaultAutoContinueDelay        = 2 * time.Second
-	defaultModelRetryBudget         = 3
-	defaultRateLimitBackoff         = 30 * time.Second
-	maxRateLimitBackoff             = 30 * time.Minute
-	maxRateLimitRetries             = 5
-	maxConsecutiveAutoTurns         = 10
-	maxProjectBootstrapAutoTurns    = 3
-	defaultSummarizeLayerBudget     = 0
-	chunkPollSteerEveryNChunks      = 10
-	maxContinuationTurnDepth        = 3
-	defaultTurnConsumerName         = "turn-engine.user-message"
-	defaultReactionConsumerName     = "turn-engine.reactions"
-	defaultTurnCompletedName        = "turn-engine.turn-completed"
-	defaultCancelConsumerPrefix     = "turn-engine.cancel"
-	stopReasonMaxToolCalls          = "max_tool_calls"
-	stopReasonMaxDuration           = "max_duration"
-	stopReasonRecoveryCLIRejected   = "model_error"
-	stopReasonRecoveryContinuation  = stopReasonRecoveryCLIRejected
-	stopReasonRecoveryFileRejected  = "recovery_content_required"
-	stopReasonRecoveryFileFallback  = stopReasonRecoveryCLIRejected
-	stopReasonValidationBlocked     = "validation_loop_blocked"
-	recoveryActionValidationResume  = "resume_validation_blocked_task"
-	workerPromptTokenGuardrail      = 32000
-	defaultPromptTokenGuardrail     = 64000
-	validationLoopBlockThreshold    = 3
-	validationLoopSuppressionReason = "validation_loop_blocked"
-	recoveryCLIRepairBudget         = 1
-	recoveryFileWriteRepairBudget   = 1
-	recoveryArtifactDir             = ".ottercamp/recovery"
-	recoveryResumeExcerptChars      = 3000
-	projectBootstrapMetadataKey     = "project_bootstrap"
-	projectBootstrapStatusActive    = "active"
-	projectBootstrapStatusCompleted = "completed"
-	projectBootstrapStatusFailed    = "failed"
-	projectBootstrapFailureStalled  = "stalled"
-	projectBootstrapSource          = "project_bootstrap"
+	AgentTurnJobType                          = "agent_turn"
+	defaultAgentTurnJobPriority               = 70
+	defaultMaxToolCalls                       = 75
+	defaultSyncMaxDuration                    = 5 * time.Minute
+	defaultAsyncMaxDuration                   = 30 * time.Minute
+	defaultListeningEvalDelay                 = 500 * time.Millisecond
+	defaultAutoContinueDelay                  = 2 * time.Second
+	defaultModelRetryBudget                   = 3
+	defaultRateLimitBackoff                   = 30 * time.Second
+	maxRateLimitBackoff                       = 30 * time.Minute
+	maxRateLimitRetries                       = 5
+	maxConsecutiveAutoTurns                   = 10
+	maxProjectBootstrapAutoTurns              = 3
+	defaultSummarizeLayerBudget               = 0
+	chunkPollSteerEveryNChunks                = 10
+	maxContinuationTurnDepth                  = 3
+	defaultTurnConsumerName                   = "turn-engine.user-message"
+	defaultReactionConsumerName               = "turn-engine.reactions"
+	defaultTurnCompletedName                  = "turn-engine.turn-completed"
+	defaultCancelConsumerPrefix               = "turn-engine.cancel"
+	stopReasonMaxToolCalls                    = "max_tool_calls"
+	stopReasonMaxDuration                     = "max_duration"
+	stopReasonRecoveryCLIRejected             = "model_error"
+	stopReasonRecoveryContinuation            = stopReasonRecoveryCLIRejected
+	stopReasonRecoveryFileRejected            = "recovery_content_required"
+	stopReasonRecoveryFileFallback            = stopReasonRecoveryCLIRejected
+	stopReasonValidationBlocked               = "validation_loop_blocked"
+	recoveryActionValidationResume            = "resume_validation_blocked_task"
+	workerPromptTokenGuardrail                = 32000
+	defaultPromptTokenGuardrail               = 64000
+	validationLoopBlockThreshold              = 3
+	validationLoopSuppressionReason           = "validation_loop_blocked"
+	recoveryCLIRepairBudget                   = 1
+	recoveryFileWriteRepairBudget             = 1
+	recoveryArtifactDir                       = ".ottercamp/recovery"
+	recoveryResumeExcerptChars                = 3000
+	projectBootstrapMetadataKey               = "project_bootstrap"
+	projectBootstrapStatusActive              = "active"
+	projectBootstrapStatusCompleted           = "completed"
+	projectBootstrapStatusFailed              = "failed"
+	projectBootstrapFailureStalled            = "stalled"
+	projectBootstrapFailureMissingAssignments = "missing_assignments"
+	projectBootstrapFailureCompoundParent     = "compound_parent_missing_children"
+	projectBootstrapFailureFirstWaveFlow      = "first_wave_flow_invalid"
+	projectBootstrapValidationPending         = "pending"
+	projectBootstrapValidationPassed          = "passed"
+	projectBootstrapValidationFailed          = "failed"
+	projectBootstrapSource                    = "project_bootstrap"
 )
 
 var (
@@ -985,6 +992,10 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	state.AssignmentCount = progress.AssignmentCount
 	state.PlannedTaskCount = progress.PlannedTaskCount
 	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
+	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
+	state.ValidationStatus = progress.ValidationStatus
+	state.ValidationFailureClass = progress.ValidationFailureClass
+	state.ValidationFailureReason = progress.ValidationFailureReason
 	state.UpdatedAt = &now
 	state.CompletedAt = nil
 	state.FailedAt = nil
@@ -1006,6 +1017,18 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		state.CompletedAt = &now
 		state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
 		return e.updateProjectBootstrapState(ctx, session, state)
+	}
+
+	if progress.ValidationFailed() {
+		state.Status = projectBootstrapStatusFailed
+		state.FailedAt = &now
+		state.FailureClass = progress.ValidationFailureClass
+		state.FailureReason = progress.ValidationFailureReason
+		if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
+			return err
+		}
+		_, _ = e.appendSystemMessage(ctx, turnID, session.ID, buildProjectBootstrapFailureMessage(state.FailureReason))
+		return nil
 	}
 
 	if state.AutoTurnCount >= maxProjectBootstrapAutoTurns {
@@ -1049,11 +1072,22 @@ type projectBootstrapProgress struct {
 	AssignmentCount          int
 	PlannedTaskCount         int
 	PlannedFlowTemplateCount int
-	FirstWaveReady           bool
+	FirstWaveTaskCount       int
+	ValidationStatus         string
+	ValidationFailureClass   string
+	ValidationFailureReason  string
 }
 
 func (p projectBootstrapProgress) Materialized() bool {
-	return p.AssignmentCount > 0 && p.PlannedTaskCount > 0 && p.PlannedFlowTemplateCount > 0 && p.FirstWaveReady
+	return p.ValidationStatus == projectBootstrapValidationPassed &&
+		p.AssignmentCount > 0 &&
+		p.PlannedTaskCount > 0 &&
+		p.PlannedFlowTemplateCount > 0 &&
+		p.FirstWaveTaskCount > 0
+}
+
+func (p projectBootstrapProgress) ValidationFailed() bool {
+	return p.ValidationStatus == projectBootstrapValidationFailed
 }
 
 type projectBootstrapState struct {
@@ -1067,6 +1101,10 @@ type projectBootstrapState struct {
 	AssignmentCount          int        `json:"assignment_count,omitempty"`
 	PlannedTaskCount         int        `json:"planned_task_count,omitempty"`
 	PlannedFlowTemplateCount int        `json:"planned_flow_template_count,omitempty"`
+	FirstWaveTaskCount       int        `json:"first_wave_task_count,omitempty"`
+	ValidationStatus         string     `json:"validation_status,omitempty"`
+	ValidationFailureClass   string     `json:"validation_failure_class,omitempty"`
+	ValidationFailureReason  string     `json:"validation_failure_reason,omitempty"`
 	FailureClass             string     `json:"failure_class,omitempty"`
 	FailureReason            string     `json:"failure_reason,omitempty"`
 	StartedAt                *time.Time `json:"started_at,omitempty"`
@@ -1077,148 +1115,188 @@ type projectBootstrapState struct {
 }
 
 func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID uuid.UUID) (projectBootstrapProgress, error) {
-	progress := projectBootstrapProgress{}
+	progress := projectBootstrapProgress{ValidationStatus: projectBootstrapValidationPending}
 	if e == nil || e.pool == nil || projectID == uuid.Nil {
 		return progress, nil
 	}
 
-	var bootstrapStatus string
-	if err := e.pool.QueryRow(ctx, `
-		SELECT id, COALESCE(LOWER(work_status), '')
-		FROM project_task
-		WHERE project_id = $1
-		  AND COALESCE((metadata->>'bootstrap_gate')::boolean, false)
-		ORDER BY task_number ASC, id ASC
-		LIMIT 1
-	`, projectID).Scan(&progress.BootstrapTaskID, &bootstrapStatus); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return progress, nil
-		}
-		return projectBootstrapProgress{}, err
-	}
-	progress.BootstrapTaskOutstanding = bootstrapStatus != "done" && bootstrapStatus != "cancelled"
-
-	if err := e.pool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM agent_project_assignment
-		WHERE project_id = $1
-		  AND is_active = true
-	`, projectID).Scan(&progress.AssignmentCount); err != nil {
-		return projectBootstrapProgress{}, err
-	}
-	rows, err := e.pool.Query(ctx, `
-		SELECT id, COALESCE(LOWER(work_status), ''), metadata
-		FROM project_task
-		WHERE project_id = $1
-		  AND NOT COALESCE((metadata->>'bootstrap_gate')::boolean, false)
-	`, projectID)
+	assignments, err := repo.NewAgentProjectAssignmentRepo(e.pool).ListByProject(ctx, projectID)
 	if err != nil {
 		return projectBootstrapProgress{}, err
 	}
-	defer rows.Close()
+	progress.AssignmentCount = len(assignments)
 
-	plannedTasks := make([]projectBootstrapPlannedTask, 0)
-	for rows.Next() {
-		var taskRecord projectBootstrapPlannedTask
-		if err := rows.Scan(&taskRecord.ID, &taskRecord.WorkStatus, &taskRecord.Metadata); err != nil {
-			return projectBootstrapProgress{}, err
-		}
-		plannedTasks = append(plannedTasks, taskRecord)
-	}
-	if err := rows.Err(); err != nil {
+	tasks, err := repo.NewProjectTaskRepo(e.pool).ListByProject(ctx, projectID)
+	if err != nil {
 		return projectBootstrapProgress{}, err
+	}
+
+	plannedTasks := make([]repo.ProjectTask, 0, len(tasks))
+	childCounts := make(map[uuid.UUID]int)
+	bootstrapTaskNumber := 0
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			if progress.BootstrapTaskID == uuid.Nil || (task.TaskNumber > 0 && (bootstrapTaskNumber == 0 || task.TaskNumber < bootstrapTaskNumber)) {
+				progress.BootstrapTaskID = task.ID
+				progress.BootstrapTaskOutstanding = !projectBootstrapTaskStatusTerminal(task.WorkStatus)
+				bootstrapTaskNumber = task.TaskNumber
+			}
+			continue
+		}
+		plannedTasks = append(plannedTasks, task)
+		if parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"]); ok && parentID != uuid.Nil {
+			childCounts[parentID]++
+		}
 	}
 	progress.PlannedTaskCount = len(plannedTasks)
-	progress.FirstWaveReady = projectBootstrapFirstWaveReady(plannedTasks)
-	if err := e.pool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM flow_template
-		WHERE project_id = $1
-		  AND id <> (
-			SELECT flow_template_id
-			FROM project_task
-			WHERE project_id = $1
-			  AND COALESCE((metadata->>'bootstrap_gate')::boolean, false)
-			ORDER BY task_number ASC, id ASC
-			LIMIT 1
-		  )
-	`, projectID).Scan(&progress.PlannedFlowTemplateCount); err != nil {
+	if len(plannedTasks) == 0 {
+		return progress, nil
+	}
+	if progress.AssignmentCount == 0 {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureMissingAssignments
+		progress.ValidationFailureReason = "kickoff validation failed: planned tasks were created before any active project assignments were persisted"
+		return progress, nil
+	}
+
+	firstWaveTasks := make([]repo.ProjectTask, 0, len(plannedTasks))
+	firstWaveTemplateIDs := make(map[uuid.UUID]struct{})
+	for _, task := range plannedTasks {
+		childCount := childCounts[task.ID]
+		if plan := taskdecomp.Analyze(task.Title, task.Description); plan.RequiresDecomposition && childCount == 0 {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
+			progress.ValidationFailureReason = buildProjectBootstrapCompoundParentFailureReason(task)
+			return progress, nil
+		}
+		if childCount > 0 && projectBootstrapTaskEnteredExecution(task.WorkStatus) {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
+			progress.ValidationFailureReason = buildProjectBootstrapParentExecutionFailureReason(task, childCount)
+			return progress, nil
+		}
+		if childCount > 0 {
+			continue
+		}
+		firstWaveTasks = append(firstWaveTasks, task)
+		if task.FlowTemplateID != nil && *task.FlowTemplateID != uuid.Nil {
+			firstWaveTemplateIDs[*task.FlowTemplateID] = struct{}{}
+		}
+	}
+	progress.FirstWaveTaskCount = len(firstWaveTasks)
+	progress.PlannedFlowTemplateCount = len(firstWaveTemplateIDs)
+	if len(firstWaveTasks) == 0 {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
+		progress.ValidationFailureReason = "kickoff validation failed: no bounded first-wave tasks remain after excluding orchestration-only parent workstreams"
+		return progress, nil
+	}
+
+	failureClass, failureReason, err := e.validateProjectBootstrapFirstWaveTasks(ctx, firstWaveTasks)
+	if err != nil {
 		return projectBootstrapProgress{}, err
 	}
+	if failureClass != "" {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = failureClass
+		progress.ValidationFailureReason = failureReason
+		return progress, nil
+	}
+
+	progress.ValidationStatus = projectBootstrapValidationPassed
 	return progress, nil
 }
 
-type projectBootstrapPlannedTask struct {
-	ID         uuid.UUID
-	WorkStatus string
-	Metadata   json.RawMessage
+func projectBootstrapTaskStatusTerminal(status string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	return normalized == "done" || normalized == "cancelled"
 }
 
-func projectBootstrapFirstWaveReady(tasks []projectBootstrapPlannedTask) bool {
-	parentChildren := make(map[uuid.UUID][]projectBootstrapPlannedTask)
-	parentsByID := make(map[uuid.UUID]projectBootstrapPlannedTask, len(tasks))
-	for _, taskRecord := range tasks {
-		parentsByID[taskRecord.ID] = taskRecord
-		parentID := taskdecomp.ParseParentTaskID(taskRecord.Metadata)
-		if parentID == uuid.Nil {
-			continue
-		}
-		parentChildren[parentID] = append(parentChildren[parentID], taskRecord)
-	}
-	if len(parentChildren) == 0 {
+func projectBootstrapTaskEnteredExecution(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "in_progress", "review", "done":
 		return true
+	default:
+		return false
+	}
+}
+
+func (e *TurnEngine) validateProjectBootstrapFirstWaveTasks(ctx context.Context, tasks []repo.ProjectTask) (string, string, error) {
+	if e == nil || e.pool == nil {
+		return "", "", nil
 	}
 
-	for parentID, children := range parentChildren {
-		executableChildren := false
-		childFirstWaveReady := false
-		for _, child := range children {
-			if isProjectBootstrapTaskTerminal(child.WorkStatus) {
-				continue
+	templateRepo := repo.NewFlowTemplateRepo(e.pool)
+	nodeRepo := repo.NewFlowNodeRepo(e.pool)
+	templateCache := make(map[uuid.UUID]repo.FlowTemplate)
+	nodeCache := make(map[uuid.UUID][]repo.FlowNode)
+
+	for _, task := range tasks {
+		if task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {
+			return projectBootstrapFailureFirstWaveFlow, buildProjectBootstrapFirstWaveFlowFailureReason(task, "no flow template is attached"), nil
+		}
+
+		templateID := *task.FlowTemplateID
+		template, ok := templateCache[templateID]
+		if !ok {
+			loaded, err := templateRepo.GetByID(ctx, templateID)
+			if err != nil {
+				if errors.Is(err, repo.ErrNotFound) {
+					return projectBootstrapFailureFirstWaveFlow, buildProjectBootstrapFirstWaveFlowFailureReason(task, "the attached flow template no longer exists"), nil
+				}
+				return "", "", err
 			}
-			executableChildren = true
-			if projectBootstrapChildEnteredFirstWave(child.WorkStatus) {
-				childFirstWaveReady = true
+			template = loaded
+			templateCache[templateID] = template
+		}
+
+		nodes, ok := nodeCache[templateID]
+		if !ok {
+			loaded, err := nodeRepo.GetByTemplateOrdered(ctx, templateID)
+			if err != nil {
+				return "", "", err
 			}
+			nodes = loaded
+			nodeCache[templateID] = nodes
 		}
-		if !executableChildren {
-			continue
-		}
-		if parent, ok := parentsByID[parentID]; ok && projectBootstrapParentEnteredExecution(parent.WorkStatus) {
-			return false
-		}
-		if !childFirstWaveReady {
-			return false
+
+		if err := flowpolicy.ValidateExecutableFlowTemplate(template.StartNodeID, nodes); err != nil {
+			return projectBootstrapFailureFirstWaveFlow, buildProjectBootstrapFirstWaveFlowFailureReason(task, err.Error()), nil
 		}
 	}
-	return true
+
+	return "", "", nil
 }
 
-func isProjectBootstrapTaskTerminal(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "done", "cancelled":
-		return true
-	default:
-		return false
-	}
+func buildProjectBootstrapCompoundParentFailureReason(task repo.ProjectTask) string {
+	return fmt.Sprintf("kickoff validation failed: %s is still a broad parent workstream and must be split into bounded executable child tasks before bootstrap can complete", projectBootstrapTaskLabel(task))
 }
 
-func projectBootstrapParentEnteredExecution(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "queued", "in_progress":
-		return true
-	default:
-		return false
-	}
+func buildProjectBootstrapParentExecutionFailureReason(task repo.ProjectTask, childCount int) string {
+	return fmt.Sprintf("kickoff validation failed: %s entered execution even though %d executable child task(s) already exist, so the parent must remain orchestration-only", projectBootstrapTaskLabel(task), childCount)
 }
 
-func projectBootstrapChildEnteredFirstWave(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "", "draft", "cancelled":
-		return false
-	default:
-		return true
+func buildProjectBootstrapFirstWaveFlowFailureReason(task repo.ProjectTask, detail string) string {
+	trimmed := strings.TrimSpace(detail)
+	if trimmed == "" {
+		trimmed = "the attached flow template cannot run"
 	}
+	return fmt.Sprintf("kickoff validation failed: first-wave %s cannot run because %s", projectBootstrapTaskLabel(task), trimmed)
+}
+
+func projectBootstrapTaskLabel(task repo.ProjectTask) string {
+	title := strings.TrimSpace(task.Title)
+	if task.TaskNumber > 0 && title != "" {
+		return fmt.Sprintf("task %d (%s)", task.TaskNumber, title)
+	}
+	if task.TaskNumber > 0 {
+		return fmt.Sprintf("task %d", task.TaskNumber)
+	}
+	if title != "" {
+		return fmt.Sprintf("task %s", title)
+	}
+	return "bootstrap task"
 }
 
 func (e *TurnEngine) projectBootstrapContinuationAgent(ctx context.Context, session *chat.ChatSession, latestResponderID uuid.UUID) uuid.UUID {
