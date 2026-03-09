@@ -912,6 +912,115 @@ func TestTaskQueueProcessorIntegrationHighRiskAsyncDecisionPausesTaskEX248(t *te
 	}
 }
 
+func TestTaskQueueProcessorIntegrationDurableRecoveryBlockKeepsRuntimeResumableEX331(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
+	defer stopTurnRuntime()
+
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Blocked recovery task should stay resumable",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	runRepo := NewRunRepository(fx.pool)
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	var runRecord Run
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		for _, candidate := range runs {
+			if candidate.Status == "in_progress" {
+				runRecord = candidate
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "docs/blog-post-ideas.md",
+		ArtifactPath:  ".ottercamp/recovery/docs/blog-post-ideas.md",
+		FailureReason: "assistant draft for docs/blog-post-ideas.md described intent to write the deliverable instead of the file body",
+		HaltTurnID:    uuid.NewString(),
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRecord.Metadata = checkpointMetadata
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update task checkpoint metadata: %v", err)
+	}
+
+	blockReason := "recovery halted after assistant draft for docs/blog-post-ideas.md described intent to write the deliverable instead of the file body; resume from .ottercamp/recovery/docs/blog-post-ideas.md and re-queue only after concrete content exists"
+	if _, err := fx.tasks.MarkBlocked(ctx, created.ID, blockReason, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		updatedRun, err := runRepo.Get(ctx, runRecord.ID)
+		if err != nil {
+			return false, err
+		}
+		if updatedRun.Status != "failed" {
+			return false, nil
+		}
+		contract := loadTaskRuntimeState(t, ctx, fx.pool, created.ID).Contract()
+		return contract.Status == "resumable", nil
+	})
+
+	updatedRun, err := runRepo.Get(ctx, runRecord.ID)
+	if err != nil {
+		t.Fatalf("Get run: %v", err)
+	}
+	if updatedRun.Status != "failed" {
+		t.Fatalf("run status = %q, want failed", updatedRun.Status)
+	}
+	if updatedRun.FailureClass == nil || *updatedRun.FailureClass != string(FailureClassTransient) {
+		t.Fatalf("failure_class = %v, want %q", updatedRun.FailureClass, FailureClassTransient)
+	}
+
+	contract := loadTaskRuntimeState(t, ctx, fx.pool, created.ID).Contract()
+	if contract.Status != "resumable" {
+		t.Fatalf("runtime status = %q, want resumable", contract.Status)
+	}
+	if contract.ResumeDisposition != "resumable" {
+		t.Fatalf("runtime resume_disposition = %q, want resumable", contract.ResumeDisposition)
+	}
+	if contract.FailureClass != string(FailureClassTransient) {
+		t.Fatalf("runtime failure_class = %q, want %q", contract.FailureClass, FailureClassTransient)
+	}
+	if contract.FailureReason != blockReason {
+		t.Fatalf("runtime failure_reason = %q, want %q", contract.FailureReason, blockReason)
+	}
+}
+
 func TestTaskQueueProcessorIntegrationAsyncDecisionDoesNotBypassActiveFlowNodeEX330(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)

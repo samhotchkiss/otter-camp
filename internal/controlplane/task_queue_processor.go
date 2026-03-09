@@ -13,6 +13,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
@@ -932,6 +933,21 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 	if payload.TaskID == uuid.Nil || event.OrganizationID == uuid.Nil {
 		return nil
 	}
+	failureClass := string(FailureClassPermanent)
+	if toStatus == "blocked" {
+		if p.tasks != nil {
+			taskRecord, err := p.tasks.GetByID(ctx, payload.TaskID)
+			if errors.Is(err, repo.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if taskHasDurableRecoveryCheckpoint(taskRecord) {
+				failureClass = string(FailureClassTransient)
+			}
+		}
+	}
 
 	for _, triggerType := range []string{taskQueueTriggerType, taskSupervisorTriggerType} {
 		// Complete terminal task tracking runs, or fail them permanently when the
@@ -943,7 +959,7 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 					if reason == "" {
 						reason = "task blocked"
 					}
-					_ = p.runs.FailRun(ctx, r.ID, reason, string(FailureClassPermanent))
+					_ = p.runs.FailRun(ctx, r.ID, reason, failureClass)
 					continue
 				}
 				_ = p.runs.CompleteRun(ctx, r.ID, json.RawMessage(`{"source":"task_completed_handler","task_status":"`+toStatus+`"}`))
@@ -976,6 +992,22 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 		}
 	}
 	return nil
+}
+
+func taskHasDurableRecoveryCheckpoint(taskRecord repo.ProjectTask) bool {
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		return false
+	}
+	if taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpoint) != "" {
+		return true
+	}
+	return strings.TrimSpace(checkpoint.TargetPath) != "" ||
+		strings.TrimSpace(checkpoint.ArtifactPath) != "" ||
+		strings.TrimSpace(checkpoint.FailureReason) != "" ||
+		len(checkpoint.PriorFailureReasons) != 0 ||
+		strings.TrimSpace(checkpoint.HaltTurnID) != "" ||
+		strings.TrimSpace(checkpoint.HistoryStartMessageID) != ""
 }
 
 func (p *TaskQueueProcessor) promoteSatisfiedDependentDraftTasks(ctx context.Context, projectID, completedTaskID uuid.UUID) (int, error) {
