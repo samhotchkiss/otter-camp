@@ -430,6 +430,7 @@ type toolValidationFailure struct {
 	FailureReason      string
 	Fingerprint        string
 	AttemptFingerprint string
+	TargetPath         string
 }
 
 type taskValidationGuardState = tasksvc.ValidationGuardState
@@ -3935,11 +3936,13 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 
 	next := current
 	blockedNow := false
+	var blockingFailure toolValidationFailure
 	for _, failure := range failures {
 		candidate, candidateBlocked := nextTaskValidationGuardState(next, rt.initialMessageID, rt.turn.ID, failure, e.now())
 		next = candidate
 		if candidateBlocked {
 			blockedNow = true
+			blockingFailure = failure
 			break
 		}
 	}
@@ -3958,8 +3961,19 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 		return false, nil
 	}
 
+	blockReason := buildValidationLoopBlockReason(next)
+	systemMessage := buildValidationLoopSystemMessage(next)
+	skipDefaultSystemMessage := false
+	if fileWriteReason, handled, err := e.handleBlockedFileWriteValidationLoop(ctx, rt, blockingFailure, blockReason); err != nil {
+		return false, err
+	} else {
+		if strings.TrimSpace(fileWriteReason) != "" {
+			blockReason = fileWriteReason
+		}
+		skipDefaultSystemMessage = handled
+	}
+
 	if !strings.EqualFold(strings.TrimSpace(updatedTask.WorkStatus), "blocked") {
-		blockReason := buildValidationLoopBlockReason(next)
 		if e.taskTransitions != nil {
 			if _, err := e.taskTransitions.MarkBlocked(ctx, updatedTask.ID, blockReason, tasksvc.Actor{Type: "system"}); err != nil {
 				return false, err
@@ -3974,10 +3988,46 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 
 	metrics.RecordAgentTurnValidationLoopBlock(next.ToolName, next.FailureCode)
 	rt.stopReason = stopReasonValidationBlocked
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildValidationLoopSystemMessage(next)); err != nil {
-		return false, err
+	if !skipDefaultSystemMessage {
+		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
+			return false, err
+		}
 	}
 	return true, nil
+}
+
+func (e *TurnEngine) handleBlockedFileWriteValidationLoop(ctx context.Context, rt *turnRuntime, failure toolValidationFailure, blockReason string) (string, bool, error) {
+	if e == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return "", false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(failure.ToolName), "file.write") {
+		return "", false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(failure.FailureCode), "content_required") {
+		return "", false, nil
+	}
+	targetPath := strings.TrimSpace(failure.TargetPath)
+	if targetPath == "" {
+		return "", false, nil
+	}
+	draft, _ := e.latestRecoveryAssistantDraftContent(ctx, rt)
+	artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, draft, blockReason)
+	if artifactErr != nil {
+		e.logger.Warn("validation loop: failed to persist file.write recovery artifact",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+			"error", artifactErr,
+		)
+	}
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, blockReason))
+	if err != nil {
+		return "", false, err
+	}
+	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, blockReason, message.ID); checkpointErr != nil {
+		return "", false, checkpointErr
+	}
+	return buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, blockReason), true, nil
 }
 
 func collectToolValidationFailures(calls []ToolCall, results []ToolResult) []toolValidationFailure {
@@ -4025,28 +4075,30 @@ func classifyToolValidationFailure(call ToolCall, result ToolResult) (toolValida
 	}
 	attemptFingerprint := toolargs.AttemptFingerprint(toolName, call.Arguments)
 
+	targetPath := validationFailureTargetPath(toolName, call.Arguments)
+
 	if hasRawToolArguments(call) {
 		reason := "malformed _raw arguments"
 		if code := strings.TrimSpace(toolResultErrorCode(result)); code != "" {
 			reason = fmt.Sprintf("malformed _raw arguments (%s)", code)
 		}
-		return buildToolValidationFailure(toolName, "malformed_arguments_raw", reason, attemptFingerprint), true
+		return buildToolValidationFailure(toolName, "malformed_arguments_raw", reason, attemptFingerprint, targetPath), true
 	}
 
 	if code := normalizeValidationFailureCode(toolResultErrorCode(result)); isToolValidationCode(code) {
-		return buildToolValidationFailure(toolName, code, strings.TrimSpace(toolResultErrorCode(result)), attemptFingerprint), true
+		return buildToolValidationFailure(toolName, code, strings.TrimSpace(toolResultErrorCode(result)), attemptFingerprint, targetPath), true
 	}
 
 	if reason := strings.TrimSpace(stripToolFailurePrefix(result.Error, toolName)); reason != "" {
 		if code := normalizeValidationFailureCode(reason); isToolValidationCode(code) {
-			return buildToolValidationFailure(toolName, code, reason, attemptFingerprint), true
+			return buildToolValidationFailure(toolName, code, reason, attemptFingerprint, targetPath), true
 		}
 	}
 
 	return toolValidationFailure{}, false
 }
 
-func buildToolValidationFailure(toolName, failureCode, failureReason, attemptFingerprint string) toolValidationFailure {
+func buildToolValidationFailure(toolName, failureCode, failureReason, attemptFingerprint, targetPath string) toolValidationFailure {
 	code := normalizeValidationFailureCode(failureCode)
 	if code == "" {
 		code = "validation_failure"
@@ -4063,7 +4115,16 @@ func buildToolValidationFailure(toolName, failureCode, failureReason, attemptFin
 		FailureReason:      reason,
 		Fingerprint:        strings.ToLower(strings.TrimSpace(toolName)) + ":" + code,
 		AttemptFingerprint: strings.TrimSpace(attemptFingerprint),
+		TargetPath:         strings.TrimSpace(targetPath),
 	}
+}
+
+func validationFailureTargetPath(toolName string, args map[string]any) string {
+	if !strings.EqualFold(strings.TrimSpace(toolName), "file.write") {
+		return ""
+	}
+	normalized := toolargs.Normalize("file.write", args)
+	return strings.TrimSpace(stringValue(normalized["path"]))
 }
 
 func hasRawToolArguments(call ToolCall) bool {

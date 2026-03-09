@@ -4894,6 +4894,28 @@ He said "ship it".
 	if strings.TrimSpace(guard.AttemptFingerprint) == "" {
 		t.Fatal("expected attempt fingerprint on validation guard")
 	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery file-write checkpoint metadata")
+	}
+	if checkpoint.TargetPath != "docs/outline.md" {
+		t.Fatalf("checkpoint target_path = %q, want docs/outline.md", checkpoint.TargetPath)
+	}
+	if strings.TrimSpace(checkpoint.ArtifactPath) == "" {
+		t.Fatal("expected checkpoint artifact_path")
+	}
+	projectRoot, err := workspace.ProjectRoot(fixture.engine.dataDir, project.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+	artifactAbs := filepath.Join(projectRoot, filepath.FromSlash(checkpoint.ArtifactPath))
+	artifactBytes, err := os.ReadFile(artifactAbs)
+	if err != nil {
+		t.Fatalf("read checkpoint artifact: %v", err)
+	}
+	if !strings.Contains(string(artifactBytes), "docs/outline.md") {
+		t.Fatalf("artifact missing target path, got:\n%s", string(artifactBytes))
+	}
 
 	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
 	if err != nil {
@@ -4909,7 +4931,7 @@ He said "ship it".
 		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"`) {
 			successfulWrites++
 		}
-		if item.Role == "system" && strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") {
+		if item.Role == "system" && (strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "validation loop blocked") || strings.Contains(strings.ToLower(strings.TrimSpace(item.Content)), "resume from `")) {
 			blockerMessages++
 		}
 	}
