@@ -3136,6 +3136,17 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects ws4 artifact recap placeholder narration",
+			content: "Good — I have the content strategy, the existing truncated draft (cuts off mid-Post 14), and the recovery notes. I can see what was already written (Posts 1–14, with Post 14 cut off) and what review feedback needs addressing.\n\n" +
+				"The fixes needed:\n" +
+				"1. Complete all 20 posts\n" +
+				"2. Keep the corrected pillar names\n" +
+				"3. Add the Three Stones tie-in\n" +
+				"4. Vary the AI/orchestration audience\n\n" +
+				"Now let me write the complete file.",
+			want: "intent to write the deliverable",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
