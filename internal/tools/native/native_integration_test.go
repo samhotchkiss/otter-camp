@@ -3276,6 +3276,145 @@ func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t
 	}
 }
 
+func TestIntegrationParentTaskCanReopenCompletedChildWithFeedback(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Launch integration gate",
+		Description:    stringPtr("Verify the bounded launch work together."),
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Billing workstream",
+		Description:    stringPtr("Finish the bounded billing handoff."),
+		WorkStatus:     "done",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+		Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentTask.ID, 2),
+	})
+	if err != nil {
+		t.Fatalf("create child task: %v", err)
+	}
+	parentTask.Metadata = taskdecomp.AppendChildTaskID(parentTask.Metadata, childTask.ID)
+	if _, err := taskRepo.Update(ctx, parentTask); err != nil {
+		t.Fatalf("update parent metadata: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	if _, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
+		"task_id":         childTask.ID.String(),
+		"work_status":     "queued",
+		"reopen_feedback": "Fix the checkout mismatch found during parent integration verification.",
+	}); err != nil {
+		t.Fatalf("task.update reopen child: %v", err)
+	}
+
+	reopened, err := taskRepo.GetByID(ctx, childTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID reopened child: %v", err)
+	}
+	if reopened.WorkStatus != "queued" {
+		t.Fatalf("child work_status = %q, want queued", reopened.WorkStatus)
+	}
+	if reopened.Description == nil || !strings.Contains(*reopened.Description, "Fix the checkout mismatch found during parent integration verification.") {
+		t.Fatalf("child description = %v, want reopen feedback", reopened.Description)
+	}
+}
+
+func TestIntegrationParentTaskCanCreateBoundedFollowOnChild(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Launch integration gate",
+		Description:    stringPtr("Verify the bounded launch work together."),
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	existingChild, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Landing page workstream",
+		Description:    stringPtr("Finish the landing page content pass."),
+		WorkStatus:     "done",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+		Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentTask.ID, 2),
+	})
+	if err != nil {
+		t.Fatalf("create existing child: %v", err)
+	}
+	parentTask.Metadata = taskdecomp.AppendChildTaskID(parentTask.Metadata, existingChild.ID)
+	if _, err := taskRepo.Update(ctx, parentTask); err != nil {
+		t.Fatalf("update parent metadata: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Analytics handoff patch",
+		"description":    "Add the missing analytics event coverage for checkout success only.",
+	})
+	if err != nil {
+		t.Fatalf("task.create follow-on child: %v", err)
+	}
+
+	childID := nestedUUID(t, out, "task", "id")
+	createdChild, err := taskRepo.GetByID(ctx, childID)
+	if err != nil {
+		t.Fatalf("GetByID created child: %v", err)
+	}
+	if taskdecomp.ParseParentTaskID(createdChild.Metadata) != parentTask.ID {
+		t.Fatalf("created child parent_task_id = %s, want %s", taskdecomp.ParseParentTaskID(createdChild.Metadata), parentTask.ID)
+	}
+	if createdChild.FlowTemplateID == nil || *createdChild.FlowTemplateID != template.ID {
+		t.Fatalf("created child flow_template_id = %v, want %s", createdChild.FlowTemplateID, template.ID)
+	}
+
+	updatedParent, err := taskRepo.GetByID(ctx, parentTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID updated parent: %v", err)
+	}
+	childIDs := taskdecomp.ParseChildTaskIDs(updatedParent.Metadata)
+	if len(childIDs) != 2 {
+		t.Fatalf("parent child_task_ids len = %d, want 2", len(childIDs))
+	}
+	if childIDs[1] != createdChild.ID {
+		t.Fatalf("parent child_task_ids[1] = %s, want %s", childIDs[1], createdChild.ID)
+	}
+}
+
 func TestIntegrationProjectSessionPlanningIgnoresStaleCrossProjectTaskBinding(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -3778,6 +3917,10 @@ func integrationExecCtxWithSession(orgID, agentID, sessionID uuid.UUID) context.
 		AgentID:        &agentID,
 		SessionID:      &sessionID,
 	})
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func nestedUUID(t *testing.T, payload map[string]any, key, sub string) uuid.UUID {

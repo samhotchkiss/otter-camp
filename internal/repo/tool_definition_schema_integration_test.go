@@ -40,8 +40,8 @@ func TestKeyToolSchemasExposeRequiredParameters(t *testing.T) {
 	checks := []schemaCheck{
 		{name: "file.read", requiredKeys: []string{"path"}, propertyKeys: []string{"path", "encoding", "max_bytes"}},
 		{name: "memory.query", requiredKeys: []string{"query"}, propertyKeys: []string{"query", "scope", "limit"}},
-		{name: "task.create", requiredKeys: []string{"project_id", "title"}, propertyKeys: []string{"project_id", "title", "description", "planning_artifacts", "planning_override_reason", "planning_follow_on_stop_reason"}},
-		{name: "task.update", requiredKeys: []string{"task_id"}, propertyKeys: []string{"task_id", "title", "description", "work_status", "flow_template_id", "assigned_agent_id", "planning_artifacts", "planning_override_reason", "planning_follow_on_stop_reason"}},
+		{name: "task.create", requiredKeys: []string{"project_id", "title"}, propertyKeys: []string{"project_id", "parent_task_id", "title", "description", "planning_artifacts", "planning_override_reason", "planning_follow_on_stop_reason"}},
+		{name: "task.update", requiredKeys: []string{"task_id"}, propertyKeys: []string{"task_id", "title", "description", "work_status", "flow_template_id", "assigned_agent_id", "reopen_feedback", "child_output_verifications", "integration_check", "outcome_assessment", "planning_artifacts", "planning_override_reason", "planning_follow_on_stop_reason"}},
 		{name: "agent.create_staff", requiredKeys: []string{"name", "agent_type", "system_prompt"}, propertyKeys: []string{"name", "agent_type", "system_prompt", "operator_instructions"}},
 		{name: "agent.assign_project", requiredKeys: []string{"agent_id", "project_id", "role"}, propertyKeys: []string{"agent_id", "project_id", "role"}},
 		{name: "flow.list_templates", propertyKeys: []string{"project_id"}},

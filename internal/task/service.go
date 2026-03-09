@@ -19,6 +19,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
@@ -932,6 +933,13 @@ func projectRequiresPMBeforeQueueSetting(settings json.RawMessage) bool {
 }
 
 func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.ProjectTask) error {
+	children, err := s.listDecompositionChildren(ctx, taskRecord)
+	if err != nil {
+		return err
+	}
+	if err := taskorchestration.ValidateCompletion(taskRecord, children); err != nil {
+		return err
+	}
 	if taskRecord.FlowTemplateID == nil || taskRecord.CurrentFlowNodeID == nil {
 		return ErrDoneRequiresTerminalFlow
 	}
