@@ -2501,6 +2501,7 @@ func (e *TurnEngine) currentRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	if !ok {
 		return nil, false
 	}
+	checkpoint = tasksvc.NormalizeRecoveryCheckpointForTask(taskRecord.Title, checkpoint)
 	return &checkpoint, true
 }
 

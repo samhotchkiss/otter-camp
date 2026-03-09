@@ -148,6 +148,24 @@ func TestAnalyzeClassifiesVerifiableRequestsAsExecutionFirst(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDoesNotOverrideExplicitStrategyWithRiskReadinessOnCriticalLanguage(t *testing.T) {
+	description := "Develop a comprehensive content strategy. The critical strategic piece is the unified narrative framework, plus migration strategy recommendations and an editorial calendar."
+
+	plan := Analyze("Content Strategy — Editorial Framework", &description)
+	if plan.Playbook != PlaybookStrategy {
+		t.Fatalf("Playbook = %q, want %q", plan.Playbook, PlaybookStrategy)
+	}
+}
+
+func TestAnalyzeDoesNotOverrideExplicitExecutionSpecWithRiskReadinessOnCriticalLanguage(t *testing.T) {
+	description := "Scrape every post from the legacy site, migrate them into the repo, and preserve metadata. Completeness is critical for this migration."
+
+	plan := Analyze("Content Migration — Scrape legacy posts", &description)
+	if plan.Playbook != PlaybookExecutionSpec {
+		t.Fatalf("Playbook = %q, want %q", plan.Playbook, PlaybookExecutionSpec)
+	}
+}
+
 func TestAnalyzeDiscoveryModeClassification(t *testing.T) {
 	tests := []struct {
 		name        string

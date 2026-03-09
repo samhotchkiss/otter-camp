@@ -26,6 +26,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/toolargs"
@@ -923,6 +924,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	}
 	var description *string
 	if value, ok := readString(input, "description"); ok {
+		value = tasksvc.NormalizeTaskDescriptionOutputPaths(title, value)
 		description = &value
 	}
 	var flowTemplateID *uuid.UUID
@@ -1071,8 +1073,13 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	}
 	if title, ok := readString(input, "title"); ok && title != "" {
 		current.Title = title
+		if current.Description != nil {
+			normalized := tasksvc.NormalizeTaskDescriptionOutputPaths(current.Title, *current.Description)
+			current.Description = &normalized
+		}
 	}
 	if description, ok := readString(input, "description"); ok {
+		description = tasksvc.NormalizeTaskDescriptionOutputPaths(current.Title, description)
 		current.Description = &description
 	}
 	if flowTemplateID, ok := readUUID(input, "flow_template_id"); ok && flowTemplateID != uuid.Nil {

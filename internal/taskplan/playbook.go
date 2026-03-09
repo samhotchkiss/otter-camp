@@ -574,7 +574,7 @@ func hasExplicitBacklogDecompositionRequest(text string) bool {
 }
 
 func selectPlaybook(text, workType, projectStage, evidenceMaturity, riskLevel string) string {
-	if workType == PlaybookRiskReadiness || riskLevel == RiskCritical {
+	if workType == PlaybookRiskReadiness {
 		return PlaybookRiskReadiness
 	}
 	if hasExplicitBacklogDecompositionRequest(text) {
@@ -582,6 +582,15 @@ func selectPlaybook(text, workType, projectStage, evidenceMaturity, riskLevel st
 	}
 	if shouldDefaultToRiskReadiness(text, projectStage, riskLevel) {
 		return PlaybookRiskReadiness
+	}
+	if riskLevel == RiskCritical {
+		switch workType {
+		case PlaybookStrategy, PlaybookExecutionSpec, PlaybookBacklogDecomposition, PlaybookDiscovery:
+			// Preserve explicit planning intent for strategy/spec/discovery work even when
+			// the task text says the stakes are critical.
+		default:
+			return PlaybookRiskReadiness
+		}
 	}
 
 	switch workType {

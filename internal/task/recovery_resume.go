@@ -85,7 +85,7 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 		guardCopy = &candidate
 	}
 	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok && hasDurableRecoveryCheckpoint(checkpoint) {
-		checkpointCopy := checkpoint
+		checkpointCopy := NormalizeRecoveryCheckpointForTask(taskRecord.Title, checkpoint)
 		blockerClass := taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpointCopy)
 		if blockerClass == "" {
 			blockerClass = RecoveryBlockerClassDurableRecoveryCheckpoint
@@ -190,8 +190,8 @@ func (s *service) rebuildDurableRecoveryCheckpointFromWorkspace(ctx context.Cont
 		updatedAt = s.clock.Now().UTC()
 	}
 	return taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(taskcheckpoint.RecoveryFileWriteCheckpoint{
-		TargetPath:    targetPath,
-		ArtifactPath:  artifactPath,
+		TargetPath:    CanonicalTaskOutputPath(taskRecord.Title, targetPath),
+		ArtifactPath:  CanonicalRecoveryArtifactPath(taskRecord.Title, artifactPath),
 		FailureReason: recoveryArtifactFailureReason(artifactDocument),
 		UpdatedAt:     updatedAt.Format(time.RFC3339Nano),
 	}), true, nil
@@ -216,6 +216,7 @@ func (s *service) rebuildDurableRecoveryCheckpointFromSessionState(ctx context.C
 	if !ok {
 		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, nil
 	}
+	checkpoint = NormalizeRecoveryCheckpointForTask(taskRecord.Title, checkpoint)
 
 	roots, err := s.recoveryWorkspaceRoots(ctx, taskRecord)
 	if err != nil {
