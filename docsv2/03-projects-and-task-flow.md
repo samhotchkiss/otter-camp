@@ -65,8 +65,8 @@ If Lori needs to create a brand-new PM during bootstrap, that PM candidate is cr
 
 - A **fresh kickoff** means "start this project again as a clean slate." The system creates at most one new live project and one canonical project-scoped planning session for that kickoff request.
 - Repeating or retrying the same fresh kickoff request must reuse that canonical live project/session path. The system must not silently create a second active project or a second parallel project-planning session for the same intended run.
-- Fresh kickoff planning maps each explicitly planned workstream to exactly one runtime task by default. Retries and recovery reuse or repair that same task set; they do not silently fan a planned task into extra top-level `(Workstream N)` siblings unless the planner or flow explicitly requested parallel child tasks.
-- When a planned workstream is explicitly decomposed into persisted child tasks, the parent workstream becomes orchestration-only. The first queued/executing wave must be the bounded child tasks, and kickoff remains incomplete if the parent is the only queued work item.
+- Fresh kickoff planning maps each explicitly planned workstream to one runtime parent task by default. Retries and recovery reuse or repair that same task set; they do not silently fan a planned workstream into unrelated extra top-level siblings. If bounded-size validation determines that a planned workstream bundles multiple named outputs, sections, or phases, that parent must be decomposed into persisted child tasks before queueing.
+- When a planned workstream is decomposed into persisted child tasks, the parent workstream becomes orchestration-only. The first queued/executing wave must be the bounded child tasks, and kickoff remains incomplete if the parent is the only queued work item.
 - Archived or closed project/session transcripts from prior runs are excluded from fresh-kickoff planning context. They are only reintroduced when the operator explicitly chooses **resume** or **recovery** mode.
 - If fresh kickoff cannot reach initial task creation within the prompt/turn guardrails, the session surfaces one concrete blocker and stops auto-churning.
 
@@ -536,7 +536,7 @@ Flow: [Write Code] → [Code Review] → [Done]
 - **PM during rework**: if a review node rejects work and the flow loops back, the PM may create new subtasks for the rework (or the agent may, based on the reviewer's feedback).
 
 Subtask creation is not a privileged operation. The guard rail is that subtasks are scoped to a flow node execution — they can't exist outside that context.
-Queueing a draft task must not infer extra top-level task fan-out just because the description contains multiple bullets or checklists. Parallel child tasks are only created when the planner or flow explicitly marks that task for decomposition.
+Queueing a draft task must not infer extra top-level task fan-out from a simple checklist attached to one concrete deliverable. But if bounded-size validation finds multiple named outputs, sections, or phases in the task contract, the system must decompose that parent into persisted child tasks before queueing so execution starts with small reviewable units.
 If decomposition produces parallel child tasks, the parent task stays coordination-only and must not enter `queued` or `in_progress` while executable children still exist.
 
 ### Subtask Properties

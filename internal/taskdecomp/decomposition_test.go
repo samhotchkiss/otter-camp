@@ -2,6 +2,7 @@ package taskdecomp
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -143,7 +144,7 @@ func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	}
 }
 
-func TestPrepareQueueDecompositionSkipsWithoutExplicitMode(t *testing.T) {
+func TestPrepareQueueDecompositionAutoAppliesForCompoundWorkWithoutExplicitMode(t *testing.T) {
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
 		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
@@ -159,11 +160,25 @@ func TestPrepareQueueDecompositionSkipsWithoutExplicitMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareQueueDecomposition: %v", err)
 	}
-	if result.Applied {
-		t.Fatal("Applied = true, want false without explicit queue decomposition mode")
+	if !result.Applied {
+		t.Fatal("Applied = false, want true for compound work without explicit mode")
 	}
-	if len(result.ChildDrafts) != 0 {
-		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
+	if len(result.ChildDrafts) < 1 {
+		t.Fatalf("ChildDrafts len = %d, want >= 1", len(result.ChildDrafts))
+	}
+}
+
+func TestPrepareQueueDecompositionRejectsOversizedUnsplittableWork(t *testing.T) {
+	description := "Create the full launch strategy packet that covers customer research synthesis and messaging framework and positioning rationale and editorial pillar selection and rollout sequencing and stakeholder communication in one end-to-end document for the Sam.blog relaunch without breaking it into separate reviewable work units."
+
+	_, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "Launch strategy packet",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if !errors.Is(err, ErrBoundedTaskTooLarge) {
+		t.Fatalf("PrepareQueueDecomposition err = %v, want ErrBoundedTaskTooLarge", err)
 	}
 }
 

@@ -1154,6 +1154,9 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			strings.EqualFold(strings.TrimSpace(status), "queued") {
 			decompResult, decompErr := e.applyQueueDecomposition(ctx, &current)
 			if decompErr != nil {
+				if errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) {
+					return map[string]any{"error": decompErr.Error()}, nil
+				}
 				return nil, decompErr
 			}
 			decomposition = decompResult

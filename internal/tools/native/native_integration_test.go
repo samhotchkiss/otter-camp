@@ -3038,44 +3038,24 @@ func TestIntegrationProjectSessionQueueKeepsPlannedTaskSetFlat(t *testing.T) {
 		description string
 	}{
 		{
-			title: "Landing page rebuild",
-			description: strings.Join([]string{
-				"- Redesign the marketing landing page structure, hero narrative, and proof sections for the new launch.",
-				"- Implement the responsive layout, reusable content blocks, and production-ready navigation shell.",
-				"- Validate analytics hooks, SEO metadata, and content QA coverage before release.",
-			}, "\n"),
+			title:       "Landing page rebuild",
+			description: "Redesign the landing page hero and proof sections for the new launch.",
 		},
 		{
-			title: "Billing integration",
-			description: strings.Join([]string{
-				"- Wire Stripe checkout, billing portal entry points, and subscription lifecycle webhooks into the app.",
-				"- Add entitlement updates, retry-safe webhook handling, and account state transitions for paid plans.",
-				"- Cover failure paths, audit logging, and operator runbooks for billing support incidents.",
-			}, "\n"),
+			title:       "Billing integration",
+			description: "Wire Stripe checkout into the app for the first paid-plan launch slice.",
 		},
 		{
-			title: "Analytics foundation",
-			description: strings.Join([]string{
-				"- Define core product and growth events for onboarding, activation, and conversion measurement.",
-				"- Implement the event emission path, dashboard-ready schemas, and warehouse export validation.",
-				"- Verify the baseline dashboards, alert thresholds, and smoke checks for first-run reporting.",
-			}, "\n"),
+			title:       "Analytics foundation",
+			description: "Define the first set of activation events for onboarding analytics.",
 		},
 		{
-			title: "Content migration",
-			description: strings.Join([]string{
-				"- Import legacy posts, author data, and canonical URLs into the new content model with parity checks.",
-				"- Rebuild media handling, redirect coverage, and structured content transforms for migrated pages.",
-				"- Validate taxonomy mapping, broken-link scans, and migration sign-off artifacts before cutover.",
-			}, "\n"),
+			title:       "Content migration",
+			description: "Import the first batch of legacy posts into the new content model.",
 		},
 		{
-			title: "Launch operations",
-			description: strings.Join([]string{
-				"- Prepare release sequencing, rollback checkpoints, and stakeholder communication for the public launch.",
-				"- Finalize environment readiness, smoke scripts, and incident response contacts across the team.",
-				"- Capture the launch checklist, ownership map, and post-launch monitoring commitments in one place.",
-			}, "\n"),
+			title:       "Launch operations",
+			description: "Prepare the public launch rollback checklist for the release lead.",
 		},
 	}
 
@@ -3169,7 +3149,6 @@ func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t
 		FlowTemplateID: &template.ID,
 		CreatedByType:  "agent",
 		CreatedByID:    &agent.ID,
-		Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 	})
 	if err != nil {
 		t.Fatalf("create parent task: %v", err)

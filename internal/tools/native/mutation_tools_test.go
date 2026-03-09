@@ -878,7 +878,7 @@ func TestTaskUpdateQueuedOversizedTaskCreatesDecomposedChildWorkUnits(t *testing
 	}
 }
 
-func TestTaskUpdateQueuedOversizedTaskSkipsImplicitDecomposition(t *testing.T) {
+func TestTaskUpdateQueuedOversizedTaskAutoDecomposesCompoundWork(t *testing.T) {
 	taskID := uuid.New()
 	flowTemplateID := uuid.New()
 	description := strings.Join([]string{
@@ -913,14 +913,14 @@ func TestTaskUpdateQueuedOversizedTaskSkipsImplicitDecomposition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task.update: %v", err)
 	}
-	if tasks.createCalls != 0 {
-		t.Fatalf("create calls = %d, want 0 without explicit queue decomposition mode", tasks.createCalls)
+	if tasks.createCalls < 1 {
+		t.Fatalf("create calls = %d, want >= 1 for compound work", tasks.createCalls)
 	}
-	if _, ok := out["decomposition"]; ok {
-		t.Fatalf("decomposition output = %v, want omitted without explicit queue decomposition mode", out["decomposition"])
+	if _, ok := out["decomposition"]; !ok {
+		t.Fatalf("decomposition output missing for compound work: %v", out)
 	}
-	if tasks.task.Description == nil || *tasks.task.Description != description {
-		t.Fatalf("updated description = %v, want original description preserved", tasks.task.Description)
+	if tasks.task.Description == nil || !strings.Contains(*tasks.task.Description, "Migrate all legacy markdown posts") {
+		t.Fatalf("updated description = %v, want focused primary deliverable", tasks.task.Description)
 	}
 }
 
