@@ -54,6 +54,14 @@ The schema is multi-tenant from day one (doc 04 — every entity carries `organi
 
 See the Bootstrap Dataset section at the end of this document for the complete specification. The short version: every fresh install is immediately usable. The human opens OtterCamp, talks to Frank, and starts working. No configuration required beyond providing model provider API keys.
 
+### 4. What is the next hard validation project after Sam.blog?
+
+**Resolved: use a mixed operational project, seeded as `Speaker Pipeline Ops`, not another site rebuild.**
+
+Sam.blog remains the right first hard validation because it proves fresh kickoff, repo binding, scoped execution, review, and publishing on a real user-facing project. Once that path is stable, repeating another website rebuild becomes a narrow signal: it over-tests content/web delivery and under-tests research, data normalization, structured documentation, automation, and reporting loops.
+
+The next default validation project should intentionally mix deliverable types. `Speaker Pipeline Ops` is the seed candidate: it combines research, scoring/schema design, structured docs, scripts/automation, and reporting/review work in one operational project. That produces a better proof that OtterCamp can coordinate mixed-mode real work rather than only succeeding on another website migration.
+
 ---
 
 ## Build Phases Overview
