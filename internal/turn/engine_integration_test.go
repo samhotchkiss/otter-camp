@@ -6182,6 +6182,30 @@ func TestTurnEngineIntegrationProjectBootstrapQueuesFollowOnAfterLoriAcknowledge
 	if bootstrapState.PlannedTaskCount != 0 || bootstrapState.PlannedFlowTemplateCount != 0 || bootstrapState.AssignmentCount != 0 {
 		t.Fatalf("bootstrap progress = %+v, want zero persisted setup before follow-on turn", bootstrapState)
 	}
+	if bootstrapState.CurrentPhase != projectBootstrapCheckpointStaffingPersisted {
+		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointStaffingPersisted)
+	}
+	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointProjectCreated)
+	}
+	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointProjectCreated); checkpoint.Status != projectBootstrapCheckpointStatusCompleted {
+		t.Fatalf("project_created checkpoint status = %q, want %q", checkpoint.Status, projectBootstrapCheckpointStatusCompleted)
+	}
+	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointStaffingPersisted); checkpoint.Status != projectBootstrapCheckpointStatusPending {
+		t.Fatalf("staffing_persisted checkpoint status = %q, want %q", checkpoint.Status, projectBootstrapCheckpointStatusPending)
+	}
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("GetByID project: %v", err)
+	}
+	projectBootstrapState := mustProjectBootstrapProjectState(t, projectRecord)
+	if projectBootstrapState.CurrentPhase != projectBootstrapCheckpointStaffingPersisted {
+		t.Fatalf("project settings bootstrap current_phase = %q, want %q", projectBootstrapState.CurrentPhase, projectBootstrapCheckpointStaffingPersisted)
+	}
+	if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointProjectCreated)
+	}
 }
 
 func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *testing.T) {
@@ -6344,6 +6368,15 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 	if bootstrapState.FirstWaveKickoffCount == 0 {
 		t.Fatalf("bootstrap first_wave_kickoff_count = %d, want > 0", bootstrapState.FirstWaveKickoffCount)
 	}
+	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveJobsClaimed)
+	}
+	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveJobsClaimed)
+	}
+	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveJobsClaimed); checkpoint.Status != projectBootstrapCheckpointStatusCompleted {
+		t.Fatalf("first_wave_jobs_claimed checkpoint status = %q, want %q", checkpoint.Status, projectBootstrapCheckpointStatusCompleted)
+	}
 
 	var activeExecutions int
 	if err := fixture.pool.QueryRow(ctx, `
@@ -6361,6 +6394,18 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 	}
 	if activeExecutions == 0 {
 		t.Fatal("expected at least one active flow_node_execution after bootstrap promotion")
+	}
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("GetByID project: %v", err)
+	}
+	projectBootstrapState := mustProjectBootstrapProjectState(t, projectRecord)
+	if projectBootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("project settings bootstrap current_phase = %q, want %q", projectBootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveJobsClaimed)
+	}
+	if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveJobsClaimed)
 	}
 }
 
@@ -6477,6 +6522,24 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 	if !strings.Contains(bootstrapState.ValidationFailureReason, "flow_node_execution") {
 		t.Fatalf("bootstrap validation_failure_reason = %q, want execution handoff detail", bootstrapState.ValidationFailureReason)
 	}
+	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
+		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
+	}
+	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
+		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
+	}
+	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveExecutions); checkpoint.Status != projectBootstrapCheckpointStatusFailed {
+		t.Fatalf("first_wave_executions_created checkpoint status = %q, want %q", checkpoint.Status, projectBootstrapCheckpointStatusFailed)
+	}
+	if len(bootstrapState.ValidationFindings) != 1 {
+		t.Fatalf("bootstrap validation_findings = %d, want 1", len(bootstrapState.ValidationFindings))
+	}
+	if bootstrapState.ValidationFindings[0].Category != projectBootstrapFindingCategoryExecutionShape {
+		t.Fatalf("bootstrap validation finding category = %q, want %q", bootstrapState.ValidationFindings[0].Category, projectBootstrapFindingCategoryExecutionShape)
+	}
+	if bootstrapState.ValidationFindings[0].Code != "first_wave_executions_missing" {
+		t.Fatalf("bootstrap validation finding code = %q, want %q", bootstrapState.ValidationFindings[0].Code, "first_wave_executions_missing")
+	}
 
 	tasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
 	if err != nil {
@@ -6494,6 +6557,18 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 	}
 	if queuedFirstWaveTasks == 0 {
 		t.Fatal("expected bootstrap promotion attempt to move at least one first-wave task out of draft")
+	}
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("GetByID project: %v", err)
+	}
+	projectBootstrapState := mustProjectBootstrapProjectState(t, projectRecord)
+	if projectBootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
+		t.Fatalf("project settings bootstrap current_phase = %q, want %q", projectBootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
+	}
+	if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
+		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
 	}
 }
 
@@ -6598,6 +6673,69 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationWithoutPersistedAss
 	}
 	if bootstrapState.ValidationFailureClass != projectBootstrapFailureMissingAssignments {
 		t.Fatalf("bootstrap validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureMissingAssignments)
+	}
+}
+
+func TestTurnEngineIntegrationProjectBootstrapPersistsProviderFailureClassification(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start bootstrap setup for this project.")
+
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{}, ErrAuthFailed
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage bootstrap provider failure: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.FailureClass != projectBootstrapFailureProviderAuth {
+		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureProviderAuth)
+	}
+	if bootstrapState.ValidationFailureClass != projectBootstrapFailureProviderAuth {
+		t.Fatalf("bootstrap validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureProviderAuth)
+	}
+	if bootstrapState.CurrentPhase != projectBootstrapCheckpointStaffingPersisted {
+		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointStaffingPersisted)
+	}
+	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointProjectCreated)
+	}
+	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointStaffingPersisted); checkpoint.Status != projectBootstrapCheckpointStatusFailed {
+		t.Fatalf("staffing_persisted checkpoint status = %q, want %q", checkpoint.Status, projectBootstrapCheckpointStatusFailed)
+	}
+	if len(bootstrapState.ValidationFindings) != 1 {
+		t.Fatalf("bootstrap validation_findings = %d, want 1", len(bootstrapState.ValidationFindings))
+	}
+	if bootstrapState.ValidationFindings[0].Category != projectBootstrapFindingCategoryProviderAPI {
+		t.Fatalf("bootstrap validation finding category = %q, want %q", bootstrapState.ValidationFindings[0].Category, projectBootstrapFindingCategoryProviderAPI)
+	}
+	if bootstrapState.ValidationFindings[0].Code != "authentication_failed" {
+		t.Fatalf("bootstrap validation finding code = %q, want %q", bootstrapState.ValidationFindings[0].Code, "authentication_failed")
+	}
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("GetByID project: %v", err)
+	}
+	projectBootstrapState := mustProjectBootstrapProjectState(t, projectRecord)
+	if projectBootstrapState.CurrentPhase != projectBootstrapCheckpointStaffingPersisted {
+		t.Fatalf("project settings bootstrap current_phase = %q, want %q", projectBootstrapState.CurrentPhase, projectBootstrapCheckpointStaffingPersisted)
+	}
+	if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointProjectCreated)
 	}
 }
 
@@ -9143,6 +9281,26 @@ func countRunnableAgentTurnJobsForSession(t *testing.T, ctx context.Context, poo
 		t.Fatalf("count runnable agent_turn jobs: %v", err)
 	}
 	return count
+}
+
+func mustProjectBootstrapCheckpoint(t *testing.T, state projectBootstrapState, name string) projectBootstrapCheckpoint {
+	t.Helper()
+	for _, checkpoint := range state.Checkpoints {
+		if checkpoint.Name == name {
+			return checkpoint
+		}
+	}
+	t.Fatalf("missing bootstrap checkpoint %q in %+v", name, state.Checkpoints)
+	return projectBootstrapCheckpoint{}
+}
+
+func mustProjectBootstrapProjectState(t *testing.T, projectRecord repo.Project) projectBootstrapProjectState {
+	t.Helper()
+	state := projectBootstrapProjectStateFromSettings(projectRecord.Settings)
+	if state.Status == "" && state.CurrentPhase == "" && state.LastSuccessfulCheckpoint == "" {
+		t.Fatalf("missing mirrored project bootstrap state in project settings: %s", string(projectRecord.Settings))
+	}
+	return state
 }
 
 func mustCreateCompletedWorkTurn(t *testing.T, ctx context.Context, fixture *integrationFixture, sessionID, agentID uuid.UUID) (uuid.UUID, uuid.UUID) {
