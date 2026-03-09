@@ -3289,6 +3289,74 @@ func TestRecoveryResumeRequiresDirectWriteModeWithSubstantiveTargetAndRejectedAr
 	}
 }
 
+func TestShouldTreatFlowRejectedKickoffAsRecoveryWhenCheckpointExists(t *testing.T) {
+	taskID := uuid.New()
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "docs/blog-post-ideas.md",
+		ArtifactPath:  ".ottercamp/recovery/docs/blog-post-ideas.md",
+		FailureReason: "deterministic tool validation loop blocked after 3 identical failures: file.write (content_required)",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	engine := &TurnEngine{
+		tasks: &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:       taskID,
+				Metadata: metadata,
+			},
+		}},
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			ScopeID:   taskID,
+		},
+	}
+	message := repo.ChatMessage{
+		ID:      uuid.New(),
+		Role:    "user",
+		Content: "Start work on task: WS4\n\nPrevious flow step was rejected.",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":          "task_queue_processor",
+			"flow_event_type": "flow.rejected",
+		}),
+	}
+	if !engine.shouldTreatFlowRejectedKickoffAsRecovery(context.Background(), rt, message) {
+		t.Fatal("expected rejected kickoff with recovery checkpoint to be treated as recovery")
+	}
+}
+
+func TestShouldTreatFlowRejectedKickoffAsRecoveryRequiresCheckpoint(t *testing.T) {
+	taskID := uuid.New()
+	engine := &TurnEngine{
+		tasks: &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {ID: taskID},
+		}},
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			ScopeID:   taskID,
+		},
+	}
+	message := repo.ChatMessage{
+		ID:      uuid.New(),
+		Role:    "user",
+		Content: "Start work on task: WS4\n\nPrevious flow step was rejected.",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":          "task_queue_processor",
+			"flow_event_type": "flow.rejected",
+		}),
+	}
+	if engine.shouldTreatFlowRejectedKickoffAsRecovery(context.Background(), rt, message) {
+		t.Fatal("expected rejected kickoff without recovery checkpoint to stay a normal work turn")
+	}
+}
+
 func TestEnsureRecoveryTurnDurableTaskStateSkipsBlockingAfterRecoveryWrite(t *testing.T) {
 	taskID := uuid.New()
 	taskRepo := &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{

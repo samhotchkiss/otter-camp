@@ -1070,6 +1070,9 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		recoveryTurn:     isRecoveryResumeMessage(message),
 	}
 	runtime.projectIdentity = e.loadProjectIdentityForMessage(ctx, sessionID, messageID)
+	if !runtime.recoveryTurn && e.shouldTreatFlowRejectedKickoffAsRecovery(ctx, runtime, message) {
+		runtime.recoveryTurn = true
+	}
 	if isFreshKickoffRequest(session, message) {
 		runtime.historyStartID = &message.ID
 		runtime.disableMemory = true
@@ -4442,6 +4445,28 @@ func isRecoveryResumeMessage(message repo.ChatMessage) bool {
 	}
 	text := strings.ToLower(normalizeInstructionText(message.Content))
 	return strings.Contains(text, "resume") && strings.Contains(text, "task")
+}
+
+func (e *TurnEngine) shouldTreatFlowRejectedKickoffAsRecovery(ctx context.Context, rt *turnRuntime, message repo.ChatMessage) bool {
+	if e == nil || rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return false
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), "task_queue_processor") {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["flow_event_type"])), "flow.rejected") &&
+		!strings.Contains(message.Content, "Previous flow step was rejected.") {
+		return false
+	}
+	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	return ok && hasRecoveryFileWriteCheckpointState(*checkpoint)
 }
 
 func messageMetadataMap(metadata json.RawMessage) map[string]any {
