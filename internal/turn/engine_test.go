@@ -3436,15 +3436,47 @@ func (f *fakeTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.Pr
 }
 
 type fakeTaskTransitionService struct {
-	repo  *fakeTaskRepo
-	calls []blockedTaskCall
-	err   error
+	repo            *fakeTaskRepo
+	calls           []blockedTaskCall
+	transitionCalls []transitionTaskCall
+	err             error
 }
 
 type blockedTaskCall struct {
 	taskID uuid.UUID
 	reason string
 	actor  tasksvc.Actor
+}
+
+type transitionTaskCall struct {
+	taskID   uuid.UUID
+	toStatus string
+	actor    tasksvc.Actor
+}
+
+func (f *fakeTaskTransitionService) TransitionStatus(_ context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	target := strings.TrimSpace(toStatus)
+	f.transitionCalls = append(f.transitionCalls, transitionTaskCall{
+		taskID:   taskID,
+		toStatus: target,
+		actor:    actor,
+	})
+	if f.repo != nil {
+		taskRecord, err := f.repo.GetByID(context.Background(), taskID)
+		if err == nil {
+			taskRecord.WorkStatus = target
+			updated, updateErr := f.repo.Update(context.Background(), taskRecord)
+			if updateErr == nil {
+				transitioned := tasksvc.ProjectTask(updated)
+				return &transitioned, nil
+			}
+		}
+	}
+	transitioned := tasksvc.ProjectTask{ID: taskID, WorkStatus: target}
+	return &transitioned, nil
 }
 
 func (f *fakeTaskTransitionService) MarkBlocked(_ context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
