@@ -501,10 +501,12 @@ func (s *runService) FailRun(ctx context.Context, runID uuid.UUID, reason, failu
 	if state, found, stateErr := s.runtimeStateForRun(ctx, updated); stateErr != nil {
 		return stateErr
 	} else if found {
+		var releasedActiveOwner bool
 		if state.ActiveRunID != nil && *state.ActiveRunID == updated.ID {
 			if _, clearErr := s.runtime.ClearActive(ctx, state.ID); clearErr != nil && !errors.Is(clearErr, ErrNotFound) {
 				return clearErr
 			}
+			releasedActiveOwner = true
 		}
 		switch normalizeFailureClass(failureClass) {
 		case "permanent":
@@ -514,6 +516,11 @@ func (s *runService) FailRun(ctx context.Context, runID uuid.UUID, reason, failu
 		default:
 			if syncErr := s.syncRuntimeStateResumable(ctx, state, updated, eventType, reason, failureClass); syncErr != nil {
 				return syncErr
+			}
+		}
+		if releasedActiveOwner {
+			if _, releaseErr := s.ReleaseExecutionOwner(ctx, uuidPointerValue(updated.TaskID), uuidPointerValue(updated.SessionID), eventType); releaseErr != nil {
+				return releaseErr
 			}
 		}
 	}
