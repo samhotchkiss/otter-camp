@@ -2586,11 +2586,6 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 		rt.historyStartID = &message.ID
 		return true, nil
 	}
-	if preserveInitialMessage && rt.initialMessageID != uuid.Nil {
-		initial := rt.initialMessageID
-		rt.historyStartID = &initial
-		return true, nil
-	}
 	rt.historyStartID = &message.ID
 	return true, nil
 }

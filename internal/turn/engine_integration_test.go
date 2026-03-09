@@ -3677,6 +3677,14 @@ func TestTurnEngineIntegrationRecoveryResumeSeedsDurableDiskContextEX323(t *test
 	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
 
 	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, recoveryMessage.ID)
+	staleCheckpointMessage := "[Content migration checkpoint] Resume from persisted workspace state instead of replaying raw page content.\nCheckpoint: .ottercamp/checkpoints/oc-4-content-migration.md."
+	if _, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		Role:       "system",
+		Content:    staleCheckpointMessage,
+	}); err != nil {
+		t.Fatalf("AppendMessage stale checkpoint: %v", err)
+	}
 
 	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
 	if err != nil {
@@ -3745,6 +3753,9 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 
 	if !strings.Contains(promptBlob, "[Recovery resume state]") {
 		t.Fatalf("prompt missing recovery resume state:\n%s", promptBlob)
+	}
+	if strings.Contains(promptBlob, staleCheckpointMessage) {
+		t.Fatalf("prompt should exclude stale session checkpoint context:\n%s", promptBlob)
 	}
 	if !strings.Contains(promptBlob, "Resume order: target file draft, then recovery artifact draft, then checkpoint metadata/failure reason.") {
 		t.Fatalf("prompt missing durable resume order:\n%s", promptBlob)
