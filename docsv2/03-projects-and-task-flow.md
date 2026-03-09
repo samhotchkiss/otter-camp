@@ -969,6 +969,8 @@ create index on project_task_event (task_id, created_at);
 - **Blockers are tasks, not a separate entity.** Agent files a new task with a dependency link. PM triages. Escalation: PM → Frank → human.
 - **`blocks_scope = 'all'` is a project-wide execution gate.** While any gate task is outstanding, only the lowest-numbered outstanding gate task in that project may start.
 - **Every new project starts with a bootstrap gate task.** Task 1 is a `blocks_scope = 'all'` governance flow: Lori does staffing/decomposition work, Frank reviews it, and an explicit completion/merge node closes the gate before other tasks can start.
+  The kickoff/bootstrap conversation in the canonical project session is an active bounded workflow, not a passive chat plan. After Frank hands off to Lori, the system may enqueue automatic follow-on bootstrap turns until persisted setup records exist or the session records an explicit bootstrap failure instead of silently idling.
+  The project session metadata carries a machine-checkable `project_bootstrap` contract (`active`, `completed`, or `failed`) with persisted-count progress so operators and UI clients can see whether staffing/task/flow setup actually materialized.
 - **Cancelled dependencies create resolution tasks.** When a dependency is cancelled, the system auto-creates a task for the PM to resolve the situation. Blocked progress creates tasks, not notifications.
 - **Dependencies can be removed.** PM can unlink a dependency at any time. If a blocked task has no remaining unresolved dependencies, it resumes.
 - **Dependencies form a DAG.** Cycles rejected at creation time.
