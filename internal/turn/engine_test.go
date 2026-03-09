@@ -3289,6 +3289,49 @@ func TestRecoveryResumeRequiresDirectWriteModeWithSubstantiveTargetAndRejectedAr
 	}
 }
 
+func TestEnsureRecoveryTurnDurableTaskStateSkipsBlockingAfterRecoveryWrite(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:         taskID,
+			WorkStatus: "in_progress",
+		},
+	}}
+	transitions := &fakeTaskTransitionService{repo: taskRepo}
+	engine := &TurnEngine{
+		tasks:           taskRepo,
+		taskTransitions: transitions,
+	}
+	rt := &turnRuntime{
+		recoveryTurn:      true,
+		recoveryWriteDone: true,
+		recoveryBlockReason: "recovery halted after recovered file.write for docs/blog-post-ideas.md failed",
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project_task",
+			ScopeID:   taskID,
+		},
+		turn: &chat.ChatTurn{ID: uuid.New()},
+	}
+
+	if err := engine.ensureRecoveryTurnDurableTaskState(context.Background(), rt); err != nil {
+		t.Fatalf("ensureRecoveryTurnDurableTaskState: %v", err)
+	}
+	if len(transitions.calls) != 0 {
+		t.Fatalf("MarkBlocked calls = %d, want 0", len(transitions.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if updated.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updated.WorkStatus)
+	}
+	if rt.recoveryBlockReason != "" {
+		t.Fatalf("recoveryBlockReason = %q, want empty", rt.recoveryBlockReason)
+	}
+}
+
 type unitFixture struct {
 	engine        *TurnEngine
 	events        *fakeEventBus

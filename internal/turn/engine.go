@@ -3916,6 +3916,7 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 			return clearErr
 		} else if cleared {
 			rt.recoveryWriteDone = true
+			rt.recoveryBlockReason = ""
 			if meta, metaErr := buildCompletedRecoveryWriteMetadata(message.Metadata, checkpoint.TargetPath); metaErr != nil {
 				return metaErr
 			} else if _, err := e.messages.UpdateMetadata(ctx, message.ID, meta); err != nil {
@@ -5687,6 +5688,10 @@ func shouldSuppressAutoContinuationForStopReason(stopReason *string) bool {
 
 func (e *TurnEngine) ensureRecoveryTurnDurableTaskState(ctx context.Context, rt *turnRuntime) error {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return nil
+	}
+	if rt.recoveryWriteDone {
+		rt.recoveryBlockReason = ""
 		return nil
 	}
 	if !rt.recoveryTurn && strings.TrimSpace(rt.recoveryBlockReason) == "" {
