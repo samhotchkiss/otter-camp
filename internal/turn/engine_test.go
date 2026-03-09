@@ -3107,6 +3107,35 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "analysis of the existing draft instead of the file body",
 		},
 		{
+			name: "rejects checklist-style recovery placeholder narration",
+			content: "Good. I now have:\n" +
+				"1. The full content strategy with exact pillar names\n" +
+				"2. The existing draft (17 posts, cuts off mid-Post 17)\n" +
+				"3. The recovery artifact confirming the fixes needed\n\n" +
+				"Let me review the existing draft against Vivian's feedback:\n\n" +
+				"**MUST-FIX:**\n" +
+				"1. Complete Post 17 and add Posts 18-20\n" +
+				"2. Verify pillar names\n\n" +
+				"**What's needed:**\n" +
+				"- Add 1 Intentional Living & Craft post\n" +
+				"- Add 1 more ethics post\n\n" +
+				"Plan for new posts:\n" +
+				"- Post 18: Three Stones tie-in\n" +
+				"- Post 19: Intersection piece\n" +
+				"- Post 20: Ethics & Technology\n\n" +
+				"Let me now write the complete file.",
+			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects clear-picture checklist recovery placeholder narration",
+			content: "Now I have a clear picture of:\n" +
+				"1. The five content pillars from the strategy\n" +
+				"2. The migrated post inventory to avoid duplication\n" +
+				"3. Vivian's review feedback and missing coverage\n\n" +
+				"Let me now write the complete deliverable — all 20 blog post concepts with every required field, addressing all of Vivian's must-fix items.",
+			want: "intent to write the deliverable",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
@@ -3163,6 +3192,60 @@ func TestRecoveryResumeRequiresDirectWriteModeFromFirstRejectedDraftWithoutUsabl
 	}
 	if !recoveryResumeRequiresDirectWriteMode(state) {
 		t.Fatal("expected first rejected-draft checkpoint without substantive durable drafts to require direct-write recovery mode")
+	}
+}
+
+func TestRecoveryResumeRequiresDirectWriteModeWhenStoredDraftsAreRejectedLiveWS4Case(t *testing.T) {
+	const (
+		targetPath    = "docs/blog-post-ideas.md"
+		failureReason = "assistant draft for docs/blog-post-ideas.md would overwrite an existing substantive target file with a non-substantive recovery draft instead of the file body"
+		targetDraft   = "Good. I now have:\n" +
+			"1. The full content strategy with exact pillar names\n" +
+			"2. The existing draft (17 posts, cuts off mid-Post 17)\n" +
+			"3. The recovery artifact confirming the fixes needed\n\n" +
+			"Let me review the existing draft against Vivian's feedback:\n\n" +
+			"**MUST-FIX:**\n" +
+			"1. Complete Post 17 and add Posts 18-20\n" +
+			"2. Verify pillar names\n\n" +
+			"**What's needed:**\n" +
+			"- Add 1 Intentional Living & Craft post\n" +
+			"- Add 1 more ethics post\n\n" +
+			"Plan for new posts:\n" +
+			"- Post 18: Three Stones tie-in\n" +
+			"- Post 19: Intersection piece\n" +
+			"- Post 20: Ethics & Technology\n\n" +
+			"Let me now write the complete file."
+		artifactDraft = "Now I have a clear picture of:\n" +
+			"1. The five content pillars from the strategy\n" +
+			"2. All existing migrated posts to avoid duplication\n" +
+			"3. Vivian's review feedback with specific fixes needed\n\n" +
+			"Let me now write the complete deliverable — all 20 blog post concepts with every required field, addressing all of Vivian's must-fix items."
+	)
+	filteredTarget, targetRejectReason := recoveryResumeDraftForPrompt(failureReason, targetPath, targetDraft)
+	filteredArtifact, artifactRejectReason := recoveryResumeDraftForPrompt(failureReason, targetPath, artifactDraft)
+	if filteredTarget != "" {
+		t.Fatalf("filtered target draft = %q, want empty", filteredTarget)
+	}
+	if filteredArtifact != "" {
+		t.Fatalf("filtered artifact draft = %q, want empty", filteredArtifact)
+	}
+	if targetRejectReason == "" {
+		t.Fatal("expected target draft to be rejected")
+	}
+	if artifactRejectReason == "" {
+		t.Fatal("expected artifact draft to be rejected")
+	}
+
+	state := recoveryResumeState{
+		targetPath:                  targetPath,
+		artifactPath:                ".ottercamp/recovery/docs/blog-post-ideas.md",
+		blockerClass:                taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+		failureReason:               failureReason,
+		targetDraftRejectedReason:   targetRejectReason,
+		artifactDraftRejectedReason: artifactRejectReason,
+	}
+	if !recoveryResumeRequiresDirectWriteMode(state) {
+		t.Fatal("expected rejected stored drafts to force direct-write recovery mode")
 	}
 }
 

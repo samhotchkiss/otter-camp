@@ -3279,10 +3279,24 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 
 	lower := strings.ToLower(trimmed)
 	wordCount := len(strings.Fields(trimmed))
+	hasChecklistReviewCue := containsAny(lower,
+		"must-fix",
+		"what's needed",
+		"whats needed",
+		"plan for ",
+		"let me review the existing draft",
+		"review the existing draft against",
+		"let me check the content mix",
+		"let me verify",
+		"scanning the existing file",
+	)
 	hasWriteIntent := containsAny(lower,
 		"let me write",
+		"let me now write",
 		"let me draft",
+		"let me now draft",
 		"let me rewrite",
+		"let me now rewrite",
 		"i'm going to write",
 		"i am going to write",
 		"i'm going to rewrite",
@@ -3307,8 +3321,13 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"now i have everything i need",
 		"i now have everything i need",
 		"i have everything i need",
+		"good. i now have:",
+		"good, i now have:",
 		"i have enough context",
 		"i have what i need",
+		"now i have a clear picture of",
+		"i now have a clear picture of",
+		"i have a clear picture of",
 		"now that i have",
 	)
 	hasInventoryCue := containsAny(lower,
@@ -3343,6 +3362,9 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		return true
 	}
 	if hasGeneralizedUnderstandingCue && wordCount <= 140 {
+		return true
+	}
+	if (hasSetupCue || hasInventoryCue || hasGeneralizedUnderstandingCue) && hasChecklistReviewCue && (hasWriteIntent || hasDeliverableCue) {
 		return true
 	}
 	if (hasSetupCue || hasInventoryCue) && hasInventoryList && (hasWriteIntent || hasDeliverableCue) {
