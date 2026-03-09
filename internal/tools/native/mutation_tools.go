@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
 
 const (
 	taskDoneTerminalNodeMessage   = "task can only be marked done when its flow reaches a terminal node"
+	taskOrchestrationOnlyMessage  = "task must remain orchestration-only while executable child tasks exist"
 	flowTemplateValidationMessage = "flow template must define a work -> review -> completion path"
 	memoryRecordEmbeddingDims     = 1536
 	memoryRecordDefaultConfidence = 0.85
@@ -1162,6 +1164,20 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			!e.projectHasActivePM(ctx, current.ProjectID) {
 			return map[string]any{"error": "project has no active PM assignment"}, nil
 		}
+		decompositionChildren, childErr := e.listDecompositionChildren(ctx, current)
+		if childErr != nil {
+			return nil, childErr
+		}
+		executableChildren := executableTasks(decompositionChildren)
+		if strings.EqualFold(strings.TrimSpace(status), "queued") && len(executableChildren) > 0 {
+			if err := e.queueDecompositionChildren(ctx, current, executableChildren); err != nil {
+				return nil, err
+			}
+			status = previousStatus
+		}
+		if strings.EqualFold(strings.TrimSpace(status), "in_progress") && len(executableChildren) > 0 {
+			return map[string]any{"error": taskOrchestrationOnlyMessage}, nil
+		}
 		if strings.EqualFold(strings.TrimSpace(status), "done") {
 			if _, validationErr := e.validateTaskDoneTransition(ctx, current); validationErr != nil {
 				return map[string]any{"error": validationErr.Error()}, nil
@@ -1707,20 +1723,88 @@ func hasMeaningfulJSON(raw json.RawMessage) bool {
 }
 
 func decompositionWorkstreamIndex(task repo.ProjectTask, parentTaskID uuid.UUID) (int, bool) {
-	payload := metadataObject(task.Metadata)
-	parentRaw, ok := metadataStringValue(payload, "decomposition_parent_task_id")
-	if !ok {
+	parentID := taskdecomp.ParseParentTaskID(task.Metadata)
+	if parentID == uuid.Nil || parentID != parentTaskID {
 		return 0, false
 	}
-	parentID, err := uuid.Parse(parentRaw)
-	if err != nil || parentID != parentTaskID {
-		return 0, false
-	}
-	index, ok := metadataIntValue(payload, "workstream_index")
+	index, ok := taskdecomp.ParseWorkstreamIndex(task.Metadata)
 	if !ok || index < 1 {
 		return 0, false
 	}
 	return index, true
+}
+
+func (e *NativeToolExecutor) listDecompositionChildren(ctx context.Context, parentTask repo.ProjectTask) ([]repo.ProjectTask, error) {
+	if e.tasks == nil {
+		return nil, nil
+	}
+
+	projectTasks, err := e.tasks.ListByProject(ctx, parentTask.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	childIDSet := make(map[uuid.UUID]struct{})
+	for _, childID := range taskdecomp.ParseChildTaskIDs(parentTask.Metadata) {
+		childIDSet[childID] = struct{}{}
+	}
+
+	children := make([]repo.ProjectTask, 0)
+	for _, projectTask := range projectTasks {
+		if projectTask.ID == parentTask.ID {
+			continue
+		}
+		if taskdecomp.ParseParentTaskID(projectTask.Metadata) == parentTask.ID {
+			children = append(children, projectTask)
+			delete(childIDSet, projectTask.ID)
+			continue
+		}
+		if _, ok := childIDSet[projectTask.ID]; ok {
+			children = append(children, projectTask)
+			delete(childIDSet, projectTask.ID)
+		}
+	}
+
+	sort.Slice(children, func(i, j int) bool {
+		leftIndex, leftOK := decompositionWorkstreamIndex(children[i], parentTask.ID)
+		rightIndex, rightOK := decompositionWorkstreamIndex(children[j], parentTask.ID)
+		switch {
+		case leftOK && rightOK && leftIndex != rightIndex:
+			return leftIndex < rightIndex
+		case leftOK != rightOK:
+			return leftOK
+		default:
+			return taskCanonicalLess(children[i], children[j])
+		}
+	})
+	return children, nil
+}
+
+func (e *NativeToolExecutor) queueDecompositionChildren(ctx context.Context, parentTask repo.ProjectTask, children []repo.ProjectTask) error {
+	for _, child := range children {
+		if !strings.EqualFold(strings.TrimSpace(child.WorkStatus), "draft") {
+			continue
+		}
+		queuedChild := child
+		queuedChild.WorkStatus = "queued"
+		if _, err := e.tasks.Update(ctx, queuedChild); err != nil {
+			return fmt.Errorf("queue decomposition child for parent %s: %w", parentTask.ID, err)
+		}
+		if err := e.publishTaskStatusEvents(ctx, nil, child, "queued", nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func executableTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
+	filtered := make([]repo.ProjectTask, 0, len(tasks))
+	for _, task := range tasks {
+		if isTaskTerminal(task.WorkStatus) {
+			continue
+		}
+		filtered = append(filtered, task)
+	}
+	return filtered
 }
 
 func (e *NativeToolExecutor) findReusableScopedSession(ctx context.Context, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID, mode string) (*repo.ChatSession, error) {

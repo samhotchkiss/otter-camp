@@ -23,34 +23,35 @@ import (
 )
 
 var (
-	ErrOrganizationIDRequired     = errors.New("organization_id is required")
-	ErrProjectIDRequired          = errors.New("project_id is required")
-	ErrTaskIDRequired             = errors.New("task_id is required")
-	ErrTitleRequired              = errors.New("title is required")
-	ErrInvalidCreatedByType       = errors.New("created_by_type must be human_user, agent, or system")
-	ErrCreatedByIDRequired        = errors.New("created_by_id is required for human_user and agent")
-	ErrAgentNotAssigned           = errors.New("assigned_agent_id is not actively assigned to the project")
-	ErrHumanReviewNotRequired     = errors.New("task does not require human review")
-	ErrInboxItemNotFound          = errors.New("inbox item not found")
-	ErrInboxActionForbidden       = errors.New("inbox action forbidden for this user")
-	ErrUnknownInboxItemType       = errors.New("unknown inbox item type")
-	ErrUnknownInboxAction         = errors.New("unknown inbox action")
-	ErrNoTaskBranch               = errors.New("task has no branch name")
-	ErrPMNotAssigned              = errors.New("project has no active PM assignment")
-	ErrInboxItemTypeInvalid       = errors.New("invalid inbox item type")
-	ErrSourceTaskRequired         = errors.New("source_task_id is required for this inbox item type")
-	ErrSourceProjectIDRequired    = errors.New("source_project_id is required for this inbox item type")
-	ErrRequiresHumanApproval      = errors.New("task requires human approval before queueing")
-	ErrFlowTemplateRequired       = errors.New("task requires a flow template before it can be queued")
-	ErrFlowTemplateReviewRequired = errors.New("flow template must define a work -> review -> completion path")
-	ErrProjectGateBlockingQueue   = errors.New("task is blocked by an outstanding project gate and cannot be queued yet")
-	ErrInvalidBlocksScope         = errors.New("blocks_scope must be one of: none, all")
-	ErrDoneRequiresTerminalFlow   = errors.New("task can only be marked done when its flow reaches a terminal node")
-	ErrTransitionTargetRequired   = errors.New("target status is required")
-	ErrActorTypeInvalidForAction  = errors.New("actor_type is invalid for action")
-	ErrBrowserHandoffUnavailable  = errors.New("browser handoff service unavailable")
-	ErrActiveFlowRequired         = errors.New("task requires an active flow to be in_progress")
-	ErrFlowServiceUnavailable     = errors.New("flow service unavailable")
+	ErrOrganizationIDRequired          = errors.New("organization_id is required")
+	ErrProjectIDRequired               = errors.New("project_id is required")
+	ErrTaskIDRequired                  = errors.New("task_id is required")
+	ErrTitleRequired                   = errors.New("title is required")
+	ErrInvalidCreatedByType            = errors.New("created_by_type must be human_user, agent, or system")
+	ErrCreatedByIDRequired             = errors.New("created_by_id is required for human_user and agent")
+	ErrAgentNotAssigned                = errors.New("assigned_agent_id is not actively assigned to the project")
+	ErrHumanReviewNotRequired          = errors.New("task does not require human review")
+	ErrInboxItemNotFound               = errors.New("inbox item not found")
+	ErrInboxActionForbidden            = errors.New("inbox action forbidden for this user")
+	ErrUnknownInboxItemType            = errors.New("unknown inbox item type")
+	ErrUnknownInboxAction              = errors.New("unknown inbox action")
+	ErrNoTaskBranch                    = errors.New("task has no branch name")
+	ErrPMNotAssigned                   = errors.New("project has no active PM assignment")
+	ErrInboxItemTypeInvalid            = errors.New("invalid inbox item type")
+	ErrSourceTaskRequired              = errors.New("source_task_id is required for this inbox item type")
+	ErrSourceProjectIDRequired         = errors.New("source_project_id is required for this inbox item type")
+	ErrRequiresHumanApproval           = errors.New("task requires human approval before queueing")
+	ErrFlowTemplateRequired            = errors.New("task requires a flow template before it can be queued")
+	ErrFlowTemplateReviewRequired      = errors.New("flow template must define a work -> review -> completion path")
+	ErrProjectGateBlockingQueue        = errors.New("task is blocked by an outstanding project gate and cannot be queued yet")
+	ErrInvalidBlocksScope              = errors.New("blocks_scope must be one of: none, all")
+	ErrDoneRequiresTerminalFlow        = errors.New("task can only be marked done when its flow reaches a terminal node")
+	ErrTransitionTargetRequired        = errors.New("target status is required")
+	ErrActorTypeInvalidForAction       = errors.New("actor_type is invalid for action")
+	ErrBrowserHandoffUnavailable       = errors.New("browser handoff service unavailable")
+	ErrActiveFlowRequired              = errors.New("task requires an active flow to be in_progress")
+	ErrFlowServiceUnavailable          = errors.New("flow service unavailable")
+	ErrTaskMustRemainOrchestrationOnly = errors.New("task must remain orchestration-only while executable child tasks exist")
 )
 
 var validStatusTransitions = map[string]map[string]struct{}{
@@ -538,6 +539,27 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 			}
 		}
 	}
+	executableChildren := []repo.ProjectTask(nil)
+	if target == "queued" || target == "in_progress" {
+		decompositionChildren, childErr := s.listDecompositionChildren(ctx, taskRecord)
+		if childErr != nil {
+			return nil, childErr
+		}
+		executableChildren = executableProjectTasks(decompositionChildren)
+	}
+	if target == "queued" && len(executableChildren) > 0 {
+		if err := s.queueDecompositionChildren(ctx, taskRecord, executableChildren, actor); err != nil {
+			return nil, err
+		}
+		updated, err := s.tasks.Update(ctx, taskRecord)
+		if err != nil {
+			return nil, err
+		}
+		return &updated, nil
+	}
+	if target == "in_progress" && len(executableChildren) > 0 {
+		return nil, ErrTaskMustRemainOrchestrationOnly
+	}
 	if target == "in_progress" {
 		allowNoActiveFlow := actor.AllowNoActiveFlow && strings.EqualFold(strings.TrimSpace(actor.Type), "system")
 		hasActiveFlow, flowErr := s.hasActiveFlowExecution(ctx, taskRecord.ID)
@@ -762,6 +784,86 @@ func (s *service) applyQueueDecomposition(ctx context.Context, taskRecord *repo.
 		applied:      true,
 		childTaskIDs: childTaskIDs,
 	}, nil
+}
+
+func (s *service) listDecompositionChildren(ctx context.Context, parentTask repo.ProjectTask) ([]repo.ProjectTask, error) {
+	projectTasks, err := s.tasks.ListByProject(ctx, parentTask.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+
+	childIDSet := make(map[uuid.UUID]struct{})
+	for _, childID := range taskdecomp.ParseChildTaskIDs(parentTask.Metadata) {
+		childIDSet[childID] = struct{}{}
+	}
+
+	children := make([]repo.ProjectTask, 0)
+	for _, projectTask := range projectTasks {
+		if projectTask.ID == parentTask.ID {
+			continue
+		}
+		if taskdecomp.ParseParentTaskID(projectTask.Metadata) == parentTask.ID {
+			children = append(children, projectTask)
+			delete(childIDSet, projectTask.ID)
+			continue
+		}
+		if _, ok := childIDSet[projectTask.ID]; ok {
+			children = append(children, projectTask)
+			delete(childIDSet, projectTask.ID)
+		}
+	}
+
+	sort.Slice(children, func(i, j int) bool {
+		return decompositionTaskLess(children[i], children[j])
+	})
+	return children, nil
+}
+
+func (s *service) queueDecompositionChildren(ctx context.Context, parentTask repo.ProjectTask, children []repo.ProjectTask, actor Actor) error {
+	for _, child := range children {
+		if normalizeStatus(child.WorkStatus) != "draft" {
+			continue
+		}
+		if _, err := s.transitionTaskRecord(ctx, child, "queued", actor, nil, false); err != nil {
+			return fmt.Errorf("queue decomposition child for parent %s: %w", parentTask.ID, err)
+		}
+	}
+	return nil
+}
+
+func executableProjectTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
+	filtered := make([]repo.ProjectTask, 0, len(tasks))
+	for _, taskRecord := range tasks {
+		if isTerminalTaskStatus(taskRecord.WorkStatus) {
+			continue
+		}
+		filtered = append(filtered, taskRecord)
+	}
+	return filtered
+}
+
+func isTerminalTaskStatus(status string) bool {
+	switch normalizeStatus(status) {
+	case "done", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func decompositionTaskLess(left, right repo.ProjectTask) bool {
+	leftIndex, leftOK := taskdecomp.ParseWorkstreamIndex(left.Metadata)
+	rightIndex, rightOK := taskdecomp.ParseWorkstreamIndex(right.Metadata)
+	switch {
+	case leftOK && rightOK && leftIndex != rightIndex:
+		return leftIndex < rightIndex
+	case leftOK != rightOK:
+		return leftOK
+	case left.TaskNumber != right.TaskNumber:
+		return left.TaskNumber < right.TaskNumber
+	default:
+		return left.ID.String() < right.ID.String()
+	}
 }
 
 func (s *service) projectRequiresPMBeforeQueue(ctx context.Context, projectID uuid.UUID) (bool, error) {

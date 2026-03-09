@@ -30,6 +30,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
@@ -6226,19 +6227,56 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 		}); err != nil {
 			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
 		}
+		taskRepo := repo.NewProjectTaskRepo(fixture.pool)
 		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
-		description := "Initial scoped bootstrap workstream"
-		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		sourceDescription := strings.Join([]string{
+			"- Define the first execution slice.",
+			"- Draft the landing page structure for the launch.",
+			"- Outline the initial analytics instrumentation checklist.",
+		}, "\n")
+		parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
 			OrganizationID: fixture.org.ID,
 			ProjectID:      project.ID,
 			Title:          "Define the first execution slice",
-			Description:    &description,
+			Description:    &sourceDescription,
 			WorkStatus:     "draft",
 			FlowTemplateID: &template.ID,
 			CreatedByType:  "agent",
 			CreatedByID:    &lori.ID,
+			Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 		})
 		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		childDescription := "Draft the landing page structure for the launch."
+		childTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "Define the first execution slice (Workstream 2)",
+			Description:    &childDescription,
+			WorkStatus:     "queued",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+			Metadata:       json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s","workstream_index":2}`, parentTask.ID)),
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		parentTask.Description = func() *string {
+			value := "Define the first execution slice."
+			return &value
+		}()
+		parentTask.Metadata = taskdecomp.ApplyMetadata(parentTask.Metadata, taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "Define the first execution slice.",
+			Deliverables: []string{
+				"Define the first execution slice.",
+				"Draft the landing page structure for the launch.",
+				"Outline the initial analytics instrumentation checklist.",
+			},
+		}, sourceDescription, []uuid.UUID{childTask.ID})
+		if _, err := taskRepo.Update(ctx, parentTask); err != nil {
 			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
 		}
 		return ToolResult{
@@ -6246,7 +6284,8 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 			Name:       call.Name,
 			Output: map[string]any{
 				"pm_agent_id":      pmAgent.ID.String(),
-				"task_id":          taskRecord.ID.String(),
+				"parent_task_id":   parentTask.ID.String(),
+				"child_task_id":    childTask.ID.String(),
 				"flow_template_id": template.ID.String(),
 			},
 		}, nil
@@ -6292,6 +6331,8 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 		t.Fatalf("ListByProject tasks: %v", err)
 	}
 	var plannedTasks int
+	var parentTask repo.ProjectTask
+	var childTask repo.ProjectTask
 	for _, item := range tasks {
 		var metadata map[string]any
 		_ = json.Unmarshal(item.Metadata, &metadata)
@@ -6299,9 +6340,25 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 			continue
 		}
 		plannedTasks++
+		if taskdecomp.ParseParentTaskID(item.Metadata) != uuid.Nil {
+			childTask = item
+			continue
+		}
+		if item.Title == "Define the first execution slice" {
+			parentTask = item
+		}
 	}
-	if plannedTasks == 0 {
-		t.Fatal("expected persisted non-bootstrap task after self-start bootstrap")
+	if plannedTasks < 2 {
+		t.Fatalf("planned task count = %d, want at least parent + child workstream", plannedTasks)
+	}
+	if parentTask.ID == uuid.Nil || childTask.ID == uuid.Nil {
+		t.Fatalf("expected persisted parent + child bootstrap tasks, parent=%s child=%s", parentTask.ID, childTask.ID)
+	}
+	if parentTask.WorkStatus != "draft" {
+		t.Fatalf("parent work_status = %q, want draft orchestration-only state", parentTask.WorkStatus)
+	}
+	if childTask.WorkStatus != "queued" {
+		t.Fatalf("child work_status = %q, want queued first-wave task", childTask.WorkStatus)
 	}
 
 	var flowTemplateCount int
@@ -6329,6 +6386,151 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 	}
 	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
 		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after persisted setup", jobs)
+	}
+}
+
+func TestTurnEngineIntegrationProjectBootstrapStaysIncompleteWhenParentQueuesBeforeChild(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: staff the project and persist the first workstream.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-parent-first",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is now persisted in project records."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		}); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+
+		taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		sourceDescription := strings.Join([]string{
+			"- Define the first execution slice.",
+			"- Draft the landing page structure for the launch.",
+			"- Outline the initial analytics instrumentation checklist.",
+		}, "\n")
+		parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "Define the first execution slice",
+			Description:    &sourceDescription,
+			WorkStatus:     "queued",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+			Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		childDescription := "Draft the landing page structure for the launch."
+		childTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "Define the first execution slice (Workstream 2)",
+			Description:    &childDescription,
+			WorkStatus:     "draft",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+			Metadata:       json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s","workstream_index":2}`, parentTask.ID)),
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		parentTask.Metadata = taskdecomp.ApplyMetadata(parentTask.Metadata, taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "Define the first execution slice.",
+			Deliverables: []string{
+				"Define the first execution slice.",
+				"Draft the landing page structure for the launch.",
+				"Outline the initial analytics instrumentation checklist.",
+			},
+		}, sourceDescription, []uuid.UUID{childTask.ID})
+		if _, err := taskRepo.Update(ctx, parentTask); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":      pmAgent.ID.String(),
+				"parent_task_id":   parentTask.ID.String(),
+				"child_task_id":    childTask.ID.String(),
+				"flow_template_id": template.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q for invalid parent-first kickoff", bootstrapState.Status, projectBootstrapStatusActive)
+	}
+	if bootstrapState.AutoTurnCount != 0 {
+		t.Fatalf("bootstrap auto_turn_count = %d, want 0 because persistence made progress but left kickoff incomplete", bootstrapState.AutoTurnCount)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 follow-on job for incomplete parent-first kickoff", jobs)
 	}
 }
 

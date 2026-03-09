@@ -14,6 +14,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 )
 
 func TestStatusTransitionMatrix(t *testing.T) {
@@ -487,6 +488,61 @@ func TestTransitionStatusDraftToQueuedWithFlowTemplateAndPMSucceedsWhenProjectCo
 	}
 	if updated.WorkStatus != "queued" {
 		t.Fatalf("work_status = %q, want queued", updated.WorkStatus)
+	}
+}
+
+func TestTransitionStatusInProgressRejectsDecomposedParentTaskEX332(t *testing.T) {
+	parentID := uuid.New()
+	childID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	parentMetadata := taskdecomp.ApplyMetadata(
+		taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
+		taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "Primary deliverable",
+			Deliverables:          []string{"Primary deliverable", "Secondary deliverable"},
+		},
+		"source description",
+		[]uuid.UUID{childID},
+	)
+	childMetadata := json.RawMessage(`{"decomposition_parent_task_id":"` + parentID.String() + `","workstream_index":2}`)
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			parentID: {
+				ID:             parentID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				WorkStatus:     "queued",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Parent workstream",
+				CreatedByType:  "system",
+				Metadata:       parentMetadata,
+			},
+			childID: {
+				ID:             childID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				WorkStatus:     "queued",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Child workstream",
+				CreatedByType:  "system",
+				Metadata:       childMetadata,
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	if _, err := svc.TransitionStatus(context.Background(), parentID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); !errors.Is(err, ErrTaskMustRemainOrchestrationOnly) {
+		t.Fatalf("TransitionStatus in_progress err = %v, want ErrTaskMustRemainOrchestrationOnly", err)
+	}
+
+	stored, getErr := taskRepo.GetByID(context.Background(), parentID)
+	if getErr != nil {
+		t.Fatalf("GetByID parent task: %v", getErr)
+	}
+	if stored.WorkStatus != "queued" {
+		t.Fatalf("work_status = %q, want queued after rejected execution", stored.WorkStatus)
 	}
 }
 

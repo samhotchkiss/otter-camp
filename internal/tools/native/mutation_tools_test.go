@@ -834,14 +834,17 @@ func TestTaskUpdateQueuedOversizedTaskCreatesDecomposedChildWorkUnits(t *testing
 	if err != nil {
 		t.Fatalf("task.update: %v", err)
 	}
-	if tasks.updateCalls != 1 {
-		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
-	}
 	if tasks.createCalls < 1 {
 		t.Fatalf("create calls = %d, want >= 1", tasks.createCalls)
 	}
+	if tasks.updateCalls != tasks.createCalls+1 {
+		t.Fatalf("update calls = %d, want %d parent+child queue updates", tasks.updateCalls, tasks.createCalls+1)
+	}
 	if tasks.task.Description == nil || !strings.Contains(*tasks.task.Description, "Migrate all legacy markdown posts") {
 		t.Fatalf("updated description = %v, want focused primary deliverable", tasks.task.Description)
+	}
+	if tasks.task.WorkStatus != "draft" {
+		t.Fatalf("parent work_status = %q, want draft orchestration-only state", tasks.task.WorkStatus)
 	}
 	decomp, ok := out["decomposition"].(map[string]any)
 	if !ok {
@@ -856,6 +859,22 @@ func TestTaskUpdateQueuedOversizedTaskCreatesDecomposedChildWorkUnits(t *testing
 	}
 	if len(childIDs) != tasks.createCalls {
 		t.Fatalf("decomposition.child_task_ids len = %d, want %d", len(childIDs), tasks.createCalls)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if got := taskOut["work_status"]; got != "draft" {
+		t.Fatalf("task output work_status = %v, want draft", got)
+	}
+	queuedChildren := 0
+	for _, created := range tasks.createdTasks {
+		if created.WorkStatus == "queued" {
+			queuedChildren++
+		}
+	}
+	if queuedChildren != tasks.createCalls {
+		t.Fatalf("queued child count = %d, want %d", queuedChildren, tasks.createCalls)
 	}
 }
 
@@ -1076,6 +1095,24 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 	}
 	if mustUUIDFromAny(t, childIDs[1]) != childTwoID {
 		t.Fatalf("second child task id = %v, want %s", childIDs[1], childTwoID)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if got := taskOut["work_status"]; got != "draft" {
+		t.Fatalf("task output work_status = %v, want draft", got)
+	}
+	if tasks.task.WorkStatus != "draft" {
+		t.Fatalf("parent work_status = %q, want draft orchestration-only state", tasks.task.WorkStatus)
+	}
+	for _, task := range tasks.listByProjectTasks {
+		if task.ID != childOneID && task.ID != childTwoID {
+			continue
+		}
+		if task.WorkStatus != "queued" {
+			t.Fatalf("child task %s work_status = %q, want queued", task.ID, task.WorkStatus)
+		}
 	}
 
 	for _, event := range publisher.events {

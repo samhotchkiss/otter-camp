@@ -782,7 +782,7 @@ func TestTaskServiceIntegrationQueueRequiresPMWhenProjectConfigured(t *testing.T
 	}
 }
 
-func TestTaskServiceIntegrationQueueDecomposesOversizedTaskIntoChildWorkUnits(t *testing.T) {
+func TestTaskServiceIntegrationQueueKeepsParentDraftAndQueuesChildWorkUnits(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
@@ -811,8 +811,8 @@ func TestTaskServiceIntegrationQueueDecomposesOversizedTaskIntoChildWorkUnits(t 
 	if err != nil {
 		t.Fatalf("TransitionStatus queued: %v", err)
 	}
-	if queued.WorkStatus != "queued" {
-		t.Fatalf("queued work_status = %q, want queued", queued.WorkStatus)
+	if queued.WorkStatus != "draft" {
+		t.Fatalf("queued work_status = %q, want draft parent orchestration-only state", queued.WorkStatus)
 	}
 	if queued.Description == nil || !strings.Contains(*queued.Description, "Migrate all legacy markdown posts") {
 		t.Fatalf("queued description = %v, want focused primary deliverable", queued.Description)
@@ -829,6 +829,20 @@ func TestTaskServiceIntegrationQueueDecomposesOversizedTaskIntoChildWorkUnits(t 
 	}
 	if childCount < 1 {
 		t.Fatalf("decomposed child task count = %d, want >= 1", childCount)
+	}
+
+	var queuedChildCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task
+		WHERE project_id = $1
+		  AND metadata->>'decomposition_parent_task_id' = $2
+		  AND work_status = 'queued'
+	`, project.ID, created.ID.String()).Scan(&queuedChildCount); err != nil {
+		t.Fatalf("count queued decomposed child tasks: %v", err)
+	}
+	if queuedChildCount != childCount {
+		t.Fatalf("queued decomposed child task count = %d, want %d", queuedChildCount, childCount)
 	}
 
 	var primaryDeliverable string

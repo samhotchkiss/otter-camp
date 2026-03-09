@@ -24,6 +24,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/testutil"
@@ -3143,6 +3144,84 @@ func TestIntegrationProjectSessionQueueKeepsPlannedTaskSetFlat(t *testing.T) {
 		if task.WorkStatus != "queued" {
 			t.Fatalf("task %q work_status = %q, want queued", task.Title, task.WorkStatus)
 		}
+	}
+}
+
+func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	description := strings.Join([]string{
+		"- Define the first execution slice for the launch.",
+		"- Draft the landing page structure for the launch.",
+		"- Outline the initial analytics instrumentation checklist.",
+	}, "\n")
+	parentTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Launch readiness workstream",
+		Description:    &description,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+		Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
+		"task_id":     parentTask.ID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update queued: %v", err)
+	}
+
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task.update output task = %T, want map[string]any", out["task"])
+	}
+	if taskOut["work_status"] != "draft" {
+		t.Fatalf("task output work_status = %v, want draft orchestration-only state", taskOut["work_status"])
+	}
+	decomposition, ok := out["decomposition"].(map[string]any)
+	if !ok {
+		t.Fatalf("decomposition output = %T, want map[string]any", out["decomposition"])
+	}
+	childIDs, ok := decomposition["child_task_ids"].([]string)
+	if !ok || len(childIDs) == 0 {
+		t.Fatalf("decomposition.child_task_ids = %v, want non-empty []string", decomposition["child_task_ids"])
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks: %v", err)
+	}
+	var queuedChildren int
+	for _, task := range tasks {
+		if task.ID == parentTask.ID {
+			if task.WorkStatus != "draft" {
+				t.Fatalf("parent work_status = %q, want draft", task.WorkStatus)
+			}
+			continue
+		}
+		if taskdecomp.ParseParentTaskID(task.Metadata) != parentTask.ID {
+			continue
+		}
+		if task.WorkStatus != "queued" {
+			t.Fatalf("child task %q work_status = %q, want queued", task.Title, task.WorkStatus)
+		}
+		queuedChildren++
+	}
+	if queuedChildren != len(childIDs) {
+		t.Fatalf("queued child task count = %d, want %d", queuedChildren, len(childIDs))
 	}
 }
 
