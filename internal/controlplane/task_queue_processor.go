@@ -903,8 +903,10 @@ func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNod
 }
 
 // SubscribeTaskCompleted subscribes to task status events that should settle
-// tracking runs. Terminal task outcomes complete or retire runtime state; blocked
-// outcomes fail the active tracking runs so supervisor recovery does not churn.
+// tracking runs. Review transitions complete the active work run so deferred
+// review wakeups can promote cleanly. Terminal task outcomes complete or retire
+// runtime state; blocked outcomes fail the active tracking runs so supervisor
+// recovery does not churn.
 func (p *TaskQueueProcessor) SubscribeTaskCompleted(orgID *uuid.UUID) eventbus.Subscription {
 	return p.events.Subscribe(taskCompletedConsumerName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
 		return p.handleTaskCompletedEvent(ctx, event)
@@ -927,7 +929,7 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 	}
 
 	toStatus := strings.ToLower(strings.TrimSpace(payload.ToStatus))
-	if toStatus != "done" && toStatus != "cancelled" && toStatus != "blocked" {
+	if toStatus != "done" && toStatus != "cancelled" && toStatus != "blocked" && toStatus != "review" {
 		return nil
 	}
 	if payload.TaskID == uuid.Nil || event.OrganizationID == uuid.Nil {
@@ -973,6 +975,9 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 		}
 	}
 	if toStatus == "blocked" {
+		return nil
+	}
+	if toStatus == "review" {
 		return nil
 	}
 	if err := p.runs.RetireRuntimeStateForTask(ctx, payload.TaskID, toStatus); err != nil {

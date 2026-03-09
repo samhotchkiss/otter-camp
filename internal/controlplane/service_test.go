@@ -677,6 +677,83 @@ func TestFailRunTransientPromotesDeferredWakeup(t *testing.T) {
 	}
 }
 
+func TestCompleteRunPromotesDeferredWakeup(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	workerID := uuid.New()
+	reviewerID := uuid.New()
+
+	started, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    workerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup started: %v", err)
+	}
+
+	deferred, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: started.Run.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup deferred: %v", err)
+	}
+	if deferred.Decision != executionWakeupDeferred {
+		t.Fatalf("deferred decision = %q, want %q", deferred.Decision, executionWakeupDeferred)
+	}
+
+	if err := svc.CompleteRun(context.Background(), started.Run.ID, json.RawMessage(`{"ok":true}`)); err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	if state.ActiveRunID == nil || *state.ActiveRunID != deferred.Run.ID {
+		t.Fatalf("runtime active_run_id = %v, want %s", state.ActiveRunID, deferred.Run.ID)
+	}
+	contract := state.Contract()
+	if contract.Status != "active" {
+		t.Fatalf("runtime status = %q, want active", contract.Status)
+	}
+	if contract.LastProgressEvent != "wakeup_promoted" {
+		t.Fatalf("runtime last_progress_event = %q, want wakeup_promoted", contract.LastProgressEvent)
+	}
+
+	promotedRun, err := repos.runs.Get(context.Background(), deferred.Run.ID)
+	if err != nil {
+		t.Fatalf("Get promoted run: %v", err)
+	}
+	if promotedRun.Status != "in_progress" {
+		t.Fatalf("promoted run status = %q, want in_progress", promotedRun.Status)
+	}
+}
+
 func TestRetireRuntimeStateForTaskMarksRetired(t *testing.T) {
 	repos := newFakeRunDeps()
 	svc := repos.newService(t)

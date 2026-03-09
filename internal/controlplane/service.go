@@ -458,8 +458,20 @@ func (s *runService) CompleteRun(ctx context.Context, runID uuid.UUID, output js
 	if state, found, stateErr := s.runtimeStateForRun(ctx, updated); stateErr != nil {
 		return stateErr
 	} else if found {
+		var releasedActiveOwner bool
+		if state.ActiveRunID != nil && *state.ActiveRunID == updated.ID {
+			if _, clearErr := s.runtime.ClearActive(ctx, state.ID); clearErr != nil && !errors.Is(clearErr, ErrNotFound) {
+				return clearErr
+			}
+			releasedActiveOwner = true
+		}
 		if syncErr := s.syncRuntimeProgress(ctx, state, updated, "run_completed"); syncErr != nil {
 			return syncErr
+		}
+		if releasedActiveOwner {
+			if _, releaseErr := s.ReleaseExecutionOwner(ctx, uuidPointerValue(updated.TaskID), uuidPointerValue(updated.SessionID), "run_completed"); releaseErr != nil {
+				return releaseErr
+			}
 		}
 	}
 	var payload map[string]any
