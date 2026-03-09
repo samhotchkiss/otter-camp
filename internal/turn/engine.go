@@ -2009,6 +2009,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return false, err
 		}
 		rt.toolCallsUsed++
+		if shouldStopAfterSuccessfulFlowTool(call, result) {
+			return true, nil
+		}
 		if blocked {
 			return true, nil
 		}
@@ -2020,6 +2023,18 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	}
 
 	return false, nil
+}
+
+func shouldStopAfterSuccessfulFlowTool(call ToolCall, result ToolResult) bool {
+	if strings.TrimSpace(result.Error) != "" {
+		return false
+	}
+	switch strings.TrimSpace(call.Name) {
+	case "flow.advance", "flow.review_decision":
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *TurnEngine) handleRecoveryDirectWriteAssistantBody(ctx context.Context, rt *turnRuntime, content string) (bool, error) {

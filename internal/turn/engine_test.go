@@ -2706,6 +2706,69 @@ func TestHandleUserMessageAllowsReviewFlowTransitionKickoff(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageStopsAfterSuccessfulFlowReviewDecision(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "flow.review_decision", Tier: "tier2"},
+	}}
+
+	dispatches := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		dispatches++
+		if call.Name != "flow.review_decision" {
+			t.Fatalf("unexpected tool dispatch: %s", call.Name)
+		}
+		runID := uuid.New()
+		onRunStarted(runID)
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			RunID:      &runID,
+			Output: map[string]any{
+				"next_node_id": uuid.NewString(),
+			},
+		}, nil
+	}
+
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if fixture.model.streamCalls > 1 {
+			t.Fatalf("unexpected extra model call after successful flow.review_decision: %d", fixture.model.streamCalls)
+		}
+		return ModelResponse{
+			Content: "Rejecting this work back to the work node.",
+			ToolCalls: []ModelToolCall{{
+				ID:   "review-decision",
+				Name: "flow.review_decision",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"flow_node_execution_id": uuid.NewString(),
+					"decision":               "reject",
+				},
+			}},
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", fixture.model.streamCalls)
+	}
+	if dispatches != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatches)
+	}
+	if got := len(fixture.chat.turnOrder); got != 1 {
+		t.Fatalf("turn count = %d, want 1", got)
+	}
+	turn := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.Status != "completed" {
+		t.Fatalf("turn status = %q, want completed", turn.Status)
+	}
+}
+
 func TestHandleUserMessageAllowsReviewFlowTransitionKickoffWhenTaskStatusIsBlocked(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

@@ -1200,6 +1200,8 @@ Inbox integration: human review of agent actions is handled by `review` flow nod
 
 Flow-transition wakeups may not silently die because a planner/template left `actor_type` blank on the next node. When `flow.advanced` or `flow.rejected` enters a blank `review` node, the control plane must infer the project's `reviewer` assignment; when it enters a blank `work` or `merge` node, it must infer the task's assigned worker. Only truly `human` or intentionally actorless terminal nodes are allowed to suppress automatic dispatch. A task that is already `in_progress` on a non-review node must remain dispatchable for that node's kickoff/resume turn; `merge` nodes are part of the same in-progress execution contract and must not be cancelled just because they are not typed `work`.
 
+When an agent successfully calls a flow-transition tool (`flow.advance` or `flow.review_decision`), that originating turn is terminal. The turn engine must complete the current turn immediately after the successful tool result so the deferred next-node wakeup can promote against a released owner instead of racing a still-live prior turn.
+
 Proactive supervision: the PM receives signals from the supervisor (stuck tasks, orphaned runs) and applies judgment in the project session.
 
 ### Models and Inference (Doc 07)
