@@ -25,6 +25,7 @@ import (
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
@@ -6136,6 +6137,280 @@ func TestTurnEngineIntegrationProjectKickoffResponderOrderFrankThenLori(t *testi
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapQueuesFollowOnAfterLoriAcknowledgement(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and setup for this new project.")
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage project bootstrap acknowledgement: %v", err)
+	}
+
+	latestTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": latestTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent bootstrap acknowledgement: %v", err)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 follow-on job", jobs)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusActive)
+	}
+	if bootstrapState.AutoTurnCount != 1 {
+		t.Fatalf("bootstrap auto_turn_count = %d, want 1", bootstrapState.AutoTurnCount)
+	}
+	if bootstrapState.PlannedTaskCount != 0 || bootstrapState.PlannedFlowTemplateCount != 0 || bootstrapState.AssignmentCount != 0 {
+		t.Fatalf("bootstrap progress = %+v, want zero persisted setup before follow-on turn", bootstrapState)
+	}
+}
+
+func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: staff the project, create initial tasks, and attach flow templates.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-1",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is now persisted in project records."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		}); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		description := "Initial scoped bootstrap workstream"
+		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "Define the first execution slice",
+			Description:    &description,
+			WorkStatus:     "draft",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":      pmAgent.ID.String(),
+				"task_id":          taskRecord.ID.String(),
+				"flow_template_id": template.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	assignments, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject assignments: %v", err)
+	}
+	if len(assignments) == 0 {
+		t.Fatal("expected persisted project assignment after self-start bootstrap")
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject tasks: %v", err)
+	}
+	var plannedTasks int
+	for _, item := range tasks {
+		var metadata map[string]any
+		_ = json.Unmarshal(item.Metadata, &metadata)
+		if raw, ok := metadata["bootstrap_gate"].(bool); ok && raw {
+			continue
+		}
+		plannedTasks++
+	}
+	if plannedTasks == 0 {
+		t.Fatal("expected persisted non-bootstrap task after self-start bootstrap")
+	}
+
+	var flowTemplateCount int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_template
+		WHERE project_id = $1
+	`, project.ID).Scan(&flowTemplateCount); err != nil {
+		t.Fatalf("count flow templates: %v", err)
+	}
+	if flowTemplateCount < 2 {
+		t.Fatalf("project flow template count = %d, want at least bootstrap + one planned flow", flowTemplateCount)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusCompleted {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusCompleted)
+	}
+	if bootstrapState.AssignmentCount == 0 || bootstrapState.PlannedTaskCount == 0 || bootstrapState.PlannedFlowTemplateCount == 0 {
+		t.Fatalf("bootstrap completed state missing persisted counts: %+v", bootstrapState)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after persisted setup", jobs)
+	}
+}
+
+func TestTurnEngineIntegrationProjectBootstrapFailsExplicitlyAfterRepeatedNoProgressTurns(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and setup for this new project.")
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "Acknowledged. I am still working through the bootstrap setup."}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial stalled bootstrap turn: %v", err)
+	}
+
+	latestTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": latestTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial stalled bootstrap turn: %v", err)
+	}
+
+	for attempt := 1; attempt < maxProjectBootstrapAutoTurns; attempt++ {
+		jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+		if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+			t.Fatalf("handleUserMessage stalled bootstrap follow-on %d: %v", attempt, err)
+		}
+		latestTurn = latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+		if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+			OrganizationID: fixture.org.ID,
+			EventType:      "chat.turn.completed",
+			Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": latestTurn.ID.String()}),
+		}); err != nil {
+			t.Fatalf("HandleTurnCompletedEvent stalled bootstrap follow-on %d: %v", attempt, err)
+		}
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after explicit bootstrap failure", jobs)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.FailureClass != projectBootstrapFailureStalled {
+		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureStalled)
+	}
+	if bootstrapState.FailureReason == "" {
+		t.Fatal("expected bootstrap failure_reason after repeated no-progress turns")
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	var failureMessages int
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if strings.Contains(message.Content, "Project bootstrap failed:") {
+			failureMessages++
+		}
+	}
+	if failureMessages != 1 {
+		t.Fatalf("bootstrap failure system messages = %d, want 1", failureMessages)
+	}
+}
+
 func TestTurnEngineIntegrationKickoffSummaryCarriesOriginatingWorkstreams(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -7991,6 +8266,94 @@ func mustCreateProject(t *testing.T, ctx context.Context, pool *pgxpool.Pool, or
 	return project
 }
 
+func mustCreateBootstrapProject(t *testing.T, ctx context.Context, fixture *integrationFixture) repo.Project {
+	t.Helper()
+
+	svc, err := projectsvc.NewService(projectsvc.Options{
+		Pool:   fixture.pool,
+		Events: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("project.NewService: %v", err)
+	}
+	created, err := svc.Create(ctx, projectsvc.CreateProjectRequest{
+		OrganizationID: fixture.org.ID,
+		Slug:           "bootstrap-project-" + uuid.NewString()[:8],
+		DisplayName:    "Bootstrap Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("project.Create bootstrap: %v", err)
+	}
+	return repo.Project(*created)
+}
+
+func mustCreateProjectSession(t *testing.T, ctx context.Context, fixture *integrationFixture, projectID uuid.UUID, participantAgentIDs ...uuid.UUID) repo.ChatSession {
+	t.Helper()
+
+	session, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project",
+		ScopeID:        projectID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession project scope: %v", err)
+	}
+	for _, agentID := range participantAgentIDs {
+		if agentID == uuid.Nil {
+			continue
+		}
+		if _, err := fixture.chatService.AddParticipant(ctx, session.ID, "agent", agentID, "member"); err != nil {
+			t.Fatalf("AddParticipant agent %s: %v", agentID, err)
+		}
+	}
+	return repo.ChatSession(*session)
+}
+
+func mustAppendProjectBootstrapHandoff(t *testing.T, ctx context.Context, fixture *integrationFixture, sessionID, authorAgentID uuid.UUID, content string) repo.ChatMessage {
+	t.Helper()
+
+	authorType := "agent"
+	message, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  sessionID,
+		AuthorType: &authorType,
+		AuthorID:   &authorAgentID,
+		Role:       "user",
+		Content:    content,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage project bootstrap handoff: %v", err)
+	}
+	return repo.ChatMessage(*message)
+}
+
+func mustCreateBootstrapPMAgent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID) repo.Agent {
+	t.Helper()
+
+	agentRecord, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "Bootstrap PM",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "You are the bootstrap PM.",
+		OperatorInstructions: "",
+		AgentType:            "pm",
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org", "project", "agent"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create bootstrap PM agent: %v", err)
+	}
+	return agentRecord
+}
+
 func mustCreateExecutionFlowTemplate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, projectID, userID uuid.UUID) repo.FlowTemplate {
 	t.Helper()
 
@@ -8094,4 +8457,46 @@ func mustAssignProjectPM(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 		t.Fatalf("assign project PM: %v", err)
 	}
 	return assignment
+}
+
+func latestCompletedTurnForSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sessionID uuid.UUID) repo.ChatTurn {
+	t.Helper()
+
+	turns, err := repo.NewChatTurnRepo(pool).ListBySession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	turn := latestCompletedTurn(turns)
+	if turn == nil {
+		t.Fatal("expected completed turn")
+	}
+	return *turn
+}
+
+func dequeueNextAgentTurnForSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sessionID uuid.UUID) (uuid.UUID, AgentTurnPayload) {
+	t.Helper()
+
+	var (
+		jobID   uuid.UUID
+		payload []byte
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT id, payload
+		FROM job_queue
+		WHERE job_type = $1
+		  AND status = 'pending'
+		  AND payload->>'session_id' = $2
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1
+	`, AgentTurnJobType, sessionID.String()).Scan(&jobID, &payload); err != nil {
+		t.Fatalf("load pending agent_turn job: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM job_queue WHERE id = $1`, jobID); err != nil {
+		t.Fatalf("delete pending agent_turn job: %v", err)
+	}
+	var decoded AgentTurnPayload
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal pending agent_turn payload: %v", err)
+	}
+	return jobID, decoded
 }

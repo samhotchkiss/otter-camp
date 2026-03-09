@@ -216,6 +216,8 @@ The principal is determined by the chat layer before the action reaches the brok
 
 Project-scoped sessions are canonical for project-level actions: if a resumed run carries stale task bindings from some other execution, the control plane must re-anchor `project_id` from the live project session and clear `task_id` unless that task still belongs to the same project. Task-scoped invariants only apply when the live session itself is `project_task`.
 
+Fresh project bootstrap uses that same canonical project session as the coordination surface. The session metadata carries a machine-visible `project_bootstrap` contract with bounded states (`active`, `completed`, `failed`), persisted setup counts, and failure detail. Automatic follow-on bootstrap turns may append system-generated continuation user messages to that same session until staffing/task/flow setup materializes or the session records an explicit bootstrap failure instead of silently idling.
+
 ### Delegation and Authority
 
 When a human says "go ahead, deploy that" in a sync session, the agent's subsequent actions carry `delegated_by` pointing to the human. This matters for policy evaluation — some capabilities may only be available when a human has explicitly delegated.

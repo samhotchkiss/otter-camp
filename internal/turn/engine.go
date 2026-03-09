@@ -47,6 +47,7 @@ const (
 	maxRateLimitBackoff             = 30 * time.Minute
 	maxRateLimitRetries             = 5
 	maxConsecutiveAutoTurns         = 10
+	maxProjectBootstrapAutoTurns    = 3
 	defaultSummarizeLayerBudget     = 0
 	chunkPollSteerEveryNChunks      = 10
 	maxContinuationTurnDepth        = 3
@@ -70,6 +71,12 @@ const (
 	recoveryFileWriteRepairBudget   = 1
 	recoveryArtifactDir             = ".ottercamp/recovery"
 	recoveryResumeExcerptChars      = 3000
+	projectBootstrapMetadataKey     = "project_bootstrap"
+	projectBootstrapStatusActive    = "active"
+	projectBootstrapStatusCompleted = "completed"
+	projectBootstrapStatusFailed    = "failed"
+	projectBootstrapFailureStalled  = "stalled"
+	projectBootstrapSource          = "project_bootstrap"
 )
 
 var (
@@ -795,6 +802,9 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 		}
 		return err
 	}
+	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
+		return e.handleProjectBootstrapCompletedTurn(ctx, session, payload.TurnID)
+	}
 	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
 		return nil
 	}
@@ -899,6 +909,351 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 		return nil
 	}
 	return nil
+}
+
+func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, session *chat.ChatSession, turnID uuid.UUID) error {
+	if e == nil || session == nil || turnID == uuid.Nil {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+		return nil
+	}
+	if session.ScopeID == uuid.Nil || !strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return nil
+	}
+	if paused, reason, pauseErr := e.projectPausedForSession(ctx, session); pauseErr != nil {
+		return pauseErr
+	} else if paused {
+		e.logPausedTurnSkip("skipping bootstrap auto continuation for paused project", session, reason, turnID)
+		return nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, session.ScopeID)
+	if err != nil {
+		return err
+	}
+	if progress.BootstrapTaskID == uuid.Nil {
+		return nil
+	}
+
+	turns, err := e.turns.ListBySession(ctx, session.ID)
+	if err != nil {
+		return err
+	}
+	latestCompleted := latestCompletedTurn(turns)
+	if latestCompleted == nil || latestCompleted.ID != turnID {
+		return nil
+	}
+	if shouldSuppressAutoContinuationForStopReason(latestCompleted.StopReason) {
+		return nil
+	}
+
+	messages, err := e.messages.ListBySession(ctx, session.ID)
+	if err != nil {
+		return err
+	}
+	latestUser := latestUserMessage(messages)
+	if latestUser == nil {
+		return nil
+	}
+	assistant := latestAssistantFinalForTurn(messages, turnID)
+	if assistant == nil || latestUser.SequenceNumber > assistant.SequenceNumber {
+		return nil
+	}
+
+	state := projectBootstrapStateFromMetadata(session.Metadata)
+	if strings.TrimSpace(state.LastTurnID) == turnID.String() {
+		return nil
+	}
+	now := e.now().UTC()
+	initialMessageID := projectBootstrapWorkflowMessageID(latestUser)
+	if strings.TrimSpace(state.InitialMessageID) != initialMessageID.String() {
+		state = projectBootstrapState{
+			InitialMessageID: initialMessageID.String(),
+			StartedAt:        &now,
+		}
+	}
+
+	madeProgress := progress.AssignmentCount > state.AssignmentCount ||
+		progress.PlannedTaskCount > state.PlannedTaskCount ||
+		progress.PlannedFlowTemplateCount > state.PlannedFlowTemplateCount
+	state.Status = projectBootstrapStatusActive
+	state.LastTurnID = turnID.String()
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	state.AssignmentCount = progress.AssignmentCount
+	state.PlannedTaskCount = progress.PlannedTaskCount
+	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = nil
+	state.FailureClass = ""
+	state.FailureReason = ""
+	if latestCompleted.RespondingID != uuid.Nil {
+		state.LastResponderID = latestCompleted.RespondingID.String()
+	}
+	if madeProgress {
+		state.LastProgressAt = &now
+		state.AutoTurnCount = 0
+	} else {
+		state.AutoTurnCount++
+	}
+
+	if progress.Materialized() {
+		state.Status = projectBootstrapStatusCompleted
+		state.AutoTurnCount = 0
+		state.CompletedAt = &now
+		state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+		return e.updateProjectBootstrapState(ctx, session, state)
+	}
+
+	if state.AutoTurnCount >= maxProjectBootstrapAutoTurns {
+		state.Status = projectBootstrapStatusFailed
+		state.FailedAt = &now
+		state.FailureClass = projectBootstrapFailureStalled
+		state.FailureReason = buildProjectBootstrapFailureReason(state.AutoTurnCount)
+		if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
+			return err
+		}
+		_, _ = e.appendSystemMessage(ctx, turnID, session.ID, buildProjectBootstrapFailureMessage(state.FailureReason))
+		return nil
+	}
+
+	if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
+		return err
+	}
+
+	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, session, latestCompleted.RespondingID)
+	continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount)
+	if err != nil {
+		return err
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID: session.ID,
+		MessageID: continuationMessage.ID,
+	}
+	if continuationAgentID != uuid.Nil {
+		nextAgentID := continuationAgentID
+		nextPayload.AgentID = &nextAgentID
+	}
+	runAfter := now.Add(defaultAutoContinueDelay)
+	_, err = e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	return err
+}
+
+type projectBootstrapProgress struct {
+	BootstrapTaskID          uuid.UUID
+	BootstrapTaskOutstanding bool
+	AssignmentCount          int
+	PlannedTaskCount         int
+	PlannedFlowTemplateCount int
+}
+
+func (p projectBootstrapProgress) Materialized() bool {
+	return p.AssignmentCount > 0 && p.PlannedTaskCount > 0 && p.PlannedFlowTemplateCount > 0
+}
+
+type projectBootstrapState struct {
+	Status                   string     `json:"status,omitempty"`
+	InitialMessageID         string     `json:"initial_message_id,omitempty"`
+	BootstrapTaskID          string     `json:"bootstrap_task_id,omitempty"`
+	BootstrapTaskOutstanding bool       `json:"bootstrap_task_outstanding,omitempty"`
+	LastTurnID               string     `json:"last_turn_id,omitempty"`
+	LastResponderID          string     `json:"last_responder_id,omitempty"`
+	AutoTurnCount            int        `json:"auto_turn_count,omitempty"`
+	AssignmentCount          int        `json:"assignment_count,omitempty"`
+	PlannedTaskCount         int        `json:"planned_task_count,omitempty"`
+	PlannedFlowTemplateCount int        `json:"planned_flow_template_count,omitempty"`
+	FailureClass             string     `json:"failure_class,omitempty"`
+	FailureReason            string     `json:"failure_reason,omitempty"`
+	StartedAt                *time.Time `json:"started_at,omitempty"`
+	LastProgressAt           *time.Time `json:"last_progress_at,omitempty"`
+	UpdatedAt                *time.Time `json:"updated_at,omitempty"`
+	CompletedAt              *time.Time `json:"completed_at,omitempty"`
+	FailedAt                 *time.Time `json:"failed_at,omitempty"`
+}
+
+func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID uuid.UUID) (projectBootstrapProgress, error) {
+	progress := projectBootstrapProgress{}
+	if e == nil || e.pool == nil || projectID == uuid.Nil {
+		return progress, nil
+	}
+
+	var bootstrapStatus string
+	if err := e.pool.QueryRow(ctx, `
+		SELECT id, COALESCE(LOWER(work_status), '')
+		FROM project_task
+		WHERE project_id = $1
+		  AND COALESCE((metadata->>'bootstrap_gate')::boolean, false)
+		ORDER BY task_number ASC, id ASC
+		LIMIT 1
+	`, projectID).Scan(&progress.BootstrapTaskID, &bootstrapStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return progress, nil
+		}
+		return projectBootstrapProgress{}, err
+	}
+	progress.BootstrapTaskOutstanding = bootstrapStatus != "done" && bootstrapStatus != "cancelled"
+
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM agent_project_assignment
+		WHERE project_id = $1
+		  AND is_active = true
+	`, projectID).Scan(&progress.AssignmentCount); err != nil {
+		return projectBootstrapProgress{}, err
+	}
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task
+		WHERE project_id = $1
+		  AND NOT COALESCE((metadata->>'bootstrap_gate')::boolean, false)
+	`, projectID).Scan(&progress.PlannedTaskCount); err != nil {
+		return projectBootstrapProgress{}, err
+	}
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_template
+		WHERE project_id = $1
+		  AND id <> (
+			SELECT flow_template_id
+			FROM project_task
+			WHERE project_id = $1
+			  AND COALESCE((metadata->>'bootstrap_gate')::boolean, false)
+			ORDER BY task_number ASC, id ASC
+			LIMIT 1
+		  )
+	`, projectID).Scan(&progress.PlannedFlowTemplateCount); err != nil {
+		return projectBootstrapProgress{}, err
+	}
+	return progress, nil
+}
+
+func (e *TurnEngine) projectBootstrapContinuationAgent(ctx context.Context, session *chat.ChatSession, latestResponderID uuid.UUID) uuid.UUID {
+	if latestResponderID == uuid.Nil {
+		return uuid.Nil
+	}
+	frankID, err := e.resolveFrankStarterID(ctx, session.OrganizationID)
+	if err == nil && latestResponderID == frankID {
+		return uuid.Nil
+	}
+	return latestResponderID
+}
+
+func (e *TurnEngine) updateProjectBootstrapState(ctx context.Context, session *chat.ChatSession, state projectBootstrapState) error {
+	if e == nil || e.pool == nil || session == nil || session.ID == uuid.Nil {
+		return nil
+	}
+	metadata, err := projectBootstrapMetadataJSON(session.Metadata, state)
+	if err != nil {
+		return err
+	}
+	if _, err := e.pool.Exec(ctx, `
+		UPDATE chat_session
+		SET metadata = $2::jsonb
+		WHERE id = $1
+	`, session.ID, metadata); err != nil {
+		return err
+	}
+	session.Metadata = metadata
+	return nil
+}
+
+func projectBootstrapStateFromMetadata(metadata json.RawMessage) projectBootstrapState {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return projectBootstrapState{}
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(metadata, &decoded); err != nil {
+		return projectBootstrapState{}
+	}
+	raw, ok := decoded[projectBootstrapMetadataKey]
+	if !ok || raw == nil {
+		return projectBootstrapState{}
+	}
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return projectBootstrapState{}
+	}
+	var state projectBootstrapState
+	if err := json.Unmarshal(payload, &state); err != nil {
+		return projectBootstrapState{}
+	}
+	return state
+}
+
+func projectBootstrapMetadataJSON(metadata json.RawMessage, state projectBootstrapState) (json.RawMessage, error) {
+	payload := map[string]any{}
+	if len(metadata) > 0 && json.Valid(metadata) {
+		if err := json.Unmarshal(metadata, &payload); err != nil {
+			return nil, err
+		}
+	}
+	payload[projectBootstrapMetadataKey] = state
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+func projectBootstrapWorkflowMessageID(message *repo.ChatMessage) uuid.UUID {
+	if message == nil {
+		return uuid.Nil
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	if parsed, ok := parseUUIDAny(metadata["bootstrap_initial_message_id"]); ok && parsed != uuid.Nil {
+		return parsed
+	}
+	return message.ID
+}
+
+func (e *TurnEngine) appendProjectBootstrapContinuationMessage(ctx context.Context, sessionID, authorAgentID uuid.UUID, initialMessageID string, autoTurnCount int) (*chat.ChatMessage, error) {
+	if e == nil || sessionID == uuid.Nil {
+		return nil, repo.ErrNotFound
+	}
+	authorType := "agent"
+	metadata, err := json.Marshal(map[string]any{
+		"source":                       projectBootstrapSource,
+		"auto_continue":                true,
+		"bootstrap_initial_message_id": strings.TrimSpace(initialMessageID),
+		"bootstrap_auto_turn_count":    autoTurnCount,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var authorID *uuid.UUID
+	if authorAgentID != uuid.Nil {
+		authorID = &authorAgentID
+	}
+	return e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  sessionID,
+		AuthorType: &authorType,
+		AuthorID:   authorID,
+		Role:       "user",
+		Content:    buildProjectBootstrapContinuationPrompt(autoTurnCount),
+		Metadata:   metadata,
+	})
+}
+
+func buildProjectBootstrapContinuationPrompt(autoTurnCount int) string {
+	return fmt.Sprintf(
+		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Do not stop at acknowledgement. Persist project assignments, scoped tasks, and flow templates if the handoff already contains enough information. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
+		autoTurnCount,
+	)
+}
+
+func buildProjectBootstrapFailureReason(autoTurnCount int) string {
+	return fmt.Sprintf("bootstrap setup stalled after %d consecutive follow-on turns without creating project assignments, scoped tasks, and flow templates", autoTurnCount)
+}
+
+func buildProjectBootstrapFailureMessage(reason string) string {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		trimmed = "bootstrap setup stalled before persisted staffing and task records were created"
+	}
+	return fmt.Sprintf("[Project bootstrap failed: %s. The project session metadata now carries a machine-visible bootstrap failure state instead of silently idling.]", trimmed)
 }
 
 type workCompletionSignal struct {

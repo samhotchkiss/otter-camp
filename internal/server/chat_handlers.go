@@ -188,6 +188,7 @@ type chatSessionResponse struct {
 	LastMessageAt  *time.Time              `json:"last_message_at"`
 	TurnCount      int                     `json:"turn_count"`
 	MessageCount   int                     `json:"message_count"`
+	Metadata       json.RawMessage         `json:"metadata,omitempty"`
 	CreatedAt      time.Time               `json:"created_at"`
 	UpdatedAt      time.Time               `json:"updated_at"`
 	ClosedAt       *time.Time              `json:"closed_at,omitempty"`
@@ -1874,6 +1875,7 @@ func toChatSessionResponse(model *chat.ChatSession, participants []chatParticipa
 		LastMessageAt:  model.LastMessageAt,
 		TurnCount:      model.TurnCount,
 		MessageCount:   model.MessageCount,
+		Metadata:       model.Metadata,
 		CreatedAt:      model.CreatedAt,
 		UpdatedAt:      model.UpdatedAt,
 		ClosedAt:       model.ClosedAt,

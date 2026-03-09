@@ -319,6 +319,8 @@ Projects need agents to do work. The staffing process is conversational — Lori
 4. The human approves or adjusts the staffing plan.
 5. Assignments are recorded in `agent_project_assignment`.
 
+Kickoff/setup is a bounded active workflow. After Frank hands a fresh project to Lori, the project session should keep taking automatic follow-on setup turns instead of waiting for an operator to type "continue." Those turns either materialize the persisted staffing/task/flow records needed for bootstrap, or they end with an explicit machine-visible bootstrap failure/blocker state on the project session.
+
 For project bootstrap governance flows, Lori and Frank may be assigned directly on specific flow nodes using `actor_type = 'agent'`. This is intentional and does not change the standard project role model (`project_manager`, `worker`, `reviewer`, `planner`).
 
 **Ongoing staffing:**

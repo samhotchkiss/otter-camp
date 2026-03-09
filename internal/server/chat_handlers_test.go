@@ -64,6 +64,25 @@ func TestChatRoutesRegistered(t *testing.T) {
 	}
 }
 
+func TestToChatSessionResponseIncludesMetadata(t *testing.T) {
+	session := &chat.ChatSession{
+		ID:             uuid.New(),
+		OrganizationID: uuid.New(),
+		ScopeType:      "project",
+		ScopeID:        uuid.New(),
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active","auto_turn_count":1}}`),
+	}
+
+	response := toChatSessionResponse(session, nil)
+	if string(response.Metadata) != string(session.Metadata) {
+		t.Fatalf("metadata = %s, want %s", response.Metadata, session.Metadata)
+	}
+}
+
 func TestCreateSessionMapsActiveSyncConflict(t *testing.T) {
 	svc := &fakeChatService{
 		createSessionFn: func(context.Context, chat.CreateSessionInput) (*chat.ChatSession, error) {
