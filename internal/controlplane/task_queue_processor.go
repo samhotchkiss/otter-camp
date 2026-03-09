@@ -1245,9 +1245,74 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 		return err
 	}
 	if !result.shouldDispatch() {
-		return nil
+		return p.dispatchCurrentFlowRunIfMissingKickoff(ctx, session.ScopeID)
 	}
 	return p.dispatchWakeupRun(ctx, result.Run)
+}
+
+func (p *TaskQueueProcessor) dispatchCurrentFlowRunIfMissingKickoff(ctx context.Context, taskID uuid.UUID) error {
+	if taskID == uuid.Nil || p.tasks == nil || p.runs == nil {
+		return nil
+	}
+
+	taskRecord, err := p.tasks.GetByID(ctx, taskID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if taskRecord.FlowTemplateID == nil || taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {
+		return nil
+	}
+
+	execution, err := p.ensureTaskFlowExecutionState(ctx, taskRecord)
+	if err != nil {
+		return err
+	}
+	if execution == nil || execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+		return nil
+	}
+
+	runRecord, found, err := p.findCurrentFlowRun(ctx, taskRecord, execution.FlowNodeID)
+	if err != nil || !found {
+		return err
+	}
+
+	hasKickoff, err := p.sessionHasKickoffMessage(ctx, *execution.SessionID, runRecord.ID)
+	if err != nil {
+		return err
+	}
+	if hasKickoff {
+		return nil
+	}
+
+	if strings.EqualFold(strings.TrimSpace(runRecord.Status), "created") {
+		if err := p.runs.StartRun(ctx, runRecord.ID); err != nil && !errors.Is(err, ErrInvalidTransition) {
+			return err
+		}
+		if refreshed, getErr := p.runs.GetRun(ctx, runRecord.ID); getErr == nil {
+			runRecord = refreshed
+		}
+	}
+
+	return p.dispatchWakeupRun(ctx, runRecord)
+}
+
+func (p *TaskQueueProcessor) findCurrentFlowRun(ctx context.Context, taskRecord repo.ProjectTask, flowNodeID uuid.UUID) (Run, bool, error) {
+	for _, status := range []string{"in_progress", "created"} {
+		runs, err := p.runs.ListRunsByTask(ctx, taskRecord.OrganizationID, taskRecord.ID, status, taskQueueTriggerType)
+		if err != nil {
+			return Run{}, false, err
+		}
+		for _, runRecord := range runs {
+			if runRecord.FlowNodeID == nil || *runRecord.FlowNodeID != flowNodeID {
+				continue
+			}
+			return runRecord, true, nil
+		}
+	}
+	return Run{}, false, nil
 }
 
 func (p *TaskQueueProcessor) ensureFlowTransitionRun(

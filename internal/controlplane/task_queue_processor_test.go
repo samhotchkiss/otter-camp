@@ -1224,6 +1224,121 @@ func TestHandleTurnTerminalEventDispatchesPromotedFlowTransitionAfterTaskAlready
 	}
 }
 
+func TestHandleTurnTerminalEventDispatchesExistingReviewRunMissingKickoff(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	workSessionID := uuid.New()
+	reviewSessionID := uuid.New()
+	reviewNodeID := uuid.New()
+	reviewExecutionID := uuid.New()
+	reviewerID := uuid.New()
+	runID := uuid.New()
+
+	runMetadata := buildExecutionWakeupMetadata(
+		nil,
+		executionScope{Type: "task", ID: taskID},
+		"task_queue_processor",
+		"flow_transition",
+		map[string]any{
+			"flow_node_execution_id": reviewExecutionID.String(),
+			"flow_event_type":        "flow.advanced",
+		},
+		"started",
+		nil,
+	)
+
+	chatService := &fakeTaskQueueChatService{
+		session: &chat.ChatSession{
+			ID:        workSessionID,
+			ScopeType: "project_task",
+			ScopeID:   taskID,
+			Mode:      "async",
+			Status:    "active",
+		},
+		nodeSession: &chat.ChatSession{
+			ID:        reviewSessionID,
+			ScopeType: "project_task",
+			ScopeID:   taskID,
+			Mode:      "async",
+			Status:    "active",
+		},
+	}
+	runService := &fakeTaskQueueRunStarter{
+		listRunsByTaskResponses: map[string][]Run{
+			"in_progress|scheduler": {
+				{
+					ID:             runID,
+					OrganizationID: orgID,
+					ProjectID:      &projectID,
+					TaskID:         &taskID,
+					FlowNodeID:     &reviewNodeID,
+					PrincipalType:  "agent",
+					PrincipalID:    reviewerID,
+					TriggerType:    taskQueueTriggerType,
+					Status:         "in_progress",
+					Metadata:       runMetadata,
+				},
+			},
+		},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				FlowTemplateID:    &flowTemplateID,
+				WorkStatus:        "review",
+				Title:             "WS4: Generate 20 Blog Post Ideas",
+				CurrentFlowNodeID: &reviewNodeID,
+			},
+		},
+		runs:  runService,
+		chats: chatService,
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{
+				ID:         reviewExecutionID,
+				TaskID:     taskID,
+				FlowNodeID: reviewNodeID,
+				SessionID:  &reviewSessionID,
+			},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{
+				ID:       reviewNodeID,
+				NodeType: "review",
+			},
+		},
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": workSessionID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	if err := processor.handleTurnTerminalEvent(ctx, eventbus.DomainEvent{
+		EventType: "chat.turn.completed",
+		Payload:   payload,
+	}); err != nil {
+		t.Fatalf("handleTurnTerminalEvent: %v", err)
+	}
+
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("appendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+	if chatService.appendMessages[0].SessionID != reviewSessionID {
+		t.Fatalf("kickoff session = %s, want %s", chatService.appendMessages[0].SessionID, reviewSessionID)
+	}
+	if !strings.Contains(chatService.appendMessages[0].Content, "Review task: WS4: Generate 20 Blog Post Ideas") {
+		t.Fatalf("kickoff content = %q, want review kickoff", chatService.appendMessages[0].Content)
+	}
+}
+
 func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
