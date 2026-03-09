@@ -2567,6 +2567,210 @@ func TestTurnEngineIntegrationClaimedRecoveryResumeRejectsInventoryPlaceholderWr
 	}
 }
 
+func TestTurnEngineIntegrationClaimedRecoveryResumeProtectsSubstantiveTargetFromAnalysisOverwriteDirectFix(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateTaskQueueRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, recoveryMessage.ID)
+
+	existingTargetBody := strings.TrimSpace(`# Blog Post Ideas for Sam.blog
+
+## Idea 1: Orchestration Is the New Product Layer
+- Thesis: orchestration, not model selection, is the durable moat.
+- Outcome: consulting credibility for production AI architecture.
+- Outline: explain orchestration debt, workflow design, and build-vs-buy tradeoffs.
+
+## Idea 2: Parenting With AI Without Training Passive Kids
+- Thesis: the real risk is passive thinking, not the model itself.
+- Outcome: speaking-ready narrative grounded in lived parenting experience.
+- Outline: household guardrails, supervised use, and reflective practice.
+
+## Idea 3: The Internet Remembers Fragments, Not Context
+- Thesis: context collapse creates injustice in online memory systems.
+- Outcome: ethics authority with concrete product-design implications.
+- Outline: contextual integrity, design failures, and practical interventions.
+
+## Idea 4: Photography Made Me Better at Engineering Leadership
+- Thesis: composition and exclusion are strategic leadership skills.
+- Outcome: executive-recruiting signal for judgment and framing.
+- Outline: selection, patience, timing, and signal-vs-noise tradeoffs.
+
+## Idea 5: Workflow Engineering Replaces Prompt Engineering
+- Thesis: handoffs, memory, and verification matter more than single prompts.
+- Outcome: consulting proof for AI systems leadership.
+- Outline: workflow patterns, failure modes, and hiring implications.
+
+## Idea 6: Building Human Override Into AI Systems
+- Thesis: the best AI systems make intervention easy before damage compounds.
+- Outcome: thought leadership for operators and platform teams.
+- Outline: recovery paths, pause points, and review gates.
+`) + "\n" + strings.Repeat("- Additional developed concept with thesis, audience, outline, and target outcome.\n", 18)
+	if err := os.WriteFile(seed.targetAbs, []byte(existingTargetBody), 0o644); err != nil {
+		t.Fatalf("rewrite substantive target draft: %v", err)
+	}
+
+	assembler := &fakeAssembler{results: []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "system"}}, TotalTokens: 30}},
+	}}
+	fixture.engine.assembler = assembler
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	const analysisOverwrite = `# Revision Notes for Blog Post Ideas
+
+The current list has strong coverage, but the final cluster still needs a more balanced distribution of speaking, consulting, and executive-recruiting hooks. The overall direction is solid; the real work now is tightening the last segment so the outcomes feel distinct instead of repetitive.
+
+## Coverage Gaps
+- the final three concepts overlap too much in their audience framing
+- the consulting hooks should be more explicit earlier in the sequence
+- the photography thread should connect more directly to leadership and judgment
+
+## Revision Priorities
+- rebalance the final cluster of ideas
+- make the CTA/outcome language more specific
+- sharpen the titles so each post feels more conference-ready`
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{
+				Content: analysisOverwrite,
+				ToolCalls: []ModelToolCall{{
+					ID:   "resume-write",
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"path": seed.targetPath,
+					},
+				}},
+			}, nil
+		default:
+			return ModelResponse{}, fmt.Errorf("unexpected follow-up model call after analysis overwrite draft")
+		}
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		t.Fatalf("unexpected tier2 dispatch for protected-target recovery draft: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	worker := jobqueue.New(fixture.pool, nil, jobqueue.Config{})
+	jobID, err := worker.Enqueue(ctx, nil, AgentTurnJobType, defaultAgentTurnJobPriority, AgentTurnPayload{
+		SessionID: taskSession.ID,
+		MessageID: recoveryMessage.ID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueue claimed recovery job: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'integration-worker',
+		    claimed_at = now()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("mark recovery job claimed: %v", err)
+	}
+
+	var payload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&payload); err != nil {
+		t.Fatalf("load claimed recovery payload: %v", err)
+	}
+	claimedJob := jobqueue.Job{
+		ID:      jobID,
+		JobType: AgentTurnJobType,
+		Payload: payload,
+		Status:  "claimed",
+	}
+
+	if err := fixture.engine.HandleTurnJob(ctx, claimedJob); err != nil {
+		t.Fatalf("HandleTurnJob claimed recovery resume: %v", err)
+	}
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1 bounded recovery turn", modelCalls)
+	}
+	if assembler.calls != 1 {
+		t.Fatalf("assemble calls = %d, want 1 because protected-target rejection should halt before dispatch", assembler.calls)
+	}
+	if dispatched != 0 {
+		t.Fatalf("tier2 dispatches = %d, want 0", dispatched)
+	}
+
+	outputBody, err := os.ReadFile(seed.targetAbs)
+	if err != nil {
+		t.Fatalf("read target file after claimed recovery resume: %v", err)
+	}
+	if string(outputBody) != existingTargetBody {
+		t.Fatalf("target file was clobbered:\n%s", string(outputBody))
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != seed.targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, seed.targetPath)
+	}
+	if checkpoint.ArtifactPath != seed.artifactRel {
+		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, seed.artifactRel)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "existing substantive target file") {
+		t.Fatalf("checkpoint failure_reason = %q, want substantive-target overwrite guard", checkpoint.FailureReason)
+	}
+
+	artifactBody, err := os.ReadFile(seed.artifactAbs)
+	if err != nil {
+		t.Fatalf("read recovery artifact: %v", err)
+	}
+	artifactText := string(artifactBody)
+	if !strings.Contains(artifactText, analysisOverwrite) {
+		t.Fatalf("artifact missing rejected analysis draft:\n%s", artifactText)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var haltMessages int
+	var toolResults int
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"docs/content-strategy.md"`) {
+			toolResults++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "existing substantive target file") {
+			haltMessages++
+		}
+	}
+	if haltMessages != 1 {
+		t.Fatalf("substantive-target halt messages = %d, want 1", haltMessages)
+	}
+	if toolResults != 0 {
+		t.Fatalf("file.write tool_results = %d, want 0", toolResults)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnPersistsCheckpointForRepeatedEmptyCLIExecuteWithFileContextEX321(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

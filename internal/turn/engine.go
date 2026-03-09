@@ -2040,6 +2040,10 @@ func (e *TurnEngine) handleRecoveryDirectWriteAssistantBody(ctx context.Context,
 		_, _, err := e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
 		return true, err
 	}
+	if rejectReason := e.recoveryExistingTargetOverwriteRejectReason(ctx, rt, targetPath, draft); strings.TrimSpace(rejectReason) != "" {
+		_, _, err := e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
+		return true, err
+	}
 	if !looksLikeRecoveryFileDraft(draft) {
 		rt.stopReason = stopReasonRecoveryFileRejected
 		artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, draft, "")
@@ -2249,7 +2253,10 @@ func (e *TurnEngine) handleRecoveryRejectedFileWriteContent(ctx context.Context,
 
 	rejectReason := recoveryFileWriteDraftRejectReason(draft, targetPath)
 	if strings.TrimSpace(rejectReason) == "" {
-		return false, false, nil
+		rejectReason = e.recoveryExistingTargetOverwriteRejectReason(ctx, rt, targetPath, draft)
+		if strings.TrimSpace(rejectReason) == "" {
+			return false, false, nil
+		}
 	}
 	return e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
 }
@@ -3038,10 +3045,39 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 	if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" {
 		return draft, reason, false
 	}
+	if reason := e.recoveryExistingTargetOverwriteRejectReason(ctx, rt, targetPath, draft); reason != "" {
+		return draft, reason, false
+	}
 	if !looksLikeRecoveryFileDraft(draft) {
 		return "", "", false
 	}
 	return draft, "", true
+}
+
+func (e *TurnEngine) recoveryExistingTargetOverwriteRejectReason(ctx context.Context, rt *turnRuntime, targetPath, draft string) string {
+	if e == nil || rt == nil || rt.session == nil {
+		return ""
+	}
+	targetPath = strings.TrimSpace(targetPath)
+	draft = strings.TrimSpace(draft)
+	if targetPath == "" || draft == "" {
+		return ""
+	}
+	existing, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath)
+	if !found {
+		return ""
+	}
+	existing = strings.TrimSpace(existing)
+	if existing == "" {
+		return ""
+	}
+	if !looksLikeSubstantiveRecoveryTarget(existing, targetPath) {
+		return ""
+	}
+	if looksLikeSubstantiveRecoveryTarget(draft, targetPath) {
+		return ""
+	}
+	return fmt.Sprintf("assistant draft for %s would overwrite an existing substantive target file with a non-substantive recovery draft instead of the file body", targetPath)
 }
 
 func (e *TurnEngine) latestRecoveryAssistantDraftContent(ctx context.Context, rt *turnRuntime) (string, bool) {
@@ -3106,6 +3142,29 @@ func looksLikeRecoveryFileDraft(content string) bool {
 		return true
 	}
 	return hasStructuredRecoveryFileDraftMarkers(trimmed)
+}
+
+func looksLikeSubstantiveRecoveryTarget(content, targetPath string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	if strings.TrimSpace(recoveryFileWriteDraftRejectReason(trimmed, targetPath)) != "" {
+		return false
+	}
+	if len(trimmed) >= 1500 {
+		return true
+	}
+	if strings.Count(trimmed, "\n## ") >= 3 && len(trimmed) >= 900 {
+		return true
+	}
+	if hasStructuredRecoveryFileDraftMarkers(trimmed) && len(trimmed) >= 1200 {
+		return true
+	}
+	if (strings.Contains(trimmed, "\n- ") || strings.Contains(trimmed, "\n1. ")) && len(trimmed) >= 1200 {
+		return true
+	}
+	return false
 }
 
 func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
