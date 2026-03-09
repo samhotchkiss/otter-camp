@@ -2,6 +2,7 @@ package taskdecomp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,7 +14,67 @@ const (
 	descriptionThresholdChars              = 320
 	maxGeneratedChildWorkUnits             = 5
 	QueueDecompositionModeParallelChildren = "parallel_children"
+	defaultMaxTaskMinutes                  = 30
+	extendedMaxTaskMinutes                 = 60
 )
+
+var ErrBoundedTaskTooLarge = errors.New("task exceeds bounded size policy and must be split before queueing")
+
+var (
+	toolHeavySignals = []string{
+		"api",
+		"cli",
+		"command",
+		"database",
+		"deploy",
+		"integration",
+		"migration",
+		"script",
+		"terminal",
+		"webhook",
+	}
+	externalBoundSignals = []string{
+		"approval",
+		"customer",
+		"dependency",
+		"external",
+		"partner",
+		"stakeholder",
+		"vendor",
+		"wait for",
+	}
+	broadScopeSignals = []string{
+		"distribution",
+		"go-to-market",
+		"gtm",
+		"ideation",
+		"messaging",
+		"persona",
+		"personas",
+		"pillar",
+		"pillars",
+		"positioning",
+		"strategy",
+	}
+)
+
+type QueueSizeError struct {
+	EstimatedMinutes int
+	MaxMinutes       int
+	Reason           string
+}
+
+func (e QueueSizeError) Error() string {
+	reason := strings.TrimSpace(e.Reason)
+	if reason == "" {
+		reason = "split the work into smaller reviewable tasks before queueing"
+	}
+	return fmt.Sprintf("task exceeds bounded size policy (estimated %d minutes > %d minute limit): %s", e.EstimatedMinutes, e.MaxMinutes, reason)
+}
+
+func (e QueueSizeError) Is(target error) bool {
+	return target == ErrBoundedTaskTooLarge
+}
 
 type Plan struct {
 	RequiresDecomposition bool
@@ -53,7 +114,7 @@ func Analyze(title string, description *string) Plan {
 		return Plan{}
 	}
 
-	requires := len(rawDescription) >= descriptionThresholdChars || len(deliverables) >= 3
+	requires := len(deliverables) >= 2 || len(rawDescription) >= descriptionThresholdChars
 	if !requires {
 		return Plan{}
 	}
@@ -79,12 +140,11 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 	if strings.TrimSpace(ParsePrimaryDeliverable(input.Metadata)) != "" {
 		return QueueDecomposition{}, nil
 	}
-	if !QueueDecompositionRequested(input.Metadata) {
-		return QueueDecomposition{}, nil
-	}
-
 	plan := Analyze(input.Title, input.Description)
 	if !plan.RequiresDecomposition {
+		if sizingErr := validateBoundedTaskSize(input.Title, input.Description); sizingErr != nil {
+			return QueueDecomposition{}, sizingErr
+		}
 		return QueueDecomposition{}, nil
 	}
 
@@ -291,6 +351,60 @@ func extractDeliverables(description string) []string {
 		deduped = append(deduped, strings.TrimSpace(item))
 	}
 	return deduped
+}
+
+func validateBoundedTaskSize(title string, description *string) error {
+	estimatedMinutes, maxMinutes := estimateTaskMinutes(title, description)
+	if estimatedMinutes <= maxMinutes {
+		return nil
+	}
+	return QueueSizeError{
+		EstimatedMinutes: estimatedMinutes,
+		MaxMinutes:       maxMinutes,
+		Reason:           "split the work into smaller reviewable tasks before queueing",
+	}
+}
+
+func estimateTaskMinutes(title string, description *string) (int, int) {
+	rawDescription := strings.TrimSpace(deref(description))
+	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{title, rawDescription}, " ")))
+
+	maxMinutes := defaultMaxTaskMinutes
+	if containsAny(text, toolHeavySignals) || containsAny(text, externalBoundSignals) {
+		maxMinutes = extendedMaxTaskMinutes
+	}
+
+	estimatedMinutes := 20
+	deliverables := extractDeliverables(rawDescription)
+	if extraDeliverables := len(deliverables) - 1; extraDeliverables > 0 {
+		estimatedMinutes += extraDeliverables * 15
+	}
+	if len(rawDescription) >= 220 {
+		estimatedMinutes += 10
+	}
+	if len(rawDescription) >= descriptionThresholdChars {
+		estimatedMinutes += 10
+	}
+	if len(rawDescription) >= 520 {
+		estimatedMinutes += 10
+	}
+	if strings.Count(text, " and ") >= 2 || strings.Count(text, " plus ") >= 2 {
+		estimatedMinutes += 10
+	}
+	if containsAny(text, broadScopeSignals) {
+		estimatedMinutes += 15
+	}
+
+	return estimatedMinutes, maxMinutes
+}
+
+func containsAny(text string, signals []string) bool {
+	for _, signal := range signals {
+		if strings.Contains(text, signal) {
+			return true
+		}
+	}
+	return false
 }
 
 func splitSegments(raw, delimiter string) []string {

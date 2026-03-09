@@ -801,7 +801,6 @@ func TestTaskServiceIntegrationQueueKeepsParentDraftAndQueuesChildWorkUnits(t *t
 		Description:    &description,
 		FlowTemplateID: &template.ID,
 		CreatedByType:  "system",
-		Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
@@ -858,22 +857,18 @@ func TestTaskServiceIntegrationQueueKeepsParentDraftAndQueuesChildWorkUnits(t *t
 	}
 }
 
-func TestTaskServiceIntegrationQueueSkipsDecompositionWithoutExplicitMode(t *testing.T) {
+func TestTaskServiceIntegrationQueueRejectsOversizedUnsplittableWork(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
 	svc := newTaskIntegrationService(t, pool)
 	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
 
-	description := strings.Join([]string{
-		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
-		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
-		"- Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots.",
-	}, "\n")
+	description := "Create the full launch strategy packet that covers customer research synthesis and messaging framework and positioning rationale and editorial pillar selection and rollout sequencing and stakeholder communication in one end-to-end document for the Sam.blog relaunch without breaking it into separate reviewable work units."
 
 	created, err := svc.CreateTask(ctx, CreateTaskRequest{
 		ProjectID:      project.ID,
-		Title:          "Blog migration epic",
+		Title:          "Launch strategy packet",
 		Description:    &description,
 		FlowTemplateID: &template.ID,
 		CreatedByType:  "system",
@@ -882,28 +877,9 @@ func TestTaskServiceIntegrationQueueSkipsDecompositionWithoutExplicitMode(t *tes
 		t.Fatalf("CreateTask: %v", err)
 	}
 
-	queued, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
-	if err != nil {
-		t.Fatalf("TransitionStatus queued: %v", err)
-	}
-	if queued.WorkStatus != "queued" {
-		t.Fatalf("queued work_status = %q, want queued", queued.WorkStatus)
-	}
-	if queued.Description == nil || *queued.Description != description {
-		t.Fatalf("queued description = %v, want original description preserved", queued.Description)
-	}
-
-	var childCount int
-	if err := pool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM project_task
-		WHERE project_id = $1
-		  AND metadata->>'decomposition_parent_task_id' = $2
-	`, project.ID, created.ID.String()).Scan(&childCount); err != nil {
-		t.Fatalf("count decomposed child tasks: %v", err)
-	}
-	if childCount != 0 {
-		t.Fatalf("decomposed child task count = %d, want 0", childCount)
+	_, err = svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
+	if !errors.Is(err, taskdecomp.ErrBoundedTaskTooLarge) {
+		t.Fatalf("TransitionStatus queued err = %v, want ErrBoundedTaskTooLarge", err)
 	}
 }
 
