@@ -1648,25 +1648,6 @@ func metadataObject(raw json.RawMessage) map[string]any {
 	return payload
 }
 
-func metadataStringValue(payload map[string]any, key string) (string, bool) {
-	if payload == nil {
-		return "", false
-	}
-	value, ok := payload[key]
-	if !ok {
-		return "", false
-	}
-	text, ok := value.(string)
-	if !ok {
-		return "", false
-	}
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return "", false
-	}
-	return trimmed, true
-}
-
 func metadataIntValue(payload map[string]any, key string) (int, bool) {
 	if payload == nil {
 		return 0, false
