@@ -753,7 +753,6 @@ func TestCompleteRunPromotesDeferredWakeup(t *testing.T) {
 		t.Fatalf("promoted run status = %q, want in_progress", promotedRun.Status)
 	}
 }
-
 func TestRetireRuntimeStateForTaskMarksRetired(t *testing.T) {
 	repos := newFakeRunDeps()
 	svc := repos.newService(t)
