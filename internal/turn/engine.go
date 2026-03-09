@@ -1014,6 +1014,7 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	madeProgress := progress.AssignmentCount > state.AssignmentCount ||
 		progress.PlannedTaskCount > state.PlannedTaskCount ||
 		progress.PlannedFlowTemplateCount > state.PlannedFlowTemplateCount ||
+		progress.FirstWaveTaskCount > state.FirstWaveTaskCount ||
 		progress.FirstWavePromotedCount > state.FirstWavePromotedCount ||
 		progress.FirstWaveExecutionCount > state.FirstWaveExecutionCount ||
 		progress.FirstWaveKickoffCount > state.FirstWaveKickoffCount
@@ -1237,30 +1238,34 @@ func (p projectBootstrapProgress) ValidationFailed() bool {
 }
 
 type projectBootstrapState struct {
-	Status                   string     `json:"status,omitempty"`
-	InitialMessageID         string     `json:"initial_message_id,omitempty"`
-	BootstrapTaskID          string     `json:"bootstrap_task_id,omitempty"`
-	BootstrapTaskOutstanding bool       `json:"bootstrap_task_outstanding,omitempty"`
-	LastTurnID               string     `json:"last_turn_id,omitempty"`
-	LastResponderID          string     `json:"last_responder_id,omitempty"`
-	AutoTurnCount            int        `json:"auto_turn_count,omitempty"`
-	AssignmentCount          int        `json:"assignment_count,omitempty"`
-	PlannedTaskCount         int        `json:"planned_task_count,omitempty"`
-	PlannedFlowTemplateCount int        `json:"planned_flow_template_count,omitempty"`
-	FirstWaveTaskCount       int        `json:"first_wave_task_count,omitempty"`
-	FirstWavePromotedCount   int        `json:"first_wave_promoted_count,omitempty"`
-	FirstWaveExecutionCount  int        `json:"first_wave_execution_count,omitempty"`
-	FirstWaveKickoffCount    int        `json:"first_wave_kickoff_count,omitempty"`
-	ValidationStatus         string     `json:"validation_status,omitempty"`
-	ValidationFailureClass   string     `json:"validation_failure_class,omitempty"`
-	ValidationFailureReason  string     `json:"validation_failure_reason,omitempty"`
-	FailureClass             string     `json:"failure_class,omitempty"`
-	FailureReason            string     `json:"failure_reason,omitempty"`
-	StartedAt                *time.Time `json:"started_at,omitempty"`
-	LastProgressAt           *time.Time `json:"last_progress_at,omitempty"`
-	UpdatedAt                *time.Time `json:"updated_at,omitempty"`
-	CompletedAt              *time.Time `json:"completed_at,omitempty"`
-	FailedAt                 *time.Time `json:"failed_at,omitempty"`
+	Status                   string                              `json:"status,omitempty"`
+	CurrentPhase             string                              `json:"current_phase,omitempty"`
+	LastSuccessfulCheckpoint string                              `json:"last_successful_checkpoint,omitempty"`
+	InitialMessageID         string                              `json:"initial_message_id,omitempty"`
+	BootstrapTaskID          string                              `json:"bootstrap_task_id,omitempty"`
+	BootstrapTaskOutstanding bool                                `json:"bootstrap_task_outstanding,omitempty"`
+	LastTurnID               string                              `json:"last_turn_id,omitempty"`
+	LastResponderID          string                              `json:"last_responder_id,omitempty"`
+	AutoTurnCount            int                                 `json:"auto_turn_count,omitempty"`
+	AssignmentCount          int                                 `json:"assignment_count,omitempty"`
+	PlannedTaskCount         int                                 `json:"planned_task_count,omitempty"`
+	PlannedFlowTemplateCount int                                 `json:"planned_flow_template_count,omitempty"`
+	FirstWaveTaskCount       int                                 `json:"first_wave_task_count,omitempty"`
+	FirstWavePromotedCount   int                                 `json:"first_wave_promoted_count,omitempty"`
+	FirstWaveExecutionCount  int                                 `json:"first_wave_execution_count,omitempty"`
+	FirstWaveKickoffCount    int                                 `json:"first_wave_kickoff_count,omitempty"`
+	ValidationStatus         string                              `json:"validation_status,omitempty"`
+	ValidationFailureClass   string                              `json:"validation_failure_class,omitempty"`
+	ValidationFailureReason  string                              `json:"validation_failure_reason,omitempty"`
+	Checkpoints              []projectBootstrapCheckpoint        `json:"checkpoints,omitempty"`
+	ValidationFindings       []projectBootstrapValidationFinding `json:"validation_findings,omitempty"`
+	FailureClass             string                              `json:"failure_class,omitempty"`
+	FailureReason            string                              `json:"failure_reason,omitempty"`
+	StartedAt                *time.Time                          `json:"started_at,omitempty"`
+	LastProgressAt           *time.Time                          `json:"last_progress_at,omitempty"`
+	UpdatedAt                *time.Time                          `json:"updated_at,omitempty"`
+	CompletedAt              *time.Time                          `json:"completed_at,omitempty"`
+	FailedAt                 *time.Time                          `json:"failed_at,omitempty"`
 }
 
 type projectBootstrapWatchdog struct {
@@ -1326,41 +1331,30 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	if len(plannedTasks) == 0 {
 		return progress, nil
 	}
-	if progress.AssignmentCount == 0 {
-		progress.ValidationStatus = projectBootstrapValidationFailed
-		progress.ValidationFailureClass = projectBootstrapFailureMissingAssignments
-		progress.ValidationFailureReason = "kickoff validation failed: planned tasks were created before any active project assignments were persisted"
-		return progress, nil
-	}
-	if e.environments == nil {
-		return progress, nil
-	}
-	environments, err := e.environments.ListByProject(ctx, projectID)
-	if err != nil {
-		return projectBootstrapProgress{}, err
-	}
-	if !projectsvc.HasProjectRepoBinding(environments) {
-		progress.ValidationStatus = projectBootstrapValidationFailed
-		progress.ValidationFailureClass = projectBootstrapFailureRepoBinding
-		progress.ValidationFailureReason = buildProjectBootstrapRepoBindingFailureReason()
-		return progress, nil
+
+	repoBindingKnown := e.environments != nil
+	repoBindingPresent := false
+	if repoBindingKnown {
+		environments, err := e.environments.ListByProject(ctx, projectID)
+		if err != nil {
+			return projectBootstrapProgress{}, err
+		}
+		repoBindingPresent = projectsvc.HasProjectRepoBinding(environments)
 	}
 
 	firstWaveTasks := make([]repo.ProjectTask, 0, len(plannedTasks))
 	firstWaveTemplateIDs := make(map[uuid.UUID]struct{})
+	structuralFailureClass := ""
+	structuralFailureReason := ""
 	for _, task := range plannedTasks {
 		childCount := childCounts[task.ID]
-		if plan := taskdecomp.Analyze(task.Title, task.Description); plan.RequiresDecomposition && childCount == 0 {
-			progress.ValidationStatus = projectBootstrapValidationFailed
-			progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
-			progress.ValidationFailureReason = buildProjectBootstrapCompoundParentFailureReason(task)
-			return progress, nil
+		if plan := taskdecomp.Analyze(task.Title, task.Description); plan.RequiresDecomposition && childCount == 0 && structuralFailureClass == "" {
+			structuralFailureClass = projectBootstrapFailureCompoundParent
+			structuralFailureReason = buildProjectBootstrapCompoundParentFailureReason(task)
 		}
-		if childCount > 0 && projectBootstrapTaskEnteredExecution(task.WorkStatus) {
-			progress.ValidationStatus = projectBootstrapValidationFailed
-			progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
-			progress.ValidationFailureReason = buildProjectBootstrapParentExecutionFailureReason(task, childCount)
-			return progress, nil
+		if childCount > 0 && projectBootstrapTaskEnteredExecution(task.WorkStatus) && structuralFailureClass == "" {
+			structuralFailureClass = projectBootstrapFailureCompoundParent
+			structuralFailureReason = buildProjectBootstrapParentExecutionFailureReason(task, childCount)
 		}
 		if childCount > 0 {
 			continue
@@ -1376,6 +1370,27 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	progress.FirstWaveTaskCount = len(firstWaveTasks)
 	progress.PlannedFlowTemplateCount = len(firstWaveTemplateIDs)
 	progress.FirstWaveTasks = append(progress.FirstWaveTasks[:0], firstWaveTasks...)
+
+	switch {
+	case progress.AssignmentCount == 0:
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureMissingAssignments
+		progress.ValidationFailureReason = "kickoff validation failed: planned tasks were created before any active project assignments were persisted"
+		return progress, nil
+	case !repoBindingKnown:
+		return progress, nil
+	case !repoBindingPresent:
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureRepoBinding
+		progress.ValidationFailureReason = buildProjectBootstrapRepoBindingFailureReason()
+		return progress, nil
+	case structuralFailureClass != "":
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = structuralFailureClass
+		progress.ValidationFailureReason = structuralFailureReason
+		return progress, nil
+	}
+
 	if len(firstWaveTasks) == 0 {
 		progress.ValidationStatus = projectBootstrapValidationFailed
 		progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
@@ -1581,6 +1596,8 @@ func (e *TurnEngine) updateProjectBootstrapState(ctx context.Context, session *c
 	if e == nil || e.pool == nil || session == nil || session.ID == uuid.Nil {
 		return nil
 	}
+	previous := projectBootstrapStateFromMetadata(session.Metadata)
+	state = projectBootstrapStateWithDerived(previous, state)
 	metadata, err := projectBootstrapMetadataJSON(session.Metadata, state)
 	if err != nil {
 		return err
@@ -1593,6 +1610,11 @@ func (e *TurnEngine) updateProjectBootstrapState(ctx context.Context, session *c
 		return err
 	}
 	session.Metadata = metadata
+	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") && session.ScopeID != uuid.Nil {
+		if err := e.updateProjectBootstrapProjectState(ctx, session.ScopeID, state); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1616,7 +1638,7 @@ func projectBootstrapStateFromMetadata(metadata json.RawMessage) projectBootstra
 	if err := json.Unmarshal(payload, &state); err != nil {
 		return projectBootstrapState{}
 	}
-	return state
+	return projectBootstrapStateWithDerived(state, state)
 }
 
 func projectBootstrapMetadataJSON(metadata json.RawMessage, state projectBootstrapState) (json.RawMessage, error) {
@@ -1709,6 +1731,23 @@ func buildProjectBootstrapGuardrailFailureReason(detail string) string {
 		trimmed = "bounded prompt/continuation guardrails exhausted before persisted setup was created"
 	}
 	return fmt.Sprintf("bootstrap setup hit continuation-depth guardrails before creating project assignments, scoped tasks, and flow templates: %s", trimmed)
+}
+
+func buildProjectBootstrapTerminalFailureReason(nextCheckpoint string, cause error) string {
+	target := strings.TrimSpace(nextCheckpoint)
+	if target == "" {
+		target = "the next bootstrap checkpoint"
+	}
+	switch {
+	case errors.Is(cause, ErrAuthFailed):
+		return fmt.Sprintf("bootstrap setup could not reach %s because model provider authentication failed: %s", target, summarizeFailure(cause))
+	case errors.Is(cause, ErrRateLimited):
+		return fmt.Sprintf("bootstrap setup could not reach %s because model provider rate limits were exhausted: %s", target, summarizeFailure(cause))
+	case isTransientModelError(cause):
+		return fmt.Sprintf("bootstrap setup could not reach %s because provider/API connectivity remained transiently unavailable: %s", target, summarizeFailure(cause))
+	default:
+		return fmt.Sprintf("bootstrap setup failed before reaching %s: %s", target, summarizeFailure(cause))
+	}
 }
 
 func buildProjectBootstrapFailureMessage(reason string) string {
@@ -1900,6 +1939,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 			return nil
 		}
 	}
+	if handled, handleErr := e.handleProjectBootstrapTerminalTurnFailure(ctx, runtime, err); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
 
 	e.logger.Error("turn failed", "error", err, "session_id", sessionID, "turn_id", runtime.turn.ID, "agent_id", agentID)
 	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(err))
@@ -1922,6 +1966,11 @@ func (e *TurnEngine) handleRateLimitedTurnFailure(
 		retryCount = 0
 	}
 	if retryCount >= maxRateLimitRetries {
+		if handled, handleErr := e.handleProjectBootstrapTerminalTurnFailure(ctx, runtime, cause); handleErr != nil {
+			return true, handleErr
+		} else if handled {
+			return true, nil
+		}
 		_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
 		_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Turn failed: model retries exhausted after %d attempts.]", maxRateLimitRetries))
 		return true, nil
@@ -4862,6 +4911,9 @@ func (e *TurnEngine) handleProjectBootstrapGuardrailFailure(ctx context.Context,
 	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
 	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
 	state.FirstWaveKickoffCount = progress.FirstWaveKickoffCount
+	state.ValidationStatus = projectBootstrapValidationFailed
+	state.ValidationFailureClass = projectBootstrapFailureGuardrail
+	state.ValidationFailureReason = buildProjectBootstrapGuardrailFailureReason(reason)
 	state.UpdatedAt = &now
 	state.CompletedAt = nil
 	state.FailedAt = &now
@@ -4929,9 +4981,9 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
 	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
 	state.FirstWaveKickoffCount = progress.FirstWaveKickoffCount
-	state.ValidationStatus = progress.ValidationStatus
-	state.ValidationFailureClass = progress.ValidationFailureClass
-	state.ValidationFailureReason = progress.ValidationFailureReason
+	state.ValidationStatus = projectBootstrapValidationFailed
+	state.ValidationFailureClass = projectBootstrapFailureStalled
+	state.ValidationFailureReason = buildProjectBootstrapWatchdogFailureReason(timeoutErr)
 	state.UpdatedAt = &now
 	state.CompletedAt = nil
 	state.FailedAt = &now
@@ -4942,6 +4994,86 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 	if err := e.recordStopReason(ctx, rt); err != nil {
 		return true, err
 	}
+	if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
+		return true, err
+	}
+	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, state.FailureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
+		return true, failErr
+	}
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapFailureMessage(state.FailureReason)); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) handleProjectBootstrapTerminalTurnFailure(ctx context.Context, rt *turnRuntime, cause error) (bool, error) {
+	if rt == nil || rt.turn == nil || rt.session == nil || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
+	if err != nil {
+		return true, err
+	}
+	if progress.BootstrapTaskID == uuid.Nil || !progress.BootstrapTaskOutstanding || progress.Materialized() {
+		return false, nil
+	}
+
+	failureClass := projectBootstrapFailureRuntime
+	switch {
+	case errors.Is(cause, ErrAuthFailed):
+		failureClass = projectBootstrapFailureProviderAuth
+	case errors.Is(cause, ErrRateLimited):
+		failureClass = projectBootstrapFailureProviderRateLimit
+	case isTransientModelError(cause):
+		failureClass = projectBootstrapFailureProviderTransient
+	}
+
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	now := e.now().UTC()
+	workflowMessageID := rt.initialMessageID
+	if e.messages != nil && rt.initialMessageID != uuid.Nil {
+		message, getErr := e.messages.GetByID(ctx, rt.initialMessageID)
+		if getErr != nil && !errors.Is(getErr, repo.ErrNotFound) {
+			return true, getErr
+		}
+		if getErr == nil {
+			workflowMessageID = projectBootstrapWorkflowMessageID(&message)
+		}
+	}
+	if strings.TrimSpace(state.InitialMessageID) == "" && workflowMessageID != uuid.Nil {
+		state.InitialMessageID = workflowMessageID.String()
+	}
+	if state.StartedAt == nil {
+		startedAt := rt.startedAt.UTC()
+		state.StartedAt = &startedAt
+	}
+	state.Status = projectBootstrapStatusFailed
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	state.LastTurnID = rt.turn.ID.String()
+	if rt.agent.ID != uuid.Nil {
+		state.LastResponderID = rt.agent.ID.String()
+	}
+	state.AssignmentCount = progress.AssignmentCount
+	state.PlannedTaskCount = progress.PlannedTaskCount
+	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
+	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
+	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
+	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
+	state.FirstWaveKickoffCount = progress.FirstWaveKickoffCount
+	state.ValidationStatus = projectBootstrapValidationFailed
+	state.ValidationFailureClass = failureClass
+	state.ValidationFailureReason = buildProjectBootstrapTerminalFailureReason(projectBootstrapNextPendingCheckpoint(state), cause)
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = &now
+	state.FailureClass = failureClass
+	state.FailureReason = state.ValidationFailureReason
+
 	if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
 		return true, err
 	}
