@@ -2825,13 +2825,16 @@ func recoveryResumeRequiresDirectWriteMode(state recoveryResumeState) bool {
 	if strings.TrimSpace(state.targetPath) == "" {
 		return false
 	}
+	if recoveryResumeHasRepeatedDraftHistory(state) {
+		return true
+	}
 	if strings.TrimSpace(state.targetDraft) != "" || strings.TrimSpace(state.artifactDraft) != "" {
 		return false
 	}
 	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
 		return true
 	}
-	return recoveryResumeHasRepeatedDraftHistory(state)
+	return false
 }
 
 func recoveryResumeHasRepeatedDraftHistory(state recoveryResumeState) bool {

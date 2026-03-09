@@ -6281,6 +6281,210 @@ func TestTurnEngineIntegrationRecoveryResumeWriteOnlyCheckpointDirectFix(t *test
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryResumeRepeatedDraftWithSubstantiveTargetStillUsesWriteOnlyModeDirectFix(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, initialUserMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	const targetPath = "docs/content-strategy.md"
+	const priorFailureReason = "repeated intent-only recovery drafts for docs/content-strategy.md across explicit resume attempts; latest assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body"
+	const repeatedPlaceholder = "I now have a complete view of the strategic gaps and the final refinements needed before the document is ready. The next step is to write the finished strategy file cleanly from top to bottom."
+
+	targetBody := strings.TrimSpace(`# Content Strategy — Sam.blog
+
+## Brand Outcome
+Sam.blog should make event organizers, consulting buyers, and executive recruiters immediately understand that Sam is a pragmatic operator with depth across AI, ethics, parenting, and photography.
+
+## Core Pillars
+- AI and orchestration writing that demonstrates systems leadership.
+- Ethics and internet essays with concrete product-design implications.
+- Parenting and human-systems writing that broadens voice without diluting authority.
+- Photography and cross-domain essays that reinforce judgment, taste, and leadership.
+
+## Audience Mapping
+- Event organizers need strong talk themes and quotable theses.
+- Consulting buyers need implementation depth and workflow credibility.
+- Executive recruiters need strategic clarity plus evidence of operational judgment.
+
+## Editorial Plan
+Publish a balanced mix of archive migrations, pillar-defining essays, tactical AI/orchestration posts, and cross-domain leadership pieces with explicit speaking, consulting, and recruiting calls to action.
+`) + "\n" + strings.Repeat("- Supporting editorial direction with concrete audience and outcome guidance.\n", 12)
+
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetBody), 0o644); err != nil {
+		t.Fatalf("write substantive target: %v", err)
+	}
+
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	artifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
+	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	artifactDoc := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetPath, repeatedPlaceholder, priorFailureReason, []string{
+		"assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body",
+	}, time.Now().UTC())
+	if err := os.WriteFile(artifactAbs, []byte(artifactDoc), 0o644); err != nil {
+		t.Fatalf("write recovery artifact: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task before checkpoint seed: %v", err)
+	}
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(currentTask.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:          targetPath,
+		ArtifactPath:        artifactRel,
+		FailureReason:       priorFailureReason,
+		BlockerClass:        taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint,
+		PriorFailureReasons: []string{"assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body"},
+		HistoryStartMessageID: initialUserMessage.ID.String(),
+		HaltTurnID:            uuid.NewString(),
+		UpdatedAt:             time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	currentTask.Metadata = checkpointMetadata
+	currentTask.WorkStatus = "blocked"
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update checkpointed task: %v", err)
+	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	resumed, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+
+	resumedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	resumedTask.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
+		t.Fatalf("Update resumed task in_progress: %v", err)
+	}
+
+	authorType := "human_user"
+	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(taskRecord),
+		Metadata: mustJSON(t, map[string]any{
+			"source":                    "task_queue_processor",
+			"recovery_action":           "resume_validation_blocked_task",
+			"validation_tool_name":      "file.write",
+			"validation_failure_code":   "content_required",
+			"validation_failure_reason": priorFailureReason,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage recovery kickoff: %v", err)
+	}
+
+	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	fixture.engine.assembler = assembler
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "file.write", Tier: "tier2"},
+		{Name: "file.read", Tier: "tier1"},
+		{Name: "file.list", Tier: "tier1"},
+		{Name: "cli.execute", Tier: "tier2"},
+	}}
+
+	firstPromptBlob := ""
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			firstPromptBlob = flattenPrompt(req.Prompt)
+		}
+		if len(req.Prompt.ToolDescriptors) != 0 {
+			t.Fatalf("recovery write-only mode toolset = %#v, want no tools", req.Prompt.ToolDescriptors)
+		}
+		if modelCalls != 1 {
+			t.Fatalf("unexpected extra model call %d", modelCalls)
+		}
+		return ModelResponse{Content: repeatedPlaceholder}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		t.Fatalf("unexpected tier2 dispatch in repeated write-only recovery mode: %+v", call)
+		return ToolResult{}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage repeated write-only checkpoint recovery: %v", err)
+	}
+
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1 direct body attempt", modelCalls)
+	}
+	if dispatched != 0 {
+		t.Fatalf("tier2 dispatches = %d, want 0", dispatched)
+	}
+	if !strings.Contains(firstPromptBlob, "Write-only recovery mode is active.") {
+		t.Fatalf("prompt missing write-only recovery instruction:\n%s", firstPromptBlob)
+	}
+	if !strings.Contains(firstPromptBlob, "Existing target file draft:") {
+		t.Fatalf("prompt missing substantive target draft excerpt:\n%s", firstPromptBlob)
+	}
+	if !strings.Contains(firstPromptBlob, "Brand Outcome") {
+		t.Fatalf("prompt missing existing substantive target content:\n%s", firstPromptBlob)
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after repeated write-only recovery attempt: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	outputBody, err := os.ReadFile(targetAbs)
+	if err != nil {
+		t.Fatalf("read preserved target file: %v", err)
+	}
+	if string(outputBody) != targetBody {
+		t.Fatalf("substantive target file was clobbered:\n%s", string(outputBody))
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryResumeWriteOnlyAssistantBodyDirectWrite(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
