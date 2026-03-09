@@ -29,6 +29,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
@@ -1048,10 +1049,11 @@ type projectBootstrapProgress struct {
 	AssignmentCount          int
 	PlannedTaskCount         int
 	PlannedFlowTemplateCount int
+	FirstWaveReady           bool
 }
 
 func (p projectBootstrapProgress) Materialized() bool {
-	return p.AssignmentCount > 0 && p.PlannedTaskCount > 0 && p.PlannedFlowTemplateCount > 0
+	return p.AssignmentCount > 0 && p.PlannedTaskCount > 0 && p.PlannedFlowTemplateCount > 0 && p.FirstWaveReady
 }
 
 type projectBootstrapState struct {
@@ -1104,14 +1106,30 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	`, projectID).Scan(&progress.AssignmentCount); err != nil {
 		return projectBootstrapProgress{}, err
 	}
-	if err := e.pool.QueryRow(ctx, `
-		SELECT COUNT(*)
+	rows, err := e.pool.Query(ctx, `
+		SELECT id, COALESCE(LOWER(work_status), ''), metadata
 		FROM project_task
 		WHERE project_id = $1
 		  AND NOT COALESCE((metadata->>'bootstrap_gate')::boolean, false)
-	`, projectID).Scan(&progress.PlannedTaskCount); err != nil {
+	`, projectID)
+	if err != nil {
 		return projectBootstrapProgress{}, err
 	}
+	defer rows.Close()
+
+	plannedTasks := make([]projectBootstrapPlannedTask, 0)
+	for rows.Next() {
+		var taskRecord projectBootstrapPlannedTask
+		if err := rows.Scan(&taskRecord.ID, &taskRecord.WorkStatus, &taskRecord.Metadata); err != nil {
+			return projectBootstrapProgress{}, err
+		}
+		plannedTasks = append(plannedTasks, taskRecord)
+	}
+	if err := rows.Err(); err != nil {
+		return projectBootstrapProgress{}, err
+	}
+	progress.PlannedTaskCount = len(plannedTasks)
+	progress.FirstWaveReady = projectBootstrapFirstWaveReady(plannedTasks)
 	if err := e.pool.QueryRow(ctx, `
 		SELECT COUNT(*)
 		FROM flow_template
@@ -1128,6 +1146,79 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		return projectBootstrapProgress{}, err
 	}
 	return progress, nil
+}
+
+type projectBootstrapPlannedTask struct {
+	ID         uuid.UUID
+	WorkStatus string
+	Metadata   json.RawMessage
+}
+
+func projectBootstrapFirstWaveReady(tasks []projectBootstrapPlannedTask) bool {
+	parentChildren := make(map[uuid.UUID][]projectBootstrapPlannedTask)
+	parentsByID := make(map[uuid.UUID]projectBootstrapPlannedTask, len(tasks))
+	for _, taskRecord := range tasks {
+		parentsByID[taskRecord.ID] = taskRecord
+		parentID := taskdecomp.ParseParentTaskID(taskRecord.Metadata)
+		if parentID == uuid.Nil {
+			continue
+		}
+		parentChildren[parentID] = append(parentChildren[parentID], taskRecord)
+	}
+	if len(parentChildren) == 0 {
+		return true
+	}
+
+	for parentID, children := range parentChildren {
+		executableChildren := false
+		childFirstWaveReady := false
+		for _, child := range children {
+			if isProjectBootstrapTaskTerminal(child.WorkStatus) {
+				continue
+			}
+			executableChildren = true
+			if projectBootstrapChildEnteredFirstWave(child.WorkStatus) {
+				childFirstWaveReady = true
+			}
+		}
+		if !executableChildren {
+			continue
+		}
+		if parent, ok := parentsByID[parentID]; ok && projectBootstrapParentEnteredExecution(parent.WorkStatus) {
+			return false
+		}
+		if !childFirstWaveReady {
+			return false
+		}
+	}
+	return true
+}
+
+func isProjectBootstrapTaskTerminal(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "done", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func projectBootstrapParentEnteredExecution(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "in_progress":
+		return true
+	default:
+		return false
+	}
+}
+
+func projectBootstrapChildEnteredFirstWave(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "draft", "cancelled":
+		return false
+	default:
+		return true
+	}
 }
 
 func (e *TurnEngine) projectBootstrapContinuationAgent(ctx context.Context, session *chat.ChatSession, latestResponderID uuid.UUID) uuid.UUID {

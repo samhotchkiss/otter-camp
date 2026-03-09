@@ -346,6 +346,7 @@ The project manager is not just another role — the PM has unique responsibilit
 
 - **Designs flows**: the PM proposes flow templates to the human. Flow design happens through conversation with the PM (see 03-projects-and-task-flow.md Flow Templates).
 - **Scopes tasks**: the PM is responsible for ensuring tasks have sufficient context before queuing — description, acceptance criteria, constraints, relevant files.
+- **Keeps broad parents out of execution**: when the PM decomposes a broad workstream into persisted child tasks, the parent remains coordination-only. The PM queues the bounded child tasks first and does not send the parent workstream into `queued` or `in_progress` while those children still exist.
 - **Triages blockers**: when an agent files a blocker, it goes to the PM first. The PM decides whether to resolve it, escalate to Frank, or escalate to the human.
 - **Proactive supervision**: the PM monitors active flow nodes for stuck agents, failed sessions, and stalled progress. This is a periodic check, not continuous polling — the PM reviews flow node state when triggered by events (session ended, timeout elapsed, blocker filed) or on a periodic sweep. When the PM detects a stuck node, it can: reassign the work to a different temp, provide additional context to the current agent, escalate to Frank, or escalate to the human. See 03-projects-and-task-flow.md Proactive Supervision for the full supervision protocol.
 - **Default responder**: the PM is the default responder in the project-scoped session and in task sync sessions.

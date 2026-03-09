@@ -120,23 +120,58 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 }
 
 func ParsePrimaryDeliverable(metadata json.RawMessage) string {
-	if len(metadata) == 0 {
-		return ""
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(metadata, &payload); err != nil {
-		return ""
-	}
-	raw, ok := payload[metadataKeyDecomposition]
-	if !ok {
-		return ""
-	}
-	decomp, ok := raw.(map[string]any)
-	if !ok {
+	decomp := decompositionObject(metadata)
+	if decomp == nil {
 		return ""
 	}
 	primary, _ := decomp["primary_deliverable"].(string)
 	return strings.TrimSpace(primary)
+}
+
+func ParseChildTaskIDs(metadata json.RawMessage) []uuid.UUID {
+	decomp := decompositionObject(metadata)
+	if decomp == nil {
+		return nil
+	}
+	rawChildIDs, ok := decomp["child_task_ids"].([]any)
+	if !ok {
+		return nil
+	}
+
+	childIDs := make([]uuid.UUID, 0, len(rawChildIDs))
+	for _, rawChildID := range rawChildIDs {
+		value, ok := rawChildID.(string)
+		if !ok {
+			continue
+		}
+		childID, err := uuid.Parse(strings.TrimSpace(value))
+		if err != nil || childID == uuid.Nil {
+			continue
+		}
+		childIDs = append(childIDs, childID)
+	}
+	return childIDs
+}
+
+func ParseParentTaskID(metadata json.RawMessage) uuid.UUID {
+	payload := metadataObject(metadata)
+	if payload == nil {
+		return uuid.Nil
+	}
+	rawParentID, _ := payload["decomposition_parent_task_id"].(string)
+	parentID, err := uuid.Parse(strings.TrimSpace(rawParentID))
+	if err != nil {
+		return uuid.Nil
+	}
+	return parentID
+}
+
+func ParseWorkstreamIndex(metadata json.RawMessage) (int, bool) {
+	payload := metadataObject(metadata)
+	if payload == nil {
+		return 0, false
+	}
+	return metadataIntValue(payload["workstream_index"])
 }
 
 func ApplyMetadata(existing json.RawMessage, plan Plan, sourceDescription string, childTaskIDs []uuid.UUID) json.RawMessage {
@@ -161,6 +196,7 @@ func ApplyMetadata(existing json.RawMessage, plan Plan, sourceDescription string
 	payload[metadataKeyDecomposition] = map[string]any{
 		"applied":             true,
 		"mode":                mode,
+		"orchestration_only":  true,
 		"primary_deliverable": strings.TrimSpace(plan.PrimaryDeliverable),
 		"deliverables":        append([]string(nil), plan.Deliverables...),
 		"source_description":  strings.TrimSpace(sourceDescription),
@@ -175,19 +211,8 @@ func ApplyMetadata(existing json.RawMessage, plan Plan, sourceDescription string
 }
 
 func ParseQueueDecompositionMode(metadata json.RawMessage) string {
-	if len(metadata) == 0 {
-		return ""
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(metadata, &payload); err != nil {
-		return ""
-	}
-	raw, ok := payload[metadataKeyDecomposition]
-	if !ok {
-		return ""
-	}
-	decomp, ok := raw.(map[string]any)
-	if !ok {
+	decomp := decompositionObject(metadata)
+	if decomp == nil {
 		return ""
 	}
 	mode, _ := decomp["mode"].(string)
@@ -277,6 +302,56 @@ func splitSegments(raw, delimiter string) []string {
 		}
 	}
 	return items
+}
+
+func metadataObject(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	return payload
+}
+
+func decompositionObject(metadata json.RawMessage) map[string]any {
+	payload := metadataObject(metadata)
+	if payload == nil {
+		return nil
+	}
+	raw, ok := payload[metadataKeyDecomposition]
+	if !ok {
+		return nil
+	}
+	decomp, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return decomp
+}
+
+func metadataIntValue(raw any) (int, bool) {
+	switch typed := raw.(type) {
+	case int:
+		if typed > 0 {
+			return typed, true
+		}
+	case int32:
+		if typed > 0 {
+			return int(typed), true
+		}
+	case int64:
+		if typed > 0 {
+			return int(typed), true
+		}
+	case float64:
+		integer := int(typed)
+		if typed == float64(integer) && integer > 0 {
+			return integer, true
+		}
+	}
+	return 0, false
 }
 
 func cleanSegment(raw string) string {

@@ -82,6 +82,9 @@ func TestApplyMetadataRoundTripPreservesExistingKeys(t *testing.T) {
 	if decomp["mode"] != QueueDecompositionModeParallelChildren {
 		t.Fatalf("mode = %v, want %s", decomp["mode"], QueueDecompositionModeParallelChildren)
 	}
+	if decomp["orchestration_only"] != true {
+		t.Fatalf("orchestration_only = %v, want true", decomp["orchestration_only"])
+	}
 	if decomp["source_description"] != "source description" {
 		t.Fatalf("source_description = %v, want trimmed source description", decomp["source_description"])
 	}
@@ -161,6 +164,29 @@ func TestPrepareQueueDecompositionSkipsWithoutExplicitMode(t *testing.T) {
 	}
 	if len(result.ChildDrafts) != 0 {
 		t.Fatalf("ChildDrafts len = %d, want 0", len(result.ChildDrafts))
+	}
+}
+
+func TestParseDecompositionReferences(t *testing.T) {
+	parentID := uuid.New()
+	childID := uuid.New()
+	metadata := json.RawMessage(`{
+		"decomposition_parent_task_id":"` + parentID.String() + `",
+		"workstream_index":2,
+		"decomposition":{
+			"child_task_ids":["` + childID.String() + `"]
+		}
+	}`)
+
+	if got := ParseParentTaskID(metadata); got != parentID {
+		t.Fatalf("ParseParentTaskID = %s, want %s", got, parentID)
+	}
+	if got, ok := ParseWorkstreamIndex(metadata); !ok || got != 2 {
+		t.Fatalf("ParseWorkstreamIndex = (%d, %t), want (2, true)", got, ok)
+	}
+	childIDs := ParseChildTaskIDs(metadata)
+	if len(childIDs) != 1 || childIDs[0] != childID {
+		t.Fatalf("ParseChildTaskIDs = %v, want [%s]", childIDs, childID)
 	}
 }
 
