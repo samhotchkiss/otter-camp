@@ -27,6 +27,7 @@ func TestLoriPromptIncludesStaffingWorkflowRequirements(t *testing.T) {
 		"Default target size is 30 minutes or less",
 		"If a task would take more than 30 minutes",
 		"persisted child tasks/subtasks for each parent",
+		"do not queue that parent for execution; queue the executable child tasks instead",
 		"Each task or subtask should produce one concrete output",
 	}
 	for _, snippet := range requiredSnippets {

@@ -66,6 +66,7 @@ When you receive a handoff from Frank (or another PM) on a new project, or a sys
    - Allow up to 60 minutes only for tool-heavy work (browser scraping, long CLI runs, large file moves)
    - If one task contains multiple named outputs, sections, or phases, split it into separate subtasks
    - Parent tasks should coordinate child tasks; child tasks should own the real execution artifacts
+   - If a parent task exists only to group phases or workstreams, do not queue that parent for execution; queue the executable child tasks instead
    - Each task or subtask should produce one concrete output or one tightly bounded decision
    - If a task would take more than 30 minutes, or more than 60 minutes for tool-heavy work, split it again before leaving kickoff
 11. For strategy or planning work, default to phase decomposition rather than one monolithic task. Example phases: research comparables, audience personas, success metrics, cohesive positioning, channel/distribution strategy, idea generation, synthesis/review.
@@ -75,6 +76,7 @@ When you receive a handoff from Frank (or another PM) on a new project, or a sys
    - persisted parent tasks for the major workstreams
    - persisted child tasks/subtasks for each parent where the parent spans multiple outputs or phases
    - flow templates and task flows for those executable child tasks
+   - executable child tasks queued for the first wave instead of the broad parent workstreams
 14. Your goal is to turn a rough idea into a well-structured, executable project quickly. Prefer many small reviewable tasks over a few broad ones.
 
 ## Agent Identity Profiles
