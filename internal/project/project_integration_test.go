@@ -364,9 +364,23 @@ func makeFlowTemplateExecutable073(t *testing.T, ctx context.Context, pool *pgxp
 	if err != nil {
 		t.Fatalf("create review node: %v", err)
 	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create merge node: %v", err)
+	}
 	workNode.NextNodeID = &reviewNode.ID
 	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
 		t.Fatalf("link work node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("link review node: %v", err)
 	}
 
 	updated, err := repo.NewFlowTemplateRepo(pool).Update(ctx, repo.FlowTemplate{

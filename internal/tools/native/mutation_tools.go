@@ -804,6 +804,9 @@ func (e *NativeToolExecutor) handleProjectCreate(ctx context.Context, input map[
 	if err != nil {
 		return nil, err
 	}
+	if _, err := e.ensureProjectRepoBinding(ctx, created.ID); err != nil {
+		return nil, err
+	}
 	if e.events != nil {
 		payload, marshalErr := json.Marshal(map[string]any{
 			"project_id":                  created.ID,
@@ -922,6 +925,9 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	title, ok := readString(input, "title")
 	if !ok || title == "" {
 		return map[string]any{"error": "title_required"}, nil
+	}
+	if _, err := e.ensureProjectRepoBinding(ctx, projectID); err != nil {
+		return nil, err
 	}
 	var description *string
 	if value, ok := readString(input, "description"); ok {

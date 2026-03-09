@@ -6233,7 +6233,7 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 			ProjectID:      project.ID,
 			Title:          "Define the first execution slice",
 			Description:    &description,
-			WorkStatus:     "draft",
+			WorkStatus:     "queued",
 			FlowTemplateID: &template.ID,
 			CreatedByType:  "agent",
 			CreatedByID:    &lori.ID,
@@ -6442,6 +6442,302 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationWithoutPersistedAss
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapFailsValidationWithoutRepoBinding(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	if _, err := fixture.pool.Exec(ctx, `
+		DELETE FROM project_environment
+		WHERE project_id = $1
+	`, project.ID); err != nil {
+		t.Fatalf("delete project environments: %v", err)
+	}
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: create the initial staffed work plan for this project.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-missing-repo-binding",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is persisted."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		}); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		description := "Prepare the first reviewable landing page slice for implementation."
+		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "Landing page first slice",
+			Description:    &description,
+			WorkStatus:     "queued",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":      pmAgent.ID.String(),
+				"task_id":          taskRecord.ID.String(),
+				"flow_template_id": template.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after missing-repo validation failure", jobs)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.ValidationStatus != projectBootstrapValidationFailed {
+		t.Fatalf("bootstrap validation_status = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationFailed)
+	}
+	if bootstrapState.FailureClass != projectBootstrapFailureRepoBinding {
+		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureRepoBinding)
+	}
+	if bootstrapState.ValidationFailureClass != projectBootstrapFailureRepoBinding {
+		t.Fatalf("bootstrap validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureRepoBinding)
+	}
+	if !strings.Contains(bootstrapState.ValidationFailureReason, "repo/workspace binding") {
+		t.Fatalf("bootstrap validation_failure_reason = %q, want repo binding detail", bootstrapState.ValidationFailureReason)
+	}
+}
+
+func TestTurnEngineIntegrationProjectBootstrapSelfStartsAfterRepoBindingRecovered(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	if _, err := fixture.pool.Exec(ctx, `
+		DELETE FROM project_environment
+		WHERE project_id = $1
+	`, project.ID); err != nil {
+		t.Fatalf("delete project environments: %v", err)
+	}
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: create the initial staffed work plan for this project.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-retry-after-binding",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is now ready to continue with the recovered repo binding."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		}); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		description := "Prepare the first reviewable landing page slice for implementation."
+		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "Landing page first slice",
+			Description:    &description,
+			WorkStatus:     "queued",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":      pmAgent.ID.String(),
+				"task_id":          taskRecord.ID.String(),
+				"flow_template_id": template.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session after failure: %v", err)
+	}
+	failedState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if failedState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status after missing repo binding = %q, want %q", failedState.Status, projectBootstrapStatusFailed)
+	}
+	if failedState.FailureClass != projectBootstrapFailureRepoBinding {
+		t.Fatalf("bootstrap failure_class after missing repo binding = %q, want %q", failedState.FailureClass, projectBootstrapFailureRepoBinding)
+	}
+
+	mustInsertProjectRepoBinding(t, ctx, fixture.pool, project)
+
+	continuationMessage, err := fixture.engine.appendProjectBootstrapContinuationMessage(ctx, projectSession.ID, lori.ID, failedState.InitialMessageID, failedState.AutoTurnCount)
+	if err != nil {
+		t.Fatalf("appendProjectBootstrapContinuationMessage retry: %v", err)
+	}
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, continuationMessage.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage retry bootstrap turn: %v", err)
+	}
+
+	retryTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": retryTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent retry bootstrap turn: %v", err)
+	}
+
+	storedSession, err = repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session after retry: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusCompleted {
+		t.Fatalf("bootstrap status after repo binding recovery = %q, want %q", bootstrapState.Status, projectBootstrapStatusCompleted)
+	}
+	if bootstrapState.ValidationStatus != projectBootstrapValidationPassed {
+		t.Fatalf("bootstrap validation_status after repo binding recovery = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationPassed)
+	}
+	if bootstrapState.FailureClass != "" {
+		t.Fatalf("bootstrap failure_class after repo binding recovery = %q, want empty", bootstrapState.FailureClass)
+	}
+	if bootstrapState.ValidationFailureClass != "" {
+		t.Fatalf("bootstrap validation_failure_class after repo binding recovery = %q, want empty", bootstrapState.ValidationFailureClass)
+	}
+	if bootstrapState.FirstWaveTaskCount == 0 {
+		t.Fatalf("bootstrap first_wave_task_count after repo binding recovery = %d, want > 0", bootstrapState.FirstWaveTaskCount)
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject tasks after repo binding recovery: %v", err)
+	}
+	var queuedFirstWaveTasks int
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			continue
+		}
+		if task.WorkStatus == "queued" {
+			queuedFirstWaveTasks++
+		}
+	}
+	if queuedFirstWaveTasks == 0 {
+		t.Fatal("expected at least one queued first-wave task after repo binding recovery")
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap agent_turn jobs after repo binding recovery = %d, want 0", jobs)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsValidationForBroadParentOnlySetup(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -6607,7 +6903,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationForNonRunnableFirst
 			ProjectID:      project.ID,
 			Title:          "Landing page first slice",
 			Description:    &description,
-			WorkStatus:     "draft",
+			WorkStatus:     "queued",
 			FlowTemplateID: &template.ID,
 			CreatedByType:  "agent",
 			CreatedByID:    &lori.ID,
@@ -8717,6 +9013,28 @@ func mustCreateBootstrapProject(t *testing.T, ctx context.Context, fixture *inte
 		t.Fatalf("project.Create bootstrap: %v", err)
 	}
 	return repo.Project(*created)
+}
+
+func mustInsertProjectRepoBinding(t *testing.T, ctx context.Context, pool *pgxpool.Pool, project repo.Project) {
+	t.Helper()
+
+	repoPath, err := workspace.ProjectRoot("", project.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: project.DeliveryMode,
+		RepoPath: func() *string {
+			value := repoPath
+			return &value
+		}(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create repo binding environment: %v", err)
+	}
 }
 
 func mustCreateProjectSession(t *testing.T, ctx context.Context, fixture *integrationFixture, projectID uuid.UUID, participantAgentIDs ...uuid.UUID) repo.ChatSession {

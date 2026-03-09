@@ -162,6 +162,7 @@ type projectAssigner interface {
 }
 
 type projectEnvironmentReader interface {
+	Create(ctx context.Context, environment repo.ProjectEnvironment) (repo.ProjectEnvironment, error)
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error)
 }
 

@@ -50,10 +50,10 @@ func TestTask_StateMachine_FullPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByTemplateOrdered: %v", err)
 	}
-	if len(nodes) < 2 {
-		t.Fatalf("flow node count = %d, want at least 2", len(nodes))
+	if len(nodes) < 3 {
+		t.Fatalf("flow node count = %d, want at least 3", len(nodes))
 	}
-	current.CurrentFlowNodeID = &nodes[1].ID
+	current.CurrentFlowNodeID = &nodes[2].ID
 	updatedTask, err := fx.taskRepo.Update(ctx, *current)
 	if err != nil {
 		t.Fatalf("Update current flow node: %v", err)
@@ -84,6 +84,18 @@ func TestTask_StateMachine_FullPath(t *testing.T) {
 	}
 	if _, err := executionRepo.Complete(ctx, reviewExecution.ID); err != nil {
 		t.Fatalf("Complete review execution: %v", err)
+	}
+	mergeExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      current.ID,
+		FlowNodeID:  nodes[2].ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("Create merge execution: %v", err)
+	}
+	if _, err := executionRepo.Complete(ctx, mergeExecution.ID); err != nil {
+		t.Fatalf("Complete merge execution: %v", err)
 	}
 
 	current, err = fx.taskService.TransitionStatus(ctx, current.ID, "done", tasksvc.Actor{Type: "system"})
@@ -518,9 +530,23 @@ func seedTaskFixtureData073(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	if err != nil {
 		t.Fatalf("create review node: %v", err)
 	}
+	mergeNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: flowTemplate.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create merge node: %v", err)
+	}
 	workNode.NextNodeID = &reviewNode.ID
 	if _, err := repo.NewFlowNodeRepo(pool).Update(ctx, workNode); err != nil {
 		t.Fatalf("link work node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := repo.NewFlowNodeRepo(pool).Update(ctx, reviewNode); err != nil {
+		t.Fatalf("link review node: %v", err)
 	}
 	flowTemplate.StartNodeID = &workNode.ID
 	flowTemplate, err = repo.NewFlowTemplateRepo(pool).Update(ctx, flowTemplate)

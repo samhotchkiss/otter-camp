@@ -25,6 +25,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/model"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -80,6 +81,7 @@ const (
 	projectBootstrapFailureStalled            = "stalled"
 	projectBootstrapFailureGuardrail          = "guardrail_loop"
 	projectBootstrapFailureMissingAssignments = "missing_assignments"
+	projectBootstrapFailureRepoBinding        = "project_repo_binding_missing"
 	projectBootstrapFailureCompoundParent     = "compound_parent_missing_children"
 	projectBootstrapFailureFirstWaveFlow      = "first_wave_flow_invalid"
 	projectBootstrapValidationPending         = "pending"
@@ -293,6 +295,10 @@ type projectRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
 }
 
+type projectEnvironmentLister interface {
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error)
+}
+
 type organizationRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Organization, error)
 }
@@ -337,6 +343,7 @@ type Options struct {
 	FlowAdvancer    flowAdvancer
 	Assignments     assignmentRepository
 	Projects        projectRepository
+	Environments    projectEnvironmentLister
 	Organizations   organizationRepository
 	MemorySources   memorySourceRepository
 	Memories        memoryRepository
@@ -379,6 +386,7 @@ type TurnEngine struct {
 	flowAdvancer    flowAdvancer
 	assignments     assignmentRepository
 	projects        projectRepository
+	environments    projectEnvironmentLister
 	organizations   organizationRepository
 	sources         memorySourceRepository
 	memories        memoryRepository
@@ -517,6 +525,9 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 	if opts.Assignments == nil && opts.Pool != nil {
 		opts.Assignments = repo.NewAgentProjectAssignmentRepo(opts.Pool)
 	}
+	if opts.Environments == nil && opts.Pool != nil {
+		opts.Environments = repo.NewProjectEnvironmentRepo(opts.Pool)
+	}
 	if opts.MemorySources == nil {
 		opts.MemorySources = repo.NewMemorySourceRepo(opts.Pool)
 	}
@@ -600,6 +611,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		flowAdvancer:          opts.FlowAdvancer,
 		assignments:           opts.Assignments,
 		projects:              opts.Projects,
+		environments:          opts.Environments,
 		organizations:         opts.Organizations,
 		sources:               opts.MemorySources,
 		memories:              opts.Memories,
@@ -1160,6 +1172,19 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		progress.ValidationFailureReason = "kickoff validation failed: planned tasks were created before any active project assignments were persisted"
 		return progress, nil
 	}
+	if e.environments == nil {
+		return progress, nil
+	}
+	environments, err := e.environments.ListByProject(ctx, projectID)
+	if err != nil {
+		return projectBootstrapProgress{}, err
+	}
+	if !projectsvc.HasProjectRepoBinding(environments) {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureRepoBinding
+		progress.ValidationFailureReason = buildProjectBootstrapRepoBindingFailureReason()
+		return progress, nil
+	}
 
 	firstWaveTasks := make([]repo.ProjectTask, 0, len(plannedTasks))
 	firstWaveTemplateIDs := make(map[uuid.UUID]struct{})
@@ -1234,6 +1259,9 @@ func (e *TurnEngine) validateProjectBootstrapFirstWaveTasks(ctx context.Context,
 	nodeCache := make(map[uuid.UUID][]repo.FlowNode)
 
 	for _, task := range tasks {
+		if !projectBootstrapTaskEnteredExecution(task.WorkStatus) {
+			return projectBootstrapFailureFirstWaveFlow, buildProjectBootstrapFirstWaveFlowFailureReason(task, buildProjectBootstrapFirstWaveStatusFailureReason(task.WorkStatus)), nil
+		}
 		if task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {
 			return projectBootstrapFailureFirstWaveFlow, buildProjectBootstrapFirstWaveFlowFailureReason(task, "no flow template is attached"), nil
 		}
@@ -1274,6 +1302,10 @@ func buildProjectBootstrapCompoundParentFailureReason(task repo.ProjectTask) str
 	return fmt.Sprintf("kickoff validation failed: %s is still a broad parent workstream and must be split into bounded executable child tasks before bootstrap can complete", projectBootstrapTaskLabel(task))
 }
 
+func buildProjectBootstrapRepoBindingFailureReason() string {
+	return "kickoff validation failed: planned tasks were created before the project repo/workspace binding was persisted, so no first-wave task has a repo-bound workspace to run in"
+}
+
 func buildProjectBootstrapParentExecutionFailureReason(task repo.ProjectTask, childCount int) string {
 	return fmt.Sprintf("kickoff validation failed: %s entered execution even though %d executable child task(s) already exist, so the parent must remain orchestration-only", projectBootstrapTaskLabel(task), childCount)
 }
@@ -1284,6 +1316,14 @@ func buildProjectBootstrapFirstWaveFlowFailureReason(task repo.ProjectTask, deta
 		trimmed = "the attached flow template cannot run"
 	}
 	return fmt.Sprintf("kickoff validation failed: first-wave %s cannot run because %s", projectBootstrapTaskLabel(task), trimmed)
+}
+
+func buildProjectBootstrapFirstWaveStatusFailureReason(status string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(status))
+	if trimmed == "" {
+		trimmed = "draft"
+	}
+	return fmt.Sprintf("it is still %q instead of queued or already executing", trimmed)
 }
 
 func projectBootstrapTaskLabel(task repo.ProjectTask) string {
