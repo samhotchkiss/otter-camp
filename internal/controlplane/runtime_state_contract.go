@@ -93,7 +93,7 @@ func (s *runService) syncRuntimeStateActive(ctx context.Context, state RuntimeSt
 }
 
 func (s *runService) syncRuntimeStateDeferred(ctx context.Context, state RuntimeState, blockingRun, deferredRun Run, reason string) error {
-	contract := runtimeContractFromStateAndRun(state, blockingRun)
+	contract := runtimeContractFromStateAndRun(state, deferredRun)
 	now := s.clock.Now().UTC()
 	contract.Status = "active"
 	contract.LastProgressAt = &now
@@ -200,31 +200,29 @@ func (s *runService) retireRuntimeState(ctx context.Context, state RuntimeState,
 
 func runtimeContractFromStateAndRun(state RuntimeState, runRecord Run) RuntimeStateContract {
 	contract := state.Contract()
-	if contract.TaskID == nil && runRecord.TaskID != nil && *runRecord.TaskID != uuid.Nil {
+	if runRecord.TaskID != nil && *runRecord.TaskID != uuid.Nil {
 		id := *runRecord.TaskID
 		contract.TaskID = &id
 	}
-	if contract.SessionID == nil && runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
+	if runRecord.SessionID != nil && *runRecord.SessionID != uuid.Nil {
 		id := *runRecord.SessionID
 		contract.SessionID = &id
 	}
-	if contract.FlowNodeID == nil && runRecord.FlowNodeID != nil && *runRecord.FlowNodeID != uuid.Nil {
+	if runRecord.FlowNodeID != nil && *runRecord.FlowNodeID != uuid.Nil {
 		id := *runRecord.FlowNodeID
 		contract.FlowNodeID = &id
 	}
-	if contract.FlowNodeExecutionID == nil {
-		if id, ok := runtimeMetadataUUIDValue(runRecord.Metadata, "flow_node_execution_id"); ok {
-			contract.FlowNodeExecutionID = &id
-		}
+	if id, ok := runtimeMetadataUUIDValue(runRecord.Metadata, "flow_node_execution_id"); ok {
+		contract.FlowNodeExecutionID = &id
 	}
-	if contract.ProviderSessionID == "" {
-		contract.ProviderSessionID = runtimeMetadataStringValue(runRecord.Metadata, "provider_session_id")
+	if providerSessionID := runtimeMetadataStringValue(runRecord.Metadata, "provider_session_id"); providerSessionID != "" {
+		contract.ProviderSessionID = providerSessionID
 	}
-	if contract.WakeupSource == "" {
-		contract.WakeupSource = executionWakeupSource(runRecord.Metadata)
+	if wakeupSource := executionWakeupSource(runRecord.Metadata); wakeupSource != "" {
+		contract.WakeupSource = wakeupSource
 	}
-	if contract.WakeupKind == "" {
-		contract.WakeupKind = executionWakeupKind(runRecord.Metadata)
+	if wakeupKind := executionWakeupKind(runRecord.Metadata); wakeupKind != "" {
+		contract.WakeupKind = wakeupKind
 	}
 	return contract.normalize()
 }

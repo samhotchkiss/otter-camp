@@ -117,6 +117,113 @@ func TestAddFlowNodeRevalidatesCoverageAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestCreateFlowTemplateRejectsReviewNodeMissingRejectEdge(t *testing.T) {
+	sourceTemplateID := uuid.New()
+	workID := uuid.New()
+	reviewID := uuid.New()
+	mergeID := uuid.New()
+	startNodeID := workID
+
+	templates := &reviewCoverageTemplateRepoStub{
+		templates: make(map[uuid.UUID]repo.FlowTemplate),
+	}
+	nodes := &reviewCoverageNodeRepoStub{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			workID: {
+				ID:             workID,
+				FlowTemplateID: sourceTemplateID,
+				NodeType:       "work",
+				Position:       1,
+				NextNodeID:     &reviewID,
+			},
+			reviewID: {
+				ID:             reviewID,
+				FlowTemplateID: sourceTemplateID,
+				NodeType:       "review",
+				Position:       2,
+				NextNodeID:     &mergeID,
+			},
+			mergeID: {
+				ID:             mergeID,
+				FlowTemplateID: sourceTemplateID,
+				NodeType:       "merge",
+				Position:       3,
+			},
+		},
+	}
+	svc := &service{
+		templates: templates,
+		nodes:     nodes,
+	}
+
+	_, err := svc.CreateFlowTemplate(context.Background(), CreateFlowTemplateRequest{
+		Slug:          "review-edge-check",
+		DisplayName:   "Review Edge Check",
+		StartNodeID:   &startNodeID,
+		CreatedByType: actorSystem,
+	})
+	if !errors.Is(err, ErrReviewNodeEdgesRequired) {
+		t.Fatalf("CreateFlowTemplate err = %v, want ErrReviewNodeEdgesRequired", err)
+	}
+	if templates.createCalls != 0 {
+		t.Fatalf("Create calls = %d, want 0", templates.createCalls)
+	}
+}
+
+func TestUpdateFlowNodeRejectsRemovingReviewRejectEdge(t *testing.T) {
+	templateID := uuid.New()
+	workID := uuid.New()
+	reviewID := uuid.New()
+	mergeID := uuid.New()
+	startNodeID := workID
+
+	templates := &reviewCoverageTemplateRepoStub{
+		templates: map[uuid.UUID]repo.FlowTemplate{
+			templateID: {
+				ID:          templateID,
+				StartNodeID: &startNodeID,
+			},
+		},
+	}
+	nodes := &reviewCoverageNodeRepoStub{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			workID: {
+				ID:             workID,
+				FlowTemplateID: templateID,
+				NodeType:       "work",
+				Position:       1,
+				NextNodeID:     &reviewID,
+			},
+			reviewID: {
+				ID:             reviewID,
+				FlowTemplateID: templateID,
+				NodeType:       "review",
+				Position:       2,
+				NextNodeID:     &mergeID,
+				RejectNodeID:   &workID,
+			},
+			mergeID: {
+				ID:             mergeID,
+				FlowTemplateID: templateID,
+				NodeType:       "merge",
+				Position:       3,
+			},
+		},
+	}
+	svc := &service{
+		templates: templates,
+		nodes:     nodes,
+	}
+
+	nilUUID := uuid.Nil
+	_, err := svc.UpdateFlowNode(context.Background(), reviewID, UpdateFlowNodeRequest{
+		RejectNodeID: &nilUUID,
+	})
+	if !errors.Is(err, ErrReviewNodeEdgesRequired) {
+		t.Fatalf("UpdateFlowNode err = %v, want ErrReviewNodeEdgesRequired", err)
+	}
+}
+
 func TestRemoveFlowNodeRejectsDeleteThatBreaksReviewCoverage(t *testing.T) {
 	templateID := uuid.New()
 	workID := uuid.New()

@@ -2476,6 +2476,9 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeWork.ID {
 			return false, nil
 		}
+		if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+			return false, nil
+		}
 		rejectExecution, err = executionRepo.GetActive(ctx, created.ID, nodeWork.ID)
 		if err != nil {
 			if err == repo.ErrNotFound {
@@ -2531,6 +2534,107 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 			return false, err
 		}
 		return hasFlowKickoffMessage(messages, "flow.rejected", rejectExecution.ID), nil
+	})
+}
+
+func TestTaskQueueProcessorIntegrationRejectFlowDispatchesFromStaleBlockedReviewState(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	worker := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "worker", "Blocked Review Worker", "worker")
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Blocked Review Reviewer", "reviewer")
+	template, nodeWork, nodeReview := seedTaskQueueRejectFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, worker.ID, reviewer.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Stale blocked review reject",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	runRepo := NewRunRepository(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+
+	var reviewExecution repo.FlowNodeExecution
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeReview.ID {
+			return false, nil
+		}
+		reviewExecution, err = executionRepo.GetActive(ctx, created.ID, nodeReview.ID)
+		if err != nil {
+			if err == repo.ErrNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		return reviewExecution.SessionID != nil && *reviewExecution.SessionID != uuid.Nil, nil
+	})
+
+	if _, err := fx.tasks.MarkBlocked(ctx, created.ID, "stale blocked review state", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+	if _, err := fx.flow.RejectFlowNode(ctx, created.ID, flowsvc.Actor{Type: "agent", ID: reviewer.ID}); err != nil {
+		t.Fatalf("RejectFlowNode review->work: %v", err)
+	}
+
+	var rejectExecution repo.FlowNodeExecution
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeWork.ID {
+			return false, nil
+		}
+		if taskRecord.WorkStatus == "blocked" {
+			return false, nil
+		}
+		rejectExecution, err = executionRepo.GetActive(ctx, created.ID, nodeWork.ID)
+		if err != nil {
+			if err == repo.ErrNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		if rejectExecution.SessionID == nil || *rejectExecution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeWork.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		for _, runRecord := range runs {
+			if runRecord.Status == "in_progress" && runRecord.PrincipalType == "agent" && runRecord.PrincipalID == worker.ID && runRecord.SessionID != nil && *runRecord.SessionID == *rejectExecution.SessionID {
+				messages, err := messageRepo.ListBySession(ctx, *rejectExecution.SessionID)
+				if err != nil {
+					return false, err
+				}
+				return hasFlowKickoffMessage(messages, "flow.rejected", rejectExecution.ID), nil
+			}
+		}
+		return false, nil
 	})
 }
 
@@ -3256,6 +3360,7 @@ func seedTaskQueueProcessorFixture(t *testing.T, ctx context.Context) taskQueueP
 		FlowExecutions: repo.NewFlowNodeExecutionRepo(pool),
 		FlowNodes:      repo.NewFlowNodeRepo(pool),
 		Assignments:    repo.NewAgentProjectAssignmentRepo(pool),
+		Dependencies:   repo.NewProjectTaskDependencyRepo(pool),
 		Runs:           queueRuns,
 		Chats:          chatService,
 		Sessions:       repo.NewChatSessionRepo(pool),
@@ -3702,7 +3807,18 @@ func seedTaskQueueRejectFlowTemplate(
 	if err != nil {
 		t.Fatalf("create review node: %v", err)
 	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create merge node: %v", err)
+	}
 	workNode.NextNodeID = &reviewNode.ID
+	reviewNode.NextNodeID = &mergeNode.ID
 	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
 		t.Fatalf("update work node edge: %v", err)
 	}

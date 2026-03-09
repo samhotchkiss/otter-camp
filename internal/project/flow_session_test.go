@@ -97,6 +97,7 @@ func TestFlowSessionBridgeEnsureNodeSessionReturnsExistingSession(t *testing.T) 
 			ScopeType:      "project_task",
 			ScopeID:        taskID,
 			Mode:           "async",
+			Metadata:       mustJSONRaw(t, map[string]any{"flow_node_execution_id": executionID.String()}),
 		},
 	}
 
@@ -129,6 +130,69 @@ func TestFlowSessionBridgeEnsureNodeSessionReturnsExistingSession(t *testing.T) 
 	}
 	if executions.setSessionCalls != 0 {
 		t.Fatalf("SetSessionID calls = %d, want 0", executions.setSessionCalls)
+	}
+}
+
+func TestFlowSessionBridgeEnsureNodeSessionReplacesMismatchedExistingSession(t *testing.T) {
+	taskID := uuid.New()
+	flowNodeID := uuid.New()
+	executionID := uuid.New()
+	otherExecutionID := uuid.New()
+	sessionID := uuid.New()
+	newSessionID := uuid.New()
+	orgID := uuid.New()
+
+	executions := &fakeFlowSessionExecutionRepo{}
+	tasks := &fakeFlowSessionTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+		},
+	}
+	chats := &fakeFlowSessionChatService{
+		getSession: &repo.ChatSession{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Metadata:       mustJSONRaw(t, map[string]any{"flow_node_execution_id": otherExecutionID.String()}),
+		},
+		createdSession: &repo.ChatSession{ID: newSessionID, OrganizationID: orgID},
+	}
+
+	bridge, err := NewFlowSessionBridge(FlowSessionBridgeOptions{
+		Executions: executions,
+		Tasks:      tasks,
+		Chats:      chats,
+	})
+	if err != nil {
+		t.Fatalf("NewFlowSessionBridge: %v", err)
+	}
+
+	got, err := bridge.EnsureNodeSession(context.Background(), repo.FlowNodeExecution{
+		ID:         executionID,
+		TaskID:     taskID,
+		FlowNodeID: flowNodeID,
+		SessionID:  &sessionID,
+	})
+	if err != nil {
+		t.Fatalf("EnsureNodeSession: %v", err)
+	}
+	if got.ID != newSessionID {
+		t.Fatalf("session.id = %s, want %s", got.ID, newSessionID)
+	}
+	if chats.getCalls != 1 {
+		t.Fatalf("GetSession calls = %d, want 1", chats.getCalls)
+	}
+	if chats.createCalls != 1 {
+		t.Fatalf("CreateSession calls = %d, want 1", chats.createCalls)
+	}
+	if executions.setSessionCalls != 1 {
+		t.Fatalf("SetSessionID calls = %d, want 1", executions.setSessionCalls)
+	}
+	if executions.lastSetExecutionID != executionID || executions.lastSetSessionID != newSessionID {
+		t.Fatalf("SetSessionID args = (%s,%s), want (%s,%s)", executions.lastSetExecutionID, executions.lastSetSessionID, executionID, newSessionID)
 	}
 }
 
@@ -397,3 +461,12 @@ func (f *fakeFlowSessionChatService) AppendMessage(_ context.Context, input chat
 var _ flowSessionExecutionRepository = (*fakeFlowSessionExecutionRepo)(nil)
 var _ flowSessionTaskRepository = (*fakeFlowSessionTaskRepo)(nil)
 var _ flowSessionChatService = (*fakeFlowSessionChatService)(nil)
+
+func mustJSONRaw(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal json: %v", err)
+	}
+	return raw
+}

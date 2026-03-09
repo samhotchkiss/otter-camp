@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -669,6 +670,65 @@ func (e *NativeToolExecutor) finalizeTaskScope(ctx context.Context, scope worksp
 	projectID := taskRecord.ProjectID
 	scope.projectID = &projectID
 	return scope, nil
+}
+
+func (e *NativeToolExecutor) resolveExecutionIDAlias(ctx context.Context, raw uuid.UUID) (uuid.UUID, error) {
+	if raw == uuid.Nil || e.flowExecs == nil {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	if _, err := e.flowExecs.GetByID(ctx, raw); err == nil {
+		return raw, nil
+	} else if !errors.Is(err, repo.ErrNotFound) {
+		return uuid.Nil, err
+	}
+
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil {
+		rows, listErr := e.flowExecs.ListByTask(ctx, *scope.taskID)
+		if listErr != nil && !errors.Is(listErr, repo.ErrNotFound) {
+			return uuid.Nil, listErr
+		}
+		for _, execution := range rows {
+			if execution.FlowNodeID != raw {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
+				continue
+			}
+			return execution.ID, nil
+		}
+	}
+
+	execCtx := mcp.ExecutionContextFromContext(ctx)
+	if execCtx.SessionID == nil || *execCtx.SessionID == uuid.Nil || e.chatSessions == nil {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	session, err := e.chatSessions.GetByID(ctx, *execCtx.SessionID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return uuid.Nil, repo.ErrNotFound
+		}
+		return uuid.Nil, err
+	}
+	if len(session.Metadata) == 0 {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(session.Metadata, &metadata); err != nil {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	sessionNodeID, _ := readUUID(metadata, "flow_node_id")
+	if sessionNodeID != raw {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	sessionExecutionID, ok := readUUID(metadata, "flow_node_execution_id")
+	if !ok || sessionExecutionID == uuid.Nil {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	return sessionExecutionID, nil
 }
 
 func taskScopeResolutionError(detail string) error {

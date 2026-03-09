@@ -3625,6 +3625,101 @@ func TestIntegrationFlowAdvanceTerminalRollsBackTaskUpdateWhenEventPublishFails(
 	}
 }
 
+func TestIntegrationReviewToolsAcceptReviewNodeIDAliasInTaskScopedSession(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	worker := testutil.MakeAgent(t, pool, orgID)
+	reviewer := testutil.MakeAgent(t, pool, orgID)
+
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("nodes count = %d, want 3", len(nodes))
+	}
+	workNodeID := nodes[0].ID
+	reviewNodeID := nodes[1].ID
+	mergeNodeID := nodes[2].ID
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &worker.ID,
+		WorkStatus:      "in_progress",
+		CreatedByType:   "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	if executor.flowService == nil {
+		t.Fatal("flowService = nil, want initialized service")
+	}
+	if _, err := executor.flowService.StartFlow(ctx, task.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+
+	execRepo := repo.NewFlowNodeExecutionRepo(pool)
+	workExecution, err := execRepo.GetActive(ctx, task.ID, workNodeID)
+	if err != nil {
+		t.Fatalf("GetActive work execution: %v", err)
+	}
+	if _, err := executor.Execute(integrationExecCtxWith(orgID, worker.ID), "flow.advance", map[string]any{
+		"flow_node_execution_id": workExecution.ID.String(),
+	}); err != nil {
+		t.Fatalf("flow.advance work->review: %v", err)
+	}
+
+	reviewExecution, err := execRepo.GetActive(ctx, task.ID, reviewNodeID)
+	if err != nil {
+		t.Fatalf("GetActive review execution: %v", err)
+	}
+	if reviewExecution.SessionID == nil || *reviewExecution.SessionID == uuid.Nil {
+		t.Fatalf("review execution session_id = %v, want non-nil", reviewExecution.SessionID)
+	}
+
+	reviewCtx := integrationExecCtxWithSession(orgID, reviewer.ID, *reviewExecution.SessionID)
+
+	getOut, err := executor.Execute(reviewCtx, "flow.get_execution", map[string]any{
+		"flow_node_execution_id": reviewNodeID.String(),
+	})
+	if err != nil {
+		t.Fatalf("flow.get_execution with node-id alias: %v", err)
+	}
+	executionPayload, ok := getOut["execution"].(map[string]any)
+	if !ok {
+		t.Fatalf("flow.get_execution output = %T, want map[string]any", getOut["execution"])
+	}
+	if mustUUIDValue(t, executionPayload["id"]) != reviewExecution.ID {
+		t.Fatalf("execution.id = %v, want %s", executionPayload["id"], reviewExecution.ID)
+	}
+
+	out, err := executor.Execute(reviewCtx, "flow.review_decision", map[string]any{
+		"decision":               "approve",
+		"flow_node_execution_id": reviewNodeID.String(),
+	})
+	if err != nil {
+		t.Fatalf("flow.review_decision with node-id alias: %v", err)
+	}
+	if mustUUIDValue(t, out["next_node_id"]) != mergeNodeID {
+		t.Fatalf("next_node_id = %v, want %s", out["next_node_id"], mergeNodeID)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetByID updated task: %v", err)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != mergeNodeID {
+		t.Fatalf("task current_flow_node_id = %v, want %s", updatedTask.CurrentFlowNodeID, mergeNodeID)
+	}
+}
+
 func integrationExecCtxWith(orgID, agentID uuid.UUID) context.Context {
 	return mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
 		OrganizationID: orgID,

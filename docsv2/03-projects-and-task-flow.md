@@ -218,6 +218,10 @@ When a blocked task or subtask becomes unblocked (dependency resolved), it re-en
 
 When a reviewer rejects work and the flow loops back (`review → in_progress`), the task doesn't go back to `queued` — it stays `in_progress` because it's a continuation of the same work, not a fresh pickup. However, the agent's new run still requires a concurrency slot from the scheduler. The status transitions immediately (`in_progress`), but the async run kicks off only when the scheduler allocates a slot. This is the same mechanic as unblocking — status changes are immediate, but execution waits for capacity.
 
+If the task row is temporarily stale `blocked` when the reviewer rejects back to a work node, the reject transition must still leave the task in a dispatchable work state. The runtime may normalize that stale case through `queued`, but it may not leave the task `blocked` on a work node after a successful reject.
+
+Each `flow_node_execution` keeps its own async session. When review rejects back to work, the new work visit must bind to a work-scoped execution session for that visit; it may not inherit the review session transcript just because that review session was the most recent async task session.
+
 ## Flow Templates
 
 ### Creation
@@ -266,6 +270,7 @@ Flow advancement is always explicit — never automatic.
 - **Nodes without subtasks** advance when the agent signals "step done" directly.
 - If the agent encounters an issue, it files a blocking task with a dependency link (see Blockers and Escalation). The flow stays at the current node until the dependency is resolved, then the agent resumes.
 - For review nodes, the reviewer must explicitly approve or reject. Approval advances to `next_node`; rejection advances to `reject_node`.
+- When flow progression enters a `review` node or loops back into a `work` node, the control plane must still be able to launch the next async run even if the node's `actor_type` was left blank by the planner/template. Blank `review` nodes infer the project's `reviewer` assignment; blank `work` nodes infer the task's assigned worker. A flow node transition may not silently drop because the template omitted explicit actor wiring.
 - **Rejection back to a node with subtasks**: each visit to a node is a separate `flow_node_execution` record. The original subtasks belong to visit 1. When the flow loops back, a new execution record (visit 2) is created. The PM or worker agent creates new subtasks scoped to the rework — informed by the reviewer's feedback (captured in `project_task_event.comment`). Old subtasks from visit 1 remain `done` or `cancelled` for audit purposes. This keeps a clean separation between attempts.
 
 ### Flow Node Execution State

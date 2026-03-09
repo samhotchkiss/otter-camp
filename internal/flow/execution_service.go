@@ -498,6 +498,17 @@ func taskWorkStatusForNode(node repo.FlowNode) string {
 	return "in_progress"
 }
 
+func rejectedTaskWorkStatus(currentStatus string, node repo.FlowNode) string {
+	target := taskWorkStatusForNode(node)
+	if !strings.EqualFold(strings.TrimSpace(target), "in_progress") {
+		return target
+	}
+	if strings.EqualFold(strings.TrimSpace(currentStatus), "blocked") {
+		return "queued"
+	}
+	return target
+}
+
 func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.ProjectTask, flowNodeID uuid.UUID, actor Actor) error {
 	title := "Task review required"
 	body := "Flow advancement paused pending human review."
@@ -722,6 +733,12 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 	}
 	if err := s.ensureExecutionSession(ctx, &created); err != nil {
 		return nil, err
+	}
+	if targetStatus := rejectedTaskWorkStatus(taskRecord.WorkStatus, rejectNode); targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
+		if _, err := s.taskService.TransitionStatus(ctx, taskRecord.ID, targetStatus, toTaskActor(actor)); err != nil {
+			return nil, err
+		}
+		taskRecord.WorkStatus = targetStatus
 	}
 
 	payload := map[string]any{
@@ -1068,6 +1085,10 @@ func (s *service) loadActiveFlowState(ctx context.Context, taskID uuid.UUID) (re
 		}
 	} else if err != nil {
 		return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
+	} else {
+		if err := s.ensureExecutionSession(ctx, &activeExecution); err != nil {
+			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
+		}
 	}
 
 	return taskRecord, currentNode, activeExecution, nil

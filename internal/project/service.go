@@ -1588,7 +1588,25 @@ func (s *service) validateFlowTemplateReviewCoverage(ctx context.Context, templa
 		nodes = filtered
 	}
 
+	if err := validateReviewNodeEdges(nodes); err != nil {
+		return err
+	}
 	return ValidateExecutableFlowTemplate(startNodeID, nodes)
+}
+
+func validateReviewNodeEdges(nodes []repo.FlowNode) error {
+	for _, node := range nodes {
+		if !strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
+			continue
+		}
+		if node.NextNodeID == nil || *node.NextNodeID == uuid.Nil {
+			return ErrReviewNodeEdgesRequired
+		}
+		if node.RejectNodeID == nil || *node.RejectNodeID == uuid.Nil {
+			return ErrReviewNodeEdgesRequired
+		}
+	}
+	return nil
 }
 
 func ValidateExecutableFlowNodes(nodes []repo.FlowNode) error {

@@ -14,6 +14,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 )
 
 func TestStatusTransitionMatrix(t *testing.T) {
@@ -148,6 +149,47 @@ func TestResumeValidationBlockedTaskRejectsNonBlockedTask(t *testing.T) {
 	}
 	if resumeErr.BlockerClass != RecoveryBlockerClassNotBlocked {
 		t.Fatalf("resume blocker_class = %q, want %q", resumeErr.BlockerClass, RecoveryBlockerClassNotBlocked)
+	}
+}
+
+func TestClassifyTaskResumeDecisionPrefersDurableCheckpointOverValidationGuard(t *testing.T) {
+	taskID := uuid.New()
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{
+		"agent_turn_validation_guard": {
+			"blocked": true,
+			"tool_name": "file.write",
+			"failure_code": "content_required",
+			"failure_reason": "content_required"
+		}
+	}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "docs/blog-post-ideas.md",
+		ArtifactPath:  ".ottercamp/recovery/docs/blog-post-ideas.md",
+		FailureReason: "assistant draft for docs/blog-post-ideas.md described intent to write the deliverable instead of the file body",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	decision := classifyTaskResumeDecision(repo.ProjectTask{
+		ID:         taskID,
+		WorkStatus: "blocked",
+		Metadata:   checkpointMetadata,
+	}, "recovery halted after assistant draft for docs/blog-post-ideas.md described intent to write the deliverable instead of the file body")
+
+	if !decision.resumable {
+		t.Fatal("expected task with durable checkpoint to be resumable")
+	}
+	if decision.blockerClass != RecoveryBlockerClassDurableRecoveryCheckpoint {
+		t.Fatalf("blockerClass = %q, want %q", decision.blockerClass, RecoveryBlockerClassDurableRecoveryCheckpoint)
+	}
+	if !decision.clearValidationGuard || decision.validationGuard == nil {
+		t.Fatal("expected stale validation guard to be cleared when durable checkpoint is present")
+	}
+	if decision.checkpoint == nil {
+		t.Fatal("expected durable checkpoint to remain attached to resume decision")
+	}
+	if decision.checkpoint.TargetPath != "docs/blog-post-ideas.md" {
+		t.Fatalf("checkpoint target_path = %q, want docs/blog-post-ideas.md", decision.checkpoint.TargetPath)
 	}
 }
 

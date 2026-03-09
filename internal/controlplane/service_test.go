@@ -331,6 +331,90 @@ func TestCreateExecutionWakeupStaleOwnerPromotesDeferredRun(t *testing.T) {
 	}
 }
 
+func TestCreateExecutionWakeupDeferredRuntimeTracksDeferredTargetIdentity(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	workSessionID := uuid.New()
+	reviewSessionID := uuid.New()
+	workNodeID := uuid.New()
+	reviewNodeID := uuid.New()
+	workerID := uuid.New()
+	reviewerID := uuid.New()
+	reviewExecutionID := uuid.New()
+
+	first, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    workerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &workSessionID,
+			FlowNodeID:     &workNodeID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup first: %v", err)
+	}
+
+	deferredMetadata, err := json.Marshal(map[string]any{
+		"run_mode":               "async",
+		"flow_node_execution_id": reviewExecutionID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal deferred metadata: %v", err)
+	}
+	deferred, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: first.Run.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &reviewSessionID,
+			FlowNodeID:     &reviewNodeID,
+			Metadata:       deferredMetadata,
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+		WakeupPayload: map[string]any{
+			"flow_node_execution_id": reviewExecutionID.String(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup deferred: %v", err)
+	}
+	if deferred.Decision != executionWakeupDeferred {
+		t.Fatalf("deferred decision = %q, want %q", deferred.Decision, executionWakeupDeferred)
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	contract := state.Contract()
+	if contract.SessionID == nil || *contract.SessionID != reviewSessionID {
+		t.Fatalf("runtime session_id = %v, want %s", contract.SessionID, reviewSessionID)
+	}
+	if contract.FlowNodeID == nil || *contract.FlowNodeID != reviewNodeID {
+		t.Fatalf("runtime flow_node_id = %v, want %s", contract.FlowNodeID, reviewNodeID)
+	}
+	if contract.FlowNodeExecutionID == nil || *contract.FlowNodeExecutionID != reviewExecutionID {
+		t.Fatalf("runtime flow_node_execution_id = %v, want %s", contract.FlowNodeExecutionID, reviewExecutionID)
+	}
+	if contract.WakeupKind != "flow_transition" {
+		t.Fatalf("runtime wakeup_kind = %q, want flow_transition", contract.WakeupKind)
+	}
+}
+
 func TestReleaseExecutionOwnerMarksRuntimeStateResumable(t *testing.T) {
 	repos := newFakeRunDeps()
 	svc := repos.newService(t)

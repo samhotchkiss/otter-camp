@@ -11,6 +11,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
 
 func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresIrrelevantStatusesAndEvents(t *testing.T) {
@@ -235,6 +236,141 @@ func TestSelectNextQueuedTaskUnderProjectGateSkipsReviewCheckpointEX248(t *testi
 	}
 }
 
+func TestResolveFlowTransitionAgentInfersReviewerForBlankReviewNode(t *testing.T) {
+	projectID := uuid.New()
+	reviewerID := uuid.New()
+	processor := &TaskQueueProcessor{
+		assignments: &fakeTaskQueueAssignmentRepository{
+			assignments: []repo.AgentProjectAssignment{
+				{
+					ProjectID: projectID,
+					AgentID:   reviewerID,
+					Role:      "reviewer",
+				},
+			},
+		},
+	}
+
+	agentID, err := processor.resolveFlowTransitionAgent(context.Background(), repo.ProjectTask{
+		ID:        uuid.New(),
+		ProjectID: projectID,
+	}, repo.FlowNode{
+		ID:       uuid.New(),
+		NodeType: "review",
+	})
+	if err != nil {
+		t.Fatalf("resolveFlowTransitionAgent: %v", err)
+	}
+	if agentID == nil || *agentID != reviewerID {
+		t.Fatalf("agentID = %v, want reviewer %s", agentID, reviewerID)
+	}
+}
+
+func TestResolveFlowTransitionAgentInfersAssignedWorkerForBlankWorkNode(t *testing.T) {
+	projectID := uuid.New()
+	workerID := uuid.New()
+	processor := &TaskQueueProcessor{}
+
+	agentID, err := processor.resolveFlowTransitionAgent(context.Background(), repo.ProjectTask{
+		ID:              uuid.New(),
+		ProjectID:       projectID,
+		AssignedAgentID: &workerID,
+	}, repo.FlowNode{
+		ID:       uuid.New(),
+		NodeType: "work",
+	})
+	if err != nil {
+		t.Fatalf("resolveFlowTransitionAgent: %v", err)
+	}
+	if agentID == nil || *agentID != workerID {
+		t.Fatalf("agentID = %v, want worker %s", agentID, workerID)
+	}
+}
+
+func TestDispatchTaskQueueWakeupFlowTransitionUsesFlowExecutionSession(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	flowNodeID := uuid.New()
+	executionID := uuid.New()
+	nodeSessionID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{
+		nodeSession: &chat.ChatSession{
+			ID:             nodeSessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:              taskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				Title:           "WS3 review",
+				WorkStatus:      "review",
+				AssignedAgentID: &agentID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{
+				ID:         executionID,
+				TaskID:     taskID,
+				FlowNodeID: flowNodeID,
+				Status:     "active",
+			},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{
+				ID:          flowNodeID,
+				DisplayName: "Review",
+				NodeType:    "review",
+			},
+		},
+		chats: chatService,
+	}
+
+	runRecord := Run{
+		ID:             uuid.New(),
+		OrganizationID: orgID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+		FlowNodeID:     &flowNodeID,
+		PrincipalType:  "agent",
+		PrincipalID:    agentID,
+		Metadata: mustTaskQueueJSON(t, map[string]any{
+			"execution_wakeup": map[string]any{
+				"source": "task_queue_processor",
+				"kind":   "flow_transition",
+			},
+			"flow_event_type":        "flow.advanced",
+			"flow_node_execution_id": executionID.String(),
+		}),
+	}
+
+	if err := processor.dispatchTaskQueueWakeup(ctx, runRecord); err != nil {
+		t.Fatalf("dispatchTaskQueueWakeup: %v", err)
+	}
+	if len(chatService.getOrCreateNodeSessionCalls) != 1 {
+		t.Fatalf("GetOrCreateNodeSession calls = %d, want 1", len(chatService.getOrCreateNodeSessionCalls))
+	}
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("append messages = %d, want 1", len(chatService.appendMessages))
+	}
+	if chatService.appendMessages[0].SessionID != nodeSessionID {
+		t.Fatalf("append session_id = %s, want node session %s", chatService.appendMessages[0].SessionID, nodeSessionID)
+	}
+	if len(chatService.createSessionInputs) != 0 {
+		t.Fatalf("unexpected canonical CreateSession calls = %d", len(chatService.createSessionInputs))
+	}
+}
+
 func TestProcessQueuedTaskSkipsPausedProject(t *testing.T) {
 	ctx := context.Background()
 	projectID := uuid.New()
@@ -312,7 +448,8 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *test
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
-	if err := processor.handleFlowAdvancedEvent(ctx, eventbus.DomainEvent{EventType: "flow.advanced", Payload: payload}); err != nil {
+	event := eventbus.DomainEvent{ID: uuid.New(), EventType: "flow.advanced", Payload: payload}
+	if err := processor.handleFlowAdvancedEvent(ctx, event); err != nil {
 		t.Fatalf("handleFlowAdvancedEvent: %v", err)
 	}
 
@@ -323,8 +460,9 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *test
 	if createInput.PrincipalType != "agent" || createInput.PrincipalID != agentID {
 		t.Fatalf("CreateRun principal = (%s,%s), want (agent,%s)", createInput.PrincipalType, createInput.PrincipalID, agentID)
 	}
-	if createInput.IdempotencyKey == nil || *createInput.IdempotencyKey != "flow-transition:"+executionID.String() {
-		t.Fatalf("CreateRun idempotency_key = %v, want flow-transition:%s", createInput.IdempotencyKey, executionID)
+	wantKey := "flow-transition:" + executionID.String()
+	if createInput.IdempotencyKey == nil || *createInput.IdempotencyKey != wantKey {
+		t.Fatalf("CreateRun idempotency_key = %v, want %s", createInput.IdempotencyKey, wantKey)
 	}
 	if len(chatService.addParticipantCalls) != 1 {
 		t.Fatalf("AddParticipant calls = %d, want 1", len(chatService.addParticipantCalls))
@@ -332,8 +470,15 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *test
 	if len(chatService.appendMessages) != 1 {
 		t.Fatalf("AppendMessage calls = %d, want 1", len(chatService.appendMessages))
 	}
-	if !strings.Contains(chatService.appendMessages[0].Content, "Flow node: Review") {
-		t.Fatalf("kickoff content missing flow node details: %q", chatService.appendMessages[0].Content)
+	kickoff := chatService.appendMessages[0].Content
+	if !strings.Contains(kickoff, "Flow node: Review") {
+		t.Fatalf("kickoff content missing flow node details: %q", kickoff)
+	}
+	if !strings.Contains(kickoff, "Review task:") {
+		t.Fatalf("review kickoff missing review preface: %q", kickoff)
+	}
+	if strings.Contains(kickoff, "Start work on task:") {
+		t.Fatalf("review kickoff reused work preface: %q", kickoff)
 	}
 }
 
@@ -535,7 +680,10 @@ func TestTaskQueueProcessorHandleTaskCompletedEventCompletesSupervisorAndCancell
 			},
 		},
 	}
-	processor := &TaskQueueProcessor{runs: runService}
+	processor := &TaskQueueProcessor{
+		runs:         runService,
+		dependencies: &fakeTaskQueueDependencyRepository{},
+	}
 
 	payload, err := json.Marshal(map[string]any{
 		"task_id":   taskID,
@@ -595,7 +743,10 @@ func TestTaskQueueProcessorHandleTaskCompletedEventFailsBlockedTrackingRuns(t *t
 			},
 		},
 	}
-	processor := &TaskQueueProcessor{runs: runService}
+	processor := &TaskQueueProcessor{
+		runs:         runService,
+		dependencies: &fakeTaskQueueDependencyRepository{},
+	}
 
 	payload, err := json.Marshal(map[string]any{
 		"task_id":        taskID,
@@ -633,6 +784,101 @@ func TestTaskQueueProcessorHandleTaskCompletedEventFailsBlockedTrackingRuns(t *t
 	}
 	if len(runService.retireRuntimeTaskCalls) != 0 {
 		t.Fatalf("RetireRuntimeStateForTask calls = %+v, want none for blocked task", runService.retireRuntimeTaskCalls)
+	}
+}
+
+func TestTaskQueueProcessorHandleTaskCompletedEventQueuesSatisfiedDependentDraftTasks(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	upstreamID := uuid.New()
+	downstreamID := uuid.New()
+
+	taskRepo := &fakeTaskQueueTaskRepository{
+		tasksByID: map[uuid.UUID]repo.ProjectTask{
+			upstreamID: {
+				ID:         upstreamID,
+				ProjectID:  projectID,
+				TaskNumber: 3,
+				Title:      "Upstream",
+				WorkStatus: "done",
+			},
+			downstreamID: {
+				ID:         downstreamID,
+				ProjectID:  projectID,
+				TaskNumber: 4,
+				Title:      "Downstream",
+				WorkStatus: "draft",
+			},
+		},
+		tasksByProject: []repo.ProjectTask{
+			{ID: downstreamID, ProjectID: projectID, TaskNumber: 4, Title: "Downstream", WorkStatus: "draft"},
+		},
+	}
+	taskService := &fakeTaskQueueStatusTransitioner{
+		transitionStatusResponses: map[string]*tasksvc.ProjectTask{
+			downstreamID.String() + "|queued": {
+				ID:         downstreamID,
+				ProjectID:  projectID,
+				TaskNumber: 4,
+				Title:      "Downstream",
+				WorkStatus: "queued",
+			},
+		},
+		onTransitionStatus: func(taskID uuid.UUID, toStatus string, actor tasksvc.Actor) {
+			task := taskRepo.tasksByID[taskID]
+			task.WorkStatus = toStatus
+			taskRepo.tasksByID[taskID] = task
+			taskRepo.tasksByProject = []repo.ProjectTask{task}
+		},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: taskRepo,
+		taskService: taskService,
+		dependencies: &fakeTaskQueueDependencyRepository{
+			inboundByDependsOnID: map[uuid.UUID][]repo.ProjectTaskDependency{
+				upstreamID: {{
+					SourceType:    "project_task",
+					SourceID:      downstreamID,
+					DependsOnType: "project_task",
+					DependsOnID:   upstreamID,
+				}},
+			},
+			outboundBySourceID: map[uuid.UUID][]repo.ProjectTaskDependency{
+				downstreamID: {{
+					SourceType:    "project_task",
+					SourceID:      downstreamID,
+					DependsOnType: "project_task",
+					DependsOnID:   upstreamID,
+				}},
+			},
+		},
+		runs: &fakeTaskQueueRunStarter{},
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    upstreamID,
+		"project_id": projectID,
+		"to_status":  "done",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "task.status_changed",
+		Payload:        payload,
+	}
+	if err := processor.handleTaskCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("handleTaskCompletedEvent: %v", err)
+	}
+
+	if len(taskService.transitionStatusCalls) != 1 {
+		t.Fatalf("TransitionStatus calls = %d, want 1", len(taskService.transitionStatusCalls))
+	}
+	call := taskService.transitionStatusCalls[0]
+	if call.taskID != downstreamID || call.toStatus != "queued" {
+		t.Fatalf("TransitionStatus call = %+v, want downstream queued", call)
 	}
 }
 
@@ -860,6 +1106,124 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 	}
 }
 
+func TestHandleTurnTerminalEventDispatchesPromotedFlowTransitionAfterTaskAlreadyAdvanced(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	workSessionID := uuid.New()
+	reviewSessionID := uuid.New()
+	reviewNodeID := uuid.New()
+	reviewExecutionID := uuid.New()
+	reviewerID := uuid.New()
+	runID := uuid.New()
+
+	baseMetadata, err := json.Marshal(map[string]any{
+		"flow_node_execution_id": reviewExecutionID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	runMetadata := buildExecutionWakeupMetadata(
+		baseMetadata,
+		executionScope{Type: "task", ID: taskID},
+		"task_queue_processor",
+		"flow_transition",
+		map[string]any{
+			"flow_node_execution_id": reviewExecutionID.String(),
+			"flow_event_type":        "flow.advanced",
+		},
+		"started",
+		nil,
+	)
+
+	chatService := &fakeTaskQueueChatService{
+		session: &chat.ChatSession{
+			ID:        workSessionID,
+			ScopeType: "project_task",
+			ScopeID:   taskID,
+			Mode:      "async",
+			Status:    "active",
+		},
+		nodeSession: &chat.ChatSession{
+			ID:        reviewSessionID,
+			ScopeType: "project_task",
+			ScopeID:   taskID,
+			Mode:      "async",
+			Status:    "active",
+		},
+	}
+	runService := &fakeTaskQueueRunStarter{
+		releaseExecutionResult: executionWakeupResult{
+			Run: Run{
+				ID:             runID,
+				OrganizationID: orgID,
+				ProjectID:      &projectID,
+				TaskID:         &taskID,
+				FlowNodeID:     &reviewNodeID,
+				SessionID:      &reviewSessionID,
+				PrincipalType:  "agent",
+				PrincipalID:    reviewerID,
+				TriggerType:    "scheduler",
+				Metadata:       runMetadata,
+			},
+			Decision: executionWakeupPromoted,
+		},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				WorkStatus:        "review",
+				Title:             "WS3: Develop Comprehensive Content Strategy",
+				CurrentFlowNodeID: &reviewNodeID,
+			},
+		},
+		runs:  runService,
+		chats: chatService,
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{
+				ID:         reviewExecutionID,
+				TaskID:     taskID,
+				FlowNodeID: reviewNodeID,
+				SessionID:  &reviewSessionID,
+			},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{
+				ID:       reviewNodeID,
+				NodeType: "review",
+			},
+		},
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": workSessionID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	if err := processor.handleTurnTerminalEvent(ctx, eventbus.DomainEvent{
+		EventType: "chat.turn.completed",
+		Payload:   payload,
+	}); err != nil {
+		t.Fatalf("handleTurnTerminalEvent: %v", err)
+	}
+
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("appendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+	if chatService.appendMessages[0].SessionID != reviewSessionID {
+		t.Fatalf("kickoff session = %s, want %s", chatService.appendMessages[0].SessionID, reviewSessionID)
+	}
+	if !strings.Contains(chatService.appendMessages[0].Content, "Review task: WS3: Develop Comprehensive Content Strategy") {
+		t.Fatalf("kickoff content = %q, want review kickoff", chatService.appendMessages[0].Content)
+	}
+}
+
 func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -986,12 +1350,52 @@ func (f *fakeTaskQueueSessionRepository) sessionKey(scopeType string, scopeID uu
 type fakeTaskQueueTaskRepository struct {
 	task           repo.ProjectTask
 	tasksByProject []repo.ProjectTask
+	tasksByID      map[uuid.UUID]repo.ProjectTask
 	err            error
 }
 
-func (f *fakeTaskQueueTaskRepository) GetByID(context.Context, uuid.UUID) (repo.ProjectTask, error) {
+type transitionStatusCall struct {
+	taskID   uuid.UUID
+	toStatus string
+	actor    tasksvc.Actor
+}
+
+type fakeTaskQueueStatusTransitioner struct {
+	transitionStatusResponses map[string]*tasksvc.ProjectTask
+	transitionStatusErr       error
+	transitionStatusCalls     []transitionStatusCall
+	onTransitionStatus        func(taskID uuid.UUID, toStatus string, actor tasksvc.Actor)
+}
+
+func (f *fakeTaskQueueStatusTransitioner) TransitionStatus(_ context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+	f.transitionStatusCalls = append(f.transitionStatusCalls, transitionStatusCall{
+		taskID:   taskID,
+		toStatus: toStatus,
+		actor:    actor,
+	})
+	if f.onTransitionStatus != nil {
+		f.onTransitionStatus(taskID, toStatus, actor)
+	}
+	if f.transitionStatusErr != nil {
+		return nil, f.transitionStatusErr
+	}
+	if item, ok := f.transitionStatusResponses[taskID.String()+"|"+toStatus]; ok {
+		clone := *item
+		return &clone, nil
+	}
+	return &tasksvc.ProjectTask{ID: taskID, WorkStatus: toStatus}, nil
+}
+
+func (f *fakeTaskQueueStatusTransitioner) CreateInboxItem(context.Context, tasksvc.CreateInboxItemRequest) (*tasksvc.InboxItem, error) {
+	return &tasksvc.InboxItem{}, nil
+}
+
+func (f *fakeTaskQueueTaskRepository) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTask, error) {
 	if f.err != nil {
 		return repo.ProjectTask{}, f.err
+	}
+	if item, ok := f.tasksByID[id]; ok {
+		return item, nil
 	}
 	return f.task, nil
 }
@@ -1012,6 +1416,26 @@ func (f *fakeTaskQueueTaskRepository) ListByProject(context.Context, uuid.UUID, 
 type fakeTaskQueueProjectRepository struct {
 	items map[uuid.UUID]repo.Project
 	err   error
+}
+
+type fakeTaskQueueDependencyRepository struct {
+	inboundByDependsOnID map[uuid.UUID][]repo.ProjectTaskDependency
+	outboundBySourceID   map[uuid.UUID][]repo.ProjectTaskDependency
+	err                  error
+}
+
+func (f *fakeTaskQueueDependencyRepository) ListInbound(_ context.Context, _ string, dependsOnID uuid.UUID) ([]repo.ProjectTaskDependency, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]repo.ProjectTaskDependency(nil), f.inboundByDependsOnID[dependsOnID]...), nil
+}
+
+func (f *fakeTaskQueueDependencyRepository) ListOutbound(_ context.Context, _ string, sourceID uuid.UUID) ([]repo.ProjectTaskDependency, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]repo.ProjectTaskDependency(nil), f.outboundBySourceID[sourceID]...), nil
 }
 
 func (f *fakeTaskQueueProjectRepository) GetByID(_ context.Context, id uuid.UUID) (repo.Project, error) {
@@ -1039,6 +1463,8 @@ type fakeTaskQueueRunStarter struct {
 	confirmCancelledCalls   []uuid.UUID
 	listRunsByTaskCalls     []listRunsByTaskCall
 	releaseExecutionCalls   []releaseExecutionCall
+	releaseExecutionResult  executionWakeupResult
+	releaseExecutionErr     error
 	retireRuntimeTaskCalls  []retireRuntimeTaskCall
 	retireRuntimeProjCalls  []retireRuntimeProjectCall
 	createRunInputs         []CreateRunInput
@@ -1234,7 +1660,10 @@ func (f *fakeTaskQueueRunStarter) ReleaseExecutionOwner(_ context.Context, taskI
 		sessionID: sessionID,
 		reason:    reason,
 	})
-	return executionWakeupResult{}, nil
+	if f.releaseExecutionErr != nil {
+		return executionWakeupResult{}, f.releaseExecutionErr
+	}
+	return f.releaseExecutionResult, nil
 }
 
 func (f *fakeTaskQueueRunStarter) RetireRuntimeStateForTask(_ context.Context, taskID uuid.UUID, reason string) error {
@@ -1313,11 +1742,16 @@ type addParticipantCall struct {
 }
 
 type fakeTaskQueueChatService struct {
-	calls               []string
-	session             *chat.ChatSession
-	createSessionInputs []chat.CreateSessionInput
-	createSessionErr    error
-	onCreateSession     func(*chat.ChatSession)
+	calls                       []string
+	session                     *chat.ChatSession
+	nodeSession                 *chat.ChatSession
+	createSessionInputs         []chat.CreateSessionInput
+	createSessionErr            error
+	onCreateSession             func(*chat.ChatSession)
+	getOrCreateNodeSessionCalls []struct {
+		executionID uuid.UUID
+		agentID     uuid.UUID
+	}
 	addParticipantCalls []addParticipantCall
 	addParticipantErr   error
 	appendMessageErr    error
@@ -1365,6 +1799,21 @@ func (f *fakeTaskQueueChatService) CreateSession(_ context.Context, input chat.C
 	return session, nil
 }
 
+func (f *fakeTaskQueueChatService) GetOrCreateNodeSession(_ context.Context, flowNodeExecutionID, agentID uuid.UUID) (*chat.ChatSession, error) {
+	f.calls = append(f.calls, "get_or_create_node_session")
+	f.getOrCreateNodeSessionCalls = append(f.getOrCreateNodeSessionCalls, struct {
+		executionID uuid.UUID
+		agentID     uuid.UUID
+	}{executionID: flowNodeExecutionID, agentID: agentID})
+	if f.nodeSession != nil {
+		return f.nodeSession, nil
+	}
+	if f.session != nil {
+		return f.session, nil
+	}
+	return nil, repo.ErrNotFound
+}
+
 func (f *fakeTaskQueueChatService) AddParticipant(_ context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error) {
 	f.calls = append(f.calls, "add_participant")
 	f.addParticipantCalls = append(f.addParticipantCalls, addParticipantCall{
@@ -1407,6 +1856,15 @@ func (f *fakeTaskQueueChatService) ListMessages(context.Context, uuid.UUID, chat
 		return nil, f.listMessagesErr
 	}
 	return f.listMessages, nil
+}
+
+func mustTaskQueueJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal json: %v", err)
+	}
+	return raw
 }
 
 var _ taskQueueChatService = (*fakeTaskQueueChatService)(nil)

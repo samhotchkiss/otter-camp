@@ -14,7 +14,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
+	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -348,6 +350,13 @@ func TestFlowExecutionServiceRejectFlowNodeMaxVisits(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+	taskTransitions, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     pool,
+		EventBus: eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{}),
+	})
+	if err != nil {
+		t.Fatalf("task.NewService: %v", err)
+	}
 
 	template, _ := seedLinearTemplate(t, ctx, fixture, true, 2)
 	taskRecord := seedFlowTask(t, ctx, fixture, "Max visits task", "in_progress", &template.ID)
@@ -360,6 +369,15 @@ func TestFlowExecutionServiceRejectFlowNodeMaxVisits(t *testing.T) {
 	}
 	if _, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID}); err != nil {
 		t.Fatalf("RejectFlowNode first: %v", err)
+	}
+	afterFirstReject, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after first reject: %v", err)
+	}
+	if afterFirstReject.WorkStatus == "queued" {
+		if _, err := taskTransitions.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system"}); err != nil {
+			t.Fatalf("TransitionStatus queued->in_progress: %v", err)
+		}
 	}
 	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
 		t.Fatalf("AdvanceFlow to review again: %v", err)
@@ -389,6 +407,113 @@ func TestFlowExecutionServiceRejectFlowNodeMaxVisits(t *testing.T) {
 	}
 	if visitsToRejectTarget != 0 {
 		t.Fatalf("unexpected execution created beyond max visits")
+	}
+}
+
+func TestFlowExecutionServiceRejectFlowNodeLeavesBlockedReviewStateDispatchable(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+	taskTransitions, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     pool,
+		EventBus: eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{}),
+	})
+	if err != nil {
+		t.Fatalf("task.NewService: %v", err)
+	}
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, true, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Blocked review reject", "in_progress", &template.ID)
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review: %v", err)
+	}
+	if _, err := taskTransitions.MarkBlocked(ctx, taskRecord.ID, "stale blocked review state", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	rejected, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID})
+	if err != nil {
+		t.Fatalf("RejectFlowNode: %v", err)
+	}
+	if rejected.FlowNodeID != nodes[0].ID {
+		t.Fatalf("reject flow_node_id = %s, want %s", rejected.FlowNodeID, nodes[0].ID)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[0].ID {
+		t.Fatalf("current_flow_node_id = %v, want work node %s", updatedTask.CurrentFlowNodeID, nodes[0].ID)
+	}
+	if updatedTask.WorkStatus != "queued" {
+		t.Fatalf("task work_status = %q, want queued", updatedTask.WorkStatus)
+	}
+}
+
+func TestFlowExecutionServiceEnsureActiveExecutionRepairsMismatchedSessionBinding(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, true, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Repair mismatched session binding", "in_progress", &template.ID)
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review: %v", err)
+	}
+
+	reviewExecution, err := fixture.executionRepo.GetActive(ctx, taskRecord.ID, nodes[1].ID)
+	if err != nil {
+		t.Fatalf("GetActive review execution: %v", err)
+	}
+	if reviewExecution.SessionID == nil {
+		t.Fatal("review execution session_id is nil")
+	}
+
+	rejected, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID})
+	if err != nil {
+		t.Fatalf("RejectFlowNode: %v", err)
+	}
+	if rejected.SessionID == nil {
+		t.Fatal("rejected work execution session_id is nil")
+	}
+	if *rejected.SessionID == *reviewExecution.SessionID {
+		t.Fatalf("rejected work execution reused review session %s", *reviewExecution.SessionID)
+	}
+
+	if _, err := fixture.executionRepo.SetSessionID(ctx, rejected.ID, *reviewExecution.SessionID); err != nil {
+		t.Fatalf("SetSessionID mismatched binding: %v", err)
+	}
+
+	repaired, err := fixture.service.EnsureActiveExecution(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("EnsureActiveExecution: %v", err)
+	}
+	if repaired.SessionID == nil {
+		t.Fatal("repaired execution session_id is nil")
+	}
+	if *repaired.SessionID == *reviewExecution.SessionID {
+		t.Fatalf("repaired execution still uses review session %s", *reviewExecution.SessionID)
+	}
+
+	var flowNodeExecutionID string
+	if err := pool.QueryRow(ctx, `
+		SELECT metadata->>'flow_node_execution_id'
+		FROM chat_session
+		WHERE id = $1
+	`, *repaired.SessionID).Scan(&flowNodeExecutionID); err != nil {
+		t.Fatalf("load repaired session metadata: %v", err)
+	}
+	if flowNodeExecutionID != repaired.ID.String() {
+		t.Fatalf("repaired session flow_node_execution_id = %q, want %q", flowNodeExecutionID, repaired.ID.String())
 	}
 }
 
@@ -581,9 +706,24 @@ func seedFlowIntegrationFixture(t *testing.T, ctx context.Context, pool *pgxpool
 	}
 
 	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
-	svc, err := NewService(Options{
+	chatService, err := chat.NewService(chat.Options{
 		Pool:   pool,
 		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("chat.NewService: %v", err)
+	}
+	sessionBridge, err := projectsvc.NewFlowSessionBridge(projectsvc.FlowSessionBridgeOptions{
+		Pool:  pool,
+		Chats: chatService,
+	})
+	if err != nil {
+		t.Fatalf("project.NewFlowSessionBridge: %v", err)
+	}
+	svc, err := NewService(Options{
+		Pool:          pool,
+		Events:        bus,
+		SessionBridge: sessionBridge,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)

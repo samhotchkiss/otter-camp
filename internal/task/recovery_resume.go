@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -78,15 +79,10 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
 		return taskResumeDecision{blockerClass: RecoveryBlockerClassNotBlocked}
 	}
+	var guardCopy *ValidationGuardState
 	if guard, ok := ParseValidationGuard(taskRecord.Metadata); ok && guard.Blocked {
-		guardCopy := guard
-		return taskResumeDecision{
-			resumable:            true,
-			blockerClass:         RecoveryBlockerClassValidationLoop,
-			blockerReason:        strings.TrimSpace(blockerReason),
-			clearValidationGuard: true,
-			validationGuard:      &guardCopy,
-		}
+		candidate := guard
+		guardCopy = &candidate
 	}
 	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok && hasDurableRecoveryCheckpoint(checkpoint) {
 		checkpointCopy := checkpoint
@@ -95,10 +91,21 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 			blockerClass = RecoveryBlockerClassDurableRecoveryCheckpoint
 		}
 		return taskResumeDecision{
-			resumable:     true,
-			blockerClass:  blockerClass,
-			blockerReason: strings.TrimSpace(blockerReason),
-			checkpoint:    &checkpointCopy,
+			resumable:            true,
+			blockerClass:         blockerClass,
+			blockerReason:        strings.TrimSpace(blockerReason),
+			clearValidationGuard: guardCopy != nil,
+			validationGuard:      guardCopy,
+			checkpoint:           &checkpointCopy,
+		}
+	}
+	if guardCopy != nil {
+		return taskResumeDecision{
+			resumable:            true,
+			blockerClass:         RecoveryBlockerClassValidationLoop,
+			blockerReason:        strings.TrimSpace(blockerReason),
+			clearValidationGuard: true,
+			validationGuard:      guardCopy,
 		}
 	}
 	return taskResumeDecision{
@@ -205,7 +212,7 @@ func (s *service) rebuildDurableRecoveryCheckpointFromSessionState(ctx context.C
 		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, err
 	}
 
-	checkpoint, ok := recoveryCheckpointFromSessionMessages(messages, blockerReason)
+	checkpoint, ok := recoveryCheckpointFromSessionMessages(taskRecord, messages, blockerReason)
 	if !ok {
 		return taskcheckpoint.RecoveryFileWriteCheckpoint{}, false, nil
 	}
@@ -270,7 +277,7 @@ func (s *service) latestTaskRecoverySessionID(ctx context.Context, taskID uuid.U
 	return sessionID, sessionID != uuid.Nil, nil
 }
 
-func recoveryCheckpointFromSessionMessages(messages []repo.ChatMessage, blockerReason string) (taskcheckpoint.RecoveryFileWriteCheckpoint, bool) {
+func recoveryCheckpointFromSessionMessages(taskRecord repo.ProjectTask, messages []repo.ChatMessage, blockerReason string) (taskcheckpoint.RecoveryFileWriteCheckpoint, bool) {
 	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{}
 	for i := len(messages) - 1; i >= 0; i-- {
 		message := messages[i]
@@ -287,6 +294,11 @@ func recoveryCheckpointFromSessionMessages(messages []repo.ChatMessage, blockerR
 	}
 	if strings.TrimSpace(checkpoint.TargetPath) == "" {
 		if targetPath, ok := recoveryCheckpointTargetPathFromMessages(messages); ok {
+			checkpoint.TargetPath = targetPath
+		}
+	}
+	if strings.TrimSpace(checkpoint.TargetPath) == "" {
+		if targetPath, ok := recoveryCheckpointTargetPathFromTask(taskRecord); ok {
 			checkpoint.TargetPath = targetPath
 		}
 	}
@@ -356,7 +368,13 @@ func recoveryCheckpointTargetPathFromMessages(messages []repo.ChatMessage) (stri
 			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(toolName)) {
-		case "file.read", "file.write", "cli.execute":
+		case "file.write", "cli.execute":
+		case "file.read":
+			candidatePath, usedArtifactPath := recoveryTargetPathFromToolOutput(output)
+			if !usedArtifactPath || strings.TrimSpace(candidatePath) == "" {
+				continue
+			}
+			return candidatePath, true
 		default:
 			continue
 		}
@@ -364,6 +382,29 @@ func recoveryCheckpointTargetPathFromMessages(messages []repo.ChatMessage) (stri
 		if strings.TrimSpace(targetPath) != "" {
 			return targetPath, true
 		}
+	}
+	return "", false
+}
+
+var recoveryCheckpointTaskPathPattern = regexp.MustCompile("`([^`]+)`")
+
+func recoveryCheckpointTargetPathFromTask(taskRecord repo.ProjectTask) (string, bool) {
+	if taskRecord.Description == nil {
+		return "", false
+	}
+	for _, match := range recoveryCheckpointTaskPathPattern.FindAllStringSubmatch(*taskRecord.Description, -1) {
+		candidate := strings.TrimSpace(match[1])
+		if candidate == "" || strings.Contains(candidate, " ") {
+			continue
+		}
+		normalized := filepath.ToSlash(filepath.Clean(filepath.FromSlash(candidate)))
+		if normalized == "." || strings.HasPrefix(normalized, "../") || strings.HasPrefix(normalized, "/") {
+			continue
+		}
+		if !strings.Contains(normalized, "/") || !strings.Contains(filepath.Base(normalized), ".") {
+			continue
+		}
+		return normalized, true
 	}
 	return "", false
 }

@@ -271,6 +271,7 @@ type flowAdvancer interface {
 
 type assignmentRepository interface {
 	GetPM(ctx context.Context, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error)
 }
 
 type projectRepository interface {
@@ -1003,7 +1004,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		e.logger.Info("skipping cancelled agent turn dispatch", "session_id", sessionID, "message_id", messageID)
 		return nil
 	}
-	if allowed, reason, allowErr := e.taskAllowsAgentTurnDispatch(ctx, session); allowErr != nil {
+	if allowed, reason, allowErr := e.taskAllowsAgentTurnDispatch(ctx, session, message); allowErr != nil {
 		return allowErr
 	} else if !allowed {
 		if merged, mergeErr := chat.MergeAgentTurnDispatchCancelledMetadata(message.Metadata, reason, e.now()); mergeErr == nil {
@@ -1071,6 +1072,9 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		runtime.historyStartID = &message.ID
 		runtime.disableMemory = true
 		runtime.freshKickoff = true
+	} else if e.reviewFlowTransitionKickoffRequiresBoundedHistory(ctx, session, message) {
+		runtime.historyStartID = &message.ID
+		runtime.disableMemory = true
 	}
 
 	cancelCtx, stopCancelWatch := e.watchTurnCancellation(ctx, runtime)
@@ -2819,10 +2823,13 @@ func recoveryResumeRequiresDirectWriteMode(state recoveryResumeState) bool {
 	if strings.TrimSpace(state.targetPath) == "" {
 		return false
 	}
-	if !recoveryResumeHasRepeatedDraftHistory(state) {
+	if strings.TrimSpace(state.targetDraft) != "" || strings.TrimSpace(state.artifactDraft) != "" {
 		return false
 	}
-	return strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == ""
+	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
+		return true
+	}
+	return recoveryResumeHasRepeatedDraftHistory(state)
 }
 
 func recoveryResumeHasRepeatedDraftHistory(state recoveryResumeState) bool {
@@ -3117,6 +3124,30 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		path = "the requested workspace file"
 	}
 	if containsAny(lower,
+		"existing draft",
+		"existing document",
+		"current draft",
+		"current document",
+		"the file `docs/content-strategy.md` already exists",
+		"the file docs/content-strategy.md already exists",
+		"key observations:",
+	) && containsAny(lower,
+		"let me update",
+		"let me refine",
+		"let me finalize",
+		"i should refine",
+		"i need to refine",
+		"targeted improvements",
+		"rather than a full rewrite",
+		"before finalizing",
+		"cross-reference",
+		"cross reference",
+		"verify its completeness",
+		"make sure the strategy is properly grounded",
+	) {
+		return fmt.Sprintf("assistant draft for %s described analysis of the existing draft instead of the file body", path)
+	}
+	if containsAny(lower,
 		"i understand the problem",
 		"i can see the problem",
 		"let me ",
@@ -3171,16 +3202,26 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 	hasWriteIntent := containsAny(lower,
 		"let me write",
 		"let me draft",
+		"let me rewrite",
 		"i'm going to write",
 		"i am going to write",
+		"i'm going to rewrite",
+		"i am going to rewrite",
 		"time to write",
 		"time to draft",
 		"ready to write",
 		"ready to draft",
+		"ready to rewrite",
 		"write the full",
 		"write the comprehensive",
 		"draft the full",
 		"draft the comprehensive",
+		"rewrite the full",
+		"rewrite the comprehensive",
+		"i'll now rewrite",
+		"i will now rewrite",
+		"now i'll rewrite",
+		"now i will rewrite",
 	)
 	hasSetupCue := containsAny(lower,
 		"now i have everything i need",
@@ -3277,6 +3318,9 @@ func (e *TurnEngine) strengthenRecoveryDraftRejectFailureReason(ctx context.Cont
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
 		path = "the requested workspace file"
+	}
+	if taskcheckpoint.RecoveryFileWriteFailureIsIntentOnly(current) && strings.TrimSpace(priorReason) != "" {
+		return fmt.Sprintf("repeated intent-only recovery drafts for %s across explicit resume attempts; latest %s", path, current)
 	}
 	if taskcheckpoint.RecoveryFileWriteFailureIsIntentOnly(priorReason) && taskcheckpoint.RecoveryFileWriteFailureIsIntentOnly(current) {
 		return fmt.Sprintf("repeated intent-only recovery drafts for %s across explicit resume attempts; latest %s", path, current)
@@ -4750,7 +4794,7 @@ func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session 
 	}
 	scopeType := strings.TrimSpace(session.ScopeType)
 	if strings.EqualFold(scopeType, "project_task") {
-		agentID, err := e.resolveTaskScopeAgent(ctx, session.OrganizationID, session.ScopeID)
+		agentID, err := e.resolveTaskScopeAgent(ctx, session.OrganizationID, session.ScopeID, session)
 		if err != nil {
 			return uuid.Nil, err
 		}
@@ -4809,7 +4853,7 @@ func (e *TurnEngine) ensureAgentParticipant(ctx context.Context, sessionID, agen
 	return nil
 }
 
-func (e *TurnEngine) resolveTaskScopeAgent(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {
+func (e *TurnEngine) resolveTaskScopeAgent(ctx context.Context, organizationID, taskID uuid.UUID, session *chat.ChatSession) (uuid.UUID, error) {
 	if e.tasks == nil {
 		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing task repository")
 	}
@@ -4826,10 +4870,160 @@ func (e *TurnEngine) resolveTaskScopeAgent(ctx context.Context, organizationID, 
 	if taskRecord.OrganizationID != uuid.Nil && taskRecord.OrganizationID != organizationID {
 		return uuid.Nil, repo.ErrNotFound
 	}
+	if reviewerID, err := e.resolveTaskScopedRoleAgent(ctx, taskRecord, session); err != nil {
+		return uuid.Nil, err
+	} else if reviewerID != uuid.Nil {
+		return reviewerID, nil
+	}
 	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID == uuid.Nil {
 		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing assigned agent")
 	}
 	return *taskRecord.AssignedAgentID, nil
+}
+
+func (e *TurnEngine) resolveTaskScopedRoleAgent(ctx context.Context, taskRecord repo.ProjectTask, session *chat.ChatSession) (uuid.UUID, error) {
+	if session == nil || e.assignments == nil || e.flowNodes == nil {
+		return uuid.Nil, nil
+	}
+	nodeID := sessionFlowNodeID(session.Metadata)
+	if nodeID == uuid.Nil {
+		nodeID = derefUUID(taskRecord.CurrentFlowNodeID)
+	}
+	if nodeID == uuid.Nil {
+		return uuid.Nil, nil
+	}
+	node, err := e.flowNodes.GetByID(ctx, nodeID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return uuid.Nil, nil
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	role := resolveFlowNodeRole(node)
+	if role == "" || role == "worker" {
+		return uuid.Nil, nil
+	}
+	assignments, err := e.assignments.ListByProject(ctx, taskRecord.ProjectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return uuid.Nil, nil
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	for _, assignment := range assignments {
+		if !assignment.IsActive || assignment.AgentID == uuid.Nil {
+			continue
+		}
+		if normalizeAssignmentRole(assignment.Role) == role {
+			return assignment.AgentID, nil
+		}
+	}
+	return uuid.Nil, nil
+}
+
+func sessionFlowNodeID(metadata json.RawMessage) uuid.UUID {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return uuid.Nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return uuid.Nil
+	}
+	raw := strings.TrimSpace(valueAsString(payload["flow_node_id"]))
+	if raw == "" {
+		return uuid.Nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil
+	}
+	return id
+}
+
+func resolveFlowNodeRole(node repo.FlowNode) string {
+	if role := flowNodeRoleFromMetadata(node.Metadata); role != "" {
+		return role
+	}
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
+		return "reviewer"
+	}
+	return "worker"
+}
+
+func flowNodeRoleFromMetadata(metadata json.RawMessage) string {
+	if len(metadata) == 0 || !json.Valid(metadata) {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return ""
+	}
+	for _, key := range []string{"actor_role", "role", "project_role"} {
+		if value := normalizeAssignmentRole(valueAsString(payload[key])); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func normalizeAssignmentRole(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "pm", "project_manager":
+		return "project_manager"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func valueAsString(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	case json.Number:
+		return v.String()
+	case float64:
+		return fmt.Sprintf("%v", v)
+	case float32:
+		return fmt.Sprintf("%v", v)
+	case int:
+		return fmt.Sprintf("%d", v)
+	case int64:
+		return fmt.Sprintf("%d", v)
+	case int32:
+		return fmt.Sprintf("%d", v)
+	case int16:
+		return fmt.Sprintf("%d", v)
+	case int8:
+		return fmt.Sprintf("%d", v)
+	case uint:
+		return fmt.Sprintf("%d", v)
+	case uint64:
+		return fmt.Sprintf("%d", v)
+	case uint32:
+		return fmt.Sprintf("%d", v)
+	case uint16:
+		return fmt.Sprintf("%d", v)
+	case uint8:
+		return fmt.Sprintf("%d", v)
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	default:
+		return ""
+	}
+}
+
+func derefUUID(id *uuid.UUID) uuid.UUID {
+	if id == nil {
+		return uuid.Nil
+	}
+	return *id
 }
 
 func (e *TurnEngine) resolveFrankStarterID(ctx context.Context, organizationID uuid.UUID) (uuid.UUID, error) {
@@ -5799,6 +5993,21 @@ func (e *TurnEngine) validationLoopBlockerForSession(ctx context.Context, sessio
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
 		return false, taskValidationGuardState{}, nil
 	}
+	if guard.InitialMessageID != "" {
+		initialMessageID, parseErr := uuid.Parse(strings.TrimSpace(guard.InitialMessageID))
+		if parseErr == nil && initialMessageID != uuid.Nil {
+			initialMessage, messageErr := e.messages.GetByID(ctx, initialMessageID)
+			if errors.Is(messageErr, repo.ErrNotFound) {
+				return false, taskValidationGuardState{}, nil
+			}
+			if messageErr != nil {
+				return false, taskValidationGuardState{}, messageErr
+			}
+			if initialMessage.SessionID != session.ID {
+				return false, taskValidationGuardState{}, nil
+			}
+		}
+	}
 	return true, guard, nil
 }
 
@@ -5819,7 +6028,7 @@ func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat
 	if err != nil {
 		return false, err
 	}
-	if allowed, reason, allowErr := e.taskAllowsAgentTurnDispatch(ctx, session); allowErr != nil {
+	if allowed, reason, allowErr := e.taskAllowsAgentTurnDispatch(ctx, session, message); allowErr != nil {
 		return false, allowErr
 	} else if !allowed {
 		if merged, mergeErr := chat.MergeAgentTurnDispatchCancelledMetadata(message.Metadata, reason, e.now()); mergeErr == nil {
@@ -5846,7 +6055,7 @@ func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat
 	return true, nil
 }
 
-func (e *TurnEngine) taskAllowsAgentTurnDispatch(ctx context.Context, session *chat.ChatSession) (bool, string, error) {
+func (e *TurnEngine) taskAllowsAgentTurnDispatch(ctx context.Context, session *chat.ChatSession, message repo.ChatMessage) (bool, string, error) {
 	if session == nil || !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") || e.tasks == nil {
 		return true, "", nil
 	}
@@ -5856,32 +6065,96 @@ func (e *TurnEngine) taskAllowsAgentTurnDispatch(ctx context.Context, session *c
 	}
 	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
 	if errors.Is(err, repo.ErrNotFound) {
-		return false, "task no longer exists", nil
+		return true, "", nil
 	}
 	if err != nil {
 		return false, "", err
 	}
 	status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
+	if status == "" {
+		return true, "", nil
+	}
+	var currentNode *repo.FlowNode
+	if taskRecord.CurrentFlowNodeID != nil && e.flowNodes != nil {
+		node, nodeErr := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+		if errors.Is(nodeErr, repo.ErrNotFound) {
+			return false, "task current flow node no longer exists", nil
+		}
+		if nodeErr != nil {
+			return false, "", nodeErr
+		}
+		currentNode = &node
+	}
 	switch status {
 	case "queued":
 		return true, "", nil
 	case "in_progress":
-		if taskRecord.CurrentFlowNodeID != nil && e.flowNodes != nil {
-			node, nodeErr := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
-			if errors.Is(nodeErr, repo.ErrNotFound) {
-				return false, "task current flow node no longer exists", nil
-			}
-			if nodeErr != nil {
-				return false, "", nodeErr
-			}
-			if !strings.EqualFold(strings.TrimSpace(node.NodeType), "work") {
-				return false, fmt.Sprintf("task is no longer on a work node (node_type=%s)", strings.TrimSpace(node.NodeType)), nil
-			}
+		if currentNode != nil && strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") {
+			return false, fmt.Sprintf("task is no longer on a dispatchable in-progress node (node_type=%s)", strings.TrimSpace(currentNode.NodeType)), nil
 		}
 		return true, "", nil
+	case "blocked":
+		if currentNode != nil && strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") && isRecoveryResumeMessage(message) {
+			return false, "supervisor recovery is suppressed while task is already on a review node", nil
+		}
+		if currentNode != nil && strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") && reviewKickoffMessageAllowed(message) {
+			return true, "", nil
+		}
+		return false, fmt.Sprintf("task status %s is not dispatchable", status), nil
+	case "review":
+		if currentNode == nil {
+			return false, "task review state has no current flow node", nil
+		}
+		if !strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") {
+			return false, fmt.Sprintf("task review state is bound to non-review node (node_type=%s)", strings.TrimSpace(currentNode.NodeType)), nil
+		}
+		if isRecoveryResumeMessage(message) {
+			return false, "supervisor recovery is suppressed while task is already on a review node", nil
+		}
+		if reviewKickoffMessageAllowed(message) {
+			return true, "", nil
+		}
+		return false, "task review node only accepts flow-transition kickoff messages", nil
 	default:
 		return false, fmt.Sprintf("task status %s is not dispatchable", status), nil
 	}
+}
+
+func reviewKickoffMessageAllowed(message repo.ChatMessage) bool {
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return false
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), "task_queue_processor") {
+		return false
+	}
+	if strings.TrimSpace(stringValue(metadata["flow_node_execution_id"])) == "" {
+		return false
+	}
+	eventType := strings.ToLower(strings.TrimSpace(stringValue(metadata["flow_event_type"])))
+	return eventType == "flow.advanced" || eventType == "flow.rejected"
+}
+
+func (e *TurnEngine) reviewFlowTransitionKickoffRequiresBoundedHistory(ctx context.Context, session *chat.ChatSession, message repo.ChatMessage) bool {
+	if session == nil || !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") || e == nil || e.tasks == nil || e.flowNodes == nil {
+		return false
+	}
+	if !reviewKickoffMessageAllowed(message) {
+		return false
+	}
+	taskID := resolveTaskID(session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") || taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {
+		return false
+	}
+	node, err := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(node.NodeType), "review")
 }
 
 func (e *TurnEngine) logValidationLoopSuppressed(message string, session *chat.ChatSession, messageID uuid.UUID, guard taskValidationGuardState) {

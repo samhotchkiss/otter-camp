@@ -48,6 +48,11 @@ type taskQueueStatusTransitioner interface {
 	CreateInboxItem(ctx context.Context, req tasksvc.CreateInboxItemRequest) (*tasksvc.InboxItem, error)
 }
 
+type taskQueueDependencyRepository interface {
+	ListInbound(ctx context.Context, dependsOnType string, dependsOnID uuid.UUID) ([]repo.ProjectTaskDependency, error)
+	ListOutbound(ctx context.Context, sourceType string, sourceID uuid.UUID) ([]repo.ProjectTaskDependency, error)
+}
+
 type taskQueueFlowStarter interface {
 	StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
 	EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
@@ -84,6 +89,7 @@ type taskQueueRunStarter interface {
 type taskQueueChatService interface {
 	GetSession(ctx context.Context, id uuid.UUID) (*chat.ChatSession, error)
 	CreateSession(ctx context.Context, input chat.CreateSessionInput) (*chat.ChatSession, error)
+	GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionID, agentID uuid.UUID) (*chat.ChatSession, error)
 	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
 	ListMessages(ctx context.Context, sessionID uuid.UUID, filter chat.MessageFilter) ([]*chat.ChatMessage, error)
@@ -102,6 +108,7 @@ type TaskQueueProcessorOptions struct {
 	FlowExecutions taskQueueFlowExecutionRepository
 	FlowNodes      taskQueueFlowNodeRepository
 	Assignments    taskQueueAssignmentRepository
+	Dependencies   taskQueueDependencyRepository
 	Runs           taskQueueRunStarter
 	Chats          taskQueueChatService
 	Sessions       taskQueueSessionRepository
@@ -116,6 +123,7 @@ type TaskQueueProcessor struct {
 	flowExecutions taskQueueFlowExecutionRepository
 	flowNodes      taskQueueFlowNodeRepository
 	assignments    taskQueueAssignmentRepository
+	dependencies   taskQueueDependencyRepository
 	runs           taskQueueRunStarter
 	chats          taskQueueChatService
 	sessions       taskQueueSessionRepository
@@ -146,6 +154,9 @@ func NewTaskQueueProcessor(opts TaskQueueProcessorOptions) (*TaskQueueProcessor,
 	if opts.Assignments == nil {
 		return nil, fmt.Errorf("task queue processor requires assignment repository")
 	}
+	if opts.Dependencies == nil {
+		return nil, fmt.Errorf("task queue processor requires dependency repository")
+	}
 	if opts.Runs == nil {
 		return nil, fmt.Errorf("task queue processor requires run service")
 	}
@@ -165,6 +176,7 @@ func NewTaskQueueProcessor(opts TaskQueueProcessorOptions) (*TaskQueueProcessor,
 		flowExecutions: opts.FlowExecutions,
 		flowNodes:      opts.FlowNodes,
 		assignments:    opts.Assignments,
+		dependencies:   opts.Dependencies,
 		runs:           opts.Runs,
 		chats:          opts.Chats,
 		sessions:       opts.Sessions,
@@ -757,7 +769,7 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		session, err := p.ensureCanonicalTaskAsyncSession(ctx, taskRecord)
+		session, err := p.ensureFlowNodeExecutionSession(ctx, execution, runRecord.PrincipalID, taskRecord)
 		if err != nil {
 			return err
 		}
@@ -780,6 +792,22 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 	default:
 		return nil
 	}
+}
+
+func (p *TaskQueueProcessor) ensureFlowNodeExecutionSession(ctx context.Context, execution repo.FlowNodeExecution, agentID uuid.UUID, taskRecord repo.ProjectTask) (*chat.ChatSession, error) {
+	if p == nil {
+		return nil, nil
+	}
+	if p.chats != nil && execution.ID != uuid.Nil && agentID != uuid.Nil {
+		session, err := p.chats.GetOrCreateNodeSession(ctx, execution.ID, agentID)
+		if err == nil && session != nil {
+			return session, nil
+		}
+		if err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return nil, err
+		}
+	}
+	return p.ensureCanonicalTaskAsyncSession(ctx, taskRecord)
 }
 
 func (p *TaskQueueProcessor) dispatchSupervisorWakeup(ctx context.Context, runRecord Run) error {
@@ -833,6 +861,30 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 		return "Start work on task: " + title
 	}
 	return "Start work on task: " + title + "\n\nTask description:\n" + description
+}
+
+func buildReviewKickoffMessage(taskRecord repo.ProjectTask) string {
+	title := strings.TrimSpace(taskRecord.Title)
+	if title == "" {
+		title = "Untitled task"
+	}
+
+	lines := []string{
+		"Review task: " + title,
+		"",
+		"Review instructions:",
+		"- Evaluate the current task output and workspace state against the task contract.",
+		"- Decide whether to approve the work or reject it with concrete feedback.",
+		"- Do not rewrite or continue the task deliverable in this review turn; send it back to work if changes are needed.",
+	}
+	if description := strings.TrimSpace(valueOrEmpty(taskRecord.Description)); description != "" {
+		lines = append(lines,
+			"",
+			"Original task description:",
+			description,
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNodeExecution) string {
@@ -904,12 +956,85 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 	if err := p.runs.RetireRuntimeStateForTask(ctx, payload.TaskID, toStatus); err != nil {
 		return err
 	}
-	if payload.ProjectID != uuid.Nil {
+	promotedDependents := 0
+	if payload.ProjectID != uuid.Nil && toStatus == "done" {
+		var err error
+		promotedDependents, err = p.promoteSatisfiedDependentDraftTasks(ctx, payload.ProjectID, payload.TaskID)
+		if err != nil {
+			return err
+		}
+	}
+	if payload.ProjectID != uuid.Nil && promotedDependents == 0 {
 		if err := p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (p *TaskQueueProcessor) promoteSatisfiedDependentDraftTasks(ctx context.Context, projectID, completedTaskID uuid.UUID) (int, error) {
+	inbound, err := p.dependencies.ListInbound(ctx, "project_task", completedTaskID)
+	if err != nil {
+		return 0, err
+	}
+	promoted := 0
+	for _, dependency := range inbound {
+		if dependency.SourceType != "project_task" || dependency.SourceID == uuid.Nil {
+			continue
+		}
+		dependentTask, err := p.tasks.GetByID(ctx, dependency.SourceID)
+		if errors.Is(err, repo.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return promoted, err
+		}
+		if dependentTask.ProjectID != projectID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(dependentTask.WorkStatus), "draft") {
+			continue
+		}
+		ready, err := p.taskDependenciesSatisfied(ctx, dependentTask.ID)
+		if err != nil {
+			return promoted, err
+		}
+		if !ready {
+			continue
+		}
+		if _, err := p.taskService.TransitionStatus(ctx, dependentTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if !errors.As(err, &transitionErr) {
+				return promoted, err
+			}
+			continue
+		}
+		promoted++
+	}
+	return promoted, nil
+}
+
+func (p *TaskQueueProcessor) taskDependenciesSatisfied(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	dependencies, err := p.dependencies.ListOutbound(ctx, "project_task", taskID)
+	if err != nil {
+		return false, err
+	}
+	for _, dependency := range dependencies {
+		if dependency.DependsOnType != "project_task" || dependency.DependsOnID == uuid.Nil {
+			continue
+		}
+		dependedTask, err := p.tasks.GetByID(ctx, dependency.DependsOnID)
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if !strings.EqualFold(strings.TrimSpace(dependedTask.WorkStatus), "done") {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // SubscribeRunCancellationRequested subscribes to run.cancellation_requested events
@@ -1072,20 +1197,9 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") || session.ScopeID == uuid.Nil {
 		return nil
 	}
-	taskRecord, err := p.tasks.GetByID(ctx, session.ScopeID)
-	if errors.Is(err, repo.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
 	result, err := p.runs.ReleaseExecutionOwner(ctx, session.ScopeID, session.ID, event.EventType)
 	if err != nil {
 		return err
-	}
-	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
-		return nil
 	}
 	if !result.shouldDispatch() {
 		return nil
@@ -1152,6 +1266,14 @@ func (p *TaskQueueProcessor) ensureFlowTransitionRun(
 
 func (p *TaskQueueProcessor) resolveFlowTransitionAgent(ctx context.Context, taskRecord repo.ProjectTask, node repo.FlowNode) (*uuid.UUID, error) {
 	actorType := strings.ToLower(strings.TrimSpace(valueOrEmpty(node.ActorType)))
+	if actorType == "" {
+		switch strings.ToLower(strings.TrimSpace(node.NodeType)) {
+		case "review":
+			actorType = "role"
+		case "work":
+			actorType = "agent"
+		}
+	}
 	switch actorType {
 	case "", "human":
 		return nil, nil
@@ -1248,6 +1370,9 @@ func buildFlowTransitionKickoffMessage(
 	rejectionFeedback string,
 ) string {
 	base := buildQueueKickoffMessage(taskRecord)
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
+		base = buildReviewKickoffMessage(taskRecord)
+	}
 	nodeName := strings.TrimSpace(node.DisplayName)
 	if nodeName != "" {
 		base += "\n\nFlow node: " + nodeName

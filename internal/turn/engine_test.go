@@ -2527,6 +2527,60 @@ func TestHandleUserMessageSkipsBlockedValidationLoop(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageIgnoresBlockedValidationLoopFromDifferentSession(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	otherMessage := fixture.messages.create(repo.ChatMessage{
+		SessionID: uuid.New(),
+		Role:      "user",
+		Status:    "pending",
+		Content:   "old work-session kickoff",
+	})
+
+	guard := taskValidationGuardState{
+		InitialMessageID:   otherMessage.ID.String(),
+		Fingerprint:        "file.write:content_required",
+		AttemptFingerprint: "file.write:attempt",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "content_required",
+		FailureReason:      "content_required",
+		Count:              validationLoopBlockThreshold,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            true,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{}`), guard)
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      uuid.New(),
+				Title:          "Review task",
+				WorkStatus:     "blocked",
+				Metadata:       metadata,
+			},
+		},
+	}
+
+	blocked, _, err := fixture.engine.validationLoopBlockerForSession(context.Background(), fixture.session)
+	if err != nil {
+		t.Fatalf("validationLoopBlockerForSession: %v", err)
+	}
+	if blocked {
+		t.Fatal("expected blocked validation guard from a different session to be ignored")
+	}
+}
+
 func TestHandleUserMessageSkipsNonDispatchableTaskState(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -2572,6 +2626,361 @@ func TestHandleUserMessageSkipsNonDispatchableTaskState(t *testing.T) {
 	}
 	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
 		t.Fatalf("agent turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestHandleUserMessageAllowsReviewFlowTransitionKickoff(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	reviewNodeID := uuid.New()
+	flowExecutionID := uuid.New()
+	agentID := fixture.chat.participants[0].ParticipantID
+	var assembleInput prompt.AssemblyInput
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, _ int) {
+		assembleInput = input
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				Title:             "Ready for review",
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   &agentID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			reviewNodeID: {ID: reviewNodeID, NodeType: "review"},
+		},
+	}
+	metadata := mustRawJSON(t, map[string]any{
+		"source":                 "task_queue_processor",
+		"flow_node_execution_id": flowExecutionID.String(),
+		"flow_event_type":        "flow.advanced",
+	})
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, metadata); err != nil {
+		t.Fatalf("UpdateMetadata user message: %v", err)
+	}
+
+	if err := fixture.engine.handleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID, nil, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage: %v", err)
+	}
+	if got := len(fixture.chat.turnOrder); got != 1 {
+		t.Fatalf("created turns = %d, want 1", got)
+	}
+	if assembleInput.HistoryStartID == nil || *assembleInput.HistoryStartID != fixture.userMessageID {
+		t.Fatalf("assemble history_start_id = %v, want %s", assembleInput.HistoryStartID, fixture.userMessageID)
+	}
+	if !assembleInput.DisableMemory {
+		t.Fatal("expected review flow-transition kickoff to disable memory")
+	}
+	updatedMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID message: %v", err)
+	}
+	if chat.AgentTurnDispatchCancelled(updatedMessage.Metadata) {
+		t.Fatal("did not expect flow-transition kickoff to be cancelled")
+	}
+
+	enqueued, err := fixture.engine.enqueueAgentTurnIfActive(context.Background(), fixture.session, AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueueAgentTurnIfActive: %v", err)
+	}
+	if !enqueued {
+		t.Fatal("expected enqueue for review flow-transition kickoff")
+	}
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 1 {
+		t.Fatalf("agent turn jobs = %d, want 1", len(jobs))
+	}
+}
+
+func TestHandleUserMessageAllowsReviewFlowTransitionKickoffWhenTaskStatusIsBlocked(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	reviewNodeID := uuid.New()
+	flowExecutionID := uuid.New()
+	agentID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				Title:             "Blocked review handoff",
+				WorkStatus:        "blocked",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   &agentID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			reviewNodeID: {ID: reviewNodeID, NodeType: "review"},
+		},
+	}
+	metadata := mustRawJSON(t, map[string]any{
+		"source":                 "task_queue_processor",
+		"flow_node_execution_id": flowExecutionID.String(),
+		"flow_event_type":        "flow.advanced",
+	})
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, metadata); err != nil {
+		t.Fatalf("UpdateMetadata user message: %v", err)
+	}
+
+	if err := fixture.engine.handleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID, nil, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage: %v", err)
+	}
+	if got := len(fixture.chat.turnOrder); got != 1 {
+		t.Fatalf("created turns = %d, want 1", got)
+	}
+}
+
+func TestHandleUserMessageAllowsInProgressMergeNodeDispatch(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	mergeNodeID := uuid.New()
+	agentID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_id":           mergeNodeID.String(),
+		"flow_node_execution_id": uuid.New().String(),
+	})
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				Title:             "Merge node dispatch",
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &mergeNodeID,
+				AssignedAgentID:   &agentID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			mergeNodeID: {ID: mergeNodeID, NodeType: "merge"},
+		},
+	}
+
+	if err := fixture.engine.handleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID, nil, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage: %v", err)
+	}
+	if got := len(fixture.chat.turnOrder); got != 1 {
+		t.Fatalf("created turns = %d, want 1", got)
+	}
+	updatedMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID message: %v", err)
+	}
+	if chat.AgentTurnDispatchCancelled(updatedMessage.Metadata) {
+		t.Fatal("did not expect merge-node kickoff to be cancelled")
+	}
+}
+
+func TestHandleUserMessageSkipsSupervisorRecoveryWhileTaskInReview(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	reviewNodeID := uuid.New()
+	agentID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				Title:             "Ready for review",
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   &agentID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			reviewNodeID: {ID: reviewNodeID, NodeType: "review"},
+		},
+	}
+	metadata := mustRawJSON(t, map[string]any{
+		"source":                 "supervisor",
+		"flow_node_execution_id": uuid.New().String(),
+		"flow_event_type":        "flow.advanced",
+	})
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, metadata); err != nil {
+		t.Fatalf("UpdateMetadata user message: %v", err)
+	}
+
+	if err := fixture.engine.handleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID, nil, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage: %v", err)
+	}
+	if got := len(fixture.chat.turnOrder); got != 0 {
+		t.Fatalf("created turns = %d, want 0", got)
+	}
+	updatedMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID message: %v", err)
+	}
+	if !chat.AgentTurnDispatchCancelled(updatedMessage.Metadata) {
+		t.Fatal("expected supervisor recovery to be cancelled while task is in review")
+	}
+
+	enqueued, err := fixture.engine.enqueueAgentTurnIfActive(context.Background(), fixture.session, AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueueAgentTurnIfActive: %v", err)
+	}
+	if enqueued {
+		t.Fatal("expected enqueue to be suppressed for supervisor recovery on review task")
+	}
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestHandleUserMessageSkipsSupervisorRecoveryWhileTaskStatusBlockedOnReviewNode(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	reviewNodeID := uuid.New()
+	taskID := uuid.New()
+	projectID := uuid.New()
+	agentID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				Title:             "Blocked review state",
+				WorkStatus:        "blocked",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   &agentID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			reviewNodeID: {ID: reviewNodeID, NodeType: "review"},
+		},
+	}
+	metadata := mustRawJSON(t, map[string]any{
+		"source":                 "supervisor",
+		"flow_node_execution_id": uuid.New().String(),
+		"flow_event_type":        "flow.advanced",
+	})
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, metadata); err != nil {
+		t.Fatalf("UpdateMetadata user message: %v", err)
+	}
+
+	if err := fixture.engine.handleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID, nil, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage: %v", err)
+	}
+	if got := len(fixture.chat.turnOrder); got != 0 {
+		t.Fatalf("created turns = %d, want 0", got)
+	}
+	updatedMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID message: %v", err)
+	}
+	if !chat.AgentTurnDispatchCancelled(updatedMessage.Metadata) {
+		t.Fatal("expected supervisor recovery to be cancelled while blocked task is already on review node")
+	}
+
+	enqueued, err := fixture.engine.enqueueAgentTurnIfActive(context.Background(), fixture.session, AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueueAgentTurnIfActive: %v", err)
+	}
+	if enqueued {
+		t.Fatal("expected enqueue to be suppressed for supervisor recovery on blocked review task")
+	}
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestResolveSessionAgentForSessionRoutesReviewTaskSessionToReviewer(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	workAgentID := fixture.chat.participants[0].ParticipantID
+	reviewerID := uuid.New()
+	reviewNodeID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_id":           reviewNodeID.String(),
+		"flow_node_execution_id": uuid.New().String(),
+	})
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				Title:             "Review node routing",
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &reviewNodeID,
+				AssignedAgentID:   &workAgentID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			reviewNodeID: {ID: reviewNodeID, NodeType: "review"},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		assignments: map[uuid.UUID][]repo.AgentProjectAssignment{
+			projectID: {{
+				ID:        uuid.New(),
+				ProjectID: projectID,
+				AgentID:   reviewerID,
+				Role:      "reviewer",
+				IsActive:  true,
+			}},
+		},
+	}
+
+	got, err := fixture.engine.resolveSessionAgentForSession(context.Background(), fixture.session)
+	if err != nil {
+		t.Fatalf("resolveSessionAgentForSession: %v", err)
+	}
+	if got != reviewerID {
+		t.Fatalf("agentID = %s, want reviewer %s", got, reviewerID)
 	}
 }
 
@@ -2621,6 +3030,20 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects rewrite-style placeholder narration",
+			content: "Now I have everything I need. The About page confirms the 5 Hugo categories. " +
+				"I'll now rewrite `docs/content-strategy.md` to be a comprehensive, reconciled strategy document that's grounded in the actual site architecture while incorporating the strategic framing needed for Sam's goals.",
+			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects existing-draft analysis placeholder narration",
+			content: "Now I have a complete picture. The existing draft is comprehensive and well-structured, but I should refine it to better ground it in Sam's actual content and voice. Key observations:\n\n" +
+				"1. Sam's existing categories: Philosophy & Ethics, Parenting, Deep Dives, Practices, Personal\n" +
+				"2. The technonymous brand concept and Great Inversion thesis are central identity pieces\n\n" +
+				"Let me update the strategy to be more grounded in Sam's actual voice and content, while keeping the strong structure intact. I'll make targeted improvements rather than a full rewrite since the existing document is 95% solid.",
+			want: "analysis of the existing draft instead of the file body",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
@@ -2665,6 +3088,18 @@ func TestRecoveryResumeRequiresDirectWriteModeFromRepeatedHistory(t *testing.T) 
 	}
 	if !recoveryResumeRequiresDirectWriteMode(state) {
 		t.Fatal("expected durable checkpoint with repeated prior failure history to require direct-write recovery mode")
+	}
+}
+
+func TestRecoveryResumeRequiresDirectWriteModeFromFirstRejectedDraftWithoutUsableCheckpointDraft(t *testing.T) {
+	state := recoveryResumeState{
+		targetPath:    "docs/blog-post-ideas.md",
+		artifactPath:  ".ottercamp/recovery/docs/blog-post-ideas.md",
+		blockerClass:  taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+		failureReason: "assistant draft for docs/blog-post-ideas.md described intent to write the deliverable instead of the file body",
+	}
+	if !recoveryResumeRequiresDirectWriteMode(state) {
+		t.Fatal("expected first rejected-draft checkpoint without substantive durable drafts to require direct-write recovery mode")
 	}
 }
 
@@ -3282,7 +3717,16 @@ type fakeToolResolver struct {
 
 func (f *fakeToolResolver) GetSessionToolSet(ctx context.Context, sessionID, agentID uuid.UUID) ([]tools.ToolDescriptor, error) {
 	if len(f.tools) == 0 {
-		return []tools.ToolDescriptor{{Name: "file.read", Tier: "tier1"}, {Name: "cli.execute", Tier: "tier2"}}, nil
+		return []tools.ToolDescriptor{
+			{Name: "file.read", Tier: "tier1"},
+			{Name: "file.write", Tier: "tier2"},
+			{Name: "memory.query", Tier: "tier1"},
+			{Name: "chat.search", Tier: "tier1"},
+			{Name: "task.list", Tier: "tier1"},
+			{Name: "project.create", Tier: "tier1"},
+			{Name: "cli.execute", Tier: "tier2"},
+			{Name: "run.deploy", Tier: "tier2"},
+		}, nil
 	}
 	return append([]tools.ToolDescriptor(nil), f.tools...), nil
 }
@@ -3673,8 +4117,9 @@ func (f *fakeFlowAdvancer) AdvanceFlow(_ context.Context, taskID uuid.UUID, acto
 }
 
 type fakeAssignmentRepo struct {
-	items map[uuid.UUID]repo.AgentProjectAssignment
-	err   error
+	items       map[uuid.UUID]repo.AgentProjectAssignment
+	assignments map[uuid.UUID][]repo.AgentProjectAssignment
+	err         error
 }
 
 func (f *fakeAssignmentRepo) GetPM(_ context.Context, projectID uuid.UUID) (repo.AgentProjectAssignment, error) {
@@ -3685,6 +4130,19 @@ func (f *fakeAssignmentRepo) GetPM(_ context.Context, projectID uuid.UUID) (repo
 		return item, nil
 	}
 	return repo.AgentProjectAssignment{}, repo.ErrNotFound
+}
+
+func (f *fakeAssignmentRepo) ListByProject(_ context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if items, ok := f.assignments[projectID]; ok {
+		return append([]repo.AgentProjectAssignment(nil), items...), nil
+	}
+	if item, ok := f.items[projectID]; ok {
+		return []repo.AgentProjectAssignment{item}, nil
+	}
+	return nil, repo.ErrNotFound
 }
 
 type fakeProjectRepo struct {

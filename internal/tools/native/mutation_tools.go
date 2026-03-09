@@ -2482,7 +2482,14 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	if decision != "approve" && decision != "reject" {
 		return map[string]any{"error": "invalid_decision"}, nil
 	}
-	execution, err := e.flowExecs.GetByID(ctx, flowNodeExecutionID)
+	resolvedExecutionID, err := e.resolveExecutionIDAlias(ctx, flowNodeExecutionID)
+	if err != nil && !errors.Is(err, repo.ErrNotFound) {
+		return nil, err
+	}
+	if resolvedExecutionID == uuid.Nil {
+		resolvedExecutionID = flowNodeExecutionID
+	}
+	execution, err := e.flowExecs.GetByID(ctx, resolvedExecutionID)
 	if err != nil {
 		return nil, err
 	}

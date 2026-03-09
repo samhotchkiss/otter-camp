@@ -418,7 +418,7 @@ func (s *service) CreateSession(ctx context.Context, input CreateSessionInput) (
 			return nil, err
 		}
 	}
-	if scopeType == "project_task" && mode == "async" {
+	if scopeType == "project_task" && mode == "async" && !hasFlowNodeExecutionMetadata(input.Metadata) {
 		reusable, err := s.reuseCanonicalTaskAsyncSession(ctx, orgID, input.ScopeID)
 		if err != nil {
 			return nil, err

@@ -95,7 +95,9 @@ func (b *flowSessionBridge) EnsureNodeSession(ctx context.Context, execution rep
 		if session == nil {
 			return repo.ChatSession{}, repo.ErrNotFound
 		}
-		return *session, nil
+		if flowSessionMatchesExecution(*session, execution) {
+			return *session, nil
+		}
 	}
 
 	taskRecord, err := b.tasks.GetByID(ctx, execution.TaskID)
@@ -127,6 +129,24 @@ func (b *flowSessionBridge) EnsureNodeSession(ctx context.Context, execution rep
 		return repo.ChatSession{}, err
 	}
 	return *session, nil
+}
+
+func flowSessionMatchesExecution(session repo.ChatSession, execution repo.FlowNodeExecution) bool {
+	if session.ID == uuid.Nil || execution.ID == uuid.Nil {
+		return false
+	}
+	if session.ScopeType != "project_task" || session.ScopeID != execution.TaskID {
+		return false
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(session.Metadata, &metadata); err != nil {
+		return false
+	}
+	value, ok := metadata["flow_node_execution_id"]
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(fmt.Sprint(value)) == execution.ID.String()
 }
 
 func (b *flowSessionBridge) RecordCommitSHA(ctx context.Context, flowNodeExecutionID uuid.UUID, commitSHA string) error {

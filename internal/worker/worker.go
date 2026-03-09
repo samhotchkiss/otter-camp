@@ -215,6 +215,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		FlowExecutions: repo.NewFlowNodeExecutionRepo(pool.Raw()),
 		FlowNodes:      repo.NewFlowNodeRepo(pool.Raw()),
 		Assignments:    repo.NewAgentProjectAssignmentRepo(pool.Raw()),
+		Dependencies:   repo.NewProjectTaskDependencyRepo(pool.Raw()),
 		Runs:           queueRuns,
 		Chats:          chatService,
 		Sessions:       repo.NewChatSessionRepo(pool.Raw()),

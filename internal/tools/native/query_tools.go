@@ -681,7 +681,14 @@ func (e *NativeToolExecutor) handleFlowGetExecution(ctx context.Context, input m
 	if !ok {
 		return map[string]any{"error": "not_found"}, nil
 	}
-	execRow, err := e.flowExecs.GetByID(ctx, id)
+	resolvedID, err := e.resolveExecutionIDAlias(ctx, id)
+	if err != nil && !errors.Is(err, repo.ErrNotFound) {
+		return nil, err
+	}
+	if resolvedID == uuid.Nil {
+		resolvedID = id
+	}
+	execRow, err := e.flowExecs.GetByID(ctx, resolvedID)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			return map[string]any{"error": "not_found"}, nil
@@ -690,7 +697,7 @@ func (e *NativeToolExecutor) handleFlowGetExecution(ctx context.Context, input m
 	}
 	subtaskPayload := make([]map[string]any, 0)
 	if e.subtasks != nil {
-		rows, listErr := e.subtasks.ListByExecution(ctx, id)
+		rows, listErr := e.subtasks.ListByExecution(ctx, execRow.ID)
 		if listErr == nil {
 			for _, subtask := range rows {
 				subtaskPayload = append(subtaskPayload, map[string]any{

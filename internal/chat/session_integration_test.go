@@ -361,6 +361,49 @@ func TestSession_Create_TaskScopeAsyncReusesCanonicalNonBlankSessionEX294(t *tes
 	}
 }
 
+func TestSession_Create_TaskScopeAsyncWithFlowExecutionMetadataDoesNotReuseCanonicalSession(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	svc := newIntegrationService(t, pool, nil)
+
+	execution := seedChatServiceFlowNodeExecution(t, ctx, pool, org.ID)
+	canonical, err := svc.CreateSession(ctx, CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        execution.TaskID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession canonical: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).IncrementCounts(ctx, canonical.ID, 0, 1); err != nil {
+		t.Fatalf("IncrementCounts canonical: %v", err)
+	}
+
+	nodeScoped, err := svc.CreateSession(ctx, CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        execution.TaskID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"flow_node_execution_id":"` + execution.ID.String() + `"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession node-scoped: %v", err)
+	}
+	if nodeScoped.ID == canonical.ID {
+		t.Fatalf("node-scoped session id = %s, want distinct from canonical %s", nodeScoped.ID, canonical.ID)
+	}
+
+	var metadata map[string]string
+	if err := json.Unmarshal(nodeScoped.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if metadata["flow_node_execution_id"] != execution.ID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %q", metadata["flow_node_execution_id"], execution.ID.String())
+	}
+}
+
 func TestSession_PerNodeAsync_AutoCreated(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

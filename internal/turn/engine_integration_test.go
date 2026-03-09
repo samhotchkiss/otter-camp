@@ -6487,6 +6487,83 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	}
 }
 
+func TestTurnEngineStrengthenRecoveryDraftRejectFailureReasonWithSubstantiveTargetDraft(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, _ := mustCreateTaskSession(t, ctx, fixture, taskRecord, "ignored")
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	const targetPath = "docs/content-strategy.md"
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	substantiveBody := strings.TrimSpace(`# Content Strategy — Sam.blog
+
+## Content Pillars
+- Ethics and technology essays rooted in real operator judgment.
+- AI orchestration posts that demonstrate practical systems leadership.
+- Parenting and human-systems writing that broadens Sam's voice without diluting it.
+
+## Audience Mapping
+Event organizers need crisp talk themes, consulting buyers need proof of operational depth, and executive recruiters need evidence of strategic leadership.
+
+## Editorial Direction
+The site should bridge the migrated archive and new original writing with a clear point of view, concrete publishing cadence, and explicit calls to action for speaking, consulting, and recruiting outcomes.
+`) + "\n"
+	if err := os.WriteFile(targetAbs, []byte(substantiveBody), 0o644); err != nil {
+		t.Fatalf("write substantive target: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task before checkpoint seed: %v", err)
+	}
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(currentTask.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		Version:             1,
+		TargetPath:          targetPath,
+		ArtifactPath:        ".ottercamp/recovery/docs/content-strategy.md",
+		FailureReason:       "deterministic tool validation loop blocked after 3 identical failures: file.write (content_required)",
+		PriorFailureReasons: []string{"deterministic tool validation loop blocked after 3 identical failures: file.write (content_required)"},
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	currentTask.Metadata = checkpointMetadata
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update checkpointed task: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        taskSession.ID,
+			ScopeType: "project_task",
+			ScopeID:   taskRecord.ID,
+		},
+	}
+	currentReason := "assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body"
+	got := fixture.engine.strengthenRecoveryDraftRejectFailureReason(ctx, rt, targetPath, currentReason)
+	if !strings.Contains(got, "repeated intent-only recovery drafts for docs/content-strategy.md") {
+		t.Fatalf("strengthened reason = %q, want repeated intent-only blocker", got)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryGuardrailDoesNotCountCurrentClaimedJobAsQueuedWakeupEX323(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
