@@ -3883,9 +3883,9 @@ func TestTurnEngineIntegrationRecoveryResumeSeedsDurableDiskContextEX323(t *test
 	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, recoveryMessage.ID)
 	staleCheckpointMessage := "[Content migration checkpoint] Resume from persisted workspace state instead of replaying raw page content.\nCheckpoint: .ottercamp/checkpoints/oc-4-content-migration.md."
 	if _, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
-		SessionID:  taskSession.ID,
-		Role:       "system",
-		Content:    staleCheckpointMessage,
+		SessionID: taskSession.ID,
+		Role:      "system",
+		Content:   staleCheckpointMessage,
 	}); err != nil {
 		t.Fatalf("AppendMessage stale checkpoint: %v", err)
 	}
@@ -6082,7 +6082,7 @@ func TestTurnEngineIntegrationRecoveryResumeWriteOnlyCheckpointDirectFix(t *test
 	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
 	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
 	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
-	taskSession, _ := mustCreateTaskSession(t, ctx, fixture, taskRecord, "ORIGINAL KICKOFF CONTEXT SHOULD NOT REAPPEAR")
+	taskSession, initialUser := mustCreateTaskSession(t, ctx, fixture, taskRecord, "ORIGINAL KICKOFF CONTEXT SHOULD NOT REAPPEAR")
 
 	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
 	if err != nil {
@@ -6135,7 +6135,22 @@ func TestTurnEngineIntegrationRecoveryResumeWriteOnlyCheckpointDirectFix(t *test
 	if err != nil {
 		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
 	}
-	currentTask.Metadata = checkpointMetadata
+	guardedMetadata, err := tasksvc.MergeValidationGuardMetadata(checkpointMetadata, tasksvc.ValidationGuardState{
+		InitialMessageID:   initialUser.ID.String(),
+		Fingerprint:        "file.write:content_required",
+		AttemptFingerprint: "file.write:content_required:attempt",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "content_required",
+		FailureReason:      "content_required",
+		Count:              validationLoopBlockThreshold,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	currentTask.Metadata = guardedMetadata
 	currentTask.WorkStatus = "blocked"
 	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
 		t.Fatalf("Update checkpointed task: %v", err)
@@ -6352,11 +6367,11 @@ Publish a balanced mix of archive migrations, pillar-defining essays, tactical A
 		t.Fatalf("GetByID task before checkpoint seed: %v", err)
 	}
 	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(currentTask.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
-		TargetPath:          targetPath,
-		ArtifactPath:        artifactRel,
-		FailureReason:       priorFailureReason,
-		BlockerClass:        taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint,
-		PriorFailureReasons: []string{"assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body"},
+		TargetPath:            targetPath,
+		ArtifactPath:          artifactRel,
+		FailureReason:         priorFailureReason,
+		BlockerClass:          taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint,
+		PriorFailureReasons:   []string{"assistant draft for docs/content-strategy.md described intent to write the deliverable instead of the file body"},
 		HistoryStartMessageID: initialUserMessage.ID.String(),
 		HaltTurnID:            uuid.NewString(),
 		UpdatedAt:             time.Now().UTC().Format(time.RFC3339Nano),
@@ -6686,6 +6701,9 @@ Sam is the practitioner who connects AI systems, parenting, ethics, and craftsma
 	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
 	if ok && strings.TrimSpace(checkpoint.TargetPath) != "" {
 		t.Fatalf("recovery checkpoint should clear after durable direct body write, metadata=%s", string(updatedTask.Metadata))
+	}
+	if _, ok := tasksvc.ParseValidationGuard(updatedTask.Metadata); ok {
+		t.Fatalf("validation guard should clear after durable direct body write, metadata=%s", string(updatedTask.Metadata))
 	}
 }
 

@@ -410,6 +410,7 @@ type turnRuntime struct {
 	recoveryBlockReason string
 	recoveryQueuedTurn  bool
 	recoveryDirectWrite bool
+	recoveryWriteDone   bool
 }
 
 type projectIdentity struct {
@@ -2009,6 +2010,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return false, err
 		}
 		rt.toolCallsUsed++
+		if rt.recoveryWriteDone {
+			return true, nil
+		}
 		if shouldStopAfterSuccessfulFlowTool(call, result) {
 			return true, nil
 		}
@@ -2135,6 +2139,9 @@ func (e *TurnEngine) handleRecoveryDirectWriteAssistantBody(ctx context.Context,
 		return true, err
 	}
 	rt.toolCallsUsed++
+	if rt.recoveryWriteDone {
+		return true, nil
+	}
 	if blocked {
 		return true, nil
 	}
@@ -3574,6 +3581,10 @@ func (e *TurnEngine) maybeClearRecoveryFileWriteCheckpoint(ctx context.Context, 
 	if err != nil {
 		return nil, false, err
 	}
+	cleared, err = clearTaskValidationGuardMetadata(cleared)
+	if err != nil {
+		return nil, false, err
+	}
 	taskRecord.Metadata = cleared
 	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
 		return nil, false, err
@@ -3873,6 +3884,7 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 		if checkpoint, cleared, clearErr := e.maybeClearRecoveryFileWriteCheckpoint(ctx, rt, result); clearErr != nil {
 			return clearErr
 		} else if cleared {
+			rt.recoveryWriteDone = true
 			if meta, metaErr := buildCompletedRecoveryWriteMetadata(message.Metadata, checkpoint.TargetPath); metaErr != nil {
 				return metaErr
 			} else if _, err := e.messages.UpdateMetadata(ctx, message.ID, meta); err != nil {
