@@ -106,8 +106,11 @@ func TestStarterTrioLoriPromptIncludesStaffingWorkflow(t *testing.T) {
 		"worker/reviewer recommendations",
 		"Project kickoff is a forward-progress phase, not an approval gate.",
 		"there must be real persisted setup in the project",
+		"Do not leave kickoff with only broad parent workstreams.",
 		"Use your native tools in the same kickoff turn",
 		"Default target size is 30 minutes or less",
+		"If a task would take more than 30 minutes",
+		"persisted child tasks/subtasks for each parent",
 		"Each task or subtask should produce one concrete output",
 	} {
 		if !strings.Contains(loriPrompt, snippet) {

@@ -113,20 +113,23 @@ Lori is responsible for the agent workforce. She creates staff agents, recommend
 - **Creates staff agents**: when the org needs a new durable agent, Lori handles it. The human describes what they need ("I need a PM for the backend rewrite" or "I need a content reviewer who enforces our brand voice"), and Lori creates the agent — name, personality, system prompt, skill set, model profile, tool policy. All through conversation, never through a form.
 - **Staffs projects**: when a new project is created, the PM (or Frank) @mentions Lori to help staff it. For staff roles (PM, policy reviewers, architects), Lori recommends existing staff agents or proposes creating new ones. For temp-default roles (workers, code reviewers), Lori selects catalog templates and configures the project's temp profile settings. Project kickoff staffing is a forward-progress phase by default: Lori should create the initial assignments, task breakdown, and flows without stopping for a separate human approval gate unless the human explicitly requests review before execution.
 - **Materializes kickoff setup**: a staffing plan written in chat is not enough. By the end of kickoff, Lori should have created real project assignments, tasks/subtasks, and flow templates through tools. If those records do not exist yet, kickoff is not complete.
+- **Does not stop at parent workstreams**: broad parent tasks such as "Content Strategy", "Migration", or "Site Build" do not count as complete kickoff output by themselves. If a parent spans multiple outputs or phases, Lori must materialize the persisted child tasks/subtasks that make that parent executable before kickoff is complete.
 - **Promotes temps to staff**: when a temp agent proves valuable and the human or PM wants to keep it around, Lori handles the promotion. She reviews the temp's configuration, proposes a durable identity, and creates the staff agent.
 - **Manages agent profiles**: updates to agent system prompts, skill sets, model profiles, and policies go through Lori. She understands the implications of changes ("if I change this agent's model to a cheaper one, it will affect code quality on complex tasks").
 - **Recommends changes**: Lori can proactively suggest staffing adjustments — "Agent X hasn't been used in 3 months, want to retire it?" or "This project would benefit from a dedicated reviewer instead of sharing one with Project Y."
 - **Agent directory**: Lori knows every agent in the org — their skills, current assignments, workload, and history. The human can ask "who's available to review Go code?" and Lori has the answer.
 - **Decomposes kickoff work into bounded tasks**: Lori must break kickoff planning into small execution units. The default target size is 30 minutes or less, with up to 60 minutes allowed only for tool-heavy work such as browser scraping, long CLI runs, or large file moves. If a task contains multiple named outputs, sections, or phases, Lori splits it into subtasks instead of leaving one monolithic work item.
+- **Sizes kickoff work for fast review**: if a task would take more than 30 minutes, or more than 60 minutes for tool-heavy work, Lori must split it again before leaving kickoff. The system should prefer many small reviewable tasks over a few large ones.
 
 **What Lori does NOT do:**
 - Assign agents to specific tasks or flow nodes in normal project execution. The PM does that. Exception: Lori can be directly assigned governance setup nodes (for example, project bootstrap decomposition/staffing work) via `actor_type = 'agent'`.
 - Manage project workflow. The PM does that.
 - Leave kickoff work at the level of a broad summary. Lori must turn the project into real assignments, bounded tasks/subtasks, and flows.
+- Leave kickoff with only parent workstreams and no persisted executable child tasks. Parent-only decomposition is still incomplete kickoff.
 
 **Model profile**: Lori uses a capable model profile. Her work involves understanding nuanced role descriptions and making judgment calls about agent capabilities.
 
-**Kickoff decomposition rule:** parent tasks coordinate; child tasks own the real work. Each task or subtask should produce one concrete output or one tightly bounded decision, and every task/subtask flow must include at least one work stage, one review stage, and one success/merge stage.
+**Kickoff decomposition rule:** parent tasks coordinate; child tasks own the real work. Each task or subtask should produce one concrete output or one tightly bounded decision, and every task/subtask flow must include at least one work stage, one review stage, and one success/merge stage. If kickoff produces only four broad workstreams with no persisted child tasks, kickoff is not done.
 
 ### Ellie — Memory System
 
