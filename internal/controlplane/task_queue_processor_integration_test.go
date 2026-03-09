@@ -912,6 +912,102 @@ func TestTaskQueueProcessorIntegrationHighRiskAsyncDecisionPausesTaskEX248(t *te
 	}
 }
 
+func TestTaskQueueProcessorIntegrationAsyncDecisionDoesNotBypassActiveFlowNodeEX330(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Async Reviewer", "reviewer")
+	template := seedTaskQueueReviewCompletionFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, fx.agent.ID, reviewer.ID)
+	description := "Human review before continuing, but this task is already running inside an explicit flow step."
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Resume async review without bypassing flow",
+		Description:     &description,
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	started, err := fx.flow.StartFlow(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	if _, err := taskRepo.UpdateStatus(ctx, created.ID, "queued"); err != nil {
+		t.Fatalf("UpdateStatus queued: %v", err)
+	}
+
+	event := eventbus.DomainEvent{
+		EventType:      "task.status_changed",
+		OrganizationID: fx.org.ID,
+	}
+	if err := fx.processor.processQueuedTask(ctx, event, created.ID); err != nil {
+		t.Fatalf("processQueuedTask: %v", err)
+	}
+
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if taskRecord.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", taskRecord.WorkStatus)
+	}
+	if taskRecord.CurrentFlowNodeID == nil {
+		t.Fatal("task current_flow_node_id = nil, want existing work node")
+	}
+	if *taskRecord.CurrentFlowNodeID != started.FlowNodeID {
+		t.Fatalf("task current_flow_node_id = %s, want %s", *taskRecord.CurrentFlowNodeID, started.FlowNodeID)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	execution, err := executionRepo.GetActive(ctx, created.ID, started.FlowNodeID)
+	if err != nil {
+		t.Fatalf("GetActive execution: %v", err)
+	}
+	if execution.ID != started.ID {
+		t.Fatalf("active execution = %s, want %s", execution.ID, started.ID)
+	}
+
+	runRepo := NewRunRepository(fx.pool)
+	runs, err := runRepo.List(ctx, RunListFilter{
+		OrganizationID: fx.org.ID,
+		TaskID:         &created.ID,
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("List runs: %v", err)
+	}
+	if len(runs) == 0 {
+		t.Fatal("expected queued flow-backed task to keep running after async review artifact")
+	}
+
+	inboxRepo := repo.NewInboxItemRepo(fx.pool)
+	items, err := inboxRepo.ListBroadcast(ctx, fx.org.ID, repo.InboxListOptions{
+		IncludeActed: true,
+		ItemType:     "system_alert",
+		Limit:        50,
+	})
+	if err != nil {
+		t.Fatalf("ListBroadcast inbox: %v", err)
+	}
+	artifact, found := findAsyncDecisionArtifact(items, created.ID, taskplan.AsyncDecisionPrepareForReview)
+	if !found {
+		t.Fatal("expected async review artifact for active flow-backed task")
+	}
+	if artifact.SourceTaskID == nil || *artifact.SourceTaskID != created.ID {
+		t.Fatalf("artifact source_task_id = %v, want %s", artifact.SourceTaskID, created.ID)
+	}
+}
+
 func TestTaskQueueProcessorIntegrationReviewEventSelfHealsMissingExecutionStateEX293(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)

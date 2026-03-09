@@ -266,6 +266,7 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 	} else if blocked {
 		return nil
 	}
+	hadExplicitFlowState := taskRecord.FlowTemplateID != nil && taskRecord.CurrentFlowNodeID != nil
 
 	status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
 	if status == "queued" {
@@ -303,7 +304,7 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 	if err != nil {
 		return err
 	}
-	if paused, err := p.applyAsyncDecisionPolicy(ctx, event, taskRecord); err != nil {
+	if paused, err := p.applyAsyncDecisionPolicy(ctx, event, taskRecord, hadExplicitFlowState); err != nil {
 		return err
 	} else if paused {
 		return nil
@@ -342,7 +343,7 @@ func (p *TaskQueueProcessor) processNextEligibleQueuedTask(ctx context.Context, 
 	return p.processQueuedTask(ctx, event, next.ID)
 }
 
-func (p *TaskQueueProcessor) applyAsyncDecisionPolicy(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask) (bool, error) {
+func (p *TaskQueueProcessor) applyAsyncDecisionPolicy(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask, hadExplicitFlowState bool) (bool, error) {
 	decision := taskplan.AssessAsyncDecision(taskRecord.Title, taskRecord.Description)
 	if !decision.NeedsReviewArtifact() {
 		return false, nil
@@ -351,6 +352,11 @@ func (p *TaskQueueProcessor) applyAsyncDecisionPolicy(ctx context.Context, event
 		return false, err
 	}
 	if !decision.PausesTask() {
+		return false, nil
+	}
+	if hadExplicitFlowState {
+		// Flow-backed tasks that are already on an explicit node must reach review
+		// through flow progression, not a direct status flip from async policy.
 		return false, nil
 	}
 	if _, err := p.ensureTaskFlowExecutionState(ctx, taskRecord); err != nil {
