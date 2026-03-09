@@ -75,6 +75,7 @@ type taskQueueAssignmentRepository interface {
 
 type taskQueueRunStarter interface {
 	CreateRun(ctx context.Context, input CreateRunInput) (Run, error)
+	BindRunSession(ctx context.Context, runID, sessionID uuid.UUID) (Run, error)
 	CreateExecutionWakeup(ctx context.Context, input executionWakeupInput) (executionWakeupResult, error)
 	StartRun(ctx context.Context, runID uuid.UUID) error
 	CompleteRun(ctx context.Context, runID uuid.UUID, output json.RawMessage) error
@@ -735,6 +736,10 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if session == nil || session.ID == uuid.Nil {
 			return nil
 		}
+		runRecord, err = p.bindRunSessionIfNeeded(ctx, runRecord, session.ID)
+		if err != nil {
+			return err
+		}
 		messageMetadata, err := json.Marshal(map[string]any{
 			"source":                 "task_queue_processor",
 			"run_id":                 runRecord.ID.String(),
@@ -783,6 +788,10 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if session == nil || session.ID == uuid.Nil {
 			return nil
 		}
+		runRecord, err = p.bindRunSessionIfNeeded(ctx, runRecord, session.ID)
+		if err != nil {
+			return err
+		}
 		eventType := metadataStringValue(runRecord.Metadata, "flow_event_type")
 		rejectionFeedback := metadataStringValue(runRecord.Metadata, "rejection_feedback")
 		messageMetadata, err := json.Marshal(map[string]any{
@@ -799,6 +808,16 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 	default:
 		return nil
 	}
+}
+
+func (p *TaskQueueProcessor) bindRunSessionIfNeeded(ctx context.Context, runRecord Run, sessionID uuid.UUID) (Run, error) {
+	if sessionID == uuid.Nil || runRecord.ID == uuid.Nil {
+		return runRecord, nil
+	}
+	if runRecord.SessionID != nil && *runRecord.SessionID == sessionID {
+		return runRecord, nil
+	}
+	return p.runs.BindRunSession(ctx, runRecord.ID, sessionID)
 }
 
 func (p *TaskQueueProcessor) ensureFlowNodeExecutionSession(ctx context.Context, execution repo.FlowNodeExecution, agentID uuid.UUID, taskRecord repo.ProjectTask) (*chat.ChatSession, error) {

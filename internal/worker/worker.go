@@ -192,6 +192,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 	queueRuns, ok := runService.(interface {
 		CreateRun(ctx context.Context, input controlplane.CreateRunInput) (controlplane.Run, error)
+		BindRunSession(ctx context.Context, runID, sessionID uuid.UUID) (controlplane.Run, error)
 		CreateExecutionWakeup(ctx context.Context, input controlplane.ExecutionWakeupInput) (controlplane.ExecutionWakeupResult, error)
 		StartRun(ctx context.Context, runID uuid.UUID) error
 		CompleteRun(ctx context.Context, runID uuid.UUID, output json.RawMessage) error

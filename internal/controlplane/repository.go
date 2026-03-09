@@ -185,6 +185,34 @@ func (r *RunRepository) GetByIdempotencyKey(ctx context.Context, organizationID 
 	return item, nil
 }
 
+func (r *RunRepository) SetSessionID(ctx context.Context, id, sessionID uuid.UUID) (Run, error) {
+	if id == uuid.Nil {
+		return Run{}, fmt.Errorf("run id is required")
+	}
+	if sessionID == uuid.Nil {
+		return Run{}, fmt.Errorf("session id is required")
+	}
+
+	row := r.db.QueryRow(ctx, `
+		UPDATE run
+		SET session_id = $2,
+		    updated_at = now()
+		WHERE id = $1
+		RETURNING id, organization_id, project_id, task_id, flow_node_id, session_id, turn_id,
+		          principal_type, principal_id, status, idempotency_key, trigger_type, version,
+		          failure_reason, failure_class, input_tokens, output_tokens, metadata, created_at, updated_at, started_at, completed_at
+	`, id, sessionID)
+
+	item, err := scanRun(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Run{}, ErrNotFound
+	}
+	if err != nil {
+		return Run{}, mapDBError(err)
+	}
+	return item, nil
+}
+
 func (r *RunRepository) UpdateStatus(ctx context.Context, id uuid.UUID, expectedVersion int, status string, failureReason, failureClass *string) (Run, error) {
 	if expectedVersion <= 0 {
 		return Run{}, fmt.Errorf("expected_version must be >= 1")

@@ -833,7 +833,7 @@ func TestTaskQueueProcessorHandleTaskCompletedEventQueuesSatisfiedDependentDraft
 		},
 	}
 	processor := &TaskQueueProcessor{
-		tasks: taskRepo,
+		tasks:       taskRepo,
 		taskService: taskService,
 		dependencies: &fakeTaskQueueDependencyRepository{
 			inboundByDependsOnID: map[uuid.UUID][]repo.ProjectTaskDependency{
@@ -1283,6 +1283,20 @@ func TestHandleTurnTerminalEventDispatchesExistingReviewRunMissingKickoff(t *tes
 				},
 			},
 		},
+		runByID: map[uuid.UUID]Run{
+			runID: {
+				ID:             runID,
+				OrganizationID: orgID,
+				ProjectID:      &projectID,
+				TaskID:         &taskID,
+				FlowNodeID:     &reviewNodeID,
+				PrincipalType:  "agent",
+				PrincipalID:    reviewerID,
+				TriggerType:    taskQueueTriggerType,
+				Status:         "in_progress",
+				Metadata:       runMetadata,
+			},
+		},
 	}
 	processor := &TaskQueueProcessor{
 		tasks: &fakeTaskQueueTaskRepository{
@@ -1330,6 +1344,12 @@ func TestHandleTurnTerminalEventDispatchesExistingReviewRunMissingKickoff(t *tes
 
 	if len(chatService.appendMessages) != 1 {
 		t.Fatalf("appendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+	if len(runService.bindRunSessionCalls) != 1 {
+		t.Fatalf("bindRunSession calls = %d, want 1", len(runService.bindRunSessionCalls))
+	}
+	if runService.bindRunSessionCalls[0].sessionID != reviewSessionID {
+		t.Fatalf("bindRunSession session_id = %s, want %s", runService.bindRunSessionCalls[0].sessionID, reviewSessionID)
 	}
 	if chatService.appendMessages[0].SessionID != reviewSessionID {
 		t.Fatalf("kickoff session = %s, want %s", chatService.appendMessages[0].SessionID, reviewSessionID)
@@ -1583,6 +1603,7 @@ type fakeTaskQueueRunStarter struct {
 	retireRuntimeTaskCalls  []retireRuntimeTaskCall
 	retireRuntimeProjCalls  []retireRuntimeProjectCall
 	createRunInputs         []CreateRunInput
+	bindRunSessionCalls     []bindRunSessionCall
 	dedupeByIdempotency     bool
 	idempotentRuns          map[string]Run
 	uniqueCreateRunCount    int
@@ -1620,6 +1641,11 @@ type retireRuntimeTaskCall struct {
 type retireRuntimeProjectCall struct {
 	projectID uuid.UUID
 	reason    string
+}
+
+type bindRunSessionCall struct {
+	runID     uuid.UUID
+	sessionID uuid.UUID
 }
 
 func (f *fakeTaskQueueRunStarter) CreateRun(_ context.Context, input CreateRunInput) (Run, error) {
@@ -1710,6 +1736,20 @@ func (f *fakeTaskQueueRunStarter) CreateExecutionWakeup(ctx context.Context, inp
 		Run:      runRecord,
 		Decision: executionWakeupStarted,
 	}, nil
+}
+
+func (f *fakeTaskQueueRunStarter) BindRunSession(_ context.Context, runID, sessionID uuid.UUID) (Run, error) {
+	f.bindRunSessionCalls = append(f.bindRunSessionCalls, bindRunSessionCall{runID: runID, sessionID: sessionID})
+	if runRecord, ok := f.runByID[runID]; ok {
+		runRecord.SessionID = &sessionID
+		f.runByID[runID] = runRecord
+		return runRecord, nil
+	}
+	if f.run.ID == runID {
+		f.run.SessionID = &sessionID
+		return f.run, nil
+	}
+	return Run{}, ErrNotFound
 }
 
 func (f *fakeTaskQueueRunStarter) CompleteRun(_ context.Context, runID uuid.UUID, output json.RawMessage) error {

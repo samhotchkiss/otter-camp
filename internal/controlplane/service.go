@@ -102,6 +102,7 @@ type runRepository interface {
 	Create(ctx context.Context, run Run) (Run, error)
 	Get(ctx context.Context, id uuid.UUID) (Run, error)
 	GetByIdempotencyKey(ctx context.Context, organizationID uuid.UUID, key string) (Run, error)
+	SetSessionID(ctx context.Context, id, sessionID uuid.UUID) (Run, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, expectedVersion int, status string, failureReason, failureClass *string) (Run, error)
 	List(ctx context.Context, filter RunListFilter) ([]Run, error)
 }
@@ -133,6 +134,7 @@ type runSessionRouter interface {
 
 type RunService interface {
 	CreateRun(ctx context.Context, input CreateRunInput) (Run, error)
+	BindRunSession(ctx context.Context, runID, sessionID uuid.UUID) (Run, error)
 	StartRun(ctx context.Context, runID uuid.UUID) error
 	CompleteRun(ctx context.Context, runID uuid.UUID, output json.RawMessage) error
 	FailRun(ctx context.Context, runID uuid.UUID, reason, failureClass string) error
@@ -277,6 +279,28 @@ func (s *runService) GetRun(ctx context.Context, runID uuid.UUID) (Run, error) {
 		return Run{}, ErrRunIDRequired
 	}
 	return s.runs.Get(ctx, runID)
+}
+
+func (s *runService) BindRunSession(ctx context.Context, runID, sessionID uuid.UUID) (Run, error) {
+	if runID == uuid.Nil {
+		return Run{}, ErrRunIDRequired
+	}
+	if sessionID == uuid.Nil {
+		return Run{}, fmt.Errorf("session_id is required")
+	}
+	updated, err := s.runs.SetSessionID(ctx, runID, sessionID)
+	if err != nil {
+		return Run{}, err
+	}
+	if state, found, stateErr := s.runtimeStateForRun(ctx, updated); stateErr != nil {
+		return Run{}, stateErr
+	} else if found {
+		contract := runtimeContractFromStateAndRun(state, updated)
+		if _, updateErr := s.runtime.UpdateMetadata(ctx, state.ID, contract.JSON()); updateErr != nil {
+			return Run{}, updateErr
+		}
+	}
+	return updated, nil
 }
 
 func (s *runService) ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]Run, error) {

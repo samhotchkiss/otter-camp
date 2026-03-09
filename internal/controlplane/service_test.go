@@ -1290,6 +1290,19 @@ func (r *fakeRunRepo) GetByIdempotencyKey(_ context.Context, organizationID uuid
 	return runRecord, nil
 }
 
+func (r *fakeRunRepo) SetSessionID(_ context.Context, id, sessionID uuid.UUID) (Run, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	runRecord, ok := r.byID[id]
+	if !ok {
+		return Run{}, ErrNotFound
+	}
+	runRecord.SessionID = &sessionID
+	runRecord.UpdatedAt = runRecord.UpdatedAt.Add(time.Second)
+	r.byID[id] = runRecord
+	return runRecord, nil
+}
+
 func (r *fakeRunRepo) UpdateStatus(_ context.Context, id uuid.UUID, expectedVersion int, status string, failureReason, failureClass *string) (Run, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1742,6 +1755,10 @@ func (f *fakeSupervisorRunService) CreateRun(_ context.Context, input CreateRunI
 		Status:         "created",
 		TriggerType:    input.TriggerType,
 	}, nil
+}
+
+func (*fakeSupervisorRunService) BindRunSession(_ context.Context, runID, sessionID uuid.UUID) (Run, error) {
+	return Run{ID: runID, SessionID: &sessionID}, nil
 }
 
 func (*fakeSupervisorRunService) StartRun(context.Context, uuid.UUID) error { return nil }

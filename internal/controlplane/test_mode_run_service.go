@@ -74,6 +74,16 @@ func (s *testModeRunService) CreateRun(ctx context.Context, input CreateRunInput
 	return runRecord, nil
 }
 
+func (s *testModeRunService) BindRunSession(ctx context.Context, runID, sessionID uuid.UUID) (Run, error) {
+	binder, ok := s.RunService.(interface {
+		BindRunSession(context.Context, uuid.UUID, uuid.UUID) (Run, error)
+	})
+	if !ok {
+		return Run{}, errors.New("bind run session not supported")
+	}
+	return binder.BindRunSession(ctx, runID, sessionID)
+}
+
 func (s *testModeRunService) RequestCancel(ctx context.Context, runID uuid.UUID, requestedBy CancelRequestActor) error {
 	if err := s.RunService.RequestCancel(ctx, runID, requestedBy); err != nil {
 		return err
