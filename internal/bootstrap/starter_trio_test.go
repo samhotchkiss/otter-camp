@@ -20,7 +20,9 @@ func TestLoriPromptIncludesStaffingWorkflowRequirements(t *testing.T) {
 		"project.staffing_needed",
 		"PM recommendation",
 		"worker/reviewer recommendations",
-		"human approval request",
+		"Project kickoff is a forward-progress phase, not an approval gate.",
+		"Default target size is 30 minutes or less",
+		"Each task or subtask should produce one concrete output",
 	}
 	for _, snippet := range requiredSnippets {
 		if !strings.Contains(loriPrompt, snippet) {

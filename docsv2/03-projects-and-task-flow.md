@@ -136,6 +136,10 @@ Work status: `draft`, `queued`, `in_progress`, `blocked`, `on_hold`, `review`, `
 
 There is no separate approval state machine. Review and approval are handled by review nodes in the flow template (see Flow Nodes). A review node's approve/reject decision advances or loops the flow, which maps directly to work status transitions (`review` → explicit completion/merge → `done`, or `review` → `in_progress`).
 
+## Kickoff Decomposition Rule
+
+Project kickoff planning must bias toward small bounded tasks rather than broad workstreams. The default target size is 30 minutes or less; up to 60 minutes is allowed only for tool-heavy work such as browser scraping, long CLI runs, or large file moves. If a task description contains multiple named outputs, sections, or phases, the planner must split it into subtasks before execution starts. Parent tasks coordinate; child tasks own the concrete deliverables. Each task or subtask should produce one concrete artifact or one tightly bounded decision and must receive a full `work -> review -> success/merge` flow.
+
 ### Work Status Definitions
 
 - `draft`: idea captured but not yet planned. Not available for agents to pick up. Needs to be scoped with structured context (description, acceptance criteria, etc.) before it can move forward. This is the PM's job.

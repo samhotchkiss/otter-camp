@@ -104,7 +104,9 @@ func TestStarterTrioLoriPromptIncludesStaffingWorkflow(t *testing.T) {
 		"project.staffing_needed",
 		"PM recommendation",
 		"worker/reviewer recommendations",
-		"human approval request",
+		"Project kickoff is a forward-progress phase, not an approval gate.",
+		"Default target size is 30 minutes or less",
+		"Each task or subtask should produce one concrete output",
 	} {
 		if !strings.Contains(loriPrompt, snippet) {
 			t.Fatalf("Lori prompt missing %q", snippet)
