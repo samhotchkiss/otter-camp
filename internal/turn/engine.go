@@ -2854,6 +2854,11 @@ func recoveryResumeRequiresDirectWriteMode(state recoveryResumeState) bool {
 	if strings.TrimSpace(state.targetDraft) != "" && strings.TrimSpace(state.artifactDraftRejectedReason) != "" {
 		return true
 	}
+	if strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == "" {
+		if strings.TrimSpace(state.targetDraftRejectedReason) != "" || strings.TrimSpace(state.artifactDraftRejectedReason) != "" {
+			return true
+		}
+	}
 	if strings.TrimSpace(state.targetDraft) != "" || strings.TrimSpace(state.artifactDraft) != "" {
 		return false
 	}
@@ -3300,21 +3305,38 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"let me now write",
 		"let me draft",
 		"let me now draft",
+		"let me build",
+		"let me now build",
+		"let me create",
+		"let me now create",
 		"let me rewrite",
 		"let me now rewrite",
 		"i'm going to write",
 		"i am going to write",
+		"i'm going to build",
+		"i am going to build",
+		"i'm going to create",
+		"i am going to create",
 		"i'm going to rewrite",
 		"i am going to rewrite",
+		"i'll create",
+		"i will create",
 		"time to write",
 		"time to draft",
+		"time to build",
+		"time to create",
 		"ready to write",
 		"ready to draft",
+		"ready to build",
+		"ready to create",
 		"ready to rewrite",
 		"write the full",
 		"write the comprehensive",
 		"draft the full",
 		"draft the comprehensive",
+		"build all ",
+		"create all ",
+		"start with templates",
 		"rewrite the full",
 		"rewrite the comprehensive",
 		"i'll now rewrite",
@@ -3326,6 +3348,9 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"now i have everything i need",
 		"i now have everything i need",
 		"i have everything i need",
+		"good — i can see",
+		"good - i can see",
+		"good, i can see",
 		"good — i have",
 		"good - i have",
 		"good, i have",

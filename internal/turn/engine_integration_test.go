@@ -6706,6 +6706,257 @@ func TestTurnEngineIntegrationRecoveryResumeDurableCheckpointWithSubstantiveTarg
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryResumeDurableCheckpointWithRejectedArtifactAndMissingCSSUsesWriteOnlyMode(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, initialUserMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+
+	const targetPath = "templates/01-executive-minimal/styles.css"
+	const failureReason = "deterministic tool validation loop blocked after 3 identical failures: file.write (content_required)"
+	const placeholderArtifactDraft = "Good — I can see the clean-slate template has solid patterns. Now let me build all 10 templates. I'll create them in batches. Each template gets its own directory with `index.html` (containing all 4 page layouts) and `styles.css`.\n\nLet me start with templates 01-03:"
+	substantiveDraft := strings.TrimSpace(`:root {
+  --bg: #f4efe6;
+  --ink: #19130f;
+  --accent: #b4532a;
+  --muted: #6b5c4d;
+  --paper: #fffaf3;
+  --line: rgba(25, 19, 15, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Iowan Old Style", "Palatino Linotype", serif;
+  background: linear-gradient(180deg, #f6f1e9 0%, #efe2d1 100%);
+  color: var(--ink);
+}
+
+.shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+}
+
+.hero {
+  padding: 48px 40px;
+  border-right: 1px solid var(--line);
+  background: rgba(255, 250, 243, 0.88);
+}
+
+.content {
+  padding: 56px 48px 72px;
+  display: grid;
+  gap: 28px;
+}
+
+.post-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 28px;
+  box-shadow: 0 18px 40px rgba(25, 19, 15, 0.08);
+}
+`) + "\n"
+
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	artifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
+	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	artifactDoc := buildRecoveryFileWriteArtifactDocument(buildTaskLabel(taskRecord), targetPath, placeholderArtifactDraft, failureReason, nil, time.Now().UTC())
+	if err := os.WriteFile(artifactAbs, []byte(artifactDoc), 0o644); err != nil {
+		t.Fatalf("write recovery artifact: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task before checkpoint seed: %v", err)
+	}
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(currentTask.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:            targetPath,
+		ArtifactPath:          artifactRel,
+		FailureReason:         failureReason,
+		BlockerClass:          taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+		HistoryStartMessageID: initialUserMessage.ID.String(),
+		HaltTurnID:            uuid.NewString(),
+		UpdatedAt:             time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	currentTask.Metadata = checkpointMetadata
+	currentTask.WorkStatus = "blocked"
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update checkpointed task: %v", err)
+	}
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	resumed, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+
+	resumedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	resumedTask.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
+		t.Fatalf("Update resumed task in_progress: %v", err)
+	}
+
+	authorType := "human_user"
+	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(taskRecord),
+		Metadata: mustJSON(t, map[string]any{
+			"source":                    "task_queue_processor",
+			"recovery_action":           "resume_validation_blocked_task",
+			"validation_tool_name":      "file.write",
+			"validation_failure_code":   "content_required",
+			"validation_failure_reason": failureReason,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage recovery kickoff: %v", err)
+	}
+
+	assembler, err := prompt.NewPromptAssembler(prompt.AssemblerOptions{Pool: fixture.pool})
+	if err != nil {
+		t.Fatalf("NewPromptAssembler: %v", err)
+	}
+	fixture.engine.assembler = assembler
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "file.write", Tier: "tier2"},
+		{Name: "file.read", Tier: "tier1"},
+		{Name: "file.list", Tier: "tier1"},
+		{Name: "cli.execute", Tier: "tier2"},
+	}}
+
+	firstPromptBlob := ""
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			firstPromptBlob = flattenPrompt(req.Prompt)
+		}
+		if len(req.Prompt.ToolDescriptors) != 0 {
+			t.Fatalf("recovery write-only mode toolset = %#v, want no tools", req.Prompt.ToolDescriptors)
+		}
+		if modelCalls != 1 {
+			t.Fatalf("unexpected extra model call %d", modelCalls)
+		}
+		return ModelResponse{Content: substantiveDraft}, nil
+	}
+
+	dispatched := 0
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		if call.Name != "file.write" {
+			t.Fatalf("unexpected tier2 tool %q", call.Name)
+		}
+		if got := stringValue(call.Arguments["path"]); got != targetPath {
+			t.Fatalf("file.write path = %q, want %q", got, targetPath)
+		}
+		if got := strings.TrimSpace(stringValue(call.Arguments["content"])); got != strings.TrimSpace(substantiveDraft) {
+			t.Fatalf("file.write content mismatch:\n%s", got)
+		}
+		if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+			t.Fatalf("mkdir target dir from fake dispatcher: %v", err)
+		}
+		if err := os.WriteFile(targetAbs, []byte(substantiveDraft), 0o644); err != nil {
+			t.Fatalf("write target from fake dispatcher: %v", err)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      targetPath,
+				"byte_size": len(substantiveDraft),
+				"created":   true,
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage CSS write-only recovery attempt: %v", err)
+	}
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1 direct body attempt", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1 direct file.write", dispatched)
+	}
+	if !strings.Contains(firstPromptBlob, "Write-only recovery mode is active.") {
+		t.Fatalf("prompt missing write-only recovery instruction:\n%s", firstPromptBlob)
+	}
+	if !strings.Contains(firstPromptBlob, "Target file: "+targetPath) {
+		t.Fatalf("prompt missing target path:\n%s", firstPromptBlob)
+	}
+	if strings.Contains(firstPromptBlob, placeholderArtifactDraft) {
+		t.Fatalf("prompt should omit rejected placeholder artifact draft:\n%s", firstPromptBlob)
+	}
+	if !strings.Contains(firstPromptBlob, "Recovery artifact draft: omitted because it only preserved the rejected non-substantive placeholder.") {
+		t.Fatalf("prompt missing rejected artifact omission note:\n%s", firstPromptBlob)
+	}
+
+	outputBody, err := os.ReadFile(targetAbs)
+	if err != nil {
+		t.Fatalf("read target file after direct body recovery: %v", err)
+	}
+	if strings.TrimSpace(string(outputBody)) != strings.TrimSpace(substantiveDraft) {
+		t.Fatalf("target file =\n%s\nwant:\n%s", string(outputBody), substantiveDraft)
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after direct body recovery: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task remained blocked after substantive direct body recovery")
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if ok && strings.TrimSpace(checkpoint.TargetPath) != "" {
+		t.Fatalf("recovery checkpoint should clear after durable direct body write, metadata=%s", string(updatedTask.Metadata))
+	}
+	if _, ok := tasksvc.ParseValidationGuard(updatedTask.Metadata); ok {
+		t.Fatalf("validation guard should clear after durable direct body write, metadata=%s", string(updatedTask.Metadata))
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryResumeWriteOnlyAssistantBodyDirectWrite(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
