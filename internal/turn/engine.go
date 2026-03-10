@@ -26,6 +26,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/metrics"
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
+	"github.com/samhotchkiss/otter-camp/internal/projectfailure"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -88,9 +89,25 @@ const (
 	projectBootstrapFailureCompoundParent     = "compound_parent_missing_children"
 	projectBootstrapFailureFirstWaveFlow      = "first_wave_flow_invalid"
 	projectBootstrapFailureFirstWaveExecution = "first_wave_execution_missing"
+	projectBootstrapFailureFirstWaveSize      = "first_wave_task_unbounded"
 	projectBootstrapValidationPending         = "pending"
 	projectBootstrapValidationPassed          = "passed"
 	projectBootstrapValidationFailed          = "failed"
+	projectBootstrapCheckpointStaffing        = projectBootstrapCheckpointStaffingPersisted
+	projectBootstrapCheckpointTaskTree        = projectBootstrapCheckpointTaskTreePersisted
+	projectBootstrapCheckpointFlowTemplates   = projectBootstrapCheckpointFlowTemplatesPersisted
+	projectBootstrapCheckpointFirstWave       = projectBootstrapCheckpointFirstWaveSelected
+	projectBootstrapCheckpointExecutions      = projectBootstrapCheckpointFirstWaveExecutions
+	projectBootstrapCheckpointJobsClaimed     = projectBootstrapCheckpointFirstWaveJobsClaimed
+	projectFailureActionArchive               = "archive"
+	projectFailureActionPause                 = "pause"
+	projectFailureCategoryBootstrap           = "bootstrap_product"
+	projectFailureCategoryExecution           = "execution_runtime"
+	projectFailureCategoryProvider            = "provider_api"
+	projectFailureClassExecutionRuntime       = "task_runtime_failed"
+	projectFailureClassProviderAuth           = projectBootstrapFailureProviderAuth
+	projectFailureClassProviderRateLimit      = projectBootstrapFailureProviderRateLimit
+	projectFailureClassProviderTransient      = projectBootstrapFailureProviderTransient
 	projectBootstrapSource                    = "project_bootstrap"
 )
 
@@ -1022,21 +1039,16 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	state.LastTurnID = turnID.String()
 	state.BootstrapTaskID = progress.BootstrapTaskID.String()
 	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
-	state.AssignmentCount = progress.AssignmentCount
-	state.PlannedTaskCount = progress.PlannedTaskCount
-	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
-	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
-	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
-	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
-	state.setFirstWaveJobCount(progress.FirstWaveJobCount)
-	state.ValidationStatus = progress.ValidationStatus
-	state.ValidationFailureClass = progress.ValidationFailureClass
-	state.ValidationFailureReason = progress.ValidationFailureReason
+	applyProjectBootstrapProgressState(&state, progress)
 	state.UpdatedAt = &now
 	state.CompletedAt = nil
 	state.FailedAt = nil
+	state.FailureCategory = ""
 	state.FailureClass = ""
+	state.FailurePhase = ""
 	state.FailureReason = ""
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
 	if latestCompleted.RespondingID != uuid.Nil {
 		state.LastResponderID = latestCompleted.RespondingID.String()
 	}
@@ -1056,26 +1068,50 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	}
 
 	if progress.ValidationFailed() {
+		record := buildProjectBootstrapAutomaticFailureRecord(
+			progress,
+			projectFailureCategoryBootstrap,
+			progress.ValidationFailureClass,
+			progress.ValidationFailureReason,
+			now,
+		)
 		state.Status = projectBootstrapStatusFailed
 		state.FailedAt = &now
-		state.FailureClass = progress.ValidationFailureClass
-		state.FailureReason = progress.ValidationFailureReason
+		state.FailureCategory = record.FailureCategory
+		state.FailureClass = record.FailureClass
+		state.FailurePhase = record.FailurePhase
+		state.FailureReason = record.FailureReason
 		if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
 			return err
 		}
-		_, _ = e.appendSystemMessage(ctx, turnID, session.ID, buildProjectBootstrapFailureMessage(state.FailureReason))
+		_, _ = e.appendSystemMessage(ctx, turnID, session.ID, buildProjectBootstrapAutomaticFailureMessage(record))
+		if err := e.applyProjectAutomaticFailure(ctx, session.ScopeID, record); err != nil {
+			return err
+		}
 		return nil
 	}
 
 	if state.AutoTurnCount >= maxProjectBootstrapAutoTurns {
+		record := buildProjectBootstrapAutomaticFailureRecord(
+			progress,
+			projectFailureCategoryBootstrap,
+			projectBootstrapFailureStalled,
+			buildProjectBootstrapFailureReason(state.AutoTurnCount),
+			now,
+		)
 		state.Status = projectBootstrapStatusFailed
 		state.FailedAt = &now
-		state.FailureClass = projectBootstrapFailureStalled
-		state.FailureReason = buildProjectBootstrapFailureReason(state.AutoTurnCount)
+		state.FailureCategory = record.FailureCategory
+		state.FailureClass = record.FailureClass
+		state.FailurePhase = record.FailurePhase
+		state.FailureReason = record.FailureReason
 		if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
 			return err
 		}
-		_, _ = e.appendSystemMessage(ctx, turnID, session.ID, buildProjectBootstrapFailureMessage(state.FailureReason))
+		_, _ = e.appendSystemMessage(ctx, turnID, session.ID, buildProjectBootstrapAutomaticFailureMessage(record))
+		if err := e.applyProjectAutomaticFailure(ctx, session.ScopeID, record); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -1237,6 +1273,33 @@ func (p projectBootstrapProgress) ValidationFailed() bool {
 	return p.ValidationStatus == projectBootstrapValidationFailed
 }
 
+func projectBootstrapLastCheckpoint(progress projectBootstrapProgress) string {
+	checkpoint := projectBootstrapCheckpointProjectCreated
+	if progress.AssignmentCount > 0 {
+		checkpoint = projectBootstrapCheckpointStaffing
+	}
+	if progress.PlannedTaskCount > 0 {
+		checkpoint = projectBootstrapCheckpointTaskTree
+	}
+	if progress.PlannedFlowTemplateCount > 0 {
+		checkpoint = projectBootstrapCheckpointFlowTemplates
+	}
+	if progress.FirstWaveTaskCount > 0 {
+		checkpoint = projectBootstrapCheckpointFirstWave
+	}
+	if progress.FirstWaveExecutionCount > 0 {
+		checkpoint = projectBootstrapCheckpointExecutions
+	}
+	if progress.FirstWaveJobCount > 0 {
+		checkpoint = projectBootstrapCheckpointJobsClaimed
+	}
+	return checkpoint
+}
+
+func projectBootstrapReachedFirstWaveClaim(progress projectBootstrapProgress) bool {
+	return projectBootstrapLastCheckpoint(progress) == projectBootstrapCheckpointJobsClaimed
+}
+
 type projectBootstrapState struct {
 	Status                   string                              `json:"status,omitempty"`
 	CurrentPhase             string                              `json:"current_phase,omitempty"`
@@ -1260,13 +1323,30 @@ type projectBootstrapState struct {
 	ValidationFailureReason  string                              `json:"validation_failure_reason,omitempty"`
 	Checkpoints              []projectBootstrapCheckpoint        `json:"checkpoints,omitempty"`
 	ValidationFindings       []projectBootstrapValidationFinding `json:"validation_findings,omitempty"`
+	FailureCategory          string                              `json:"failure_category,omitempty"`
 	FailureClass             string                              `json:"failure_class,omitempty"`
+	FailurePhase             string                              `json:"failure_phase,omitempty"`
 	FailureReason            string                              `json:"failure_reason,omitempty"`
+	ProviderFailureClass     string                              `json:"provider_failure_class,omitempty"`
+	ProviderFailureReason    string                              `json:"provider_failure_reason,omitempty"`
+	Phase                    string                              `json:"phase,omitempty"`
+	LastCheckpoint           string                              `json:"last_checkpoint,omitempty"`
 	StartedAt                *time.Time                          `json:"started_at,omitempty"`
 	LastProgressAt           *time.Time                          `json:"last_progress_at,omitempty"`
 	UpdatedAt                *time.Time                          `json:"updated_at,omitempty"`
 	CompletedAt              *time.Time                          `json:"completed_at,omitempty"`
 	FailedAt                 *time.Time                          `json:"failed_at,omitempty"`
+}
+
+type projectAutomaticFailureRecord struct {
+	Action          string
+	Source          string
+	FailureCategory string
+	FailureClass    string
+	FailurePhase    string
+	LastCheckpoint  string
+	FailureReason   string
+	RecordedAt      time.Time
 }
 
 type projectBootstrapWatchdog struct {
@@ -1367,9 +1447,26 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	structuralFailureReason := ""
 	for _, task := range plannedTasks {
 		childCount := childCounts[task.ID]
-		if plan := taskdecomp.Analyze(task.Title, task.Description); plan.RequiresDecomposition && childCount == 0 && structuralFailureClass == "" {
-			structuralFailureClass = projectBootstrapFailureCompoundParent
-			structuralFailureReason = buildProjectBootstrapCompoundParentFailureReason(task)
+		prepared, decompErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+			ParentTaskID: task.ID,
+			Title:        task.Title,
+			Description:  task.Description,
+			Metadata:     task.Metadata,
+		})
+		if decompErr != nil && errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) && childCount == 0 {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = projectBootstrapFailureFirstWaveSize
+			progress.ValidationFailureReason = buildProjectBootstrapFirstWaveSizeFailureReason(task, decompErr.Error())
+			return progress, nil
+		}
+		if decompErr != nil {
+			return projectBootstrapProgress{}, decompErr
+		}
+		if prepared.Applied && childCount == 0 {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
+			progress.ValidationFailureReason = buildProjectBootstrapCompoundParentFailureReason(task)
+			return progress, nil
 		}
 		if childCount > 0 && projectBootstrapTaskEnteredExecution(task.WorkStatus) && structuralFailureClass == "" {
 			structuralFailureClass = projectBootstrapFailureCompoundParent
@@ -1555,6 +1652,14 @@ func buildProjectBootstrapRepoBindingFailureReason() string {
 
 func buildProjectBootstrapParentExecutionFailureReason(task repo.ProjectTask, childCount int) string {
 	return fmt.Sprintf("kickoff validation failed: %s entered execution even though %d executable child task(s) already exist, so the parent must remain orchestration-only", projectBootstrapTaskLabel(task), childCount)
+}
+
+func buildProjectBootstrapFirstWaveSizeFailureReason(task repo.ProjectTask, detail string) string {
+	trimmed := strings.TrimSpace(detail)
+	if trimmed == "" {
+		trimmed = "split the work into smaller reviewable tasks before queueing"
+	}
+	return fmt.Sprintf("kickoff validation failed: first-wave %s violates the bounded task-size policy: %s", projectBootstrapTaskLabel(task), trimmed)
 }
 
 func buildProjectBootstrapFirstWaveFlowFailureReason(task repo.ProjectTask, detail string) string {
@@ -1779,6 +1884,216 @@ func buildProjectBootstrapFailureMessage(reason string) string {
 	return fmt.Sprintf("[Project bootstrap failed: %s. The project session metadata now carries a machine-visible bootstrap failure state instead of silently idling.]", trimmed)
 }
 
+func classifyProjectProviderFailure(err error) (string, string, bool) {
+	switch {
+	case errors.Is(err, ErrAuthFailed):
+		return projectFailureClassProviderAuth, strings.TrimSpace(err.Error()), true
+	case errors.Is(err, ErrRateLimited):
+		return projectFailureClassProviderRateLimit, strings.TrimSpace(err.Error()), true
+	case isTransientModelError(err):
+		return projectFailureClassProviderTransient, strings.TrimSpace(err.Error()), true
+	default:
+		return "", "", false
+	}
+}
+
+func projectFailureActionForProgress(progress projectBootstrapProgress, failureCategory string) string {
+	if failureCategory == projectFailureCategoryProvider {
+		return projectFailureActionPause
+	}
+	if projectBootstrapReachedFirstWaveClaim(progress) {
+		return projectFailureActionPause
+	}
+	return projectFailureActionArchive
+}
+
+func formatBootstrapCheckpoint(checkpoint string) string {
+	trimmed := strings.TrimSpace(checkpoint)
+	if trimmed == "" {
+		return projectBootstrapCheckpointProjectCreated
+	}
+	return trimmed
+}
+
+func projectBootstrapFailureCheckpoint(progress projectBootstrapProgress, failureClass string) string {
+	switch strings.TrimSpace(failureClass) {
+	case projectBootstrapFailureMissingAssignments:
+		if progress.PlannedTaskCount > 0 {
+			return projectBootstrapCheckpointTaskTree
+		}
+		return projectBootstrapCheckpointProjectCreated
+	case projectBootstrapFailureCompoundParent, projectBootstrapFailureFirstWaveSize:
+		if progress.PlannedTaskCount > 0 {
+			return projectBootstrapCheckpointTaskTree
+		}
+		return projectBootstrapCheckpointProjectCreated
+	case projectBootstrapFailureRepoBinding, projectBootstrapFailureFirstWaveFlow:
+		if progress.FirstWaveTaskCount > 0 {
+			return projectBootstrapCheckpointFirstWave
+		}
+		if progress.PlannedFlowTemplateCount > 0 {
+			return projectBootstrapCheckpointFlowTemplates
+		}
+		if progress.PlannedTaskCount > 0 {
+			return projectBootstrapCheckpointTaskTree
+		}
+		return projectBootstrapCheckpointProjectCreated
+	case projectBootstrapFailureFirstWaveExecution:
+		if progress.FirstWaveTaskCount > 0 {
+			return projectBootstrapCheckpointFirstWave
+		}
+		if progress.PlannedFlowTemplateCount > 0 {
+			return projectBootstrapCheckpointFlowTemplates
+		}
+		if progress.PlannedTaskCount > 0 {
+			return projectBootstrapCheckpointTaskTree
+		}
+		return projectBootstrapCheckpointProjectCreated
+	default:
+		return projectBootstrapLastCheckpoint(progress)
+	}
+}
+
+func buildProjectBootstrapAutomaticFailureRecord(progress projectBootstrapProgress, failureCategory, failureClass, failureReason string, now time.Time) projectAutomaticFailureRecord {
+	checkpoint := projectBootstrapFailureCheckpoint(progress, failureClass)
+	return projectAutomaticFailureRecord{
+		Action:          projectFailureActionForProgress(progress, failureCategory),
+		Source:          projectBootstrapSource,
+		FailureCategory: strings.TrimSpace(failureCategory),
+		FailureClass:    strings.TrimSpace(failureClass),
+		FailurePhase:    checkpoint,
+		LastCheckpoint:  checkpoint,
+		FailureReason:   strings.TrimSpace(failureReason),
+		RecordedAt:      now.UTC(),
+	}
+}
+
+func buildProjectExecutionFailureRecord(progress projectBootstrapProgress, failureCategory, failureClass, failureReason string, now time.Time) projectAutomaticFailureRecord {
+	checkpoint := projectBootstrapLastCheckpoint(progress)
+	return projectAutomaticFailureRecord{
+		Action:          projectFailureActionPause,
+		Source:          "execution_runtime",
+		FailureCategory: strings.TrimSpace(failureCategory),
+		FailureClass:    strings.TrimSpace(failureClass),
+		FailurePhase:    checkpoint,
+		LastCheckpoint:  checkpoint,
+		FailureReason:   strings.TrimSpace(failureReason),
+		RecordedAt:      now.UTC(),
+	}
+}
+
+func buildProjectBootstrapAutomaticFailureMessage(record projectAutomaticFailureRecord) string {
+	reason := strings.TrimSpace(record.FailureReason)
+	if reason == "" {
+		reason = "bootstrap setup failed"
+	}
+	checkpoint := formatBootstrapCheckpoint(record.LastCheckpoint)
+	switch {
+	case record.FailureCategory == projectFailureCategoryProvider:
+		return fmt.Sprintf("[Project bootstrap paused: %s. The project was paused instead of archived because the failure was classified as a provider/API outage at phase %s.]", reason, checkpoint)
+	case record.Action == projectFailureActionPause:
+		return fmt.Sprintf("[Project bootstrap failed: %s. The project was paused automatically because execution had already reached %s and existing work needed to be preserved.]", reason, checkpoint)
+	default:
+		return fmt.Sprintf("[Project bootstrap failed: %s. The project was archived automatically because bootstrap never reached %s.]", reason, projectBootstrapCheckpointJobsClaimed)
+	}
+}
+
+func buildProjectExecutionPauseMessage(record projectAutomaticFailureRecord) string {
+	reason := strings.TrimSpace(record.FailureReason)
+	if reason == "" {
+		reason = "execution failed"
+	}
+	checkpoint := formatBootstrapCheckpoint(record.LastCheckpoint)
+	if record.FailureCategory == projectFailureCategoryProvider {
+		return fmt.Sprintf("[Project paused automatically: %s. Execution had already reached %s, and the failure was classified as a provider/API outage rather than a bootstrap defect.]", reason, checkpoint)
+	}
+	return fmt.Sprintf("[Project paused automatically: %s. Execution had already reached %s, so the project was paused to preserve existing work.]", reason, checkpoint)
+}
+
+func (e *TurnEngine) applyProjectAutomaticFailure(ctx context.Context, projectID uuid.UUID, record projectAutomaticFailureRecord) error {
+	if e == nil || e.pool == nil || e.events == nil || projectID == uuid.Nil {
+		return nil
+	}
+
+	projectRecord, err := e.projects.GetByID(ctx, projectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	projectRepo := repo.NewProjectRepo(e.pool)
+	updated := projectRecord
+	updated.Settings, err = projectfailure.Apply(updated.Settings, projectfailure.State{
+		Action:          record.Action,
+		Source:          record.Source,
+		FailureCategory: record.FailureCategory,
+		FailureClass:    record.FailureClass,
+		FailurePhase:    record.FailurePhase,
+		LastCheckpoint:  record.LastCheckpoint,
+		FailureReason:   record.FailureReason,
+		RecordedAt: func() *time.Time {
+			recordedAt := record.RecordedAt.UTC()
+			return &recordedAt
+		}(),
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := projectRepo.Update(ctx, updated); err != nil {
+		return err
+	}
+
+	projectService, err := projectsvc.NewService(projectsvc.Options{
+		Pool:   e.pool,
+		Events: e.events,
+	})
+	if err != nil {
+		return err
+	}
+
+	switch strings.TrimSpace(record.Action) {
+	case projectFailureActionArchive:
+		if strings.EqualFold(strings.TrimSpace(projectRecord.Status), "archived") {
+			return nil
+		}
+		_, err = projectService.Archive(ctx, projectRecord.OrganizationID, projectRecord.ID)
+		return err
+	case projectFailureActionPause:
+		if strings.EqualFold(strings.TrimSpace(projectRecord.Status), "archived") {
+			return nil
+		}
+		_, err = projectService.Pause(ctx, projectRecord.OrganizationID, projectRecord.ID, projectsvc.PauseProjectRequest{
+			Reason:       record.FailureReason,
+			Metadata:     projectfailure.State{Action: record.Action, Source: record.Source, FailureCategory: record.FailureCategory, FailureClass: record.FailureClass, FailurePhase: record.FailurePhase, LastCheckpoint: record.LastCheckpoint, FailureReason: record.FailureReason, RecordedAt: &record.RecordedAt}.JSON(),
+			PausedByType: "system",
+		})
+		return err
+	default:
+		return nil
+	}
+}
+
+func applyProjectBootstrapProgressState(state *projectBootstrapState, progress projectBootstrapProgress) {
+	if state == nil {
+		return
+	}
+	checkpoint := projectBootstrapLastCheckpoint(progress)
+	state.Phase = checkpoint
+	state.LastCheckpoint = checkpoint
+	state.AssignmentCount = progress.AssignmentCount
+	state.PlannedTaskCount = progress.PlannedTaskCount
+	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
+	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
+	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
+	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
+	state.setFirstWaveJobCount(progress.FirstWaveJobCount)
+	state.ValidationStatus = progress.ValidationStatus
+	state.ValidationFailureClass = progress.ValidationFailureClass
+	state.ValidationFailureReason = progress.ValidationFailureReason
+}
+
 type workCompletionSignal struct {
 	commitSHA      string
 	filesCommitted int
@@ -1960,7 +2275,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 			return nil
 		}
 	}
-	if handled, handleErr := e.handleProjectBootstrapTerminalTurnFailure(ctx, runtime, err); handleErr != nil {
+	if handled, handleErr := e.handleProjectBootstrapUnhandledFailure(ctx, runtime, err); handleErr != nil {
 		return handleErr
 	} else if handled {
 		return nil
@@ -1969,6 +2284,9 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	e.logger.Error("turn failed", "error", err, "session_id", sessionID, "turn_id", runtime.turn.ID, "agent_id", agentID)
 	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(err))
 	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Turn failed: %s]", summarizeFailure(err)))
+	if pauseErr := e.pauseProjectAfterExecutionFailure(ctx, runtime, err); pauseErr != nil {
+		return pauseErr
+	}
 	return err
 }
 
@@ -1987,13 +2305,16 @@ func (e *TurnEngine) handleRateLimitedTurnFailure(
 		retryCount = 0
 	}
 	if retryCount >= maxRateLimitRetries {
-		if handled, handleErr := e.handleProjectBootstrapTerminalTurnFailure(ctx, runtime, cause); handleErr != nil {
+		_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
+		if handled, handleErr := e.handleProjectBootstrapUnhandledFailure(ctx, runtime, cause); handleErr != nil {
 			return true, handleErr
 		} else if handled {
 			return true, nil
 		}
-		_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
 		_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Turn failed: model retries exhausted after %d attempts.]", maxRateLimitRetries))
+		if err := e.pauseProjectAfterExecutionFailure(ctx, runtime, cause); err != nil {
+			return true, err
+		}
 		return true, nil
 	}
 
@@ -3663,6 +3984,122 @@ func (e *TurnEngine) hasQueuedAgentTurnForSession(ctx context.Context, sessionID
 	return queued, nil
 }
 
+func (e *TurnEngine) handleProjectBootstrapUnhandledFailure(ctx context.Context, rt *turnRuntime, cause error) (bool, error) {
+	if rt == nil || rt.turn == nil || rt.session == nil || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
+	if err != nil {
+		return true, err
+	}
+	if progress.BootstrapTaskID == uuid.Nil || progress.Materialized() {
+		return false, nil
+	}
+
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	now := e.now().UTC()
+	if state.StartedAt == nil {
+		startedAt := rt.startedAt.UTC()
+		state.StartedAt = &startedAt
+	}
+	if strings.TrimSpace(state.InitialMessageID) == "" && rt.initialMessageID != uuid.Nil {
+		if message, getErr := e.messages.GetByID(ctx, rt.initialMessageID); getErr == nil {
+			state.InitialMessageID = projectBootstrapWorkflowMessageID(&message).String()
+		}
+	}
+
+	failureCategory := projectFailureCategoryBootstrap
+	failureClass := projectBootstrapFailureRuntime
+	failureReason := summarizeFailure(cause)
+	if providerClass, providerReason, ok := classifyProjectProviderFailure(cause); ok {
+		failureCategory = projectFailureCategoryProvider
+		failureClass = providerClass
+		if strings.TrimSpace(providerReason) != "" {
+			failureReason = providerReason
+		}
+	}
+	record := buildProjectBootstrapAutomaticFailureRecord(progress, failureCategory, failureClass, failureReason, now)
+
+	state.Status = projectBootstrapStatusFailed
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	state.LastTurnID = rt.turn.ID.String()
+	if rt.agent.ID != uuid.Nil {
+		state.LastResponderID = rt.agent.ID.String()
+	}
+	applyProjectBootstrapProgressState(&state, progress)
+	state.ValidationStatus = projectBootstrapValidationFailed
+	state.ValidationFailureClass = failureClass
+	state.ValidationFailureReason = failureReason
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = &now
+	state.FailureCategory = record.FailureCategory
+	state.FailureClass = record.FailureClass
+	state.FailurePhase = record.FailurePhase
+	state.FailureReason = record.FailureReason
+	if failureCategory == projectFailureCategoryProvider {
+		state.ProviderFailureClass = record.FailureClass
+		state.ProviderFailureReason = record.FailureReason
+	} else {
+		state.ProviderFailureClass = ""
+		state.ProviderFailureReason = ""
+	}
+
+	if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
+		return true, err
+	}
+	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, record.FailureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
+		return true, failErr
+	}
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record)); err != nil {
+		return true, err
+	}
+	if err := e.applyProjectAutomaticFailure(ctx, rt.session.ScopeID, record); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) pauseProjectAfterExecutionFailure(ctx context.Context, rt *turnRuntime, cause error) error {
+	if rt == nil || rt.turn == nil || rt.session == nil {
+		return nil
+	}
+
+	projectID := resolveProjectID(ctx, rt.session, e.tasks)
+	if projectID == nil || *projectID == uuid.Nil {
+		return nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, *projectID)
+	if err != nil {
+		return err
+	}
+	if !projectBootstrapReachedFirstWaveClaim(progress) {
+		return nil
+	}
+
+	failureCategory := projectFailureCategoryExecution
+	failureClass := projectFailureClassExecutionRuntime
+	failureReason := summarizeFailure(cause)
+	if providerClass, providerReason, ok := classifyProjectProviderFailure(cause); ok {
+		failureCategory = projectFailureCategoryProvider
+		failureClass = providerClass
+		if strings.TrimSpace(providerReason) != "" {
+			failureReason = providerReason
+		}
+	}
+	record := buildProjectExecutionFailureRecord(progress, failureCategory, failureClass, failureReason, e.now().UTC())
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectExecutionPauseMessage(record)); err != nil {
+		return err
+	}
+	return e.applyProjectAutomaticFailure(ctx, *projectID, record)
+}
+
 func (e *TurnEngine) handleTaskScopedProviderAuthFailure(ctx context.Context, rt *turnRuntime, cause error) (bool, error) {
 	if rt == nil || rt.turn == nil || rt.session == nil || !errors.Is(cause, ErrAuthFailed) {
 		return false, nil
@@ -3680,6 +4117,9 @@ func (e *TurnEngine) handleTaskScopedProviderAuthFailure(ctx context.Context, rt
 		return true, err
 	}
 	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	if err := e.pauseProjectAfterExecutionFailure(ctx, rt, cause); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -4917,6 +5357,13 @@ func (e *TurnEngine) handleProjectBootstrapGuardrailFailure(ctx context.Context,
 	if state.StartedAt == nil {
 		state.StartedAt = &now
 	}
+	record := buildProjectBootstrapAutomaticFailureRecord(
+		progress,
+		projectFailureCategoryBootstrap,
+		projectBootstrapFailureGuardrail,
+		buildProjectBootstrapGuardrailFailureReason(reason),
+		now,
+	)
 	state.Status = projectBootstrapStatusFailed
 	state.BootstrapTaskID = progress.BootstrapTaskID.String()
 	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
@@ -4925,29 +5372,30 @@ func (e *TurnEngine) handleProjectBootstrapGuardrailFailure(ctx context.Context,
 		state.LastResponderID = rt.agent.ID.String()
 	}
 	state.AutoTurnCount = 0
-	state.AssignmentCount = progress.AssignmentCount
-	state.PlannedTaskCount = progress.PlannedTaskCount
-	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
-	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
-	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
-	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
-	state.setFirstWaveJobCount(progress.FirstWaveJobCount)
+	applyProjectBootstrapProgressState(&state, progress)
 	state.ValidationStatus = projectBootstrapValidationFailed
 	state.ValidationFailureClass = projectBootstrapFailureGuardrail
 	state.ValidationFailureReason = buildProjectBootstrapGuardrailFailureReason(reason)
 	state.UpdatedAt = &now
 	state.CompletedAt = nil
 	state.FailedAt = &now
-	state.FailureClass = projectBootstrapFailureGuardrail
-	state.FailureReason = buildProjectBootstrapGuardrailFailureReason(reason)
+	state.FailureCategory = record.FailureCategory
+	state.FailureClass = record.FailureClass
+	state.FailurePhase = record.FailurePhase
+	state.FailureReason = record.FailureReason
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
 
 	if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
 		return true, err
 	}
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapFailureMessage(state.FailureReason)); err != nil {
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record)); err != nil {
 		return true, err
 	}
 	if err := e.completeTurn(ctx, rt); err != nil {
+		return true, err
+	}
+	if err := e.applyProjectAutomaticFailure(ctx, rt.session.ScopeID, record); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -4988,6 +5436,13 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 		startedAt := rt.startedAt.UTC()
 		state.StartedAt = &startedAt
 	}
+	record := buildProjectBootstrapAutomaticFailureRecord(
+		progress,
+		projectFailureCategoryBootstrap,
+		projectBootstrapFailureStalled,
+		buildProjectBootstrapWatchdogFailureReason(timeoutErr),
+		now,
+	)
 	state.Status = projectBootstrapStatusFailed
 	state.BootstrapTaskID = progress.BootstrapTaskID.String()
 	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
@@ -4995,21 +5450,19 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 	if rt.agent.ID != uuid.Nil {
 		state.LastResponderID = rt.agent.ID.String()
 	}
-	state.AssignmentCount = progress.AssignmentCount
-	state.PlannedTaskCount = progress.PlannedTaskCount
-	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
-	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
-	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
-	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
-	state.setFirstWaveJobCount(progress.FirstWaveJobCount)
+	applyProjectBootstrapProgressState(&state, progress)
 	state.ValidationStatus = projectBootstrapValidationFailed
 	state.ValidationFailureClass = projectBootstrapFailureStalled
 	state.ValidationFailureReason = buildProjectBootstrapWatchdogFailureReason(timeoutErr)
 	state.UpdatedAt = &now
 	state.CompletedAt = nil
 	state.FailedAt = &now
-	state.FailureClass = projectBootstrapFailureStalled
-	state.FailureReason = buildProjectBootstrapWatchdogFailureReason(timeoutErr)
+	state.FailureCategory = record.FailureCategory
+	state.FailureClass = record.FailureClass
+	state.FailurePhase = record.FailurePhase
+	state.FailureReason = record.FailureReason
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
 	rt.stopReason = stopReasonMaxDuration
 
 	if err := e.recordStopReason(ctx, rt); err != nil {
@@ -5021,7 +5474,10 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, state.FailureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
 		return true, failErr
 	}
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapFailureMessage(state.FailureReason)); err != nil {
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record)); err != nil {
+		return true, err
+	}
+	if err := e.applyProjectAutomaticFailure(ctx, rt.session.ScopeID, record); err != nil {
 		return true, err
 	}
 	return true, nil
