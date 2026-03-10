@@ -115,6 +115,7 @@ const (
 	projectFailureClassProviderTransient      = projectBootstrapFailureProviderTransient
 	projectBootstrapSource                    = "project_bootstrap"
 	bootstrapFrankSignOffStepSlug             = "record-frank-sign-off"
+	bootstrapChildTaskBoundednessError        = "parent integration follow-on tasks must already be bounded before they are created"
 )
 
 var (
@@ -2897,6 +2898,12 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			return fmt.Errorf("dispatchTools: %w", dispatchErr)
 		}
 		if stop {
+			if currentTurn, getErr := e.chat.GetTurn(ctx, rt.turn.ID); getErr == nil {
+				rt.turn = currentTurn
+				if !strings.EqualFold(strings.TrimSpace(currentTurn.Status), "in_progress") {
+					return e.ensureRecoveryTurnDurableTaskState(ctx, rt)
+				}
+			}
 			shouldContinue, err := e.shouldContinueMaxToolCalls(ctx, rt)
 			if err != nil {
 				return fmt.Errorf("shouldContinueMaxToolCalls: %w", err)
@@ -3467,6 +3474,13 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if err := e.appendToolResults(ctx, rt, results); err != nil {
 			return false, err
 		}
+		failedBootstrap, err := e.handleProjectBootstrapChildTaskFailure(ctx, rt, results)
+		if err != nil {
+			return false, err
+		}
+		if failedBootstrap {
+			return true, nil
+		}
 		blocked, err := e.handleToolValidationResults(ctx, rt, runCalls, results)
 		if err != nil {
 			return false, err
@@ -3536,6 +3550,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if err := e.appendToolResults(ctx, rt, []ToolResult{result}); err != nil {
 			return false, err
 		}
+		failedBootstrap, err := e.handleProjectBootstrapChildTaskFailure(ctx, rt, []ToolResult{result})
+		if err != nil {
+			return false, err
+		}
+		if failedBootstrap {
+			rt.toolCallsUsed++
+			return true, nil
+		}
 		recoveryBlocked, recoveryErr := e.handleRecoveryPopulatedFileWriteOutcome(ctx, rt, call, result)
 		if recoveryErr != nil {
 			return false, recoveryErr
@@ -3560,6 +3582,73 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	}
 
 	return false, nil
+}
+
+func (e *TurnEngine) handleProjectBootstrapChildTaskFailure(ctx context.Context, rt *turnRuntime, results []ToolResult) (bool, error) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+	if !projectBootstrapToolResultsContainChildBoundednessFailure(results) {
+		return false, nil
+	}
+
+	initialMessage, err := e.messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	messageSource := strings.TrimSpace(stringValue(messageMetadataMap(initialMessage.Metadata)["source"]))
+	bootstrapState := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if !strings.EqualFold(messageSource, projectBootstrapSource) && bootstrapState.Status != projectBootstrapStatusActive {
+		return false, nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	if progress.BootstrapTaskID == uuid.Nil || progress.Materialized() {
+		return false, nil
+	}
+	if !progress.ValidationFailed() {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
+		progress.ValidationFailureReason = "kickoff validation failed: bootstrap persisted orchestration parent tasks, then child task creation stopped because parent integration follow-on tasks must already be bounded before they are created"
+	}
+
+	now := e.now().UTC()
+	if err := e.failProjectBootstrapValidation(ctx, rt, progress, now); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func projectBootstrapToolResultsContainChildBoundednessFailure(results []ToolResult) bool {
+	for _, result := range results {
+		if projectBootstrapToolResultHasChildBoundednessFailure(result) {
+			return true
+		}
+	}
+	return false
+}
+
+func projectBootstrapToolResultHasChildBoundednessFailure(result ToolResult) bool {
+	if strings.Contains(strings.ToLower(strings.TrimSpace(result.Error)), bootstrapChildTaskBoundednessError) {
+		return true
+	}
+	if len(result.Output) == 0 {
+		return false
+	}
+	raw, ok := result.Output["error"]
+	if !ok || raw == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", raw))), bootstrapChildTaskBoundednessError)
 }
 
 func (e *TurnEngine) handleRecoveryCLIExecuteWithoutCommand(ctx context.Context, rt *turnRuntime, call ToolCall) (bool, bool, error) {
