@@ -235,6 +235,32 @@ func TestSelectNextQueuedTaskUnderProjectGateSkipsReviewCheckpointEX248(t *testi
 	}
 }
 
+func TestSelectNextQueuedTaskUnderProjectGateAllowsQueuedChildrenBehindBootstrapGate(t *testing.T) {
+	projectID := uuid.New()
+	bootstrapGate := repo.ProjectTask{
+		ID:          uuid.New(),
+		ProjectID:   projectID,
+		TaskNumber:  1,
+		Title:       "Bootstrap governance gate",
+		WorkStatus:  "draft",
+		BlocksScope: "all",
+		Metadata:    json.RawMessage(`{"bootstrap_gate":true}`),
+	}
+	child := repo.ProjectTask{
+		ID:          uuid.New(),
+		ProjectID:   projectID,
+		TaskNumber:  2,
+		Title:       "First-wave child",
+		WorkStatus:  "queued",
+		BlocksScope: "none",
+	}
+
+	selected := selectNextQueuedTaskUnderProjectGate([]repo.ProjectTask{bootstrapGate, child})
+	if selected == nil || selected.ID != child.ID {
+		t.Fatalf("selected queued task = %v, want child task %s", selected, child.ID)
+	}
+}
+
 func TestProcessQueuedTaskSkipsPausedProject(t *testing.T) {
 	ctx := context.Background()
 	projectID := uuid.New()

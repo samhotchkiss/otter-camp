@@ -122,6 +122,7 @@ type Actor struct {
 	ID                uuid.UUID
 	AllowNoActiveFlow bool
 	AllowDoneBypass   bool
+	AllowGateBypass   bool
 }
 
 type ErrInProgressRequiresActiveFlow struct {
@@ -506,7 +507,7 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 		return nil, ErrRequiresHumanApproval
 	}
 	if target == "queued" {
-		if err := s.ensureQueueEligible(ctx, taskRecord); err != nil {
+		if err := s.ensureQueueEligible(ctx, taskRecord, actor); err != nil {
 			return nil, err
 		}
 	}
@@ -881,7 +882,10 @@ func (s *service) projectRequiresPMBeforeQueue(ctx context.Context, projectID uu
 	return projectRequiresPMBeforeQueueSetting(projectRecord.Settings), nil
 }
 
-func (s *service) ensureQueueEligible(ctx context.Context, taskRecord repo.ProjectTask) error {
+func (s *service) ensureQueueEligible(ctx context.Context, taskRecord repo.ProjectTask, actor Actor) error {
+	if actor.AllowGateBypass && strings.EqualFold(strings.TrimSpace(actor.Type), "system") {
+		return nil
+	}
 	gateTask, err := s.lowestOutstandingProjectGate(ctx, taskRecord.ProjectID)
 	if err != nil {
 		return err

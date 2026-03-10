@@ -270,7 +270,9 @@ func projectBootstrapStatusFromCheckpoints(checkpoints []projectBootstrapCheckpo
 	if projectBootstrapStateMarkedFailed(state) {
 		return projectBootstrapStatusFailed
 	}
-	if len(checkpoints) != 0 && strings.EqualFold(strings.TrimSpace(checkpoints[len(checkpoints)-1].Status), projectBootstrapCheckpointStatusCompleted) {
+	if len(checkpoints) != 0 &&
+		strings.EqualFold(strings.TrimSpace(checkpoints[len(checkpoints)-1].Status), projectBootstrapCheckpointStatusCompleted) &&
+		(!state.BootstrapTaskOutstanding || strings.TrimSpace(state.BootstrapTaskID) == "") {
 		return projectBootstrapStatusCompleted
 	}
 	if projectBootstrapReachedCheckpoints(state)[projectBootstrapCheckpointProjectCreated] {

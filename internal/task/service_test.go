@@ -411,6 +411,51 @@ func TestTransitionStatusDraftToQueuedAllowsOutstandingGateTaskEX256(t *testing.
 	}
 }
 
+func TestTransitionStatusDraftToQueuedAllowsSystemGateBypass(t *testing.T) {
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	gateTaskID := uuid.New()
+	regularTaskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			gateTaskID: {
+				ID:             gateTaskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     1,
+				Title:          "Bootstrap governance gate",
+				WorkStatus:     "draft",
+				BlocksScope:    "all",
+				FlowTemplateID: &flowTemplateID,
+				CreatedByType:  "system",
+			},
+			regularTaskID: {
+				ID:             regularTaskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     2,
+				Title:          "First-wave child task",
+				WorkStatus:     "draft",
+				BlocksScope:    "none",
+				FlowTemplateID: &flowTemplateID,
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: validExecutableTemplateNodes(flowTemplateID),
+	}
+	updated, err := svc.TransitionStatus(context.Background(), regularTaskID, "queued", Actor{Type: "system", AllowGateBypass: true})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued with gate bypass: %v", err)
+	}
+	if updated.WorkStatus != "queued" {
+		t.Fatalf("work_status = %q, want queued", updated.WorkStatus)
+	}
+}
+
 func TestTransitionStatusDraftToQueuedWithFlowTemplateRequiresPMWhenProjectConfigured(t *testing.T) {
 	taskID := uuid.New()
 	projectID := uuid.New()
