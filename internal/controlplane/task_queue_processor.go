@@ -315,7 +315,7 @@ func (p *TaskQueueProcessor) isBlockedByOutstandingProjectGate(ctx context.Conte
 	if gateTask == nil {
 		return false, nil
 	}
-	if taskIsBootstrapGate(*gateTask) {
+	if bootstrapGateAllowsQueuedChild(*gateTask, taskRecord) {
 		return false, nil
 	}
 	return gateTask.ID != taskRecord.ID, nil
@@ -458,13 +458,14 @@ func lowestOutstandingGateTask(tasks []repo.ProjectTask) *repo.ProjectTask {
 
 func selectNextQueuedTaskUnderProjectGate(tasks []repo.ProjectTask) *repo.ProjectTask {
 	if gate := lowestOutstandingGateTask(tasks); gate != nil {
+		if bootstrapChild := lowestQueuedBootstrapChild(tasks, *gate); bootstrapChild != nil {
+			return bootstrapChild
+		}
 		if strings.EqualFold(strings.TrimSpace(gate.WorkStatus), "queued") {
 			clone := *gate
 			return &clone
 		}
-		if !taskIsBootstrapGate(*gate) {
-			return nil
-		}
+		return nil
 	}
 
 	var selected *repo.ProjectTask
@@ -480,16 +481,59 @@ func selectNextQueuedTaskUnderProjectGate(tasks []repo.ProjectTask) *repo.Projec
 	return selected
 }
 
-func taskIsBootstrapGate(taskRecord repo.ProjectTask) bool {
-	if len(taskRecord.Metadata) == 0 || !json.Valid(taskRecord.Metadata) {
+func lowestQueuedBootstrapChild(tasks []repo.ProjectTask, gateTask repo.ProjectTask) *repo.ProjectTask {
+	if !bootstrapGateFlag(gateTask.Metadata, "bootstrap_gate") {
+		return nil
+	}
+
+	var selected *repo.ProjectTask
+	for _, taskRecord := range tasks {
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "queued") {
+			continue
+		}
+		if !bootstrapGateAllowsQueuedChild(gateTask, taskRecord) {
+			continue
+		}
+		if selected == nil || taskRecord.TaskNumber < selected.TaskNumber {
+			clone := taskRecord
+			selected = &clone
+		}
+	}
+	return selected
+}
+
+func bootstrapGateAllowsQueuedChild(gateTask, taskRecord repo.ProjectTask) bool {
+	if !bootstrapGateFlag(gateTask.Metadata, "bootstrap_gate") {
 		return false
 	}
-	var metadata map[string]any
-	if err := json.Unmarshal(taskRecord.Metadata, &metadata); err != nil {
+	if bootstrapGateFlag(taskRecord.Metadata, "bootstrap_gate") || bootstrapGateFlag(taskRecord.Metadata, "bootstrap_setup_task") {
 		return false
 	}
-	raw, ok := metadata["bootstrap_gate"].(bool)
-	return ok && raw
+	return taskDecompositionParentPresent(taskRecord.Metadata)
+}
+
+func bootstrapGateFlag(raw json.RawMessage, key string) bool {
+	if len(raw) == 0 || strings.TrimSpace(key) == "" {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false
+	}
+	value, _ := payload[key].(bool)
+	return value
+}
+
+func taskDecompositionParentPresent(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false
+	}
+	parentID, _ := payload["decomposition_parent_task_id"].(string)
+	return strings.TrimSpace(parentID) != ""
 }
 
 func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask) error {

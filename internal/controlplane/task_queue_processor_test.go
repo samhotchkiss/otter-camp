@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -235,29 +236,34 @@ func TestSelectNextQueuedTaskUnderProjectGateSkipsReviewCheckpointEX248(t *testi
 	}
 }
 
-func TestSelectNextQueuedTaskUnderProjectGateAllowsQueuedChildrenBehindBootstrapGate(t *testing.T) {
+func TestSelectNextQueuedTaskUnderProjectGateAllowsBootstrapPhasedChild(t *testing.T) {
 	projectID := uuid.New()
-	bootstrapGate := repo.ProjectTask{
+	gate := repo.ProjectTask{
 		ID:          uuid.New(),
 		ProjectID:   projectID,
 		TaskNumber:  1,
-		Title:       "Bootstrap governance gate",
-		WorkStatus:  "draft",
+		WorkStatus:  "queued",
 		BlocksScope: "all",
 		Metadata:    json.RawMessage(`{"bootstrap_gate":true}`),
 	}
+	parentID := uuid.New()
 	child := repo.ProjectTask{
-		ID:          uuid.New(),
-		ProjectID:   projectID,
-		TaskNumber:  2,
-		Title:       "First-wave child",
-		WorkStatus:  "queued",
-		BlocksScope: "none",
+		ID:         uuid.New(),
+		ProjectID:  projectID,
+		TaskNumber: 3,
+		WorkStatus: "queued",
+		Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentID)),
+	}
+	normal := repo.ProjectTask{
+		ID:         uuid.New(),
+		ProjectID:  projectID,
+		TaskNumber: 4,
+		WorkStatus: "queued",
 	}
 
-	selected := selectNextQueuedTaskUnderProjectGate([]repo.ProjectTask{bootstrapGate, child})
+	selected := selectNextQueuedTaskUnderProjectGate([]repo.ProjectTask{normal, child, gate})
 	if selected == nil || selected.ID != child.ID {
-		t.Fatalf("selected queued task = %v, want child task %s", selected, child.ID)
+		t.Fatalf("selected queued task = %v, want bootstrap child %s", selected, child.ID)
 	}
 }
 

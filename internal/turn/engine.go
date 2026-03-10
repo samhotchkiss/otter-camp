@@ -1252,15 +1252,21 @@ func (e *TurnEngine) failProjectBootstrapValidation(ctx context.Context, rt *tur
 }
 
 func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Context, progress projectBootstrapProgress) (projectBootstrapProgress, error) {
-	if e == nil || e.taskTransitions == nil || progress.ValidationStatus != projectBootstrapValidationPassed || progress.FirstWaveMaterialized() {
+	if e == nil || e.taskTransitions == nil || progress.ValidationStatus != projectBootstrapValidationPassed {
+		return progress, nil
+	}
+	if progress.FirstWaveExecutionMaterialized() && (!progress.BootstrapTaskOutstanding || !progress.BootstrapGateReady()) {
 		return progress, nil
 	}
 	if progress.FirstWaveTaskCount == 0 || len(progress.FirstWaveTasks) == 0 {
 		return progress, nil
 	}
+	if progress.WaitingForBootstrapGate() && !progress.HasPhasedParentTasks {
+		return progress, nil
+	}
 
 	projectID := progress.FirstWaveTasks[0].ProjectID
-	if progress.BootstrapTaskOutstanding && progress.BootstrapTaskID != uuid.Nil && progress.BootstrapGateReady() {
+	if progress.BootstrapTaskOutstanding && progress.BootstrapTaskID != uuid.Nil {
 		if err := e.completeProjectBootstrapGateTask(ctx, progress.BootstrapTaskID); err != nil {
 			return progress, err
 		}
@@ -1276,7 +1282,7 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
 			continue
 		}
-		if _, err := e.taskTransitions.TransitionStatus(ctx, task.ID, "queued", tasksvc.Actor{Type: "system", AllowGateBypass: true}); err != nil {
+		if _, err := e.taskTransitions.TransitionStatus(ctx, task.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
 			return progress, err
 		}
 		queuedAny = true
@@ -1298,9 +1304,6 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 		updated.ValidationFailureReason = buildProjectBootstrapFirstWaveExecutionFailureReason(updated)
 		return updated, nil
 	}
-	if !updated.BootstrapGateReady() {
-		return updated, nil
-	}
 
 	deadline := time.Now().Add(defaultProjectBootstrapPromotionTimeout)
 	for {
@@ -1308,7 +1311,7 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 		if err != nil {
 			return progress, err
 		}
-		if updated.FirstWaveMaterialized() || updated.ValidationFailed() {
+		if updated.FirstWaveExecutionMaterialized() || updated.ValidationFailed() {
 			return updated, nil
 		}
 		if time.Now().After(deadline) {
@@ -1364,10 +1367,7 @@ func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskI
 		return nil
 	}
 
-	integrationSummary := "Validated the bootstrap setup outputs together and confirmed the first-wave execution plan is coherent."
-	if len(childLabels) > 0 {
-		integrationSummary = fmt.Sprintf("Validated the bootstrap setup outputs together across %s and confirmed the first-wave execution plan is coherent.", strings.Join(childLabels, ", "))
-	}
+	integrationSummary := fmt.Sprintf("Validated the bootstrap setup outputs together across %s and confirmed the first-wave execution plan is coherent.", strings.Join(childLabels, ", "))
 	taskRecord.Metadata, err = taskorchestration.Apply(taskRecord.Metadata, taskorchestration.Update{
 		ChildVerifications: verifications,
 		IntegrationCheck:   taskorchestration.NewIntegrationCheck("passed", integrationSummary, verifiedAt),
@@ -1464,6 +1464,7 @@ type projectBootstrapProgress struct {
 	BootstrapSetupTaskCount  int
 	BootstrapSetupDoneCount  int
 	FrankSignOffRecorded     bool
+	HasPhasedParentTasks     bool
 	AssignmentCount          int
 	PlannedTaskCount         int
 	PlannedFlowTemplateCount int
@@ -1478,11 +1479,14 @@ type projectBootstrapProgress struct {
 }
 
 func (p projectBootstrapProgress) Materialized() bool {
-	return p.FirstWaveMaterialized() &&
-		(p.BootstrapTaskID == uuid.Nil || !p.BootstrapTaskOutstanding)
+	return p.FirstWaveExecutionMaterialized() && (p.BootstrapTaskID == uuid.Nil || !p.BootstrapTaskOutstanding)
 }
 
 func (p projectBootstrapProgress) FirstWaveMaterialized() bool {
+	return p.FirstWaveExecutionMaterialized()
+}
+
+func (p projectBootstrapProgress) FirstWaveExecutionMaterialized() bool {
 	return p.ValidationStatus == projectBootstrapValidationPassed &&
 		p.AssignmentCount > 0 &&
 		p.PlannedTaskCount > 0 &&
@@ -1775,6 +1779,7 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 			structuralFailureReason = buildProjectBootstrapParentExecutionFailureReason(task, childCount)
 		}
 		if childCount > 0 {
+			progress.HasPhasedParentTasks = true
 			continue
 		}
 		firstWaveTasks = append(firstWaveTasks, task)
@@ -2006,14 +2011,34 @@ func (e *TurnEngine) countProjectBootstrapFirstWaveJobs(ctx context.Context, tas
 
 	var count int
 	if err := e.pool.QueryRow(ctx, `
-		SELECT COUNT(DISTINCT s.scope_id)
-		FROM job_queue jq
-		JOIN chat_session s ON s.id::text = jq.payload->>'session_id'
-		WHERE jq.job_type = 'agent_turn'
-		  AND jq.status IN ('pending', 'claimed')
-		  AND s.scope_type = 'project_task'
-		  AND s.mode = 'async'
-		  AND s.scope_id = ANY($1::uuid[])
+		SELECT COUNT(DISTINCT scope_id)
+		FROM (
+			SELECT s.scope_id
+			FROM chat_session s
+			JOIN chat_message m ON m.session_id = s.id
+			WHERE s.scope_type = 'project_task'
+			  AND s.mode = 'async'
+			  AND s.scope_id = ANY($1::uuid[])
+			  AND m.role = 'user'
+			  AND COALESCE(m.metadata->>'source', '') = 'task_queue_processor'
+			UNION
+			SELECT s.scope_id
+			FROM chat_session s
+			JOIN chat_turn t ON t.id = s.current_turn_id
+			WHERE s.scope_type = 'project_task'
+			  AND s.mode = 'async'
+			  AND s.scope_id = ANY($1::uuid[])
+			  AND t.status IN ('pending', 'in_progress')
+			UNION
+			SELECT s.scope_id
+			FROM chat_session s
+			JOIN job_queue jq ON s.id::text = jq.payload->>'session_id'
+			WHERE jq.job_type = 'agent_turn'
+			  AND jq.status IN ('pending', 'claimed')
+			  AND s.scope_type = 'project_task'
+			  AND s.mode = 'async'
+			  AND s.scope_id = ANY($1::uuid[])
+		) kickoff
 	`, taskIDs).Scan(&count); err != nil {
 		return 0, err
 	}
