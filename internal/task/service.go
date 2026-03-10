@@ -918,7 +918,7 @@ func (s *service) ensureQueueEligible(ctx context.Context, taskRecord repo.Proje
 	if err != nil {
 		return err
 	}
-	if gateTask == nil || gateTask.ID == taskRecord.ID {
+	if gateTask == nil || gateTask.ID == taskRecord.ID || bootstrapGateAllowsQueuedChild(*gateTask, taskRecord) {
 		return nil
 	}
 	return ErrQueueBlockedByProjectGate{
@@ -949,6 +949,28 @@ func (s *service) lowestOutstandingProjectGate(ctx context.Context, projectID uu
 		}
 	}
 	return selected, nil
+}
+
+func bootstrapGateAllowsQueuedChild(gateTask, taskRecord repo.ProjectTask) bool {
+	if !taskMetadataFlag(gateTask.Metadata, "bootstrap_gate") {
+		return false
+	}
+	if taskMetadataFlag(taskRecord.Metadata, "bootstrap_gate") || taskMetadataFlag(taskRecord.Metadata, "bootstrap_setup_task") {
+		return false
+	}
+	return taskdecomp.ParseParentTaskID(taskRecord.Metadata) != uuid.Nil
+}
+
+func taskMetadataFlag(raw json.RawMessage, key string) bool {
+	if len(raw) == 0 || strings.TrimSpace(key) == "" {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false
+	}
+	value, _ := payload[key].(bool)
+	return value
 }
 
 func projectRequiresPMBeforeQueueSetting(settings json.RawMessage) bool {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -449,11 +450,12 @@ func TestTransitionStatusDraftToQueuedAllowsOutstandingGateTaskEX256(t *testing.
 	}
 }
 
-func TestTransitionStatusDraftToQueuedAllowsSystemGateBypass(t *testing.T) {
+func TestTransitionStatusDraftToQueuedAllowsBootstrapPhasedChildPastOutstandingGate(t *testing.T) {
 	projectID := uuid.New()
 	flowTemplateID := uuid.New()
 	gateTaskID := uuid.New()
-	regularTaskID := uuid.New()
+	parentTaskID := uuid.New()
+	childTaskID := uuid.New()
 	taskRepo := &fakeTaskRepo{
 		tasks: map[uuid.UUID]repo.ProjectTask{
 			gateTaskID: {
@@ -465,17 +467,28 @@ func TestTransitionStatusDraftToQueuedAllowsSystemGateBypass(t *testing.T) {
 				WorkStatus:     "draft",
 				BlocksScope:    "all",
 				FlowTemplateID: &flowTemplateID,
+				Metadata:       json.RawMessage(`{"bootstrap_gate":true}`),
 				CreatedByType:  "system",
 			},
-			regularTaskID: {
-				ID:             regularTaskID,
+			parentTaskID: {
+				ID:             parentTaskID,
 				OrganizationID: uuid.New(),
 				ProjectID:      projectID,
 				TaskNumber:     2,
-				Title:          "First-wave child task",
+				Title:          "Bootstrap parent",
 				WorkStatus:     "draft",
-				BlocksScope:    "none",
 				FlowTemplateID: &flowTemplateID,
+				CreatedByType:  "system",
+			},
+			childTaskID: {
+				ID:             childTaskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     3,
+				Title:          "Bootstrap child slice",
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Metadata:       json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTaskID)),
 				CreatedByType:  "system",
 			},
 		},
@@ -485,9 +498,10 @@ func TestTransitionStatusDraftToQueuedAllowsSystemGateBypass(t *testing.T) {
 	svc.flowNodes = &fakeFlowNodeRepo{
 		nodes: validExecutableTemplateNodes(flowTemplateID),
 	}
-	updated, err := svc.TransitionStatus(context.Background(), regularTaskID, "queued", Actor{Type: "system", AllowGateBypass: true})
+
+	updated, err := svc.TransitionStatus(context.Background(), childTaskID, "queued", Actor{Type: "system"})
 	if err != nil {
-		t.Fatalf("TransitionStatus queued with gate bypass: %v", err)
+		t.Fatalf("TransitionStatus queued bootstrap child: %v", err)
 	}
 	if updated.WorkStatus != "queued" {
 		t.Fatalf("work_status = %q, want queued", updated.WorkStatus)
