@@ -6615,6 +6615,228 @@ func TestTurnEngineIntegrationProjectBootstrapOpensFirstWaveAfterSetupTasksAndFr
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapPromotesWaveBasedChildPlanIntoExecution(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	enableTaskQueueProcessor(t, fixture)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: persist the wave-based bootstrap plan, attach one executable flow template, and start the first-wave child execution immediately.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-wave-plan",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is now persisted in project records."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+		assignments := []repo.AgentProjectAssignment{
+			{
+				AgentID:        pmAgent.ID,
+				ProjectID:      project.ID,
+				Role:           "pm",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+			{
+				AgentID:        workerAgent.ID,
+				ProjectID:      project.ID,
+				Role:           "worker",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+			{
+				AgentID:        fixture.agent.ID,
+				ProjectID:      project.ID,
+				Role:           "reviewer",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+		}
+		assignmentRepo := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+		for _, assignment := range assignments {
+			if _, err := assignmentRepo.Assign(ctx, assignment); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+		}
+
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+		taskIDs := make(map[string]uuid.UUID)
+		taskTitles := []struct {
+			key         string
+			title       string
+			description string
+			parentKey   string
+		}{
+			{key: "wave-1", title: "Wave 1: Access & ingestion foundation", description: "Coordinate the first execution wave without doing the implementation work in the parent."},
+			{key: "wave-2", title: "Wave 2: Content inventory & migration prep", description: "Coordinate the second wave without absorbing execution inside the parent."},
+			{key: "wave-3", title: "Wave 3: Theme and UX planning", description: "Coordinate the third wave without doing the implementation work in the parent."},
+			{key: "wave-4", title: "Wave 4: Launch readiness", description: "Coordinate the fourth wave without doing the implementation work in the parent."},
+			{key: "phase-1", title: "Wave 1 / Phase A: Access prerequisites", description: "Break access work into bounded executable children.", parentKey: "wave-1"},
+			{key: "phase-2", title: "Wave 2 / Phase D: Photography catalog prep", description: "Break catalog prep into bounded executable children.", parentKey: "wave-2"},
+			{key: "phase-3", title: "Wave 3 / Phase A: Theme research", description: "Break theme research into bounded executable children.", parentKey: "wave-3"},
+			{key: "phase-4", title: "Wave 4 / Phase B: Launch cutover readiness", description: "Break launch readiness into bounded executable children.", parentKey: "wave-4"},
+			{key: "1a", title: "1a: Verify SFTP Connectivity & Permissions", description: "Verify the SFTP endpoint, credentials, and directory permissions.", parentKey: "phase-1"},
+			{key: "1b", title: "1b: Validate Content Export Package Integrity", description: "Confirm export archives are complete and restorable.", parentKey: "phase-1"},
+			{key: "1c", title: "1c: Mirror Source Assets into Working Storage", description: "Mirror the source assets into the repo-bound working storage.", parentKey: "phase-1"},
+			{key: "2a", title: "2a: Inventory Legacy Page Templates", description: "Inventory the legacy templates and document migration risks.", parentKey: "wave-2"},
+			{key: "2b", title: "2b: Map Redirects & Canonical URLs", description: "Map the redirect and canonical URL requirements.", parentKey: "wave-2"},
+			{key: "2c", title: "2c: Audit Embedded Media Dependencies", description: "Audit embedded media dependencies and breakage risks.", parentKey: "wave-2"},
+			{key: "2d", title: "2d: Catalog Photography Content (CRITICAL BASELINE)", description: "Catalog the full photography corpus and mark baseline must-keep assets.", parentKey: "phase-2"},
+			{key: "2e", title: "2e: Tag Missing Metadata Hotspots", description: "Tag missing metadata hotspots that will block migration.", parentKey: "phase-2"},
+			{key: "3a", title: "3a: Research & Evaluate Photography-Friendly Themes", description: "Research theme options that preserve photography fidelity.", parentKey: "phase-3"},
+			{key: "3b", title: "3b: Score Theme Accessibility & Performance Tradeoffs", description: "Score accessibility and performance tradeoffs for finalist themes.", parentKey: "phase-3"},
+			{key: "3c", title: "3c: Prototype Gallery Navigation Patterns", description: "Prototype gallery navigation patterns for the migrated site.", parentKey: "wave-3"},
+			{key: "3d", title: "3d: Document Theme Decision Constraints", description: "Document the decision constraints and non-negotiables.", parentKey: "wave-3"},
+			{key: "4a", title: "4a: Prepare Launch Rollback Checklist", description: "Prepare the rollback checklist for cutover and verification.", parentKey: "phase-4"},
+			{key: "4b", title: "4b: Assemble Production Smoke Test Grid", description: "Assemble the production smoke-test grid for launch day.", parentKey: "phase-4"},
+		}
+		for _, item := range taskTitles {
+			task := repo.ProjectTask{
+				OrganizationID:  fixture.org.ID,
+				ProjectID:       project.ID,
+				Title:           item.title,
+				Description:     &item.description,
+				WorkStatus:      "draft",
+				FlowTemplateID:  &template.ID,
+				AssignedAgentID: &pmAgent.ID,
+				CreatedByType:   "agent",
+				CreatedByID:     &lori.ID,
+			}
+			if item.parentKey != "" {
+				task.Metadata = mustJSON(t, map[string]any{
+					"decomposition_parent_task_id": taskIDs[item.parentKey].String(),
+				})
+			}
+			created, err := taskRepo.Create(ctx, task)
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			taskIDs[item.key] = created.ID
+		}
+
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"assignment_count":   len(assignments),
+				"flow_template_id":   template.ID.String(),
+				"planned_task_count": len(taskTitles),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	enableTurnEngineUserMessageEnqueue(t, fixture)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	assignments, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject assignments: %v", err)
+	}
+	if len(assignments) != 3 {
+		t.Fatalf("project assignment count = %d, want 3", len(assignments))
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject tasks: %v", err)
+	}
+	var plannedTasks int
+	var draftTasks int
+	firstWaveTaskIDs := make([]uuid.UUID, 0, len(tasks))
+	for _, item := range tasks {
+		metadata := messageMetadataMap(item.Metadata)
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			continue
+		}
+		if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); bootstrapSetupTask {
+			continue
+		}
+		plannedTasks++
+		if item.WorkStatus == "draft" {
+			draftTasks++
+		}
+		firstWaveTaskIDs = append(firstWaveTaskIDs, item.ID)
+	}
+	if plannedTasks != 22 {
+		t.Fatalf("planned task count = %d, want 22 wave-based parent plus child tasks", plannedTasks)
+	}
+	if draftTasks == plannedTasks {
+		t.Fatalf("all %d planned tasks remained draft; want first-wave child promotion into execution", plannedTasks)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.AssignmentCount != 3 {
+		t.Fatalf("bootstrap assignment_count = %d, want 3", bootstrapState.AssignmentCount)
+	}
+	if bootstrapState.PlannedTaskCount != 22 {
+		t.Fatalf("bootstrap planned_task_count = %d, want 22", bootstrapState.PlannedTaskCount)
+	}
+	if bootstrapState.PlannedFlowTemplateCount != 1 {
+		t.Fatalf("bootstrap planned_flow_template_count = %d, want 1", bootstrapState.PlannedFlowTemplateCount)
+	}
+	if bootstrapState.FirstWaveExecutionCount == 0 {
+		t.Fatalf("bootstrap first_wave_execution_count = %d, want > 0 for executable child tasks", bootstrapState.FirstWaveExecutionCount)
+	}
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q while gate stays open and first-wave child work runs", bootstrapState.Status, projectBootstrapStatusActive)
+	}
+
+	if jobCount := waitForRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs, 1); jobCount == 0 {
+		t.Fatal("expected runnable first-wave agent_turn jobs for the wave-based child plan")
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupTaskOwnsExecutableChildren(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
