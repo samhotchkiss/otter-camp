@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/browser"
 	"github.com/samhotchkiss/otter-camp/internal/budget"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
@@ -412,30 +413,35 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("OTTERCAMP_MODE")), "test") {
 		modelGateway = deterministicTurnModelGateway{}
 	}
-	turnEngine, err := turn.NewEngine(turn.Options{
-		Pool:          pool.Raw(),
-		DataDir:       strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR")),
-		Chat:          chatService,
-		ToolResolver:  toolResolver,
-		Assembler:     promptAssembler,
-		Summarization: summarizationChecker,
-		ModelGateway:  modelGateway,
-		Dispatcher:    toolDispatcher,
-		RunCanceler:   runService,
-		Events:        bus,
-		Enqueuer:      jqWorker,
-		Invocations:   modelInvocationRepo,
-		ModelProfiles: repo.NewModelProfileRepo(pool.Raw()),
-		Profiles:      profileResolver,
-		Messages:      repo.NewChatMessageRepo(pool.Raw()),
-		Turns:         repo.NewChatTurnRepo(pool.Raw()),
-		Sessions:      repo.NewChatSessionRepo(pool.Raw()),
-		Agents:        repo.NewAgentRepo(pool.Raw()),
-		Tasks:         repo.NewProjectTaskRepo(pool.Raw()),
-		MemorySources: repo.NewMemorySourceRepo(pool.Raw()),
-		Memories:      repo.NewMemoryRepo(pool.Raw()),
-		Logger:        logger,
-	})
+	turnEngine, err := turn.NewEngine(workerTurnEngineOptions(
+		turn.Options{
+			Pool:          pool.Raw(),
+			DataDir:       strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR")),
+			Chat:          chatService,
+			ToolResolver:  toolResolver,
+			Assembler:     promptAssembler,
+			Summarization: summarizationChecker,
+			ModelGateway:  modelGateway,
+			Dispatcher:    toolDispatcher,
+			RunCanceler:   runService,
+			Events:        bus,
+			Enqueuer:      jqWorker,
+			Invocations:   modelInvocationRepo,
+			ModelProfiles: repo.NewModelProfileRepo(pool.Raw()),
+			Profiles:      profileResolver,
+			Messages:      repo.NewChatMessageRepo(pool.Raw()),
+			Turns:         repo.NewChatTurnRepo(pool.Raw()),
+			Sessions:      repo.NewChatSessionRepo(pool.Raw()),
+			Agents:        repo.NewAgentRepo(pool.Raw()),
+			Tasks:         repo.NewProjectTaskRepo(pool.Raw()),
+			MemorySources: repo.NewMemorySourceRepo(pool.Raw()),
+			Memories:      repo.NewMemoryRepo(pool.Raw()),
+			Logger:        logger,
+		},
+		pool.Raw(),
+		tasks,
+		flowService,
+	))
 	if err != nil {
 		return fmt.Errorf("worker turn engine setup: %w", err)
 	}
@@ -584,6 +590,19 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	}
 
 	return nil
+}
+
+func workerTurnEngineOptions(opts turn.Options, pool *pgxpool.Pool, tasks tasksvc.TaskService, flowService flowsvc.FlowExecutionService) turn.Options {
+	if pool != nil {
+		opts.FlowNodes = repo.NewFlowNodeRepo(pool)
+		opts.Assignments = repo.NewAgentProjectAssignmentRepo(pool)
+		opts.Projects = repo.NewProjectRepo(pool)
+		opts.Environments = repo.NewProjectEnvironmentRepo(pool)
+		opts.Organizations = repo.NewOrgRepo(pool)
+	}
+	opts.TaskTransitions = tasks
+	opts.FlowAdvancer = flowService
+	return opts
 }
 
 type deterministicQueryEmbedder struct{}
