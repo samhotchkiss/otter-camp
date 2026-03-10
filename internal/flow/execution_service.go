@@ -723,6 +723,13 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 	if err := s.ensureExecutionSession(ctx, &created); err != nil {
 		return nil, err
 	}
+	targetStatus := taskWorkStatusForNode(rejectNode)
+	if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
+		if _, err := s.taskService.TransitionStatus(ctx, taskRecord.ID, targetStatus, toTaskActor(actor)); err != nil {
+			return nil, err
+		}
+		taskRecord.WorkStatus = targetStatus
+	}
 
 	payload := map[string]any{
 		"task_id":               taskRecord.ID,
@@ -1047,6 +1054,9 @@ func (s *service) loadActiveFlowState(ctx context.Context, taskID uuid.UUID) (re
 	if err != nil {
 		return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
 	}
+	if err := validateTaskFlowRuntimeState(taskRecord, currentNode); err != nil {
+		return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
+	}
 
 	activeExecution, err := s.executions.GetActive(ctx, taskRecord.ID, currentNode.ID)
 	if errors.Is(err, repo.ErrNotFound) {
@@ -1217,6 +1227,27 @@ func executionMetadataWithCompletedBy(existing json.RawMessage, actor Actor) jso
 		return json.RawMessage(`{}`)
 	}
 	return encoded
+}
+
+func validateTaskFlowRuntimeState(taskRecord repo.ProjectTask, currentNode repo.FlowNode) error {
+	status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
+	switch status {
+	case "in_progress", "review":
+		expected := taskWorkStatusForNode(currentNode)
+		if status == expected {
+			return nil
+		}
+		return tasksvc.ErrTaskFlowStateConflict{
+			TaskID:            taskRecord.ID,
+			WorkStatus:        status,
+			TargetStatus:      status,
+			CurrentFlowNodeID: taskRecord.CurrentFlowNodeID,
+			CurrentNodeType:   strings.ToLower(strings.TrimSpace(currentNode.NodeType)),
+			Reason:            fmt.Sprintf("task runtime status %s does not match current flow node %s", status, strings.ToLower(strings.TrimSpace(currentNode.NodeType))),
+		}
+	default:
+		return nil
+	}
 }
 
 func decodeExecutionActorRef(metadata json.RawMessage) executionActorRef {

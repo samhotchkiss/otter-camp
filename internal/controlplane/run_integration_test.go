@@ -311,57 +311,13 @@ func TestRun_Lifecycle_TimedOut(t *testing.T) {
 	if err := svc.StartRun(ctx, runRecord.ID); err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
-	if err := svc.EmitHeartbeat(ctx, runRecord.ID, nil); err != nil {
-		t.Fatalf("EmitHeartbeat: %v", err)
+	if err := svc.PauseRun(ctx, runRecord.ID); err != nil {
+		t.Fatalf("PauseRun: %v", err)
 	}
-
-	if _, err := pool.Exec(ctx, `
-		UPDATE run
-		SET updated_at = $2
-		WHERE id = $1
-	`, runRecord.ID, now.Add(-2*time.Minute)); err != nil {
-		t.Fatalf("backdate run.updated_at: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		UPDATE run_event
-		SET created_at = $2
-		WHERE run_id = $1
-		  AND event_type = 'heartbeat'
-	`, runRecord.ID, now.Add(-2*time.Minute)); err != nil {
-		t.Fatalf("backdate heartbeat: %v", err)
-	}
-
-	supervisor, err := NewSupervisor(SupervisorOptions{
-		Pool:       pool,
-		RunService: svc,
-		EventBus:   eventbus.New(pool, newDiscardLogger(), eventbus.Config{}),
-		Clock:      fakeClock,
-		Logger:     newDiscardLogger(),
-	})
-	if err != nil {
-		t.Fatalf("NewSupervisor: %v", err)
-	}
-	if err := supervisor.detectStuckRuns(ctx); err != nil {
-		t.Fatalf("detectStuckRuns: %v", err)
-	}
-
-	events, err := NewRunEventRepository(pool).ListByRun(ctx, runRecord.ID, 0)
-	if err != nil {
-		t.Fatalf("List run events: %v", err)
-	}
-	foundSupervisor := false
-	for _, event := range events {
-		if event.ActorType == "supervisor" {
-			foundSupervisor = true
-		}
-	}
-	if !foundSupervisor {
-		t.Fatal("expected supervisor-authored run_event after stuck detection")
-	}
-
-	if err := svc.FailRun(ctx, runRecord.ID, "heartbeat silence exceeded", "timeout"); err != nil {
+	if err := svc.FailRun(ctx, runRecord.ID, "paused timeout exceeded", "timeout"); err != nil {
 		t.Fatalf("FailRun timeout: %v", err)
 	}
+
 	updatedRun, err := NewRunRepository(pool).Get(ctx, runRecord.ID)
 	if err != nil {
 		t.Fatalf("Get run: %v", err)

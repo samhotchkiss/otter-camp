@@ -53,6 +53,7 @@ var (
 	ErrActiveFlowRequired              = errors.New("task requires an active flow to be in_progress")
 	ErrFlowServiceUnavailable          = errors.New("flow service unavailable")
 	ErrTaskMustRemainOrchestrationOnly = errors.New("task must remain orchestration-only while executable child tasks exist")
+	ErrTaskFlowStateInvariant          = errors.New("task flow state invariant violated")
 )
 
 var validStatusTransitions = map[string]map[string]struct{}{
@@ -62,6 +63,7 @@ var validStatusTransitions = map[string]map[string]struct{}{
 	},
 	"queued": {
 		"in_progress": {},
+		"on_hold":     {},
 		"cancelled":   {},
 	},
 	"in_progress": {
@@ -72,12 +74,13 @@ var validStatusTransitions = map[string]map[string]struct{}{
 		"cancelled": {},
 	},
 	"blocked": {
-		"queued":    {},
-		"cancelled": {},
+		"in_progress": {},
+		"on_hold":     {},
+		"cancelled":   {},
 	},
 	"on_hold": {
-		"in_progress": {},
-		"cancelled":   {},
+		"queued":    {},
+		"cancelled": {},
 	},
 	"review": {
 		"blocked":     {},
@@ -115,6 +118,27 @@ type ErrInvalidStatusTransition struct {
 
 func (e ErrInvalidStatusTransition) Error() string {
 	return fmt.Sprintf("invalid status transition from %q to %q", e.From, e.To)
+}
+
+type ErrTaskFlowStateConflict struct {
+	TaskID            uuid.UUID
+	WorkStatus        string
+	TargetStatus      string
+	CurrentFlowNodeID *uuid.UUID
+	CurrentNodeType   string
+	Reason            string
+}
+
+func (e ErrTaskFlowStateConflict) Error() string {
+	reason := strings.TrimSpace(e.Reason)
+	if reason == "" {
+		reason = "task flow state does not match the requested runtime transition"
+	}
+	return reason
+}
+
+func (e ErrTaskFlowStateConflict) Is(target error) bool {
+	return target == ErrTaskFlowStateInvariant
 }
 
 type Actor struct {
@@ -519,6 +543,9 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 			return nil, ErrFlowTemplateReviewRequired
 		}
 	}
+	if err := s.validateFlowRuntimeStatus(ctx, taskRecord, target); err != nil {
+		return nil, err
+	}
 
 	decomposition := queueDecompositionResult{}
 	if from == "draft" && target == "queued" {
@@ -563,7 +590,7 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 		return nil, ErrTaskMustRemainOrchestrationOnly
 	}
 	if target == "in_progress" {
-		allowNoActiveFlow := actor.AllowNoActiveFlow && strings.EqualFold(strings.TrimSpace(actor.Type), "system")
+		allowNoActiveFlow := actor.AllowNoActiveFlow
 		hasActiveFlow, flowErr := s.hasActiveFlowExecution(ctx, taskRecord.ID)
 		if flowErr != nil {
 			return nil, flowErr
@@ -690,7 +717,8 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 			payload[key] = value
 		}
 	}
-	return s.transitionTaskRecord(ctx, taskRecord, "queued", actor, payload, false)
+	actor.AllowNoActiveFlow = true
+	return s.transitionTaskRecord(ctx, taskRecord, "in_progress", actor, payload, false)
 }
 
 func (s *service) loadLatestBlockedTaskReason(ctx context.Context, taskID uuid.UUID) string {
@@ -1662,9 +1690,6 @@ func isTransitionAllowed(fromStatus, toStatus string) bool {
 	if !ok {
 		return false
 	}
-	if target == "cancelled" {
-		return true
-	}
 	_, ok = allowedTargets[target]
 	return ok
 }
@@ -1680,6 +1705,69 @@ func statusRequiresFlowTemplate(status string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *service) validateFlowRuntimeStatus(ctx context.Context, taskRecord repo.ProjectTask, targetStatus string) error {
+	target := normalizeStatus(targetStatus)
+	if taskRecord.FlowTemplateID == nil {
+		return nil
+	}
+	if target != "in_progress" && target != "review" {
+		return nil
+	}
+	if taskRecord.CurrentFlowNodeID == nil {
+		if target == "review" {
+			return ErrTaskFlowStateConflict{
+				TaskID:            taskRecord.ID,
+				WorkStatus:        normalizeStatus(taskRecord.WorkStatus),
+				TargetStatus:      target,
+				CurrentFlowNodeID: nil,
+				Reason:            "task cannot enter review without a current flow node",
+			}
+		}
+		return nil
+	}
+	if s.flowNodes == nil {
+		return ErrTaskFlowStateConflict{
+			TaskID:            taskRecord.ID,
+			WorkStatus:        normalizeStatus(taskRecord.WorkStatus),
+			TargetStatus:      target,
+			CurrentFlowNodeID: taskRecord.CurrentFlowNodeID,
+			Reason:            "task flow validation requires flow node repository",
+		}
+	}
+	currentNode, err := s.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return ErrTaskFlowStateConflict{
+				TaskID:            taskRecord.ID,
+				WorkStatus:        normalizeStatus(taskRecord.WorkStatus),
+				TargetStatus:      target,
+				CurrentFlowNodeID: taskRecord.CurrentFlowNodeID,
+				Reason:            "task current flow node is missing",
+			}
+		}
+		return err
+	}
+	expected := expectedTaskRuntimeStatusForNode(currentNode)
+	if target == expected {
+		return nil
+	}
+	return ErrTaskFlowStateConflict{
+		TaskID:            taskRecord.ID,
+		WorkStatus:        normalizeStatus(taskRecord.WorkStatus),
+		TargetStatus:      target,
+		CurrentFlowNodeID: taskRecord.CurrentFlowNodeID,
+		CurrentNodeType:   normalizeStatus(currentNode.NodeType),
+		Reason:            fmt.Sprintf("task cannot enter %s while current flow node %s requires %s", target, normalizeStatus(currentNode.NodeType), expected),
+	}
+}
+
+func expectedTaskRuntimeStatusForNode(node repo.FlowNode) string {
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") || node.RequiresHumanReview {
+		return "review"
+	}
+	return "in_progress"
 }
 
 func (s *service) validateExecutableFlowTemplate(ctx context.Context, flowTemplateID uuid.UUID) error {

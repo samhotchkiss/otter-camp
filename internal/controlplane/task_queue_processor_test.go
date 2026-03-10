@@ -307,10 +307,12 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *test
 	processor := &TaskQueueProcessor{
 		tasks: &fakeTaskQueueTaskRepository{
 			task: repo.ProjectTask{
-				ID:             taskID,
-				OrganizationID: orgID,
-				ProjectID:      projectID,
-				Title:          "Flow advanced task",
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				Title:             "Flow advanced task",
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
 			},
 		},
 		flowNodes: &fakeTaskQueueFlowNodeRepository{
@@ -323,7 +325,7 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *test
 			},
 		},
 		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
-			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: nodeID, SessionID: &sessionID},
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, Status: "active", SessionID: &sessionID},
 		},
 		runs:  runService,
 		chats: chatService,
@@ -387,7 +389,7 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresHumanActor(t *testing.T
 			},
 		},
 		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
-			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: nodeID, SessionID: &sessionID},
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, Status: "active", SessionID: &sessionID},
 		},
 		runs:  runService,
 		chats: &fakeTaskQueueChatService{},
@@ -435,6 +437,60 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresTerminalTransition(t *t
 	}
 }
 
+func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresTaskFlowRuntimeMismatch(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	agentID := uuid.New()
+	sessionID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				Title:             "Stale flow task",
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{
+				ID:        nodeID,
+				NodeType:  "work",
+				ActorType: strPtr("agent"),
+				ActorID:   &agentID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, Status: "active", SessionID: &sessionID},
+		},
+		runs:  runService,
+		chats: &fakeTaskQueueChatService{},
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":              taskID,
+		"project_id":           projectID,
+		"to_flow_node_id":      nodeID,
+		"to_flow_execution_id": executionID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := processor.handleFlowAdvancedEvent(ctx, eventbus.DomainEvent{EventType: "flow.advanced", Payload: payload}); err != nil {
+		t.Fatalf("handleFlowAdvancedEvent: %v", err)
+	}
+	if len(runService.createRunInputs) != 0 {
+		t.Fatalf("CreateRun calls = %d, want 0", len(runService.createRunInputs))
+	}
+}
+
 func TestTaskQueueProcessorHandleFlowAdvancedEventDuplicateIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -454,10 +510,12 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventDuplicateIsIdempotent(t *testi
 	processor := &TaskQueueProcessor{
 		tasks: &fakeTaskQueueTaskRepository{
 			task: repo.ProjectTask{
-				ID:             taskID,
-				OrganizationID: orgID,
-				ProjectID:      projectID,
-				Title:          "Flow duplicate task",
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				Title:             "Flow duplicate task",
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
 			},
 		},
 		flowNodes: &fakeTaskQueueFlowNodeRepository{
@@ -469,7 +527,7 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventDuplicateIsIdempotent(t *testi
 			},
 		},
 		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
-			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: nodeID, SessionID: &sessionID},
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, Status: "active", SessionID: &sessionID},
 		},
 		runs:  runService,
 		chats: chatService,

@@ -228,7 +228,7 @@ func TestAdvanceFlowRejectsSelfReview(t *testing.T) {
 					ProjectID:         projectID,
 					OrganizationID:    uuid.New(),
 					CurrentFlowNodeID: &reviewNodeID,
-					WorkStatus:        "in_progress",
+					WorkStatus:        "review",
 				},
 			},
 		},
