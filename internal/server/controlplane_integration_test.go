@@ -1094,6 +1094,139 @@ func TestOperatorDashboardRecentActivityIncludesFailuresRetriesAndNavigationTarg
 	}
 }
 
+func TestOperatorDashboardShowsProviderHealthAndInvocationFailures(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	providerRepo := repo.NewModelProviderRepo(testServer.Pool)
+	connectionRepo := repo.NewProviderConnectionRepo(testServer.Pool)
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+	invocationRepo := repo.NewModelInvocationRepo(testServer.Pool)
+
+	provider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "ops-dashboard-provider-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		DisplayName: "Ops Dashboard Provider",
+		APIBaseURL:  "https://provider.example",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	connection, err := connectionRepo.Create(ctx, repo.ProviderConnection{
+		OrganizationID:   orgA.ID,
+		ProviderID:       provider.ID,
+		DisplayName:      "Primary Ops Connection",
+		APIKeyRef:        "ref:ops-dashboard-provider",
+		FailoverPriority: 1,
+		MaxConcurrent:    1,
+		HealthStatus:     "rate_limited",
+		IsEnabled:        true,
+	})
+	if err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-provider-health-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		DisplayName:    "Ops Dashboard Provider Health",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		Slug:           "ops-dashboard-provider-template-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		DisplayName:    "Ops Dashboard Provider Template",
+		Description:    "template for provider health dashboard coverage",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	createdByID := adminA.ID
+	task, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Recover rate-limited worker",
+		WorkStatus:     "queued",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		Priority:       100,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	failureClass := "provider_rate_limit"
+	errorCode := "provider_rate_limited"
+	errorMessage := "retry after 60s"
+	if _, err := invocationRepo.Create(ctx, repo.ModelInvocation{
+		OrganizationID:       orgA.ID,
+		ModelProviderID:      provider.ID,
+		ProviderConnectionID: &connection.ID,
+		ModelProfileID:       stringPtrTest("ops-dashboard-profile"),
+		InvocationPurpose:    "agent_turn",
+		Status:               "failed",
+		FailureClass:         &failureClass,
+		ErrorCode:            &errorCode,
+		ErrorMessage:         &errorMessage,
+		ModelName:            "gpt-4o-mini",
+		ProjectID:            &project.ID,
+		ProjectTaskID:        &task.ID,
+	}); err != nil {
+		t.Fatalf("create invocation: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=6", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	if payload.Summary.ProviderIssues != 1 {
+		t.Fatalf("provider_issues=%d want=1 body=%s", payload.Summary.ProviderIssues, string(resp.Body))
+	}
+	if payload.ProviderHealth.TotalCount != 1 {
+		t.Fatalf("provider health total_count=%d want=1 body=%s", payload.ProviderHealth.TotalCount, string(resp.Body))
+	}
+	if len(payload.ProviderHealth.Items) != 1 {
+		t.Fatalf("provider health items=%d want=1 body=%s", len(payload.ProviderHealth.Items), string(resp.Body))
+	}
+	if payload.ProviderHealth.Items[0].HealthStatus != "rate_limited" {
+		t.Fatalf("provider health status=%q want=rate_limited body=%s", payload.ProviderHealth.Items[0].HealthStatus, string(resp.Body))
+	}
+
+	failureItem := findOperatorDashboardItem(payload.RecentFailures.Items, "model_invocation_failed", uuid.Nil)
+	if failureItem == nil {
+		t.Fatalf("recent failures missing model_invocation_failed body=%s", string(resp.Body))
+	}
+	if !strings.Contains(failureItem.Summary, "provider rate limit") {
+		t.Fatalf("failure summary=%q want provider rate limit detail body=%s", failureItem.Summary, string(resp.Body))
+	}
+	if failureItem.Project == nil || failureItem.Project.ID != project.ID {
+		t.Fatalf("failure project ref=%+v want=%s body=%s", failureItem.Project, project.ID, string(resp.Body))
+	}
+	if failureItem.Task == nil || failureItem.Task.ID != task.ID {
+		t.Fatalf("failure task ref=%+v want=%s body=%s", failureItem.Task, task.ID, string(resp.Body))
+	}
+}
+
 func newControlPlaneTestServer(t *testing.T) (*controlPlaneIntegrationServer, repo.Organization, repo.HumanUser, repo.Organization, repo.HumanUser) {
 	t.Helper()
 
@@ -1156,6 +1289,9 @@ func findOperatorDashboardItem(items []operatorDashboardItemResponse, kind strin
 		item := &items[i]
 		if strings.TrimSpace(item.Kind) != strings.TrimSpace(kind) {
 			continue
+		}
+		if id == uuid.Nil {
+			return item
 		}
 		switch {
 		case item.Run != nil && item.Run.ID == id:

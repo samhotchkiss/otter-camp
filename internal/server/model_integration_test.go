@@ -487,6 +487,129 @@ func TestModelAPIUsageQueryAndOrgIsolation(t *testing.T) {
 	}
 }
 
+func TestModelAPIInvocationHistorySupportsProjectAndTaskFilters(t *testing.T) {
+	testServer, orgA, adminA, _, _, _ := newModelTestServer(t)
+	defer testServer.Close()
+
+	ctx := context.Background()
+	providerRepo := repo.NewModelProviderRepo(testServer.Pool)
+	connectionRepo := repo.NewProviderConnectionRepo(testServer.Pool)
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+	invocationRepo := repo.NewModelInvocationRepo(testServer.Pool)
+
+	provider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "provider-invocation-history-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		DisplayName: "Invocation History Provider",
+		APIBaseURL:  "https://provider.example",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	connection, err := connectionRepo.Create(ctx, repo.ProviderConnection{
+		OrganizationID:   orgA.ID,
+		ProviderID:       provider.ID,
+		DisplayName:      "Primary Connection",
+		APIKeyRef:        "ref:history-key",
+		FailoverPriority: 1,
+		MaxConcurrent:    1,
+		HealthStatus:     "unavailable",
+		IsEnabled:        true,
+	})
+	if err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "invocation-history-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		DisplayName:    "Invocation History Project",
+		Description:    "project for invocation history filtering",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		Slug:           "invocation-history-template-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		DisplayName:    "Invocation History Template",
+		Description:    "template for invocation history task",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	task, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Investigate provider auth",
+		WorkStatus:     "queued",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		Priority:       100,
+		CreatedByType:  "human_user",
+		CreatedByID:    &adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	failureClass := "provider_auth"
+	errorCode := "provider_auth_failed"
+	errorMessage := "invalid credentials"
+	if _, err := invocationRepo.Create(ctx, repo.ModelInvocation{
+		OrganizationID:       orgA.ID,
+		ModelProviderID:      provider.ID,
+		ProviderConnectionID: &connection.ID,
+		ModelProfileID:       stringPtrTest("history-profile"),
+		InvocationPurpose:    "agent_turn",
+		Status:               "failed",
+		FailureClass:         &failureClass,
+		ErrorCode:            &errorCode,
+		ErrorMessage:         &errorMessage,
+		ModelName:            "gpt-4o-mini",
+		ProjectID:            &project.ID,
+		ProjectTaskID:        &task.ID,
+	}); err != nil {
+		t.Fatalf("create invocation: %v", err)
+	}
+
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	projectResp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/model/invocations?project_id="+project.ID.String(), nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if projectResp.StatusCode != http.StatusOK {
+		t.Fatalf("project invocations status=%d want=%d body=%s", projectResp.StatusCode, http.StatusOK, string(projectResp.Body))
+	}
+	if got := jsonPathString(t, projectResp.Body, "data", "0", "failure_class"); got != "provider_auth" {
+		t.Fatalf("project filter failure_class=%q want=provider_auth body=%s", got, string(projectResp.Body))
+	}
+	if got := jsonPathString(t, projectResp.Body, "data", "0", "error_code"); got != "provider_auth_failed" {
+		t.Fatalf("project filter error_code=%q want=provider_auth_failed body=%s", got, string(projectResp.Body))
+	}
+
+	taskResp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/model/invocations?task_id="+task.ID.String(), nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if taskResp.StatusCode != http.StatusOK {
+		t.Fatalf("task invocations status=%d want=%d body=%s", taskResp.StatusCode, http.StatusOK, string(taskResp.Body))
+	}
+	if got := jsonPathString(t, taskResp.Body, "data", "0", "provider_connection_id"); got != connection.ID.String() {
+		t.Fatalf("task filter provider_connection_id=%q want=%q body=%s", got, connection.ID.String(), string(taskResp.Body))
+	}
+	if got := jsonPathString(t, taskResp.Body, "data", "0", "error_message"); got != "invalid credentials" {
+		t.Fatalf("task filter error_message=%q want=%q body=%s", got, "invalid credentials", string(taskResp.Body))
+	}
+}
+
 func newModelTestServer(t *testing.T) (*authIntegrationServer, repo.Organization, repo.HumanUser, repo.HumanUser, repo.Organization, repo.HumanUser) {
 	t.Helper()
 

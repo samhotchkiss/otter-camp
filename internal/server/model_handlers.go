@@ -67,6 +67,8 @@ type modelProfileAssignmentRepository interface {
 
 type modelInvocationRepository interface {
 	ListByOrg(ctx context.Context, organizationID uuid.UUID) ([]repo.ModelInvocation, error)
+	ListByProject(ctx context.Context, organizationID, projectID uuid.UUID) ([]repo.ModelInvocation, error)
+	ListByTask(ctx context.Context, organizationID, taskID uuid.UUID) ([]repo.ModelInvocation, error)
 	ListByRun(ctx context.Context, organizationID, runID uuid.UUID) ([]repo.ModelInvocation, error)
 	ListBySession(ctx context.Context, organizationID, sessionID uuid.UUID) ([]repo.ModelInvocation, error)
 }
@@ -241,21 +243,25 @@ type assignmentResponse struct {
 }
 
 type invocationResponse struct {
-	ID                uuid.UUID       `json:"id"`
-	OrganizationID    uuid.UUID       `json:"organization_id"`
-	ModelProviderID   uuid.UUID       `json:"model_provider_id"`
-	ModelProfileID    *string         `json:"model_profile_id"`
-	InvocationPurpose string          `json:"invocation_purpose"`
-	Status            string          `json:"status"`
-	InputTokens       *int            `json:"input_tokens"`
-	OutputTokens      *int            `json:"output_tokens"`
-	ModelName         string          `json:"model_name"`
-	Metadata          json.RawMessage `json:"metadata"`
-	SessionID         *uuid.UUID      `json:"session_id"`
-	TurnID            *uuid.UUID      `json:"turn_id"`
-	RunID             *uuid.UUID      `json:"run_id"`
-	CreatedAt         time.Time       `json:"created_at"`
-	CompletedAt       *time.Time      `json:"completed_at"`
+	ID                   uuid.UUID       `json:"id"`
+	OrganizationID       uuid.UUID       `json:"organization_id"`
+	ModelProviderID      uuid.UUID       `json:"model_provider_id"`
+	ProviderConnectionID *uuid.UUID      `json:"provider_connection_id,omitempty"`
+	ModelProfileID       *string         `json:"model_profile_id"`
+	InvocationPurpose    string          `json:"invocation_purpose"`
+	Status               string          `json:"status"`
+	FailureClass         *string         `json:"failure_class,omitempty"`
+	ErrorCode            *string         `json:"error_code,omitempty"`
+	ErrorMessage         *string         `json:"error_message,omitempty"`
+	InputTokens          *int            `json:"input_tokens"`
+	OutputTokens         *int            `json:"output_tokens"`
+	ModelName            string          `json:"model_name"`
+	Metadata             json.RawMessage `json:"metadata"`
+	SessionID            *uuid.UUID      `json:"session_id"`
+	TurnID               *uuid.UUID      `json:"turn_id"`
+	RunID                *uuid.UUID      `json:"run_id"`
+	CreatedAt            time.Time       `json:"created_at"`
+	CompletedAt          *time.Time      `json:"completed_at"`
 }
 
 type usageResponse struct {
@@ -1152,6 +1158,8 @@ func (h modelHandlers) listInvocations(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	runIDText := strings.TrimSpace(query.Get("run_id"))
 	sessionIDText := strings.TrimSpace(query.Get("session_id"))
+	projectIDText := strings.TrimSpace(query.Get("project_id"))
+	taskIDText := strings.TrimSpace(query.Get("task_id"))
 
 	var (
 		items []repo.ModelInvocation
@@ -1172,6 +1180,20 @@ func (h modelHandlers) listInvocations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items, err = h.invocations.ListBySession(r.Context(), principal.OrganizationID, sessionID)
+	case taskIDText != "":
+		taskID, parseErr := uuid.Parse(taskIDText)
+		if parseErr != nil {
+			responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid task_id")
+			return
+		}
+		items, err = h.invocations.ListByTask(r.Context(), principal.OrganizationID, taskID)
+	case projectIDText != "":
+		projectID, parseErr := uuid.Parse(projectIDText)
+		if parseErr != nil {
+			responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project_id")
+			return
+		}
+		items, err = h.invocations.ListByProject(r.Context(), principal.OrganizationID, projectID)
 	default:
 		items, err = h.invocations.ListByOrg(r.Context(), principal.OrganizationID)
 	}
@@ -1952,21 +1974,25 @@ func toInvocationResponse(item repo.ModelInvocation) invocationResponse {
 		metadata = json.RawMessage(`{}`)
 	}
 	return invocationResponse{
-		ID:                item.ID,
-		OrganizationID:    item.OrganizationID,
-		ModelProviderID:   item.ModelProviderID,
-		ModelProfileID:    item.ModelProfileID,
-		InvocationPurpose: item.InvocationPurpose,
-		Status:            item.Status,
-		InputTokens:       item.InputTokens,
-		OutputTokens:      item.OutputTokens,
-		ModelName:         item.ModelName,
-		Metadata:          metadata,
-		SessionID:         item.SessionID,
-		TurnID:            item.TurnID,
-		RunID:             item.RunID,
-		CreatedAt:         item.CreatedAt,
-		CompletedAt:       item.CompletedAt,
+		ID:                   item.ID,
+		OrganizationID:       item.OrganizationID,
+		ModelProviderID:      item.ModelProviderID,
+		ProviderConnectionID: item.ProviderConnectionID,
+		ModelProfileID:       item.ModelProfileID,
+		InvocationPurpose:    item.InvocationPurpose,
+		Status:               item.Status,
+		FailureClass:         item.FailureClass,
+		ErrorCode:            item.ErrorCode,
+		ErrorMessage:         item.ErrorMessage,
+		InputTokens:          item.InputTokens,
+		OutputTokens:         item.OutputTokens,
+		ModelName:            item.ModelName,
+		Metadata:             metadata,
+		SessionID:            item.SessionID,
+		TurnID:               item.TurnID,
+		RunID:                item.RunID,
+		CreatedAt:            item.CreatedAt,
+		CompletedAt:          item.CompletedAt,
 	}
 }
 

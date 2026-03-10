@@ -376,6 +376,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		Providers:   repo.NewModelProviderRepo(pool.Raw()),
 		Secrets:     secret.NewService(repo.NewSecretRepo(pool.Raw())),
 		Invocations: modelInvocationRepo,
+		HealthStore: repo.NewProviderConnectionRepo(pool.Raw()),
 		Enqueuer:    jqWorker,
 		Health:      healthChecker,
 		Spans:       traceSpanService,

@@ -112,6 +112,7 @@ func TestLiveModelGatewayStreamCompleteOpenAIUpdatesInvocation(t *testing.T) {
 		Providers:   providerRepo,
 		Secrets:     secretSvc,
 		Invocations: invocationRepo,
+		HealthStore: connectionRepo,
 		Health:      health,
 	})
 	if err != nil {
@@ -417,6 +418,17 @@ func TestLiveModelGatewayMapsAuthErrors(t *testing.T) {
 	if state := health.GetState(connection.ID); state != HealthStateUnavailable {
 		t.Fatalf("connection health = %q, want %q", state, HealthStateUnavailable)
 	}
+
+	rows, err := invocationRepo.ListByOrg(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("ListByOrg: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("invocation rows = %d, want 1", len(rows))
+	}
+	if rows[0].FailureClass == nil || *rows[0].FailureClass != "provider_auth" {
+		t.Fatalf("failure_class = %v, want provider_auth", rows[0].FailureClass)
+	}
 }
 
 func TestLiveModelGatewayFailsOverAfterAuthFailure(t *testing.T) {
@@ -522,6 +534,7 @@ func TestLiveModelGatewayFailsOverAfterAuthFailure(t *testing.T) {
 		Providers:   providerRepo,
 		Secrets:     secretSvc,
 		Invocations: invocationRepo,
+		HealthStore: connectionRepo,
 		Health:      health,
 	})
 	if err != nil {
@@ -562,6 +575,323 @@ func TestLiveModelGatewayFailsOverAfterAuthFailure(t *testing.T) {
 	}
 	if rows[1].Status != "failed" {
 		t.Fatalf("failed status = %q, want failed", rows[1].Status)
+	}
+	if rows[1].FailureClass == nil || *rows[1].FailureClass != "provider_auth" {
+		t.Fatalf("failed failure_class = %v, want provider_auth", rows[1].FailureClass)
+	}
+	storedPrimary, err := connectionRepo.GetByID(ctx, primary.ID)
+	if err != nil {
+		t.Fatalf("GetByID primary: %v", err)
+	}
+	if storedPrimary.HealthStatus != string(HealthStateUnavailable) {
+		t.Fatalf("primary health_status = %q, want %q", storedPrimary.HealthStatus, HealthStateUnavailable)
+	}
+}
+
+func TestLiveModelGatewayClassifiesRateLimitFailures(t *testing.T) {
+	t.Setenv("OTTERCAMP_MASTER_KEY", base64.StdEncoding.EncodeToString(testMasterKey()))
+	t.Setenv("OTTERCAMP_MASTER_KEY_FILE", "")
+	t.Setenv("OTTERCAMP_KMS_KEY_ID", "")
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+	invocationRepo := repo.NewModelInvocationRepo(pool)
+	secretSvc := secret.NewService(repo.NewSecretRepo(pool))
+
+	org := mustCreateOrg(t, ctx, orgRepo, repo.Organization{
+		Slug:        "live-gateway-rate-limit-org",
+		DisplayName: "Live Gateway Rate Limit Org",
+	})
+	if err := secretSvc.Set(ctx, org.ID, "rate-limit-key", "Rate Limit Key", "", "sk-rate-limit", secret.Principal{Type: "human", ID: uuid.Nil}); err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
+
+	serverURL := testutil.MockProviderServer(t, testutil.MockProviderFixture{
+		Handlers: []testutil.MockHandler{{
+			StatusCode: http.StatusTooManyRequests,
+			Headers:    map[string]string{"Retry-After": "12"},
+			Body:       `{"error":"rate_limited"}`,
+		}},
+	})
+
+	provider := mustCreateProvider(t, ctx, providerRepo, repo.ModelProvider{
+		Slug:        "openai-rate-limit",
+		DisplayName: "OpenAI",
+		APIBaseURL:  serverURL,
+		IsEnabled:   true,
+	})
+	connection := mustCreateConnection(t, ctx, connectionRepo, repo.ProviderConnection{
+		OrganizationID:     org.ID,
+		ProviderID:         provider.ID,
+		DisplayName:        "OpenAI Rate Limited",
+		APIKeyRef:          "ref:rate-limit-key",
+		APIBaseURLOverride: &serverURL,
+		FailoverPriority:   1,
+		MaxConcurrent:      1,
+		IsEnabled:          true,
+	})
+
+	orgID := org.ID
+	profile, err := profileRepo.Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    "rate-limit-profile",
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          provider.ID,
+		ModelName:           "gpt-4o-mini",
+		DisplayName:         "Rate Limit Profile",
+		ContextWindowTokens: 128000,
+		MaxOutputTokens:     2048,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
+	})
+	if err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+
+	health := NewHealthChecker()
+	gw, err := NewLiveModelGateway(LiveModelGatewayOptions{
+		Router:      NewRouter(profileRepo, connectionRepo, health),
+		Providers:   providerRepo,
+		Secrets:     secretSvc,
+		Invocations: invocationRepo,
+		HealthStore: connectionRepo,
+		Health:      health,
+	})
+	if err != nil {
+		t.Fatalf("NewLiveModelGateway: %v", err)
+	}
+
+	_, err = gw.Complete(ctx, turn.ModelRequest{
+		OrganizationID: org.ID,
+		Purpose:        "agent_turn",
+		Profile:        profile,
+		HumanMessages:  []string{"hello"},
+	})
+	if !errors.Is(err, turn.ErrRateLimited) {
+		t.Fatalf("err = %v, want turn.ErrRateLimited", err)
+	}
+
+	rows, err := invocationRepo.ListByOrg(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("ListByOrg: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("invocation rows = %d, want 1", len(rows))
+	}
+	if rows[0].FailureClass == nil || *rows[0].FailureClass != "provider_rate_limit" {
+		t.Fatalf("failure_class = %v, want provider_rate_limit", rows[0].FailureClass)
+	}
+	storedConnection, err := connectionRepo.GetByID(ctx, connection.ID)
+	if err != nil {
+		t.Fatalf("GetByID connection: %v", err)
+	}
+	if storedConnection.HealthStatus != string(HealthStateRateLimited) {
+		t.Fatalf("health_status = %q, want %q", storedConnection.HealthStatus, HealthStateRateLimited)
+	}
+}
+
+func TestLiveModelGatewayClassifiesTransientProviderFailures(t *testing.T) {
+	t.Setenv("OTTERCAMP_MASTER_KEY", base64.StdEncoding.EncodeToString(testMasterKey()))
+	t.Setenv("OTTERCAMP_MASTER_KEY_FILE", "")
+	t.Setenv("OTTERCAMP_KMS_KEY_ID", "")
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+	invocationRepo := repo.NewModelInvocationRepo(pool)
+	secretSvc := secret.NewService(repo.NewSecretRepo(pool))
+
+	org := mustCreateOrg(t, ctx, orgRepo, repo.Organization{
+		Slug:        "live-gateway-transient-org",
+		DisplayName: "Live Gateway Transient Org",
+	})
+	if err := secretSvc.Set(ctx, org.ID, "transient-key", "Transient Key", "", "sk-transient", secret.Principal{Type: "human", ID: uuid.Nil}); err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
+
+	serverURL := testutil.MockProviderServer(t, testutil.MockProviderFixture{
+		Handlers: []testutil.MockHandler{{
+			StatusCode: http.StatusBadGateway,
+			Body:       `{"error":"upstream_unavailable"}`,
+		}},
+	})
+
+	provider := mustCreateProvider(t, ctx, providerRepo, repo.ModelProvider{
+		Slug:        "openai-transient",
+		DisplayName: "OpenAI",
+		APIBaseURL:  serverURL,
+		IsEnabled:   true,
+	})
+	_ = mustCreateConnection(t, ctx, connectionRepo, repo.ProviderConnection{
+		OrganizationID:     org.ID,
+		ProviderID:         provider.ID,
+		DisplayName:        "OpenAI Transient",
+		APIKeyRef:          "ref:transient-key",
+		APIBaseURLOverride: &serverURL,
+		FailoverPriority:   1,
+		MaxConcurrent:      1,
+		IsEnabled:          true,
+	})
+
+	orgID := org.ID
+	profile, err := profileRepo.Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    "transient-profile",
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          provider.ID,
+		ModelName:           "gpt-4o-mini",
+		DisplayName:         "Transient Profile",
+		ContextWindowTokens: 128000,
+		MaxOutputTokens:     2048,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
+	})
+	if err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+
+	health := NewHealthChecker()
+	gw, err := NewLiveModelGateway(LiveModelGatewayOptions{
+		Router:      NewRouter(profileRepo, connectionRepo, health),
+		Providers:   providerRepo,
+		Secrets:     secretSvc,
+		Invocations: invocationRepo,
+		HealthStore: connectionRepo,
+		Health:      health,
+	})
+	if err != nil {
+		t.Fatalf("NewLiveModelGateway: %v", err)
+	}
+
+	_, err = gw.Complete(ctx, turn.ModelRequest{
+		OrganizationID: org.ID,
+		Purpose:        "agent_turn",
+		Profile:        profile,
+		HumanMessages:  []string{"hello"},
+	})
+	if !errors.Is(err, turn.ErrModelTransient) {
+		t.Fatalf("err = %v, want turn.ErrModelTransient", err)
+	}
+
+	rows, err := invocationRepo.ListByOrg(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("ListByOrg: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("invocation rows = %d, want 1", len(rows))
+	}
+	if rows[0].FailureClass == nil || *rows[0].FailureClass != "provider_transient" {
+		t.Fatalf("failure_class = %v, want provider_transient", rows[0].FailureClass)
+	}
+}
+
+func TestLiveModelGatewayClassifiesProductRuntimeFailures(t *testing.T) {
+	t.Setenv("OTTERCAMP_MASTER_KEY", base64.StdEncoding.EncodeToString(testMasterKey()))
+	t.Setenv("OTTERCAMP_MASTER_KEY_FILE", "")
+	t.Setenv("OTTERCAMP_KMS_KEY_ID", "")
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+	invocationRepo := repo.NewModelInvocationRepo(pool)
+	secretSvc := secret.NewService(repo.NewSecretRepo(pool))
+
+	org := mustCreateOrg(t, ctx, orgRepo, repo.Organization{
+		Slug:        "live-gateway-product-runtime-org",
+		DisplayName: "Live Gateway Product Runtime Org",
+	})
+
+	provider := mustCreateProvider(t, ctx, providerRepo, repo.ModelProvider{
+		Slug:        "openai-product-runtime",
+		DisplayName: "OpenAI",
+		APIBaseURL:  "https://provider.example",
+		IsEnabled:   true,
+	})
+	connection := mustCreateConnection(t, ctx, connectionRepo, repo.ProviderConnection{
+		OrganizationID:   org.ID,
+		ProviderID:       provider.ID,
+		DisplayName:      "OpenAI Missing Secret",
+		APIKeyRef:        "ref:missing-runtime-secret",
+		FailoverPriority: 1,
+		MaxConcurrent:    1,
+		IsEnabled:        true,
+	})
+
+	orgID := org.ID
+	profile, err := profileRepo.Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    "product-runtime-profile",
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          provider.ID,
+		ModelName:           "gpt-4o-mini",
+		DisplayName:         "Product Runtime Profile",
+		ContextWindowTokens: 128000,
+		MaxOutputTokens:     2048,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
+	})
+	if err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+
+	health := NewHealthChecker()
+	gw, err := NewLiveModelGateway(LiveModelGatewayOptions{
+		Router:      NewRouter(profileRepo, connectionRepo, health),
+		Providers:   providerRepo,
+		Secrets:     secretSvc,
+		Invocations: invocationRepo,
+		HealthStore: connectionRepo,
+		Health:      health,
+	})
+	if err != nil {
+		t.Fatalf("NewLiveModelGateway: %v", err)
+	}
+
+	_, err = gw.Complete(ctx, turn.ModelRequest{
+		OrganizationID: org.ID,
+		Purpose:        "agent_turn",
+		Profile:        profile,
+		HumanMessages:  []string{"hello"},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	rows, err := invocationRepo.ListByOrg(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("ListByOrg: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("invocation rows = %d, want 1", len(rows))
+	}
+	if rows[0].FailureClass == nil || *rows[0].FailureClass != "product_runtime" {
+		t.Fatalf("failure_class = %v, want product_runtime", rows[0].FailureClass)
+	}
+	storedConnection, err := connectionRepo.GetByID(ctx, connection.ID)
+	if err != nil {
+		t.Fatalf("GetByID connection: %v", err)
+	}
+	if storedConnection.HealthStatus != string(HealthStateHealthy) {
+		t.Fatalf("health_status = %q, want %q", storedConnection.HealthStatus, HealthStateHealthy)
 	}
 }
 

@@ -56,6 +56,11 @@ type liveModelInvocationRepo interface {
 	modelInvocationLookup
 	Create(ctx context.Context, invocation repo.ModelInvocation) (repo.ModelInvocation, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorCode, errorMessage *string) (repo.ModelInvocation, error)
+	UpdateFailure(ctx context.Context, id uuid.UUID, status string, failureClass, errorCode, errorMessage *string) (repo.ModelInvocation, error)
+}
+
+type providerConnectionHealthWriter interface {
+	SetHealthStatus(ctx context.Context, id uuid.UUID, healthStatus string) (repo.ProviderConnection, error)
 }
 
 type traceSpanCreator interface {
@@ -69,6 +74,7 @@ type LiveModelGatewayOptions struct {
 	Providers   providerByIDLookup
 	Secrets     SecretResolver
 	Invocations liveModelInvocationRepo
+	HealthStore providerConnectionHealthWriter
 	Enqueuer    rollupJobEnqueuer
 	Health      *HealthChecker
 	Concurrency *ConcurrencyManager
@@ -83,6 +89,7 @@ type LiveModelGateway struct {
 	providers    providerByIDLookup
 	secrets      SecretResolver
 	invocations  liveModelInvocationRepo
+	healthStore  providerConnectionHealthWriter
 	enqueuer     rollupJobEnqueuer
 	health       *HealthChecker
 	concurrency  *ConcurrencyManager
@@ -133,6 +140,7 @@ func NewLiveModelGateway(opts LiveModelGatewayOptions) (*LiveModelGateway, error
 		providers:   opts.Providers,
 		secrets:     opts.Secrets,
 		invocations: opts.Invocations,
+		healthStore: opts.HealthStore,
 		enqueuer:    opts.Enqueuer,
 		health:      opts.Health,
 		concurrency: opts.Concurrency,
@@ -274,6 +282,7 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 		}
 
 		g.health.RecordSuccess(connection.ID)
+		g.persistConnectionHealth(ctx, connection.ID, string(HealthStateHealthy))
 		usageOverride := tokenUsageFromModelUsage(result.Usage)
 		if err := g.completeInvocation(ctx, invocation, result.Content, startedAt, result.FirstChunkAt, usageOverride); err != nil {
 			return turn.ModelResponse{}, err
@@ -361,12 +370,19 @@ func (g *LiveModelGateway) markInvocationFailed(ctx context.Context, invocationI
 	if invocationID == uuid.Nil || g == nil || g.invocations == nil {
 		return
 	}
-	errCode := "model_error"
+	failureClass := classifyInvocationFailure(cause)
+	if healthStatus, ok := healthStatusForInvocationFailure(failureClass); ok {
+		invocation, getErr := g.invocations.GetByID(ctx, invocationID)
+		if getErr == nil && invocation.ProviderConnectionID != nil {
+			g.persistConnectionHealth(ctx, *invocation.ProviderConnectionID, healthStatus)
+		}
+	}
+	errCode := invocationErrorCode(failureClass)
 	errMsg := strings.TrimSpace(cause.Error())
 	if errMsg == "" {
 		errMsg = "model provider call failed"
 	}
-	if _, err := g.invocations.UpdateStatus(ctx, invocationID, "failed", &errCode, &errMsg); err != nil {
+	if _, err := g.invocations.UpdateFailure(ctx, invocationID, "failed", stringPtr(string(failureClass)), &errCode, &errMsg); err != nil {
 		g.logger.Warn("failed to mark model invocation as failed", "invocation_id", invocationID, "error", err)
 	}
 }
@@ -473,17 +489,21 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 		switch providerErr.StatusCode {
 		case http.StatusUnauthorized:
 			g.health.MarkUnavailable(connectionID)
+			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateUnavailable))
 			return fmt.Errorf("%w", turn.ErrAuthFailed), false
 		case http.StatusForbidden:
 			g.health.MarkUnavailable(connectionID)
+			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateUnavailable))
 			return fmt.Errorf("%w", turn.ErrAuthFailed), false
 		case http.StatusTooManyRequests:
 			slog.Warn("provider rate limited", "connection_id", connectionID, "retry_after", providerErr.RetryAfter, "detail", providerErr.Err)
 			g.health.MarkRateLimited(connectionID)
+			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateRateLimited))
 			return turn.NewRateLimitedError(providerErr.RetryAfter, providerErr), true
 		default:
 			if providerErr.StatusCode >= http.StatusInternalServerError {
 				g.health.RecordFailure(connectionID, err)
+				g.persistConnectionHealth(context.Background(), connectionID, string(g.health.GetState(connectionID)))
 				return fmt.Errorf("%w", turn.ErrModelTransient), true
 			}
 		}
@@ -497,15 +517,85 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		g.health.RecordFailure(connectionID, err)
+		g.persistConnectionHealth(context.Background(), connectionID, string(g.health.GetState(connectionID)))
 		return fmt.Errorf("%w", turn.ErrModelTransient), true
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
 		g.health.RecordFailure(connectionID, err)
+		g.persistConnectionHealth(context.Background(), connectionID, string(g.health.GetState(connectionID)))
 		return fmt.Errorf("%w", turn.ErrModelTransient), true
 	}
 
 	return err, false
+}
+
+type invocationFailureClass string
+
+const (
+	invocationFailureProviderAuth      invocationFailureClass = "provider_auth"
+	invocationFailureProviderRateLimit invocationFailureClass = "provider_rate_limit"
+	invocationFailureProviderTransient invocationFailureClass = "provider_transient"
+	invocationFailureProductRuntime    invocationFailureClass = "product_runtime"
+)
+
+func classifyInvocationFailure(err error) invocationFailureClass {
+	var providerErr ProviderHTTPError
+	switch {
+	case errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusUnauthorized || providerErr.StatusCode == http.StatusForbidden):
+		return invocationFailureProviderAuth
+	case errors.As(err, &providerErr) && providerErr.StatusCode == http.StatusTooManyRequests:
+		return invocationFailureProviderRateLimit
+	case errors.As(err, &providerErr) && providerErr.StatusCode >= http.StatusInternalServerError:
+		return invocationFailureProviderTransient
+	case errors.Is(err, turn.ErrAuthFailed):
+		return invocationFailureProviderAuth
+	case errors.Is(err, turn.ErrRateLimited):
+		return invocationFailureProviderRateLimit
+	case errors.Is(err, turn.ErrModelTransient), errors.Is(err, context.DeadlineExceeded):
+		return invocationFailureProviderTransient
+	default:
+		var netErr net.Error
+		if errors.As(err, &netErr) {
+			return invocationFailureProviderTransient
+		}
+		return invocationFailureProductRuntime
+	}
+}
+
+func invocationErrorCode(class invocationFailureClass) string {
+	switch class {
+	case invocationFailureProviderAuth:
+		return "provider_auth_failed"
+	case invocationFailureProviderRateLimit:
+		return "provider_rate_limited"
+	case invocationFailureProviderTransient:
+		return "provider_transient_failure"
+	default:
+		return "product_runtime_failure"
+	}
+}
+
+func healthStatusForInvocationFailure(class invocationFailureClass) (string, bool) {
+	switch class {
+	case invocationFailureProviderAuth:
+		return string(HealthStateUnavailable), true
+	case invocationFailureProviderRateLimit:
+		return string(HealthStateRateLimited), true
+	case invocationFailureProviderTransient:
+		return string(HealthStateDegraded), true
+	default:
+		return "", false
+	}
+}
+
+func (g *LiveModelGateway) persistConnectionHealth(ctx context.Context, connectionID uuid.UUID, healthStatus string) {
+	if g == nil || g.healthStore == nil || connectionID == uuid.Nil || strings.TrimSpace(healthStatus) == "" {
+		return
+	}
+	if _, err := g.healthStore.SetHealthStatus(ctx, connectionID, healthStatus); err != nil {
+		g.logger.Warn("failed to persist provider connection health", "connection_id", connectionID, "health_status", healthStatus, "error", err)
+	}
 }
 
 func (g *LiveModelGateway) callProvider(

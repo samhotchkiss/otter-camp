@@ -31,6 +31,7 @@ type ModelInvocation struct {
 	TotalDurationMS          *int
 	AttemptNumber            int
 	FallbackFromInvocationID *uuid.UUID
+	FailureClass             *string
 	ErrorCode                *string
 	ErrorMessage             *string
 	Metadata                 json.RawMessage
@@ -89,6 +90,7 @@ func (r *ModelInvocationRepo) Create(ctx context.Context, invocation ModelInvoca
 			total_duration_ms,
 			attempt_number,
 			fallback_from_invocation_id,
+			failure_class,
 			error_code,
 			error_message,
 			metadata,
@@ -103,16 +105,16 @@ func (r *ModelInvocationRepo) Create(ctx context.Context, invocation ModelInvoca
 			completed_at
 		)
 		VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb,
-			$21, $22, $23, $24, $25, $26, $27, $28, $29
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb,
+			$22, $23, $24, $25, $26, $27, $28, $29, $30
 		)
 		RETURNING id, organization_id, model_provider_id, provider_connection_id, model_profile_id, invocation_purpose, status, prompt_storage_key, response_storage_key,
 		          input_tokens, output_tokens, cache_read_tokens, model_name, is_streaming, latency_ms, total_duration_ms, attempt_number,
-		          fallback_from_invocation_id, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
+		          fallback_from_invocation_id, failure_class, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
 		          run_id, run_step_id, run_attempt_id, created_at, completed_at
 	`, invocation.OrganizationID, invocation.ModelProviderID, invocation.ProviderConnectionID, invocation.ModelProfileID, invocation.InvocationPurpose, status, invocation.PromptStorageKey, invocation.ResponseStorageKey,
 		invocation.InputTokens, invocation.OutputTokens, invocation.CacheReadTokens, invocation.ModelName, invocation.IsStreaming, invocation.LatencyMS, invocation.TotalDurationMS,
-		attemptNumber, invocation.FallbackFromInvocationID, invocation.ErrorCode, invocation.ErrorMessage, metadata, invocation.AgentID, invocation.ProjectID, invocation.ProjectTaskID,
+		attemptNumber, invocation.FallbackFromInvocationID, invocation.FailureClass, invocation.ErrorCode, invocation.ErrorMessage, metadata, invocation.AgentID, invocation.ProjectID, invocation.ProjectTaskID,
 		invocation.SessionID, invocation.TurnID, invocation.RunID, invocation.RunStepID, invocation.RunAttemptID, invocation.CompletedAt,
 	)
 
@@ -127,7 +129,7 @@ func (r *ModelInvocationRepo) GetByID(ctx context.Context, id uuid.UUID) (ModelI
 	row := r.db.QueryRow(ctx, `
 		SELECT id, organization_id, model_provider_id, provider_connection_id, model_profile_id, invocation_purpose, status, prompt_storage_key, response_storage_key,
 		       input_tokens, output_tokens, cache_read_tokens, model_name, is_streaming, latency_ms, total_duration_ms, attempt_number,
-		       fallback_from_invocation_id, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
+		       fallback_from_invocation_id, failure_class, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
 		       run_id, run_step_id, run_attempt_id, created_at, completed_at
 		FROM model_invocation
 		WHERE id = $1
@@ -144,18 +146,23 @@ func (r *ModelInvocationRepo) GetByID(ctx context.Context, id uuid.UUID) (ModelI
 }
 
 func (r *ModelInvocationRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorCode, errorMessage *string) (ModelInvocation, error) {
+	return r.UpdateFailure(ctx, id, status, nil, errorCode, errorMessage)
+}
+
+func (r *ModelInvocationRepo) UpdateFailure(ctx context.Context, id uuid.UUID, status string, failureClass, errorCode, errorMessage *string) (ModelInvocation, error) {
 	row := r.db.QueryRow(ctx, `
 		UPDATE model_invocation
 		SET status = $2,
-		    error_code = $3,
-		    error_message = $4,
+		    failure_class = $3,
+		    error_code = $4,
+		    error_message = $5,
 		    completed_at = CASE WHEN $2 IN ('completed', 'failed', 'cancelled') THEN COALESCE(completed_at, now()) ELSE completed_at END
 		WHERE id = $1
 		RETURNING id, organization_id, model_provider_id, provider_connection_id, model_profile_id, invocation_purpose, status, prompt_storage_key, response_storage_key,
 		          input_tokens, output_tokens, cache_read_tokens, model_name, is_streaming, latency_ms, total_duration_ms, attempt_number,
-		          fallback_from_invocation_id, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
+		          fallback_from_invocation_id, failure_class, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
 		          run_id, run_step_id, run_attempt_id, created_at, completed_at
-	`, id, status, errorCode, errorMessage)
+	`, id, status, failureClass, errorCode, errorMessage)
 
 	updated, err := scanModelInvocation(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -194,7 +201,7 @@ func (r *ModelInvocationRepo) ListByOrg(ctx context.Context, organizationID uuid
 	return r.list(ctx, `
 		SELECT id, organization_id, model_provider_id, provider_connection_id, model_profile_id, invocation_purpose, status, prompt_storage_key, response_storage_key,
 		       input_tokens, output_tokens, cache_read_tokens, model_name, is_streaming, latency_ms, total_duration_ms, attempt_number,
-		       fallback_from_invocation_id, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
+		       fallback_from_invocation_id, failure_class, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
 		       run_id, run_step_id, run_attempt_id, created_at, completed_at
 		FROM model_invocation
 		WHERE organization_id = $1
@@ -219,7 +226,7 @@ func (r *ModelInvocationRepo) ListByProject(ctx context.Context, organizationID,
 	return r.list(ctx, `
 		SELECT id, organization_id, model_provider_id, provider_connection_id, model_profile_id, invocation_purpose, status, prompt_storage_key, response_storage_key,
 		       input_tokens, output_tokens, cache_read_tokens, model_name, is_streaming, latency_ms, total_duration_ms, attempt_number,
-		       fallback_from_invocation_id, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
+		       fallback_from_invocation_id, failure_class, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
 		       run_id, run_step_id, run_attempt_id, created_at, completed_at
 		FROM model_invocation
 		WHERE organization_id = $1
@@ -228,11 +235,24 @@ func (r *ModelInvocationRepo) ListByProject(ctx context.Context, organizationID,
 	`, organizationID, projectID)
 }
 
+func (r *ModelInvocationRepo) ListByTask(ctx context.Context, organizationID, taskID uuid.UUID) ([]ModelInvocation, error) {
+	return r.list(ctx, `
+		SELECT id, organization_id, model_provider_id, provider_connection_id, model_profile_id, invocation_purpose, status, prompt_storage_key, response_storage_key,
+		       input_tokens, output_tokens, cache_read_tokens, model_name, is_streaming, latency_ms, total_duration_ms, attempt_number,
+		       fallback_from_invocation_id, failure_class, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
+		       run_id, run_step_id, run_attempt_id, created_at, completed_at
+		FROM model_invocation
+		WHERE organization_id = $1
+		  AND project_task_id = $2
+		ORDER BY created_at DESC
+	`, organizationID, taskID)
+}
+
 func (r *ModelInvocationRepo) ListBySession(ctx context.Context, organizationID, sessionID uuid.UUID) ([]ModelInvocation, error) {
 	return r.list(ctx, `
 		SELECT id, organization_id, model_provider_id, provider_connection_id, model_profile_id, invocation_purpose, status, prompt_storage_key, response_storage_key,
 		       input_tokens, output_tokens, cache_read_tokens, model_name, is_streaming, latency_ms, total_duration_ms, attempt_number,
-		       fallback_from_invocation_id, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
+		       fallback_from_invocation_id, failure_class, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
 		       run_id, run_step_id, run_attempt_id, created_at, completed_at
 		FROM model_invocation
 		WHERE organization_id = $1
@@ -245,7 +265,7 @@ func (r *ModelInvocationRepo) ListByRun(ctx context.Context, organizationID, run
 	return r.list(ctx, `
 		SELECT id, organization_id, model_provider_id, provider_connection_id, model_profile_id, invocation_purpose, status, prompt_storage_key, response_storage_key,
 		       input_tokens, output_tokens, cache_read_tokens, model_name, is_streaming, latency_ms, total_duration_ms, attempt_number,
-		       fallback_from_invocation_id, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
+		       fallback_from_invocation_id, failure_class, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
 		       run_id, run_step_id, run_attempt_id, created_at, completed_at
 		FROM model_invocation
 		WHERE organization_id = $1
@@ -315,6 +335,7 @@ func scanModelInvocation(row pgx.Row) (ModelInvocation, error) {
 		&invocation.TotalDurationMS,
 		&invocation.AttemptNumber,
 		&invocation.FallbackFromInvocationID,
+		&invocation.FailureClass,
 		&invocation.ErrorCode,
 		&invocation.ErrorMessage,
 		&invocation.Metadata,
