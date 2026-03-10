@@ -6393,6 +6393,9 @@ func TestTurnEngineIntegrationProjectBootstrapBlocksFirstWaveUntilBootstrapGateC
 	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
 		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
 	}
+	// These scenarios stop after bootstrap setup persists but before the first-wave execution
+	// checkpoint can complete, so the last successful checkpoint may be either the selection step
+	// or the subsequent job-claim step depending on whether a runnable child task was claimed.
 	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected &&
 		bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveJobsClaimed {
 		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q or %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected, projectBootstrapCheckpointFirstWaveJobsClaimed)
