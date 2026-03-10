@@ -812,6 +812,7 @@ Full task management in the TUI.
 
 - Task board view (text kanban).
 - Task detail view with flow stepper, subtasks, dependencies, history.
+- Operator dashboard includes a provider health slice and recent model-invocation failures. Provider auth failures, rate limits, transient provider faults, and product/runtime failures are labeled distinctly rather than collapsed into a generic model error.
 - Inbox view with action keybindings.
 - Activity feed (real-time).
 - Agent status view.

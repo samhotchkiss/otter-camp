@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ type operatorDashboardResponse struct {
 	Active         operatorDashboardSectionResponse `json:"active"`
 	Stale          operatorDashboardSectionResponse `json:"stale"`
 	Blocked        operatorDashboardSectionResponse `json:"blocked"`
+	ProviderHealth operatorDashboardProviderHealth  `json:"provider_health"`
 	RecentFailures operatorDashboardSectionResponse `json:"recent_failures"`
 	RecentActivity operatorDashboardSectionResponse `json:"recent_activity"`
 	Thresholds     operatorDashboardThresholds      `json:"thresholds"`
@@ -41,6 +43,7 @@ type operatorDashboardSummaryResponse struct {
 	StaleTasks      int    `json:"stale_tasks"`
 	StaleExecutions int    `json:"stale_executions"`
 	BlockedItems    int    `json:"blocked_items"`
+	ProviderIssues  int    `json:"provider_issues"`
 	RecentFailures  int    `json:"recent_failures"`
 }
 
@@ -53,6 +56,22 @@ type operatorDashboardSectionResponse struct {
 	Count      int                             `json:"count"`
 	TotalCount int                             `json:"total_count"`
 	Items      []operatorDashboardItemResponse `json:"items"`
+}
+
+type operatorDashboardProviderHealth struct {
+	Count      int                                  `json:"count"`
+	TotalCount int                                  `json:"total_count"`
+	Items      []operatorDashboardProviderHealthRow `json:"items"`
+}
+
+type operatorDashboardProviderHealthRow struct {
+	ConnectionID   uuid.UUID `json:"connection_id"`
+	ConnectionName string    `json:"connection_name"`
+	ProviderID     uuid.UUID `json:"provider_id"`
+	ProviderName   string    `json:"provider_name"`
+	HealthStatus   string    `json:"health_status"`
+	IsEnabled      bool      `json:"is_enabled"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type operatorDashboardItemResponse struct {
@@ -149,6 +168,10 @@ func (l operatorDashboardLoader) Load(ctx context.Context, organizationID, userI
 	if err != nil {
 		return operatorDashboardResponse{}, err
 	}
+	providerIssueCount, err := l.countProviderIssues(ctx, organizationID)
+	if err != nil {
+		return operatorDashboardResponse{}, err
+	}
 	recentFailureCount, err := l.countRecentFailures(ctx, organizationID)
 	if err != nil {
 		return operatorDashboardResponse{}, err
@@ -174,6 +197,10 @@ func (l operatorDashboardLoader) Load(ctx context.Context, organizationID, userI
 	if err != nil {
 		return operatorDashboardResponse{}, err
 	}
+	providerHealthItems, err := l.loadProviderHealthItems(ctx, organizationID, limit)
+	if err != nil {
+		return operatorDashboardResponse{}, err
+	}
 	recentFailureItems, err := l.loadRecentFailureItems(ctx, organizationID, limit)
 	if err != nil {
 		return operatorDashboardResponse{}, err
@@ -188,12 +215,13 @@ func (l operatorDashboardLoader) Load(ctx context.Context, organizationID, userI
 		staleTaskCount == 0 &&
 		staleExecutionCount == 0 &&
 		blockedCount == 0 &&
+		providerIssueCount == 0 &&
 		recentFailureCount == 0
 
 	health := "active_healthy"
 	if quietHealthy {
 		health = "quiet_healthy"
-	} else if staleTaskCount > 0 || staleExecutionCount > 0 || blockedCount > 0 || recentFailureCount > 0 {
+	} else if staleTaskCount > 0 || staleExecutionCount > 0 || blockedCount > 0 || providerIssueCount > 0 || recentFailureCount > 0 {
 		health = "attention_required"
 	}
 
@@ -207,6 +235,7 @@ func (l operatorDashboardLoader) Load(ctx context.Context, organizationID, userI
 			StaleTasks:      staleTaskCount,
 			StaleExecutions: staleExecutionCount,
 			BlockedItems:    blockedCount,
+			ProviderIssues:  providerIssueCount,
 			RecentFailures:  recentFailureCount,
 		},
 		Active: operatorDashboardSectionResponse{
@@ -223,6 +252,11 @@ func (l operatorDashboardLoader) Load(ctx context.Context, organizationID, userI
 			Count:      len(blockedItems),
 			TotalCount: blockedCount,
 			Items:      blockedItems,
+		},
+		ProviderHealth: operatorDashboardProviderHealth{
+			Count:      len(providerHealthItems),
+			TotalCount: providerIssueCount,
+			Items:      providerHealthItems,
 		},
 		RecentFailures: operatorDashboardSectionResponse{
 			Count:      len(recentFailureItems),
@@ -435,7 +469,7 @@ func (l operatorDashboardLoader) countHumanInputItems(ctx context.Context, organ
 }
 
 func (l operatorDashboardLoader) countRecentFailures(ctx context.Context, organizationID uuid.UUID) (int, error) {
-	return l.countRecentEvents(ctx, organizationID, []string{
+	eventCount, err := l.countRecentEvents(ctx, organizationID, []string{
 		"run_failed",
 		"attempt_failed",
 		"run_timed_out",
@@ -444,6 +478,14 @@ func (l operatorDashboardLoader) countRecentFailures(ctx context.Context, organi
 		"wakeup_promoted",
 		"supervisor_recovery",
 	})
+	if err != nil {
+		return 0, err
+	}
+	invocationCount, err := l.countRecentInvocationFailures(ctx, organizationID)
+	if err != nil {
+		return 0, err
+	}
+	return eventCount + invocationCount, nil
 }
 
 func (l operatorDashboardLoader) countRecentActivity(ctx context.Context, organizationID uuid.UUID) (int, error) {
@@ -472,6 +514,30 @@ func (l operatorDashboardLoader) countRecentEvents(ctx context.Context, organiza
 		  AND re.created_at >= $2
 		  AND re.event_type = ANY($3::text[])
 	`, organizationID, l.now.Add(-operatorDashboardRecentWindow), eventTypes).Scan(&count)
+	return count, err
+}
+
+func (l operatorDashboardLoader) countProviderIssues(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	var count int
+	err := l.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM provider_connection
+		WHERE organization_id = $1
+		  AND is_enabled = true
+		  AND health_status <> 'healthy'
+	`, organizationID).Scan(&count)
+	return count, err
+}
+
+func (l operatorDashboardLoader) countRecentInvocationFailures(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	var count int
+	err := l.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM model_invocation
+		WHERE organization_id = $1
+		  AND created_at >= $2
+		  AND failure_class IS NOT NULL
+	`, organizationID, l.now.Add(-operatorDashboardRecentWindow)).Scan(&count)
 	return count, err
 }
 
@@ -1246,7 +1312,7 @@ func (l operatorDashboardLoader) loadHumanInputItems(ctx context.Context, organi
 }
 
 func (l operatorDashboardLoader) loadRecentFailureItems(ctx context.Context, organizationID uuid.UUID, limit int) ([]operatorDashboardItemResponse, error) {
-	return l.loadRunEventItems(ctx, organizationID, limit, []string{
+	runItems, err := l.loadRunEventItems(ctx, organizationID, limit, []string{
 		"run_failed",
 		"attempt_failed",
 		"run_timed_out",
@@ -1255,6 +1321,24 @@ func (l operatorDashboardLoader) loadRecentFailureItems(ctx context.Context, org
 		"wakeup_promoted",
 		"supervisor_recovery",
 	})
+	if err != nil {
+		return nil, err
+	}
+	invocationItems, err := l.loadRecentInvocationFailureItems(ctx, organizationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	combined := append(runItems, invocationItems...)
+	sort.Slice(combined, func(i, j int) bool {
+		if combined[i].UpdatedAt.Equal(combined[j].UpdatedAt) {
+			return combined[i].Title < combined[j].Title
+		}
+		return combined[i].UpdatedAt.After(combined[j].UpdatedAt)
+	})
+	if len(combined) > limit {
+		combined = combined[:limit]
+	}
+	return combined, nil
 }
 
 func (l operatorDashboardLoader) loadRecentActivityItems(ctx context.Context, organizationID uuid.UUID, limit int) ([]operatorDashboardItemResponse, error) {
@@ -1329,6 +1413,115 @@ func (l operatorDashboardLoader) loadRunEventItems(ctx context.Context, organiza
 			taskNumber,
 			taskTitle,
 			&runID,
+		))
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return items, nil
+}
+
+func (l operatorDashboardLoader) loadProviderHealthItems(ctx context.Context, organizationID uuid.UUID, limit int) ([]operatorDashboardProviderHealthRow, error) {
+	rows, err := l.pool.Query(ctx, `
+		SELECT
+			pc.id,
+			pc.display_name,
+			mp.id,
+			mp.display_name,
+			pc.health_status,
+			pc.is_enabled,
+			pc.updated_at
+		FROM provider_connection pc
+		JOIN model_provider mp ON mp.id = pc.provider_id
+		WHERE pc.organization_id = $1
+		  AND pc.is_enabled = true
+		  AND pc.health_status <> 'healthy'
+		ORDER BY pc.updated_at DESC, pc.id DESC
+		LIMIT $2
+	`, organizationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]operatorDashboardProviderHealthRow, 0, limit)
+	for rows.Next() {
+		var item operatorDashboardProviderHealthRow
+		if scanErr := rows.Scan(
+			&item.ConnectionID,
+			&item.ConnectionName,
+			&item.ProviderID,
+			&item.ProviderName,
+			&item.HealthStatus,
+			&item.IsEnabled,
+			&item.UpdatedAt,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return items, nil
+}
+
+func (l operatorDashboardLoader) loadRecentInvocationFailureItems(ctx context.Context, organizationID uuid.UUID, limit int) ([]operatorDashboardItemResponse, error) {
+	rows, err := l.pool.Query(ctx, `
+		SELECT
+			mi.failure_class,
+			mi.created_at,
+			COALESCE(NULLIF(mi.error_message, ''), NULLIF(mi.error_code, '')),
+			p.id,
+			p.display_name,
+			t.id,
+			t.task_number,
+			t.title,
+			mi.run_id
+		FROM model_invocation mi
+		LEFT JOIN project_task t ON t.id = mi.project_task_id
+		LEFT JOIN project p ON p.id = COALESCE(mi.project_id, t.project_id)
+		WHERE mi.organization_id = $1
+		  AND mi.created_at >= $2
+		  AND mi.failure_class IS NOT NULL
+		ORDER BY mi.created_at DESC, mi.id DESC
+		LIMIT $3
+	`, organizationID, l.now.Add(-operatorDashboardRecentWindow), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]operatorDashboardItemResponse, 0, limit)
+	for rows.Next() {
+		var (
+			failureClass string
+			createdAt    time.Time
+			detail       *string
+			projectID    *uuid.UUID
+			projectLabel *string
+			taskID       *uuid.UUID
+			taskNumber   *int
+			taskTitle    *string
+			runID        *uuid.UUID
+		)
+		if scanErr := rows.Scan(&failureClass, &createdAt, &detail, &projectID, &projectLabel, &taskID, &taskNumber, &taskTitle, &runID); scanErr != nil {
+			return nil, scanErr
+		}
+		title := taskOrProjectTitle(taskID, taskNumber, taskTitle, projectLabel, uuidPointerValue(runID))
+		items = append(items, l.newDashboardItem(
+			"model_invocation_failed",
+			title,
+			modelInvocationFailureSummary(failureClass, detail),
+			failureClass,
+			createdAt,
+			0,
+			projectID,
+			projectLabel,
+			taskID,
+			taskNumber,
+			taskTitle,
+			runID,
 		))
 	}
 	if rows.Err() != nil {
@@ -1438,6 +1631,22 @@ func runEventSummary(eventType string, detail *string) string {
 	return label
 }
 
+func modelInvocationFailureSummary(failureClass string, detail *string) string {
+	label := map[string]string{
+		"provider_auth":       "provider auth failure",
+		"provider_rate_limit": "provider rate limit",
+		"provider_transient":  "provider transient failure",
+		"product_runtime":     "product/runtime failure",
+	}[strings.TrimSpace(failureClass)]
+	if label == "" {
+		label = strings.ReplaceAll(strings.TrimSpace(failureClass), "_", " ")
+	}
+	if trimmed := strings.TrimSpace(operatorDashboardStringValue(detail)); trimmed != "" {
+		return label + ": " + trimmed
+	}
+	return label
+}
+
 func buildValidationBlockedSummary(toolName, failureReason, failureCode string) string {
 	reason := strings.TrimSpace(failureReason)
 	if reason == "" {
@@ -1498,4 +1707,11 @@ func maxDuration(value, floor time.Duration) time.Duration {
 		return floor
 	}
 	return value
+}
+
+func uuidPointerValue(value *uuid.UUID) uuid.UUID {
+	if value == nil {
+		return uuid.Nil
+	}
+	return *value
 }

@@ -986,7 +986,9 @@ create index on run_attempt (status) where status = 'in_progress';
 
 ### model_invocation (cross-reference to doc 07)
 
-Model invocations are tracked in the `model_invocation` table defined in doc 07. That table should include `run_id`, `run_step_id`, and `run_attempt_id` FK columns so that model calls made during control plane execution can be attributed back to specific runs. The control plane does not own this table — it reads from it for token aggregation and observability.
+Model invocations are tracked in the `model_invocation` table defined in doc 07. That table should include `run_id`, `run_step_id`, and `run_attempt_id` FK columns so that model calls made during control plane execution can be attributed back to specific runs. It also persists a machine-readable `failure_class` for failed calls: `provider_auth`, `provider_rate_limit`, `provider_transient`, or `product_runtime`. The control plane does not own this table — it reads from it for token aggregation and observability.
+
+Operator observability must keep provider faults separate from product/runtime faults. Dashboard/history surfaces combine run-event failures with recent failed model invocations, and provider connection health is surfaced from `provider_connection.health_status` so operators can tell "the provider is failing" apart from "OtterCamp itself is failing" without reading raw rows.
 
 ### tool_execution
 
