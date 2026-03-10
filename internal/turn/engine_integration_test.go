@@ -7249,7 +7249,11 @@ func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t 
 			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
 		}
 		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
-		description := "Partial bootstrap work item that must not be replayed on restart."
+		description := strings.Join([]string{
+			"- Redesign the landing page narrative, responsive layout, and launch messaging for the new product release.",
+			"- Wire the billing workflow, plan changes, and support operations into the product and internal tooling.",
+			"- Stand up analytics instrumentation, dashboards, alerts, and reporting QA for the first launch wave.",
+		}, "\n")
 		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
 			OrganizationID:  fixture.org.ID,
 			ProjectID:       project.ID,
