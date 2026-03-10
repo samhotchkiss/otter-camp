@@ -12854,3 +12854,23 @@ All dependencies (335, 339, 347, 348) now in 05-completed. Dependency gate clear
 - No P0/P1 issues. Two P2 design notes (gate bypass breadth in task_queue_processor.go and service.go) — not blocking.
 - PR #1735 (superseded earlier attempt) remains open with failing lint; not relevant to completion.
 - Reviewer: Claude Opus 4.6
+
+## 348 — Bootstrap gate enforcement (2026-03-10 19:20 UTC)
+- Task file: `02-in-progress/348-bootstrap-task-tree-must-block-project-execution-until-setup-and-sign-off-complete.md`
+- Fixes applied:
+  - Blocked first-wave promotion in `internal/turn/engine.go` until bootstrap setup is complete, Frank sign-off is recorded, and the bootstrap gate can be auto-completed.
+  - Tightened `internal/controlplane/task_queue_processor.go` so queued child tasks cannot run behind an outstanding bootstrap `blocks_scope='all'` gate.
+  - Updated bootstrap integration coverage to assert incomplete bootstrap stays non-runnable, while completed + signed-off bootstrap opens execution, and refreshed docsv2 gating language.
+- Tests run:
+  - `go test ./internal/controlplane -run 'TestSelectNextQueuedTaskUnderProjectGate|TestProcessQueuedTask'`
+  - `go test ./internal/turn -tags integration -run 'TestTurnEngineIntegrationProjectBootstrapBlocksFirstWaveUntilBootstrapGateCompletes|TestTurnEngineIntegrationProjectBootstrapOpensFirstWaveAfterSetupTasksAndFrankSignOff|TestTurnEngineIntegrationBootstrapInvariantHarness'`
+
+## Task 348 — Review (2026-03-10 18:28 UTC)
+Reviewer: Claude Opus 4.6 (autowork-reviewer)
+Result: **Approved and merged** (PR #1747 → main)
+- Removed bootstrap-gate exception from task queue processor so bootstrap gate blocks first-wave like any other `blocks_scope='all'` gate.
+- Engine gate logic returns early via `WaitingForBootstrapGate()` preventing first-wave promotion until setup complete + Frank sign-off.
+- Tests updated to assert blocking behavior (3 integration + 1 unit).
+- docsv2 spec updated to match.
+- All dependencies (339, 340, 341, 347) in 05-completed.
+- CI lint failure was infra/staleness (4s on branch 36 commits behind main); build and tests pass locally on merged branch.
