@@ -546,7 +546,7 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 		Role:       "user",
 		Content:    buildProjectBootstrapRestartPrompt(bundle, updatedProject, *created),
 		Metadata: mustJSONRaw(map[string]any{
-			"source":                      "project_bootstrap_restart",
+			"source":                      projectBootstrapSource,
 			"bootstrap_restart":           true,
 			"bootstrap_source_project_id": updatedProject.ID.String(),
 			"bootstrap_source_session_id": bundle.SourceSessionID,

@@ -1147,6 +1147,17 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		return e.updateProjectBootstrapState(ctx, session, state)
 	}
 
+	if projectBootstrapRestartSession(session) && projectBootstrapRestartScaffoldOnly(progress) {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureRuntime
+		progress.ValidationFailureReason = buildProjectBootstrapRestartScaffoldFailureReason()
+		rt := &turnRuntime{session: session, turn: &chat.ChatTurn{ID: turnID}}
+		if latestCompleted.RespondingID != uuid.Nil {
+			rt.agent.ID = latestCompleted.RespondingID
+		}
+		return e.failProjectBootstrapValidation(ctx, rt, progress, now)
+	}
+
 	if progress.ValidationFailed() {
 		rt := &turnRuntime{session: session, turn: &chat.ChatTurn{ID: turnID}}
 		if latestCompleted.RespondingID != uuid.Nil {
@@ -1517,6 +1528,21 @@ func (p projectBootstrapProgress) WaitingForBootstrapGate() bool {
 		!p.BootstrapGateReady()
 }
 
+func projectBootstrapRestartScaffoldOnly(progress projectBootstrapProgress) bool {
+	return progress.BootstrapTaskID != uuid.Nil &&
+		progress.BootstrapSetupTaskCount > 0 &&
+		progress.AssignmentCount == 0 &&
+		progress.PlannedTaskCount == 0 &&
+		progress.FirstWaveTaskCount == 0 &&
+		progress.FirstWavePromotedCount == 0 &&
+		progress.FirstWaveExecutionCount == 0 &&
+		progress.FirstWaveJobCount == 0
+}
+
+func buildProjectBootstrapRestartScaffoldFailureReason() string {
+	return "kickoff validation failed: automatic bootstrap restart recreated only the canonical bootstrap scaffold and never persisted staffed executable work, so the restart was archived instead of remaining active"
+}
+
 func projectBootstrapLastCheckpoint(progress projectBootstrapProgress) string {
 	checkpoint := projectBootstrapCheckpointProjectCreated
 	if progress.AssignmentCount > 0 {
@@ -1874,6 +1900,18 @@ func projectBootstrapCompletedTurnManaged(messages []repo.ChatMessage, latestUse
 		return message.ID == latestUser.ID
 	}
 	return false
+}
+
+func projectBootstrapRestartSession(session *chat.ChatSession) bool {
+	if session == nil || len(session.Metadata) == 0 {
+		return false
+	}
+	metadata := messageMetadataMap(session.Metadata)
+	if raw, ok := metadata["bootstrap_restart"].(bool); ok {
+		return raw
+	}
+	_, ok := metadata["bootstrap_restart"]
+	return ok
 }
 
 func (e *TurnEngine) projectBootstrapRuntimeManaged(ctx context.Context, session *chat.ChatSession, initialMessageID uuid.UUID) bool {
