@@ -90,6 +90,8 @@ const (
 	projectBootstrapFailureMissingAssignments = "missing_assignments"
 	projectBootstrapFailureRepoBinding        = "project_repo_binding_missing"
 	projectBootstrapFailureCompoundParent     = "compound_parent_missing_children"
+	projectBootstrapFailureSetupTaskScope     = "bootstrap_setup_task_unbounded"
+	projectBootstrapFailureSetupTaskChildren  = "bootstrap_setup_task_hidden_children"
 	projectBootstrapFailureFirstWaveFlow      = "first_wave_flow_invalid"
 	projectBootstrapFailureFirstWaveExecution = "first_wave_execution_missing"
 	projectBootstrapFailureFirstWaveSize      = "first_wave_task_unbounded"
@@ -1024,8 +1026,11 @@ func (e *TurnEngine) HandleTaskStatusChangedEvent(ctx context.Context, event eve
 	if err != nil {
 		return err
 	}
-	if progress.BootstrapTaskID == uuid.Nil || progress.ValidationFailed() {
+	if progress.BootstrapTaskID == uuid.Nil {
 		return nil
+	}
+	if progress.ValidationFailed() {
+		return e.refreshProjectBootstrapSessionState(ctx, session, progress)
 	}
 
 	progress, err = e.ensureProjectBootstrapFirstWaveExecution(ctx, progress)
@@ -1605,6 +1610,8 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	}
 
 	plannedTasks := make([]repo.ProjectTask, 0, len(tasks))
+	bootstrapSetupTasks := make([]repo.ProjectTask, 0)
+	bootstrapSetupTaskByID := make(map[uuid.UUID]repo.ProjectTask)
 	childCounts := make(map[uuid.UUID]int)
 	bootstrapTaskNumber := 0
 	for _, task := range tasks {
@@ -1619,6 +1626,10 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		}
 		if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); bootstrapSetupTask {
 			progress.BootstrapSetupTaskCount++
+			bootstrapSetupTasks = append(bootstrapSetupTasks, task)
+			if task.ID != uuid.Nil {
+				bootstrapSetupTaskByID[task.ID] = task
+			}
 			if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") {
 				progress.BootstrapSetupDoneCount++
 				if strings.EqualFold(strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"])), bootstrapFrankSignOffStepSlug) {
@@ -1636,6 +1647,29 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	if len(plannedTasks) == 0 {
 		return progress, nil
 	}
+	for _, task := range bootstrapSetupTasks {
+		prepared, decompErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+			ParentTaskID: task.ID,
+			Title:        task.Title,
+			Description:  task.Description,
+			Metadata:     task.Metadata,
+		})
+		if decompErr != nil && errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = projectBootstrapFailureSetupTaskScope
+			progress.ValidationFailureReason = buildProjectBootstrapSetupTaskSizeFailureReason(task, decompErr.Error())
+			return progress, nil
+		}
+		if decompErr != nil {
+			return projectBootstrapProgress{}, decompErr
+		}
+		if prepared.Applied {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = projectBootstrapFailureSetupTaskScope
+			progress.ValidationFailureReason = buildProjectBootstrapSetupTaskSizeFailureReason(task, "split the setup/orchestration outcome into a bounded checklist and delegate deliverable work into normal project tasks")
+			return progress, nil
+		}
+	}
 
 	repoBindingKnown := e.environments != nil
 	repoBindingPresent := false
@@ -1652,6 +1686,14 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	structuralFailureClass := ""
 	structuralFailureReason := ""
 	for _, task := range plannedTasks {
+		if parentID := taskdecomp.ParseParentTaskID(task.Metadata); parentID != uuid.Nil {
+			if setupTask, ok := bootstrapSetupTaskByID[parentID]; ok {
+				progress.ValidationStatus = projectBootstrapValidationFailed
+				progress.ValidationFailureClass = projectBootstrapFailureSetupTaskChildren
+				progress.ValidationFailureReason = buildProjectBootstrapSetupTaskChildrenFailureReason(setupTask, task)
+				return progress, nil
+			}
+		}
 		childCount := childCounts[task.ID]
 		prepared, decompErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
 			ParentTaskID: task.ID,
@@ -1850,6 +1892,18 @@ func (e *TurnEngine) countProjectBootstrapFirstWaveJobs(ctx context.Context, tas
 
 func buildProjectBootstrapCompoundParentFailureReason(task repo.ProjectTask) string {
 	return fmt.Sprintf("kickoff validation failed: %s is still a broad parent workstream and must be split into bounded executable child tasks before bootstrap can complete", projectBootstrapTaskLabel(task))
+}
+
+func buildProjectBootstrapSetupTaskSizeFailureReason(task repo.ProjectTask, detail string) string {
+	trimmed := strings.TrimSpace(detail)
+	if trimmed == "" {
+		trimmed = "split the setup/orchestration outcome into a smaller checklist and delegate production work into normal project tasks"
+	}
+	return fmt.Sprintf("kickoff validation failed: bootstrap setup %s violates the bounded task-size policy: %s", projectBootstrapTaskLabel(task), trimmed)
+}
+
+func buildProjectBootstrapSetupTaskChildrenFailureReason(setupTask, childTask repo.ProjectTask) string {
+	return fmt.Sprintf("kickoff validation failed: bootstrap setup %s must stay orchestration-only, so executable %s cannot be hidden beneath it; delegate deliverable work into normal project tasks instead", projectBootstrapTaskLabel(setupTask), projectBootstrapTaskLabel(childTask))
 }
 
 func buildProjectBootstrapRepoBindingFailureReason() string {
@@ -2128,7 +2182,7 @@ func projectBootstrapFailureCheckpoint(progress projectBootstrapProgress, failur
 			return projectBootstrapCheckpointTaskTree
 		}
 		return projectBootstrapCheckpointProjectCreated
-	case projectBootstrapFailureCompoundParent, projectBootstrapFailureFirstWaveSize:
+	case projectBootstrapFailureCompoundParent, projectBootstrapFailureFirstWaveSize, projectBootstrapFailureSetupTaskScope, projectBootstrapFailureSetupTaskChildren:
 		if progress.PlannedTaskCount > 0 {
 			return projectBootstrapCheckpointTaskTree
 		}
