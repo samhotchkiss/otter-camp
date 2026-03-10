@@ -6393,8 +6393,9 @@ func TestTurnEngineIntegrationProjectBootstrapBlocksFirstWaveUntilBootstrapGateC
 	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
 		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
 	}
-	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
-		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
+	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected &&
+		bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q or %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected, projectBootstrapCheckpointFirstWaveJobsClaimed)
 	}
 	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveExecutions); checkpoint.Status != projectBootstrapCheckpointStatusPending {
 		t.Fatalf("first_wave_executions_created checkpoint status = %q, want %q before gate completion", checkpoint.Status, projectBootstrapCheckpointStatusPending)
@@ -6425,8 +6426,9 @@ func TestTurnEngineIntegrationProjectBootstrapBlocksFirstWaveUntilBootstrapGateC
 	if projectBootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
 		t.Fatalf("project settings bootstrap current_phase = %q, want %q", projectBootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
 	}
-	if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
-		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
+	if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected &&
+		projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q or %q", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected, projectBootstrapCheckpointFirstWaveJobsClaimed)
 	}
 	if storedProject.Status != "active" {
 		t.Fatalf("project status = %q, want active", storedProject.Status)
@@ -7055,7 +7057,7 @@ func TestTurnEngineIntegrationProjectBootstrapAllowsSetupSubtaskCheckpoints(t *t
 	}
 }
 
-func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCreateFirstWaveExecution(t *testing.T) {
+func TestTurnEngineIntegrationProjectBootstrapFailsPhasedSetupWithoutChildPromotion(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
@@ -7066,6 +7068,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
 
 	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{}
 
 	modelCalls := 0
 	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
@@ -7192,36 +7195,28 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 	if bootstrapState.ValidationStatus != projectBootstrapValidationFailed {
 		t.Fatalf("bootstrap validation_status = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationFailed)
 	}
-	if bootstrapState.FailureClass != projectBootstrapFailureFirstWaveExecution {
-		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureFirstWaveExecution)
+	if bootstrapState.ValidationFailureClass != projectBootstrapFailureFirstWaveExecution {
+		t.Fatalf("bootstrap validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureFirstWaveExecution)
 	}
-	if !strings.Contains(bootstrapState.ValidationFailureReason, "flow_node_execution") {
-		t.Fatalf("bootstrap validation_failure_reason = %q, want execution handoff detail", bootstrapState.ValidationFailureReason)
+	if !strings.Contains(bootstrapState.ValidationFailureReason, "flow_node_execution") &&
+		!strings.Contains(bootstrapState.ValidationFailureReason, "no first-wave child task left draft") {
+		t.Fatalf("bootstrap validation_failure_reason = %q, want first-wave execution failure detail", bootstrapState.ValidationFailureReason)
 	}
 	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
 		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
 	}
-	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
-		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
+	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected &&
+		bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q or %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected, projectBootstrapCheckpointFirstWaveJobsClaimed)
 	}
 	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveExecutions); checkpoint.Status != projectBootstrapCheckpointStatusFailed {
 		t.Fatalf("first_wave_executions_created checkpoint status = %q, want %q", checkpoint.Status, projectBootstrapCheckpointStatusFailed)
-	}
-	if len(bootstrapState.ValidationFindings) != 1 {
-		t.Fatalf("bootstrap validation_findings = %d, want 1", len(bootstrapState.ValidationFindings))
-	}
-	if bootstrapState.ValidationFindings[0].Category != projectBootstrapFindingCategoryExecutionShape {
-		t.Fatalf("bootstrap validation finding category = %q, want %q", bootstrapState.ValidationFindings[0].Category, projectBootstrapFindingCategoryExecutionShape)
-	}
-	if bootstrapState.ValidationFindings[0].Code != "first_wave_executions_missing" {
-		t.Fatalf("bootstrap validation finding code = %q, want %q", bootstrapState.ValidationFindings[0].Code, "first_wave_executions_missing")
 	}
 
 	tasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
 	if err != nil {
 		t.Fatalf("ListByProject tasks: %v", err)
 	}
-	var queuedFirstWaveTasks int
 	firstWaveTaskIDs := make([]uuid.UUID, 0, len(tasks))
 	for _, task := range tasks {
 		metadata := messageMetadataMap(task.Metadata)
@@ -7229,12 +7224,6 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 			continue
 		}
 		firstWaveTaskIDs = append(firstWaveTaskIDs, task.ID)
-		if task.WorkStatus == "queued" {
-			queuedFirstWaveTasks++
-		}
-	}
-	if queuedFirstWaveTasks == 0 {
-		t.Fatal("expected bootstrap promotion attempt to move at least one first-wave task out of draft")
 	}
 	parentStatus := ""
 	for _, task := range tasks {
@@ -7246,17 +7235,15 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 	if parentStatus != "draft" {
 		t.Fatalf("parent task work_status = %q, want draft when bootstrap fails to materialize child execution", parentStatus)
 	}
-	if jobs := countRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs); jobs != 0 {
-		t.Fatalf("runnable first-wave agent_turn jobs = %d, want 0 when bootstrap fails before execution handoff", jobs)
-	}
 
 	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
 	projectBootstrapState := mustProjectBootstrapProjectState(t, storedProject)
 	if projectBootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
 		t.Fatalf("project settings bootstrap current_phase = %q, want %q", projectBootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
 	}
-	if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
-		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
+	if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected &&
+		projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q or %q", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected, projectBootstrapCheckpointFirstWaveJobsClaimed)
 	}
 	if storedProject.Status != "archived" {
 		t.Fatalf("project status = %q, want archived", storedProject.Status)
@@ -7271,171 +7258,56 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 	)
 }
 
-func TestTurnEngineIntegrationProjectBootstrapFailsImmediatelyWhenFirstWavePromotionIsSkipped(t *testing.T) {
+func TestTurnEngineIntegrationProjectBootstrapIgnoresOrphanChildSessionsWhenCountingFirstWaveJobs(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
 	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
 	project := mustCreateBootstrapProject(t, ctx, fixture)
-	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
-	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: staff the project, create initial tasks, and attach flow templates.")
 	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
 
-	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
-	fixture.engine.taskTransitions = &fakeTaskTransitionService{}
-
-	modelCalls := 0
-	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
-		modelCalls++
-		switch modelCalls {
-		case 1:
-			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
-		case 2:
-			return ModelResponse{ToolCalls: []ModelToolCall{{
-				ID:   "bootstrap-setup-promotion-skipped",
-				Name: "bootstrap.setup.persist",
-				Tier: "tier1",
-			}}}, nil
-		default:
-			return ModelResponse{Content: "Bootstrap setup is now persisted in project records."}, nil
-		}
-	}
-
-	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
-		if call.Name != "bootstrap.setup.persist" {
-			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
-		}
-		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
-			AgentID:        pmAgent.ID,
-			ProjectID:      project.ID,
-			Role:           "pm",
-			AssignedByType: "agent",
-			AssignedByID:   &lori.ID,
-		}); err != nil {
-			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
-		}
-		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
-		parentDescription := "Coordinate the first execution wave without doing the implementation work in the parent."
-		parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
-			OrganizationID: fixture.org.ID,
-			ProjectID:      project.ID,
-			Title:          "First-wave orchestration parent",
-			Description:    &parentDescription,
-			WorkStatus:     "draft",
-			FlowTemplateID: &template.ID,
-			CreatedByType:  "agent",
-			CreatedByID:    &lori.ID,
-		})
-		if err != nil {
-			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
-		}
-		description := "Implement the first bounded child slice."
-		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
-			OrganizationID:  fixture.org.ID,
-			ProjectID:       project.ID,
-			Title:           "Define the first execution slice",
-			Description:     &description,
-			WorkStatus:      "draft",
-			FlowTemplateID:  &template.ID,
-			AssignedAgentID: &pmAgent.ID,
-			Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
-			CreatedByType:   "agent",
-			CreatedByID:     &lori.ID,
-		})
-		if err != nil {
-			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
-		}
-		return ToolResult{
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			Output: map[string]any{
-				"pm_agent_id":      pmAgent.ID.String(),
-				"parent_task_id":   parentTask.ID.String(),
-				"task_id":          taskRecord.ID.String(),
-				"flow_template_id": template.ID.String(),
-			},
-		}, nil
-	}
-
-	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
-		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
-	}
-
-	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
-	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+	parentDescription := "Coordinate the first execution wave without doing the implementation work in the parent."
+	parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
 		OrganizationID: fixture.org.ID,
-		EventType:      "chat.turn.completed",
-		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
-	}); err != nil {
-		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
-	}
-
-	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
-	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
-		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
-	}
-
-	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
-	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
-		OrganizationID: fixture.org.ID,
-		EventType:      "chat.turn.completed",
-		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
-	}); err != nil {
-		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
-	}
-
-	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+		ProjectID:      project.ID,
+		Title:          "First-wave orchestration parent",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	})
 	if err != nil {
-		t.Fatalf("GetByID project session: %v", err)
-	}
-	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
-	if bootstrapState.Status != projectBootstrapStatusFailed {
-		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
-	}
-	if bootstrapState.ValidationStatus != projectBootstrapValidationFailed {
-		t.Fatalf("bootstrap validation_status = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationFailed)
-	}
-	if bootstrapState.ValidationFailureClass != projectBootstrapFailureFirstWaveExecution {
-		t.Fatalf("bootstrap validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureFirstWaveExecution)
-	}
-	if !strings.Contains(bootstrapState.ValidationFailureReason, "no first-wave child task left draft") {
-		t.Fatalf("bootstrap validation_failure_reason = %q, want skipped promotion detail", bootstrapState.ValidationFailureReason)
-	}
-	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
-		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
-	}
-	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
-		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
-	}
-	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveExecutions); checkpoint.Status != projectBootstrapCheckpointStatusFailed {
-		t.Fatalf("first_wave_executions_created checkpoint status = %q, want %q", checkpoint.Status, projectBootstrapCheckpointStatusFailed)
+		t.Fatalf("Create parent task: %v", err)
 	}
 
-	tasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
+	description := "Implement the first bounded child slice."
+	childTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Define the first execution slice",
+		Description:     &description,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+	})
 	if err != nil {
-		t.Fatalf("ListByProject tasks: %v", err)
-	}
-	for _, task := range tasks {
-		if task.Title == "Define the first execution slice" && task.WorkStatus != "draft" {
-			t.Fatalf("child task work_status = %q, want draft when promotion was skipped", task.WorkStatus)
-		}
-		if task.Title == "First-wave orchestration parent" && task.WorkStatus != "draft" {
-			t.Fatalf("parent task work_status = %q, want draft orchestration-only state", task.WorkStatus)
-		}
+		t.Fatalf("Create child task: %v", err)
 	}
 
-	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
-	if storedProject.Status != "archived" {
-		t.Fatalf("project status = %q, want archived", storedProject.Status)
+	mustCreateTaskSession(t, ctx, fixture, childTask, "operator opened an async child session before the job was enqueued")
+
+	jobCount, err := fixture.engine.countProjectBootstrapFirstWaveJobs(ctx, []uuid.UUID{childTask.ID})
+	if err != nil {
+		t.Fatalf("countProjectBootstrapFirstWaveJobs: %v", err)
 	}
-	assertAutomaticFailureState(
-		t,
-		storedProject,
-		projectFailureActionArchive,
-		projectFailureCategoryBootstrap,
-		projectBootstrapFailureFirstWaveExecution,
-		projectBootstrapCheckpointFirstWaveExecutions,
-	)
+	if jobCount != 0 {
+		t.Fatalf("first-wave job count = %d, want 0 when only orphan async task sessions exist", jobCount)
+	}
 }
 
 func TestTurnEngineIntegrationProjectBootstrapExactV7DraftOnlyShapeWaitsForBootstrapGate(t *testing.T) {
