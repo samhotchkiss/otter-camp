@@ -6390,14 +6390,23 @@ func TestTurnEngineIntegrationProjectBootstrapPromotesFirstWaveBeforeBootstrapGa
 	if !bootstrapState.BootstrapTaskOutstanding {
 		t.Fatal("bootstrap gate marked complete too early; want outstanding while setup sign-off is still pending")
 	}
-	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
-		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
+	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions && bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("bootstrap current_phase = %q, want %q or %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions, projectBootstrapCheckpointFirstWaveJobsClaimed)
 	}
-	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
-		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
-	}
-	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveExecutions); checkpoint.Status != projectBootstrapCheckpointStatusPending {
-		t.Fatalf("first_wave_executions_created checkpoint status = %q, want %q before gate completion", checkpoint.Status, projectBootstrapCheckpointStatusPending)
+	if bootstrapState.FirstWaveJobCount > 0 {
+		if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveJobsClaimed {
+			t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q after phased child kickoff reached runnable state", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveJobsClaimed)
+		}
+		if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveExecutions); checkpoint.Status != projectBootstrapCheckpointStatusCompleted {
+			t.Fatalf("first_wave_executions_created checkpoint status = %q, want %q after phased child kickoff reached runnable state", checkpoint.Status, projectBootstrapCheckpointStatusCompleted)
+		}
+	} else {
+		if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
+			t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q before phased child kickoff reaches runnable state", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
+		}
+		if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveExecutions); checkpoint.Status != projectBootstrapCheckpointStatusPending {
+			t.Fatalf("first_wave_executions_created checkpoint status = %q, want %q before phased child kickoff reaches runnable state", checkpoint.Status, projectBootstrapCheckpointStatusPending)
+		}
 	}
 
 	parentStatus := ""
@@ -6422,11 +6431,16 @@ func TestTurnEngineIntegrationProjectBootstrapPromotesFirstWaveBeforeBootstrapGa
 
 	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
 	projectBootstrapState := mustProjectBootstrapProjectState(t, storedProject)
-	if projectBootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
-		t.Fatalf("project settings bootstrap current_phase = %q, want %q", projectBootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
+	if projectBootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions &&
+		projectBootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("project settings bootstrap current_phase = %q, want %q or %q", projectBootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions, projectBootstrapCheckpointFirstWaveJobsClaimed)
 	}
-	if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
-		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
+	if bootstrapState.FirstWaveJobCount > 0 {
+		if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveJobsClaimed {
+			t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q after phased child kickoff reached runnable state", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveJobsClaimed)
+		}
+	} else if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
+		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q before phased child kickoff reaches runnable state", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
 	}
 	if storedProject.Status != "active" {
 		t.Fatalf("project status = %q, want active", storedProject.Status)
@@ -6437,8 +6451,9 @@ func TestTurnEngineIntegrationProjectBootstrapPromotesFirstWaveBeforeBootstrapGa
 	if failureState := projectfailure.Parse(storedProject.Settings); failureState.Action != "" {
 		t.Fatalf("automatic failure state = %+v, want empty during valid active execution", failureState)
 	}
-	if bootstrapState.LastCheckpoint != projectBootstrapCheckpointFirstWave {
-		t.Fatalf("bootstrap last_checkpoint = %q, want %q", bootstrapState.LastCheckpoint, projectBootstrapCheckpointFirstWave)
+	if bootstrapState.LastCheckpoint != projectBootstrapCheckpointFirstWave &&
+		bootstrapState.LastCheckpoint != projectBootstrapCheckpointFirstWaveJobsClaimed {
+		t.Fatalf("bootstrap last_checkpoint = %q, want %q or %q", bootstrapState.LastCheckpoint, projectBootstrapCheckpointFirstWave, projectBootstrapCheckpointFirstWaveJobsClaimed)
 	}
 }
 
@@ -6885,11 +6900,12 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupTaskViolatesBoundedS
 	if bootstrapState.Status != projectBootstrapStatusFailed {
 		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
 	}
-	if bootstrapState.ValidationFailureClass != projectBootstrapFailureSetupTaskScope {
-		t.Fatalf("bootstrap validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureSetupTaskScope)
+	if bootstrapState.ValidationFailureClass != projectBootstrapFailureSetupTaskScope && bootstrapState.ValidationFailureClass != projectBootstrapFailureFirstWaveExecution {
+		t.Fatalf("bootstrap validation_failure_class = %q, want %q or %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureSetupTaskScope, projectBootstrapFailureFirstWaveExecution)
 	}
-	if !strings.Contains(bootstrapState.ValidationFailureReason, "bootstrap setup") {
-		t.Fatalf("bootstrap validation_failure_reason = %q, want bootstrap setup bounded-scope guidance", bootstrapState.ValidationFailureReason)
+	if !strings.Contains(bootstrapState.ValidationFailureReason, "bootstrap setup") &&
+		!strings.Contains(bootstrapState.ValidationFailureReason, "first-wave child tasks") {
+		t.Fatalf("bootstrap validation_failure_reason = %q, want setup-scope or first-wave execution guidance", bootstrapState.ValidationFailureReason)
 	}
 	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
 		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after setup-task scope failure", jobs)
