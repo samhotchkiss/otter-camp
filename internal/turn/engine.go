@@ -1345,6 +1345,7 @@ func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskI
 	verifiedAt := e.now().UTC()
 	verifications := make([]taskorchestration.ChildVerification, 0)
 	childLabels := make([]string, 0)
+	allSetupTasksDone := true
 	for _, candidate := range projectTasks {
 		metadata := messageMetadataMap(candidate.Metadata)
 		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
@@ -1355,7 +1356,8 @@ func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskI
 		}
 		childTasks = append(childTasks, candidate)
 		if !strings.EqualFold(strings.TrimSpace(candidate.WorkStatus), "done") {
-			return nil
+			allSetupTasksDone = false
+			continue
 		}
 		verifications = append(verifications, taskorchestration.NewChildVerification(candidate.ID, "Verified bootstrap setup output for "+strings.TrimSpace(candidate.Title)+".", verifiedAt))
 		childLabels = append(childLabels, strings.TrimSpace(candidate.Title))
@@ -1364,14 +1366,16 @@ func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskI
 		return nil
 	}
 
-	integrationSummary := "Validated the bootstrap setup outputs together and confirmed the first-wave execution plan is coherent."
-	if len(childLabels) > 0 {
+	integrationSummary := "Automatically completed the bootstrap gate once the first-wave child execution plan was ready to enter runnable task-scoped execution."
+	outcomeSummary := "The bootstrap gate was auto-completed after the first-wave child execution plan became runnable."
+	if len(childLabels) > 0 && allSetupTasksDone {
 		integrationSummary = fmt.Sprintf("Validated the bootstrap setup outputs together across %s and confirmed the first-wave execution plan is coherent.", strings.Join(childLabels, ", "))
+		outcomeSummary = "The bootstrap task tree is complete and Frank sign-off is recorded."
 	}
 	taskRecord.Metadata, err = taskorchestration.Apply(taskRecord.Metadata, taskorchestration.Update{
 		ChildVerifications: verifications,
 		IntegrationCheck:   taskorchestration.NewIntegrationCheck("passed", integrationSummary, verifiedAt),
-		OutcomeAssessment:  taskorchestration.NewOutcomeAssessment(true, "The bootstrap task tree is complete and Frank sign-off is recorded.", verifiedAt),
+		OutcomeAssessment:  taskorchestration.NewOutcomeAssessment(true, outcomeSummary, verifiedAt),
 	})
 	if err != nil {
 		return err
@@ -1464,6 +1468,7 @@ type projectBootstrapProgress struct {
 	BootstrapSetupTaskCount  int
 	BootstrapSetupDoneCount  int
 	FrankSignOffRecorded     bool
+	HasPhasedParentTasks     bool
 	AssignmentCount          int
 	PlannedTaskCount         int
 	PlannedFlowTemplateCount int
@@ -1775,6 +1780,7 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 			structuralFailureReason = buildProjectBootstrapParentExecutionFailureReason(task, childCount)
 		}
 		if childCount > 0 {
+			progress.HasPhasedParentTasks = true
 			continue
 		}
 		firstWaveTasks = append(firstWaveTasks, task)
@@ -2006,14 +2012,17 @@ func (e *TurnEngine) countProjectBootstrapFirstWaveJobs(ctx context.Context, tas
 
 	var count int
 	if err := e.pool.QueryRow(ctx, `
-		SELECT COUNT(DISTINCT s.scope_id)
-		FROM job_queue jq
-		JOIN chat_session s ON s.id::text = jq.payload->>'session_id'
-		WHERE jq.job_type = 'agent_turn'
-		  AND jq.status IN ('pending', 'claimed')
-		  AND s.scope_type = 'project_task'
-		  AND s.mode = 'async'
-		  AND s.scope_id = ANY($1::uuid[])
+		SELECT COUNT(DISTINCT scope_id)
+		FROM (
+			SELECT s.scope_id
+			FROM job_queue jq
+			JOIN chat_session s ON s.id::text = jq.payload->>'session_id'
+			WHERE jq.job_type = 'agent_turn'
+			  AND jq.status IN ('pending', 'claimed')
+			  AND s.scope_type = 'project_task'
+			  AND s.mode = 'async'
+			  AND s.scope_id = ANY($1::uuid[])
+		) kickoff
 	`, taskIDs).Scan(&count); err != nil {
 		return 0, err
 	}
