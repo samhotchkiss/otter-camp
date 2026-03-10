@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -13,9 +14,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
@@ -162,7 +165,7 @@ func TestProjectServiceCreateBindsCanonicalWorkspaceEnvironment(t *testing.T) {
 	}
 }
 
-func TestProjectServiceCreateAutoGeneratesBootstrapGateTaskAndFlow(t *testing.T) {
+func TestProjectServiceCreateAutoGeneratesCanonicalBootstrapTaskTree(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	svc := newIntegrationService(t, pool)
@@ -202,6 +205,10 @@ func TestProjectServiceCreateAutoGeneratesBootstrapGateTaskAndFlow(t *testing.T)
 	}
 	if bootstrapTask.FlowTemplateID == nil || *bootstrapTask.FlowTemplateID == uuid.Nil {
 		t.Fatal("bootstrap flow_template_id is nil, want non-nil")
+	}
+	bootstrapMetadata := projectTaskMetadata(t, bootstrapTask.Metadata)
+	if root, _ := bootstrapMetadata["bootstrap_tree_root"].(bool); !root {
+		t.Fatalf("bootstrap root metadata = %v, want bootstrap_tree_root=true", bootstrapMetadata)
 	}
 
 	template, err := templateRepo.GetByID(ctx, *bootstrapTask.FlowTemplateID)
@@ -258,6 +265,150 @@ func TestProjectServiceCreateAutoGeneratesBootstrapGateTaskAndFlow(t *testing.T)
 	}
 	if mergeNode.NextNodeID != nil {
 		t.Fatalf("merge next_node_id = %v, want nil for terminal completion", mergeNode.NextNodeID)
+	}
+
+	allTasks, err := taskRepo.ListByProject(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListByProject bootstrap tasks: %v", err)
+	}
+	if len(allTasks) != len(bootstrapSetupTaskSpecs)+1 {
+		t.Fatalf("project bootstrap task count = %d, want %d", len(allTasks), len(bootstrapSetupTaskSpecs)+1)
+	}
+
+	childIDs := taskdecomp.ParseChildTaskIDs(bootstrapTask.Metadata)
+	if len(childIDs) != len(bootstrapSetupTaskSpecs) {
+		t.Fatalf("bootstrap child_task_ids len = %d, want %d", len(childIDs), len(bootstrapSetupTaskSpecs))
+	}
+
+	expectedBySlug := make(map[string]bootstrapSetupTaskSpec, len(bootstrapSetupTaskSpecs))
+	for _, spec := range bootstrapSetupTaskSpecs {
+		expectedBySlug[spec.Slug] = spec
+	}
+
+	seen := make(map[string]repo.ProjectTask, len(bootstrapSetupTaskSpecs))
+	for _, taskRecord := range allTasks {
+		metadata := projectTaskMetadata(t, taskRecord.Metadata)
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			continue
+		}
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
+			t.Fatalf("bootstrap child metadata missing bootstrap_setup_task: %s", string(taskRecord.Metadata))
+		}
+		slug := strings.TrimSpace(valueAsString(metadata["bootstrap_step_slug"]))
+		spec, ok := expectedBySlug[slug]
+		if !ok {
+			t.Fatalf("unexpected bootstrap step slug %q", slug)
+		}
+		if taskRecord.Title != spec.Title {
+			t.Fatalf("bootstrap task %q title = %q, want %q", slug, taskRecord.Title, spec.Title)
+		}
+		if taskRecord.WorkStatus != "draft" {
+			t.Fatalf("bootstrap task %q work_status = %q, want draft", slug, taskRecord.WorkStatus)
+		}
+		if taskRecord.FlowTemplateID == nil || *taskRecord.FlowTemplateID != template.ID {
+			t.Fatalf("bootstrap task %q flow_template_id = %v, want %s", slug, taskRecord.FlowTemplateID, template.ID)
+		}
+		if parentID := taskdecomp.ParseParentTaskID(taskRecord.Metadata); parentID != bootstrapTask.ID {
+			t.Fatalf("bootstrap task %q parent_task_id = %s, want %s", slug, parentID, bootstrapTask.ID)
+		}
+		seen[slug] = taskRecord
+	}
+	if len(seen) != len(bootstrapSetupTaskSpecs) {
+		t.Fatalf("bootstrap child task count = %d, want %d", len(seen), len(bootstrapSetupTaskSpecs))
+	}
+	if signoff := seen["record-frank-sign-off"]; signoff.AssignedAgentID == nil || *signoff.AssignedAgentID != frankID {
+		t.Fatalf("sign-off assigned_agent_id = %v, want Frank %s", signoff.AssignedAgentID, frankID)
+	}
+	if bind := seen["bind-repo-environment"]; bind.AssignedAgentID == nil || *bind.AssignedAgentID != loriID {
+		t.Fatalf("bind-repo assigned_agent_id = %v, want Lori %s", bind.AssignedAgentID, loriID)
+	}
+}
+
+func TestProjectServiceCreateBootstrapTaskTreeSurvivesProjectSessionRotation(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	orgRepo := repo.NewOrgRepo(pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
+	chatSvc, err := chat.NewService(chat.Options{Pool: pool, Events: bus})
+	if err != nil {
+		t.Fatalf("chat.NewService: %v", err)
+	}
+
+	org, err := orgRepo.Create(ctx, repo.Organization{
+		Slug:        "proj-svc-bootstrap-rotate-" + uuid.NewString()[:8],
+		DisplayName: "Bootstrap Rotation Org",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	created, err := svc.Create(ctx, CreateProjectRequest{
+		OrganizationID: org.ID,
+		Slug:           "bootstrap-rotation-project",
+		DisplayName:    "Bootstrap Rotation Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	beforeTasks, err := taskRepo.ListByProject(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListByProject before rotation: %v", err)
+	}
+
+	firstSession, err := chatSvc.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        created.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession first: %v", err)
+	}
+	if err := chatSvc.CloseSession(ctx, firstSession.ID); err != nil {
+		t.Fatalf("CloseSession first: %v", err)
+	}
+	secondSession, err := chatSvc.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        created.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession second: %v", err)
+	}
+	if secondSession.ID == firstSession.ID {
+		t.Fatalf("rotated session id = %s, want a fresh session id", secondSession.ID)
+	}
+
+	afterTasks, err := taskRepo.ListByProject(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListByProject after rotation: %v", err)
+	}
+	if len(afterTasks) != len(beforeTasks) {
+		t.Fatalf("bootstrap task count after rotation = %d, want %d", len(afterTasks), len(beforeTasks))
+	}
+
+	beforeBySlug := bootstrapTasksBySlug(t, beforeTasks)
+	afterBySlug := bootstrapTasksBySlug(t, afterTasks)
+	if len(afterBySlug) != len(beforeBySlug) {
+		t.Fatalf("bootstrap task slugs after rotation = %d, want %d", len(afterBySlug), len(beforeBySlug))
+	}
+	for slug, beforeTask := range beforeBySlug {
+		afterTask, ok := afterBySlug[slug]
+		if !ok {
+			t.Fatalf("missing bootstrap task %q after session rotation", slug)
+		}
+		if afterTask.ID != beforeTask.ID {
+			t.Fatalf("bootstrap task %q id changed from %s to %s across session rotation", slug, beforeTask.ID, afterTask.ID)
+		}
+		if afterTask.Title != beforeTask.Title {
+			t.Fatalf("bootstrap task %q title changed from %q to %q across session rotation", slug, beforeTask.Title, afterTask.Title)
+		}
 	}
 }
 
@@ -766,6 +917,49 @@ func seedProject(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (uuid.UU
 		t.Fatalf("create project: %v", err)
 	}
 	return org.ID, project.ID
+}
+
+func bootstrapTasksBySlug(t *testing.T, tasks []repo.ProjectTask) map[string]repo.ProjectTask {
+	t.Helper()
+
+	bySlug := make(map[string]repo.ProjectTask)
+	for _, taskRecord := range tasks {
+		metadata := projectTaskMetadata(t, taskRecord.Metadata)
+		slug := strings.TrimSpace(valueAsString(metadata["bootstrap_step_slug"]))
+		if slug == "" {
+			if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+				slug = "bootstrap-governance-gate"
+			} else {
+				continue
+			}
+		}
+		bySlug[slug] = taskRecord
+	}
+	return bySlug
+}
+
+func projectTaskMetadata(t *testing.T, raw json.RawMessage) map[string]any {
+	t.Helper()
+
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		t.Fatalf("unmarshal project task metadata: %v", err)
+	}
+	return metadata
+}
+
+func valueAsString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", typed)
+	}
 }
 
 func seedProjectWithSlug(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, slug string) (uuid.UUID, uuid.UUID) {
