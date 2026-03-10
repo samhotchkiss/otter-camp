@@ -50,6 +50,8 @@ Agents can perform meaningful work (project updates, tool execution, CLI and bro
 
 6. **Predictability over intelligence.** Policy outcomes are deterministic based on static configuration. The human knows exactly what is allowed and denied because they set the policy. No surprises.
 
+7. **Bootstrap and task flows are explicit state machines.** The control plane is responsible for enforcing legal transitions, promoting success exactly once, and rejecting contradictory state. If persisted setup never becomes runnable first-wave execution, bootstrap must fail deterministically. If a task remains active after satisfying a node's contract, that is a runtime bug, not acceptable "continued refinement."
+
 ## Control Plane Components
 
 ### Policy API
