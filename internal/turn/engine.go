@@ -1062,9 +1062,6 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	if err != nil {
 		return err
 	}
-	if progress.BootstrapTaskID == uuid.Nil {
-		return nil
-	}
 
 	turns, err := e.turns.ListBySession(ctx, session.ID)
 	if err != nil {
@@ -1092,6 +1089,9 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	}
 
 	state := projectBootstrapStateFromMetadata(session.Metadata)
+	if !projectBootstrapCompletedTurnManaged(messages, latestUser, state, progress) {
+		return nil
+	}
 	if strings.TrimSpace(state.LastTurnID) == turnID.String() {
 		return nil
 	}
@@ -1850,6 +1850,63 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 func projectBootstrapTaskStatusTerminal(status string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(status))
 	return normalized == "done" || normalized == "cancelled"
+}
+
+func projectBootstrapStateActive(state projectBootstrapState) bool {
+	return strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusActive)
+}
+
+func projectBootstrapCompletedTurnManaged(messages []repo.ChatMessage, latestUser *repo.ChatMessage, state projectBootstrapState, progress projectBootstrapProgress) bool {
+	if progress.Materialized() || latestUser == nil || latestUser.ID == uuid.Nil {
+		return false
+	}
+	if projectBootstrapStateActive(state) {
+		return true
+	}
+	metadata := messageMetadataMap(latestUser.Metadata)
+	if strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectBootstrapSource) {
+		return true
+	}
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		return message.ID == latestUser.ID
+	}
+	return false
+}
+
+func (e *TurnEngine) projectBootstrapRuntimeManaged(ctx context.Context, session *chat.ChatSession, initialMessageID uuid.UUID) bool {
+	if session == nil || session.ID == uuid.Nil {
+		return false
+	}
+	if projectBootstrapStateActive(projectBootstrapStateFromMetadata(session.Metadata)) {
+		return true
+	}
+	if e == nil || e.messages == nil || initialMessageID == uuid.Nil {
+		return false
+	}
+
+	message, err := e.messages.GetByID(ctx, initialMessageID)
+	if err != nil {
+		return false
+	}
+	workflowMessageID := projectBootstrapWorkflowMessageID(&message)
+	if workflowMessageID == uuid.Nil {
+		return false
+	}
+
+	messages, err := e.messages.ListBySession(ctx, session.ID)
+	if err != nil {
+		return false
+	}
+	for _, item := range messages {
+		if !strings.EqualFold(strings.TrimSpace(item.Role), "user") {
+			continue
+		}
+		return item.ID == workflowMessageID
+	}
+	return false
 }
 
 func projectBootstrapTaskEnteredExecution(status string) bool {
@@ -2687,7 +2744,7 @@ func (e *TurnEngine) handleProjectBootstrapPreflight(ctx context.Context, rt *tu
 	if err != nil {
 		return false, err
 	}
-	if progress.BootstrapTaskID == uuid.Nil || progress.Materialized() {
+	if !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) || progress.Materialized() {
 		return false, nil
 	}
 
@@ -4498,11 +4555,10 @@ func (e *TurnEngine) handleProjectBootstrapUnhandledFailure(ctx context.Context,
 	if err != nil {
 		return true, err
 	}
-	if progress.BootstrapTaskID == uuid.Nil || progress.Materialized() {
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) || progress.Materialized() {
 		return false, nil
 	}
-
-	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
 	now := e.now().UTC()
 	if state.StartedAt == nil {
 		startedAt := rt.startedAt.UTC()
@@ -5837,11 +5893,10 @@ func (e *TurnEngine) handleProjectBootstrapGuardrailFailure(ctx context.Context,
 	if err != nil {
 		return true, err
 	}
-	if progress.BootstrapTaskID == uuid.Nil || !progress.BootstrapTaskOutstanding || progress.Materialized() {
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) || progress.Materialized() {
 		return false, nil
 	}
-
-	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
 	now := e.now().UTC()
 	workflowMessageID := rt.initialMessageID
 	if e.messages != nil && rt.initialMessageID != uuid.Nil {
@@ -5915,11 +5970,10 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 	if err != nil {
 		return true, err
 	}
-	if progress.BootstrapTaskID == uuid.Nil || !progress.BootstrapTaskOutstanding || progress.Materialized() {
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) || progress.Materialized() {
 		return false, nil
 	}
-
-	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
 	now := e.now().UTC()
 	workflowMessageID := rt.initialMessageID
 	if e.messages != nil && rt.initialMessageID != uuid.Nil {
@@ -5997,7 +6051,8 @@ func (e *TurnEngine) handleProjectBootstrapTerminalTurnFailure(ctx context.Conte
 	if err != nil {
 		return true, err
 	}
-	if progress.BootstrapTaskID == uuid.Nil || !progress.BootstrapTaskOutstanding || progress.Materialized() {
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) || progress.Materialized() {
 		return false, nil
 	}
 
@@ -6011,7 +6066,6 @@ func (e *TurnEngine) handleProjectBootstrapTerminalTurnFailure(ctx context.Conte
 		failureClass = projectBootstrapFailureProviderTransient
 	}
 
-	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
 	now := e.now().UTC()
 	workflowMessageID := rt.initialMessageID
 	if e.messages != nil && rt.initialMessageID != uuid.Nil {
@@ -6093,7 +6147,7 @@ func (e *TurnEngine) projectBootstrapStreamWatchdog(ctx context.Context, rt *tur
 	if err != nil {
 		return projectBootstrapWatchdog{}, false, err
 	}
-	if progress.BootstrapTaskID == uuid.Nil || !progress.BootstrapTaskOutstanding || progress.Materialized() || progress.ValidationFailed() {
+	if !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) || progress.Materialized() || progress.ValidationFailed() {
 		return projectBootstrapWatchdog{}, false, nil
 	}
 	if progress.AssignmentCount != 0 || progress.PlannedTaskCount != 0 || progress.PlannedFlowTemplateCount != 0 {
