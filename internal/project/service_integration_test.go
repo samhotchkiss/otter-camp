@@ -79,6 +79,51 @@ func TestProjectServiceCreateGetBySlugAndUniqueness(t *testing.T) {
 	}
 }
 
+func TestProjectServiceCreateAllowsArchivedSlugReuseWithFreshDerivedSlug(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	orgRepo := repo.NewOrgRepo(pool)
+
+	org, err := orgRepo.Create(ctx, repo.Organization{Slug: "proj-svc-archived-slug-" + uuid.NewString()[:8], DisplayName: "Archived Slug Org"})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	first, err := svc.Create(ctx, CreateProjectRequest{
+		OrganizationID: org.ID,
+		Slug:           "alpha",
+		DisplayName:    "Alpha",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+
+	archived, err := svc.Archive(ctx, org.ID, first.ID)
+	if err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	if archived.Status != "archived" {
+		t.Fatalf("archived status = %q, want archived", archived.Status)
+	}
+
+	second, err := svc.Create(ctx, CreateProjectRequest{
+		OrganizationID: org.ID,
+		Slug:           "alpha",
+		DisplayName:    "Alpha Restart",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("Create second after archive: %v", err)
+	}
+	if second.Slug != "alpha-2" {
+		t.Fatalf("second slug = %q, want alpha-2", second.Slug)
+	}
+}
+
 func TestProjectServiceCreatePublishesStaffingNeededEvent(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

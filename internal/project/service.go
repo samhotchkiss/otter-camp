@@ -439,11 +439,11 @@ func (s *service) Create(ctx context.Context, req CreateProjectRequest) (*Projec
 		return nil, err
 	}
 
-	if _, err := s.projects.GetBySlug(ctx, req.OrganizationID, slug); err == nil {
-		return nil, ErrSlugTaken
-	} else if !errors.Is(err, repo.ErrNotFound) {
+	resolvedSlug, err := s.resolveCreateSlug(ctx, req.OrganizationID, slug)
+	if err != nil {
 		return nil, err
 	}
+	slug = resolvedSlug
 
 	createdByType, createdByID, err := normalizeActor(req.CreatedByType, req.CreatedByID)
 	if err != nil {
@@ -775,6 +775,46 @@ func normalizeProjectStatusFilter(value string) string {
 		return "all"
 	default:
 		return "active"
+	}
+}
+
+func (s *service) resolveCreateSlug(ctx context.Context, orgID uuid.UUID, requested string) (string, error) {
+	slug := strings.TrimSpace(requested)
+	projectRecord, err := s.projects.GetBySlug(ctx, orgID, slug)
+	if err == nil {
+		status := normalizeProjectStatusFilter(projectRecord.Status)
+		if status != "archived" {
+			return "", ErrSlugTaken
+		}
+		projects, listErr := s.listProjectsForSlugResolution(ctx, orgID)
+		if listErr != nil {
+			return "", listErr
+		}
+		return nextArchivedSlugCandidate(slug, projects), nil
+	}
+	if !errors.Is(err, repo.ErrNotFound) {
+		return "", err
+	}
+	return slug, nil
+}
+
+func (s *service) listProjectsForSlugResolution(ctx context.Context, orgID uuid.UUID) ([]repo.Project, error) {
+	if listAllRepo, ok := s.projects.(projectRepositoryListAll); ok {
+		return listAllRepo.ListAll(ctx, orgID)
+	}
+	return s.projects.List(ctx, orgID)
+}
+
+func nextArchivedSlugCandidate(base string, projects []repo.Project) string {
+	used := make(map[string]struct{}, len(projects))
+	for _, item := range projects {
+		used[strings.ToLower(strings.TrimSpace(item.Slug))] = struct{}{}
+	}
+	for attempt := 2; ; attempt++ {
+		candidate := fmt.Sprintf("%s-%d", base, attempt)
+		if _, ok := used[strings.ToLower(candidate)]; !ok {
+			return candidate
+		}
 	}
 }
 
