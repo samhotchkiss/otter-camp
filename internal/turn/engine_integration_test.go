@@ -6297,6 +6297,7 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 	}
 
 	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	enableTurnEngineUserMessageEnqueue(t, fixture)
 	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
 		OrganizationID: fixture.org.ID,
 		EventType:      "chat.turn.completed",
@@ -6318,6 +6319,7 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 		t.Fatalf("ListByProject tasks: %v", err)
 	}
 	var plannedTasks int
+	firstWaveTaskIDs := make([]uuid.UUID, 0, len(tasks))
 	for _, item := range tasks {
 		var metadata map[string]any
 		_ = json.Unmarshal(item.Metadata, &metadata)
@@ -6325,6 +6327,7 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 			continue
 		}
 		plannedTasks++
+		firstWaveTaskIDs = append(firstWaveTaskIDs, item.ID)
 	}
 	if plannedTasks == 0 {
 		t.Fatal("expected persisted non-bootstrap task after self-start bootstrap")
@@ -6365,8 +6368,8 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 	if bootstrapState.FirstWaveExecutionCount == 0 {
 		t.Fatalf("bootstrap first_wave_execution_count = %d, want > 0", bootstrapState.FirstWaveExecutionCount)
 	}
-	if bootstrapState.FirstWaveKickoffCount == 0 {
-		t.Fatalf("bootstrap first_wave_kickoff_count = %d, want > 0", bootstrapState.FirstWaveKickoffCount)
+	if bootstrapState.FirstWaveJobCount == 0 {
+		t.Fatalf("bootstrap first_wave_job_count = %d, want > 0", bootstrapState.FirstWaveJobCount)
 	}
 	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveJobsClaimed {
 		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveJobsClaimed)
@@ -6394,6 +6397,9 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsIntoPersistedSetup(t *te
 	}
 	if activeExecutions == 0 {
 		t.Fatal("expected at least one active flow_node_execution after bootstrap promotion")
+	}
+	if jobCount := waitForRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs, 1); jobCount == 0 {
+		t.Fatal("expected at least one runnable first-wave agent_turn job after bootstrap promotion")
 	}
 
 	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
@@ -6546,17 +6552,22 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 		t.Fatalf("ListByProject tasks: %v", err)
 	}
 	var queuedFirstWaveTasks int
+	firstWaveTaskIDs := make([]uuid.UUID, 0, len(tasks))
 	for _, task := range tasks {
 		metadata := messageMetadataMap(task.Metadata)
 		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
 			continue
 		}
+		firstWaveTaskIDs = append(firstWaveTaskIDs, task.ID)
 		if task.WorkStatus == "queued" {
 			queuedFirstWaveTasks++
 		}
 	}
 	if queuedFirstWaveTasks == 0 {
 		t.Fatal("expected bootstrap promotion attempt to move at least one first-wave task out of draft")
+	}
+	if jobs := countRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs); jobs != 0 {
+		t.Fatalf("runnable first-wave agent_turn jobs = %d, want 0 when bootstrap fails before execution handoff", jobs)
 	}
 
 	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
@@ -6986,6 +6997,7 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsAfterRepoBindingRecovere
 	}
 
 	retryTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	enableTurnEngineUserMessageEnqueue(t, fixture)
 	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
 		OrganizationID: fixture.org.ID,
 		EventType:      "chat.turn.completed",
@@ -7014,8 +7026,8 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsAfterRepoBindingRecovere
 	if bootstrapState.FirstWaveTaskCount == 0 {
 		t.Fatalf("bootstrap first_wave_task_count after repo binding recovery = %d, want > 0", bootstrapState.FirstWaveTaskCount)
 	}
-	if bootstrapState.FirstWavePromotedCount == 0 || bootstrapState.FirstWaveExecutionCount == 0 || bootstrapState.FirstWaveKickoffCount == 0 {
-		t.Fatalf("bootstrap execution counts after repo binding recovery = %+v, want promoted/execution/kickoff counts", bootstrapState)
+	if bootstrapState.FirstWavePromotedCount == 0 || bootstrapState.FirstWaveExecutionCount == 0 || bootstrapState.FirstWaveJobCount == 0 {
+		t.Fatalf("bootstrap execution counts after repo binding recovery = %+v, want promoted/execution/job counts", bootstrapState)
 	}
 
 	tasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
@@ -7023,17 +7035,22 @@ func TestTurnEngineIntegrationProjectBootstrapSelfStartsAfterRepoBindingRecovere
 		t.Fatalf("ListByProject tasks after repo binding recovery: %v", err)
 	}
 	var promotedFirstWaveTasks int
+	firstWaveTaskIDs := make([]uuid.UUID, 0, len(tasks))
 	for _, task := range tasks {
 		metadata := messageMetadataMap(task.Metadata)
 		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
 			continue
 		}
+		firstWaveTaskIDs = append(firstWaveTaskIDs, task.ID)
 		if task.WorkStatus == "queued" || task.WorkStatus == "in_progress" || task.WorkStatus == "review" || task.WorkStatus == "done" {
 			promotedFirstWaveTasks++
 		}
 	}
 	if promotedFirstWaveTasks == 0 {
 		t.Fatal("expected at least one promoted first-wave task after repo binding recovery")
+	}
+	if jobCount := waitForRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs, 1); jobCount == 0 {
+		t.Fatal("expected at least one runnable first-wave agent_turn job after repo binding recovery")
 	}
 	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
 		t.Fatalf("runnable bootstrap agent_turn jobs after repo binding recovery = %d, want 0", jobs)
@@ -7628,6 +7645,7 @@ func TestTurnEngineIntegrationProjectBootstrapRecoversAfterWatchdogFailure(t *te
 	}
 
 	retryTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	enableTurnEngineUserMessageEnqueue(t, fixture)
 	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
 		OrganizationID: fixture.org.ID,
 		EventType:      "chat.turn.completed",
@@ -7659,8 +7677,23 @@ func TestTurnEngineIntegrationProjectBootstrapRecoversAfterWatchdogFailure(t *te
 	if bootstrapState.FirstWaveTaskCount == 0 {
 		t.Fatalf("bootstrap first_wave_task_count after watchdog recovery = %d, want > 0", bootstrapState.FirstWaveTaskCount)
 	}
-	if bootstrapState.FirstWavePromotedCount == 0 || bootstrapState.FirstWaveExecutionCount == 0 || bootstrapState.FirstWaveKickoffCount == 0 {
-		t.Fatalf("bootstrap execution counts after watchdog recovery = %+v, want promoted/execution/kickoff counts", bootstrapState)
+	if bootstrapState.FirstWavePromotedCount == 0 || bootstrapState.FirstWaveExecutionCount == 0 || bootstrapState.FirstWaveJobCount == 0 {
+		t.Fatalf("bootstrap execution counts after watchdog recovery = %+v, want promoted/execution/job counts", bootstrapState)
+	}
+	tasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject tasks after watchdog recovery: %v", err)
+	}
+	firstWaveTaskIDs := make([]uuid.UUID, 0, len(tasks))
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			continue
+		}
+		firstWaveTaskIDs = append(firstWaveTaskIDs, task.ID)
+	}
+	if jobCount := waitForRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs, 1); jobCount == 0 {
+		t.Fatal("expected at least one runnable first-wave agent_turn job after watchdog recovery")
 	}
 	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
 		t.Fatalf("runnable bootstrap agent_turn jobs after watchdog recovery = %d, want 0", jobs)
@@ -8913,6 +8946,33 @@ func enableTaskQueueProcessor(t *testing.T, fixture *integrationFixture) {
 	time.Sleep(50 * time.Millisecond)
 }
 
+func enableTurnEngineUserMessageEnqueue(t *testing.T, fixture *integrationFixture) {
+	t.Helper()
+
+	subscription := fixture.bus.Subscribe("turn-user-enqueue-"+uuid.NewString(), &fixture.org.ID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		if event.EventType != "chat.message.user_sent" {
+			return nil
+		}
+		payload, err := parseAgentTurnPayload(event.Payload)
+		if err != nil {
+			return nil
+		}
+		session, err := fixture.chatService.GetSession(ctx, payload.SessionID)
+		if err != nil || session == nil {
+			return nil
+		}
+		if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+			return nil
+		}
+		return fixture.engine.HandleUserMessageEvent(ctx, event)
+	})
+	t.Cleanup(func() {
+		fixture.bus.Unsubscribe(subscription)
+	})
+
+	time.Sleep(50 * time.Millisecond)
+}
+
 func newIntegrationFixture(t *testing.T) *integrationFixture {
 	t.Helper()
 	ctx := context.Background()
@@ -9281,6 +9341,46 @@ func countRunnableAgentTurnJobsForSession(t *testing.T, ctx context.Context, poo
 		t.Fatalf("count runnable agent_turn jobs: %v", err)
 	}
 	return count
+}
+
+func countRunnableAgentTurnJobsForTasks(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskIDs []uuid.UUID) int {
+	t.Helper()
+
+	if len(taskIDs) == 0 {
+		return 0
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT s.scope_id)
+		FROM job_queue jq
+		JOIN chat_session s ON s.id::text = jq.payload->>'session_id'
+		WHERE jq.job_type = 'agent_turn'
+		  AND jq.status IN ('pending', 'claimed')
+		  AND s.scope_type = 'project_task'
+		  AND s.mode = 'async'
+		  AND s.scope_id = ANY($1::uuid[])
+	`, taskIDs).Scan(&count); err != nil {
+		t.Fatalf("count runnable task agent_turn jobs: %v", err)
+	}
+	return count
+}
+
+func waitForRunnableAgentTurnJobsForTasks(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskIDs []uuid.UUID, wantAtLeast int) int {
+	t.Helper()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		count := countRunnableAgentTurnJobsForTasks(t, ctx, pool, taskIDs)
+		if count >= wantAtLeast {
+			return count
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	got := countRunnableAgentTurnJobsForTasks(t, ctx, pool, taskIDs)
+	t.Fatalf("runnable first-wave agent_turn jobs = %d, want >= %d", got, wantAtLeast)
+	return 0
 }
 
 func mustProjectBootstrapCheckpoint(t *testing.T, state projectBootstrapState, name string) projectBootstrapCheckpoint {
