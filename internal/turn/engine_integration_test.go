@@ -6590,6 +6590,426 @@ func TestTurnEngineIntegrationProjectBootstrapOpensFirstWaveAfterSetupTasksAndFr
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupTaskOwnsExecutableChildren(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: staff the project, create initial tasks, and attach flow templates.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-hidden-child",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is now persisted in project records."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		}); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		setupTask := mustFindBootstrapSetupTaskBySlug(t, ctx, fixture.pool, project.ID, "decompose-workstreams")
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		description := "Write the launch brief for the selected first execution slice."
+		metadata := mustJSON(t, map[string]any{
+			"decomposition_parent_task_id": setupTask.ID.String(),
+			"workstream_index":             1,
+		})
+		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID:  fixture.org.ID,
+			ProjectID:       project.ID,
+			Title:           "Define the first execution slice",
+			Description:     &description,
+			WorkStatus:      "draft",
+			FlowTemplateID:  &template.ID,
+			AssignedAgentID: &pmAgent.ID,
+			CreatedByType:   "agent",
+			CreatedByID:     &lori.ID,
+			Metadata:        metadata,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":      pmAgent.ID.String(),
+				"task_id":          taskRecord.ID.String(),
+				"flow_template_id": template.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	enableTurnEngineUserMessageEnqueue(t, fixture)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	signoffTask := completeBootstrapSetupTasks(t, ctx, fixture.pool, project.ID, "")
+	if err := fixture.engine.HandleTaskStatusChangedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "task.status_changed",
+		Payload: mustJSON(t, map[string]any{
+			"task_id":    signoffTask.ID.String(),
+			"project_id": project.ID.String(),
+			"to_status":  "done",
+		}),
+	}); err != nil {
+		t.Fatalf("HandleTaskStatusChangedEvent bootstrap sign-off: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.ValidationFailureClass != projectBootstrapFailureSetupTaskChildren {
+		t.Fatalf("bootstrap validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureSetupTaskChildren)
+	}
+	if !strings.Contains(bootstrapState.ValidationFailureReason, "must stay orchestration-only") {
+		t.Fatalf("bootstrap validation_failure_reason = %q, want setup-task orchestration guidance", bootstrapState.ValidationFailureReason)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after hidden bootstrap child failure", jobs)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if storedProject.Status != "archived" {
+		t.Fatalf("project status = %q, want archived", storedProject.Status)
+	}
+}
+
+func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupTaskViolatesBoundedScope(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: staff the project, create initial tasks, and attach flow templates.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-oversized",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is now persisted in project records."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		}); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		description := "Initial scoped bootstrap workstream"
+		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID:  fixture.org.ID,
+			ProjectID:       project.ID,
+			Title:           "Define the first execution slice",
+			Description:     &description,
+			WorkStatus:      "draft",
+			FlowTemplateID:  &template.ID,
+			AssignedAgentID: &pmAgent.ID,
+			CreatedByType:   "agent",
+			CreatedByID:     &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":      pmAgent.ID.String(),
+				"task_id":          taskRecord.ID.String(),
+				"flow_template_id": template.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	enableTurnEngineUserMessageEnqueue(t, fixture)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	setupTask := mustFindBootstrapSetupTaskBySlug(t, ctx, fixture.pool, project.ID, "decompose-workstreams")
+	oversizedDescription := "Define the long-term product strategy; create the messaging pillars and personas; write the launch brief and customer email; draft the implementation backlog and analytics plan."
+	setupTask.Description = &oversizedDescription
+	if _, err := taskRepo.Update(ctx, setupTask); err != nil {
+		t.Fatalf("Update oversized bootstrap setup task: %v", err)
+	}
+
+	signoffTask := completeBootstrapSetupTasks(t, ctx, fixture.pool, project.ID, "")
+	if err := fixture.engine.HandleTaskStatusChangedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "task.status_changed",
+		Payload: mustJSON(t, map[string]any{
+			"task_id":    signoffTask.ID.String(),
+			"project_id": project.ID.String(),
+			"to_status":  "done",
+		}),
+	}); err != nil {
+		t.Fatalf("HandleTaskStatusChangedEvent bootstrap sign-off: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.ValidationFailureClass != projectBootstrapFailureSetupTaskScope {
+		t.Fatalf("bootstrap validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureSetupTaskScope)
+	}
+	if !strings.Contains(bootstrapState.ValidationFailureReason, "bootstrap setup") {
+		t.Fatalf("bootstrap validation_failure_reason = %q, want bootstrap setup bounded-scope guidance", bootstrapState.ValidationFailureReason)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after setup-task scope failure", jobs)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if storedProject.Status != "archived" {
+		t.Fatalf("project status = %q, want archived", storedProject.Status)
+	}
+}
+
+func TestTurnEngineIntegrationProjectBootstrapAllowsSetupSubtaskCheckpoints(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	enableTaskQueueProcessor(t, fixture)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: staff the project, create initial tasks, and attach flow templates.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-subtask-checkpoint",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is now persisted in project records."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		}); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		description := "Initial scoped bootstrap workstream"
+		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID:  fixture.org.ID,
+			ProjectID:       project.ID,
+			Title:           "Define the first execution slice",
+			Description:     &description,
+			WorkStatus:      "draft",
+			FlowTemplateID:  &template.ID,
+			AssignedAgentID: &pmAgent.ID,
+			CreatedByType:   "agent",
+			CreatedByID:     &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":      pmAgent.ID.String(),
+				"task_id":          taskRecord.ID.String(),
+				"flow_template_id": template.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	enableTurnEngineUserMessageEnqueue(t, fixture)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	setupTask := mustFindBootstrapSetupTaskBySlug(t, ctx, fixture.pool, project.ID, "validate-task-shape")
+	setupExecution := mustCreateBootstrapSetupTaskExecution(t, ctx, fixture.pool, setupTask)
+	createdByID := lori.ID
+	if _, err := repo.NewProjectSubtaskRepo(fixture.pool).Create(ctx, repo.ProjectSubtask{
+		TaskID:              setupTask.ID,
+		FlowNodeExecutionID: setupExecution.ID,
+		Title:               "Confirm sizing checklist",
+		WorkStatus:          "done",
+		CreatedByType:       "agent",
+		CreatedByID:         &createdByID,
+	}); err != nil {
+		t.Fatalf("Create bootstrap setup subtask checkpoint: %v", err)
+	}
+
+	signoffTask := completeBootstrapSetupTasks(t, ctx, fixture.pool, project.ID, "")
+	if err := fixture.engine.HandleTaskStatusChangedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "task.status_changed",
+		Payload: mustJSON(t, map[string]any{
+			"task_id":    signoffTask.ID.String(),
+			"project_id": project.ID.String(),
+			"to_status":  "done",
+		}),
+	}); err != nil {
+		t.Fatalf("HandleTaskStatusChangedEvent bootstrap sign-off: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusCompleted {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusCompleted)
+	}
+	if bootstrapState.FirstWaveJobCount == 0 {
+		t.Fatalf("bootstrap first_wave_job_count = %d, want > 0 after setup subtasks remain internal checkpoints", bootstrapState.FirstWaveJobCount)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCreateFirstWaveExecution(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -10238,6 +10658,51 @@ func mustFindFirstNonBootstrapTask(t *testing.T, ctx context.Context, pool *pgxp
 	}
 	t.Fatal("expected non-bootstrap project task")
 	return repo.ProjectTask{}
+}
+
+func mustFindBootstrapSetupTaskBySlug(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID uuid.UUID, slug string) repo.ProjectTask {
+	t.Helper()
+
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListByProject bootstrap setup tasks: %v", err)
+	}
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); !bootstrapSetupTask {
+			continue
+		}
+		if strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"])) == strings.TrimSpace(slug) {
+			return task
+		}
+	}
+	t.Fatalf("expected bootstrap setup task with slug %q", slug)
+	return repo.ProjectTask{}
+}
+
+func mustCreateBootstrapSetupTaskExecution(t *testing.T, ctx context.Context, pool *pgxpool.Pool, task repo.ProjectTask) repo.FlowNodeExecution {
+	t.Helper()
+
+	if task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {
+		t.Fatal("expected bootstrap setup task flow template")
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).GetByID(ctx, *task.FlowTemplateID)
+	if err != nil {
+		t.Fatalf("GetByID bootstrap setup flow template: %v", err)
+	}
+	if template.StartNodeID == nil || *template.StartNodeID == uuid.Nil {
+		t.Fatal("expected bootstrap setup flow template start node")
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  *template.StartNodeID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("Create bootstrap setup flow execution: %v", err)
+	}
+	return execution
 }
 
 func completeBootstrapSetupTasks(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID uuid.UUID, skipStepSlug string) repo.ProjectTask {
