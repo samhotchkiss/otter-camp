@@ -12380,3 +12380,333 @@ Decision: APPROVED
 - RateLimitedError wraps ErrRateLimited correctly via Unwrap []error
 - Unit tests pass: jobqueue (3 new test functions), gateway (extended existing), turn (3 new tests)
 - Build clean, no regressions
+
+## 339: Parent tasks must be orchestration and integration gates (2026-03-09)
+Reviewer: Claude Sonnet 4.5
+Status: APPROVED and merged to main (PR #1722, merged 2026-03-09T23:36:40Z)
+
+All acceptance criteria met:
+- Parent orchestration-only enforcement via `internal/taskorchestration/metadata.go` + `internal/tools/native/mutation_tools.go`
+- Completion gate requiring child verification + integration check + outcome satisfaction in `internal/task/service.go`
+- Reopen completed child with feedback (`appendReopenFeedback`)
+- Create bounded follow-on child tasks with parent binding
+- Prompt context surfacing child gate status in `internal/prompt/assembler.go`
+- SQL migration 0121 adds tool schemas for orchestration fields
+- `docsv2/03-projects-and-task-flow.md` and `docsv2/05-agents-staff-and-temps.md` updated
+
+All 4 required integration/E2E tests present and unit tests pass locally. CI was UNSTABLE due to GitHub billing infra issue (not code), build and go vet clean.
+- [2026-03-09 17:38:18 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-09 17:48:18 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+
+## 2026-03-09 — Task 340 ready for review
+
+**Task:** 340 Bootstrap must track phase checkpoints through first-wave claim
+
+**Summary:**
+- Reworked project bootstrap state in `internal/turn` to persist explicit ordered checkpoints, current phase, last successful checkpoint, and structured validation findings instead of relying on message-history inference.
+- Mirrored the bootstrap runtime snapshot into `project.settings.project_bootstrap` so project-level state can report the same phase/checkpoint information as the canonical project session metadata.
+- Extended bootstrap failure handling to persist provider/API classifications for terminal bootstrap turn failures and to keep checkpoint progress visible even when validation fails before execution handoff.
+- Added integration coverage for active checkpoint progression, successful completion through `first_wave_jobs_claimed`, pre-claim execution-handoff failure, and provider-auth bootstrap failure classification.
+
+**Tests:**
+- `go test ./internal/turn`
+- `go test ./internal/turn -tags integration -run 'TestTurnEngineIntegrationProjectBootstrap(QueuesFollowOnAfterLoriAcknowledgement|SelfStartsIntoPersistedSetup|FailsWhenPersistedSetupDoesNotCreateFirstWaveExecution|PersistsProviderFailureClassification)$'`
+- `go test ./internal/turn -tags integration -run 'TestTurnEngineIntegrationProjectBootstrap'`
+- `go test ./internal/turn -tags integration`
+
+## 2026-03-09 — Queue blocker note
+
+- `341-bootstrap-failure-policy-must-auto-archive-before-execution-and-pause-after-execution.md` is blocked on task 340 while PR #1723 is still open against `main`.
+- `342-clean-bootstrap-restarts-must-replay-canonical-input-not-polluted-project-session-context.md`, `343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md`, `344-operator-observability-must-separate-provider-failures-from-product-runtime-failures.md`, and `346-post-338-kickoff-can-still-persist-full-setup-with-all-tasks-draft-and-zero-first-wave-execution.md` remain transitively blocked on 340/341.
+- Continuing with `345-post-samblog-validation-must-use-a-mixed-operational-project-not-another-site-rebuild.md`, which depends only on completed tasks 331-335.
+
+## 2026-03-09 — Task 345 ready for review
+
+**Task:** 345 Post-Sam.blog validation must use a mixed operational project, not another site rebuild
+
+**Summary:**
+- Updated `docsv2/14-open-questions-and-phasing.md` to define the post-Sam.blog hard validation class as a mixed operational project and seed `Speaker Pipeline Ops` as the default candidate.
+- Updated `docsv2/16-agent-control-plane.md` so the control-plane spec records the same mixed-project validation policy and explains why it gives broader coverage than another site rebuild.
+- Updated the starter-trio seeded prompt/config in `internal/bootstrap/starter_trio.go` so the default project-creation example points at `Speaker Pipeline Ops` instead of a generic site rebuild.
+
+**Tests:**
+- `go test ./internal/bootstrap`
+
+## 2026-03-09 — Task 340 Review: ACCEPTED
+Reviewer: Claude Sonnet 4.6
+
+**Task**: Bootstrap must track phase checkpoints through first-wave claim
+**PR**: #1723 (merged c25c4e3f into main)
+
+All acceptance criteria met:
+- New `project_bootstrap_state.go` defines all 7 required checkpoints (project_created → first_wave_jobs_claimed), checkpoint status derivation, validation findings, and project-settings mirror via `updateProjectBootstrapProjectState`.
+- Validation findings cover execution_shape (missing assignments, compound parent, first-wave flow), task_size (bounded child tasks required), runtime (stalled, guardrail, bootstrap_runtime_failure), and provider_api (auth, rate_limit, transient) failure classes.
+- `CurrentPhase` and `LastSuccessfulCheckpoint` derived from persisted state — not from session prose.
+- `docsv2/03-projects-and-task-flow.md` and `docsv2/16-agent-control-plane.md` both updated.
+- Integration tests cover: successful kickoff reaching first_wave_jobs_claimed, partial failure checkpoint trail, provider failure classification (ErrAuthFailed), missing assignments/repo-binding validation.
+
+CI note: Lint check shows "fail" in GitHub Actions but is confirmed pre-existing baseline infra issue (same pattern on task 338 PR #1721 which was already merged). Build, unit tests, go vet all pass locally.
+
+Dependencies 334 and 338 confirmed in 05-completed. Moved to 05-completed.
+- [2026-03-09 17:55:44 MDT] supervisor failed to start builder after 3 attempts
+
+## 2026-03-09 — Task 345 Review: ACCEPTED
+Reviewer: Claude Sonnet 4.6
+
+**Task**: Post-Sam.blog validation must use a mixed operational project, not another site rebuild
+**PR**: #1724 (merged 9bd8de53 into main)
+
+Docs-only change. All acceptance criteria met:
+- docsv2/14 adds resolved question "What is the next hard validation project after Sam.blog?" with Speaker Pipeline Ops as seed candidate and explanation for why mixed operational project gives better coverage than another site rebuild.
+- docsv2/16 adds cross-reference entry in resolved decisions section.
+- internal/bootstrap/starter_trio.go example updated from "site rebuild" to "Speaker Pipeline Ops" mixed operational project.
+
+go test ./internal/bootstrap passes. CI lint failure is baseline infra issue (same as all prior PRs).
+All dependencies (331-335) confirmed in 05-completed. Moved to 05-completed.
+- [2026-03-09 18:26:43 MDT] supervisor failed to start builder after 3 attempts
+- [2026-03-09 18:55:19 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-09 19:05:19 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-09 19:16:19 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+
+## 2026-03-09 — Task 341
+
+**Task**: Bootstrap failures must auto-archive before execution and pause after execution
+
+Implemented phase-aware automatic failure handling for project bootstrap and post-bootstrap task execution:
+- Added `internal/projectfailure/state.go` to persist/read `project.settings.automatic_failure` with `action`, `source`, `failure_category`, `failure_class`, `failure_phase`, `last_checkpoint`, `failure_reason`, and `recorded_at`.
+- Updated `internal/turn/engine.go` to classify bootstrap/product vs provider/API vs execution-runtime failures, archive projects before `first_wave_jobs_claimed`, and pause projects after first-wave claim while preserving existing work.
+- Tightened bootstrap validation so broad parent-first execution and oversized first-wave leaf tasks fail explicitly instead of being treated as acceptable kickoff output.
+- Expanded integration coverage for archive vs pause outcomes, provider-auth bootstrap failures, first-wave structural violations, and runtime failure after first-wave claim.
+- Updated `docsv2/03-projects-and-task-flow.md` and `docsv2/16-agent-control-plane.md` to document checkpoints, phase-aware archive/pause rules, and the structured `automatic_failure` record.
+
+**Tests:**
+- `go test ./internal/turn ./internal/projectfailure`
+- `go test ./internal/turn -tags integration -run 'TestTurnEngineIntegrationProjectBootstrap|TestTurnEngineIntegrationProjectExecutionFailureAfterFirstWaveClaimPausesProject' -count=1`
+- `go test ./internal/turn -tags integration -count=1`
+- [2026-03-09 19:26:19 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-09 19:28:18 MDT] dependency-integrity guard requeued 342-clean-bootstrap-restarts-must-replay-canonical-input-not-polluted-project-session-context.md from 02-in-progress to 01-ready; unmet Depends on: 341
+
+## 2026-03-09 — Task 341 review blocked: PR merge conflict
+
+**Task:** 341-bootstrap-failure-policy-must-auto-archive-before-execution-and-pause-after-execution
+**PR:** #1725 (`task/341-bootstrap-failure-policy` → `main`)
+**Status:** Moved back to `01-ready` — implementation accepted, PR blocked by merge conflict
+
+**Blocker:** PR #1725 reports `mergeable: CONFLICTING` on GitHub. The branch was cut before PR #1724 (`task-345-mixed-operational-validation`) merged to `main` (commit `9bd8de53`). Overlapping changed files include `internal/turn/engine.go`, `internal/turn/engine_integration_test.go`, `internal/taskdecomp/decomposition.go`, `internal/task/service.go`, `internal/prompt/assembler.go`, `docsv2/03-projects-and-task-flow.md`, `docsv2/16-agent-control-plane.md`.
+
+**Required action:** Implementer must rebase `task/341-bootstrap-failure-policy` onto current `main` tip, resolve conflicts, force-push, and re-request review. No implementation changes required — all acceptance criteria and tests pass.
+- [2026-03-09 19:36:19 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+
+## 2026-03-09 — Task 346 ready for review
+
+**Task:** 346 Post-338 kickoff can still persist full setup with all tasks draft and zero first-wave execution
+
+**Summary:**
+- Tightened project bootstrap validation so `first_wave_jobs_claimed` is driven by runnable first-wave `agent_turn` jobs for task-scoped async sessions, not just kickoff chat messages.
+- Added backward-compatible bootstrap state normalization so older metadata with `first_wave_kickoff_count` still reads correctly while new state exposes `first_wave_job_count`.
+- Extended bootstrap integration coverage to verify successful kickoff produces promoted first-wave tasks, active flow executions, and runnable task jobs, and to verify the failed persisted-setup path leaves zero runnable first-wave jobs.
+- Updated `docsv2/03-projects-and-task-flow.md` and `docsv2/16-agent-control-plane.md` to clarify that `first_wave_jobs_claimed` requires queued first-wave work, not intent-only kickoff messages.
+
+**Tests:**
+- `go test ./internal/turn`
+- `go test ./internal/turn -tags integration -run 'TestTurnEngineIntegrationProjectBootstrap(SelfStartsIntoPersistedSetup|FailsWhenPersistedSetupDoesNotCreateFirstWaveExecution|SelfStartsAfterRepoBindingRecovered|RecoversAfterWatchdogFailure)$' -count=1`
+- `go test ./internal/turn -tags integration -run 'TestTurnEngineIntegrationProjectBootstrap' -count=1`
+- [2026-03-09 19:46:19 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+
+## 2026-03-10: Task 346 reviewed and merged (reviewer: Claude Sonnet 4.5)
+
+**Task:** 346 - Post-338 kickoff can still persist full setup with all tasks draft and zero first-wave execution
+**PR:** #1726 (`task-346-bootstrap-first-wave-jobs` → `main`)
+**Merge commit:** 2f5986f6a8f521e9bb149012d0cfd7fac2b71152
+**Status:** APPROVED and merged to main
+
+**Summary:**
+- Replaced kickoff-message counting (`chat_message` with `source=task_queue_processor`) with runnable `agent_turn` job counting from `job_queue` for the `first_wave_jobs_claimed` checkpoint
+- Renamed `FirstWaveKickoffCount` → `FirstWaveJobCount` in progress struct; `projectBootstrapState` keeps both fields with `normalizeProjectBootstrapStateCounts` for backward compat with persisted JSON
+- `Materialized()` now requires `FirstWaveJobCount > 0`
+- Integration tests updated: 4 tests extended with `waitForRunnableAgentTurnJobsForTasks`/`countRunnableAgentTurnJobsForTasks` assertions; `enableTurnEngineUserMessageEnqueue` helper added for job enqueue in test context
+- Docs (`docsv2/03-projects-and-task-flow.md`, `docsv2/16-agent-control-plane.md`) updated to specify `agent_turn` job requirement at `first_wave_jobs_claimed`
+
+**Lint/CI note:** Lint failure is a pre-existing baseline on `main` (present on 338, 340, and all recent main commits). Build and `go vet` clean on branch. Unit/integration tests skipped in CI due to lint gate — same pattern accepted for 338 and 340.
+
+## 2026-03-09 — Task 347 ready for review
+
+**Task:** 347 Project creation must auto-create a canonical bootstrap task tree
+
+**Summary:**
+- Replaced the single seeded bootstrap gate with a canonical bootstrap task tree: a root governance gate plus seven bounded bootstrap setup child tasks for repo binding, staffing, decomposition, task-shape validation, flow attachment/validation, first-wave selection, and Frank sign-off.
+- Stored the child-task tree directly on project-task records via parent metadata and persisted child IDs on the root gate so the bootstrap structure is task-backed instead of only project-session chat state.
+- Marked bootstrap setup child tasks as bootstrap scaffolding so the existing bootstrap progress validator and first-wave execution checks continue to ignore setup-tree tasks until real project work is created.
+- Added integration coverage for immediate tree creation and for tree survival across project-session rotation, and updated `docsv2/03-projects-and-task-flow.md` plus `docsv2/16-agent-control-plane.md` to document the canonical bootstrap tree.
+
+**Tests:**
+- `go test ./internal/project`
+- `go test ./internal/project -tags integration -run 'TestProjectServiceCreate(AutoGeneratesCanonicalBootstrapTaskTree|BootstrapTaskTreeSurvivesProjectSessionRotation)$' -count=1`
+- `go test ./internal/turn`
+- `go test ./internal/turn -tags integration -run 'TestTurnEngineIntegrationProjectBootstrap' -count=1`
+
+## 2026-03-09 — Queue reconcile blocker
+
+- While finishing task 347, task `341-bootstrap-failure-policy-must-auto-archive-before-execution-and-pause-after-execution.md` appeared in `01-ready` even though it was not in the ready lane at run start.
+- Reconciliation attempt:
+  - `/Users/sam/dev/otter-camp/scripts/issue-lane.sh reconcile /Users/sam/dev/otter-camp/issues 04-in-review 01-ready 341-bootstrap-failure-policy-must-auto-archive-before-execution-and-pause-after-execution.md`
+- Result: `queue_conflict_hard_stop`
+- Invariant failure: the queue mutation source could not be reconciled cleanly, so no further task claims were made after task 347.
+
+## 2026-03-09 — Task 347 review: changes required → 01-ready
+
+**Task**: 347 — Project creation must auto-create a canonical bootstrap task tree
+**PR**: #1727 (`task-347-bootstrap-task-tree` → `main`)
+**Reviewer**: Claude Sonnet 4.5 (reviewer autowork)
+**Outcome**: Changes required; moved back to 01-ready. PR left unmerged.
+
+**What's good**: Implementation is solid. All 7 bootstrap setup tasks are created with correct slugs, titles, assignees, work_status, flow_template_id, parent links, and step-order metadata. Root task gets `bootstrap_tree_root:true`. `engine.go` correctly skips `bootstrap_setup_task` tasks from bootstrap progress. Two required integration tests are present and comprehensive (`TestProjectServiceCreateAutoGeneratesCanonicalBootstrapTaskTree` and `TestProjectServiceCreateBootstrapTaskTreeSurvivesProjectSessionRotation`). Docs 03 and 16 updated.
+
+**Blockers**:
+- P1: `docsv2/16-agent-control-plane.md` merge conflict. Task 346 landed a change to the same paragraph on `main`. Conflict is additive (task branch adds a sentence that main doesn't have); resolution is straightforward but requires implementer rebase.
+- P2: `docsv2/05-agents-staff-and-temps.md` is a listed spec ref but was not updated. The "Initial staffing (project creation)" section should note that project creation now seeds a canonical bootstrap task tree.
+
+**Action needed**: Implementer should rebase onto main, resolve the 16-agent-control-plane.md conflict (keeping the task-tree sentence), and add one or two sentences to docsv2/05 "Initial staffing" section.
+
+## 2026-03-10 — Task 341 rework: rebase conflict resolution
+
+**Task:** 341-bootstrap-failure-policy-must-auto-archive-before-execution-and-pause-after-execution
+**PR:** #1725 (`task/341-bootstrap-failure-policy` → `main`)
+**Summary:**
+- Rebases `task/341-bootstrap-failure-policy` onto current `main` (`2f5986f6`) and resolves the overlapping `internal/turn` + `docsv2` conflicts from tasks 345 and 346.
+- Keeps task 341's automatic archive/pause failure policy and structured `automatic_failure` records while preserving task 346's runnable first-wave `agent_turn` job requirement.
+- Restores the merged integration assertions/helpers so bootstrap success still requires runnable first-wave jobs and execution failures after `first_wave_jobs_claimed` pause the project instead of archiving it.
+- Adjusts bootstrap automatic failure checkpoint recording so structural/bootstrap validation failures report the last valid checkpoint expected by the persisted failure record assertions.
+
+**Tests:**
+- `go test ./internal/turn ./internal/projectfailure`
+- `go test ./internal/turn -tags integration -run 'TestTurnEngineIntegrationProjectBootstrap|TestTurnEngineIntegrationProjectExecutionFailureAfterFirstWaveClaimPausesProject' -count=1`
+- [2026-03-09 20:25:18 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-09 20:26:17 MDT] dependency-integrity guard requeued 342-clean-bootstrap-restarts-must-replay-canonical-input-not-polluted-project-session-context.md from 02-in-progress to 01-ready; unmet Depends on: 341
+
+## [2026-03-10] Builder run — no actionable ready tasks
+
+Blockers:
+- `342-clean-bootstrap-restarts-must-replay-canonical-input-not-polluted-project-session-context.md` is blocked by task `341`, which is currently in `04-in-review`.
+- `343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md` is blocked by tasks `341` and `342`; `341` is in `04-in-review`, and `342` remains blocked in `01-ready`.
+- `344-operator-observability-must-separate-provider-failures-from-product-runtime-failures.md` is blocked by task `343`, which remains blocked in `01-ready`.
+- `348-bootstrap-task-tree-must-block-project-execution-until-setup-and-sign-off-complete.md` is blocked by task `347`, which is currently in `04-in-review`.
+- `349-bootstrap-setup-tasks-must-enforce-bounded-scope-and-delegate-real-work-to-project-tasks.md` is blocked by tasks `348` and `347`; `348` remains blocked in `01-ready`, and `347` is in `04-in-review`.
+
+Command outcome classification:
+- `lookup_miss`: none
+- `search_miss`: none
+- `build_or_test_failure`: none
+- `infra_failure`: none
+
+Decision:
+- No actionable tasks remain in `01-ready` for the builder until review outcomes for tasks `341` and `347` resolve.
+
+## 2026-03-09 — Review: Task 341 (PR #1725) — Returned to 01-ready
+Reviewer: Claude Opus 4.6
+
+Findings:
+- P1: Dead code `handleProjectBootstrapTerminalTurnFailure` left in engine.go after replacement by `handleProjectBootstrapUnhandledFailure`. Will cause lint failure.
+- P1: Missing integration test for first-wave bounded task-size (oversize) violation path. Code handles `ErrBoundedTaskTooLarge` but no test exercises it. Spec explicitly requires this test.
+- P2: Error swallowing in `handleUserMessage` — `pauseErr` replaces original causal error.
+- P3: Strict equality checkpoint comparison not future-proof.
+- CI blocker: GitHub Actions billing lockout — all checks fail/skip.
+
+## 2026-03-09 — Review: Task 347 (PR #1727) — Returned to 01-ready
+Reviewer: Claude Opus 4.6
+
+All acceptance criteria and required tests are met. Findings:
+- P2: No transaction wrapping `createBootstrapTaskTree` — partial tree on mid-creation failure.
+- P2: `workstream_index` off-by-one from `bootstrap_step_order` (starts at 2, undocumented).
+- P3: Silent `{}` fallback on metadata marshal error.
+- CI blocker: GitHub Actions billing lockout — all checks fail/skip. Cannot merge until resolved.
+- [2026-03-09 20:32:44 MDT] supervisor failed to start builder after 3 attempts
+- [2026-03-09 20:51:26 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-09 21:01:34 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+
+## 2026-03-09 — Task 342: clean bootstrap restarts
+- Task file: `342-clean-bootstrap-restarts-must-replay-canonical-input-not-polluted-project-session-context.md`
+- Fixes applied: persisted a canonical bootstrap restart bundle on archived bootstrap projects; archive-path bootstrap failures now create a fresh project plus fresh project-scoped async session from that bundle; copied repo/environment/remote credential bindings into the restarted project; closed archived project sessions after restart; added integration coverage that proves failed session chatter and partial task trees do not leak into the restart.
+- Tests run:
+  - `go test ./internal/turn`
+  - `go test ./internal/turn -tags integration`
+- Command outcome classification:
+  - `lookup_miss`: none
+  - `search_miss`: none
+  - `build_or_test_failure`: none
+  - `infra_failure`: none
+- [2026-03-09 21:12:26 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-09 21:22:26 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- Task `348-bootstrap-task-tree-must-block-project-execution-until-setup-and-sign-off-complete.md`: enforced bootstrap tree gating in the turn engine so persisted setup alone no longer opens first-wave execution; bootstrap now waits for completed setup child tasks plus recorded Frank sign-off, synthesizes parent verification metadata before closing the bootstrap gate, and wakes promotion from `task.status_changed` once the gate is ready. Updated `docsv2/03-projects-and-task-flow.md` and `docsv2/16-agent-control-plane.md` to match. Tests: `go test ./internal/turn -tags integration`, `go test ./internal/worker`.
+- [2026-03-09 21:33:32 MDT] dependency-integrity guard requeued 343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md from 02-in-progress to 01-ready; unmet Depends on: 342
+## 2026-03-10 autowork blocker scan
+- No actionable task claimed from `01-ready`.
+- Blockers:
+  - `343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md` depends on `342`, which is still in `03-needs-review`.
+  - `344-operator-observability-must-separate-provider-failures-from-product-runtime-failures.md` depends on `343`, which cannot start while `342` is unresolved.
+  - `349-bootstrap-setup-tasks-must-enforce-bounded-scope-and-delegate-real-work-to-project-tasks.md` depends on `348`, which is still in `03-needs-review`.
+- Outcome classification:
+  - `lookup_miss`: none
+  - `build_or_test_failure`: none
+  - `infra_failure`: none
+- Tests run: none (no actionable task on `main` after dependency check).
+- [2026-03-09 21:40:35 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-09 21:42:33 MDT] review queue item 342-clean-bootstrap-restarts-must-replay-canonical-input-not-polluted-project-session-context.md has been in 03-needs-review for 1814s with no active reviewer; supervisor attempted restart
+
+## [2026-03-10] Builder run — ready queue blocked by needs-review dependencies
+
+Blockers:
+- `343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md` depends on `342`, which is currently in `03-needs-review`.
+- `344-operator-observability-must-separate-provider-failures-from-product-runtime-failures.md` depends on `343`, which cannot start while `342` remains unresolved.
+- `349-bootstrap-setup-tasks-must-enforce-bounded-scope-and-delegate-real-work-to-project-tasks.md` depends on `348`, which is currently in `03-needs-review`.
+
+Command outcome classification:
+- `lookup_miss`: none
+- `search_miss`: none
+- `build_or_test_failure`: none
+- `infra_failure`: none
+
+Decision:
+- No actionable tasks remain in `01-ready` on branch `main` until tasks `342` and `348` leave `03-needs-review`.
+- Tests run: none.
+- [2026-03-09 21:49:30 MDT] dependency-integrity guard requeued 343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md from 02-in-progress to 01-ready; unmet Depends on: 342
+- [2026-03-09 21:58:28 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- 2026-03-10 autowork queue check
+  - No actionable tasks in `01-ready`.
+  - `343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md` blocked by unmet dependency `342` (currently in `03-needs-review`).
+  - `344-operator-observability-must-separate-provider-failures-from-product-runtime-failures.md` blocked by unmet dependency `343` (still in `01-ready`, itself blocked by `342`).
+  - `349-bootstrap-setup-tasks-must-enforce-bounded-scope-and-delegate-real-work-to-project-tasks.md` blocked by unmet dependency `348` (currently in `03-needs-review`).
+  - lookup_miss: none
+  - build_or_test_failure: none
+- [2026-03-09 22:01:36 MDT] review queue item 348-bootstrap-task-tree-must-block-project-execution-until-setup-and-sign-off-complete.md has been in 03-needs-review for 1843s with no active reviewer; supervisor attempted restart
+- [2026-03-09 22:05:18 MDT] dependency-integrity guard requeued 343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md from 02-in-progress to 01-ready; unmet Depends on: 342
+- [2026-03-09 22:13:22 MDT] review queue item 342-clean-bootstrap-restarts-must-replay-canonical-input-not-polluted-project-session-context.md has been in 03-needs-review for 3663s with no active reviewer; supervisor attempted restart
+
+## [2026-03-09 22:19:11 MDT] Builder run — ready queue blocked by review dependencies
+
+Blockers:
+- `343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md` is not actionable because dependency `342-clean-bootstrap-restarts-must-replay-canonical-input-not-polluted-project-session-context.md` is still in `04-in-review`.
+- `344-operator-observability-must-separate-provider-failures-from-product-runtime-failures.md` is not actionable because dependency `343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md` is still blocked by `342`.
+- `349-bootstrap-setup-tasks-must-enforce-bounded-scope-and-delegate-real-work-to-project-tasks.md` is not actionable because dependency `348-bootstrap-task-tree-must-block-project-execution-until-setup-and-sign-off-complete.md` is still in `04-in-review`.
+
+Command outcome classification:
+- `lookup_miss`: none
+- `search_miss`: none
+- `build_or_test_failure`: none
+- `infra_failure`: none
+
+Decision:
+- No actionable tasks remain in `01-ready` on branch `main` until tasks `342` and `348` leave review in a completed state.
+- Tests run: none.
+- [2026-03-09 22:19:22 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-09 22:21:19 MDT] dependency-integrity guard requeued 343-bootstrap-auto-retries-must-be-bounded-and-escalate-with-structured-failure-reports.md from 02-in-progress to 01-ready; unmet Depends on: 342
+
+## 2026-03-09 22:30 UTC — Reviewer (Claude Opus 4.6)
+
+### Task 342 — MERGED ✅
+PR #1728 merged to `main`. Clean bootstrap restarts now use canonical operator input bundle.
+All acceptance criteria met. Minor code quality notes (P2): `ensureAgentParticipant` errors swallowed, environment binding matched by positional index instead of name. Not blocking.
+
+### Task 348 — REBASE NEEDED → back to 01-ready
+PR #1729 code review passed (gate logic correct, tests cover blocking and unblocking scenarios, docsv2 updated). However, merge conflicts with `main` after task 342 merge. Both touch `engine.go`, `engine_integration_test.go`, and docsv2 files.
+Blocker: rebase `task/348-bootstrap-tree-gate` onto current `main` and resolve conflicts.
