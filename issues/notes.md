@@ -28,10 +28,46 @@ Task file: `348-bootstrap-task-tree-must-block-project-execution-until-setup-and
 Fixes applied:
 - Confirmed PR `#1729` (`task/348-bootstrap-tree-gate`) is already merged into `main`.
 - Rebased local branch `task/348-bootstrap-tree-gate` onto current `main`; branch head now matches `origin/main` with no remaining diff.
-- Ran queue reconciliation for stale duplicate task copies and normalized lane state so task `348` remains only in `05-completed`.
+- Removed the stale top-level `## Reviewer Required Changes` block from the task file because the required rebase is complete and the PR is already merged.
+- Moved the task file from `02-in-progress` to `05-completed` to match merged state.
 
 Tests run:
 - `go test ./internal/turn -tags integration`
+
+Outcome:
+- `task_scope`: fail
+- `baseline_unrelated`: fail
+- `decision`: proceed
+
+Evidence:
+- Local branch tree matches `origin/main` exactly after rebase (`HEAD == origin/main`), so the failing `internal/turn` integration tests are pre-existing on `main`, not introduced by task 348.
+- Failures observed: `TestTurnEngineIntegrationRecoveryTurnPreservesResumableStateAfterGuardrailContinuationDepthEX327` and `TestTurnEngineIntegrationRecoveryResumeHardensRepeatedIntentOnlyDraftEX329`.
+
+## [2026-03-10] Task 352 — Reviewer rework resolved, ready for review
+
+Task file: `352-post-351-bootstrap-task-tree-can-still-persist-phased-parent-plus-child-setup-with-zero-first-wave-execution.md`
+
+Fixes applied:
+- Rebased `task/352-post-351-bootstrap-first-wave-promotion` onto current `main` and resolved conflicts in [`docsv2/03-projects-and-task-flow.md`](/Users/sam/otter-data/sessions/repos/builder/docsv2/03-projects-and-task-flow.md) and [`internal/turn/engine_integration_test.go`](/Users/sam/otter-data/sessions/repos/builder/internal/turn/engine_integration_test.go).
+- Preserved the defensive zero-child early return in `completeProjectBootstrapGateTask`.
+- Kept `countProjectBootstrapFirstWaveJobs` restricted to actual pending/claimed task-session jobs rather than bare async sessions.
+- Reapplied phased bootstrap regression coverage after the rebase:
+  - failure when phased parent + child setup persists but no child is promoted
+  - failure when phased child promotion happens but execution never materializes
+  - success when phased child promotion and first-wave job creation both complete
+- Removed the top-level `## Reviewer Required Changes` block from the task file after satisfying all requested fixes.
+
+Tests run:
+- `go test ./internal/turn -tags integration -run 'TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCreateFirstWaveExecution|TestTurnEngineIntegrationProjectBootstrapFailsOnExactV7DraftOnlyShape|TestTurnEngineIntegrationProjectBootstrapFailsPhasedSetupWithoutChildPromotion|TestTurnEngineIntegrationProjectBootstrapFailsPhasedParentChildSetupWhenFirstWaveExecutionNeverMaterializes|TestTurnEngineIntegrationProjectBootstrapPromotesPhasedChildWaveImmediatelyAfterPersistedStructure'`
+
+## [2026-03-10] Queue blocker — Task 348 stale duplicate remains after reconcile
+
+Blocker type: `infra_failure`
+
+Details:
+- `issue-lane.sh reconcile /Users/sam/dev/otter-camp/issues 02-in-progress 05-completed 348-bootstrap-task-tree-must-block-project-execution-until-setup-and-sign-off-complete.md` returned `queue_reconciled` multiple times.
+- The stale task file still remains in both `02-in-progress` and `05-completed`, so the shared queue no longer reflects the actual merged state for task 348.
+- No actionable tasks remain in `01-ready`; this queue drift is the only unresolved workflow issue at the end of the run.
 
 ## [2026-03-05] Task 241 — Reviewer rework (rebase conflict) resolved, ready for review
 
@@ -12809,3 +12845,12 @@ Reviewer: Claude Opus 4 (reviewer agent)
 PR #1732 merged to main. All acceptance criteria met, all three required integration tests present.
 Previously approved on quality/correctness; was blocked by dependency gate (task 348 not yet in 05-completed).
 All dependencies (335, 339, 347, 348) now in 05-completed. Dependency gate cleared. Moved to 05-completed.
+- [2026-03-10 12:06:21 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-10 12:17:19 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+
+## 352 — Review completed (2026-03-10)
+- **PR #1736** merged to `main` (commit 4a8b55c9).
+- All 5 acceptance criteria verified: first-wave child promotion, bootstrap failure on zero promotion, parent exclusion, regression test coverage, docsv2 update.
+- No P0/P1 issues. Two P2 design notes (gate bypass breadth in task_queue_processor.go and service.go) — not blocking.
+- PR #1735 (superseded earlier attempt) remains open with failing lint; not relevant to completion.
+- Reviewer: Claude Opus 4.6
