@@ -1421,6 +1421,9 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 			}
 			continue
 		}
+		if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); bootstrapSetupTask {
+			continue
+		}
 		plannedTasks = append(plannedTasks, task)
 		if parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"]); ok && parentID != uuid.Nil {
 			childCounts[parentID]++

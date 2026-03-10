@@ -19,6 +19,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/validation"
 )
 
@@ -52,6 +53,58 @@ const (
 	bootstrapBlocksScopeAll = "all"
 	bootstrapTemplateSlug   = "bootstrap-governance-gate"
 )
+
+type bootstrapSetupTaskSpec struct {
+	Slug        string
+	Title       string
+	Description string
+	Assignee    string
+}
+
+var bootstrapSetupTaskSpecs = []bootstrapSetupTaskSpec{
+	{
+		Slug:        "bind-repo-environment",
+		Title:       "Bind repo and environment",
+		Description: "Confirm the canonical repo/workspace binding, environment records, and credentials required for project execution.",
+		Assignee:    "lori",
+	},
+	{
+		Slug:        "staff-project",
+		Title:       "Staff the project",
+		Description: "Assign the required project roles and verify the initial working roster before execution begins.",
+		Assignee:    "lori",
+	},
+	{
+		Slug:        "decompose-workstreams",
+		Title:       "Decompose workstreams into bounded tasks",
+		Description: "Break the kickoff scope into bounded executable workstreams and capture the task tree shape explicitly.",
+		Assignee:    "lori",
+	},
+	{
+		Slug:        "validate-task-shape",
+		Title:       "Validate task sizing and dependencies",
+		Description: "Verify task scope, dependency ordering, and readiness so oversized or ambiguous work does not enter execution.",
+		Assignee:    "lori",
+	},
+	{
+		Slug:        "attach-validate-flow-templates",
+		Title:       "Attach and validate flow templates",
+		Description: "Attach runnable flow templates to the planned tasks and confirm each required execution path is valid.",
+		Assignee:    "lori",
+	},
+	{
+		Slug:        "select-first-wave",
+		Title:       "Select first-wave runnable tasks",
+		Description: "Choose the first bounded executable tasks that should enter real project execution once bootstrap is approved.",
+		Assignee:    "lori",
+	},
+	{
+		Slug:        "record-frank-sign-off",
+		Title:       "Request and record Frank sign-off",
+		Description: "Collect the final bootstrap review decision from Frank before the project may cross into real execution.",
+		Assignee:    "frank",
+	},
+}
 
 type Project = repo.Project
 type FlowTemplate = repo.FlowTemplate
@@ -238,6 +291,7 @@ type taskScheduleRepository interface {
 
 type taskRepository interface {
 	Create(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
+	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
 type modelInvocationProjectCleaner interface {
@@ -421,7 +475,7 @@ func (s *service) Create(ctx context.Context, req CreateProjectRequest) (*Projec
 	if _, _, err := EnsureCanonicalRepoBinding(ctx, s.environments, s.dataDir, created); err != nil {
 		return nil, err
 	}
-	if bootstrapErr := s.createBootstrapGate(ctx, created, createdByType, createdByID); bootstrapErr != nil {
+	if bootstrapErr := s.createBootstrapTaskTree(ctx, created, createdByType, createdByID); bootstrapErr != nil {
 		return nil, bootstrapErr
 	}
 
@@ -444,7 +498,7 @@ type bootstrapAgents struct {
 	frankID *uuid.UUID
 }
 
-func (s *service) createBootstrapGate(ctx context.Context, projectRecord repo.Project, createdByType string, createdByID uuid.UUID) error {
+func (s *service) createBootstrapTaskTree(ctx context.Context, projectRecord repo.Project, createdByType string, createdByID uuid.UUID) error {
 	if s.templates == nil || s.nodes == nil || s.tasks == nil {
 		return nil
 	}
@@ -539,8 +593,8 @@ func (s *service) createBootstrapGate(ctx context.Context, projectRecord repo.Pr
 		return err
 	}
 
-	description := "Project bootstrap gate: Lori performs setup and Frank reviews before other tasks can start."
-	if _, err := s.tasks.Create(ctx, repo.ProjectTask{
+	description := "Project bootstrap gate: the canonical setup task tree must complete and Frank must sign off before other tasks can start."
+	rootTask, err := s.tasks.Create(ctx, repo.ProjectTask{
 		OrganizationID:      projectRecord.OrganizationID,
 		ProjectID:           projectRecord.ID,
 		Title:               "Bootstrap governance gate",
@@ -552,12 +606,56 @@ func (s *service) createBootstrapGate(ctx context.Context, projectRecord repo.Pr
 		CreatedByType:       createdByType,
 		CreatedByID:         actorIDPointer(createdByID),
 		AssignedAgentID:     agents.loriID,
-		Metadata:            json.RawMessage(`{"bootstrap_gate":true}`),
-	}); err != nil {
+		Metadata:            json.RawMessage(`{"bootstrap_gate":true,"bootstrap_tree_root":true}`),
+	})
+	if err != nil {
+		return err
+	}
+
+	for idx, spec := range bootstrapSetupTaskSpecs {
+		assigneeID := agents.loriID
+		if spec.Assignee == "frank" {
+			assigneeID = agents.frankID
+		}
+		taskDescription := spec.Description
+		childTask, err := s.tasks.Create(ctx, repo.ProjectTask{
+			OrganizationID:      projectRecord.OrganizationID,
+			ProjectID:           projectRecord.ID,
+			Title:               spec.Title,
+			Description:         &taskDescription,
+			WorkStatus:          "draft",
+			FlowTemplateID:      &template.ID,
+			RequiresHumanReview: false,
+			CreatedByType:       createdByType,
+			CreatedByID:         actorIDPointer(createdByID),
+			AssignedAgentID:     assigneeID,
+			Metadata:            bootstrapSetupTaskMetadata(rootTask.ID, spec.Slug, idx+1),
+		})
+		if err != nil {
+			return err
+		}
+		rootTask.Metadata = taskdecomp.AppendChildTaskID(rootTask.Metadata, childTask.ID)
+	}
+	if _, err := s.tasks.Update(ctx, rootTask); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func bootstrapSetupTaskMetadata(parentTaskID uuid.UUID, slug string, order int) json.RawMessage {
+	payload := map[string]any{
+		"bootstrap_setup_task":         true,
+		"bootstrap_step_slug":          strings.TrimSpace(slug),
+		"bootstrap_step_order":         order,
+		"decomposition_parent_task_id": parentTaskID.String(),
+		"workstream_index":             order + 1,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return raw
 }
 
 func (s *service) resolveBootstrapAgents(ctx context.Context, organizationID uuid.UUID) (bootstrapAgents, error) {
