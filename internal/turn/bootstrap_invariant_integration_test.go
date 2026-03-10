@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
 
@@ -225,6 +226,57 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 			t.Fatalf("runnable first-wave jobs = %d, want 0", result.runnableJobs)
 		}
 	})
+
+	t.Run("playbook_aware_persisted_setup_without_live_promotion_fails_closed", func(t *testing.T) {
+		fixture := newIntegrationFixture(t)
+		ctx := context.Background()
+
+		result := runBootstrapInvariantScenario(t, ctx, fixture, bootstrapInvariantScenario{
+			assignments:            5,
+			topLevelTaskCount:      5,
+			flowTemplateCount:      1,
+			livePromotion:          false,
+			completeBootstrapSetup: true,
+			planningAwareTopLevel:  true,
+		})
+
+		if result.assignmentCount != 5 {
+			t.Fatalf("assignment count = %d, want 5", result.assignmentCount)
+		}
+		if result.totalTaskCount != 13 {
+			t.Fatalf("task count = %d, want 13", result.totalTaskCount)
+		}
+		if result.bootstrapState.PlannedFlowTemplateCount != 1 {
+			t.Fatalf("bootstrap planned_flow_template_count = %d, want 1", result.bootstrapState.PlannedFlowTemplateCount)
+		}
+		if result.bootstrapState.PlannedTaskCount != 5 {
+			t.Fatalf("bootstrap planned_task_count = %d, want 5", result.bootstrapState.PlannedTaskCount)
+		}
+		if result.bootstrapState.FirstWaveTaskCount != 5 {
+			t.Fatalf("bootstrap first_wave_task_count = %d, want 5", result.bootstrapState.FirstWaveTaskCount)
+		}
+		if result.bootstrapState.FirstWaveExecutionCount != 0 {
+			t.Fatalf("bootstrap first_wave_execution_count = %d, want 0", result.bootstrapState.FirstWaveExecutionCount)
+		}
+		if result.bootstrapState.FirstWaveJobCount != 0 {
+			t.Fatalf("bootstrap first_wave_job_count = %d, want 0", result.bootstrapState.FirstWaveJobCount)
+		}
+		if result.bootstrapState.Status != projectBootstrapStatusFailed {
+			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusFailed)
+		}
+		if result.bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
+			t.Fatalf("bootstrap current_phase = %q, want %q", result.bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
+		}
+		if result.project.Status != "archived" {
+			t.Fatalf("project status = %q, want archived", result.project.Status)
+		}
+		if result.activeExecutions != 0 {
+			t.Fatalf("active flow executions = %d, want 0", result.activeExecutions)
+		}
+		if result.runnableJobs != 0 {
+			t.Fatalf("runnable first-wave jobs = %d, want 0", result.runnableJobs)
+		}
+	})
 }
 
 type bootstrapInvariantScenario struct {
@@ -235,6 +287,7 @@ type bootstrapInvariantScenario struct {
 	flowTemplateCount      int
 	completeBootstrapSetup bool
 	livePromotion          bool
+	planningAwareTopLevel  bool
 }
 
 type bootstrapInvariantResult struct {
@@ -260,7 +313,8 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 	workerB := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
 	workerC := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
 	workerD := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
-	assignedAgents := []repo.Agent{pmAgent, workerA, workerB, workerC, workerD}
+	workerE := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	assignedAgents := []repo.Agent{pmAgent, workerA, workerB, workerC, workerD, workerE}
 
 	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
 	if !scenario.livePromotion {
@@ -289,7 +343,7 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
 		}
 
-		roles := []string{"pm", "worker", "reviewer", "observer", "worker"}
+		roles := []string{"pm", "worker", "reviewer", "observer", "worker", "specialist"}
 		for i := 0; i < scenario.assignments && i < len(assignedAgents); i++ {
 			if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
 				AgentID:        assignedAgents[i].ID,
@@ -358,6 +412,12 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 		for i := 0; i < scenario.topLevelTaskCount; i++ {
 			description := fmt.Sprintf("Deliver bounded top-level first-wave slice %d.", i+1)
 			assignedID := assignedAgents[(i%max(1, scenario.assignments-1))+1].ID
+			metadata := mustJSON(t, map[string]any{
+				"first_wave_index": i + 1,
+			})
+			if scenario.planningAwareTopLevel {
+				metadata = taskplan.ApplyMetadata(metadata, taskplan.Analyze(fmt.Sprintf("Implementation slice %d", i+1), &description))
+			}
 			if _, err := taskRepo.Create(ctx, repo.ProjectTask{
 				OrganizationID:  fixture.org.ID,
 				ProjectID:       project.ID,
@@ -366,11 +426,9 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 				WorkStatus:      "draft",
 				FlowTemplateID:  &templates[i%len(templates)].ID,
 				AssignedAgentID: &assignedID,
-				Metadata: mustJSON(t, map[string]any{
-					"first_wave_index": i + 1,
-				}),
-				CreatedByType: "agent",
-				CreatedByID:   &lori.ID,
+				Metadata:        metadata,
+				CreatedByType:   "agent",
+				CreatedByID:     &lori.ID,
 			}); err != nil {
 				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
 			}
