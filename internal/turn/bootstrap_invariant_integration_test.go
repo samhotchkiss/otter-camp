@@ -308,10 +308,3 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 		runnableJobs:     countRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs),
 	}
 }
-
-func max(left, right int) int {
-	if left > right {
-		return left
-	}
-	return right
-}
