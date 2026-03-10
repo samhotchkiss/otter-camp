@@ -135,12 +135,104 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 			t.Fatalf("runnable first-wave jobs = %d, want 0", result.runnableJobs)
 		}
 	})
+
+	t.Run("samblog_rebuild_shape_promotes_first_wave_and_claims_jobs", func(t *testing.T) {
+		fixture := newIntegrationFixture(t)
+		enableTaskQueueProcessor(t, fixture)
+		enableTurnEngineUserMessageEnqueue(t, fixture)
+		ctx := context.Background()
+
+		result := runBootstrapInvariantScenario(t, ctx, fixture, bootstrapInvariantScenario{
+			assignments:            4,
+			topLevelTaskCount:      5,
+			flowTemplateCount:      2,
+			completeBootstrapSetup: true,
+			livePromotion:          true,
+		})
+
+		if result.assignmentCount != 4 {
+			t.Fatalf("assignment count = %d, want 4", result.assignmentCount)
+		}
+		if result.totalTaskCount != 13 {
+			t.Fatalf("task count = %d, want 13", result.totalTaskCount)
+		}
+		if result.bootstrapState.Status != projectBootstrapStatusCompleted {
+			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusCompleted)
+		}
+		if result.bootstrapState.PlannedTaskCount != 5 {
+			t.Fatalf("bootstrap planned_task_count = %d, want 5", result.bootstrapState.PlannedTaskCount)
+		}
+		if result.bootstrapState.PlannedFlowTemplateCount != 2 {
+			t.Fatalf("bootstrap planned_flow_template_count = %d, want 2", result.bootstrapState.PlannedFlowTemplateCount)
+		}
+		if result.bootstrapState.FirstWaveTaskCount != 5 {
+			t.Fatalf("bootstrap first_wave_task_count = %d, want 5", result.bootstrapState.FirstWaveTaskCount)
+		}
+		if result.bootstrapState.FirstWaveExecutionCount == 0 {
+			t.Fatalf("bootstrap first_wave_execution_count = %d, want > 0", result.bootstrapState.FirstWaveExecutionCount)
+		}
+		if result.bootstrapState.FirstWaveJobCount == 0 {
+			t.Fatalf("bootstrap first_wave_job_count = %d, want > 0", result.bootstrapState.FirstWaveJobCount)
+		}
+		if result.project.Status != "active" {
+			t.Fatalf("project status = %q, want active", result.project.Status)
+		}
+		if result.runnableJobs == 0 {
+			t.Fatal("expected runnable first-wave jobs for reduced samblog rebuild shape")
+		}
+	})
+
+	t.Run("samblog_rebuild_shape_without_live_promotion_fails_closed", func(t *testing.T) {
+		fixture := newIntegrationFixture(t)
+		ctx := context.Background()
+
+		result := runBootstrapInvariantScenario(t, ctx, fixture, bootstrapInvariantScenario{
+			assignments:            4,
+			topLevelTaskCount:      5,
+			flowTemplateCount:      2,
+			completeBootstrapSetup: true,
+			livePromotion:          false,
+		})
+
+		if result.assignmentCount != 4 {
+			t.Fatalf("assignment count = %d, want 4", result.assignmentCount)
+		}
+		if result.totalTaskCount != 13 {
+			t.Fatalf("task count = %d, want 13", result.totalTaskCount)
+		}
+		if result.bootstrapState.Status != projectBootstrapStatusFailed {
+			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusFailed)
+		}
+		if result.bootstrapState.PlannedTaskCount != 5 {
+			t.Fatalf("bootstrap planned_task_count = %d, want 5", result.bootstrapState.PlannedTaskCount)
+		}
+		if result.bootstrapState.PlannedFlowTemplateCount != 2 {
+			t.Fatalf("bootstrap planned_flow_template_count = %d, want 2", result.bootstrapState.PlannedFlowTemplateCount)
+		}
+		if result.bootstrapState.FirstWaveTaskCount != 5 {
+			t.Fatalf("bootstrap first_wave_task_count = %d, want 5", result.bootstrapState.FirstWaveTaskCount)
+		}
+		if result.bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
+			t.Fatalf("bootstrap current_phase = %q, want %q", result.bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
+		}
+		if result.project.Status != "archived" {
+			t.Fatalf("project status = %q, want archived", result.project.Status)
+		}
+		if result.activeExecutions != 0 {
+			t.Fatalf("active flow executions = %d, want 0", result.activeExecutions)
+		}
+		if result.runnableJobs != 0 {
+			t.Fatalf("runnable first-wave jobs = %d, want 0", result.runnableJobs)
+		}
+	})
 }
 
 type bootstrapInvariantScenario struct {
 	assignments            int
 	parentTaskCount        int
 	childTaskCount         int
+	topLevelTaskCount      int
+	flowTemplateCount      int
 	completeBootstrapSetup bool
 	livePromotion          bool
 }
@@ -210,7 +302,14 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 			}
 		}
 
-		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		templateCount := scenario.flowTemplateCount
+		if templateCount <= 0 {
+			templateCount = 1
+		}
+		templates := make([]repo.FlowTemplate, 0, templateCount)
+		for i := 0; i < templateCount; i++ {
+			templates = append(templates, mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID))
+		}
 		taskRepo := repo.NewProjectTaskRepo(fixture.pool)
 		parentTasks := make([]repo.ProjectTask, 0, scenario.parentTaskCount)
 		for i := 0; i < scenario.parentTaskCount; i++ {
@@ -222,7 +321,7 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 				Title:           fmt.Sprintf("Wave %d orchestration parent", i+1),
 				Description:     &description,
 				WorkStatus:      "draft",
-				FlowTemplateID:  &template.ID,
+				FlowTemplateID:  &templates[i%len(templates)].ID,
 				AssignedAgentID: &assignedID,
 				CreatedByType:   "agent",
 				CreatedByID:     &lori.ID,
@@ -243,7 +342,7 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 				Title:           fmt.Sprintf("Implement first-wave slice %d", i+1),
 				Description:     &description,
 				WorkStatus:      "draft",
-				FlowTemplateID:  &template.ID,
+				FlowTemplateID:  &templates[i%len(templates)].ID,
 				AssignedAgentID: &assignedID,
 				Metadata: mustJSON(t, map[string]any{
 					"decomposition_parent_task_id": parentTask.ID.String(),
@@ -256,13 +355,34 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 			}
 		}
 
+		for i := 0; i < scenario.topLevelTaskCount; i++ {
+			description := fmt.Sprintf("Deliver bounded top-level first-wave slice %d.", i+1)
+			assignedID := assignedAgents[(i%max(1, scenario.assignments-1))+1].ID
+			if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+				OrganizationID:  fixture.org.ID,
+				ProjectID:       project.ID,
+				Title:           fmt.Sprintf("Implement top-level first-wave slice %d", i+1),
+				Description:     &description,
+				WorkStatus:      "draft",
+				FlowTemplateID:  &templates[i%len(templates)].ID,
+				AssignedAgentID: &assignedID,
+				Metadata: mustJSON(t, map[string]any{
+					"first_wave_index": i + 1,
+				}),
+				CreatedByType: "agent",
+				CreatedByID:   &lori.ID,
+			}); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+		}
+
 		return ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
 			Output: map[string]any{
-				"assignment_count": scenario.assignments,
-				"planned_tasks":    scenario.parentTaskCount + scenario.childTaskCount,
-				"flow_template_id": template.ID.String(),
+				"assignment_count":    scenario.assignments,
+				"planned_tasks":       scenario.parentTaskCount + scenario.childTaskCount + scenario.topLevelTaskCount,
+				"flow_template_count": len(templates),
 			},
 		}, nil
 	}
