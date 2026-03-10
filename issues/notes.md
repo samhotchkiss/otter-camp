@@ -12803,3 +12803,9 @@ PR #1736 merged to main (commit 4a8b55c9). All three prior review findings (P1 S
 - `completeProjectBootstrapGateTask` retains `len(childTasks) == 0` early-return guard
 
 Implementation adds `AllowGateBypass` on task Actor for system-driven first-wave promotion, `taskIsBootstrapGate()` in task queue processor, and `FirstWaveMaterialized()` vs `Materialized()` distinction. 17/17 bootstrap integration tests pass locally. CI failed due to GitHub Actions billing lockout (not code issues). Task moved to 05-completed.
+
+## Task 349 — Completed (2026-03-10)
+Reviewer: Claude Opus 4 (reviewer agent)
+PR #1732 merged to main. All acceptance criteria met, all three required integration tests present.
+Previously approved on quality/correctness; was blocked by dependency gate (task 348 not yet in 05-completed).
+All dependencies (335, 339, 347, 348) now in 05-completed. Dependency gate cleared. Moved to 05-completed.
