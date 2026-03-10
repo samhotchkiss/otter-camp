@@ -53,3 +53,16 @@ Do NOT: switch providers, dead-letter jobs, send API calls directly, modify the 
 - Build: `go build -o bin/ottercamp ./cmd/ottercamp`
 - Branch: `main` is the active development branch
 - Tests: `go test ./...`
+
+## Root Cause Rule
+
+When a failure repeats or survives more than one narrow fix, stop patching the nearest symptom.
+
+Required behavior:
+1. Define the invariant that should hold.
+2. Identify the state transition or contract that violates that invariant.
+3. Add or update deterministic coverage for the underlying failure mode.
+4. Fix the underlying state-machine / contract bug.
+5. Only then rerun the end-to-end scenario.
+
+Do not keep stacking one-off symptom fixes when the same failure family keeps resurfacing under a new shape.
