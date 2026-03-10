@@ -7138,7 +7138,7 @@ func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t 
 		t.Fatalf("bootstrap restart environment bundle = %+v, want persisted repo/credential binding", bundle.Environments)
 	}
 	if bundle.RestartProjectID == "" {
-		t.Fatal("expected archived project bundle to record restart_project_id")
+		t.Fatalf("expected archived project bundle to record restart_project_id; settings=%s", string(archivedProject.Settings))
 	}
 
 	restartedProjectID, err := uuid.Parse(bundle.RestartProjectID)
@@ -7225,6 +7225,179 @@ func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t 
 	}
 	if !strings.Contains(restartPrompt, "keep main branch protected") || !strings.Contains(restartPrompt, "github-bootstrap-token") || !strings.Contains(restartPrompt, repoPath) {
 		t.Fatalf("restart prompt missing canonical constraints/bindings: %q", restartPrompt)
+	}
+}
+
+func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and setup for this new project.")
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "Acknowledged. I am still working through the bootstrap setup."}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial stalled bootstrap turn: %v", err)
+	}
+	runBootstrapFollowOnCycleToFailure(t, ctx, fixture, projectSession.ID)
+
+	initialArchived := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if initialArchived.Status != "archived" {
+		t.Fatalf("initial project status = %q, want archived", initialArchived.Status)
+	}
+	initialFailureState := projectfailure.Parse(initialArchived.Settings)
+	if initialFailureState.RetryBudget != defaultProjectBootstrapRestartRetryBudget {
+		t.Fatalf("initial retry_budget = %d, want %d; settings=%s", initialFailureState.RetryBudget, defaultProjectBootstrapRestartRetryBudget, string(initialArchived.Settings))
+	}
+	if initialFailureState.RetryAttemptCount != 0 {
+		t.Fatalf("initial retry_attempt_count = %d, want 0 before the first restart is consumed", initialFailureState.RetryAttemptCount)
+	}
+	if len(initialFailureState.FailureHistory) != 1 {
+		t.Fatalf("initial failure_history len = %d, want 1", len(initialFailureState.FailureHistory))
+	}
+	if initialFailureState.FailureHistory[0].FailureClass != projectBootstrapFailureStalled {
+		t.Fatalf("initial failure_history[0].failure_class = %q, want %q", initialFailureState.FailureHistory[0].FailureClass, projectBootstrapFailureStalled)
+	}
+	if initialFailureState.FailureHistory[0].LastSuccessfulCheckpoint != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("initial failure_history[0].last_successful_checkpoint = %q, want %q", initialFailureState.FailureHistory[0].LastSuccessfulCheckpoint, projectBootstrapCheckpointProjectCreated)
+	}
+	if initialFailureState.FailureHistory[0].SetupPersisted {
+		t.Fatal("initial failure_history[0].setup_persisted = true, want false")
+	}
+
+	initialBundle := mustProjectBootstrapRestartBundle(t, initialArchived)
+	if initialBundle.RetryBudget != defaultProjectBootstrapRestartRetryBudget {
+		t.Fatalf("initial restart bundle retry_budget = %d, want %d", initialBundle.RetryBudget, defaultProjectBootstrapRestartRetryBudget)
+	}
+	if initialBundle.RetryAttemptCount != 1 {
+		t.Fatalf("initial restart bundle retry_attempt_count = %d, want 1 after first restart launch", initialBundle.RetryAttemptCount)
+	}
+	if len(initialBundle.FailureHistory) != 1 {
+		t.Fatalf("initial restart bundle failure_history len = %d, want 1", len(initialBundle.FailureHistory))
+	}
+	restart1ID, err := uuid.Parse(initialBundle.RestartProjectID)
+	if err != nil {
+		t.Fatalf("Parse restart1 project id: %v", err)
+	}
+
+	restart1Project := mustGetProjectByID(t, ctx, fixture.pool, restart1ID)
+	if restart1Project.Status != "active" {
+		t.Fatalf("restart1 project status = %q, want active", restart1Project.Status)
+	}
+	restart1Bundle := mustProjectBootstrapRestartBundle(t, restart1Project)
+	if restart1Bundle.RetryAttemptCount != 1 {
+		t.Fatalf("restart1 retry_attempt_count = %d, want 1", restart1Bundle.RetryAttemptCount)
+	}
+	if len(restart1Bundle.FailureHistory) != 1 {
+		t.Fatalf("restart1 failure_history len = %d, want 1", len(restart1Bundle.FailureHistory))
+	}
+	restart1Session := mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restart1Project.ID)
+	runQueuedBootstrapTurnCycleToFailure(t, ctx, fixture, restart1Session.ID)
+
+	restart1Archived := mustGetProjectByID(t, ctx, fixture.pool, restart1Project.ID)
+	if restart1Archived.Status != "archived" {
+		t.Fatalf("restart1 archived status = %q, want archived", restart1Archived.Status)
+	}
+	restart1FailureState := projectfailure.Parse(restart1Archived.Settings)
+	if restart1FailureState.RetryAttemptCount != 1 {
+		t.Fatalf("restart1 retry_attempt_count = %d, want 1", restart1FailureState.RetryAttemptCount)
+	}
+	if len(restart1FailureState.FailureHistory) != 2 {
+		t.Fatalf("restart1 failure_history len = %d, want 2", len(restart1FailureState.FailureHistory))
+	}
+	restart1Bundle = mustProjectBootstrapRestartBundle(t, restart1Archived)
+	if restart1Bundle.RetryAttemptCount != 2 {
+		t.Fatalf("restart1 restart bundle retry_attempt_count = %d, want 2 after second restart launch", restart1Bundle.RetryAttemptCount)
+	}
+	if len(restart1Bundle.FailureHistory) != 2 {
+		t.Fatalf("restart1 restart bundle failure_history len = %d, want 2", len(restart1Bundle.FailureHistory))
+	}
+	restart2ID, err := uuid.Parse(restart1Bundle.RestartProjectID)
+	if err != nil {
+		t.Fatalf("Parse restart2 project id: %v", err)
+	}
+
+	restart2Project := mustGetProjectByID(t, ctx, fixture.pool, restart2ID)
+	if restart2Project.Status != "active" {
+		t.Fatalf("restart2 project status = %q, want active", restart2Project.Status)
+	}
+	restart2Bundle := mustProjectBootstrapRestartBundle(t, restart2Project)
+	if restart2Bundle.RetryAttemptCount != 2 {
+		t.Fatalf("restart2 retry_attempt_count = %d, want 2", restart2Bundle.RetryAttemptCount)
+	}
+	if len(restart2Bundle.FailureHistory) != 2 {
+		t.Fatalf("restart2 failure_history len = %d, want 2", len(restart2Bundle.FailureHistory))
+	}
+	runQueuedBootstrapTurnCycleToFailure(t, ctx, fixture, mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restart2Project.ID).ID)
+
+	finalArchived := mustGetProjectByID(t, ctx, fixture.pool, restart2Project.ID)
+	if finalArchived.Status != "archived" {
+		t.Fatalf("final archived project status = %q, want archived", finalArchived.Status)
+	}
+	finalBundle := mustProjectBootstrapRestartBundle(t, finalArchived)
+	if finalBundle.RetryAttemptCount != defaultProjectBootstrapRestartRetryBudget {
+		t.Fatalf("final retry_attempt_count = %d, want %d", finalBundle.RetryAttemptCount, defaultProjectBootstrapRestartRetryBudget)
+	}
+	if strings.TrimSpace(finalBundle.RestartProjectID) != "" {
+		t.Fatalf("final restart_project_id = %q, want empty after retry exhaustion", finalBundle.RestartProjectID)
+	}
+	if len(finalBundle.FailureHistory) != defaultProjectBootstrapRestartRetryBudget+1 {
+		t.Fatalf("final failure_history len = %d, want %d", len(finalBundle.FailureHistory), defaultProjectBootstrapRestartRetryBudget+1)
+	}
+
+	finalFailureState := projectfailure.Parse(finalArchived.Settings)
+	if finalFailureState.Action != projectFailureActionArchive {
+		t.Fatalf("final automatic_failure action = %q, want %q", finalFailureState.Action, projectFailureActionArchive)
+	}
+	if finalFailureState.FailureClass != projectBootstrapFailureStalled {
+		t.Fatalf("final automatic_failure failure_class = %q, want %q", finalFailureState.FailureClass, projectBootstrapFailureStalled)
+	}
+	if finalFailureState.FailurePhase != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("final automatic_failure failure_phase = %q, want %q", finalFailureState.FailurePhase, projectBootstrapCheckpointProjectCreated)
+	}
+	if finalFailureState.LastSuccessfulCheckpoint != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("final automatic_failure last_successful_checkpoint = %q, want %q", finalFailureState.LastSuccessfulCheckpoint, projectBootstrapCheckpointProjectCreated)
+	}
+	if finalFailureState.SetupPersisted {
+		t.Fatal("final automatic_failure setup_persisted = true, want false")
+	}
+	if finalFailureState.RetryBudget != defaultProjectBootstrapRestartRetryBudget {
+		t.Fatalf("final automatic_failure retry_budget = %d, want %d", finalFailureState.RetryBudget, defaultProjectBootstrapRestartRetryBudget)
+	}
+	if finalFailureState.RetryAttemptCount != defaultProjectBootstrapRestartRetryBudget {
+		t.Fatalf("final automatic_failure retry_attempt_count = %d, want %d", finalFailureState.RetryAttemptCount, defaultProjectBootstrapRestartRetryBudget)
+	}
+	if len(finalFailureState.FailureHistory) != defaultProjectBootstrapRestartRetryBudget+1 {
+		t.Fatalf("final automatic_failure failure_history len = %d, want %d", len(finalFailureState.FailureHistory), defaultProjectBootstrapRestartRetryBudget+1)
+	}
+	lastFailure := finalFailureState.FailureHistory[len(finalFailureState.FailureHistory)-1]
+	if lastFailure.RetryAttemptCount != defaultProjectBootstrapRestartRetryBudget {
+		t.Fatalf("final failure_history last retry_attempt_count = %d, want %d", lastFailure.RetryAttemptCount, defaultProjectBootstrapRestartRetryBudget)
+	}
+	if lastFailure.FailureClass != projectBootstrapFailureStalled {
+		t.Fatalf("final failure_history last failure_class = %q, want %q", lastFailure.FailureClass, projectBootstrapFailureStalled)
+	}
+	if lastFailure.LastCheckpoint != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("final failure_history last last_checkpoint = %q, want %q", lastFailure.LastCheckpoint, projectBootstrapCheckpointProjectCreated)
+	}
+	if lastFailure.LastSuccessfulCheckpoint != projectBootstrapCheckpointProjectCreated {
+		t.Fatalf("final failure_history last last_successful_checkpoint = %q, want %q", lastFailure.LastSuccessfulCheckpoint, projectBootstrapCheckpointProjectCreated)
+	}
+	if strings.TrimSpace(lastFailure.FailureReason) == "" {
+		t.Fatal("expected final failure_history reason")
+	}
+	if lastFailure.SetupPersisted {
+		t.Fatal("final failure_history last setup_persisted = true, want false")
+	}
+
+	if jobs := countRunnableAgentTurnJobsForProject(t, ctx, fixture.pool, restart2Project.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap agent_turn jobs after retry exhaustion = %d, want 0", jobs)
 	}
 }
 
@@ -9757,6 +9930,71 @@ func mustFindProjectAsyncSession(t *testing.T, ctx context.Context, pool *pgxpoo
 		t.Fatalf("missing active async project session for project %s", projectID)
 	}
 	return *latest
+}
+
+func runBootstrapFollowOnCycleToFailure(t *testing.T, ctx context.Context, fixture *integrationFixture, sessionID uuid.UUID) {
+	t.Helper()
+
+	latestTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, sessionID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": sessionID.String(), "turn_id": latestTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent bootstrap turn: %v", err)
+	}
+
+	for attempt := 1; attempt < maxProjectBootstrapAutoTurns; attempt++ {
+		jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, sessionID)
+		if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+			t.Fatalf("handleUserMessage bootstrap follow-on %d: %v", attempt, err)
+		}
+		latestTurn = latestCompletedTurnForSession(t, ctx, fixture.pool, sessionID)
+		if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+			OrganizationID: fixture.org.ID,
+			EventType:      "chat.turn.completed",
+			Payload:        mustJSON(t, map[string]any{"session_id": sessionID.String(), "turn_id": latestTurn.ID.String()}),
+		}); err != nil {
+			t.Fatalf("HandleTurnCompletedEvent bootstrap follow-on %d: %v", attempt, err)
+		}
+	}
+}
+
+func runQueuedBootstrapTurnCycleToFailure(t *testing.T, ctx context.Context, fixture *integrationFixture, sessionID uuid.UUID) {
+	t.Helper()
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, sessionID)
+	routedAgentID := payload.AgentID
+	if routedAgentID == nil {
+		if loriID, err := fixture.engine.resolveLoriStarterID(ctx, fixture.org.ID); err == nil && loriID != uuid.Nil {
+			routedAgentID = &loriID
+		} else if frankID, err := fixture.engine.resolveFrankStarterID(ctx, fixture.org.ID); err == nil && frankID != uuid.Nil {
+			routedAgentID = &frankID
+		}
+	}
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, routedAgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage queued bootstrap turn: %v", err)
+	}
+	runBootstrapFollowOnCycleToFailure(t, ctx, fixture, sessionID)
+}
+
+func countRunnableAgentTurnJobsForProject(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID uuid.UUID) int {
+	t.Helper()
+
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue jq
+		JOIN chat_session s ON s.id::text = jq.payload->>'session_id'
+		WHERE jq.job_type = $1
+		  AND jq.status IN ('pending', 'claimed')
+		  AND s.scope_type = 'project'
+		  AND s.mode = 'async'
+		  AND s.scope_id = $2
+	`, AgentTurnJobType, projectID).Scan(&count); err != nil {
+		t.Fatalf("count project agent_turn jobs: %v", err)
+	}
+	return count
 }
 
 func assertAutomaticFailureState(t *testing.T, projectRecord repo.Project, action, category, class, phase string) projectfailure.State {

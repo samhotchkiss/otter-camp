@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
+	"github.com/samhotchkiss/otter-camp/internal/projectfailure"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
@@ -25,6 +26,9 @@ type projectBootstrapRestartBundle struct {
 	SourceMessageID     string                               `json:"source_message_id,omitempty"`
 	SourceProjectID     string                               `json:"source_project_id,omitempty"`
 	RestartProjectID    string                               `json:"restart_project_id,omitempty"`
+	RetryBudget         int                                  `json:"retry_budget,omitempty"`
+	RetryAttemptCount   int                                  `json:"retry_attempt_count,omitempty"`
+	FailureHistory      []projectfailure.FailureHistoryEntry `json:"failure_history,omitempty"`
 	CapturedAt          *time.Time                           `json:"captured_at,omitempty"`
 }
 
@@ -49,29 +53,40 @@ type projectBootstrapRemoteBinding struct {
 
 func projectBootstrapRestartBundleFromSettings(settings json.RawMessage) projectBootstrapRestartBundle {
 	if len(settings) == 0 || !json.Valid(settings) {
-		return projectBootstrapRestartBundle{}
+		return normalizeProjectBootstrapRestartBundle(projectBootstrapRestartBundle{})
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(settings, &payload); err != nil {
-		return projectBootstrapRestartBundle{}
+		return normalizeProjectBootstrapRestartBundle(projectBootstrapRestartBundle{})
 	}
 	raw, ok := payload[projectBootstrapRestartBundleSettingsKey]
 	if !ok || raw == nil {
-		return projectBootstrapRestartBundle{}
+		return normalizeProjectBootstrapRestartBundle(projectBootstrapRestartBundle{})
 	}
 	encoded, err := json.Marshal(raw)
 	if err != nil {
-		return projectBootstrapRestartBundle{}
+		return normalizeProjectBootstrapRestartBundle(projectBootstrapRestartBundle{})
 	}
 	var bundle projectBootstrapRestartBundle
 	if err := json.Unmarshal(encoded, &bundle); err != nil {
-		return projectBootstrapRestartBundle{}
+		return normalizeProjectBootstrapRestartBundle(projectBootstrapRestartBundle{})
 	}
+	return normalizeProjectBootstrapRestartBundle(bundle)
+}
+
+func normalizeProjectBootstrapRestartBundle(bundle projectBootstrapRestartBundle) projectBootstrapRestartBundle {
 	bundle.OperatorBrief = strings.TrimSpace(bundle.OperatorBrief)
 	bundle.SourceSessionID = strings.TrimSpace(bundle.SourceSessionID)
 	bundle.SourceMessageID = strings.TrimSpace(bundle.SourceMessageID)
 	bundle.SourceProjectID = strings.TrimSpace(bundle.SourceProjectID)
 	bundle.RestartProjectID = strings.TrimSpace(bundle.RestartProjectID)
+	if bundle.RetryBudget <= 0 {
+		bundle.RetryBudget = defaultProjectBootstrapRestartRetryBudget
+	}
+	if bundle.RetryAttemptCount < 0 {
+		bundle.RetryAttemptCount = 0
+	}
+	bundle.FailureHistory = normalizeProjectBootstrapFailureHistory(bundle.FailureHistory)
 	bundle.OperatorConstraints = normalizeStringList(bundle.OperatorConstraints)
 	for i := range bundle.Environments {
 		bundle.Environments[i].Name = strings.TrimSpace(bundle.Environments[i].Name)
@@ -348,6 +363,77 @@ func pointerString(value *string) string {
 	return *value
 }
 
+func normalizeProjectBootstrapFailureHistory(entries []projectfailure.FailureHistoryEntry) []projectfailure.FailureHistoryEntry {
+	out := make([]projectfailure.FailureHistoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		normalized := projectfailure.FailureHistoryEntry{
+			ProjectID:                strings.TrimSpace(entry.ProjectID),
+			RetryAttemptCount:        entry.RetryAttemptCount,
+			FailureCategory:          strings.TrimSpace(entry.FailureCategory),
+			FailureClass:             strings.TrimSpace(entry.FailureClass),
+			FailurePhase:             strings.TrimSpace(entry.FailurePhase),
+			LastCheckpoint:           strings.TrimSpace(entry.LastCheckpoint),
+			LastSuccessfulCheckpoint: strings.TrimSpace(entry.LastSuccessfulCheckpoint),
+			FailureReason:            strings.TrimSpace(entry.FailureReason),
+			SetupPersisted:           entry.SetupPersisted,
+			RecordedAt:               cloneTimePointer(entry.RecordedAt),
+		}
+		if normalized.ProjectID == "" &&
+			normalized.FailureCategory == "" &&
+			normalized.FailureClass == "" &&
+			normalized.FailurePhase == "" &&
+			normalized.LastCheckpoint == "" &&
+			normalized.LastSuccessfulCheckpoint == "" &&
+			normalized.FailureReason == "" &&
+			normalized.RetryAttemptCount == 0 &&
+			!normalized.SetupPersisted &&
+			normalized.RecordedAt == nil {
+			continue
+		}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func appendProjectBootstrapFailureHistory(bundle projectBootstrapRestartBundle, projectRecord repo.Project, record projectAutomaticFailureRecord) projectBootstrapRestartBundle {
+	entry := projectfailure.FailureHistoryEntry{
+		ProjectID:                projectRecord.ID.String(),
+		RetryAttemptCount:        bundle.RetryAttemptCount,
+		FailureCategory:          strings.TrimSpace(record.FailureCategory),
+		FailureClass:             strings.TrimSpace(record.FailureClass),
+		FailurePhase:             strings.TrimSpace(record.FailurePhase),
+		LastCheckpoint:           strings.TrimSpace(record.LastCheckpoint),
+		LastSuccessfulCheckpoint: strings.TrimSpace(record.LastSuccessfulCheckpoint),
+		FailureReason:            strings.TrimSpace(record.FailureReason),
+		SetupPersisted:           record.SetupPersisted,
+		RecordedAt:               cloneTimePointer(&record.RecordedAt),
+	}
+	history := normalizeProjectBootstrapFailureHistory(bundle.FailureHistory)
+	if len(history) != 0 {
+		latest := history[len(history)-1]
+		if latest.ProjectID == entry.ProjectID &&
+			latest.RetryAttemptCount == entry.RetryAttemptCount &&
+			latest.FailureClass == entry.FailureClass &&
+			latest.FailureReason == entry.FailureReason {
+			bundle.FailureHistory = history
+			return bundle
+		}
+	}
+	history = append(history, entry)
+	bundle.FailureHistory = history
+	return bundle
+}
+
+func applyProjectBootstrapRetryFailureState(settings json.RawMessage, bundle projectBootstrapRestartBundle, record projectAutomaticFailureRecord) (json.RawMessage, error) {
+	state := projectfailure.Parse(settings)
+	state.LastSuccessfulCheckpoint = strings.TrimSpace(record.LastSuccessfulCheckpoint)
+	state.SetupPersisted = record.SetupPersisted
+	state.RetryBudget = bundle.RetryBudget
+	state.RetryAttemptCount = bundle.RetryAttemptCount
+	state.FailureHistory = normalizeProjectBootstrapFailureHistory(bundle.FailureHistory)
+	return projectfailure.Apply(settings, state)
+}
+
 func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, archivedProject repo.Project, record projectAutomaticFailureRecord) error {
 	if e == nil || e.pool == nil || e.events == nil {
 		return nil
@@ -371,6 +457,21 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 			return nil
 		}
 	}
+	bundle = appendProjectBootstrapFailureHistory(bundle, updatedProject, record)
+	updatedProject.Settings, err = applyProjectBootstrapRestartBundle(updatedProject.Settings, bundle)
+	if err != nil {
+		return err
+	}
+	updatedProject.Settings, err = applyProjectBootstrapRetryFailureState(updatedProject.Settings, bundle, record)
+	if err != nil {
+		return err
+	}
+	if _, err := repo.NewProjectRepo(e.pool).Update(ctx, updatedProject); err != nil {
+		return err
+	}
+	if bundle.RetryAttemptCount >= bundle.RetryBudget {
+		return nil
+	}
 
 	projectService, err := projectsvc.NewService(projectsvc.Options{
 		Pool:    e.pool,
@@ -381,6 +482,7 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 		return err
 	}
 
+	bundle.RetryAttemptCount++
 	restartSettings, err := applyProjectBootstrapRestartBundle(clearProjectBootstrapRuntimeSettings(updatedProject.Settings), bundle)
 	if err != nil {
 		return err
