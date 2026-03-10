@@ -1292,6 +1292,12 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 	if err != nil {
 		return progress, err
 	}
+	if updated.FirstWavePromotedCount == 0 && updated.FirstWaveExecutionCount == 0 && updated.FirstWaveJobCount == 0 {
+		updated.ValidationStatus = projectBootstrapValidationFailed
+		updated.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
+		updated.ValidationFailureReason = buildProjectBootstrapFirstWaveExecutionFailureReason(updated)
+		return updated, nil
+	}
 	if !updated.BootstrapGateReady() {
 		return updated, nil
 	}
@@ -2239,7 +2245,7 @@ func projectBootstrapFailureCheckpoint(progress projectBootstrapProgress, failur
 		return projectBootstrapCheckpointProjectCreated
 	case projectBootstrapFailureFirstWaveExecution:
 		if progress.FirstWaveTaskCount > 0 {
-			return projectBootstrapCheckpointFirstWave
+			return projectBootstrapCheckpointExecutions
 		}
 		if progress.PlannedFlowTemplateCount > 0 {
 			return projectBootstrapCheckpointFlowTemplates
