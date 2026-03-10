@@ -3072,6 +3072,69 @@ func TestIntegrationSessionListAndCreateIgnoreArchivedProjectTaskSessions(t *tes
 	}
 }
 
+func TestIntegrationSessionGetAndHistoryIgnoreArchivedProjectTaskSessions(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{WorkStatus: "draft"})
+
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	messageRepo := repo.NewChatMessageRepo(pool)
+	staleTaskSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"native-project-archive-test","kind":"stale-task-direct"}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale task session: %v", err)
+	}
+	authorType := "agent"
+	if _, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID:      staleTaskSession.ID,
+		SequenceNumber: 1,
+		AuthorType:     &authorType,
+		AuthorID:       &agent.ID,
+		Role:           "assistant",
+		Content:        "stale archived bootstrap context",
+		ContentFormat:  "markdown",
+		Status:         "final",
+	}); err != nil {
+		t.Fatalf("create stale task session message: %v", err)
+	}
+	if err := repo.NewProjectRepo(pool).Archive(ctx, project.ID); err != nil {
+		t.Fatalf("Archive project directly: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "session.get", map[string]any{
+		"session_id": staleTaskSession.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("session.get archived task scope: %v", err)
+	}
+	if sessionOut["error"] != "not_found" {
+		t.Fatalf("session.get error = %v, want not_found", sessionOut["error"])
+	}
+
+	historyOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "session.history", map[string]any{
+		"session_id": staleTaskSession.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("session.history archived task scope: %v", err)
+	}
+	if historyOut["error"] != "not_found" {
+		t.Fatalf("session.history error = %v, want not_found", historyOut["error"])
+	}
+}
+
 func TestIntegrationProjectSessionTaskPlanningIsIdempotent(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

@@ -400,6 +400,10 @@ func (e *NativeToolExecutor) handleSessionGet(ctx context.Context, input map[str
 	if e.chatSessions == nil {
 		return nil, errors.New("session repository not configured")
 	}
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	sessionID, ok := readUUID(input, "session_id")
 	if !ok {
 		return map[string]any{"error": "not_found"}, nil
@@ -410,6 +414,9 @@ func (e *NativeToolExecutor) handleSessionGet(ctx context.Context, input map[str
 			return map[string]any{"error": "not_found"}, nil
 		}
 		return nil, err
+	}
+	if !e.isSessionVisibleForScope(ctx, scope.organizationID, session) {
+		return map[string]any{"error": "not_found"}, nil
 	}
 	participantCount := 0
 	if e.participants != nil {
@@ -435,11 +442,28 @@ func (e *NativeToolExecutor) handleSessionGet(ctx context.Context, input map[str
 }
 
 func (e *NativeToolExecutor) handleSessionHistory(ctx context.Context, input map[string]any) (map[string]any, error) {
+	if e.chatSessions == nil {
+		return nil, errors.New("session repository not configured")
+	}
 	if e.messages == nil {
 		return nil, errors.New("message repository not configured")
 	}
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	sessionID, ok := readUUID(input, "session_id")
 	if !ok {
+		return map[string]any{"error": "not_found"}, nil
+	}
+	session, err := e.chatSessions.GetByID(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return map[string]any{"error": "not_found"}, nil
+		}
+		return nil, err
+	}
+	if !e.isSessionVisibleForScope(ctx, scope.organizationID, session) {
 		return map[string]any{"error": "not_found"}, nil
 	}
 	messages, err := e.messages.ListBySession(ctx, sessionID)
@@ -478,6 +502,17 @@ func (e *NativeToolExecutor) handleSessionHistory(ctx context.Context, input map
 		nextSequence = filtered[len(filtered)-1].SequenceNumber
 	}
 	return map[string]any{"messages": items, "meta": map[string]any{"next_sequence": nextSequence}}, nil
+}
+
+func (e *NativeToolExecutor) isSessionVisibleForScope(ctx context.Context, organizationID uuid.UUID, session repo.ChatSession) bool {
+	if session.OrganizationID != organizationID {
+		return false
+	}
+	active, err := e.scopeBelongsToActiveProject(ctx, organizationID, session.ScopeType, session.ScopeID)
+	if err != nil {
+		return false
+	}
+	return active
 }
 
 func (e *NativeToolExecutor) handleAgentList(ctx context.Context, input map[string]any) (map[string]any, error) {

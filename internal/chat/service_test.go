@@ -31,6 +31,14 @@ func TestCreateSessionSyncUniquenessReturnsErrActiveSyncSessionExists(t *testing
 	}
 
 	svc := newUnitService(t, unitDeps{sessions: sessions})
+	svc.projects = &fakeProjectRepo{
+		getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Project, error) {
+			if id != scopeID {
+				t.Fatalf("unexpected project id %s", id)
+			}
+			return repo.Project{ID: id, OrganizationID: orgID, Status: "active"}, nil
+		},
+	}
 	_, err := svc.CreateSession(context.Background(), CreateSessionInput{
 		OrganizationID: orgID,
 		ScopeType:      "project",
@@ -86,6 +94,14 @@ func TestCreateSessionProjectAsyncReusesCanonicalSession(t *testing.T) {
 			},
 		},
 	})
+	svc.projects = &fakeProjectRepo{
+		getByIDFn: func(_ context.Context, id uuid.UUID) (repo.Project, error) {
+			if id != projectID {
+				t.Fatalf("unexpected project id %s", id)
+			}
+			return repo.Project{ID: id, OrganizationID: orgID, Status: "active"}, nil
+		},
+	}
 
 	session, err := svc.CreateSession(context.Background(), CreateSessionInput{
 		OrganizationID: orgID,
