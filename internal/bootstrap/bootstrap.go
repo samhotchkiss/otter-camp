@@ -913,7 +913,7 @@ func defaultProfileSeeds() []modelProfileSeed {
 		{
 			LogicalProfileID:    "haiku",
 			ProviderSlug:        "anthropic",
-			ModelName:           "claude-haiku-3-5",
+			ModelName:           "claude-haiku-4-5-20251001",
 			ContextWindowTokens: 200000,
 			MaxOutputTokens:     4096,
 			SupportsStreaming:   true,
