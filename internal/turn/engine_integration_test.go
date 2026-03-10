@@ -6968,6 +6968,266 @@ func TestTurnEngineIntegrationProjectBootstrapProviderFailurePausesInsteadOfArch
 	)
 }
 
+func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Operator brief: launch the migration pipeline from the canonical repo binding and keep the operational handoff intact.")
+	handoffMetadata := mustJSON(t, map[string]any{
+		"operator_constraints": []string{
+			"Keep main branch protected",
+			"Reuse the existing production credential binding",
+		},
+	})
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateMetadata(ctx, handoff.ID, handoffMetadata); err != nil {
+		t.Fatalf("UpdateMetadata handoff constraints: %v", err)
+	}
+
+	assistantType := "agent"
+	polluted, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  projectSession.ID,
+		AuthorType: &assistantType,
+		AuthorID:   &fixture.agent.ID,
+		Role:       "assistant",
+		Content:    "STALE CHATTER: reuse the old carry-over partial task tree and stale runtime owner.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage polluted assistant: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, polluted.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus polluted assistant: %v", err)
+	}
+
+	environmentRepo := repo.NewProjectEnvironmentRepo(fixture.pool)
+	remoteRepo := repo.NewProjectRemoteRepo(fixture.pool)
+	environments, err := environmentRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject environments: %v", err)
+	}
+	if len(environments) == 0 {
+		t.Fatal("expected canonical project environment binding")
+	}
+	remote, err := remoteRepo.Create(ctx, repo.ProjectRemote{
+		ProjectID:     project.ID,
+		Name:          "origin",
+		URL:           "git@github.com:samhotchkiss/bootstrap-restart.git",
+		IsDefault:     true,
+		Transport:     "ssh",
+		CredentialRef: stringPtr("github-bootstrap-token"),
+	})
+	if err != nil {
+		t.Fatalf("Create remote: %v", err)
+	}
+	repoURL := remote.URL
+	repoPath := "/tmp/bootstrap/canonical-restart"
+	environment := environments[0]
+	environment.DeliveryMode = "gated"
+	environment.RemoteID = &remote.ID
+	environment.RepoURL = &repoURL
+	environment.RepoPath = &repoPath
+	environment.TargetBranch = "release"
+	environment.IsActive = true
+	if _, err := environmentRepo.Update(ctx, environment); err != nil {
+		t.Fatalf("Update environment: %v", err)
+	}
+
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start bootstrap setup."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-partial",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		case 3:
+			return ModelResponse{Content: "Bootstrap setup was partially persisted."}, nil
+		case 4:
+			return ModelResponse{Content: "Restart bootstrap acknowledged."}, nil
+		default:
+			return ModelResponse{Content: "unexpected bootstrap restart call"}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		}); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		description := "Partial bootstrap work item that must not be replayed on restart."
+		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID:  fixture.org.ID,
+			ProjectID:       project.ID,
+			Title:           "Carry-over partial task",
+			Description:     &description,
+			WorkStatus:      "draft",
+			FlowTemplateID:  &template.ID,
+			AssignedAgentID: &pmAgent.ID,
+			CreatedByType:   "agent",
+			CreatedByID:     &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":      pmAgent.ID.String(),
+				"task_id":          taskRecord.ID.String(),
+				"flow_template_id": template.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage partial bootstrap turn: %v", err)
+	}
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent partial bootstrap turn: %v", err)
+	}
+
+	archivedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if archivedProject.Status != "archived" {
+		t.Fatalf("archived project status = %q, want archived", archivedProject.Status)
+	}
+	bundle := mustProjectBootstrapRestartBundle(t, archivedProject)
+	if bundle.OperatorBrief == "" || !strings.Contains(strings.ToLower(bundle.OperatorBrief), "launch the migration pipeline") {
+		t.Fatalf("bootstrap restart bundle brief = %q, want canonical operator brief", bundle.OperatorBrief)
+	}
+	if len(bundle.OperatorConstraints) != 2 {
+		t.Fatalf("bootstrap restart constraints = %v, want 2 constraints", bundle.OperatorConstraints)
+	}
+	if len(bundle.Environments) == 0 || bundle.Environments[0].RepoPath != repoPath || bundle.Environments[0].CredentialRef != "github-bootstrap-token" {
+		t.Fatalf("bootstrap restart environment bundle = %+v, want persisted repo/credential binding", bundle.Environments)
+	}
+	if bundle.RestartProjectID == "" {
+		t.Fatal("expected archived project bundle to record restart_project_id")
+	}
+
+	restartedProjectID, err := uuid.Parse(bundle.RestartProjectID)
+	if err != nil {
+		t.Fatalf("Parse restart_project_id: %v", err)
+	}
+	restartedProject := mustGetProjectByID(t, ctx, fixture.pool, restartedProjectID)
+	if restartedProject.Status != "active" {
+		t.Fatalf("restarted project status = %q, want active", restartedProject.Status)
+	}
+	if restartedProject.ID == archivedProject.ID {
+		t.Fatal("expected clean bootstrap restart to create a fresh project record")
+	}
+
+	restartedTasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, restartedProject.ID)
+	if err != nil {
+		t.Fatalf("ListByProject restarted tasks: %v", err)
+	}
+	for _, taskRecord := range restartedTasks {
+		if taskRecord.Title == "Carry-over partial task" {
+			t.Fatalf("restarted project carried forward partial bootstrap task: %+v", taskRecord)
+		}
+	}
+
+	restartedEnvironments, err := environmentRepo.ListByProject(ctx, restartedProject.ID)
+	if err != nil {
+		t.Fatalf("ListByProject restarted environments: %v", err)
+	}
+	if len(restartedEnvironments) == 0 {
+		t.Fatal("expected restarted project environment bindings")
+	}
+	restartedEnvironment := restartedEnvironments[0]
+	if pointerString(restartedEnvironment.RepoPath) != repoPath || restartedEnvironment.TargetBranch != "release" {
+		t.Fatalf("restarted environment = %+v, want copied repo path + target branch", restartedEnvironment)
+	}
+	if restartedEnvironment.RemoteID == nil || *restartedEnvironment.RemoteID == uuid.Nil {
+		t.Fatalf("restarted environment remote_id = %v, want copied remote binding", restartedEnvironment.RemoteID)
+	}
+	restartedRemote, err := remoteRepo.GetByID(ctx, *restartedEnvironment.RemoteID)
+	if err != nil {
+		t.Fatalf("GetByID restarted remote: %v", err)
+	}
+	if pointerString(restartedRemote.CredentialRef) != "github-bootstrap-token" {
+		t.Fatalf("restarted remote credential_ref = %q, want github-bootstrap-token", pointerString(restartedRemote.CredentialRef))
+	}
+
+	oldSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID archived project session: %v", err)
+	}
+	if oldSession.Status != "closed" {
+		t.Fatalf("archived project session status = %q, want closed after restart", oldSession.Status)
+	}
+
+	restartedSession := mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restartedProject.ID)
+	if restartedSession.ID == projectSession.ID {
+		t.Fatal("expected clean bootstrap restart to use a fresh project session")
+	}
+	restartedMessages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, restartedSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession restarted session messages: %v", err)
+	}
+	restartPrompt := ""
+	for _, message := range restartedMessages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			restartPrompt = strings.ToLower(strings.TrimSpace(message.Content))
+			break
+		}
+	}
+	if restartPrompt == "" {
+		t.Fatal("expected canonical restart prompt message on the fresh bootstrap session")
+	}
+
+	restartJobID, restartPayload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, restartedSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, restartPayload.SessionID, restartPayload.MessageID, restartPayload.AgentID, restartPayload.RetryCount, &restartJobID); err != nil {
+		t.Fatalf("handleUserMessage clean bootstrap restart: %v", err)
+	}
+
+	if strings.Contains(restartPrompt, "stale chatter: reuse the old carry-over partial task tree and stale runtime owner.") || strings.Contains(restartPrompt, "partial bootstrap work item that must not be replayed on restart") {
+		t.Fatalf("restart prompt replayed failed project-session chatter: %q", restartPrompt)
+	}
+	if !strings.Contains(restartPrompt, "launch the migration pipeline") {
+		t.Fatalf("restart prompt missing canonical operator brief: %q", restartPrompt)
+	}
+	if !strings.Contains(restartPrompt, "keep main branch protected") || !strings.Contains(restartPrompt, "github-bootstrap-token") || !strings.Contains(restartPrompt, repoPath) {
+		t.Fatalf("restart prompt missing canonical constraints/bindings: %q", restartPrompt)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsValidationForBroadParentOnlySetup(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -9454,6 +9714,15 @@ func mustProjectBootstrapProjectState(t *testing.T, projectRecord repo.Project) 
 	return state
 }
 
+func mustProjectBootstrapRestartBundle(t *testing.T, projectRecord repo.Project) projectBootstrapRestartBundle {
+	t.Helper()
+	bundle := projectBootstrapRestartBundleFromSettings(projectRecord.Settings)
+	if bundle.OperatorBrief == "" {
+		t.Fatalf("missing bootstrap restart bundle in project settings: %s", string(projectRecord.Settings))
+	}
+	return bundle
+}
+
 func mustGetProjectByID(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID uuid.UUID) repo.Project {
 	t.Helper()
 
@@ -9462,6 +9731,32 @@ func mustGetProjectByID(t *testing.T, ctx context.Context, pool *pgxpool.Pool, p
 		t.Fatalf("GetByID project: %v", err)
 	}
 	return projectRecord
+}
+
+func mustFindProjectAsyncSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, projectID uuid.UUID) repo.ChatSession {
+	t.Helper()
+	sessions, err := repo.NewChatSessionRepo(pool).ListByOrg(ctx, organizationID)
+	if err != nil {
+		t.Fatalf("ListByOrg sessions: %v", err)
+	}
+	var latest *repo.ChatSession
+	for i := range sessions {
+		item := sessions[i]
+		if item.ScopeID != projectID || !strings.EqualFold(strings.TrimSpace(item.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(item.Mode), "async") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(item.Status), "active") {
+			continue
+		}
+		if latest == nil || item.CreatedAt.After(latest.CreatedAt) {
+			copyItem := item
+			latest = &copyItem
+		}
+	}
+	if latest == nil {
+		t.Fatalf("missing active async project session for project %s", projectID)
+	}
+	return *latest
 }
 
 func assertAutomaticFailureState(t *testing.T, projectRecord repo.Project, action, category, class, phase string) projectfailure.State {

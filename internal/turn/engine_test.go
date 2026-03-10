@@ -2657,6 +2657,19 @@ func (f *fakeChatService) GetSession(ctx context.Context, id uuid.UUID) (*chat.C
 	return &copySession, nil
 }
 
+func (f *fakeChatService) CreateSession(_ context.Context, input chat.CreateSessionInput) (*chat.ChatSession, error) {
+	session := chat.ChatSession{
+		ID:             uuid.New(),
+		OrganizationID: input.OrganizationID,
+		ScopeType:      input.ScopeType,
+		ScopeID:        input.ScopeID,
+		Mode:           input.Mode,
+		Status:         "active",
+		Metadata:       input.Metadata,
+	}
+	return &session, nil
+}
+
 func (f *fakeChatService) CreateForMessageAttempt(ctx context.Context, sessionID, agentID, messageID uuid.UUID, retryCount int) (repo.ChatTurn, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
