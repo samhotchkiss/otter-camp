@@ -315,9 +315,6 @@ func (p *TaskQueueProcessor) isBlockedByOutstandingProjectGate(ctx context.Conte
 	if gateTask == nil {
 		return false, nil
 	}
-	if taskIsBootstrapGate(*gateTask) {
-		return false, nil
-	}
 	return gateTask.ID != taskRecord.ID, nil
 }
 
@@ -462,9 +459,7 @@ func selectNextQueuedTaskUnderProjectGate(tasks []repo.ProjectTask) *repo.Projec
 			clone := *gate
 			return &clone
 		}
-		if !taskIsBootstrapGate(*gate) {
-			return nil
-		}
+		return nil
 	}
 
 	var selected *repo.ProjectTask

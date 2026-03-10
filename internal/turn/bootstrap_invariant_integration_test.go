@@ -48,7 +48,7 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 		}
 	})
 
-	t.Run("draft_only_failure_archives_before_project_remains_active", func(t *testing.T) {
+	t.Run("draft_only_setup_keeps_project_non_runnable_until_gate_opens", func(t *testing.T) {
 		fixture := newIntegrationFixture(t)
 		ctx := context.Background()
 
@@ -69,14 +69,14 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 		if result.totalDraftCount != result.totalTaskCount {
 			t.Fatalf("draft task count = %d, want all %d tasks draft", result.totalDraftCount, result.totalTaskCount)
 		}
-		if result.bootstrapState.Status != projectBootstrapStatusFailed {
-			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusFailed)
+		if result.bootstrapState.Status != projectBootstrapStatusActive {
+			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusActive)
 		}
 		if result.bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
 			t.Fatalf("bootstrap current_phase = %q, want %q", result.bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
 		}
-		if result.project.Status != "archived" {
-			t.Fatalf("project status = %q, want archived", result.project.Status)
+		if result.project.Status != "active" {
+			t.Fatalf("project status = %q, want active while bootstrap remains incomplete", result.project.Status)
 		}
 		if result.activeExecutions != 0 {
 			t.Fatalf("active flow executions = %d, want 0", result.activeExecutions)
@@ -86,7 +86,7 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 		}
 	})
 
-	t.Run("rebuild_v8_shape_without_bootstrap_gate_still_fails_closed", func(t *testing.T) {
+	t.Run("rebuild_v8_shape_without_gate_opening_stays_non_runnable", func(t *testing.T) {
 		fixture := newIntegrationFixture(t)
 		ctx := context.Background()
 
@@ -107,8 +107,8 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 		if result.totalDraftCount != result.totalTaskCount {
 			t.Fatalf("draft task count = %d, want all %d tasks draft", result.totalDraftCount, result.totalTaskCount)
 		}
-		if result.bootstrapState.Status != projectBootstrapStatusFailed {
-			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusFailed)
+		if result.bootstrapState.Status != projectBootstrapStatusActive {
+			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusActive)
 		}
 		if result.bootstrapState.AssignmentCount != 5 {
 			t.Fatalf("bootstrap assignment_count = %d, want 5", result.bootstrapState.AssignmentCount)
@@ -125,8 +125,8 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 		if result.bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
 			t.Fatalf("bootstrap current_phase = %q, want %q", result.bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
 		}
-		if result.project.Status != "archived" {
-			t.Fatalf("project status = %q, want archived", result.project.Status)
+		if result.project.Status != "active" {
+			t.Fatalf("project status = %q, want active while bootstrap remains incomplete", result.project.Status)
 		}
 		if result.activeExecutions != 0 {
 			t.Fatalf("active flow executions = %d, want 0", result.activeExecutions)

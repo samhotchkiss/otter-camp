@@ -1260,7 +1260,10 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 	}
 
 	projectID := progress.FirstWaveTasks[0].ProjectID
-	if progress.BootstrapTaskOutstanding && progress.BootstrapTaskID != uuid.Nil && progress.BootstrapGateReady() {
+	if progress.BootstrapTaskOutstanding && progress.BootstrapTaskID != uuid.Nil {
+		if !progress.BootstrapGateReady() {
+			return progress, nil
+		}
 		if err := e.completeProjectBootstrapGateTask(ctx, progress.BootstrapTaskID); err != nil {
 			return progress, err
 		}
