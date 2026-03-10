@@ -235,7 +235,7 @@ func TestSelectNextQueuedTaskUnderProjectGateSkipsReviewCheckpointEX248(t *testi
 	}
 }
 
-func TestSelectNextQueuedTaskUnderProjectGateAllowsQueuedChildrenBehindBootstrapGate(t *testing.T) {
+func TestSelectNextQueuedTaskUnderProjectGateBlocksQueuedChildrenBehindBootstrapGate(t *testing.T) {
 	projectID := uuid.New()
 	bootstrapGate := repo.ProjectTask{
 		ID:          uuid.New(),
@@ -256,8 +256,8 @@ func TestSelectNextQueuedTaskUnderProjectGateAllowsQueuedChildrenBehindBootstrap
 	}
 
 	selected := selectNextQueuedTaskUnderProjectGate([]repo.ProjectTask{bootstrapGate, child})
-	if selected == nil || selected.ID != child.ID {
-		t.Fatalf("selected queued task = %v, want child task %s", selected, child.ID)
+	if selected != nil {
+		t.Fatalf("selected queued task = %v, want nil while bootstrap gate is outstanding", selected)
 	}
 }
 

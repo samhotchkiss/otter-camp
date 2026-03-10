@@ -6211,7 +6211,7 @@ func TestTurnEngineIntegrationProjectBootstrapQueuesFollowOnAfterLoriAcknowledge
 	}
 }
 
-func TestTurnEngineIntegrationProjectBootstrapPromotesFirstWaveBeforeBootstrapGateCompletes(t *testing.T) {
+func TestTurnEngineIntegrationProjectBootstrapBlocksFirstWaveUntilBootstrapGateCompletes(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	enableTaskQueueProcessor(t, fixture)
 	ctx := context.Background()
@@ -6384,8 +6384,8 @@ func TestTurnEngineIntegrationProjectBootstrapPromotesFirstWaveBeforeBootstrapGa
 	if bootstrapState.FirstWaveTaskCount != 1 {
 		t.Fatalf("bootstrap first_wave_task_count = %d, want 1 leaf child task", bootstrapState.FirstWaveTaskCount)
 	}
-	if bootstrapState.FirstWavePromotedCount == 0 {
-		t.Fatalf("bootstrap first_wave_promoted_count = %d, want > 0 while gate is still open", bootstrapState.FirstWavePromotedCount)
+	if bootstrapState.FirstWavePromotedCount != 0 {
+		t.Fatalf("bootstrap first_wave_promoted_count = %d, want 0 while gate is still open", bootstrapState.FirstWavePromotedCount)
 	}
 	if !bootstrapState.BootstrapTaskOutstanding {
 		t.Fatal("bootstrap gate marked complete too early; want outstanding while setup sign-off is still pending")
@@ -6413,11 +6413,11 @@ func TestTurnEngineIntegrationProjectBootstrapPromotesFirstWaveBeforeBootstrapGa
 	if parentStatus != "draft" {
 		t.Fatalf("parent task work_status = %q, want draft while child execution starts", parentStatus)
 	}
-	if childStatus != "queued" && childStatus != "in_progress" && childStatus != "review" && childStatus != "done" {
-		t.Fatalf("child task work_status = %q, want promoted out of draft before bootstrap gate completion", childStatus)
+	if childStatus != "draft" {
+		t.Fatalf("child task work_status = %q, want draft before bootstrap gate completion", childStatus)
 	}
 	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
-		t.Fatalf("runnable bootstrap session jobs = %d, want 0 after first-wave child execution starts", jobs)
+		t.Fatalf("runnable bootstrap session jobs = %d, want 0 while bootstrap gate is outstanding", jobs)
 	}
 
 	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
