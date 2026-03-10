@@ -47,6 +47,28 @@ func TestTaskServiceIntegrationStatusLifecycleAndEvents(t *testing.T) {
 	steps := []string{"queued", "in_progress", "review", "done"}
 	current := created
 	for _, step := range steps {
+		if step == "review" {
+			currentFlowNodeID := template.StartNodeID
+			if currentFlowNodeID == nil {
+				t.Fatal("flow template start_node_id is nil")
+			}
+			workNode, err := repo.NewFlowNodeRepo(pool).GetByID(ctx, *currentFlowNodeID)
+			if err != nil {
+				t.Fatalf("GetByID work flow node: %v", err)
+			}
+			if workNode.NextNodeID == nil {
+				t.Fatal("work flow node next_node_id is nil")
+			}
+			taskRepo := repo.NewProjectTaskRepo(pool)
+			taskRecord, err := taskRepo.GetByID(ctx, current.ID)
+			if err != nil {
+				t.Fatalf("GetByID task before review: %v", err)
+			}
+			taskRecord.CurrentFlowNodeID = workNode.NextNodeID
+			if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+				t.Fatalf("Update task current_flow_node_id for review: %v", err)
+			}
+		}
 		actor := Actor{Type: "system"}
 		if step == "in_progress" {
 			actor.AllowNoActiveFlow = true
@@ -549,8 +571,8 @@ func TestTaskServiceIntegrationResumeDurableRecoveryCheckpointQueuesRecoveryEX32
 	if err != nil {
 		t.Fatalf("ResumeValidationBlockedTask: %v", err)
 	}
-	if resumed.WorkStatus != "queued" {
-		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	if resumed.WorkStatus != "in_progress" {
+		t.Fatalf("resumed work_status = %q, want in_progress", resumed.WorkStatus)
 	}
 	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumed.Metadata)
 	if !ok {
@@ -652,8 +674,8 @@ func TestTaskServiceIntegrationResumeMissingDurableRecoveryCheckpointRepairsFrom
 	if err != nil {
 		t.Fatalf("ResumeValidationBlockedTask: %v", err)
 	}
-	if resumed.WorkStatus != "queued" {
-		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	if resumed.WorkStatus != "in_progress" {
+		t.Fatalf("resumed work_status = %q, want in_progress", resumed.WorkStatus)
 	}
 	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumed.Metadata)
 	if !ok {
