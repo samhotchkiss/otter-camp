@@ -33,6 +33,7 @@ import (
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
@@ -62,6 +63,7 @@ const (
 	defaultTurnConsumerName                   = "turn-engine.user-message"
 	defaultReactionConsumerName               = "turn-engine.reactions"
 	defaultTurnCompletedName                  = "turn-engine.turn-completed"
+	defaultTaskStatusName                     = "turn-engine.task-status"
 	defaultCancelConsumerPrefix               = "turn-engine.cancel"
 	stopReasonMaxToolCalls                    = "max_tool_calls"
 	stopReasonMaxDuration                     = "max_duration"
@@ -110,6 +112,7 @@ const (
 	projectFailureClassProviderRateLimit      = projectBootstrapFailureProviderRateLimit
 	projectFailureClassProviderTransient      = projectBootstrapFailureProviderTransient
 	projectBootstrapSource                    = "project_bootstrap"
+	bootstrapFrankSignOffStepSlug             = "record-frank-sign-off"
 )
 
 var (
@@ -688,6 +691,12 @@ func (e *TurnEngine) SubscribeTurnCompletedAutoContinuation(orgID *uuid.UUID) ev
 	})
 }
 
+func (e *TurnEngine) SubscribeTaskStatusBootstrap(orgID *uuid.UUID) eventbus.Subscription {
+	return e.events.Subscribe(defaultTaskStatusName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return e.HandleTaskStatusChangedEvent(ctx, event)
+	})
+}
+
 func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error {
 	if strings.TrimSpace(job.JobType) != AgentTurnJobType {
 		return nil
@@ -963,6 +972,69 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	return nil
 }
 
+func (e *TurnEngine) HandleTaskStatusChangedEvent(ctx context.Context, event eventbus.DomainEvent) error {
+	if event.EventType != "task.status_changed" || e == nil || e.pool == nil {
+		return nil
+	}
+
+	var payload struct {
+		TaskID    string `json:"task_id"`
+		ProjectID string `json:"project_id"`
+		ToStatus  string `json:"to_status"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(payload.ToStatus), "done") {
+		return nil
+	}
+
+	projectID, err := uuid.Parse(strings.TrimSpace(payload.ProjectID))
+	if err != nil || projectID == uuid.Nil {
+		return nil
+	}
+	taskID, err := uuid.Parse(strings.TrimSpace(payload.TaskID))
+	if err != nil || taskID == uuid.Nil {
+		return nil
+	}
+
+	taskRecord, err := repo.NewProjectTaskRepo(e.pool).GetByID(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); !bootstrapGate {
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
+			return nil
+		}
+	}
+
+	session, err := repo.NewChatSessionRepo(e.pool).GetByScopeAndMode(ctx, "project", projectID, "async")
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if progress.BootstrapTaskID == uuid.Nil || progress.ValidationFailed() {
+		return nil
+	}
+
+	progress, err = e.ensureProjectBootstrapFirstWaveExecution(ctx, progress)
+	if err != nil {
+		return err
+	}
+	return e.refreshProjectBootstrapSessionState(ctx, session, progress)
+}
+
 func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, session *chat.ChatSession, turnID uuid.UUID) error {
 	if e == nil || session == nil || turnID == uuid.Nil {
 		return nil
@@ -1093,6 +1165,11 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		return nil
 	}
 
+	if progress.WaitingForBootstrapGate() {
+		state.AutoTurnCount = 0
+		return e.updateProjectBootstrapState(ctx, session, state)
+	}
+
 	if state.AutoTurnCount >= maxProjectBootstrapAutoTurns {
 		record := buildProjectBootstrapAutomaticFailureRecord(
 			progress,
@@ -1145,6 +1222,9 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 		return progress, nil
 	}
 	if progress.FirstWaveTaskCount == 0 || len(progress.FirstWaveTasks) == 0 {
+		return progress, nil
+	}
+	if progress.WaitingForBootstrapGate() {
 		return progress, nil
 	}
 
@@ -1212,6 +1292,46 @@ func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskI
 		return nil
 	}
 
+	projectTasks, err := repo.NewProjectTaskRepo(e.pool).ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return err
+	}
+	childTasks := make([]repo.ProjectTask, 0)
+	verifiedAt := e.now().UTC()
+	verifications := make([]taskorchestration.ChildVerification, 0)
+	childLabels := make([]string, 0)
+	for _, candidate := range projectTasks {
+		metadata := messageMetadataMap(candidate.Metadata)
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
+			continue
+		}
+		if parentID, ok := parseUUIDAny(metadata["decomposition_parent_task_id"]); !ok || parentID != taskID {
+			continue
+		}
+		childTasks = append(childTasks, candidate)
+		if !strings.EqualFold(strings.TrimSpace(candidate.WorkStatus), "done") {
+			return nil
+		}
+		verifications = append(verifications, taskorchestration.NewChildVerification(candidate.ID, "Verified bootstrap setup output for "+strings.TrimSpace(candidate.Title)+".", verifiedAt))
+		childLabels = append(childLabels, strings.TrimSpace(candidate.Title))
+	}
+	if len(childTasks) == 0 {
+		return nil
+	}
+
+	integrationSummary := "Validated the bootstrap setup outputs together and confirmed the first-wave execution plan is coherent."
+	if len(childLabels) > 0 {
+		integrationSummary = fmt.Sprintf("Validated the bootstrap setup outputs together across %s and confirmed the first-wave execution plan is coherent.", strings.Join(childLabels, ", "))
+	}
+	taskRecord.Metadata, err = taskorchestration.Apply(taskRecord.Metadata, taskorchestration.Update{
+		ChildVerifications: verifications,
+		IntegrationCheck:   taskorchestration.NewIntegrationCheck("passed", integrationSummary, verifiedAt),
+		OutcomeAssessment:  taskorchestration.NewOutcomeAssessment(true, "The bootstrap task tree is complete and Frank sign-off is recorded.", verifiedAt),
+	})
+	if err != nil {
+		return err
+	}
+
 	fromStatus := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
 	if fromStatus == "" {
 		fromStatus = "draft"
@@ -1244,9 +1364,61 @@ func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskI
 	})
 }
 
+func (e *TurnEngine) refreshProjectBootstrapSessionState(ctx context.Context, session *chat.ChatSession, progress projectBootstrapProgress) error {
+	if e == nil || session == nil {
+		return nil
+	}
+
+	state := projectBootstrapStateFromMetadata(session.Metadata)
+	now := e.now().UTC()
+	state.Status = projectBootstrapStatusActive
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	applyProjectBootstrapProgressState(&state, progress)
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = nil
+	state.FailureCategory = ""
+	state.FailureClass = ""
+	state.FailurePhase = ""
+	state.FailureReason = ""
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
+
+	if progress.Materialized() {
+		state.Status = projectBootstrapStatusCompleted
+		state.AutoTurnCount = 0
+		state.CompletedAt = &now
+		return e.updateProjectBootstrapState(ctx, session, state)
+	}
+	if progress.ValidationFailed() {
+		record := buildProjectBootstrapAutomaticFailureRecord(
+			progress,
+			projectFailureCategoryBootstrap,
+			progress.ValidationFailureClass,
+			progress.ValidationFailureReason,
+			now,
+		)
+		state.Status = projectBootstrapStatusFailed
+		state.FailedAt = &now
+		state.FailureCategory = record.FailureCategory
+		state.FailureClass = record.FailureClass
+		state.FailurePhase = record.FailurePhase
+		state.FailureReason = record.FailureReason
+		if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
+			return err
+		}
+		return e.applyProjectAutomaticFailure(ctx, session.ScopeID, record)
+	}
+	return e.updateProjectBootstrapState(ctx, session, state)
+}
+
 type projectBootstrapProgress struct {
 	BootstrapTaskID          uuid.UUID
 	BootstrapTaskOutstanding bool
+	BootstrapSetupTaskCount  int
+	BootstrapSetupDoneCount  int
+	FrankSignOffRecorded     bool
 	AssignmentCount          int
 	PlannedTaskCount         int
 	PlannedFlowTemplateCount int
@@ -1273,6 +1445,26 @@ func (p projectBootstrapProgress) Materialized() bool {
 
 func (p projectBootstrapProgress) ValidationFailed() bool {
 	return p.ValidationStatus == projectBootstrapValidationFailed
+}
+
+func (p projectBootstrapProgress) BootstrapSetupComplete() bool {
+	return p.BootstrapSetupTaskCount > 0 && p.BootstrapSetupDoneCount == p.BootstrapSetupTaskCount
+}
+
+func (p projectBootstrapProgress) BootstrapGateReady() bool {
+	if p.BootstrapTaskID == uuid.Nil || !p.BootstrapTaskOutstanding {
+		return true
+	}
+	return p.ValidationStatus == projectBootstrapValidationPassed &&
+		p.BootstrapSetupComplete() &&
+		p.FrankSignOffRecorded
+}
+
+func (p projectBootstrapProgress) WaitingForBootstrapGate() bool {
+	return p.ValidationStatus == projectBootstrapValidationPassed &&
+		p.BootstrapTaskID != uuid.Nil &&
+		p.BootstrapTaskOutstanding &&
+		!p.BootstrapGateReady()
 }
 
 func projectBootstrapLastCheckpoint(progress projectBootstrapProgress) string {
@@ -1426,6 +1618,13 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 			continue
 		}
 		if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); bootstrapSetupTask {
+			progress.BootstrapSetupTaskCount++
+			if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") {
+				progress.BootstrapSetupDoneCount++
+				if strings.EqualFold(strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"])), bootstrapFrankSignOffStepSlug) {
+					progress.FrankSignOffRecorded = true
+				}
+			}
 			continue
 		}
 		plannedTasks = append(plannedTasks, task)
