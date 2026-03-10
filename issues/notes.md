@@ -12757,3 +12757,39 @@ Related completed work:
 Neither of those PRs addresses 352's specific scenario (phased parent + child tree persists successfully but first-wave promotion is skipped). Task 352 still needs implementation before it can be reviewed.
 
 Moved back to `01-ready` for implementation pickup.
+- [2026-03-10 04:23:20 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-10 04:33:20 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-10 04:43:22 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+- [2026-03-10 04:54:20 MDT] JSONL validator found missing terminal state in 1 run log(s); repaired=0 skipped_active=1
+
+## [2026-03-10 10:42 MDT] Builder task 352 — phased bootstrap promotes child work before gate completion
+
+- Task file: `352-post-351-bootstrap-task-tree-can-still-persist-phased-parent-plus-child-setup-with-zero-first-wave-execution.md`
+- Fixes applied:
+  - allowed bootstrap-selected first-wave child tasks to bypass the outstanding bootstrap gate when transitioning from `draft` to `queued`, while keeping the governance gate open until the setup/sign-off path completes
+  - taught the task queue processor to keep running queued child work behind an outstanding bootstrap gate, while preserving normal gate blocking for non-bootstrap projects
+  - split bootstrap materialization from bootstrap completion so pre-sign-off flows require immediate child promotion, and gate completion still enforces first-wave execution/job creation before bootstrap can finish
+  - added task/controlplane unit coverage plus bootstrap turn integration coverage for phased parent+child promotion, gate-open progress, and explicit first-wave execution failure
+  - updated `docsv2` to state that persisted phased setup is invalid until first-wave child execution exists
+- Tests run:
+  - `go test ./internal/task ./internal/controlplane`
+  - `go test ./internal/turn -tags integration -run 'TestTurnEngineIntegrationProjectBootstrap(PromotesFirstWaveBeforeBootstrapGateCompletes|OpensFirstWaveAfterSetupTasksAndFrankSignOff|FailsWhenPersistedSetupDoesNotCreateFirstWaveExecution)$'`
+- Command outcome classification:
+  - `lookup_miss`: none
+  - `search_miss`: none
+  - `build_or_test_failure`: none
+  - `infra_failure`: none
+
+## 352 — Review (2026-03-10 10:58 UTC)
+Reviewer: Claude Opus 4.6
+
+**Result: CHANGES REQUIRED — returned to 01-ready**
+
+PR #1735 (`task/352-post-351-bootstrap-first-wave-promotion`). Build passes locally; all 21 bootstrap integration tests pass. CI billing-locked (infra, not code).
+
+Findings:
+- **P1**: `countProjectBootstrapFirstWaveJobs` SQL UNION includes bare async sessions without pending/claimed jobs, inflating count and masking potential failures at line 1287 guard.
+- **P1**: Missing regression test for phased-parent failure path. New test covers success only; acceptance criterion #4 explicitly requires coverage for phased parent+child persisting but promotion skipped. Existing failure test uses non-phased structure.
+- **P2**: `completeProjectBootstrapGateTask` removed `len(childTasks) == 0` early-return guard; gate now completes without setup-task evidence when called for phased setups.
+
+PR left unmerged.
