@@ -1147,27 +1147,11 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	}
 
 	if progress.ValidationFailed() {
-		record := buildProjectBootstrapAutomaticFailureRecord(
-			progress,
-			projectFailureCategoryBootstrap,
-			progress.ValidationFailureClass,
-			progress.ValidationFailureReason,
-			now,
-		)
-		state.Status = projectBootstrapStatusFailed
-		state.FailedAt = &now
-		state.FailureCategory = record.FailureCategory
-		state.FailureClass = record.FailureClass
-		state.FailurePhase = record.FailurePhase
-		state.FailureReason = record.FailureReason
-		if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
-			return err
+		rt := &turnRuntime{session: session, turn: &chat.ChatTurn{ID: turnID}}
+		if latestCompleted.RespondingID != uuid.Nil {
+			rt.agent.ID = latestCompleted.RespondingID
 		}
-		_, _ = e.appendSystemMessage(ctx, turnID, session.ID, buildProjectBootstrapAutomaticFailureMessage(record))
-		if err := e.applyProjectAutomaticFailure(ctx, session.ScopeID, record); err != nil {
-			return err
-		}
-		return nil
+		return e.failProjectBootstrapValidation(ctx, rt, progress, now)
 	}
 
 	if progress.WaitingForBootstrapGate() {
@@ -1220,6 +1204,50 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	runAfter := now.Add(defaultAutoContinueDelay)
 	_, err = e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
 	return err
+}
+
+func (e *TurnEngine) failProjectBootstrapValidation(ctx context.Context, rt *turnRuntime, progress projectBootstrapProgress, now time.Time) error {
+	if rt == nil || rt.session == nil || rt.turn == nil {
+		return nil
+	}
+
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if state.StartedAt == nil {
+		state.StartedAt = &now
+	}
+	state.Status = projectBootstrapStatusFailed
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	state.LastTurnID = rt.turn.ID.String()
+	if rt.agent.ID != uuid.Nil {
+		state.LastResponderID = rt.agent.ID.String()
+	}
+	applyProjectBootstrapProgressState(&state, progress)
+
+	record := buildProjectBootstrapAutomaticFailureRecord(
+		progress,
+		projectFailureCategoryBootstrap,
+		progress.ValidationFailureClass,
+		progress.ValidationFailureReason,
+		now,
+	)
+	state.FailedAt = &now
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailureCategory = record.FailureCategory
+	state.FailureClass = record.FailureClass
+	state.FailurePhase = record.FailurePhase
+	state.FailureReason = record.FailureReason
+	if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
+		return err
+	}
+	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, state.FailureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
+		return failErr
+	}
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record)); err != nil {
+		return err
+	}
+	return e.applyProjectAutomaticFailure(ctx, rt.session.ScopeID, record)
 }
 
 func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Context, progress projectBootstrapProgress) (projectBootstrapProgress, error) {
@@ -2552,6 +2580,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		runtime.disableMemory = true
 		runtime.freshKickoff = true
 	}
+	if handled, handleErr := e.handleProjectBootstrapPreflight(ctx, runtime); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
 
 	cancelCtx, stopCancelWatch := e.watchTurnCancellation(ctx, runtime)
 	defer stopCancelWatch()
@@ -2592,6 +2625,35 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return pauseErr
 	}
 	return err
+}
+
+func (e *TurnEngine) handleProjectBootstrapPreflight(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if rt == nil || rt.turn == nil || rt.session == nil || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	if progress.BootstrapTaskID == uuid.Nil || progress.Materialized() || progress.WaitingForBootstrapGate() {
+		return false, nil
+	}
+
+	progress, err = e.ensureProjectBootstrapFirstWaveExecution(ctx, progress)
+	if err != nil {
+		return false, err
+	}
+	if !progress.ValidationFailed() {
+		return false, nil
+	}
+	if err := e.failProjectBootstrapValidation(ctx, rt, progress, e.now().UTC()); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) handleRateLimitedTurnFailure(
