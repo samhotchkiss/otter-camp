@@ -164,6 +164,8 @@ func projectBootstrapStateRecordedAt(state projectBootstrapState) (time.Time, bo
 }
 
 func projectBootstrapReachedCheckpoints(state projectBootstrapState) map[string]bool {
+	firstWaveExecutionReached := state.FirstWaveTaskCount > 0 && state.FirstWaveExecutionCount >= state.FirstWaveTaskCount
+	firstWaveJobsReached := state.FirstWaveTaskCount > 0 && state.FirstWaveJobCount >= state.FirstWaveTaskCount
 	reached := map[string]bool{
 		projectBootstrapCheckpointProjectCreated: strings.TrimSpace(state.InitialMessageID) != "" ||
 			state.StartedAt != nil ||
@@ -174,8 +176,8 @@ func projectBootstrapReachedCheckpoints(state projectBootstrapState) map[string]
 		projectBootstrapCheckpointTaskTreePersisted:      state.PlannedTaskCount > 0,
 		projectBootstrapCheckpointFlowTemplatesPersisted: state.PlannedFlowTemplateCount > 0,
 		projectBootstrapCheckpointFirstWaveSelected:      state.FirstWaveTaskCount > 0,
-		projectBootstrapCheckpointFirstWaveExecutions:    state.FirstWaveExecutionCount > 0,
-		projectBootstrapCheckpointFirstWaveJobsClaimed:   state.FirstWaveJobCount > 0,
+		projectBootstrapCheckpointFirstWaveExecutions:    firstWaveExecutionReached,
+		projectBootstrapCheckpointFirstWaveJobsClaimed:   firstWaveJobsReached,
 	}
 	return reached
 }
@@ -214,7 +216,7 @@ func projectBootstrapFailurePhase(state projectBootstrapState) string {
 		}
 		return projectBootstrapCheckpointFlowTemplatesPersisted
 	case projectBootstrapFailureFirstWaveExecution:
-		if state.FirstWaveExecutionCount > 0 {
+		if state.FirstWaveTaskCount > 0 && state.FirstWaveExecutionCount >= state.FirstWaveTaskCount {
 			return projectBootstrapCheckpointFirstWaveJobsClaimed
 		}
 		return projectBootstrapCheckpointFirstWaveExecutions
@@ -318,7 +320,7 @@ func projectBootstrapValidationFindings(state projectBootstrapState) []projectBo
 		finding.Code = "first_wave_flow_invalid"
 	case projectBootstrapFailureFirstWaveExecution:
 		finding.Category = projectBootstrapFindingCategoryExecutionShape
-		if state.FirstWaveExecutionCount > 0 {
+		if state.FirstWaveTaskCount > 0 && state.FirstWaveExecutionCount >= state.FirstWaveTaskCount {
 			finding.Code = "first_wave_jobs_not_claimed"
 		} else {
 			finding.Code = "first_wave_executions_missing"
