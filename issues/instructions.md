@@ -22,8 +22,8 @@ Execution rules:
 - For CLI-related tasks, build and smoke-test the binary (`go build ./cmd/ottercamp`, then run relevant `ottercamp ...` commands).
 - Use one branch/PR per task by default.
 - Commit and push every completed task branch to origin.
-- Open/update a PR for each task targeting branch `v2`.
-- Only mark a task completed after its reviewed changes are merged into `v2`.
+- Open/update a PR for each task targeting branch `main`.
+- Only mark a task completed after its reviewed changes are merged into `main`.
 - When implementation and required tests pass, move the task to `03-needs-review`.
 - Reviewer moves files between `04-in-review` and either `05-completed` or back to `01-ready`.
 
