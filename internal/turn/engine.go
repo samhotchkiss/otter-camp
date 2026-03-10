@@ -1252,18 +1252,15 @@ func (e *TurnEngine) failProjectBootstrapValidation(ctx context.Context, rt *tur
 }
 
 func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Context, progress projectBootstrapProgress) (projectBootstrapProgress, error) {
-	if e == nil || e.taskTransitions == nil || progress.ValidationStatus != projectBootstrapValidationPassed || progress.Materialized() {
+	if e == nil || e.taskTransitions == nil || progress.ValidationStatus != projectBootstrapValidationPassed || progress.FirstWaveMaterialized() {
 		return progress, nil
 	}
 	if progress.FirstWaveTaskCount == 0 || len(progress.FirstWaveTasks) == 0 {
 		return progress, nil
 	}
-	if progress.WaitingForBootstrapGate() {
-		return progress, nil
-	}
 
 	projectID := progress.FirstWaveTasks[0].ProjectID
-	if progress.BootstrapTaskOutstanding && progress.BootstrapTaskID != uuid.Nil {
+	if progress.BootstrapTaskOutstanding && progress.BootstrapTaskID != uuid.Nil && progress.BootstrapGateReady() {
 		if err := e.completeProjectBootstrapGateTask(ctx, progress.BootstrapTaskID); err != nil {
 			return progress, err
 		}
@@ -1279,7 +1276,7 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
 			continue
 		}
-		if _, err := e.taskTransitions.TransitionStatus(ctx, task.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		if _, err := e.taskTransitions.TransitionStatus(ctx, task.ID, "queued", tasksvc.Actor{Type: "system", AllowGateBypass: true}); err != nil {
 			return progress, err
 		}
 		queuedAny = true
@@ -1291,13 +1288,21 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 		return progress, nil
 	}
 
+	updated, err := e.loadProjectBootstrapProgress(ctx, projectID)
+	if err != nil {
+		return progress, err
+	}
+	if !updated.BootstrapGateReady() {
+		return updated, nil
+	}
+
 	deadline := time.Now().Add(defaultProjectBootstrapPromotionTimeout)
 	for {
-		updated, err := e.loadProjectBootstrapProgress(ctx, projectID)
+		updated, err = e.loadProjectBootstrapProgress(ctx, projectID)
 		if err != nil {
 			return progress, err
 		}
-		if updated.Materialized() || updated.ValidationFailed() {
+		if updated.FirstWaveMaterialized() || updated.ValidationFailed() {
 			return updated, nil
 		}
 		if time.Now().After(deadline) {
@@ -1467,6 +1472,11 @@ type projectBootstrapProgress struct {
 }
 
 func (p projectBootstrapProgress) Materialized() bool {
+	return p.FirstWaveMaterialized() &&
+		(p.BootstrapTaskID == uuid.Nil || !p.BootstrapTaskOutstanding)
+}
+
+func (p projectBootstrapProgress) FirstWaveMaterialized() bool {
 	return p.ValidationStatus == projectBootstrapValidationPassed &&
 		p.AssignmentCount > 0 &&
 		p.PlannedTaskCount > 0 &&
@@ -2640,7 +2650,7 @@ func (e *TurnEngine) handleProjectBootstrapPreflight(ctx context.Context, rt *tu
 	if err != nil {
 		return false, err
 	}
-	if progress.BootstrapTaskID == uuid.Nil || progress.Materialized() || progress.WaitingForBootstrapGate() {
+	if progress.BootstrapTaskID == uuid.Nil || progress.Materialized() {
 		return false, nil
 	}
 

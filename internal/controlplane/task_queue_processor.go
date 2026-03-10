@@ -315,6 +315,9 @@ func (p *TaskQueueProcessor) isBlockedByOutstandingProjectGate(ctx context.Conte
 	if gateTask == nil {
 		return false, nil
 	}
+	if taskIsBootstrapGate(*gateTask) {
+		return false, nil
+	}
 	return gateTask.ID != taskRecord.ID, nil
 }
 
@@ -459,7 +462,9 @@ func selectNextQueuedTaskUnderProjectGate(tasks []repo.ProjectTask) *repo.Projec
 			clone := *gate
 			return &clone
 		}
-		return nil
+		if !taskIsBootstrapGate(*gate) {
+			return nil
+		}
 	}
 
 	var selected *repo.ProjectTask
@@ -473,6 +478,18 @@ func selectNextQueuedTaskUnderProjectGate(tasks []repo.ProjectTask) *repo.Projec
 		}
 	}
 	return selected
+}
+
+func taskIsBootstrapGate(taskRecord repo.ProjectTask) bool {
+	if len(taskRecord.Metadata) == 0 || !json.Valid(taskRecord.Metadata) {
+		return false
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &metadata); err != nil {
+		return false
+	}
+	raw, ok := metadata["bootstrap_gate"].(bool)
+	return ok && raw
 }
 
 func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask) error {

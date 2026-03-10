@@ -6210,7 +6210,7 @@ func TestTurnEngineIntegrationProjectBootstrapQueuesFollowOnAfterLoriAcknowledge
 	}
 }
 
-func TestTurnEngineIntegrationProjectBootstrapPersistsSetupButWaitsForBootstrapGate(t *testing.T) {
+func TestTurnEngineIntegrationProjectBootstrapPromotesFirstWaveBeforeBootstrapGateCompletes(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	enableTaskQueueProcessor(t, fixture)
 	ctx := context.Background()
@@ -6254,7 +6254,21 @@ func TestTurnEngineIntegrationProjectBootstrapPersistsSetupButWaitsForBootstrapG
 			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
 		}
 		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
-		description := "Initial scoped bootstrap workstream"
+		parentDescription := "Coordinate the first execution wave without doing the implementation work in the parent."
+		parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "First-wave orchestration parent",
+			Description:    &parentDescription,
+			WorkStatus:     "draft",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		description := "Implement the first bounded child slice."
 		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
 			OrganizationID:  fixture.org.ID,
 			ProjectID:       project.ID,
@@ -6263,6 +6277,7 @@ func TestTurnEngineIntegrationProjectBootstrapPersistsSetupButWaitsForBootstrapG
 			WorkStatus:      "draft",
 			FlowTemplateID:  &template.ID,
 			AssignedAgentID: &pmAgent.ID,
+			Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
 			CreatedByType:   "agent",
 			CreatedByID:     &lori.ID,
 		})
@@ -6274,6 +6289,7 @@ func TestTurnEngineIntegrationProjectBootstrapPersistsSetupButWaitsForBootstrapG
 			Name:       call.Name,
 			Output: map[string]any{
 				"pm_agent_id":      pmAgent.ID.String(),
+				"parent_task_id":   parentTask.ID.String(),
 				"task_id":          taskRecord.ID.String(),
 				"flow_template_id": template.ID.String(),
 			},
@@ -6364,17 +6380,14 @@ func TestTurnEngineIntegrationProjectBootstrapPersistsSetupButWaitsForBootstrapG
 	if bootstrapState.AssignmentCount == 0 || bootstrapState.PlannedTaskCount == 0 || bootstrapState.PlannedFlowTemplateCount == 0 {
 		t.Fatalf("bootstrap state missing persisted counts: %+v", bootstrapState)
 	}
-	if bootstrapState.FirstWaveTaskCount == 0 {
-		t.Fatalf("bootstrap first_wave_task_count = %d, want > 0", bootstrapState.FirstWaveTaskCount)
+	if bootstrapState.FirstWaveTaskCount != 1 {
+		t.Fatalf("bootstrap first_wave_task_count = %d, want 1 leaf child task", bootstrapState.FirstWaveTaskCount)
 	}
-	if bootstrapState.FirstWavePromotedCount != 0 {
-		t.Fatalf("bootstrap first_wave_promoted_count = %d, want 0 while bootstrap gate remains incomplete", bootstrapState.FirstWavePromotedCount)
+	if bootstrapState.FirstWavePromotedCount == 0 {
+		t.Fatalf("bootstrap first_wave_promoted_count = %d, want > 0 while gate is still open", bootstrapState.FirstWavePromotedCount)
 	}
-	if bootstrapState.FirstWaveExecutionCount != 0 {
-		t.Fatalf("bootstrap first_wave_execution_count = %d, want 0 while bootstrap gate remains incomplete", bootstrapState.FirstWaveExecutionCount)
-	}
-	if bootstrapState.FirstWaveJobCount != 0 {
-		t.Fatalf("bootstrap first_wave_job_count = %d, want 0 while bootstrap gate remains incomplete", bootstrapState.FirstWaveJobCount)
+	if !bootstrapState.BootstrapTaskOutstanding {
+		t.Fatal("bootstrap gate marked complete too early; want outstanding while setup sign-off is still pending")
 	}
 	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
 		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
@@ -6382,32 +6395,28 @@ func TestTurnEngineIntegrationProjectBootstrapPersistsSetupButWaitsForBootstrapG
 	if bootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointFirstWaveSelected {
 		t.Fatalf("bootstrap last_successful_checkpoint = %q, want %q", bootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointFirstWaveSelected)
 	}
-	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveJobsClaimed); checkpoint.Status != projectBootstrapCheckpointStatusPending {
-		t.Fatalf("first_wave_jobs_claimed checkpoint status = %q, want %q", checkpoint.Status, projectBootstrapCheckpointStatusPending)
+	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveExecutions); checkpoint.Status != projectBootstrapCheckpointStatusPending {
+		t.Fatalf("first_wave_executions_created checkpoint status = %q, want %q before gate completion", checkpoint.Status, projectBootstrapCheckpointStatusPending)
 	}
 
-	var activeExecutions int
-	if err := fixture.pool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM flow_node_execution
-		WHERE task_id IN (
-			SELECT id
-			FROM project_task
-			WHERE project_id = $1
-			  AND work_status IN ('queued', 'in_progress', 'review', 'done')
-		)
-		  AND status = 'active'
-	`, project.ID).Scan(&activeExecutions); err != nil {
-		t.Fatalf("count active flow executions: %v", err)
+	parentStatus := ""
+	childStatus := ""
+	for _, item := range tasks {
+		if item.Title == "First-wave orchestration parent" {
+			parentStatus = item.WorkStatus
+		}
+		if item.Title == "Define the first execution slice" {
+			childStatus = item.WorkStatus
+		}
 	}
-	if activeExecutions != 0 {
-		t.Fatalf("active flow_node_execution count = %d, want 0 while bootstrap gate remains incomplete", activeExecutions)
+	if parentStatus != "draft" {
+		t.Fatalf("parent task work_status = %q, want draft while child execution starts", parentStatus)
 	}
-	if jobCount := countRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs); jobCount != 0 {
-		t.Fatalf("runnable first-wave agent_turn jobs = %d, want 0 while bootstrap gate remains incomplete", jobCount)
+	if childStatus != "queued" && childStatus != "in_progress" && childStatus != "review" && childStatus != "done" {
+		t.Fatalf("child task work_status = %q, want promoted out of draft before bootstrap gate completion", childStatus)
 	}
 	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
-		t.Fatalf("runnable bootstrap session jobs = %d, want 0 after persisted setup starts waiting on bootstrap task tree", jobs)
+		t.Fatalf("runnable bootstrap session jobs = %d, want 0 after first-wave child execution starts", jobs)
 	}
 
 	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
@@ -6476,7 +6485,21 @@ func TestTurnEngineIntegrationProjectBootstrapOpensFirstWaveAfterSetupTasksAndFr
 			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
 		}
 		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
-		description := "Initial scoped bootstrap workstream"
+		parentDescription := "Coordinate the first execution wave without doing the implementation work in the parent."
+		parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "First-wave orchestration parent",
+			Description:    &parentDescription,
+			WorkStatus:     "draft",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		description := "Implement the first bounded child slice."
 		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
 			OrganizationID:  fixture.org.ID,
 			ProjectID:       project.ID,
@@ -6485,6 +6508,7 @@ func TestTurnEngineIntegrationProjectBootstrapOpensFirstWaveAfterSetupTasksAndFr
 			WorkStatus:      "draft",
 			FlowTemplateID:  &template.ID,
 			AssignedAgentID: &pmAgent.ID,
+			Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
 			CreatedByType:   "agent",
 			CreatedByID:     &lori.ID,
 		})
@@ -6496,6 +6520,7 @@ func TestTurnEngineIntegrationProjectBootstrapOpensFirstWaveAfterSetupTasksAndFr
 			Name:       call.Name,
 			Output: map[string]any{
 				"pm_agent_id":      pmAgent.ID.String(),
+				"parent_task_id":   parentTask.ID.String(),
 				"task_id":          taskRecord.ID.String(),
 				"flow_template_id": template.ID.String(),
 			},
@@ -6693,19 +6718,6 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupTaskOwnsExecutableCh
 		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
 	}
 
-	signoffTask := completeBootstrapSetupTasks(t, ctx, fixture.pool, project.ID, "")
-	if err := fixture.engine.HandleTaskStatusChangedEvent(ctx, eventbus.DomainEvent{
-		OrganizationID: fixture.org.ID,
-		EventType:      "task.status_changed",
-		Payload: mustJSON(t, map[string]any{
-			"task_id":    signoffTask.ID.String(),
-			"project_id": project.ID.String(),
-			"to_status":  "done",
-		}),
-	}); err != nil {
-		t.Fatalf("HandleTaskStatusChangedEvent bootstrap sign-off: %v", err)
-	}
-
 	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
 	if err != nil {
 		t.Fatalf("GetByID project session: %v", err)
@@ -6773,7 +6785,21 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupTaskViolatesBoundedS
 			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
 		}
 		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
-		description := "Initial scoped bootstrap workstream"
+		parentDescription := "Coordinate the first execution wave without doing the implementation work in the parent."
+		parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "First-wave orchestration parent",
+			Description:    &parentDescription,
+			WorkStatus:     "draft",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		description := "Implement the first bounded child slice."
 		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
 			OrganizationID:  fixture.org.ID,
 			ProjectID:       project.ID,
@@ -6782,6 +6808,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupTaskViolatesBoundedS
 			WorkStatus:      "draft",
 			FlowTemplateID:  &template.ID,
 			AssignedAgentID: &pmAgent.ID,
+			Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
 			CreatedByType:   "agent",
 			CreatedByID:     &lori.ID,
 		})
@@ -6793,6 +6820,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupTaskViolatesBoundedS
 			Name:       call.Name,
 			Output: map[string]any{
 				"pm_agent_id":      pmAgent.ID.String(),
+				"parent_task_id":   parentTask.ID.String(),
 				"task_id":          taskRecord.ID.String(),
 				"flow_template_id": template.ID.String(),
 			},
@@ -6916,7 +6944,21 @@ func TestTurnEngineIntegrationProjectBootstrapAllowsSetupSubtaskCheckpoints(t *t
 			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
 		}
 		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
-		description := "Initial scoped bootstrap workstream"
+		parentDescription := "Coordinate the first execution wave without doing the implementation work in the parent."
+		parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "First-wave orchestration parent",
+			Description:    &parentDescription,
+			WorkStatus:     "draft",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		description := "Implement the first bounded child slice."
 		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
 			OrganizationID:  fixture.org.ID,
 			ProjectID:       project.ID,
@@ -6925,6 +6967,7 @@ func TestTurnEngineIntegrationProjectBootstrapAllowsSetupSubtaskCheckpoints(t *t
 			WorkStatus:      "draft",
 			FlowTemplateID:  &template.ID,
 			AssignedAgentID: &pmAgent.ID,
+			Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
 			CreatedByType:   "agent",
 			CreatedByID:     &lori.ID,
 		})
@@ -6936,6 +6979,7 @@ func TestTurnEngineIntegrationProjectBootstrapAllowsSetupSubtaskCheckpoints(t *t
 			Name:       call.Name,
 			Output: map[string]any{
 				"pm_agent_id":      pmAgent.ID.String(),
+				"parent_task_id":   parentTask.ID.String(),
 				"task_id":          taskRecord.ID.String(),
 				"flow_template_id": template.ID.String(),
 			},
@@ -7053,7 +7097,21 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
 		}
 		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
-		description := "Initial scoped bootstrap workstream"
+		parentDescription := "Coordinate the first execution wave without doing the implementation work in the parent."
+		parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "First-wave orchestration parent",
+			Description:    &parentDescription,
+			WorkStatus:     "draft",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		description := "Implement the first bounded child slice."
 		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
 			OrganizationID:  fixture.org.ID,
 			ProjectID:       project.ID,
@@ -7062,6 +7120,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 			WorkStatus:      "draft",
 			FlowTemplateID:  &template.ID,
 			AssignedAgentID: &pmAgent.ID,
+			Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
 			CreatedByType:   "agent",
 			CreatedByID:     &lori.ID,
 		})
@@ -7073,6 +7132,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 			Name:       call.Name,
 			Output: map[string]any{
 				"pm_agent_id":      pmAgent.ID.String(),
+				"parent_task_id":   parentTask.ID.String(),
 				"task_id":          taskRecord.ID.String(),
 				"flow_template_id": template.ID.String(),
 			},
@@ -7174,6 +7234,16 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 	}
 	if queuedFirstWaveTasks == 0 {
 		t.Fatal("expected bootstrap promotion attempt to move at least one first-wave task out of draft")
+	}
+	parentStatus := ""
+	for _, task := range tasks {
+		if task.Title == "First-wave orchestration parent" {
+			parentStatus = task.WorkStatus
+			break
+		}
+	}
+	if parentStatus != "draft" {
+		t.Fatalf("parent task work_status = %q, want draft when bootstrap fails to materialize child execution", parentStatus)
 	}
 	if jobs := countRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs); jobs != 0 {
 		t.Fatalf("runnable first-wave agent_turn jobs = %d, want 0 when bootstrap fails before execution handoff", jobs)
