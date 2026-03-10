@@ -180,6 +180,7 @@ type ToolResult struct {
 
 type ChatService interface {
 	GetSession(ctx context.Context, id uuid.UUID) (*chat.ChatSession, error)
+	CreateSession(ctx context.Context, input chat.CreateSessionInput) (*chat.ChatSession, error)
 	CreateTurn(ctx context.Context, sessionID, agentID uuid.UUID) (*chat.ChatTurn, error)
 	StartTurn(ctx context.Context, turnID uuid.UUID) error
 	CompleteTurn(ctx context.Context, turnID uuid.UUID) error
@@ -2061,8 +2062,14 @@ func (e *TurnEngine) applyProjectAutomaticFailure(ctx context.Context, projectID
 		if strings.EqualFold(strings.TrimSpace(projectRecord.Status), "archived") {
 			return nil
 		}
-		_, err = projectService.Archive(ctx, projectRecord.OrganizationID, projectRecord.ID)
-		return err
+		archived, err := projectService.Archive(ctx, projectRecord.OrganizationID, projectRecord.ID)
+		if err != nil {
+			return err
+		}
+		if archived != nil {
+			updated = *archived
+		}
+		return e.maybeRestartArchivedBootstrapProject(ctx, updated, record)
 	case projectFailureActionPause:
 		if strings.EqualFold(strings.TrimSpace(projectRecord.Status), "archived") {
 			return nil
