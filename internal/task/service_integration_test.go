@@ -329,8 +329,8 @@ func TestTaskServiceIntegrationMarkBlockedDoesNotCreateResolutionTaskByDefault(t
 		t.Fatal("expected blocker_filed inbox item")
 	}
 
-	if _, err := svc.TransitionStatus(ctx, blocked.ID, "queued", Actor{Type: "system"}); err != nil {
-		t.Fatalf("TransitionStatus blocked->queued: %v", err)
+	if _, err := svc.TransitionStatus(ctx, blocked.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus blocked->in_progress: %v", err)
 	}
 }
 
@@ -453,8 +453,8 @@ func TestTaskServiceIntegrationResumeValidationBlockedTaskClearsGuardAndQueuesRe
 	if err != nil {
 		t.Fatalf("ResumeValidationBlockedTask: %v", err)
 	}
-	if resumed.WorkStatus != "queued" {
-		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	if resumed.WorkStatus != "in_progress" {
+		t.Fatalf("resumed work_status = %q, want in_progress", resumed.WorkStatus)
 	}
 	if _, ok := ParseValidationGuard(resumed.Metadata); ok {
 		t.Fatalf("expected validation guard to be cleared, metadata=%s", string(resumed.Metadata))
@@ -480,8 +480,8 @@ func TestTaskServiceIntegrationResumeValidationBlockedTaskClearsGuardAndQueuesRe
 	if err := json.Unmarshal(payload, &eventPayload); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["to_status"])); got != "queued" {
-		t.Fatalf("to_status = %q, want queued", got)
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["to_status"])); got != "in_progress" {
+		t.Fatalf("to_status = %q, want in_progress", got)
 	}
 	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["recovery_action"])); got != "resume_validation_blocked_task" {
 		t.Fatalf("recovery_action = %q, want resume_validation_blocked_task", got)

@@ -22,22 +22,22 @@ func TestStatusTransitionMatrix(t *testing.T) {
 		{"draft", "queued"},
 		{"draft", "cancelled"},
 		{"queued", "in_progress"},
+		{"queued", "on_hold"},
 		{"queued", "cancelled"},
 		{"in_progress", "blocked"},
 		{"in_progress", "on_hold"},
 		{"in_progress", "review"},
 		{"in_progress", "done"},
 		{"in_progress", "cancelled"},
-		{"blocked", "queued"},
+		{"blocked", "in_progress"},
+		{"blocked", "on_hold"},
 		{"blocked", "cancelled"},
-		{"on_hold", "in_progress"},
+		{"on_hold", "queued"},
 		{"on_hold", "cancelled"},
 		{"review", "blocked"},
 		{"review", "done"},
 		{"review", "in_progress"},
 		{"review", "cancelled"},
-		{"done", "cancelled"},
-		{"cancelled", "cancelled"},
 	}
 	for _, pair := range valid {
 		if !isTransitionAllowed(pair[0], pair[1]) {
@@ -54,18 +54,56 @@ func TestStatusTransitionMatrix(t *testing.T) {
 		{"draft", "review"},
 		{"queued", "done"},
 		{"queued", "review"},
-		{"blocked", "in_progress"},
+		{"blocked", "queued"},
 		{"blocked", "review"},
-		{"on_hold", "queued"},
+		{"on_hold", "in_progress"},
 		{"on_hold", "done"},
 		{"review", "queued"},
 		{"in_progress", "draft"},
 		{"in_progress", "queued"},
+		{"done", "cancelled"},
+		{"cancelled", "cancelled"},
 	}
 	for _, pair := range invalid {
 		if isTransitionAllowed(pair[0], pair[1]) {
 			t.Fatalf("expected transition %s -> %s to be invalid", pair[0], pair[1])
 		}
+	}
+}
+
+func TestTransitionStatusRejectsReviewMismatchWithCurrentFlowNode(t *testing.T) {
+	taskID := uuid.New()
+	workNodeID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    uuid.New(),
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				FlowTemplateID:    &flowTemplateID,
+				CurrentFlowNodeID: &workNodeID,
+				Title:             "Task",
+				CreatedByType:     "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			workNodeID: {ID: workNodeID, NodeType: "work"},
+		},
+	}
+
+	_, err := svc.TransitionStatus(context.Background(), taskID, "review", Actor{Type: "system"})
+	var conflict ErrTaskFlowStateConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("TransitionStatus err = %v, want ErrTaskFlowStateConflict", err)
+	}
+	if conflict.TargetStatus != "review" || conflict.CurrentNodeType != "work" {
+		t.Fatalf("flow conflict = %+v, want target=review current_node_type=work", conflict)
 	}
 }
 

@@ -317,6 +317,13 @@ func TestFlowExecutionServiceRejectionLoopVisitIncrements(t *testing.T) {
 	if firstReject.VisitNumber != 2 {
 		t.Fatalf("first rejection visit_number = %d, want 2", firstReject.VisitNumber)
 	}
+	rejectedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after first rejection: %v", err)
+	}
+	if rejectedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status after rejection = %q, want in_progress", rejectedTask.WorkStatus)
+	}
 
 	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
 		t.Fatalf("AdvanceFlow back to review: %v", err)

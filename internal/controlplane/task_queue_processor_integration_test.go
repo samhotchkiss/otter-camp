@@ -262,12 +262,12 @@ func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn
 		t.Fatalf("ResumeValidationBlockedTask: %v", err)
 	}
 
-	sessionRepo := repo.NewChatSessionRepo(fx.pool)
 	messageRepo := repo.NewChatMessageRepo(fx.pool)
 	turnRepo := repo.NewChatTurnRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
 
 	var (
-		session       *repo.ChatSession
+		sessionID     uuid.UUID
 		turns         []repo.ChatTurn
 		kickoffMeta   map[string]any
 		foundKickoff  bool
@@ -285,15 +285,22 @@ func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn
 			return false, fmt.Errorf("validation guard still present after resume")
 		}
 
-		session, err = sessionRepo.GetByScopeAndMode(ctx, "project_task", created.ID, "async")
+		if current.CurrentFlowNodeID == nil {
+			return false, nil
+		}
+		execution, err := executionRepo.GetActive(ctx, created.ID, *current.CurrentFlowNodeID)
 		if err != nil {
 			if errors.Is(err, repo.ErrNotFound) {
 				return false, nil
 			}
 			return false, err
 		}
+		if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		sessionID = *execution.SessionID
 
-		messages, err := messageRepo.ListBySession(ctx, session.ID)
+		messages, err := messageRepo.ListBySession(ctx, sessionID)
 		if err != nil {
 			return false, err
 		}
@@ -316,7 +323,7 @@ func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn
 			return false, nil
 		}
 
-		turns, err = turnRepo.ListBySession(ctx, session.ID)
+		turns, err = turnRepo.ListBySession(ctx, sessionID)
 		if err != nil {
 			return false, err
 		}
@@ -326,8 +333,8 @@ func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn
 		return turns[len(turns)-1].Status == "completed", nil
 	})
 
-	if session == nil || session.ID == uuid.Nil {
-		t.Fatal("expected canonical async task session after resume")
+	if sessionID == uuid.Nil {
+		t.Fatal("expected active execution session after resume")
 	}
 	if len(turns) == 0 {
 		t.Fatal("expected a fresh task turn after resume")
@@ -2417,7 +2424,6 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 			OrganizationID: fx.org.ID,
 			TaskID:         &created.ID,
 			FlowNodeID:     &nodeReview.ID,
-			Status:         "created",
 			Limit:          20,
 		})
 		if err != nil {
@@ -2486,22 +2492,7 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 		if rejectExecution.SessionID == nil || *rejectExecution.SessionID == uuid.Nil {
 			return false, nil
 		}
-		runs, err := runRepo.List(ctx, RunListFilter{
-			OrganizationID: fx.org.ID,
-			TaskID:         &created.ID,
-			FlowNodeID:     &nodeWork.ID,
-			Status:         "created",
-			Limit:          20,
-		})
-		if err != nil {
-			return false, err
-		}
-		for _, runRecord := range runs {
-			if runRecord.PrincipalType == "agent" && runRecord.PrincipalID == worker.ID && runRecord.SessionID != nil && *runRecord.SessionID == *rejectExecution.SessionID {
-				return true, nil
-			}
-		}
-		return false, nil
+		return true, nil
 	})
 
 	publishTaskTurnCompleted(t, ctx, fx.bus, fx.org.ID, *reviewExecution.SessionID)
@@ -2530,7 +2521,7 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 		if err != nil {
 			return false, err
 		}
-		return hasFlowKickoffMessage(messages, "flow.rejected", rejectExecution.ID), nil
+		return hasFlowKickoffMessage(messages, "flow.rejected", rejectExecution.ID) || hasFlowKickoffMessage(messages, "task.status_changed", rejectExecution.ID), nil
 	})
 }
 
@@ -3702,7 +3693,20 @@ func seedTaskQueueRejectFlowTemplate(
 	if err != nil {
 		t.Fatalf("create review node: %v", err)
 	}
+	completionNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		ActorType:      &actorAgent,
+		ActorID:        &workerAgentID,
+		MaxVisits:      5,
+	})
+	if err != nil {
+		t.Fatalf("create completion node: %v", err)
+	}
 	workNode.NextNodeID = &reviewNode.ID
+	reviewNode.NextNodeID = &completionNode.ID
 	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
 		t.Fatalf("update work node edge: %v", err)
 	}

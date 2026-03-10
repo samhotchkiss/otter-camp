@@ -151,7 +151,7 @@ There is no separate approval state machine. Review and approval are handled by 
 - `done`: completed and approved. Terminal.
 - `cancelled`: abandoned. Terminal.
 
-For tasks backed by a flow template, `in_progress` and `review` are runtime-backed states, not cosmetic labels. A task must not enter or remain in either status unless the control plane can point to a concrete `current_flow_node_id` and at least one corresponding `flow_node_execution` row for that task. If execution state is missing, the scheduler/runtime must deterministically repair it before leaving the task active; if it cannot repair the state, the task must fail closed instead of staying active with zero flow lineage.
+For tasks backed by a flow template, `in_progress` and `review` are runtime-backed states, not cosmetic labels. A task must not enter or remain in either status unless the control plane can point to a concrete `current_flow_node_id` and at least one corresponding `flow_node_execution` row for that task. The task status must also match that node type: work/merge-style nodes map to `in_progress`, review nodes map to `review`, and a reject/advance transition that changes nodes must update the task/runtime state together as one state-machine step. If execution state is missing, the scheduler/runtime must deterministically repair it before leaving the task active; if it cannot repair the state, the task must fail closed instead of staying active with zero flow lineage.
 Successful execution is also part of the same invariant: when a work node has satisfied its contract and produced the required durable output, the runtime must promote that task to the next legal node exactly once. Repeated successful rewrites of the same artifact without promotion are a state-machine failure, not "extra iteration."
 
 ### Valid Transitions
@@ -187,6 +187,8 @@ Explicit transition table:
 - `review` → `done` (approved), `in_progress` (rejected/needs changes), `cancelled`
 - `done` → terminal. If work needs revisiting, create a new task.
 - `cancelled` → terminal. Reachable from any non-terminal state.
+
+Any attempted transition outside this table is an invalid state-machine move and must be rejected deterministically with structured failure detail rather than repaired by conversational guesswork.
 
 ## Task Scheduling and Queue
 

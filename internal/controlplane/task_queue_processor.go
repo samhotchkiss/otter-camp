@@ -1018,6 +1018,9 @@ func (p *TaskQueueProcessor) handleFlowAdvancedEvent(ctx context.Context, event 
 	if err != nil {
 		return err
 	}
+	if !taskFlowEventMatchesRuntime(taskRecord, nextNode, nextExecution) {
+		return nil
+	}
 
 	agentID, err := p.resolveFlowTransitionAgent(ctx, taskRecord, nextNode)
 	if err != nil {
@@ -1101,7 +1104,7 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
+	if !taskStatusStartsAsyncWork(taskRecord.WorkStatus) {
 		return nil
 	}
 	if !result.shouldDispatch() {
@@ -1165,6 +1168,23 @@ func (p *TaskQueueProcessor) ensureFlowTransitionRun(
 		return nil
 	}
 	return p.dispatchWakeupRun(ctx, result.Run)
+}
+
+func taskFlowEventMatchesRuntime(taskRecord repo.ProjectTask, nextNode repo.FlowNode, nextExecution repo.FlowNodeExecution) bool {
+	if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nextNode.ID {
+		return false
+	}
+	if nextExecution.TaskID != taskRecord.ID || nextExecution.FlowNodeID != nextNode.ID {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(nextExecution.Status), "active") {
+		return false
+	}
+	expectedStatus := "in_progress"
+	if strings.EqualFold(strings.TrimSpace(nextNode.NodeType), "review") || nextNode.RequiresHumanReview {
+		expectedStatus = "review"
+	}
+	return strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), expectedStatus)
 }
 
 func (p *TaskQueueProcessor) resolveFlowTransitionAgent(ctx context.Context, taskRecord repo.ProjectTask, node repo.FlowNode) (*uuid.UUID, error) {
