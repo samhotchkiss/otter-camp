@@ -51,5 +51,5 @@ Do NOT: switch providers, dead-letter jobs, send API calls directly, modify the 
 ## General Development
 
 - Build: `go build -o bin/ottercamp ./cmd/ottercamp`
-- Branch: `v2` is the active development branch
+- Branch: `main` is the active development branch
 - Tests: `go test ./...`

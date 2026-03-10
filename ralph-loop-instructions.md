@@ -14,7 +14,7 @@ An end-to-end test of OtterCamp using a real project. The methodology: attempt t
 
 4. **Spec compliance at every gate.** Every step is verified against `docsv2/` spec docs. If something violates the spec, it's a bug — file an issue.
 
-5. **Push every commit.** After every commit, `git push origin v2` immediately. Also verify Codex's commits are pushed.
+5. **Push every commit.** After every commit, `git push origin main` immediately. Also verify Codex's commits are pushed.
 
 6. **Log judgment calls.** Any decision not covered by the spec goes into `decisions.md` with context, rationale, and alternatives. Sam reviews at the end.
 

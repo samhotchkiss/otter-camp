@@ -31,9 +31,9 @@ name: CI
 
 on:
   push:
-    branches: [main, v2]
+    branches: [main]
   pull_request:
-    branches: [main, v2]
+    branches: [main]
 
 env:
   GO_VERSION: "1.21"
