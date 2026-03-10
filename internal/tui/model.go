@@ -896,16 +896,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var projectLoadStatus string
 		var projectLoadActivity string
 		if typed.ProjectsErr != nil {
-			projects = m.workspace.knownActiveProjects()
-			projectLoadStatus = "Project list reload failed — keeping known active projects."
-			projectLoadActivity = "project list reload failed; preserving known active projects"
-		} else if len(projects) == 0 {
-			fallbackProjects := m.workspace.knownActiveProjects()
-			if len(fallbackProjects) > 0 {
-				projects = fallbackProjects
-				projectLoadStatus = "Project list returned empty while active project data exists — keeping known active projects."
-				projectLoadActivity = "project list returned empty; preserving known active projects"
-			}
+			projects = nil
+			projectLoadStatus = "Project list reload failed — stale project state cleared."
+			projectLoadActivity = "project list reload failed; stale project state cleared"
+		} else if len(projects) == 0 && len(m.workspace.knownActiveProjects()) > 0 {
+			projectLoadStatus = "Project list returned empty — stale project state cleared."
+			projectLoadActivity = "project list returned empty; stale project state cleared"
 		}
 		if projectLoadStatus != "" {
 			m.statusMessage = projectLoadStatus

@@ -267,7 +267,7 @@ func TestFreshStartupMatchesRunningClientProjectListEX244(t *testing.T) {
 	}
 }
 
-func TestSidebarEmptyProjectsPayloadKeepsTaskBackedProjectEX244(t *testing.T) {
+func TestSidebarEmptyProjectsPayloadClearsTaskBackedProjectEX244(t *testing.T) {
 	t.Parallel()
 
 	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
@@ -287,14 +287,14 @@ func TestSidebarEmptyProjectsPayloadKeepsTaskBackedProjectEX244(t *testing.T) {
 	model = connectAndLoadSidebar(t, model)
 
 	gotProjects := model.workspace.existingProjects()
-	if len(gotProjects) != 1 || gotProjects[0].ID != "proj-active" || gotProjects[0].DisplayName != "Active Project" {
-		t.Fatalf("projects after empty payload = %+v, want task-backed active project", gotProjects)
+	if len(gotProjects) != 0 {
+		t.Fatalf("projects after empty payload = %+v, want empty cleared state", gotProjects)
 	}
-	if got := model.statusMessage; got != "Project list returned empty while active project data exists — keeping known active projects." {
-		t.Fatalf("statusMessage = %q, want unexpected-empty warning", got)
+	if got := model.statusMessage; got != "Selected project is no longer active." {
+		t.Fatalf("statusMessage = %q, want selected-project-cleared warning", got)
 	}
-	if activity := strings.Join(model.ActivityEntries(), " | "); !strings.Contains(activity, "project list returned empty; preserving known active projects") {
-		t.Fatalf("activity missing unexpected-empty warning: %q", activity)
+	if activity := strings.Join(model.ActivityEntries(), " | "); !strings.Contains(activity, "project list returned empty; stale project state cleared") {
+		t.Fatalf("activity missing stale-clear warning: %q", activity)
 	}
 }
 

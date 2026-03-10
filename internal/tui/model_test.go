@@ -16308,7 +16308,7 @@ func TestSidebarDataLoadedClearsInvalidSelectedProjectContextAfterArchive(t *tes
 	}
 }
 
-func TestSidebarDataLoadedPreservesKnownProjectsOnUnexpectedEmptyProjectsEX244(t *testing.T) {
+func TestSidebarDataLoadedClearsKnownProjectsOnUnexpectedEmptyProjectsEX244(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.workspace.selectedProjectID = "proj-active"
 	model.workspace.selectedProject = &ProjectDetail{ID: "proj-active", DisplayName: "Active Project"}
@@ -16325,14 +16325,14 @@ func TestSidebarDataLoadedPreservesKnownProjectsOnUnexpectedEmptyProjectsEX244(t
 	})
 
 	gotProjects := model.workspace.existingProjects()
-	if len(gotProjects) != 1 || gotProjects[0].ID != "proj-active" || gotProjects[0].DisplayName != "Active Project" {
-		t.Fatalf("projects after unexpected empty payload = %+v, want active project fallback", gotProjects)
+	if len(gotProjects) != 0 {
+		t.Fatalf("projects after unexpected empty payload = %+v, want empty cleared state", gotProjects)
 	}
-	if got := model.statusMessage; got != "Project list returned empty while active project data exists — keeping known active projects." {
-		t.Fatalf("statusMessage = %q, want unexpected-empty warning", got)
+	if got := model.statusMessage; got != "Selected project is no longer active." {
+		t.Fatalf("statusMessage = %q, want selected-project-cleared warning", got)
 	}
-	if activity := strings.Join(model.ActivityEntries(), " | "); !strings.Contains(activity, "project list returned empty; preserving known active projects") {
-		t.Fatalf("activity missing unexpected-empty warning: %q", activity)
+	if activity := strings.Join(model.ActivityEntries(), " | "); !strings.Contains(activity, "project list returned empty; stale project state cleared") {
+		t.Fatalf("activity missing stale-clear warning: %q", activity)
 	}
 }
 
