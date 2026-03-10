@@ -8590,7 +8590,7 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 		t.Fatalf("restart1 failure_history len = %d, want 1", len(restart1Bundle.FailureHistory))
 	}
 	restart1Session := mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restart1Project.ID)
-	runQueuedBootstrapTurnCycleToFailure(t, ctx, fixture, restart1Session.ID)
+	runSingleQueuedBootstrapTurn(t, ctx, fixture, restart1Session.ID)
 
 	restart1Archived := mustGetProjectByID(t, ctx, fixture.pool, restart1Project.ID)
 	if restart1Archived.Status != "archived" {
@@ -8602,6 +8602,9 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 	}
 	if len(restart1FailureState.FailureHistory) != 2 {
 		t.Fatalf("restart1 failure_history len = %d, want 2", len(restart1FailureState.FailureHistory))
+	}
+	if restart1FailureState.FailureClass != projectBootstrapFailureRuntime {
+		t.Fatalf("restart1 failure_class = %q, want %q after scaffold-only restart dead-end", restart1FailureState.FailureClass, projectBootstrapFailureRuntime)
 	}
 	restart1Bundle = mustProjectBootstrapRestartBundle(t, restart1Archived)
 	if restart1Bundle.RetryAttemptCount != 2 {
@@ -8626,7 +8629,7 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 	if len(restart2Bundle.FailureHistory) != 2 {
 		t.Fatalf("restart2 failure_history len = %d, want 2", len(restart2Bundle.FailureHistory))
 	}
-	runQueuedBootstrapTurnCycleToFailure(t, ctx, fixture, mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restart2Project.ID).ID)
+	runSingleQueuedBootstrapTurn(t, ctx, fixture, mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restart2Project.ID).ID)
 
 	finalArchived := mustGetProjectByID(t, ctx, fixture.pool, restart2Project.ID)
 	if finalArchived.Status != "archived" {
@@ -8647,8 +8650,8 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 	if finalFailureState.Action != projectFailureActionArchive {
 		t.Fatalf("final automatic_failure action = %q, want %q", finalFailureState.Action, projectFailureActionArchive)
 	}
-	if finalFailureState.FailureClass != projectBootstrapFailureStalled {
-		t.Fatalf("final automatic_failure failure_class = %q, want %q", finalFailureState.FailureClass, projectBootstrapFailureStalled)
+	if finalFailureState.FailureClass != projectBootstrapFailureRuntime {
+		t.Fatalf("final automatic_failure failure_class = %q, want %q", finalFailureState.FailureClass, projectBootstrapFailureRuntime)
 	}
 	if finalFailureState.FailurePhase != projectBootstrapCheckpointProjectCreated {
 		t.Fatalf("final automatic_failure failure_phase = %q, want %q", finalFailureState.FailurePhase, projectBootstrapCheckpointProjectCreated)
@@ -8672,8 +8675,8 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 	if lastFailure.RetryAttemptCount != defaultProjectBootstrapRestartRetryBudget {
 		t.Fatalf("final failure_history last retry_attempt_count = %d, want %d", lastFailure.RetryAttemptCount, defaultProjectBootstrapRestartRetryBudget)
 	}
-	if lastFailure.FailureClass != projectBootstrapFailureStalled {
-		t.Fatalf("final failure_history last failure_class = %q, want %q", lastFailure.FailureClass, projectBootstrapFailureStalled)
+	if lastFailure.FailureClass != projectBootstrapFailureRuntime {
+		t.Fatalf("final failure_history last failure_class = %q, want %q", lastFailure.FailureClass, projectBootstrapFailureRuntime)
 	}
 	if lastFailure.LastCheckpoint != projectBootstrapCheckpointProjectCreated {
 		t.Fatalf("final failure_history last last_checkpoint = %q, want %q", lastFailure.LastCheckpoint, projectBootstrapCheckpointProjectCreated)
@@ -8690,6 +8693,102 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 
 	if jobs := countRunnableAgentTurnJobsForProject(t, ctx, fixture.pool, restart2Project.ID); jobs != 0 {
 		t.Fatalf("runnable bootstrap agent_turn jobs after retry exhaustion = %d, want 0", jobs)
+	}
+}
+
+func TestTurnEngineIntegrationBootstrapRestartFailsClosedWhenRestartOnlyRecreatesScaffoldEX364(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: restart this project from the canonical bundle and move directly into runnable bootstrap work.")
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will restart bootstrap setup."}, nil
+		case 2:
+			return ModelResponse{Content: "The canonical bootstrap scaffold is already present. I will keep coordinating from here."}, nil
+		default:
+			return ModelResponse{Content: "unexpected restart follow-on turn"}, nil
+		}
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial stalled bootstrap turn: %v", err)
+	}
+	runBootstrapFollowOnCycleToFailure(t, ctx, fixture, projectSession.ID)
+
+	initialArchived := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if initialArchived.Status != "archived" {
+		t.Fatalf("initial project status = %q, want archived", initialArchived.Status)
+	}
+
+	initialBundle := mustProjectBootstrapRestartBundle(t, initialArchived)
+	restartProjectID, err := uuid.Parse(initialBundle.RestartProjectID)
+	if err != nil {
+		t.Fatalf("Parse restart project id: %v", err)
+	}
+
+	restartProject := mustGetProjectByID(t, ctx, fixture.pool, restartProjectID)
+	restartBundle := mustProjectBootstrapRestartBundle(t, restartProject)
+	restartBundle.RetryBudget = 1
+	restartProject.Settings, err = applyProjectBootstrapRestartBundle(restartProject.Settings, restartBundle)
+	if err != nil {
+		t.Fatalf("apply restart retry budget: %v", err)
+	}
+	if _, err := repo.NewProjectRepo(fixture.pool).Update(ctx, restartProject); err != nil {
+		t.Fatalf("Update restart retry budget: %v", err)
+	}
+
+	restartSession := mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restartProject.ID)
+	restartJobID, restartPayload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, restartSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, restartPayload.SessionID, restartPayload.MessageID, restartPayload.AgentID, restartPayload.RetryCount, &restartJobID); err != nil {
+		t.Fatalf("handleUserMessage restart scaffold-only turn: %v", err)
+	}
+
+	restartTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, restartSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": restartSession.ID.String(), "turn_id": restartTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent restart scaffold-only turn: %v", err)
+	}
+
+	restartArchived := mustGetProjectByID(t, ctx, fixture.pool, restartProject.ID)
+	if restartArchived.Status != "archived" {
+		t.Fatalf("restart project status = %q, want archived", restartArchived.Status)
+	}
+	restartFailure := projectfailure.Parse(restartArchived.Settings)
+	if restartFailure.FailureClass != projectBootstrapFailureRuntime {
+		t.Fatalf("restart automatic_failure failure_class = %q, want %q", restartFailure.FailureClass, projectBootstrapFailureRuntime)
+	}
+	if !strings.Contains(restartFailure.FailureReason, "canonical bootstrap scaffold") {
+		t.Fatalf("restart automatic_failure failure_reason = %q, want scaffold dead-end detail", restartFailure.FailureReason)
+	}
+	if restartFailure.SetupPersisted {
+		t.Fatal("restart automatic_failure setup_persisted = true, want false for scaffold-only restart")
+	}
+	if restartFailure.RetryAttemptCount != 1 {
+		t.Fatalf("restart automatic_failure retry_attempt_count = %d, want 1", restartFailure.RetryAttemptCount)
+	}
+
+	restartState := mustProjectBootstrapProjectState(t, restartArchived)
+	if restartState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("restart bootstrap status = %q, want %q", restartState.Status, projectBootstrapStatusFailed)
+	}
+	if restartState.AssignmentCount != 0 || restartState.PlannedTaskCount != 0 || restartState.FirstWaveExecutionCount != 0 || restartState.FirstWaveJobCount != 0 {
+		t.Fatalf("restart bootstrap state = %+v, want scaffold-only zero-execution failure", restartState)
+	}
+	if jobs := countRunnableAgentTurnJobsForProject(t, ctx, fixture.pool, restartProject.ID); jobs != 0 {
+		t.Fatalf("restart project runnable bootstrap jobs = %d, want 0 after fail-closed archive", jobs)
 	}
 }
 
@@ -11671,6 +11770,31 @@ func runQueuedBootstrapTurnCycleToFailure(t *testing.T, ctx context.Context, fix
 		t.Fatalf("handleUserMessage queued bootstrap turn: %v", err)
 	}
 	runBootstrapFollowOnCycleToFailure(t, ctx, fixture, sessionID)
+}
+
+func runSingleQueuedBootstrapTurn(t *testing.T, ctx context.Context, fixture *integrationFixture, sessionID uuid.UUID) {
+	t.Helper()
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, sessionID)
+	routedAgentID := payload.AgentID
+	if routedAgentID == nil {
+		if loriID, err := fixture.engine.resolveLoriStarterID(ctx, fixture.org.ID); err == nil && loriID != uuid.Nil {
+			routedAgentID = &loriID
+		} else if frankID, err := fixture.engine.resolveFrankStarterID(ctx, fixture.org.ID); err == nil && frankID != uuid.Nil {
+			routedAgentID = &frankID
+		}
+	}
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, routedAgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage queued bootstrap turn: %v", err)
+	}
+	latestTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, sessionID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": sessionID.String(), "turn_id": latestTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent queued bootstrap turn: %v", err)
+	}
 }
 
 func countRunnableAgentTurnJobsForProject(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID uuid.UUID) int {
