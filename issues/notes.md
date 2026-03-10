@@ -12793,3 +12793,13 @@ Findings:
 - **P2**: `completeProjectBootstrapGateTask` removed `len(childTasks) == 0` early-return guard; gate now completes without setup-task evidence when called for phased setups.
 
 PR left unmerged.
+
+## Task 352 — Review APPROVED (2026-03-10 11:13 UTC)
+Reviewer: Claude Opus 4.6 (reviewer autowork)
+
+PR #1736 merged to main (commit 4a8b55c9). All three prior review findings (P1 SQL inflation, P1 missing phased failure test, P2 gate completion guard) addressed:
+- `countProjectBootstrapFirstWaveJobs` now uses a single JOIN query (no UNION bare-session branch)
+- `TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCreateFirstWaveExecution` updated with phased parent tasks to cover the failure path
+- `completeProjectBootstrapGateTask` retains `len(childTasks) == 0` early-return guard
+
+Implementation adds `AllowGateBypass` on task Actor for system-driven first-wave promotion, `taskIsBootstrapGate()` in task queue processor, and `FirstWaveMaterialized()` vs `Materialized()` distinction. 17/17 bootstrap integration tests pass locally. CI failed due to GitHub Actions billing lockout (not code issues). Task moved to 05-completed.
