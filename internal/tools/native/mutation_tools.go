@@ -319,6 +319,16 @@ func applyPlanningProcessInput(existing json.RawMessage, input map[string]any, a
 	}, nil
 }
 
+func hasPlanningProcessInput(input map[string]any) bool {
+	if input == nil {
+		return false
+	}
+	_, hasArtifacts := input["planning_artifacts"]
+	_, hasOverride := input["planning_override_reason"]
+	_, hasFollowOnStopReason := input["planning_follow_on_stop_reason"]
+	return hasArtifacts || hasOverride || hasFollowOnStopReason
+}
+
 func readChildOutputVerificationsInput(input map[string]any, now time.Time) ([]taskorchestration.ChildVerification, bool, error) {
 	if input == nil {
 		return nil, false, nil
@@ -1322,6 +1332,27 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	decomposition := queueDecompositionResult{}
 	planning := taskplan.Plan{}
 	actor := actorFromContext(ctx)
+	if hasPlanningProcessInput(input) {
+		existingPlan, ok := taskplan.Parse(current.Metadata)
+		if !ok || !existingPlan.HasSelection() {
+			var resolvedFlowTemplateID *uuid.UUID
+			planning, resolvedFlowTemplateID, current.Metadata, err = e.applyReviewRefinementPlanning(
+				ctx,
+				current.OrganizationID,
+				current.ProjectID,
+				current.Title,
+				current.Description,
+				current.FlowTemplateID,
+				current.Metadata,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if current.FlowTemplateID == nil && resolvedFlowTemplateID != nil {
+				current.FlowTemplateID = resolvedFlowTemplateID
+			}
+		}
+	}
 	var extraStatusPayload map[string]any
 	if status, ok := readString(input, "work_status"); ok && status != "" {
 		if current.FlowTemplateID == nil &&

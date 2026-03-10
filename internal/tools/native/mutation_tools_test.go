@@ -2237,6 +2237,66 @@ func TestTaskUpdateAllowsDoneWithPlanningOverrideReason(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateHydratesPlanningMetadataBeforePersistingArtifacts(t *testing.T) {
+	taskID := uuid.New()
+	description := "Implement the billing migration plan, document scope boundaries, and capture the acceptance criteria before development starts."
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			Title:          "Billing migration implementation plan",
+			Description:    &description,
+			WorkStatus:     "draft",
+			Metadata:       json.RawMessage(`{}`),
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id": taskID.String(),
+		"planning_artifacts": []map[string]any{
+			{
+				"slug":     "prd",
+				"summary":  "Billing migration scope, constraints, and implementation expectations.",
+				"sections": []string{"goals", "scope", "constraints"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update error = %v, want nil", out["error"])
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+
+	plan, ok := taskplan.Parse(tasks.task.Metadata)
+	if !ok {
+		t.Fatal("taskplan.Parse(metadata) = false, want true")
+	}
+	if plan.Playbook != taskplan.PlaybookExecutionSpec {
+		t.Fatalf("playbook = %q, want %q", plan.Playbook, taskplan.PlaybookExecutionSpec)
+	}
+	if len(plan.ArtifactEvidence) != 1 {
+		t.Fatalf("artifact_evidence = %d, want 1", len(plan.ArtifactEvidence))
+	}
+	if plan.ArtifactEvidence[0].Slug != "prd" {
+		t.Fatalf("artifact slug = %q, want prd", plan.ArtifactEvidence[0].Slug)
+	}
+	planningOut, ok := out["planning"].(map[string]any)
+	if !ok {
+		t.Fatalf("planning output = %T, want map[string]any", out["planning"])
+	}
+	if planningOut["playbook"] != taskplan.PlaybookExecutionSpec {
+		t.Fatalf("planning.playbook = %v, want %s", planningOut["playbook"], taskplan.PlaybookExecutionSpec)
+	}
+}
+
 func TestTaskUpdatePersistsPlanningFollowOnStopReason(t *testing.T) {
 	taskID := uuid.New()
 	description := "Run customer interviews, document assumptions, and build a validation plan for this new product idea before we commit scope."
