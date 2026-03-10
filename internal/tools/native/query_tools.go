@@ -354,6 +354,13 @@ func (e *NativeToolExecutor) handleSessionList(ctx context.Context, input map[st
 
 	filtered := make([]repo.ChatSession, 0, len(rows))
 	for _, row := range rows {
+		active, activeErr := e.scopeBelongsToActiveProject(ctx, scope.organizationID, row.ScopeType, row.ScopeID)
+		if activeErr != nil {
+			return nil, activeErr
+		}
+		if !active {
+			continue
+		}
 		if scopeTypeFilter != "" && !strings.EqualFold(row.ScopeType, scopeTypeFilter) {
 			continue
 		}

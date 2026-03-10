@@ -1054,6 +1054,18 @@ func (e *NativeToolExecutor) handleProjectArchive(ctx context.Context, input map
 	if !ok || projectID == uuid.Nil {
 		return map[string]any{"error": "project_id_required"}, nil
 	}
+	projectRecord, err := e.projects.GetByID(ctx, projectID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return map[string]any{"error": "not_found"}, nil
+		}
+		return nil, err
+	}
+	if e.chatSessions != nil {
+		if err := e.closeProjectScopedSessions(ctx, projectRecord.OrganizationID, projectID); err != nil {
+			return nil, err
+		}
+	}
 	if err := e.projects.Archive(ctx, projectID); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			return map[string]any{"error": "not_found"}, nil
@@ -2120,6 +2132,13 @@ func (e *NativeToolExecutor) findReusableScopedSession(ctx context.Context, orga
 		if session.OrganizationID != organizationID || session.ScopeID != scopeID {
 			continue
 		}
+		active, activeErr := e.scopeBelongsToActiveProject(ctx, organizationID, session.ScopeType, session.ScopeID)
+		if activeErr != nil {
+			return nil, activeErr
+		}
+		if !active {
+			continue
+		}
 		if !strings.EqualFold(strings.TrimSpace(session.ScopeType), normalizedScopeType) {
 			continue
 		}
@@ -2146,6 +2165,13 @@ func (e *NativeToolExecutor) findCurrentTaskExecutionSession(ctx context.Context
 	for i := range sessions {
 		session := sessions[i]
 		if session.OrganizationID != organizationID || session.ScopeID != taskID {
+			continue
+		}
+		active, activeErr := e.scopeBelongsToActiveProject(ctx, organizationID, session.ScopeType, session.ScopeID)
+		if activeErr != nil {
+			return nil, activeErr
+		}
+		if !active {
 			continue
 		}
 		if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
@@ -3420,6 +3446,13 @@ func (e *NativeToolExecutor) handleSessionCreate(ctx context.Context, input map[
 		mode = "async"
 	}
 	scopeType, scopeID = resolveTaskBoundExecutionScope(scope, scopeType, scopeID, mode)
+	active, err := e.scopeBelongsToActiveProject(ctx, scope.organizationID, scopeType, scopeID)
+	if err != nil {
+		return nil, err
+	}
+	if !active {
+		return map[string]any{"error": "scope_archived"}, nil
+	}
 	title, _ := readString(input, "title")
 	var titlePtr *string
 	if title != "" {
@@ -3469,6 +3502,85 @@ func (e *NativeToolExecutor) handleSessionCreate(ctx context.Context, input map[
 		result["auto_participants"] = participants
 	}
 	return result, nil
+}
+
+func (e *NativeToolExecutor) closeProjectScopedSessions(ctx context.Context, organizationID, projectID uuid.UUID) error {
+	sessions, err := e.chatSessions.ListByOrg(ctx, organizationID)
+	if err != nil {
+		return err
+	}
+	for _, session := range sessions {
+		if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(session.ScopeType)) {
+		case "project":
+			if session.ScopeID != projectID {
+				continue
+			}
+		case "project_task":
+			if e.tasks == nil {
+				continue
+			}
+			taskRecord, taskErr := e.tasks.GetByID(ctx, session.ScopeID)
+			if taskErr != nil || taskRecord.ProjectID != projectID {
+				continue
+			}
+		default:
+			continue
+		}
+		if _, err := e.chatSessions.Close(ctx, session.ID); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *NativeToolExecutor) scopeBelongsToActiveProject(ctx context.Context, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID) (bool, error) {
+	if scopeID == uuid.Nil {
+		return false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(scopeType)) {
+	case "project":
+		if e.projects == nil {
+			return true, nil
+		}
+		projectRecord, err := e.projects.GetByID(ctx, scopeID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return projectRecord.OrganizationID == organizationID && strings.EqualFold(strings.TrimSpace(projectRecord.Status), "active"), nil
+	case "project_task":
+		if e.tasks == nil {
+			return true, nil
+		}
+		taskRecord, err := e.tasks.GetByID(ctx, scopeID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		if taskRecord.OrganizationID != organizationID {
+			return false, nil
+		}
+		if e.projects == nil {
+			return true, nil
+		}
+		projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return projectRecord.OrganizationID == organizationID && strings.EqualFold(strings.TrimSpace(projectRecord.Status), "active"), nil
+	default:
+		return true, nil
+	}
 }
 
 func resolveTaskBoundExecutionScope(scope workspaceScope, requestedScopeType string, requestedScopeID uuid.UUID, mode string) (string, uuid.UUID) {
