@@ -1770,6 +1770,8 @@ func mapChatError(err error) (int, string, string) {
 		return http.StatusUnprocessableEntity, "message_not_editable", "message is not editable"
 	case errors.Is(err, chat.ErrSessionClosed):
 		return http.StatusConflict, "session_closed", "session is closed"
+	case errors.Is(err, chat.ErrProjectArchived):
+		return http.StatusConflict, "project_archived", "project is archived"
 	case errors.Is(err, chat.ErrForbidden):
 		return http.StatusForbidden, api.ErrCodeForbidden, "forbidden"
 	default:

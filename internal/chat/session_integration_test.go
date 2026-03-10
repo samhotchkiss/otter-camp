@@ -361,6 +361,58 @@ func TestSession_Create_TaskScopeAsyncReusesCanonicalNonBlankSessionEX294(t *tes
 	}
 }
 
+func TestSession_Create_TaskScopeAsyncRejectsArchivedProjectSessions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	svc := newIntegrationService(t, pool, nil)
+	projectRepo := repo.NewProjectRepo(pool)
+	sessionRepo := repo.NewChatSessionRepo(pool)
+
+	execution := seedChatServiceFlowNodeExecution(t, ctx, pool, org.ID)
+	taskRecord, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, execution.TaskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if err := projectRepo.Archive(ctx, taskRecord.ProjectID); err != nil {
+		t.Fatalf("Archive project: %v", err)
+	}
+	stale, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        execution.TaskID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"chat-session-test","kind":"stale"}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale archived task session: %v", err)
+	}
+
+	created, err := svc.CreateSession(ctx, CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        execution.TaskID,
+		Mode:           "async",
+	})
+	if !errors.Is(err, ErrProjectArchived) {
+		t.Fatalf("CreateSession error = %v, want ErrProjectArchived", err)
+	}
+	if created != nil {
+		t.Fatalf("CreateSession returned %+v, want nil on archived project", created)
+	}
+
+	stored, err := sessionRepo.GetByID(ctx, stale.ID)
+	if err != nil {
+		t.Fatalf("GetByID stale archived task session: %v", err)
+	}
+	if stored.Status != "active" {
+		t.Fatalf("stale archived session status = %q, want unchanged active legacy row", stored.Status)
+	}
+}
+
 func TestSession_PerNodeAsync_AutoCreated(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

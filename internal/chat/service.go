@@ -32,6 +32,7 @@ var (
 	ErrMessageNotEditable      = errors.New("message is not editable")
 	ErrInvalidStatusTransition = errors.New("invalid status transition")
 	ErrSessionClosed           = errors.New("session is closed")
+	ErrProjectArchived         = errors.New("project is archived")
 	ErrForbidden               = errors.New("forbidden")
 )
 
@@ -384,6 +385,9 @@ func (s *service) CreateSession(ctx context.Context, input CreateSessionInput) (
 	mode := normalizeSessionMode(input.Mode)
 	if mode == "" {
 		return nil, fmt.Errorf("invalid mode")
+	}
+	if err := s.ensureProjectActiveForScope(ctx, scopeType, input.ScopeID, orgID); err != nil {
+		return nil, err
 	}
 
 	if mode == "sync" {
@@ -1098,6 +1102,14 @@ func (s *service) ensureProjectNotPausedForSession(ctx context.Context, session 
 	return s.ensureProjectNotPausedForScope(ctx, session.ScopeType, session.ScopeID, session.OrganizationID)
 }
 
+func (s *service) ensureProjectActiveForScope(ctx context.Context, scopeType string, scopeID, organizationID uuid.UUID) error {
+	projectID, err := s.projectIDForScope(ctx, scopeType, scopeID, organizationID)
+	if err != nil || projectID == nil || *projectID == uuid.Nil {
+		return err
+	}
+	return s.ensureProjectActiveByID(ctx, *projectID, organizationID)
+}
+
 func (s *service) ensureProjectNotPausedForScope(ctx context.Context, scopeType string, scopeID, organizationID uuid.UUID) error {
 	projectID, err := s.projectIDForScope(ctx, scopeType, scopeID, organizationID)
 	if err != nil || projectID == nil || *projectID == uuid.Nil {
@@ -1127,6 +1139,24 @@ func (s *service) projectIDForScope(ctx context.Context, scopeType string, scope
 }
 
 func (s *service) ensureProjectNotPausedByID(ctx context.Context, projectID, organizationID uuid.UUID) error {
+	if err := s.ensureProjectActiveByID(ctx, projectID, organizationID); err != nil {
+		return err
+	}
+	if s.projects == nil || projectID == uuid.Nil {
+		return nil
+	}
+	projectRecord, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	pauseState := projectpause.Parse(projectRecord.Settings)
+	if !pauseState.IsPaused {
+		return nil
+	}
+	return projectpause.NewError(pauseState.Reason)
+}
+
+func (s *service) ensureProjectActiveByID(ctx context.Context, projectID, organizationID uuid.UUID) error {
 	if s.projects == nil || projectID == uuid.Nil {
 		return nil
 	}
@@ -1137,11 +1167,10 @@ func (s *service) ensureProjectNotPausedByID(ctx context.Context, projectID, org
 	if projectRecord.OrganizationID != organizationID {
 		return repo.ErrNotFound
 	}
-	pauseState := projectpause.Parse(projectRecord.Settings)
-	if !pauseState.IsPaused {
-		return nil
+	if strings.EqualFold(strings.TrimSpace(projectRecord.Status), "archived") {
+		return ErrProjectArchived
 	}
-	return projectpause.NewError(pauseState.Reason)
+	return nil
 }
 
 func (s *service) UpdateMessageStatus(ctx context.Context, messageID uuid.UUID, newStatus, errorMsg string) error {
