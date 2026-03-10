@@ -7200,6 +7200,222 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenPersistedSetupDoesNotCrea
 	)
 }
 
+func TestTurnEngineIntegrationProjectBootstrapPreflightStopsRacedPlanningArtifactTurn(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: staff the project, create initial tasks, and attach flow templates.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	projectRecord := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	workspaceRoot, err := workspace.ProjectRoot(fixture.engine.dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("ProjectRoot: %v", err)
+	}
+	artifactRel := "planning/prd-spec/oc-1-raced-parent-artifact.md"
+	artifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
+	if err := os.Remove(artifactAbs); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remove stale parent planning artifact: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "bootstrap.setup.persist", Tier: "tier1"},
+		{Name: "file.write", Tier: "tier1"},
+	}}
+
+	modelCalls := 0
+	artifactTurnArmed := false
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-race-preflight",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			if !artifactTurnArmed {
+				return ModelResponse{Content: "Bootstrap setup is now persisted in project records."}, nil
+			}
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "raced-parent-artifact",
+				Name: "file.write",
+				Tier: "tier1",
+				Arguments: map[string]any{
+					"path":    artifactRel,
+					"content": "# Parent PRD artifact\n\nThis should never be written once bootstrap is known incomplete.\n",
+				},
+			}}}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		switch call.Name {
+		case "bootstrap.setup.persist":
+			if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+				AgentID:        pmAgent.ID,
+				ProjectID:      project.ID,
+				Role:           "pm",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			}); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+			description := "Initial scoped bootstrap workstream"
+			taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+				OrganizationID:  fixture.org.ID,
+				ProjectID:       project.ID,
+				Title:           "Define the first execution slice",
+				Description:     &description,
+				WorkStatus:      "draft",
+				FlowTemplateID:  &template.ID,
+				AssignedAgentID: &pmAgent.ID,
+				CreatedByType:   "agent",
+				CreatedByID:     &lori.ID,
+			})
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"pm_agent_id":      pmAgent.ID.String(),
+					"task_id":          taskRecord.ID.String(),
+					"flow_template_id": template.ID.String(),
+				},
+			}, nil
+		case "file.write":
+			if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			if err := os.WriteFile(artifactAbs, []byte(stringValue(call.Arguments["content"])), 0o644); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"path": artifactRel}}, nil
+		default:
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+	modelCallsBeforePreflight := modelCalls
+
+	completeBootstrapSetupTasks(t, ctx, fixture.pool, project.ID, "")
+	artifactTurnArmed = true
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if !progress.BootstrapSetupComplete() {
+		t.Fatalf("bootstrap setup complete = false, progress = %+v", progress)
+	}
+	if progress.WaitingForBootstrapGate() {
+		t.Fatalf("bootstrap unexpectedly still waiting for gate before raced continuation, progress = %+v", progress)
+	}
+	continuationMessage, err := fixture.engine.appendProjectBootstrapContinuationMessage(ctx, projectSession.ID, lori.ID, handoff.ID.String(), 1)
+	if err != nil {
+		t.Fatalf("appendProjectBootstrapContinuationMessage: %v", err)
+	}
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	loriAgent, err := fixture.engine.agents.GetByID(ctx, lori.ID)
+	if err != nil {
+		t.Fatalf("GetByID lori agent: %v", err)
+	}
+	turnRecord, _, err := fixture.engine.turns.CreateForMessageAttempt(ctx, projectSession.ID, lori.ID, continuationMessage.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt continuation: %v", err)
+	}
+	startedTurn, started, err := fixture.engine.startInboundMessageTurn(ctx, turnRecord)
+	if err != nil {
+		t.Fatalf("startInboundMessageTurn continuation: %v", err)
+	}
+	if !started {
+		t.Fatal("expected raced continuation turn to start")
+	}
+	handled, err := fixture.engine.handleProjectBootstrapPreflight(ctx, &turnRuntime{
+		session:          sessionSnapshot,
+		agent:            loriAgent,
+		turn:             startedTurn,
+		initialMessageID: continuationMessage.ID,
+		startedAt:        fixture.engine.turnStartTime(startedTurn),
+	})
+	if err != nil {
+		t.Fatalf("handleProjectBootstrapPreflight: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected raced bootstrap continuation to be blocked by bootstrap preflight")
+	}
+
+	if modelCalls != modelCallsBeforePreflight {
+		t.Fatalf("model calls = %d, want %d because raced parent planning turn must fail in bootstrap preflight before an extra model round", modelCalls, modelCallsBeforePreflight)
+	}
+	if _, err := os.Stat(artifactAbs); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("parent planning artifact stat err = %v, want not exists", err)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) == 0 {
+		t.Fatal("expected bootstrap turns")
+	}
+	if turns[len(turns)-1].Status != "failed" {
+		t.Fatalf("raced bootstrap turn status = %q, want failed", turns[len(turns)-1].Status)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.ValidationFailureClass != projectBootstrapFailureFirstWaveExecution {
+		t.Fatalf("bootstrap validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureFirstWaveExecution)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if storedProject.Status != "archived" {
+		t.Fatalf("project status = %q, want archived", storedProject.Status)
+	}
+	assertAutomaticFailureState(
+		t,
+		storedProject,
+		projectFailureActionArchive,
+		projectFailureCategoryBootstrap,
+		projectBootstrapFailureFirstWaveExecution,
+		projectBootstrapCheckpointFirstWave,
+	)
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsValidationWithoutPersistedAssignments(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
