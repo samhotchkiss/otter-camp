@@ -1690,6 +1690,15 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	}
 	progress.PlannedTaskCount = len(plannedTasks)
 	if len(plannedTasks) == 0 {
+		if progress.AssignmentCount > 0 {
+			progress.PlannedFlowTemplateCount, err = e.countProjectBootstrapCurrentFlowTemplates(ctx, projectID)
+			if err != nil {
+				return projectBootstrapProgress{}, err
+			}
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
+			progress.ValidationFailureReason = "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave"
+		}
 		return progress, nil
 	}
 	for _, task := range bootstrapSetupTasks {
@@ -1777,7 +1786,9 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		}
 	}
 	progress.FirstWaveTaskCount = len(firstWaveTasks)
-	progress.PlannedFlowTemplateCount = len(firstWaveTemplateIDs)
+	if len(firstWaveTemplateIDs) > progress.PlannedFlowTemplateCount {
+		progress.PlannedFlowTemplateCount = len(firstWaveTemplateIDs)
+	}
 	progress.FirstWaveTasks = append(progress.FirstWaveTasks[:0], firstWaveTasks...)
 
 	switch {
@@ -1909,6 +1920,23 @@ func (e *TurnEngine) countProjectBootstrapFirstWaveExecutions(ctx context.Contex
 		WHERE task_id = ANY($1::uuid[])
 		  AND status = 'active'
 	`, taskIDs).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (e *TurnEngine) countProjectBootstrapCurrentFlowTemplates(ctx context.Context, projectID uuid.UUID) (int, error) {
+	if e == nil || e.pool == nil || projectID == uuid.Nil {
+		return 0, nil
+	}
+
+	var count int
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_template
+		WHERE project_id = $1
+		  AND is_current = true
+	`, projectID).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -2230,6 +2258,9 @@ func projectBootstrapFailureCheckpoint(progress projectBootstrapProgress, failur
 	case projectBootstrapFailureCompoundParent, projectBootstrapFailureFirstWaveSize, projectBootstrapFailureSetupTaskScope, projectBootstrapFailureSetupTaskChildren:
 		if progress.PlannedTaskCount > 0 {
 			return projectBootstrapCheckpointTaskTree
+		}
+		if progress.PlannedFlowTemplateCount > 0 || progress.AssignmentCount > 0 {
+			return projectBootstrapCheckpointFirstWave
 		}
 		return projectBootstrapCheckpointProjectCreated
 	case projectBootstrapFailureRepoBinding, projectBootstrapFailureFirstWaveFlow:
