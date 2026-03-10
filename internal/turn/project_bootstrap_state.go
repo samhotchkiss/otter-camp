@@ -299,9 +299,13 @@ func projectBootstrapValidationFindings(state projectBootstrapState) []projectBo
 		finding.Category = projectBootstrapFindingCategoryExecutionShape
 		finding.Code = "project_assignments_missing"
 	case projectBootstrapFailureCompoundParent:
-		if strings.Contains(strings.ToLower(finding.Summary), "entered execution") {
+		summary := strings.ToLower(finding.Summary)
+		if strings.Contains(summary, "entered execution") {
 			finding.Category = projectBootstrapFindingCategoryExecutionShape
 			finding.Code = "parent_task_executed_with_children"
+		} else if strings.Contains(summary, "did not emit any executable non-bootstrap project tasks") {
+			finding.Category = projectBootstrapFindingCategoryExecutionShape
+			finding.Code = "first_wave_tasks_missing"
 		} else {
 			finding.Category = projectBootstrapFindingCategoryTaskSize
 			finding.Code = "bounded_child_tasks_required"

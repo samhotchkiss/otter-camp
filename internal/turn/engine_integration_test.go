@@ -32,6 +32,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
@@ -8977,6 +8978,249 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationForNonRunnableFirst
 	if !strings.Contains(bootstrapState.ValidationFailureReason, "work -> review -> completion path") {
 		t.Fatalf("bootstrap validation_failure_reason = %q, want executable-flow detail", bootstrapState.ValidationFailureReason)
 	}
+}
+
+func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupPersistsWithoutExecutableFirstWaveTasks(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: staff the project, persist setup, and open the first execution wave.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-v5-shape",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is persisted."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+		assignments := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+		for _, item := range []repo.AgentProjectAssignment{
+			{
+				AgentID:        pmAgent.ID,
+				ProjectID:      project.ID,
+				Role:           "pm",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+			{
+				AgentID:        workerAgent.ID,
+				ProjectID:      project.ID,
+				Role:           "worker",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+		} {
+			if _, err := assignments.Assign(ctx, item); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+		}
+
+		gateTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByProjectAndNumber(ctx, project.ID, 1)
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		if gateTask.FlowTemplateID == nil || *gateTask.FlowTemplateID == uuid.Nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "bootstrap gate missing flow template"}, nil
+		}
+		taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+		for i := 0; i < 8; i++ {
+			description := fmt.Sprintf("Extra bounded bootstrap setup checkpoint %d.", i+1)
+			metadata := mustJSON(t, map[string]any{
+				"bootstrap_setup_task":         true,
+				"bootstrap_step_slug":          fmt.Sprintf("extra-v5-setup-%d", i+1),
+				"bootstrap_step_order":         100 + i + 1,
+				"decomposition_parent_task_id": gateTask.ID.String(),
+				"workstream_index":             100 + i + 1,
+			})
+			taskRecord, err := taskRepo.Create(ctx, repo.ProjectTask{
+				OrganizationID:  fixture.org.ID,
+				ProjectID:       project.ID,
+				Title:           fmt.Sprintf("Extra setup checkpoint %d", i+1),
+				Description:     &description,
+				WorkStatus:      "draft",
+				FlowTemplateID:  gateTask.FlowTemplateID,
+				AssignedAgentID: &pmAgent.ID,
+				Metadata:        metadata,
+				CreatedByType:   "agent",
+				CreatedByID:     &lori.ID,
+			})
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			gateTask.Metadata = taskdecomp.AppendChildTaskID(gateTask.Metadata, taskRecord.ID)
+		}
+		if _, err := taskRepo.Update(ctx, gateTask); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":     pmAgent.ID.String(),
+				"worker_agent_id": workerAgent.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	var assignmentCount int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM agent_project_assignment
+		WHERE project_id = $1
+		  AND is_active = true
+	`, project.ID).Scan(&assignmentCount); err != nil {
+		t.Fatalf("count project assignments: %v", err)
+	}
+	if assignmentCount != 2 {
+		t.Fatalf("project assignments = %d, want 2", assignmentCount)
+	}
+
+	var taskCount int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task
+		WHERE project_id = $1
+	`, project.ID).Scan(&taskCount); err != nil {
+		t.Fatalf("count project tasks: %v", err)
+	}
+	if taskCount != 16 {
+		t.Fatalf("project tasks = %d, want 16", taskCount)
+	}
+
+	var flowTemplateCount int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_template
+		WHERE project_id = $1
+		  AND is_current = true
+	`, project.ID).Scan(&flowTemplateCount); err != nil {
+		t.Fatalf("count project flow templates: %v", err)
+	}
+	if flowTemplateCount != 1 {
+		t.Fatalf("project flow templates = %d, want 1", flowTemplateCount)
+	}
+
+	var flowExecutionCount int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_node_execution fne
+		JOIN project_task pt ON pt.id = fne.task_id
+		WHERE pt.project_id = $1
+		  AND fne.status = 'active'
+	`, project.ID).Scan(&flowExecutionCount); err != nil {
+		t.Fatalf("count active flow executions: %v", err)
+	}
+	if flowExecutionCount != 0 {
+		t.Fatalf("active flow executions = %d, want 0", flowExecutionCount)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForProject(t, ctx, fixture.pool, project.ID); jobs != 0 {
+		t.Fatalf("runnable project bootstrap jobs = %d, want 0 after explicit bootstrap failure", jobs)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.ValidationStatus != projectBootstrapValidationFailed {
+		t.Fatalf("bootstrap validation_status = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationFailed)
+	}
+	if bootstrapState.AssignmentCount != 2 {
+		t.Fatalf("bootstrap assignment_count = %d, want 2", bootstrapState.AssignmentCount)
+	}
+	if bootstrapState.PlannedTaskCount != 0 {
+		t.Fatalf("bootstrap planned_task_count = %d, want 0 because only bootstrap setup tasks exist", bootstrapState.PlannedTaskCount)
+	}
+	if bootstrapState.PlannedFlowTemplateCount != 1 {
+		t.Fatalf("bootstrap planned_flow_template_count = %d, want 1", bootstrapState.PlannedFlowTemplateCount)
+	}
+	if bootstrapState.FirstWaveTaskCount != 0 || bootstrapState.FirstWaveExecutionCount != 0 || bootstrapState.FirstWaveJobCount != 0 {
+		t.Fatalf("bootstrap first-wave counts = %+v, want zero", bootstrapState)
+	}
+	if bootstrapState.FailureClass != projectBootstrapFailureCompoundParent {
+		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureCompoundParent)
+	}
+	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveSelected {
+		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveSelected)
+	}
+	if checkpoint := mustProjectBootstrapCheckpoint(t, bootstrapState, projectBootstrapCheckpointFirstWaveSelected); checkpoint.Status != projectBootstrapCheckpointStatusFailed {
+		t.Fatalf("first_wave_selected checkpoint status = %q, want %q", checkpoint.Status, projectBootstrapCheckpointStatusFailed)
+	}
+	if len(bootstrapState.ValidationFindings) != 1 {
+		t.Fatalf("bootstrap validation_findings = %d, want 1", len(bootstrapState.ValidationFindings))
+	}
+	if bootstrapState.ValidationFindings[0].Category != projectBootstrapFindingCategoryExecutionShape {
+		t.Fatalf("bootstrap validation finding category = %q, want %q", bootstrapState.ValidationFindings[0].Category, projectBootstrapFindingCategoryExecutionShape)
+	}
+	if bootstrapState.ValidationFindings[0].Code != "first_wave_tasks_missing" {
+		t.Fatalf("bootstrap validation finding code = %q, want %q", bootstrapState.ValidationFindings[0].Code, "first_wave_tasks_missing")
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if storedProject.Status != "archived" {
+		t.Fatalf("project status = %q, want archived", storedProject.Status)
+	}
+	assertAutomaticFailureState(
+		t,
+		storedProject,
+		projectFailureActionArchive,
+		projectFailureCategoryBootstrap,
+		projectBootstrapFailureCompoundParent,
+		projectBootstrapCheckpointFirstWave,
+	)
 }
 
 func TestTurnEngineIntegrationProjectBootstrapFailsExplicitlyAfterRepeatedNoProgressTurns(t *testing.T) {
