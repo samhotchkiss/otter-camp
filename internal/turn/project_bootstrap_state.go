@@ -79,6 +79,8 @@ type projectBootstrapProjectState struct {
 }
 
 func projectBootstrapStateWithDerived(previous, current projectBootstrapState) projectBootstrapState {
+	previous = normalizeProjectBootstrapStateCounts(previous)
+	current = normalizeProjectBootstrapStateCounts(current)
 	if current.StartedAt == nil {
 		current.StartedAt = cloneTimePointer(previous.StartedAt)
 	}
@@ -173,7 +175,7 @@ func projectBootstrapReachedCheckpoints(state projectBootstrapState) map[string]
 		projectBootstrapCheckpointFlowTemplatesPersisted: state.PlannedFlowTemplateCount > 0,
 		projectBootstrapCheckpointFirstWaveSelected:      state.FirstWaveTaskCount > 0,
 		projectBootstrapCheckpointFirstWaveExecutions:    state.FirstWaveExecutionCount > 0,
-		projectBootstrapCheckpointFirstWaveJobsClaimed:   state.FirstWaveKickoffCount > 0,
+		projectBootstrapCheckpointFirstWaveJobsClaimed:   state.FirstWaveJobCount > 0,
 	}
 	return reached
 }
@@ -352,7 +354,7 @@ func projectBootstrapProjectStateSnapshot(state projectBootstrapState) projectBo
 		PlannedFlowTemplateCount: state.PlannedFlowTemplateCount,
 		FirstWaveTaskCount:       state.FirstWaveTaskCount,
 		FirstWaveExecutionCount:  state.FirstWaveExecutionCount,
-		FirstWaveJobCount:        state.FirstWaveKickoffCount,
+		FirstWaveJobCount:        state.FirstWaveJobCount,
 		FailureClass:             strings.TrimSpace(state.FailureClass),
 		FailureReason:            strings.TrimSpace(state.FailureReason),
 		UpdatedAt:                cloneTimePointer(state.UpdatedAt),

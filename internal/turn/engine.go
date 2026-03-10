@@ -1017,7 +1017,7 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		progress.FirstWaveTaskCount > state.FirstWaveTaskCount ||
 		progress.FirstWavePromotedCount > state.FirstWavePromotedCount ||
 		progress.FirstWaveExecutionCount > state.FirstWaveExecutionCount ||
-		progress.FirstWaveKickoffCount > state.FirstWaveKickoffCount
+		progress.FirstWaveJobCount > state.FirstWaveJobCount
 	state.Status = projectBootstrapStatusActive
 	state.LastTurnID = turnID.String()
 	state.BootstrapTaskID = progress.BootstrapTaskID.String()
@@ -1028,7 +1028,7 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
 	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
 	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
-	state.FirstWaveKickoffCount = progress.FirstWaveKickoffCount
+	state.setFirstWaveJobCount(progress.FirstWaveJobCount)
 	state.ValidationStatus = progress.ValidationStatus
 	state.ValidationFailureClass = progress.ValidationFailureClass
 	state.ValidationFailureReason = progress.ValidationFailureReason
@@ -1132,7 +1132,7 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 		}
 		queuedAny = true
 	}
-	if !queuedAny && progress.FirstWavePromotedCount == 0 && progress.FirstWaveExecutionCount == 0 && progress.FirstWaveKickoffCount == 0 {
+	if !queuedAny && progress.FirstWavePromotedCount == 0 && progress.FirstWaveExecutionCount == 0 && progress.FirstWaveJobCount == 0 {
 		progress.ValidationStatus = projectBootstrapValidationFailed
 		progress.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
 		progress.ValidationFailureReason = buildProjectBootstrapFirstWaveExecutionFailureReason(progress)
@@ -1215,7 +1215,7 @@ type projectBootstrapProgress struct {
 	FirstWaveTaskCount       int
 	FirstWavePromotedCount   int
 	FirstWaveExecutionCount  int
-	FirstWaveKickoffCount    int
+	FirstWaveJobCount        int
 	ValidationStatus         string
 	ValidationFailureClass   string
 	ValidationFailureReason  string
@@ -1230,7 +1230,7 @@ func (p projectBootstrapProgress) Materialized() bool {
 		p.FirstWaveTaskCount > 0 &&
 		p.FirstWavePromotedCount > 0 &&
 		p.FirstWaveExecutionCount > 0 &&
-		p.FirstWaveKickoffCount > 0
+		p.FirstWaveJobCount > 0
 }
 
 func (p projectBootstrapProgress) ValidationFailed() bool {
@@ -1253,6 +1253,7 @@ type projectBootstrapState struct {
 	FirstWaveTaskCount       int                                 `json:"first_wave_task_count,omitempty"`
 	FirstWavePromotedCount   int                                 `json:"first_wave_promoted_count,omitempty"`
 	FirstWaveExecutionCount  int                                 `json:"first_wave_execution_count,omitempty"`
+	FirstWaveJobCount        int                                 `json:"first_wave_job_count,omitempty"`
 	FirstWaveKickoffCount    int                                 `json:"first_wave_kickoff_count,omitempty"`
 	ValidationStatus         string                              `json:"validation_status,omitempty"`
 	ValidationFailureClass   string                              `json:"validation_failure_class,omitempty"`
@@ -1271,6 +1272,24 @@ type projectBootstrapState struct {
 type projectBootstrapWatchdog struct {
 	Timeout   time.Duration
 	Remaining time.Duration
+}
+
+func normalizeProjectBootstrapStateCounts(state projectBootstrapState) projectBootstrapState {
+	switch {
+	case state.FirstWaveJobCount == 0 && state.FirstWaveKickoffCount > 0:
+		state.FirstWaveJobCount = state.FirstWaveKickoffCount
+	case state.FirstWaveKickoffCount == 0 && state.FirstWaveJobCount > 0:
+		state.FirstWaveKickoffCount = state.FirstWaveJobCount
+	}
+	return state
+}
+
+func (s *projectBootstrapState) setFirstWaveJobCount(count int) {
+	if s == nil {
+		return
+	}
+	s.FirstWaveJobCount = count
+	s.FirstWaveKickoffCount = count
 }
 
 type projectBootstrapTimeoutError struct {
@@ -1419,7 +1438,7 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	if err != nil {
 		return projectBootstrapProgress{}, err
 	}
-	progress.FirstWaveKickoffCount, err = e.countProjectBootstrapFirstWaveKickoffs(ctx, firstWaveTaskIDs)
+	progress.FirstWaveJobCount, err = e.countProjectBootstrapFirstWaveJobs(ctx, firstWaveTaskIDs)
 	if err != nil {
 		return projectBootstrapProgress{}, err
 	}
@@ -1505,7 +1524,7 @@ func (e *TurnEngine) countProjectBootstrapFirstWaveExecutions(ctx context.Contex
 	return count, nil
 }
 
-func (e *TurnEngine) countProjectBootstrapFirstWaveKickoffs(ctx context.Context, taskIDs []uuid.UUID) (int, error) {
+func (e *TurnEngine) countProjectBootstrapFirstWaveJobs(ctx context.Context, taskIDs []uuid.UUID) (int, error) {
 	if e == nil || e.pool == nil || len(taskIDs) == 0 {
 		return 0, nil
 	}
@@ -1513,13 +1532,13 @@ func (e *TurnEngine) countProjectBootstrapFirstWaveKickoffs(ctx context.Context,
 	var count int
 	if err := e.pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT s.scope_id)
-		FROM chat_session s
-		JOIN chat_message m ON m.session_id = s.id
-		WHERE s.scope_type = 'project_task'
+		FROM job_queue jq
+		JOIN chat_session s ON s.id::text = jq.payload->>'session_id'
+		WHERE jq.job_type = 'agent_turn'
+		  AND jq.status IN ('pending', 'claimed')
+		  AND s.scope_type = 'project_task'
 		  AND s.mode = 'async'
 		  AND s.scope_id = ANY($1::uuid[])
-		  AND m.role = 'user'
-		  AND COALESCE(m.metadata->>'source', '') = 'task_queue_processor'
 	`, taskIDs).Scan(&count); err != nil {
 		return 0, err
 	}
@@ -1552,8 +1571,8 @@ func buildProjectBootstrapFirstWaveExecutionFailureReason(progress projectBootst
 		return "kickoff validation failed: persisted setup created assignments, scoped child tasks, and runnable flow templates, but no first-wave child task left draft or entered queued execution"
 	case progress.FirstWaveExecutionCount == 0:
 		return "kickoff validation failed: first-wave child tasks left draft, but no flow_node_execution rows were created, so bootstrap never entered runnable execution"
-	case progress.FirstWaveKickoffCount == 0:
-		return "kickoff validation failed: first-wave child tasks entered flow execution, but no async kickoff message was emitted for the task sessions"
+	case progress.FirstWaveJobCount == 0:
+		return "kickoff validation failed: first-wave child tasks entered flow execution, but no runnable agent_turn jobs were created for the task sessions"
 	default:
 		return "kickoff validation failed: first-wave execution never materialized after persisted setup was created"
 	}
@@ -1597,6 +1616,7 @@ func (e *TurnEngine) updateProjectBootstrapState(ctx context.Context, session *c
 		return nil
 	}
 	previous := projectBootstrapStateFromMetadata(session.Metadata)
+	state = normalizeProjectBootstrapStateCounts(state)
 	state = projectBootstrapStateWithDerived(previous, state)
 	metadata, err := projectBootstrapMetadataJSON(session.Metadata, state)
 	if err != nil {
@@ -1638,6 +1658,7 @@ func projectBootstrapStateFromMetadata(metadata json.RawMessage) projectBootstra
 	if err := json.Unmarshal(payload, &state); err != nil {
 		return projectBootstrapState{}
 	}
+	state = normalizeProjectBootstrapStateCounts(state)
 	return projectBootstrapStateWithDerived(state, state)
 }
 
@@ -4910,7 +4931,7 @@ func (e *TurnEngine) handleProjectBootstrapGuardrailFailure(ctx context.Context,
 	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
 	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
 	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
-	state.FirstWaveKickoffCount = progress.FirstWaveKickoffCount
+	state.setFirstWaveJobCount(progress.FirstWaveJobCount)
 	state.ValidationStatus = projectBootstrapValidationFailed
 	state.ValidationFailureClass = projectBootstrapFailureGuardrail
 	state.ValidationFailureReason = buildProjectBootstrapGuardrailFailureReason(reason)
@@ -4980,7 +5001,7 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
 	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
 	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
-	state.FirstWaveKickoffCount = progress.FirstWaveKickoffCount
+	state.setFirstWaveJobCount(progress.FirstWaveJobCount)
 	state.ValidationStatus = projectBootstrapValidationFailed
 	state.ValidationFailureClass = projectBootstrapFailureStalled
 	state.ValidationFailureReason = buildProjectBootstrapWatchdogFailureReason(timeoutErr)
@@ -5064,7 +5085,7 @@ func (e *TurnEngine) handleProjectBootstrapTerminalTurnFailure(ctx context.Conte
 	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
 	state.FirstWavePromotedCount = progress.FirstWavePromotedCount
 	state.FirstWaveExecutionCount = progress.FirstWaveExecutionCount
-	state.FirstWaveKickoffCount = progress.FirstWaveKickoffCount
+	state.setFirstWaveJobCount(progress.FirstWaveJobCount)
 	state.ValidationStatus = projectBootstrapValidationFailed
 	state.ValidationFailureClass = failureClass
 	state.ValidationFailureReason = buildProjectBootstrapTerminalFailureReason(projectBootstrapNextPendingCheckpoint(state), cause)
