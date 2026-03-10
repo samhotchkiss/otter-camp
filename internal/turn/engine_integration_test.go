@@ -6209,6 +6209,20 @@ func TestTurnEngineIntegrationProjectBootstrapQueuesFollowOnAfterLoriAcknowledge
 	if projectBootstrapState.LastSuccessfulCheckpoint != projectBootstrapCheckpointProjectCreated {
 		t.Fatalf("project settings bootstrap last_successful_checkpoint = %q, want %q", projectBootstrapState.LastSuccessfulCheckpoint, projectBootstrapCheckpointProjectCreated)
 	}
+
+	report := mustReadBootstrapDoctorArtifactForSession(t, ctx, fixture.pool, projectRecord, projectSession.ID)
+	if !strings.Contains(report, "diagnosis_family: provider_api_failure") {
+		t.Fatalf("bootstrap doctor report missing provider_api classification:\n%s", report)
+	}
+	if !strings.Contains(report, "highest_checkpoint_reached: project_created") {
+		t.Fatalf("bootstrap doctor report missing highest checkpoint:\n%s", report)
+	}
+	if !strings.Contains(report, "assignments: 0") || !strings.Contains(report, "runnable_jobs: 0") {
+		t.Fatalf("bootstrap doctor report missing persisted zero counts:\n%s", report)
+	}
+	if !strings.Contains(report, "failure_class: provider_auth_failed") {
+		t.Fatalf("bootstrap doctor report missing provider failure_class:\n%s", report)
+	}
 }
 
 func TestTurnEngineIntegrationProjectBootstrapPromotesFirstWaveBeforeBootstrapGateCompletes(t *testing.T) {
@@ -8691,6 +8705,18 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 	if jobs := countRunnableAgentTurnJobsForProject(t, ctx, fixture.pool, restart2Project.ID); jobs != 0 {
 		t.Fatalf("runnable bootstrap agent_turn jobs after retry exhaustion = %d, want 0", jobs)
 	}
+
+	finalSession := mustFindProjectAsyncSessionAnyStatus(t, ctx, fixture.pool, fixture.org.ID, finalArchived.ID)
+	report := mustReadBootstrapDoctorArtifactForSession(t, ctx, fixture.pool, finalArchived, finalSession.ID)
+	if !strings.Contains(report, fmt.Sprintf("retry_budget: %d", defaultProjectBootstrapRestartRetryBudget)) {
+		t.Fatalf("bootstrap doctor report missing retry budget:\n%s", report)
+	}
+	if !strings.Contains(report, fmt.Sprintf("retry_attempt_count: %d", defaultProjectBootstrapRestartRetryBudget)) {
+		t.Fatalf("bootstrap doctor report missing retry attempt count:\n%s", report)
+	}
+	if !strings.Contains(report, "history:") || !strings.Contains(report, "failure_class=stalled") {
+		t.Fatalf("bootstrap doctor report missing retry history detail:\n%s", report)
+	}
 }
 
 func TestTurnEngineIntegrationProjectBootstrapFailsValidationForBroadParentOnlySetup(t *testing.T) {
@@ -11155,6 +11181,9 @@ func enableTurnEngineUserMessageEnqueue(t *testing.T, fixture *integrationFixtur
 func newIntegrationFixture(t *testing.T) *integrationFixture {
 	t.Helper()
 	ctx := context.Background()
+	if _, ok := os.LookupEnv("OTTERCAMP_DATA_DIR"); !ok {
+		t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+	}
 	pool := testdb.New(t)
 
 	org := mustCreateOrg(t, ctx, pool)
@@ -11238,6 +11267,62 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 		dispatcher:  dispatcher,
 		runCanceler: runCanceler,
 	}
+}
+
+func mustReadBootstrapDoctorArtifactForSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool, project repo.Project, sessionID uuid.UUID) string {
+	t.Helper()
+
+	artifacts, err := repo.NewChatArtifactRepo(pool).ListBySession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ListBySession chat artifacts: %v", err)
+	}
+	for i := len(artifacts) - 1; i >= 0; i-- {
+		item := artifacts[i]
+		if item.ArtifactType != projectBootstrapDoctorArtifactType {
+			continue
+		}
+		if item.Filename == nil || !strings.HasPrefix(strings.TrimSpace(*item.Filename), "bootstrap-doctor-") {
+			continue
+		}
+		if item.StorageKey == nil || strings.TrimSpace(*item.StorageKey) == "" {
+			t.Fatalf("bootstrap doctor artifact missing storage_key: %+v", item)
+		}
+		projectRoot, err := workspace.ProjectRoot("", project.Slug)
+		if err != nil {
+			t.Fatalf("workspace.ProjectRoot: %v", err)
+		}
+		payload, err := os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(strings.TrimSpace(*item.StorageKey))))
+		if err != nil {
+			t.Fatalf("read bootstrap doctor artifact: %v", err)
+		}
+		return string(payload)
+	}
+	t.Fatalf("missing bootstrap doctor artifact for session %s", sessionID)
+	return ""
+}
+
+func mustFindProjectAsyncSessionAnyStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, organizationID, projectID uuid.UUID) repo.ChatSession {
+	t.Helper()
+
+	sessions, err := repo.NewChatSessionRepo(pool).ListByOrg(ctx, organizationID)
+	if err != nil {
+		t.Fatalf("ListByOrg sessions: %v", err)
+	}
+	var latest *repo.ChatSession
+	for i := range sessions {
+		item := sessions[i]
+		if item.ScopeID != projectID || !strings.EqualFold(strings.TrimSpace(item.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(item.Mode), "async") {
+			continue
+		}
+		if latest == nil || item.CreatedAt.After(latest.CreatedAt) {
+			copyItem := item
+			latest = &copyItem
+		}
+	}
+	if latest == nil {
+		t.Fatalf("missing async project session for project %s", projectID)
+	}
+	return *latest
 }
 
 type persistedRecoveryResumeFixture struct {

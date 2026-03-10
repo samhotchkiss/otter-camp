@@ -1177,9 +1177,14 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
 			return err
 		}
-		_, _ = e.appendSystemMessage(ctx, turnID, session.ID, buildProjectBootstrapAutomaticFailureMessage(record))
+		reportMessage, _ := e.appendSystemMessage(ctx, turnID, session.ID, buildProjectBootstrapAutomaticFailureMessage(record))
 		if err := e.applyProjectAutomaticFailure(ctx, session.ScopeID, record); err != nil {
 			return err
+		}
+		if reportMessage != nil {
+			if err := e.emitProjectBootstrapDoctorReport(ctx, session.ScopeID, session.ID, reportMessage.ID, state); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -1245,10 +1250,14 @@ func (e *TurnEngine) failProjectBootstrapValidation(ctx context.Context, rt *tur
 	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, state.FailureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
 		return failErr
 	}
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record)); err != nil {
+	reportMessage, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record))
+	if err != nil {
 		return err
 	}
-	return e.applyProjectAutomaticFailure(ctx, rt.session.ScopeID, record)
+	if err := e.applyProjectAutomaticFailure(ctx, rt.session.ScopeID, record); err != nil {
+		return err
+	}
+	return e.emitProjectBootstrapDoctorReport(ctx, rt.session.ScopeID, rt.session.ID, reportMessage.ID, state)
 }
 
 func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Context, progress projectBootstrapProgress) (projectBootstrapProgress, error) {
@@ -1453,7 +1462,14 @@ func (e *TurnEngine) refreshProjectBootstrapSessionState(ctx context.Context, se
 		if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
 			return err
 		}
-		return e.applyProjectAutomaticFailure(ctx, session.ScopeID, record)
+		reportMessage, err := e.appendSystemMessage(ctx, uuid.Nil, session.ID, buildProjectBootstrapAutomaticFailureMessage(record))
+		if err != nil {
+			return err
+		}
+		if err := e.applyProjectAutomaticFailure(ctx, session.ScopeID, record); err != nil {
+			return err
+		}
+		return e.emitProjectBootstrapDoctorReport(ctx, session.ScopeID, session.ID, reportMessage.ID, state)
 	}
 	return e.updateProjectBootstrapState(ctx, session, state)
 }
@@ -4558,10 +4574,14 @@ func (e *TurnEngine) handleProjectBootstrapUnhandledFailure(ctx context.Context,
 	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, record.FailureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
 		return true, failErr
 	}
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record)); err != nil {
+	reportMessage, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record))
+	if err != nil {
 		return true, err
 	}
 	if err := e.applyProjectAutomaticFailure(ctx, rt.session.ScopeID, record); err != nil {
+		return true, err
+	}
+	if err := e.emitProjectBootstrapDoctorReport(ctx, rt.session.ScopeID, rt.session.ID, reportMessage.ID, state); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -5891,13 +5911,17 @@ func (e *TurnEngine) handleProjectBootstrapGuardrailFailure(ctx context.Context,
 	if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
 		return true, err
 	}
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record)); err != nil {
+	reportMessage, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record))
+	if err != nil {
 		return true, err
 	}
 	if err := e.completeTurn(ctx, rt); err != nil {
 		return true, err
 	}
 	if err := e.applyProjectAutomaticFailure(ctx, rt.session.ScopeID, record); err != nil {
+		return true, err
+	}
+	if err := e.emitProjectBootstrapDoctorReport(ctx, rt.session.ScopeID, rt.session.ID, reportMessage.ID, state); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -5976,10 +6000,14 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, state.FailureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
 		return true, failErr
 	}
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record)); err != nil {
+	reportMessage, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapAutomaticFailureMessage(record))
+	if err != nil {
 		return true, err
 	}
 	if err := e.applyProjectAutomaticFailure(ctx, rt.session.ScopeID, record); err != nil {
+		return true, err
+	}
+	if err := e.emitProjectBootstrapDoctorReport(ctx, rt.session.ScopeID, rt.session.ID, reportMessage.ID, state); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -6059,7 +6087,11 @@ func (e *TurnEngine) handleProjectBootstrapTerminalTurnFailure(ctx context.Conte
 	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, state.FailureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
 		return true, failErr
 	}
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapFailureMessage(state.FailureReason)); err != nil {
+	reportMessage, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapFailureMessage(state.FailureReason))
+	if err != nil {
+		return true, err
+	}
+	if err := e.emitProjectBootstrapDoctorReport(ctx, rt.session.ScopeID, rt.session.ID, reportMessage.ID, state); err != nil {
 		return true, err
 	}
 	return true, nil
