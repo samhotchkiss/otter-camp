@@ -47,6 +47,7 @@ const (
 	defaultProjectBootstrapTurnTimeout        = 90 * time.Second
 	defaultProjectBootstrapPromotionTimeout   = 2 * time.Second
 	defaultProjectBootstrapPromotionPollDelay = 25 * time.Millisecond
+	defaultProjectBootstrapRestartRetryBudget = 2
 	defaultListeningEvalDelay                 = 500 * time.Millisecond
 	defaultAutoContinueDelay                  = 2 * time.Second
 	defaultModelRetryBudget                   = 3
@@ -1340,14 +1341,16 @@ type projectBootstrapState struct {
 }
 
 type projectAutomaticFailureRecord struct {
-	Action          string
-	Source          string
-	FailureCategory string
-	FailureClass    string
-	FailurePhase    string
-	LastCheckpoint  string
-	FailureReason   string
-	RecordedAt      time.Time
+	Action                   string
+	Source                   string
+	FailureCategory          string
+	FailureClass             string
+	FailurePhase             string
+	LastCheckpoint           string
+	LastSuccessfulCheckpoint string
+	FailureReason            string
+	SetupPersisted           bool
+	RecordedAt               time.Time
 }
 
 type projectBootstrapWatchdog struct {
@@ -1958,31 +1961,67 @@ func projectBootstrapFailureCheckpoint(progress projectBootstrapProgress, failur
 	}
 }
 
+func projectBootstrapLastSuccessfulCheckpoint(progress projectBootstrapProgress) string {
+	checkpoints := []struct {
+		name    string
+		reached bool
+	}{
+		{name: projectBootstrapCheckpointProjectCreated, reached: true},
+		{name: projectBootstrapCheckpointStaffingPersisted, reached: progress.AssignmentCount > 0},
+		{name: projectBootstrapCheckpointTaskTreePersisted, reached: progress.PlannedTaskCount > 0},
+		{name: projectBootstrapCheckpointFlowTemplatesPersisted, reached: progress.PlannedFlowTemplateCount > 0},
+		{name: projectBootstrapCheckpointFirstWaveSelected, reached: progress.FirstWaveTaskCount > 0},
+		{name: projectBootstrapCheckpointFirstWaveExecutions, reached: progress.FirstWaveExecutionCount > 0},
+		{name: projectBootstrapCheckpointFirstWaveJobsClaimed, reached: progress.FirstWaveJobCount > 0},
+	}
+	last := ""
+	for _, checkpoint := range checkpoints {
+		if !checkpoint.reached {
+			break
+		}
+		last = checkpoint.name
+	}
+	return last
+}
+
+func projectBootstrapSetupPersisted(progress projectBootstrapProgress) bool {
+	return progress.AssignmentCount > 0 ||
+		progress.PlannedTaskCount > 0 ||
+		progress.PlannedFlowTemplateCount > 0 ||
+		progress.FirstWaveTaskCount > 0 ||
+		progress.FirstWaveExecutionCount > 0 ||
+		progress.FirstWaveJobCount > 0
+}
+
 func buildProjectBootstrapAutomaticFailureRecord(progress projectBootstrapProgress, failureCategory, failureClass, failureReason string, now time.Time) projectAutomaticFailureRecord {
 	checkpoint := projectBootstrapFailureCheckpoint(progress, failureClass)
 	return projectAutomaticFailureRecord{
-		Action:          projectFailureActionForProgress(progress, failureCategory),
-		Source:          projectBootstrapSource,
-		FailureCategory: strings.TrimSpace(failureCategory),
-		FailureClass:    strings.TrimSpace(failureClass),
-		FailurePhase:    checkpoint,
-		LastCheckpoint:  checkpoint,
-		FailureReason:   strings.TrimSpace(failureReason),
-		RecordedAt:      now.UTC(),
+		Action:                   projectFailureActionForProgress(progress, failureCategory),
+		Source:                   projectBootstrapSource,
+		FailureCategory:          strings.TrimSpace(failureCategory),
+		FailureClass:             strings.TrimSpace(failureClass),
+		FailurePhase:             checkpoint,
+		LastCheckpoint:           checkpoint,
+		LastSuccessfulCheckpoint: projectBootstrapLastSuccessfulCheckpoint(progress),
+		FailureReason:            strings.TrimSpace(failureReason),
+		SetupPersisted:           projectBootstrapSetupPersisted(progress),
+		RecordedAt:               now.UTC(),
 	}
 }
 
 func buildProjectExecutionFailureRecord(progress projectBootstrapProgress, failureCategory, failureClass, failureReason string, now time.Time) projectAutomaticFailureRecord {
 	checkpoint := projectBootstrapLastCheckpoint(progress)
 	return projectAutomaticFailureRecord{
-		Action:          projectFailureActionPause,
-		Source:          "execution_runtime",
-		FailureCategory: strings.TrimSpace(failureCategory),
-		FailureClass:    strings.TrimSpace(failureClass),
-		FailurePhase:    checkpoint,
-		LastCheckpoint:  checkpoint,
-		FailureReason:   strings.TrimSpace(failureReason),
-		RecordedAt:      now.UTC(),
+		Action:                   projectFailureActionPause,
+		Source:                   "execution_runtime",
+		FailureCategory:          strings.TrimSpace(failureCategory),
+		FailureClass:             strings.TrimSpace(failureClass),
+		FailurePhase:             checkpoint,
+		LastCheckpoint:           checkpoint,
+		LastSuccessfulCheckpoint: projectBootstrapLastSuccessfulCheckpoint(progress),
+		FailureReason:            strings.TrimSpace(failureReason),
+		SetupPersisted:           projectBootstrapSetupPersisted(progress),
+		RecordedAt:               now.UTC(),
 	}
 }
 
@@ -2030,13 +2069,15 @@ func (e *TurnEngine) applyProjectAutomaticFailure(ctx context.Context, projectID
 	projectRepo := repo.NewProjectRepo(e.pool)
 	updated := projectRecord
 	updated.Settings, err = projectfailure.Apply(updated.Settings, projectfailure.State{
-		Action:          record.Action,
-		Source:          record.Source,
-		FailureCategory: record.FailureCategory,
-		FailureClass:    record.FailureClass,
-		FailurePhase:    record.FailurePhase,
-		LastCheckpoint:  record.LastCheckpoint,
-		FailureReason:   record.FailureReason,
+		Action:                   record.Action,
+		Source:                   record.Source,
+		FailureCategory:          record.FailureCategory,
+		FailureClass:             record.FailureClass,
+		FailurePhase:             record.FailurePhase,
+		LastCheckpoint:           record.LastCheckpoint,
+		LastSuccessfulCheckpoint: record.LastSuccessfulCheckpoint,
+		FailureReason:            record.FailureReason,
+		SetupPersisted:           record.SetupPersisted,
 		RecordedAt: func() *time.Time {
 			recordedAt := record.RecordedAt.UTC()
 			return &recordedAt
@@ -2076,7 +2117,7 @@ func (e *TurnEngine) applyProjectAutomaticFailure(ctx context.Context, projectID
 		}
 		_, err = projectService.Pause(ctx, projectRecord.OrganizationID, projectRecord.ID, projectsvc.PauseProjectRequest{
 			Reason:       record.FailureReason,
-			Metadata:     projectfailure.State{Action: record.Action, Source: record.Source, FailureCategory: record.FailureCategory, FailureClass: record.FailureClass, FailurePhase: record.FailurePhase, LastCheckpoint: record.LastCheckpoint, FailureReason: record.FailureReason, RecordedAt: &record.RecordedAt}.JSON(),
+			Metadata:     projectfailure.State{Action: record.Action, Source: record.Source, FailureCategory: record.FailureCategory, FailureClass: record.FailureClass, FailurePhase: record.FailurePhase, LastCheckpoint: record.LastCheckpoint, LastSuccessfulCheckpoint: record.LastSuccessfulCheckpoint, FailureReason: record.FailureReason, SetupPersisted: record.SetupPersisted, RecordedAt: &record.RecordedAt}.JSON(),
 			PausedByType: "system",
 		})
 		return err
