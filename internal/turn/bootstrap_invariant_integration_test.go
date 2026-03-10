@@ -85,6 +85,56 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 			t.Fatalf("runnable first-wave jobs = %d, want 0", result.runnableJobs)
 		}
 	})
+
+	t.Run("rebuild_v8_shape_without_bootstrap_gate_still_fails_closed", func(t *testing.T) {
+		fixture := newIntegrationFixture(t)
+		ctx := context.Background()
+
+		result := runBootstrapInvariantScenario(t, ctx, fixture, bootstrapInvariantScenario{
+			assignments:            5,
+			parentTaskCount:        1,
+			childTaskCount:         12,
+			completeBootstrapSetup: false,
+			livePromotion:          false,
+		})
+
+		if result.assignmentCount != 5 {
+			t.Fatalf("assignment count = %d, want 5", result.assignmentCount)
+		}
+		if result.totalTaskCount != 21 {
+			t.Fatalf("task count = %d, want 21", result.totalTaskCount)
+		}
+		if result.totalDraftCount != result.totalTaskCount {
+			t.Fatalf("draft task count = %d, want all %d tasks draft", result.totalDraftCount, result.totalTaskCount)
+		}
+		if result.bootstrapState.Status != projectBootstrapStatusFailed {
+			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusFailed)
+		}
+		if result.bootstrapState.AssignmentCount != 5 {
+			t.Fatalf("bootstrap assignment_count = %d, want 5", result.bootstrapState.AssignmentCount)
+		}
+		if result.bootstrapState.PlannedFlowTemplateCount != 1 {
+			t.Fatalf("bootstrap planned_flow_template_count = %d, want 1", result.bootstrapState.PlannedFlowTemplateCount)
+		}
+		if result.bootstrapState.PlannedTaskCount != 13 {
+			t.Fatalf("bootstrap planned_task_count = %d, want 13", result.bootstrapState.PlannedTaskCount)
+		}
+		if result.bootstrapState.FirstWaveTaskCount != 12 {
+			t.Fatalf("bootstrap first_wave_task_count = %d, want 12", result.bootstrapState.FirstWaveTaskCount)
+		}
+		if result.bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
+			t.Fatalf("bootstrap current_phase = %q, want %q", result.bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
+		}
+		if result.project.Status != "archived" {
+			t.Fatalf("project status = %q, want archived", result.project.Status)
+		}
+		if result.activeExecutions != 0 {
+			t.Fatalf("active flow executions = %d, want 0", result.activeExecutions)
+		}
+		if result.runnableJobs != 0 {
+			t.Fatalf("runnable first-wave jobs = %d, want 0", result.runnableJobs)
+		}
+	})
 }
 
 type bootstrapInvariantScenario struct {
@@ -117,7 +167,8 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 	workerA := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
 	workerB := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
 	workerC := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
-	assignedAgents := []repo.Agent{pmAgent, workerA, workerB, workerC}
+	workerD := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	assignedAgents := []repo.Agent{pmAgent, workerA, workerB, workerC, workerD}
 
 	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
 	if !scenario.livePromotion {
@@ -146,7 +197,7 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
 		}
 
-		roles := []string{"pm", "worker", "reviewer", "observer"}
+		roles := []string{"pm", "worker", "reviewer", "observer", "worker"}
 		for i := 0; i < scenario.assignments && i < len(assignedAgents); i++ {
 			if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
 				AgentID:        assignedAgents[i].ID,
