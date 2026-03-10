@@ -1502,9 +1502,9 @@ func (p projectBootstrapProgress) FirstWaveMaterialized() bool {
 		p.PlannedTaskCount > 0 &&
 		p.PlannedFlowTemplateCount > 0 &&
 		p.FirstWaveTaskCount > 0 &&
-		p.FirstWavePromotedCount > 0 &&
-		p.FirstWaveExecutionCount > 0 &&
-		p.FirstWaveJobCount > 0
+		p.FirstWavePromotedCount >= p.FirstWaveTaskCount &&
+		p.FirstWaveExecutionCount >= p.FirstWaveTaskCount &&
+		p.FirstWaveJobCount >= p.FirstWaveTaskCount
 }
 
 func (p projectBootstrapProgress) ValidationFailed() bool {
@@ -2105,10 +2105,16 @@ func buildProjectBootstrapFirstWaveExecutionFailureReason(progress projectBootst
 	switch {
 	case progress.FirstWavePromotedCount == 0:
 		return "kickoff validation failed: persisted setup created assignments, scoped child tasks, and runnable flow templates, but no first-wave child task left draft or entered queued execution"
+	case progress.FirstWavePromotedCount < progress.FirstWaveTaskCount:
+		return fmt.Sprintf("kickoff validation failed: only %d of %d selected first-wave child tasks left draft or entered queued execution, so bootstrap never promoted the full runnable child wave", progress.FirstWavePromotedCount, progress.FirstWaveTaskCount)
 	case progress.FirstWaveExecutionCount == 0:
 		return "kickoff validation failed: first-wave child tasks left draft, but no flow_node_execution rows were created, so bootstrap never entered runnable execution"
+	case progress.FirstWaveExecutionCount < progress.FirstWaveTaskCount:
+		return fmt.Sprintf("kickoff validation failed: only %d of %d selected first-wave child tasks created flow_node_execution rows, so bootstrap never materialized the full runnable child wave", progress.FirstWaveExecutionCount, progress.FirstWaveTaskCount)
 	case progress.FirstWaveJobCount == 0:
 		return "kickoff validation failed: first-wave child tasks entered flow execution, but no runnable agent_turn jobs were created for the task sessions"
+	case progress.FirstWaveJobCount < progress.FirstWaveTaskCount:
+		return fmt.Sprintf("kickoff validation failed: only %d of %d selected first-wave child tasks produced runnable agent_turn jobs, so bootstrap never claimed the full runnable child wave", progress.FirstWaveJobCount, progress.FirstWaveTaskCount)
 	default:
 		return "kickoff validation failed: first-wave execution never materialized after persisted setup was created"
 	}

@@ -5,11 +5,13 @@ package turn
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
@@ -227,6 +229,93 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 		}
 	})
 
+	t.Run("wp_staging_parent_child_shape_promotes_runnable_child_executions", func(t *testing.T) {
+		fixture := newIntegrationFixture(t)
+		enableTaskQueueProcessor(t, fixture)
+		enableTurnEngineUserMessageEnqueue(t, fixture)
+		ctx := context.Background()
+
+		result := runBootstrapInvariantScenario(t, ctx, fixture, bootstrapInvariantScenario{
+			assignments:            4,
+			parentTaskCount:        3,
+			childTaskCount:         3,
+			completeBootstrapSetup: true,
+			livePromotion:          true,
+		})
+
+		if result.totalTaskCount != 14 {
+			t.Fatalf("task count = %d, want 14 including bootstrap gate/setup tasks", result.totalTaskCount)
+		}
+		if result.bootstrapState.Status != projectBootstrapStatusCompleted {
+			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusCompleted)
+		}
+		if result.bootstrapState.PlannedTaskCount != 6 {
+			t.Fatalf("bootstrap planned_task_count = %d, want 6", result.bootstrapState.PlannedTaskCount)
+		}
+		if result.bootstrapState.FirstWaveTaskCount != 3 {
+			t.Fatalf("bootstrap first_wave_task_count = %d, want 3 executable child tasks", result.bootstrapState.FirstWaveTaskCount)
+		}
+		if result.bootstrapState.FirstWaveExecutionCount != 3 {
+			t.Fatalf("bootstrap first_wave_execution_count = %d, want 3", result.bootstrapState.FirstWaveExecutionCount)
+		}
+		if result.bootstrapState.FirstWaveJobCount != 3 {
+			t.Fatalf("bootstrap first_wave_job_count = %d, want 3", result.bootstrapState.FirstWaveJobCount)
+		}
+		if result.parentDraftCount != 3 {
+			t.Fatalf("parent draft count = %d, want 3 orchestration-only parents", result.parentDraftCount)
+		}
+		if result.childPromotedCount != 3 {
+			t.Fatalf("promoted child count = %d, want 3 promoted child tasks", result.childPromotedCount)
+		}
+		if result.project.Status != "active" {
+			t.Fatalf("project status = %q, want active", result.project.Status)
+		}
+	})
+
+	t.Run("wp_staging_parent_child_shape_without_promotion_fails_and_archives", func(t *testing.T) {
+		fixture := newIntegrationFixture(t)
+		ctx := context.Background()
+
+		result := runBootstrapInvariantScenario(t, ctx, fixture, bootstrapInvariantScenario{
+			assignments:            4,
+			parentTaskCount:        3,
+			childTaskCount:         3,
+			completeBootstrapSetup: true,
+			livePromotion:          false,
+		})
+
+		if result.totalTaskCount != 14 {
+			t.Fatalf("task count = %d, want 14 including bootstrap gate/setup tasks", result.totalTaskCount)
+		}
+		if result.bootstrapState.Status != projectBootstrapStatusFailed {
+			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusFailed)
+		}
+		if result.bootstrapState.PlannedTaskCount != 6 {
+			t.Fatalf("bootstrap planned_task_count = %d, want 6", result.bootstrapState.PlannedTaskCount)
+		}
+		if result.bootstrapState.FirstWaveTaskCount != 3 {
+			t.Fatalf("bootstrap first_wave_task_count = %d, want 3 executable child tasks", result.bootstrapState.FirstWaveTaskCount)
+		}
+		if result.bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
+			t.Fatalf("bootstrap current_phase = %q, want %q", result.bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
+		}
+		if result.parentDraftCount != 3 {
+			t.Fatalf("parent draft count = %d, want 3 orchestration-only parents", result.parentDraftCount)
+		}
+		if result.childDraftCount != 3 {
+			t.Fatalf("child draft count = %d, want 3 unpromoted child tasks", result.childDraftCount)
+		}
+		if result.activeExecutions != 0 {
+			t.Fatalf("active flow executions = %d, want 0", result.activeExecutions)
+		}
+		if result.runnableJobs != 0 {
+			t.Fatalf("runnable first-wave jobs = %d, want 0", result.runnableJobs)
+		}
+		if result.project.Status != "archived" {
+			t.Fatalf("project status = %q, want archived", result.project.Status)
+		}
+	})
+
 	t.Run("playbook_aware_persisted_setup_without_live_promotion_fails_closed", func(t *testing.T) {
 		fixture := newIntegrationFixture(t)
 		ctx := context.Background()
@@ -291,13 +380,16 @@ type bootstrapInvariantScenario struct {
 }
 
 type bootstrapInvariantResult struct {
-	bootstrapState   projectBootstrapState
-	project          repo.Project
-	assignmentCount  int
-	totalTaskCount   int
-	totalDraftCount  int
-	activeExecutions int
-	runnableJobs     int
+	bootstrapState     projectBootstrapState
+	project            repo.Project
+	assignmentCount    int
+	totalTaskCount     int
+	totalDraftCount    int
+	parentDraftCount   int
+	childDraftCount    int
+	childPromotedCount int
+	activeExecutions   int
+	runnableJobs       int
 }
 
 func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *integrationFixture, scenario bootstrapInvariantScenario) bootstrapInvariantResult {
@@ -498,6 +590,9 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 
 	firstWaveTaskIDs := make([]uuid.UUID, 0, len(tasks))
 	totalDraftCount := 0
+	parentDraftCount := 0
+	childDraftCount := 0
+	childPromotedCount := 0
 	for _, task := range tasks {
 		metadata := messageMetadataMap(task.Metadata)
 		if task.WorkStatus == "draft" {
@@ -508,6 +603,16 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 		}
 		if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); bootstrapSetupTask {
 			continue
+		}
+		if parentID := taskdecomp.ParseParentTaskID(task.Metadata); parentID != uuid.Nil {
+			if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+				childDraftCount++
+			}
+			if projectBootstrapTaskEnteredExecution(task.WorkStatus) {
+				childPromotedCount++
+			}
+		} else if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+			parentDraftCount++
 		}
 		firstWaveTaskIDs = append(firstWaveTaskIDs, task.ID)
 	}
@@ -528,12 +633,15 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 
 	projectRecord := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
 	return bootstrapInvariantResult{
-		bootstrapState:   projectBootstrapStateFromMetadata(sessionRecord.Metadata),
-		project:          projectRecord,
-		assignmentCount:  len(assignments),
-		totalTaskCount:   len(tasks),
-		totalDraftCount:  totalDraftCount,
-		activeExecutions: activeExecutions,
-		runnableJobs:     countRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs),
+		bootstrapState:     projectBootstrapStateFromMetadata(sessionRecord.Metadata),
+		project:            projectRecord,
+		assignmentCount:    len(assignments),
+		totalTaskCount:     len(tasks),
+		totalDraftCount:    totalDraftCount,
+		parentDraftCount:   parentDraftCount,
+		childDraftCount:    childDraftCount,
+		childPromotedCount: childPromotedCount,
+		activeExecutions:   activeExecutions,
+		runnableJobs:       countRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs),
 	}
 }

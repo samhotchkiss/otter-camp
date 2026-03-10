@@ -7438,7 +7438,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsImmediatelyWhenFirstWavePromo
 	)
 }
 
-func TestTurnEngineIntegrationProjectBootstrapFailsOnExactV7DraftOnlyShape(t *testing.T) {
+func TestTurnEngineIntegrationProjectBootstrapExactV7DraftOnlyShapeWaitsForBootstrapGate(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
@@ -7636,11 +7636,11 @@ func TestTurnEngineIntegrationProjectBootstrapFailsOnExactV7DraftOnlyShape(t *te
 		t.Fatalf("GetByID project session: %v", err)
 	}
 	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
-	if bootstrapState.Status != projectBootstrapStatusFailed {
-		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q while setup gate is still open", bootstrapState.Status, projectBootstrapStatusActive)
 	}
-	if bootstrapState.ValidationStatus != projectBootstrapValidationFailed {
-		t.Fatalf("bootstrap validation_status = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationFailed)
+	if bootstrapState.ValidationStatus != projectBootstrapValidationPassed {
+		t.Fatalf("bootstrap validation_status = %q, want %q before promotion is attempted", bootstrapState.ValidationStatus, projectBootstrapValidationPassed)
 	}
 	if bootstrapState.AssignmentCount != 4 {
 		t.Fatalf("bootstrap assignment_count = %d, want 4", bootstrapState.AssignmentCount)
@@ -7654,25 +7654,20 @@ func TestTurnEngineIntegrationProjectBootstrapFailsOnExactV7DraftOnlyShape(t *te
 	if bootstrapState.FirstWaveTaskCount != 9 {
 		t.Fatalf("bootstrap first_wave_task_count = %d, want 9", bootstrapState.FirstWaveTaskCount)
 	}
-	if bootstrapState.FailureClass != projectBootstrapFailureFirstWaveExecution {
-		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureFirstWaveExecution)
+	if bootstrapState.FailureClass != "" {
+		t.Fatalf("bootstrap failure_class = %q, want empty while setup gate is still open", bootstrapState.FailureClass)
 	}
 	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
 		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
 	}
+	if bootstrapState.BootstrapTaskOutstanding != true {
+		t.Fatalf("bootstrap bootstrap_task_outstanding = %v, want true", bootstrapState.BootstrapTaskOutstanding)
+	}
 
 	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
-	if storedProject.Status != "archived" {
-		t.Fatalf("project status = %q, want archived", storedProject.Status)
+	if storedProject.Status != "active" {
+		t.Fatalf("project status = %q, want active before bootstrap sign-off is completed", storedProject.Status)
 	}
-	assertAutomaticFailureState(
-		t,
-		storedProject,
-		projectFailureActionArchive,
-		projectFailureCategoryBootstrap,
-		projectBootstrapFailureFirstWaveExecution,
-		projectBootstrapCheckpointFirstWaveExecutions,
-	)
 }
 
 func TestTurnEngineIntegrationProjectBootstrapPreflightStopsRacedPlanningArtifactTurn(t *testing.T) {
