@@ -54,8 +54,8 @@ func TestTUIFreshnessTrueStaleBuildWarnsEX263(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("tui --non-interactive exit=%d stderr=%q", code, stderr)
 	}
-	if !strings.Contains(stderr, "warning: binary commit") {
-		t.Fatalf("expected stale binary warning, stderr=%q", stderr)
+	if strings.Contains(stderr, "warning: binary commit") {
+		t.Fatalf("expected TUI stale build warning to stay in-app, not stderr=%q", stderr)
 	}
 }
 

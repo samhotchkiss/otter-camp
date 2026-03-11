@@ -144,7 +144,7 @@ func run(args []string) int {
 	}
 	shouldWarnFreshness := false
 	switch remaining[0] {
-	case "tui", "serve", "server", "worker":
+	case "serve", "server", "worker":
 		shouldWarnFreshness = true
 	}
 	if shouldWarnFreshness {
