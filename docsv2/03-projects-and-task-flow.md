@@ -186,7 +186,7 @@ Explicit transition table:
 - `blocked` → `queued` (dependency resolved or explicit recovery resume), `in_progress` (direct operator/manual continuation only when a live execution already exists), `on_hold`, `cancelled`
 - `on_hold` → `queued` (goes back through the queue, not straight to in_progress), `cancelled`
 - `review` → `done` (approved), `in_progress` (rejected/needs changes), `cancelled`
-- `done` → terminal. If work needs revisiting, create a new task.
+- `done` → terminal. If work needs revisiting, create a new task. The one narrow exception is orchestration-driven child rework: a completed child task may reopen to `queued` only when a parent integration gate records concrete `parent_integration_feedback` for the missing slice.
 - `cancelled` → terminal. Reachable from any non-terminal state.
 
 Any attempted transition outside this table is an invalid state-machine move and must be rejected deterministically with structured failure detail rather than repaired by conversational guesswork.
@@ -1018,7 +1018,7 @@ create index on project_task_event (task_id, created_at);
 - **Task numbering is per-project with project slug prefix.** Tasks: `OC-1`, `OC-5`. Subtasks: `OC-5.1`, `OC-5.3`. Project slugs are unique within the org.
 - **`review → in_progress` doesn't re-enter the queue** but still requires a scheduler slot. Status transitions immediately; execution waits for capacity.
 - **`on_hold → queued`** (goes back through the queue, not straight to `in_progress`).
-- **`done` and `cancelled` are terminal.** If work needs revisiting, create a new task.
+- **`done` and `cancelled` are terminal.** If work needs revisiting, create a new task. The one narrow exception is orchestration-driven child rework: a completed child task may reopen to `queued` only when a parent integration gate records concrete `parent_integration_feedback` for the missing slice.
 - **Task event log (`project_task_event`) is the audit trail.** Append-only. Every state transition, flow advancement, rejection, blocker, escalation, dependency change recorded with actor and comment.
 - **Queued tasks with unresolved dependencies remain `queued` but ineligible for scheduler pickup.** Only `in_progress` tasks transition to `blocked` when a dependency is added. The dependency is visible via the dependency table, not via work status.
 - **Tasks that produce no file changes still follow the branch/merge flow.** Empty merges are no-op fast-forwards processed instantly by the merge queue. The uniform model is simpler than special-casing tasks by whether they produce files.
