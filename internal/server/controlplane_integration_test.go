@@ -414,6 +414,82 @@ func TestOperatorDashboardSummaryIncludesStaleTaskAndExecution(t *testing.T) {
 	}
 }
 
+func TestOperatorDashboardIgnoresArchivedProjectTasksInActiveAndStaleCounts(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-archived-stale",
+		DisplayName:    "Ops Dashboard Archived Stale",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		Slug:           "ops-dashboard-archived-template",
+		DisplayName:    "Ops Dashboard Archived Template",
+		Description:    "template for archived dashboard integration tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	createdByID := adminA.ID
+	queuedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      project.ID,
+		Title:          "Archived queued task",
+		WorkStatus:     "queued",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create queued task: %v", err)
+	}
+	if _, err := testServer.Pool.Exec(ctx, `UPDATE project_task SET updated_at = $2 WHERE id = $1`, queuedTask.ID, time.Now().UTC().Add(-40*time.Minute)); err != nil {
+		t.Fatalf("backdate queued task: %v", err)
+	}
+	if err := projectRepo.Archive(ctx, project.ID); err != nil {
+		t.Fatalf("archive project: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=6", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	if payload.Summary.ActiveTasks != 0 {
+		t.Fatalf("active_tasks=%d want=0 body=%s", payload.Summary.ActiveTasks, string(resp.Body))
+	}
+	if payload.Summary.StaleTasks != 0 {
+		t.Fatalf("stale_tasks=%d want=0 body=%s", payload.Summary.StaleTasks, string(resp.Body))
+	}
+	if item := findOperatorDashboardItem(payload.Stale.Items, "stale_task", queuedTask.ID); item != nil {
+		t.Fatalf("stale task item for archived project should be hidden: %+v body=%s", *item, string(resp.Body))
+	}
+}
+
 func TestOperatorDashboardSummaryAttentionRequiredWhenOnlyBlockedItemsPresent(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 

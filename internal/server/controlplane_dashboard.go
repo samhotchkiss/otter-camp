@@ -302,9 +302,11 @@ func (l operatorDashboardLoader) countActiveTasks(ctx context.Context, organizat
 	var count int
 	err := l.pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM project_task
-		WHERE organization_id = $1
-		  AND work_status IN ('queued', 'in_progress', 'on_hold')
+		FROM project_task t
+		JOIN project p ON p.id = t.project_id
+		WHERE t.organization_id = $1
+		  AND p.status = 'active'
+		  AND t.work_status IN ('queued', 'in_progress', 'on_hold')
 	`, organizationID).Scan(&count)
 	return count, err
 }
@@ -327,11 +329,13 @@ func (l operatorDashboardLoader) countStaleTasks(ctx context.Context, organizati
 	err := l.pool.QueryRow(ctx, `
 		SELECT COUNT(*)
 		FROM project_task t
+		JOIN project p ON p.id = t.project_id
 		LEFT JOIN runtime_state rs
 		  ON rs.scope_type = 'task'
 		 AND rs.scope_id = t.id
 		 AND rs.active_run_id IS NOT NULL
 		WHERE t.organization_id = $1
+		  AND p.status = 'active'
 		  AND t.work_status IN ('queued', 'in_progress', 'on_hold')
 		  AND rs.id IS NULL
 		  AND t.updated_at < $2
@@ -696,6 +700,7 @@ func (l operatorDashboardLoader) loadActiveTaskItems(ctx context.Context, organi
 		 AND rs.scope_id = t.id
 		 AND rs.active_run_id IS NOT NULL
 		WHERE t.organization_id = $1
+		  AND p.status = 'active'
 		  AND t.work_status IN ('queued', 'in_progress', 'on_hold')
 		  AND rs.id IS NULL
 		  AND t.updated_at >= $2
@@ -845,6 +850,7 @@ func (l operatorDashboardLoader) loadStaleTaskItems(ctx context.Context, organiz
 		 AND rs.scope_id = t.id
 		 AND rs.active_run_id IS NOT NULL
 		WHERE t.organization_id = $1
+		  AND p.status = 'active'
 		  AND t.work_status IN ('queued', 'in_progress', 'on_hold')
 		  AND rs.id IS NULL
 		  AND t.updated_at < $2
