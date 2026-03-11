@@ -10852,6 +10852,126 @@ func TestTurnEngineIntegrationBackfillsMissingProjectKickoffHandoffAfterProjectC
 	}
 }
 
+func TestTurnEngineIntegrationDoesNotDuplicateExistingProjectKickoffHandoff(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	request := "Create Sam.blog with workstreams for imported legacy posts, design options, content strategy, and photography archive migration."
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateContent(ctx, fixture.userMessage.ID, request); err != nil {
+		t.Fatalf("UpdateContent originating user request: %v", err)
+	}
+
+	var createdProject repo.Project
+	var projectSession *chat.ChatSession
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		switch call.ID {
+		case "create-project":
+			createdProject = mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+			createdProject.Slug = "sam-blog-natural-handoff"
+			createdProject.DisplayName = "Sam.blog"
+			updatedProject, err := repo.NewProjectRepo(fixture.pool).Update(ctx, createdProject)
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			createdProject = updatedProject
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"project": map[string]any{
+						"id":   createdProject.ID,
+						"slug": createdProject.Slug,
+						"name": createdProject.DisplayName,
+					},
+				},
+			}, nil
+		case "create-session":
+			session, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+				OrganizationID: fixture.org.ID,
+				ScopeType:      "project",
+				ScopeID:        createdProject.ID,
+				Mode:           "async",
+			})
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			projectSession = session
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"session": map[string]any{
+						"id":         session.ID,
+						"scope_type": session.ScopeType,
+						"scope_id":   session.ScopeID,
+						"mode":       session.Mode,
+					},
+				},
+			}, nil
+		case "send-handoff":
+			if projectSession == nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "project_session_missing"}, nil
+			}
+			authorType := "agent"
+			if _, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+				SessionID:  projectSession.ID,
+				AuthorType: &authorType,
+				AuthorID:   &fixture.agent.ID,
+				Role:       "user",
+				Content:    "Hey Lori, I'm handing this project off to you to staff up and build out the flows.",
+			}); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"message_id": uuid.New().String(),
+					"sequence":   1,
+				},
+			}, nil
+		default:
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool_call"}, nil
+		}
+	}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "create-project", Name: "project.create", Tier: "tier1", Arguments: map[string]any{"name": "Sam.blog", "slug": "sam-blog-natural-handoff"}}}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "create-session", Name: "session.create", Tier: "tier1", Arguments: map[string]any{"scope_type": "project", "scope_id": createdProject.ID.String(), "mode": "async"}}}}, nil
+		case 3:
+			return ModelResponse{ToolCalls: []ModelToolCall{{ID: "send-handoff", Name: "message.send", Tier: "tier1", Arguments: map[string]any{"session_id": projectSession.ID.String(), "role": "user", "content": "Hey Lori, I'm handing this project off to you to staff up and build out the flows."}}}}, nil
+		default:
+			return ModelResponse{Content: "Project created and handed off."}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if projectSession == nil {
+		t.Fatal("project session was not created")
+	}
+
+	projectMessages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project session messages: %v", err)
+	}
+	userMessages := 0
+	for _, message := range projectMessages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			userMessages++
+		}
+	}
+	if userMessages != 1 {
+		t.Fatalf("project session user messages = %d, want 1 natural handoff without synthetic duplicate", userMessages)
+	}
+}
+
 func TestTurnEngineIntegrationTier1ToolDispatchRoundTrip(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	modelCalls := 0

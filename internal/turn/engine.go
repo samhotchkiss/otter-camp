@@ -3234,10 +3234,7 @@ func (e *TurnEngine) ensureProjectKickoffHandoff(ctx context.Context, rt *turnRu
 		return err
 	}
 	for _, message := range projectMessages {
-		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
-			continue
-		}
-		if message.AuthorID != nil && *message.AuthorID == rt.agent.ID && strings.EqualFold(stringValue(message.AuthorType), "agent") {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 			return nil
 		}
 	}
