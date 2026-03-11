@@ -1135,6 +1135,75 @@ func TestSupervisor_ImpossibleInProgressTaskWithoutRuntimeOrExecutionBlocksTask(
 	}
 }
 
+func TestSupervisor_UnpausedLegacyImpossibleLiveProjectGetsPaused(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord := seedRunProject(t, ctx, pool, org.ID)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Legacy Impossible Worker")
+	template, _ := seedSupervisorFlowTemplateNode(t, ctx, pool, org.ID, projectRecord.ID, nil, nil)
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       projectRecord.ID,
+		Title:           "Legacy impossible blocked task",
+		WorkStatus:      "blocked",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "system",
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE project_task SET updated_at = $2 WHERE id = $1`, taskRecord.ID, time.Now().UTC().Add(-20*time.Minute)); err != nil {
+		t.Fatalf("backdate blocked task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:       pool,
+		RunService: runService,
+		EventBus:   bus,
+		Logger:     newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectUnpausedImpossibleLiveProjects(ctx); err != nil {
+		t.Fatalf("detectUnpausedImpossibleLiveProjects: %v", err)
+	}
+
+	updatedProject, err := repo.NewProjectRepo(pool).GetByID(ctx, projectRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID project: %v", err)
+	}
+	pauseState := projectpause.Parse(updatedProject.Settings)
+	if !pauseState.IsPaused {
+		t.Fatalf("project pause state = %+v, want paused", pauseState)
+	}
+	if !strings.Contains(pauseState.Reason, "impossible live task state") {
+		t.Fatalf("project pause reason = %q, want impossible live task detail", pauseState.Reason)
+	}
+	failureState := projectfailure.Parse(updatedProject.Settings)
+	if failureState.FailureClass != "impossible_live_task_state" {
+		t.Fatalf("automatic failure class = %q, want impossible_live_task_state", failureState.FailureClass)
+	}
+	if !strings.Contains(failureState.FailureReason, "impossible live task state") {
+		t.Fatalf("automatic failure reason = %q, want impossible live task detail", failureState.FailureReason)
+	}
+}
+
 func TestSupervisor_StrandedActiveExecutionFailureFailsWithoutTaskService(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

@@ -272,6 +272,9 @@ func (s *Supervisor) tick(ctx context.Context) error {
 	if err := s.detectImpossibleLiveTasks(ctx); err != nil {
 		return err
 	}
+	if err := s.detectUnpausedImpossibleLiveProjects(ctx); err != nil {
+		return err
+	}
 	if err := s.detectExpiredBrowserHandoffs(ctx); err != nil {
 		return err
 	}
@@ -377,6 +380,51 @@ func (s *Supervisor) pauseProjectForImpossibleLiveTask(ctx context.Context, orga
 		PausedByType: "system",
 	})
 	return err
+}
+
+func (s *Supervisor) detectUnpausedImpossibleLiveProjects(ctx context.Context) error {
+	if s.pool == nil || s.projectService == nil {
+		return nil
+	}
+
+	cutoff := s.clock.Now().UTC().Add(-impossibleLiveTaskGraceLimit)
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT t.organization_id, t.project_id
+		FROM project_task t
+		JOIN project p
+		  ON p.id = t.project_id
+		LEFT JOIN runtime_state rs
+		  ON rs.scope_type = 'task'
+		 AND rs.scope_id = t.id
+		 AND rs.active_run_id IS NOT NULL
+		LEFT JOIN flow_node_execution e
+		  ON e.task_id = t.id
+		 AND e.status = 'active'
+		WHERE p.status = 'active'
+		  AND COALESCE((p.settings->'pause'->>'is_paused')::boolean, false) = false
+		  AND t.work_status = 'blocked'
+		  AND t.flow_template_id IS NOT NULL
+		  AND t.current_flow_node_id IS NULL
+		  AND t.updated_at < $1
+		  AND rs.id IS NULL
+		  AND e.id IS NULL
+	`, cutoff)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	const impossibleLiveTaskReason = "supervisor detected impossible live task state: flow-backed blocked task had no runtime owner, active flow execution, or current flow node"
+	for rows.Next() {
+		var organizationID, projectID uuid.UUID
+		if scanErr := rows.Scan(&organizationID, &projectID); scanErr != nil {
+			return scanErr
+		}
+		if err := s.pauseProjectForImpossibleLiveTask(ctx, organizationID, projectID, impossibleLiveTaskReason); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func (s *Supervisor) detectStaleCreatedRuns(ctx context.Context) error {
