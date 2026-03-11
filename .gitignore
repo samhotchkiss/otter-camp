@@ -79,4 +79,4 @@ reports/oc-test-human-interventions.md
 # Avatar PNGs (keep webp, ignore large PNGs)
 data/agents/*/avatar.png
 data/agents/*/avatar-*.png
-ottercamp
+/ottercamp

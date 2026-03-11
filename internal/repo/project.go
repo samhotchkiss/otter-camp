@@ -549,8 +549,109 @@ func (r *FlowTemplateRepo) BulkUpsertBySlug(ctx context.Context, templates []Flo
 		return nil, nil
 	}
 
-	var sb strings.Builder
-	sb.WriteString(`
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin bulk flow template upsert transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	upserted := make([]FlowTemplate, 0, len(templates))
+	for _, template := range templates {
+		record, upsertErr := r.bulkUpsertTemplateTx(ctx, tx, template)
+		if upsertErr != nil {
+			return nil, upsertErr
+		}
+		upserted = append(upserted, record)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit bulk flow template upsert transaction: %w", err)
+	}
+	return upserted, nil
+}
+
+func (r *FlowTemplateRepo) bulkUpsertTemplateTx(ctx context.Context, tx pgx.Tx, template FlowTemplate) (FlowTemplate, error) {
+	trimmedSlug := strings.TrimSpace(template.Slug)
+	if trimmedSlug == "" {
+		return FlowTemplate{}, errors.New("flow template slug is required")
+	}
+
+	current, err := r.getCurrentByScopeAndSlugTx(ctx, tx, template.OrganizationID, template.ProjectID, trimmedSlug)
+	switch {
+	case err == nil:
+		row := tx.QueryRow(ctx, `
+			UPDATE flow_template
+			SET
+				display_name = $2,
+				description = $3,
+				start_node_id = $4,
+				is_system = $5
+			WHERE id = $1
+			RETURNING id, organization_id, project_id, slug, display_name, description, is_current, version, start_node_id, is_system, created_by_type, created_by_id, created_at, updated_at
+		`,
+			current.ID,
+			strings.TrimSpace(template.DisplayName),
+			template.Description,
+			template.StartNodeID,
+			template.IsSystem,
+		)
+		updated, scanErr := scanFlowTemplate(row)
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return FlowTemplate{}, ErrNotFound
+		}
+		if scanErr != nil {
+			return FlowTemplate{}, mapDBError(scanErr)
+		}
+		return updated, nil
+	case !errors.Is(err, ErrNotFound):
+		return FlowTemplate{}, err
+	}
+
+	existing, err := r.listAllByScopeAndSlugTx(ctx, tx, template.OrganizationID, template.ProjectID, trimmedSlug)
+	if err != nil {
+		return FlowTemplate{}, err
+	}
+	if len(existing) > 0 {
+		latest := existing[len(existing)-1]
+		if _, err := tx.Exec(ctx, `
+			UPDATE flow_template
+			SET is_current = false
+			WHERE slug = $3
+			  AND ((organization_id IS NULL AND $1::uuid IS NULL) OR organization_id = $1)
+			  AND ((project_id IS NULL AND $2::uuid IS NULL) OR project_id = $2)
+		`, template.OrganizationID, template.ProjectID, trimmedSlug); err != nil {
+			return FlowTemplate{}, mapDBError(err)
+		}
+		row := tx.QueryRow(ctx, `
+			UPDATE flow_template
+			SET
+				display_name = $2,
+				description = $3,
+				is_current = true,
+				start_node_id = $4,
+				is_system = $5
+			WHERE id = $1
+			RETURNING id, organization_id, project_id, slug, display_name, description, is_current, version, start_node_id, is_system, created_by_type, created_by_id, created_at, updated_at
+		`,
+			latest.ID,
+			strings.TrimSpace(template.DisplayName),
+			template.Description,
+			template.StartNodeID,
+			template.IsSystem,
+		)
+		updated, scanErr := scanFlowTemplate(row)
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return FlowTemplate{}, ErrNotFound
+		}
+		if scanErr != nil {
+			return FlowTemplate{}, mapDBError(scanErr)
+		}
+		return updated, nil
+	}
+
+	row := tx.QueryRow(ctx, `
 		INSERT INTO flow_template (
 			organization_id,
 			project_id,
@@ -563,74 +664,54 @@ func (r *FlowTemplateRepo) BulkUpsertBySlug(ctx context.Context, templates []Flo
 			is_system,
 			created_by_type,
 			created_by_id
-		) VALUES
-	`)
-
-	args := make([]any, 0, len(templates)*10)
-	for i, template := range templates {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		pos := i*10 + 1
-		sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,true,$%d,$%d,$%d,$%d,$%d)",
-			pos,
-			pos+1,
-			pos+2,
-			pos+3,
-			pos+4,
-			pos+5,
-			pos+6,
-			pos+7,
-			pos+8,
-			pos+9,
-		))
-
-		args = append(args,
-			template.OrganizationID,
-			template.ProjectID,
-			template.Slug,
-			template.DisplayName,
-			template.Description,
-			defaultVersion(template.Version),
-			template.StartNodeID,
-			template.IsSystem,
-			template.CreatedByType,
-			template.CreatedByID,
 		)
-	}
-
-	sb.WriteString(`
-		ON CONFLICT (
-			COALESCE(organization_id, '` + nilUUIDLiteral + `'::uuid),
-			COALESCE(project_id, '` + nilUUIDLiteral + `'::uuid),
-			slug
-		) WHERE is_current = true
-		DO UPDATE SET
-			display_name = EXCLUDED.display_name,
-			description = EXCLUDED.description,
-			start_node_id = EXCLUDED.start_node_id,
-			is_system = EXCLUDED.is_system
+		VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, $10)
 		RETURNING id, organization_id, project_id, slug, display_name, description, is_current, version, start_node_id, is_system, created_by_type, created_by_id, created_at, updated_at
-	`)
+	`,
+		template.OrganizationID,
+		template.ProjectID,
+		trimmedSlug,
+		strings.TrimSpace(template.DisplayName),
+		template.Description,
+		defaultVersion(template.Version),
+		template.StartNodeID,
+		template.IsSystem,
+		template.CreatedByType,
+		template.CreatedByID,
+	)
+	created, scanErr := scanFlowTemplate(row)
+	if scanErr != nil {
+		return FlowTemplate{}, mapDBError(scanErr)
+	}
+	return created, nil
+}
 
-	rows, err := r.pool.Query(ctx, sb.String(), args...)
+func (r *FlowTemplateRepo) listAllByScopeAndSlugTx(ctx context.Context, tx pgx.Tx, organizationID, projectID *uuid.UUID, slug string) ([]FlowTemplate, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, organization_id, project_id, slug, display_name, description, is_current, version, start_node_id, is_system, created_by_type, created_by_id, created_at, updated_at
+		FROM flow_template
+		WHERE slug = $3
+		  AND ((organization_id IS NULL AND $1::uuid IS NULL) OR organization_id = $1)
+		  AND ((project_id IS NULL AND $2::uuid IS NULL) OR project_id = $2)
+		ORDER BY version ASC, created_at ASC, id ASC
+	`, organizationID, projectID, strings.TrimSpace(slug))
 	if err != nil {
 		return nil, mapDBError(err)
 	}
 	defer rows.Close()
 
-	upserted := make([]FlowTemplate, 0, len(templates))
+	templates := make([]FlowTemplate, 0)
 	for rows.Next() {
 		template, scanErr := scanFlowTemplate(rows)
 		if scanErr != nil {
 			return nil, mapDBError(scanErr)
 		}
-		upserted = append(upserted, template)
+		templates = append(templates, template)
 	}
 	if rows.Err() != nil {
 		return nil, mapDBError(rows.Err())
 	}
-	return upserted, nil
+	return templates, nil
 }
 
 func (r *FlowTemplateRepo) getCurrentByScopeAndSlugTx(ctx context.Context, tx pgx.Tx, organizationID, projectID *uuid.UUID, slug string) (FlowTemplate, error) {

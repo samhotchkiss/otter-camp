@@ -3785,6 +3785,80 @@ func TestIntegrationBootstrapGateAllowsPlanningTaskCreateBeforeGateClears(t *tes
 	}
 }
 
+func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreamsInSameProjectSession(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	dataDir := t.TempDir()
+	seedReviewRefinementSystemTemplate(t, ctx, pool)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Multi Workstreams",
+		"slug":        "bootstrap-multi-workstreams-" + uuid.NewString()[:8],
+		"description": "Verify repeated planning task.create calls succeed during bootstrap in the same project session.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Sam.blog bootstrap repro",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	titles := []string{
+		"WS1: Content Migration from technonymous.org",
+		"WS3: Content Strategy",
+		"WS2: HTML Layout Templates",
+		"WS4: Blog Post Ideation (20 Concepts)",
+	}
+	for _, title := range titles {
+		out, err := executor.Execute(projectCtx, "task.create", map[string]any{
+			"project_id": projectID.String(),
+			"title":      title,
+		})
+		if err != nil {
+			t.Fatalf("task.create %q: %v", title, err)
+		}
+		if got := strings.TrimSpace(fmt.Sprintf("%v", out["error"])); got != "" && got != "<nil>" {
+			t.Fatalf("task.create %q error = %q, want empty", title, got)
+		}
+	}
+
+	environments, err := repo.NewProjectEnvironmentRepo(pool).ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListByProject environments: %v", err)
+	}
+	if len(environments) != 1 {
+		t.Fatalf("environment count = %d, want 1", len(environments))
+	}
+	repoPath := strings.TrimSpace(derefString(environments[0].RepoPath))
+	if repoPath == "" {
+		t.Fatal("expected repo_path on active environment")
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+		t.Fatalf("stat .git after repeated planning task.create: %v", err)
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListByProject tasks: %v", err)
+	}
+	if len(tasks) < 12 {
+		t.Fatalf("project task count = %d, want at least bootstrap tasks plus 4 workstreams", len(tasks))
+	}
+}
+
 func TestIntegrationBootstrapSetupPersistCompletesRequestedSetupSteps(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

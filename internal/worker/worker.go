@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/browser"
 	"github.com/samhotchkiss/otter-camp/internal/budget"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
@@ -56,6 +57,16 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		return fmt.Errorf("worker database setup: %w", err)
 	}
 	defer pool.Close()
+
+	bootstrapper := bootstrap.NewBootstrapper(bootstrap.Options{
+		Pool:    pool.Raw(),
+		Logger:  logger,
+	})
+	bootstrap.RegisterStarterTrioStep(bootstrapper, repo.NewAgentRepo(pool.Raw()))
+	bootstrap.RegisterCapabilityPolicyStep(bootstrapper, repo.NewCapabilityPolicyRepo(pool.Raw()))
+	if err := bootstrapper.Run(ctx); err != nil {
+		return fmt.Errorf("worker bootstrap reconcile: %w", err)
+	}
 
 	bus := eventbus.New(pool.Raw(), logger, eventbus.Config{})
 	tasks, err := tasksvc.NewService(tasksvc.Options{

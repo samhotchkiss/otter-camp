@@ -234,6 +234,101 @@ func TestBootstrapSeedsSystemFlowTemplatesIdempotently(t *testing.T) {
 	}
 }
 
+func TestBootstrapRunReconcilesMissingSystemFlowTemplatesOnExistingInstall(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	bootstrapper := NewBootstrapper(Options{
+		Pool:      pool,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		SkillsDir: filepath.Join(t.TempDir(), "skills"),
+		OrgSlug:   "default",
+		OrgName:   "OtterCamp",
+		Version:   "test-version",
+	})
+
+	if err := bootstrapper.Run(ctx); err != nil {
+		t.Fatalf("bootstrap run 1: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		DELETE FROM flow_node
+		WHERE flow_template_id IN (
+			SELECT id
+			FROM flow_template
+			WHERE slug = 'default-review-refinement'
+			  AND organization_id IS NULL
+			  AND project_id IS NULL
+		)
+	`); err != nil {
+		t.Fatalf("delete review refinement nodes: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		DELETE FROM flow_template
+		WHERE slug = 'default-review-refinement'
+		  AND organization_id IS NULL
+		  AND project_id IS NULL
+	`); err != nil {
+		t.Fatalf("delete review refinement template: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE flow_template
+		SET is_current = false,
+		    start_node_id = NULL
+		WHERE slug = 'default-single-agent'
+		  AND organization_id IS NULL
+		  AND project_id IS NULL
+	`); err != nil {
+		t.Fatalf("deactivate single-agent template: %v", err)
+	}
+
+	if err := bootstrapper.Run(ctx); err != nil {
+		t.Fatalf("bootstrap run 2: %v", err)
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT slug, is_current, start_node_id
+		FROM flow_template
+		WHERE organization_id IS NULL
+		  AND project_id IS NULL
+		  AND is_system = true
+		  AND slug IN ('default-single-agent', 'default-review', 'default-review-refinement')
+		ORDER BY slug ASC
+	`)
+	if err != nil {
+		t.Fatalf("list reconciled system templates: %v", err)
+	}
+	defer rows.Close()
+
+	seen := map[string]bool{}
+	for rows.Next() {
+		var (
+			slug        string
+			isCurrent   bool
+			startNodeID *uuid.UUID
+		)
+		if err := rows.Scan(&slug, &isCurrent, &startNodeID); err != nil {
+			t.Fatalf("scan reconciled system template row: %v", err)
+		}
+		if !isCurrent {
+			t.Fatalf("template %q is_current = false, want true", slug)
+		}
+		if startNodeID == nil || *startNodeID == uuid.Nil {
+			t.Fatalf("template %q start_node_id = %v, want non-nil", slug, startNodeID)
+		}
+		seen[slug] = true
+	}
+	if rows.Err() != nil {
+		t.Fatalf("iterate reconciled system templates: %v", rows.Err())
+	}
+
+	for _, slug := range []string{"default-single-agent", "default-review", "default-review-refinement"} {
+		if !seen[slug] {
+			t.Fatalf("missing reconciled template %q", slug)
+		}
+	}
+}
+
 func TestTestResetRouteResetsAndRebootstrapsInTestMode(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

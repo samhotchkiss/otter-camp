@@ -431,6 +431,10 @@ func runServe() int {
 	})
 	bootstrap.RegisterStarterTrioStep(bootstrapper, repo.NewAgentRepo(pool.Raw()))
 	bootstrap.RegisterCapabilityPolicyStep(bootstrapper, repo.NewCapabilityPolicyRepo(pool.Raw()))
+	if err := bootstrapper.Run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap reconcile error: %v\n", err)
+		return 1
+	}
 	resetter := bootstrap.NewResetter(pool.Raw(), bootstrapper)
 
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
