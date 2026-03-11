@@ -40,7 +40,7 @@ The API uses REST semantics for resource CRUD (create, read, update, delete) and
 - **CRUD endpoints** follow standard REST patterns: `POST /v1/projects` creates a project, `GET /v1/projects/:id` reads it, `PATCH /v1/projects/:id` updates it.
 - **Command endpoints** model actions with side effects: `POST /v1/tasks/:id/advance-flow` advances a task's flow (which triggers scheduling, events, and possibly async work). `POST /v1/sessions/:id/cancel-turn` cancels an in-progress turn. Commands use verb-noun naming in the URL path.
 
-A PATCH to a task's `work_status` is wrong — status transitions have validation rules, trigger events, and may cascade to dependencies. These are commands, not field updates.
+A PATCH to a task's `work_status` is wrong — status transitions have validation rules, trigger events, and may cascade to dependencies. These are commands, not field updates. The REST patch route must fail closed on task state-machine fields such as `work_status`, `flow_template_id`, and `current_flow_node_id` rather than silently ignoring them or trying to reinterpret them as metadata edits.
 
 ### JSON Throughout
 
