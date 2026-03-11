@@ -1,3 +1,12 @@
+# Historical Decision Log
+
+This file is archival context from the Sam.blog Ralph Loop.
+
+Current workflow note:
+- active product-direction questions for the current hardening loop should go into `issues/discuss.md`
+- `issues/codex-state.md` is the current local handoff/state file
+- do not assume the decisions below represent current product direction without checking newer docs/issues first
+
 # Sam.blog Ralph Loop — Decision Log
 
 Judgment calls made during the Ralph Loop that are not defined in the docsv2 spec.
