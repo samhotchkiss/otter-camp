@@ -3653,6 +3653,92 @@ func TestIntegrationProjectSessionCreateAutoAddsAssignedProjectAgentsButNotStart
 	}
 }
 
+func TestIntegrationTaskSyncSessionCreateAutoAddsProjectPMAndWorkerButNotStarterTrio(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	worker := testutil.MakeAgent(t, pool, orgID)
+	pm := testutil.MakeAgent(t, pool, orgID)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		AssignedAgentID: &worker.ID,
+	})
+
+	starterFrank, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "Frank",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "prompt",
+		OperatorInstructions: "",
+		AgentType:            "general",
+		IsStarterTrio:        true,
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create starter Frank: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	execCtx := integrationExecCtxWith(orgID, actor.ID)
+
+	if _, err := executor.Execute(execCtx, "agent.assign_project", map[string]any{
+		"agent_id":   worker.ID.String(),
+		"project_id": project.ID.String(),
+		"role":       "worker",
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+	if _, err := executor.Execute(execCtx, "agent.assign_project", map[string]any{
+		"agent_id":   pm.ID.String(),
+		"project_id": project.ID.String(),
+		"role":       "project_manager",
+	}); err != nil {
+		t.Fatalf("assign pm: %v", err)
+	}
+
+	out, err := executor.Execute(execCtx, "session.create", map[string]any{
+		"scope_type": "project_task",
+		"scope_id":   task.ID.String(),
+		"mode":       "sync",
+		"title":      "Task discussion",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+
+	sessionID := mustUUIDValue(t, out["session"].(map[string]any)["id"])
+	participantRepo := repo.NewChatParticipantRepo(pool)
+	participants, err := participantRepo.ListBySession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ListBySession participants: %v", err)
+	}
+
+	seenAgents := map[uuid.UUID]bool{}
+	for _, participant := range participants {
+		if participant.ParticipantType != "agent" || participant.RemovedAt != nil {
+			continue
+		}
+		seenAgents[participant.ParticipantID] = true
+	}
+
+	if !seenAgents[worker.ID] {
+		t.Fatalf("expected assigned worker %s in task session participants", worker.ID)
+	}
+	if !seenAgents[pm.ID] {
+		t.Fatalf("expected assigned pm %s in task session participants", pm.ID)
+	}
+	if seenAgents[starterFrank.ID] {
+		t.Fatalf("starter trio agent %s should not be auto-added to task session participants", starterFrank.ID)
+	}
+}
+
 func TestIntegrationProjectSessionPlanningIgnoresStaleCrossProjectTaskBinding(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
