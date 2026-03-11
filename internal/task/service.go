@@ -149,6 +149,7 @@ type Actor struct {
 	AllowDoneBypass                bool
 	AllowGateBypass                bool
 	AllowBootstrapGateAutoComplete bool
+	AllowCompletedChildReopen      bool
 }
 
 type ErrInProgressRequiresActiveFlow struct {
@@ -532,7 +533,8 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 		return nil, ErrTransitionTargetRequired
 	}
 	bootstrapGateAutoComplete := allowsBootstrapGateAutoComplete(taskRecord, from, target, actor)
-	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete {
+	childReopen := allowsCompletedChildReopen(taskRecord, from, target, actor)
+	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !childReopen {
 		return nil, ErrInvalidStatusTransition{From: from, To: target}
 	}
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
@@ -1698,6 +1700,21 @@ func allowsBootstrapGateAutoComplete(taskRecord repo.ProjectTask, from, target s
 	metadata := taskMetadataMap(taskRecord.Metadata)
 	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
 	return bootstrapGate
+}
+
+func allowsCompletedChildReopen(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
+	if !actor.AllowCompletedChildReopen {
+		return false
+	}
+	switch normalizeActorTypeForTask(actor.Type) {
+	case "agent", "human_user", "system":
+	default:
+		return false
+	}
+	if normalizeStatus(from) != "done" || normalizeStatus(target) != "queued" {
+		return false
+	}
+	return taskdecomp.ParseParentTaskID(taskRecord.Metadata) != uuid.Nil
 }
 
 func taskMetadataMap(raw json.RawMessage) map[string]any {

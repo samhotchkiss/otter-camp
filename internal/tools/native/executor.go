@@ -23,6 +23,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/profiles"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
@@ -224,6 +225,12 @@ type ExecutorOptions struct {
 	Command        commandContextFunc
 	Secrets        secretResolver
 	Profiles       profileCatalog
+	TaskService    nativeTaskTransitionService
+}
+
+type nativeTaskTransitionService interface {
+	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
+	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
 }
 
 type NativeToolExecutor struct {
@@ -256,6 +263,7 @@ type NativeToolExecutor struct {
 	assignments    projectAssigner
 	environments   projectEnvironmentReader
 	planningAssets planningArtifactStore
+	taskService    nativeTaskTransitionService
 	audit          *repo.AuditEventRepo
 	memories       memoryWriter
 	secrets        secretResolver
@@ -283,6 +291,7 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		command:        command,
 		secrets:        opts.Secrets,
 		profiles:       opts.Profiles,
+		taskService:    opts.TaskService,
 		workspaces:     make(map[string]SessionWorkDir),
 	}
 
@@ -310,6 +319,15 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		exec.memories = repo.NewMemoryRepo(opts.Pool)
 		if exec.events == nil {
 			exec.events = eventbus.New(opts.Pool, nil, eventbus.Config{})
+		}
+		if exec.taskService == nil {
+			taskService, taskErr := tasksvc.NewService(tasksvc.Options{
+				Pool:     opts.Pool,
+				EventBus: exec.events,
+			})
+			if taskErr == nil {
+				exec.taskService = taskService
+			}
 		}
 		if exec.agentService == nil {
 			var agentEvents eventbus.EventBus = publishOnlyEventBus{publisher: exec.events}

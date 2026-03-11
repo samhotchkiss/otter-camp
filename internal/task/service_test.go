@@ -202,6 +202,50 @@ func TestTransitionStatusRejectsBootstrapAutoCompleteForNonBootstrapTask(t *test
 	}
 }
 
+func TestTransitionStatusAllowsCompletedChildReopenToQueued(t *testing.T) {
+	taskID := uuid.New()
+	parentID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "done",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Completed child",
+				CreatedByType:  "system",
+				Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentID, 2),
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.flowTemplates = &fakeFlowTemplateRepo{
+		templates: map[uuid.UUID]repo.FlowTemplate{
+			flowTemplateID: {ID: flowTemplateID},
+		},
+	}
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: validExecutableTemplateNodes(flowTemplateID),
+	}
+	queuedTask, err := svc.TransitionStatusWithPayload(context.Background(), taskID, "queued", Actor{
+		Type:                      "agent",
+		ID:                        uuid.New(),
+		AllowCompletedChildReopen: true,
+	}, map[string]any{"parent_integration_feedback": "Fix integration issue"})
+	if err != nil {
+		t.Fatalf("TransitionStatusWithPayload queued: %v", err)
+	}
+	if queuedTask.WorkStatus != "queued" {
+		t.Fatalf("work_status = %q, want queued", queuedTask.WorkStatus)
+	}
+	if queuedTask.CompletedAt != nil {
+		t.Fatalf("completed_at = %v, want nil after reopen", queuedTask.CompletedAt)
+	}
+}
+
 func TestResumeValidationBlockedTaskRequiresResumableBlockedState(t *testing.T) {
 	taskID := uuid.New()
 	taskRepo := &fakeTaskRepo{

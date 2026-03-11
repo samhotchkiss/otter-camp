@@ -27,6 +27,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
@@ -1366,10 +1367,12 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		}
 	}
 	var extraStatusPayload map[string]any
+	var desiredStatus string
 	if status, ok := readString(input, "work_status"); ok && status != "" {
+		desiredStatus = strings.TrimSpace(status)
 		if current.FlowTemplateID == nil &&
 			strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
-			strings.EqualFold(strings.TrimSpace(status), "queued") {
+			strings.EqualFold(desiredStatus, "queued") {
 			var resolvedFlowTemplateID *uuid.UUID
 			planning, resolvedFlowTemplateID, current.Metadata, err = e.applyReviewRefinementPlanning(
 				ctx,
@@ -1396,10 +1399,10 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			current.Metadata = metadataWithProcess
 			planning = processUpdate.plan
 		}
-		if taskStatusRequiresFlowTemplate(status) && current.FlowTemplateID == nil {
+		if taskStatusRequiresFlowTemplate(desiredStatus) && current.FlowTemplateID == nil {
 			return map[string]any{"error": "task requires a flow template before it can be queued"}, nil
 		}
-		if strings.EqualFold(strings.TrimSpace(status), "queued") && current.FlowTemplateID != nil {
+		if strings.EqualFold(desiredStatus, "queued") && current.FlowTemplateID != nil {
 			if err := e.validateExecutableFlowTemplate(ctx, *current.FlowTemplateID); err != nil {
 				if errors.Is(err, errInvalidExecutableFlowTemplate) {
 					return map[string]any{"error": err.Error()}, nil
@@ -1408,7 +1411,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			}
 		}
 		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
-			strings.EqualFold(strings.TrimSpace(status), "queued") {
+			strings.EqualFold(desiredStatus, "queued") {
 			decompResult, decompErr := e.applyQueueDecomposition(ctx, &current)
 			if decompErr != nil {
 				if errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) {
@@ -1419,7 +1422,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			decomposition = decompResult
 		}
 		if strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
-			strings.EqualFold(strings.TrimSpace(status), "queued") &&
+			strings.EqualFold(desiredStatus, "queued") &&
 			e.projectRequiresPMBeforeQueue(ctx, current.ProjectID) &&
 			!e.projectHasActivePM(ctx, current.ProjectID) {
 			return map[string]any{"error": "project has no active PM assignment"}, nil
@@ -1429,18 +1432,18 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			return nil, childErr
 		}
 		executableChildren := executableTasks(decompositionChildren)
-		if strings.EqualFold(strings.TrimSpace(status), "queued") && len(executableChildren) > 0 {
+		if strings.EqualFold(desiredStatus, "queued") && len(executableChildren) > 0 {
 			if err := e.queueDecompositionChildren(ctx, current, executableChildren); err != nil {
 				return nil, err
 			}
-			status = previousStatus
+			desiredStatus = previousStatus
 		}
-		if strings.EqualFold(strings.TrimSpace(status), "in_progress") && len(executableChildren) > 0 {
+		if strings.EqualFold(desiredStatus, "in_progress") && len(executableChildren) > 0 {
 			return map[string]any{"error": taskOrchestrationOnlyMessage}, nil
 		}
 		if parentTaskID := taskdecomp.ParseParentTaskID(current.Metadata); parentTaskID != uuid.Nil &&
 			strings.EqualFold(strings.TrimSpace(previousStatus), "done") &&
-			strings.EqualFold(strings.TrimSpace(status), "queued") {
+			strings.EqualFold(desiredStatus, "queued") {
 			reopenFeedback, hasFeedback := readString(input, "reopen_feedback")
 			if !hasFeedback || strings.TrimSpace(reopenFeedback) == "" {
 				return map[string]any{"error": "reopen_feedback is required when reopening a completed child task"}, nil
@@ -1453,15 +1456,14 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		} else if _, hasFeedback := input["reopen_feedback"]; hasFeedback {
 			return map[string]any{"error": "reopen_feedback can only be used when reopening a completed child task"}, nil
 		}
-		if strings.EqualFold(strings.TrimSpace(status), "done") {
+		if strings.EqualFold(desiredStatus, "done") {
 			if _, validationErr := e.validateTaskDoneTransition(ctx, current); validationErr != nil {
 				return map[string]any{"error": validationErr.Error()}, nil
 			}
 		}
-		if !strings.EqualFold(previousStatus, strings.TrimSpace(status)) {
+		if !strings.EqualFold(previousStatus, desiredStatus) {
 			statusChanged = true
 		}
-		current.WorkStatus = status
 	} else if metadataWithProcess, processUpdate, processErr := applyPlanningProcessInput(current.Metadata, input, actor); processErr != nil {
 		if errors.Is(processErr, taskplan.ErrPlanningStateRequired) || errors.Is(processErr, taskplan.ErrPlanningOverrideNotNeeded) {
 			return map[string]any{"error": processErr.Error()}, nil
@@ -1479,29 +1481,58 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			planning = syncedPlan
 		}
 	}
-	updated, err := e.tasks.Update(ctx, current)
-	if err != nil {
-		return nil, err
-	}
-	if statusChanged {
-		eventTask := current
-		eventTask.WorkStatus = previousStatus
-		if strings.EqualFold(strings.TrimSpace(updated.WorkStatus), "done") {
-			if report, reportErr := taskplan.CompletionReport(updated.Metadata); reportErr != nil {
-				if !errors.Is(reportErr, taskplan.ErrPlanningArtifactContractIncomplete) {
-					return nil, reportErr
-				}
-			} else {
-				if extraStatusPayload == nil {
-					extraStatusPayload = map[string]any{}
-				}
-				for key, value := range report.Payload() {
-					extraStatusPayload[key] = value
-				}
+	var updated repo.ProjectTask
+	if statusChanged && e.taskService != nil {
+		current.WorkStatus = previousStatus
+		updated, err = e.tasks.Update(ctx, current)
+		if err != nil {
+			return nil, err
+		}
+		transitionActor := taskActorFromExecutionActor(actor)
+		if extraStatusPayload != nil {
+			if _, hasFeedback := extraStatusPayload["parent_integration_feedback"]; hasFeedback {
+				transitionActor.AllowCompletedChildReopen = true
 			}
 		}
-		if err := e.publishTaskStatusEvents(ctx, nil, eventTask, strings.TrimSpace(updated.WorkStatus), extraStatusPayload); err != nil {
+		transitioned, transitionErr := e.taskService.TransitionStatusWithPayload(ctx, updated.ID, desiredStatus, transitionActor, extraStatusPayload)
+		if transitionErr != nil {
+			return nil, transitionErr
+		}
+		updated = repo.ProjectTask(*transitioned)
+	} else {
+		if statusChanged {
+			current.WorkStatus = desiredStatus
+		} else {
+			current.WorkStatus = previousStatus
+		}
+		updated, err = e.tasks.Update(ctx, current)
+		if err != nil {
 			return nil, err
+		}
+	}
+	if statusChanged {
+		if e.taskService != nil {
+		} else {
+			eventTask := current
+			eventTask.WorkStatus = previousStatus
+			eventTask.Metadata = updated.Metadata
+			if strings.EqualFold(strings.TrimSpace(desiredStatus), "done") {
+				if report, reportErr := taskplan.CompletionReport(updated.Metadata); reportErr != nil {
+					if !errors.Is(reportErr, taskplan.ErrPlanningArtifactContractIncomplete) {
+						return nil, reportErr
+					}
+				} else {
+					if extraStatusPayload == nil {
+						extraStatusPayload = map[string]any{}
+					}
+					for key, value := range report.Payload() {
+						extraStatusPayload[key] = value
+					}
+				}
+			}
+			if err := e.publishTaskStatusEvents(ctx, nil, eventTask, strings.TrimSpace(updated.WorkStatus), extraStatusPayload); err != nil {
+				return nil, err
+			}
 		}
 	}
 	response := map[string]any{
@@ -2083,8 +2114,15 @@ func (e *NativeToolExecutor) listDecompositionChildren(ctx context.Context, pare
 }
 
 func (e *NativeToolExecutor) queueDecompositionChildren(ctx context.Context, parentTask repo.ProjectTask, children []repo.ProjectTask) error {
+	actor := taskActorFromExecutionActor(actorFromContext(ctx))
 	for _, child := range children {
 		if !strings.EqualFold(strings.TrimSpace(child.WorkStatus), "draft") {
+			continue
+		}
+		if e.taskService != nil {
+			if _, err := e.taskService.TransitionStatus(ctx, child.ID, "queued", actor); err != nil {
+				return fmt.Errorf("queue decomposition child for parent %s: %w", parentTask.ID, err)
+			}
 			continue
 		}
 		queuedChild := child
@@ -2772,6 +2810,13 @@ func domainActorFromExecutionActor(actor executionActor) (string, *uuid.UUID) {
 
 func flowActorFromExecutionActor(actor executionActor) flowsvc.Actor {
 	return flowsvc.Actor{
+		Type: strings.TrimSpace(actor.principalType),
+		ID:   actor.principalID,
+	}
+}
+
+func taskActorFromExecutionActor(actor executionActor) tasksvc.Actor {
+	return tasksvc.Actor{
 		Type: strings.TrimSpace(actor.principalType),
 		ID:   actor.principalID,
 	}

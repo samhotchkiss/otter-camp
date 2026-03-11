@@ -70,6 +70,7 @@ If Lori needs to create a brand-new PM during bootstrap, that PM candidate is cr
 - When a planned workstream is decomposed into persisted child tasks, the parent workstream becomes orchestration-only. The first queued/executing wave must be the bounded child tasks, and kickoff remains incomplete if the parent is the only queued work item.
 - A parent workstream only reaches `done` after every required child task is complete, the parent has recorded explicit verification of each relevant child output, the combined integration/end-to-end check has passed, and the stated parent outcome is satisfied. Prompt wording is not enough; this is a runtime validation contract.
 - If parent-level integration fails, the parent does not absorb the missing work itself. It reopens a completed child task with specific feedback or creates a new bounded child task for the missing slice, then waits for that child work to finish before trying the parent integration gate again.
+  Reopening a completed child task is an explicit canonical exception to the normal task-state matrix: `done -> queued` is only legal for bounded child tasks with persisted parent linkage and recorded parent integration feedback.
 - Archived or closed project/session transcripts from prior runs are excluded from fresh-kickoff planning context. They are only reintroduced when the operator explicitly chooses **resume** or **recovery** mode.
 - If fresh kickoff cannot reach initial task creation within the prompt/turn guardrails, the session surfaces one concrete blocker and stops auto-churning.
 

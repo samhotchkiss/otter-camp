@@ -1633,15 +1633,20 @@ func TestIntegrationTaskCompletionRequiresPlanningContractOrOverride(t *testing.
 	execRepo := repo.NewFlowNodeExecutionRepo(pool)
 	nodeRepo := repo.NewFlowNodeRepo(pool)
 
-	template := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
 	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
 	if err != nil {
 		t.Fatalf("GetByTemplateOrdered: %v", err)
 	}
-	if len(nodes) != 1 {
-		t.Fatalf("template nodes = %d, want 1", len(nodes))
+	if len(nodes) != 2 {
+		t.Fatalf("template nodes = %d, want 2", len(nodes))
 	}
-	terminalNode := nodes[0]
+	workNode := nodes[0]
+	reviewNode := nodes[1]
+	reviewNode.NodeType = "review"
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("Update review node: %v", err)
+	}
 
 	tests := []struct {
 		title          string
@@ -1711,18 +1716,26 @@ func TestIntegrationTaskCompletionRequiresPlanningContractOrOverride(t *testing.
 				t.Fatalf("GetByID: %v", err)
 			}
 			taskRecord.FlowTemplateID = &template.ID
-			taskRecord.CurrentFlowNodeID = &terminalNode.ID
+			taskRecord.CurrentFlowNodeID = &reviewNode.ID
 			taskRecord.WorkStatus = "review"
 			if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
 				t.Fatalf("taskRepo.Update: %v", err)
 			}
 			if _, err := execRepo.Create(ctx, repo.FlowNodeExecution{
 				TaskID:      taskID,
-				FlowNodeID:  terminalNode.ID,
+				FlowNodeID:  workNode.ID,
 				VisitNumber: 1,
 				Status:      "completed",
 			}); err != nil {
-				t.Fatalf("Create flow execution: %v", err)
+				t.Fatalf("Create work execution: %v", err)
+			}
+			if _, err := execRepo.Create(ctx, repo.FlowNodeExecution{
+				TaskID:      taskID,
+				FlowNodeID:  reviewNode.ID,
+				VisitNumber: 1,
+				Status:      "completed",
+			}); err != nil {
+				t.Fatalf("Create review execution: %v", err)
 			}
 
 			out, err = executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
