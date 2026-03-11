@@ -154,6 +154,7 @@ type Actor struct {
 	AllowDoneBypass                bool
 	AllowGateBypass                bool
 	AllowBootstrapGateAutoComplete bool
+	AllowBootstrapSetupComplete    bool
 	AllowCompletedChildReopen      bool
 }
 
@@ -565,6 +566,9 @@ func (s *service) ensureCreateEligible(ctx context.Context, projectID uuid.UUID,
 	if gateTask == nil {
 		return nil
 	}
+	if bootstrapPlanningCreateAllowed(*gateTask) {
+		return nil
+	}
 	return ErrCreateBlockedByProjectGate{
 		GateTaskID:     gateTask.ID,
 		GateTaskNumber: gateTask.TaskNumber,
@@ -615,8 +619,9 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		return nil, fmt.Errorf("%w: expected current status %q before transition to %q, found %q", repo.ErrConflict, expectedFrom, target, from)
 	}
 	bootstrapGateAutoComplete := allowsBootstrapGateAutoComplete(taskRecord, from, target, actor)
+	bootstrapSetupComplete := allowsBootstrapSetupComplete(taskRecord, from, target, actor)
 	childReopen := allowsCompletedChildReopen(taskRecord, from, target, actor)
-	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !childReopen {
+	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !childReopen {
 		return nil, ErrInvalidStatusTransition{From: from, To: target}
 	}
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
@@ -642,7 +647,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 			return nil, ErrFlowTemplateReviewRequired
 		}
 	}
-	if !actor.AllowFlowRuntimeBypass {
+	if !actor.AllowFlowRuntimeBypass && !bootstrapSetupComplete {
 		if err := s.validateFlowRuntimeStatus(ctx, taskRecord, target); err != nil {
 			return nil, err
 		}
@@ -703,7 +708,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 			return nil, ErrInProgressRequiresActiveFlow{TaskID: taskRecord.ID}
 		}
 	}
-	if target == "done" && !actor.AllowDoneBypass && !bootstrapGateAutoComplete {
+	if target == "done" && !actor.AllowDoneBypass && !bootstrapGateAutoComplete && !bootstrapSetupComplete {
 		if report, reportErr := taskplan.CompletionReport(taskRecord.Metadata); reportErr != nil {
 			return nil, reportErr
 		} else if payload := report.Payload(); len(payload) > 0 {
@@ -1841,6 +1846,33 @@ func allowsBootstrapGateAutoComplete(taskRecord repo.ProjectTask, from, target s
 	metadata := taskMetadataMap(taskRecord.Metadata)
 	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
 	return bootstrapGate
+}
+
+func bootstrapPlanningCreateAllowed(taskRecord repo.ProjectTask) bool {
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.BlocksScope), "all") {
+		return false
+	}
+	metadata := taskMetadataMap(taskRecord.Metadata)
+	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
+	return bootstrapGate
+}
+
+func allowsBootstrapSetupComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
+	if !actor.AllowBootstrapSetupComplete {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(actor.Type), "system") {
+		return false
+	}
+	if normalizeStatus(target) != "done" {
+		return false
+	}
+	metadata := taskMetadataMap(taskRecord.Metadata)
+	bootstrapStep, _ := metadata["bootstrap_setup_task"].(bool)
+	if !bootstrapStep {
+		return false
+	}
+	return !isTerminalTaskStatus(from)
 }
 
 func bootstrapGateCreationExempt(metadata json.RawMessage) bool {

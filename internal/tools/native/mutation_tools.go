@@ -1611,6 +1611,101 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	return response, nil
 }
 
+func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, input map[string]any) (map[string]any, error) {
+	if e.tasks == nil || e.taskService == nil {
+		return map[string]any{"error": "task_repository_unavailable"}, nil
+	}
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	projectID, ok := readUUID(input, "project_id")
+	if !ok || projectID == uuid.Nil {
+		if scope.projectID == nil || *scope.projectID == uuid.Nil {
+			return map[string]any{"error": "project_id_required"}, nil
+		}
+		projectID = *scope.projectID
+	}
+	stepSlugs := readStringSlice(input, "completed_step_slugs")
+	if len(stepSlugs) == 0 {
+		return map[string]any{"error": "completed_step_slugs_required"}, nil
+	}
+
+	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	tasksBySlug := make(map[string]repo.ProjectTask)
+	for _, taskRecord := range projectTasks {
+		metadata := metadataObject(taskRecord.Metadata)
+		setupTask, _ := metadata["bootstrap_setup_task"].(bool)
+		if !setupTask {
+			continue
+		}
+		slug := strings.TrimSpace(readStringValue(metadata["bootstrap_step_slug"]))
+		if slug == "" {
+			continue
+		}
+		tasksBySlug[slug] = taskRecord
+	}
+
+	completed := make([]map[string]any, 0, len(stepSlugs))
+	missing := make([]string, 0)
+	signoffSummary, _ := readString(input, "sign_off_summary")
+	for _, rawSlug := range stepSlugs {
+		slug := strings.TrimSpace(rawSlug)
+		if slug == "" {
+			continue
+		}
+		taskRecord, exists := tasksBySlug[slug]
+		if !exists {
+			missing = append(missing, slug)
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
+			payload := map[string]any{
+				"bootstrap_setup_persisted": true,
+				"bootstrap_step_slug":       slug,
+			}
+			if strings.TrimSpace(signoffSummary) != "" {
+				payload["sign_off_summary"] = strings.TrimSpace(signoffSummary)
+			}
+			updated, transitionErr := e.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, "done", tasksvc.Actor{
+				Type:                        "system",
+				AllowFlowRuntimeBypass:      true,
+				AllowDoneBypass:             true,
+				AllowBootstrapSetupComplete: true,
+			}, payload)
+			if transitionErr != nil {
+				return nil, transitionErr
+			}
+			taskRecord = repo.ProjectTask(*updated)
+		}
+		completed = append(completed, map[string]any{
+			"task_id":     taskRecord.ID,
+			"task_number": taskRecord.TaskNumber,
+			"title":       taskRecord.Title,
+			"step_slug":   slug,
+			"work_status": taskRecord.WorkStatus,
+		})
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return map[string]any{
+			"error":              "unknown_bootstrap_step",
+			"missing_step_slugs": missing,
+		}, nil
+	}
+	sort.Slice(completed, func(i, j int) bool {
+		return fmt.Sprintf("%v", completed[i]["step_slug"]) < fmt.Sprintf("%v", completed[j]["step_slug"])
+	})
+	return map[string]any{
+		"project_id":      projectID,
+		"status":          "persisted",
+		"completed_steps": completed,
+	}, nil
+}
+
 func (e *NativeToolExecutor) projectRequiresPMBeforeQueue(ctx context.Context, projectID uuid.UUID) bool {
 	if e.projects == nil {
 		return false
@@ -3818,7 +3913,7 @@ func (e *NativeToolExecutor) handleSessionInviteAgent(ctx context.Context, input
 				continue
 			}
 			return map[string]any{
-				"participant_id": participant.ID,
+				"participant_id":  participant.ID,
 				"already_present": true,
 			}, nil
 		}
@@ -3845,7 +3940,7 @@ func (e *NativeToolExecutor) handleSessionInviteAgent(ctx context.Context, input
 						continue
 					}
 					return map[string]any{
-						"participant_id": participant.ID,
+						"participant_id":  participant.ID,
 						"already_present": true,
 					}, nil
 				}
@@ -3854,7 +3949,7 @@ func (e *NativeToolExecutor) handleSessionInviteAgent(ctx context.Context, input
 		return nil, err
 	}
 	return map[string]any{
-		"participant_id": created.ID,
+		"participant_id":  created.ID,
 		"already_present": false,
 	}, nil
 }

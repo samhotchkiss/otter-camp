@@ -459,6 +459,8 @@ func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input
 		return e.handleTaskCreate(ctx, input)
 	case "task.update":
 		return e.handleTaskUpdate(ctx, input)
+	case "bootstrap.setup.persist":
+		return e.handleBootstrapSetupPersist(ctx, input)
 	case "task.add_dependency":
 		return e.handleTaskAddDependency(ctx, input)
 	case "task.remove_dependency":

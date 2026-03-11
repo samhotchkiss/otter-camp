@@ -3722,6 +3722,120 @@ func TestIntegrationProjectKickoffTaskCreateBindsCanonicalRepoBeforeTaskTree(t *
 	}
 }
 
+func TestIntegrationBootstrapGateAllowsPlanningTaskCreateBeforeGateClears(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Create Allowed",
+		"slug":        "bootstrap-create-allowed-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap gating allows planning-time task persistence.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap planning",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	createOut, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":       projectID.String(),
+		"title":            "WS1: Bootstrap-planned research slice",
+		"description":      "Create the first bounded task during bootstrap while the governance gate is still open.",
+		"flow_template_id": template.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.create during bootstrap gate: %v", err)
+	}
+	if createOut["error"] != nil {
+		t.Fatalf("task.create error = %v, want nil", createOut["error"])
+	}
+	taskID := mustUUIDValue(t, createOut["task"].(map[string]any)["id"])
+	createdTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if createdTask.WorkStatus != "draft" {
+		t.Fatalf("created task status = %q, want draft", createdTask.WorkStatus)
+	}
+}
+
+func TestIntegrationBootstrapSetupPersistCompletesRequestedSetupSteps(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Persist Tool",
+		"slug":        "bootstrap-persist-tool-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap.setup.persist completes setup checklist tasks.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap persist",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{"bind-repo-environment", "staff-project", "record-frank-sign-off"},
+		"sign_off_summary":     "Frank approved the bootstrap setup.",
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("bootstrap.setup.persist error = %v, want nil", out["error"])
+	}
+	if out["status"] != "persisted" {
+		t.Fatalf("status = %v, want persisted", out["status"])
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list project tasks: %v", err)
+	}
+	statuses := map[string]string{}
+	for _, taskRecord := range tasks {
+		metadata := metadataObject(taskRecord.Metadata)
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
+			continue
+		}
+		statuses[readStringValue(metadata["bootstrap_step_slug"])] = taskRecord.WorkStatus
+	}
+	for _, slug := range []string{"bind-repo-environment", "staff-project", "record-frank-sign-off"} {
+		if got := statuses[slug]; got != "done" {
+			t.Fatalf("bootstrap step %q status = %q, want done", slug, got)
+		}
+	}
+}
+
 func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

@@ -44,6 +44,7 @@ func TestKeyToolSchemasExposeRequiredParameters(t *testing.T) {
 		{name: "task.update", requiredKeys: []string{"task_id"}, propertyKeys: []string{"task_id", "title", "description", "work_status", "flow_template_id", "assigned_agent_id", "reopen_feedback", "child_output_verifications", "integration_check", "outcome_assessment", "planning_artifacts", "planning_override_reason", "planning_follow_on_stop_reason"}},
 		{name: "agent.create_staff", requiredKeys: []string{"name", "agent_type", "system_prompt"}, propertyKeys: []string{"name", "agent_type", "system_prompt", "operator_instructions"}},
 		{name: "agent.assign_project", requiredKeys: []string{"agent_id", "project_id", "role"}, propertyKeys: []string{"agent_id", "project_id", "role"}},
+		{name: "bootstrap.setup.persist", requiredKeys: []string{"completed_step_slugs"}, propertyKeys: []string{"project_id", "completed_step_slugs", "sign_off_summary"}},
 		{name: "flow.list_templates", propertyKeys: []string{"project_id"}},
 		{name: "file.write", requiredKeys: []string{"path", "content"}, propertyKeys: []string{"path", "content"}},
 		{name: "cli.execute", requiredKeys: []string{"command"}, propertyKeys: []string{"command", "working_directory", "timeout_seconds", "env_overrides"}},
