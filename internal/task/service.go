@@ -145,6 +145,7 @@ func (e ErrTaskFlowStateConflict) Is(target error) bool {
 type Actor struct {
 	Type                           string
 	ID                             uuid.UUID
+	ExpectedFromStatus             string
 	AllowNoActiveFlow              bool
 	AllowFlowRuntimeBypass         bool
 	AllowDoneBypass                bool
@@ -546,8 +547,12 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 func (s *service) transitionTaskRecordTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, toStatus string, actor Actor, extraPayload map[string]any, approvalOverride bool) (*ProjectTask, error) {
 	from := normalizeStatus(taskRecord.WorkStatus)
 	target := normalizeStatus(toStatus)
+	expectedFrom := normalizeStatus(actor.ExpectedFromStatus)
 	if target == "" {
 		return nil, ErrTransitionTargetRequired
+	}
+	if expectedFrom != "" && from != expectedFrom {
+		return nil, fmt.Errorf("%w: expected current status %q before transition to %q, found %q", repo.ErrConflict, expectedFrom, target, from)
 	}
 	bootstrapGateAutoComplete := allowsBootstrapGateAutoComplete(taskRecord, from, target, actor)
 	childReopen := allowsCompletedChildReopen(taskRecord, from, target, actor)

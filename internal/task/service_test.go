@@ -136,6 +136,28 @@ func TestTransitionStatusInvalidReturnsTypedError(t *testing.T) {
 	}
 }
 
+func TestTransitionStatusExpectedFromStatusRejectsStaleTransition(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "blocked",
+				Title:          "Task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	_, err := svc.TransitionStatus(context.Background(), taskID, "in_progress", Actor{Type: "system", ExpectedFromStatus: "queued"})
+	if !errors.Is(err, repo.ErrConflict) {
+		t.Fatalf("TransitionStatus err = %v, want repo.ErrConflict", err)
+	}
+}
+
 func TestTransitionStatusAllowsBootstrapGateAutoComplete(t *testing.T) {
 	taskID := uuid.New()
 	flowTemplateID := uuid.New()

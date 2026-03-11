@@ -146,6 +146,52 @@ func TestProjectTaskRepoCreateConcurrentTaskNumbersUniquePerProject(t *testing.T
 	}
 }
 
+func TestProjectTaskRepoUpdateRejectsStaleSnapshot(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskRepoOrgProject(t, ctx, pool)
+	taskRepo := NewProjectTaskRepo(pool)
+
+	created, err := taskRepo.Create(ctx, ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Stale write task",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	fresh, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID fresh: %v", err)
+	}
+	stale, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID stale: %v", err)
+	}
+
+	fresh.WorkStatus = "blocked"
+	if _, err := taskRepo.Update(ctx, fresh); err != nil {
+		t.Fatalf("Update fresh: %v", err)
+	}
+
+	stale.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, stale); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Update stale err = %v, want ErrConflict", err)
+	}
+
+	stored, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID stored: %v", err)
+	}
+	if stored.WorkStatus != "blocked" {
+		t.Fatalf("stored work_status = %q, want blocked", stored.WorkStatus)
+	}
+}
+
 func TestProjectTaskEventRepoRecordAndListByTaskOrder(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

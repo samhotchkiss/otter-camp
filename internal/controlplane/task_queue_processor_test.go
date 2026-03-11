@@ -1011,8 +1011,14 @@ func TestEnsureFlowRunRepairsMissingNodeSessionBeforeCreatingWakeup(t *testing.T
 	sessionID := uuid.New()
 	runID := uuid.New()
 
+	flowRepo := &fakeTaskQueueFlowExecutionRepository{
+		execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID},
+	}
 	chatService := &fakeTaskQueueChatService{
 		session: &chat.ChatSession{ID: sessionID, Status: "active", Mode: "async"},
+		onGetOrCreateNodeSession: func(session *chat.ChatSession) {
+			flowRepo.execution.SessionID = &session.ID
+		},
 	}
 	runService := &fakeTaskQueueRunStarter{
 		run: Run{ID: runID, SessionID: &sessionID},
@@ -1027,11 +1033,9 @@ func TestEnsureFlowRunRepairsMissingNodeSessionBeforeCreatingWakeup(t *testing.T
 				Title:          "Flow task",
 			},
 		},
-		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
-			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID},
-		},
-		runs:  runService,
-		chats: chatService,
+		flowExecutions: flowRepo,
+		runs:           runService,
+		chats:          chatService,
 	}
 
 	err := processor.ensureFlowRun(ctx, eventbus.DomainEvent{ID: uuid.New()}, repo.ProjectTask{
@@ -1075,8 +1079,14 @@ func TestEnsureFlowTransitionRunRepairsMissingNodeSessionBeforeCreatingWakeup(t 
 	agentID := uuid.New()
 	sessionID := uuid.New()
 
+	flowRepo := &fakeTaskQueueFlowExecutionRepository{
+		execution: repo.FlowNodeExecution{ID: nextExecutionID, TaskID: taskID, FlowNodeID: nextNodeID, SessionID: &sessionID},
+	}
 	chatService := &fakeTaskQueueChatService{
 		session: &chat.ChatSession{ID: sessionID, Status: "active", Mode: "async"},
+		onGetOrCreateNodeSession: func(session *chat.ChatSession) {
+			flowRepo.execution.SessionID = &session.ID
+		},
 	}
 	runService := &fakeTaskQueueRunStarter{}
 	sessionRepo := &fakeTaskQueueSessionRepository{
@@ -1099,9 +1109,7 @@ func TestEnsureFlowTransitionRunRepairsMissingNodeSessionBeforeCreatingWakeup(t 
 				FlowTemplateID: &nextNodeID,
 			},
 		},
-		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
-			execution: repo.FlowNodeExecution{ID: nextExecutionID, TaskID: taskID, FlowNodeID: nextNodeID, SessionID: &sessionID},
-		},
+		flowExecutions: flowRepo,
 		flowNodes: &fakeTaskQueueFlowNodeRepository{
 			node: repo.FlowNode{ID: nextNodeID, NodeType: "review"},
 		},
@@ -1141,6 +1149,148 @@ func TestEnsureFlowTransitionRunRepairsMissingNodeSessionBeforeCreatingWakeup(t 
 	}
 	if runService.createRunInputs[0].SessionID == nil || *runService.createRunInputs[0].SessionID != sessionID {
 		t.Fatalf("CreateRun session_id = %v, want %s", runService.createRunInputs[0].SessionID, sessionID)
+	}
+}
+
+func TestDispatchTaskQueueWakeupFlowCurrentUsesExecutionSession(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	runID := uuid.New()
+	agentID := uuid.New()
+	genericSessionID := uuid.New()
+	executionSessionID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{
+		createSessionResult: &chat.ChatSession{ID: genericSessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID, Mode: "async", Status: "active"},
+		nodeSession:         &chat.ChatSession{ID: executionSessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID, Mode: "async", Status: "active"},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:              taskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				Title:           "Flow dispatch task",
+				FlowTemplateID:  &nodeID,
+				AssignedAgentID: &agentID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, SessionID: &executionSessionID, Status: "active"},
+		},
+		chats: chatService,
+	}
+
+	metadata, err := json.Marshal(map[string]any{
+		"execution_wakeup": map[string]any{
+			"source": "task_queue_processor",
+			"kind":   "flow_current",
+		},
+		"flow_node_execution_id": executionID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	err = processor.dispatchTaskQueueWakeup(ctx, Run{
+		ID:             runID,
+		OrganizationID: orgID,
+		PrincipalType:  "agent",
+		PrincipalID:    agentID,
+		TaskID:         &taskID,
+		FlowNodeID:     &nodeID,
+		SessionID:      &executionSessionID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		t.Fatalf("dispatchTaskQueueWakeup() error = %v", err)
+	}
+
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("appendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+	if chatService.appendMessages[0].SessionID != executionSessionID {
+		t.Fatalf("kickoff session_id = %s, want execution session %s", chatService.appendMessages[0].SessionID, executionSessionID)
+	}
+	if len(chatService.createSessionInputs) != 0 {
+		t.Fatalf("CreateSession calls = %d, want 0 for flow wakeup dispatch", len(chatService.createSessionInputs))
+	}
+}
+
+func TestDispatchTaskQueueWakeupFlowTransitionUsesExecutionSession(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	runID := uuid.New()
+	agentID := uuid.New()
+	genericSessionID := uuid.New()
+	executionSessionID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{
+		createSessionResult: &chat.ChatSession{ID: genericSessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID, Mode: "async", Status: "active"},
+		nodeSession:         &chat.ChatSession{ID: executionSessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID, Mode: "async", Status: "active"},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:              taskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				Title:           "Flow transition task",
+				FlowTemplateID:  &nodeID,
+				AssignedAgentID: &agentID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, SessionID: &executionSessionID, Status: "active"},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{ID: nodeID, DisplayName: "Review", NodeType: "review"},
+		},
+		chats: chatService,
+	}
+
+	metadata, err := json.Marshal(map[string]any{
+		"execution_wakeup": map[string]any{
+			"source": "task_queue_processor",
+			"kind":   "flow_transition",
+		},
+		"flow_node_execution_id": executionID.String(),
+		"flow_event_type":        "flow.advanced",
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	err = processor.dispatchTaskQueueWakeup(ctx, Run{
+		ID:             runID,
+		OrganizationID: orgID,
+		PrincipalType:  "agent",
+		PrincipalID:    agentID,
+		TaskID:         &taskID,
+		FlowNodeID:     &nodeID,
+		SessionID:      &executionSessionID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		t.Fatalf("dispatchTaskQueueWakeup() error = %v", err)
+	}
+
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("appendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+	if chatService.appendMessages[0].SessionID != executionSessionID {
+		t.Fatalf("kickoff session_id = %s, want execution session %s", chatService.appendMessages[0].SessionID, executionSessionID)
+	}
+	if len(chatService.createSessionInputs) != 0 {
+		t.Fatalf("CreateSession calls = %d, want 0 for flow transition dispatch", len(chatService.createSessionInputs))
 	}
 }
 
@@ -1674,6 +1824,8 @@ type addParticipantCall struct {
 type fakeTaskQueueChatService struct {
 	calls                []string
 	session              *chat.ChatSession
+	createSessionResult  *chat.ChatSession
+	nodeSession          *chat.ChatSession
 	turn                 *chat.ChatTurn
 	createSessionInputs  []chat.CreateSessionInput
 	createSessionErr     error
@@ -1681,14 +1833,15 @@ type fakeTaskQueueChatService struct {
 		flowNodeExecutionID uuid.UUID
 		agentID             uuid.UUID
 	}
-	getOrCreateNodeErr  error
-	onCreateSession     func(*chat.ChatSession)
-	addParticipantCalls []addParticipantCall
-	addParticipantErr   error
-	appendMessageErr    error
-	appendMessages      []chat.AppendMessageInput
-	listMessages        []*chat.ChatMessage
-	listMessagesErr     error
+	getOrCreateNodeErr       error
+	onGetOrCreateNodeSession func(*chat.ChatSession)
+	onCreateSession          func(*chat.ChatSession)
+	addParticipantCalls      []addParticipantCall
+	addParticipantErr        error
+	appendMessageErr         error
+	appendMessages           []chat.AppendMessageInput
+	listMessages             []*chat.ChatMessage
+	listMessagesErr          error
 }
 
 func (f *fakeTaskQueueChatService) GetSession(_ context.Context, id uuid.UUID) (*chat.ChatSession, error) {
@@ -1708,6 +1861,12 @@ func (f *fakeTaskQueueChatService) CreateSession(_ context.Context, input chat.C
 	f.createSessionInputs = append(f.createSessionInputs, input)
 	if f.createSessionErr != nil {
 		return nil, f.createSessionErr
+	}
+	if f.createSessionResult != nil {
+		if f.onCreateSession != nil {
+			f.onCreateSession(f.createSessionResult)
+		}
+		return f.createSessionResult, nil
 	}
 	if f.session != nil {
 		if f.onCreateSession != nil {
@@ -1742,7 +1901,16 @@ func (f *fakeTaskQueueChatService) GetOrCreateNodeSession(_ context.Context, flo
 	if f.getOrCreateNodeErr != nil {
 		return nil, f.getOrCreateNodeErr
 	}
+	if f.nodeSession != nil {
+		if f.onGetOrCreateNodeSession != nil {
+			f.onGetOrCreateNodeSession(f.nodeSession)
+		}
+		return f.nodeSession, nil
+	}
 	if f.session != nil {
+		if f.onGetOrCreateNodeSession != nil {
+			f.onGetOrCreateNodeSession(f.session)
+		}
 		return f.session, nil
 	}
 	session := &chat.ChatSession{
@@ -1751,6 +1919,9 @@ func (f *fakeTaskQueueChatService) GetOrCreateNodeSession(_ context.Context, flo
 		Mode:   "async",
 	}
 	f.session = session
+	if f.onGetOrCreateNodeSession != nil {
+		f.onGetOrCreateNodeSession(session)
+	}
 	return session, nil
 }
 

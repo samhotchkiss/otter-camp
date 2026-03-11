@@ -296,9 +296,9 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 		if _, err := p.ensureTaskFlowExecutionState(ctx, taskRecord); err != nil {
 			return err
 		}
-		if _, err := p.taskService.TransitionStatus(ctx, taskID, "in_progress", tasksvc.Actor{Type: "system"}); err != nil {
+		if _, err := p.taskService.TransitionStatus(ctx, taskID, "in_progress", tasksvc.Actor{Type: "system", ExpectedFromStatus: "queued"}); err != nil {
 			var transitionErr tasksvc.ErrInvalidStatusTransition
-			if !errors.As(err, &transitionErr) {
+			if !errors.As(err, &transitionErr) && !errors.Is(err, repo.ErrConflict) {
 				return err
 			}
 		}
@@ -765,11 +765,15 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		session, err := p.ensureCanonicalTaskAsyncSession(ctx, taskRecord)
+		principalID := runRecord.PrincipalID
+		if principalID == uuid.Nil && taskRecord.AssignedAgentID != nil {
+			principalID = *taskRecord.AssignedAgentID
+		}
+		execution, err = p.repairFlowExecutionSession(ctx, taskRecord, execution, principalID)
 		if err != nil {
 			return err
 		}
-		if session == nil || session.ID == uuid.Nil {
+		if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
 			return nil
 		}
 		messageMetadata, err := json.Marshal(map[string]any{
@@ -790,7 +794,7 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		return p.appendWakeupKickoff(ctx, runRecord, session.ID, buildFlowKickoffMessage(taskRecord, execution), messageMetadata)
+		return p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, buildFlowKickoffMessage(taskRecord, execution), messageMetadata)
 	case "flow_transition":
 		executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
 		if !ok {
@@ -813,11 +817,15 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		session, err := p.ensureCanonicalTaskAsyncSession(ctx, taskRecord)
+		principalID := runRecord.PrincipalID
+		if principalID == uuid.Nil && taskRecord.AssignedAgentID != nil {
+			principalID = *taskRecord.AssignedAgentID
+		}
+		execution, err = p.repairFlowExecutionSession(ctx, taskRecord, execution, principalID)
 		if err != nil {
 			return err
 		}
-		if session == nil || session.ID == uuid.Nil {
+		if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
 			return nil
 		}
 		eventType := metadataStringValue(runRecord.Metadata, "flow_event_type")
@@ -832,7 +840,7 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		return p.appendWakeupKickoff(ctx, runRecord, session.ID, buildFlowTransitionKickoffMessage(taskRecord, node, execution, eventType, rejectionFeedback), messageMetadata)
+		return p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, buildFlowTransitionKickoffMessage(taskRecord, node, execution, eventType, rejectionFeedback), messageMetadata)
 	default:
 		return nil
 	}

@@ -399,7 +399,7 @@ func (r *ProjectTaskRepo) Update(ctx context.Context, task ProjectTask) (Project
 }
 
 func (r *ProjectTaskRepo) UpdateTx(ctx context.Context, tx pgx.Tx, task ProjectTask) (ProjectTask, error) {
-	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `
+	query := `
 		UPDATE project_task
 		SET
 			title = $2,
@@ -416,6 +416,29 @@ func (r *ProjectTaskRepo) UpdateTx(ctx context.Context, tx pgx.Tx, task ProjectT
 			metadata = $13::jsonb,
 			completed_at = $14
 		WHERE id = $1
+	`
+	args := []any{
+		task.ID,
+		strings.TrimSpace(task.Title),
+		task.Description,
+		strings.TrimSpace(task.WorkStatus),
+		defaultProjectTaskBlocksScope(task.BlocksScope),
+		task.CurrentFlowNodeID,
+		task.FlowTemplateID,
+		task.ScheduleID,
+		task.BranchName,
+		task.RequiresHumanReview,
+		defaultProjectTaskPriority(task.Priority),
+		task.AssignedAgentID,
+		normalizeProjectTaskJSON(task.Metadata, json.RawMessage(`{}`)),
+		task.CompletedAt,
+	}
+	optimisticWrite := !task.UpdatedAt.IsZero()
+	if optimisticWrite {
+		query += ` AND updated_at = $15`
+		args = append(args, task.UpdatedAt.UTC())
+	}
+	query += `
 		RETURNING
 			id,
 			organization_id,
@@ -438,25 +461,18 @@ func (r *ProjectTaskRepo) UpdateTx(ctx context.Context, tx pgx.Tx, task ProjectT
 			created_at,
 			updated_at,
 			completed_at
-	`,
-		task.ID,
-		strings.TrimSpace(task.Title),
-		task.Description,
-		strings.TrimSpace(task.WorkStatus),
-		defaultProjectTaskBlocksScope(task.BlocksScope),
-		task.CurrentFlowNodeID,
-		task.FlowTemplateID,
-		task.ScheduleID,
-		task.BranchName,
-		task.RequiresHumanReview,
-		defaultProjectTaskPriority(task.Priority),
-		task.AssignedAgentID,
-		normalizeProjectTaskJSON(task.Metadata, json.RawMessage(`{}`)),
-		task.CompletedAt,
-	)
+	`
+	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, query, args...)
 
 	updated, err := scanProjectTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if optimisticWrite {
+			existsRow := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `SELECT 1 FROM project_task WHERE id = $1`, task.ID)
+			var exists int
+			if scanErr := existsRow.Scan(&exists); scanErr == nil {
+				return ProjectTask{}, ErrConflict
+			}
+		}
 		return ProjectTask{}, ErrNotFound
 	}
 	if err != nil {
