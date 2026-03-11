@@ -3090,6 +3090,50 @@ func TestIntegrationSessionCreateTaskBoundAsyncWorkUsesTaskSession(t *testing.T)
 	}
 }
 
+func TestIntegrationSessionInviteAgentIsIdempotent(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project", project.ID)
+	participantRepo := repo.NewChatParticipantRepo(pool)
+
+	existing, err := participantRepo.Create(ctx, repo.ChatParticipant{
+		SessionID:              session.ID,
+		ParticipantType:        "agent",
+		ParticipantID:          agent.ID,
+		NotificationPreference: "all",
+		Role:                   "member",
+	})
+	if err != nil {
+		t.Fatalf("seed existing participant: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "session.invite_agent", map[string]any{
+		"session_id": session.ID.String(),
+		"agent_id":   agent.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("session.invite_agent duplicate: %v", err)
+	}
+	if out["already_present"] != true {
+		t.Fatalf("already_present = %v, want true", out["already_present"])
+	}
+	if got := mustUUIDValue(t, out["participant_id"]); got != existing.ID {
+		t.Fatalf("participant_id = %s, want existing %s", got, existing.ID)
+	}
+
+	participants, err := participantRepo.ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession participants: %v", err)
+	}
+	if len(participants) != 1 {
+		t.Fatalf("participant rows = %d, want 1", len(participants))
+	}
+}
+
 func TestIntegrationProjectArchiveClosesScopedSessions(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
