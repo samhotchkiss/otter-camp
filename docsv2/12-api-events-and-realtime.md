@@ -995,6 +995,8 @@ event: task.status_changed
 data: {"task_id":"660f9500-f3ac-52e5-b827-557766550000","from_status":"in_progress","to_status":"review"}
 ```
 
+For flow-owned node transitions, `task.status_changed` may also carry `transition_source = "flow_transition"`, `flow_event_type` (`flow.advanced` or `flow.rejected`), and `to_flow_execution_id`. Consumers that also handle flow events should treat that metadata as the dedupe key that prevents starting a second generic wakeup for the same new execution.
+
 - The `id` field is the event's `seq` value (the monotonic sequence number from the `domain_event` table). This provides strict ordering and makes reconnection trivial.
 - On reconnect, the client sends `Last-Event-ID` (a numeric seq value) and the server replays all events with `seq > Last-Event-ID`.
 - If `Last-Event-ID` references a seq that has been purged (older than the retention window), the server responds with the oldest available event and includes an `X-Events-Gap: true` header to signal that events were missed.
