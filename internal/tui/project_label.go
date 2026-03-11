@@ -35,6 +35,9 @@ func cleanProjectSessionLabel(value string) string {
 
 func isSyntheticProjectIDLabel(value string) bool {
 	trimmed := strings.TrimSpace(value)
+	if looksLikeRawUUID(trimmed) {
+		return true
+	}
 	if len(trimmed) <= len("Project ") || !strings.HasPrefix(strings.ToLower(trimmed), "project ") {
 		return false
 	}
@@ -55,4 +58,12 @@ func isSyntheticProjectIDLabel(value string) bool {
 		}
 	}
 	return hexLen >= 8
+}
+
+func looksLikeRawUUID(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) != 36 {
+		return false
+	}
+	return trimmed[8] == '-' && trimmed[13] == '-' && trimmed[18] == '-' && trimmed[23] == '-'
 }
