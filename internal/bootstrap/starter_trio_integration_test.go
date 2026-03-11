@@ -102,9 +102,10 @@ func TestStarterTrioLoriPromptIncludesStaffingWorkflow(t *testing.T) {
 
 	for _, snippet := range []string{
 		"project.staffing_needed",
-		"PM recommendation",
-		"worker/reviewer recommendations",
-		"human approval request",
+		"Hire and assign a real staff PM during bootstrap",
+		"Never assign Frank, Lori, or Ellie to project PM/worker/reviewer roles",
+		"no single executable task should usually exceed 30 minutes",
+		"work stage, an internal review stage, and a completion/merge stage",
 	} {
 		if !strings.Contains(loriPrompt, snippet) {
 			t.Fatalf("Lori prompt missing %q", snippet)
