@@ -669,9 +669,7 @@ func (s *service) advanceNextFlowTx(ctx context.Context, taskRecord repo.Project
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	if err := s.ensureExecutionSession(ctx, &created); err != nil {
-		return nil, err
-	}
+	s.ensureExecutionSessionBestEffort(ctx, &created)
 	return &created, nil
 }
 
@@ -696,9 +694,7 @@ func (s *service) advanceNextFlowNonTx(ctx context.Context, taskRecord repo.Proj
 	if err != nil {
 		return nil, err
 	}
-	if err := s.ensureExecutionSession(ctx, &created); err != nil {
-		return nil, err
-	}
+	s.ensureExecutionSessionBestEffort(ctx, &created)
 	targetStatus := taskWorkStatusForNode(nextNode)
 	if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
 		statusPayload := map[string]any{
@@ -1045,9 +1041,7 @@ func (s *service) rejectFlowNodeTx(ctx context.Context, taskRecord repo.ProjectT
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	if err := s.ensureExecutionSession(ctx, &created); err != nil {
-		return nil, err
-	}
+	s.ensureExecutionSessionBestEffort(ctx, &created)
 	return &created, nil
 }
 
@@ -1071,9 +1065,7 @@ func (s *service) rejectFlowNodeNonTx(ctx context.Context, taskRecord repo.Proje
 	if err != nil {
 		return nil, err
 	}
-	if err := s.ensureExecutionSession(ctx, &created); err != nil {
-		return nil, err
-	}
+	s.ensureExecutionSessionBestEffort(ctx, &created)
 	targetStatus := taskWorkStatusForNode(rejectNode)
 	if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
 		statusPayload := map[string]any{
@@ -1327,6 +1319,10 @@ func (s *service) ensureExecutionSession(ctx context.Context, execution *repo.Fl
 	}
 	execution.SessionID = &session.ID
 	return nil
+}
+
+func (s *service) ensureExecutionSessionBestEffort(ctx context.Context, execution *repo.FlowNodeExecution) {
+	_ = s.ensureExecutionSession(ctx, execution)
 }
 
 func (s *service) ensureProjectNotPaused(ctx context.Context, projectID uuid.UUID) error {

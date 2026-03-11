@@ -563,19 +563,11 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 		principalType = "agent"
 		principalID = *taskRecord.AssignedAgentID
 	}
-	if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
-		if principalType != "agent" || principalID == uuid.Nil {
-			return fmt.Errorf("task %s execution %s missing session_id and no assigned agent available to repair it", taskRecord.ID, execution.ID)
-		}
-		session, err := p.chats.GetOrCreateNodeSession(ctx, execution.ID, principalID)
-		if err != nil {
-			return err
-		}
-		if session == nil || session.ID == uuid.Nil {
-			return fmt.Errorf("task %s execution %s failed to repair node session", taskRecord.ID, execution.ID)
-		}
-		execution.SessionID = &session.ID
+	repairedExecution, err := p.repairFlowExecutionSession(ctx, taskRecord, *execution, principalID)
+	if err != nil {
+		return err
 	}
+	execution = &repairedExecution
 
 	wakeupPayload := map[string]any{
 		"source":                 "task_queue_processor",
@@ -1246,6 +1238,11 @@ func (p *TaskQueueProcessor) ensureFlowTransitionRun(
 	}
 
 	sessionID := nextExecution.SessionID
+	repairedExecution, err := p.repairFlowExecutionSession(ctx, taskRecord, nextExecution, agentID)
+	if err != nil {
+		return err
+	}
+	sessionID = repairedExecution.SessionID
 	result, err := p.runs.CreateExecutionWakeup(ctx, executionWakeupInput{
 		CreateRunInput: CreateRunInput{
 			OrganizationID: taskRecord.OrganizationID,
@@ -1277,6 +1274,24 @@ func (p *TaskQueueProcessor) ensureFlowTransitionRun(
 		return nil
 	}
 	return p.dispatchWakeupRun(ctx, result.Run)
+}
+
+func (p *TaskQueueProcessor) repairFlowExecutionSession(ctx context.Context, taskRecord repo.ProjectTask, execution repo.FlowNodeExecution, agentID uuid.UUID) (repo.FlowNodeExecution, error) {
+	if execution.SessionID != nil && *execution.SessionID != uuid.Nil {
+		return execution, nil
+	}
+	if agentID == uuid.Nil {
+		return execution, fmt.Errorf("task %s execution %s missing session_id and no agent available to repair it", taskRecord.ID, execution.ID)
+	}
+	session, err := p.chats.GetOrCreateNodeSession(ctx, execution.ID, agentID)
+	if err != nil {
+		return execution, err
+	}
+	if session == nil || session.ID == uuid.Nil {
+		return execution, fmt.Errorf("task %s execution %s failed to repair node session", taskRecord.ID, execution.ID)
+	}
+	execution.SessionID = &session.ID
+	return execution, nil
 }
 
 func taskFlowEventMatchesRuntime(taskRecord repo.ProjectTask, nextNode repo.FlowNode, nextExecution repo.FlowNodeExecution) bool {

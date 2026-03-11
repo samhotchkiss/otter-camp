@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -51,6 +52,7 @@ type FlowSessionBridgeOptions struct {
 }
 
 type flowSessionBridge struct {
+	pool       *pgxpool.Pool
 	executions flowSessionExecutionRepository
 	tasks      flowSessionTaskRepository
 	chats      flowSessionChatService
@@ -65,7 +67,7 @@ func NewFlowSessionBridge(opts FlowSessionBridgeOptions) (FlowSessionBridge, err
 		return nil, fmt.Errorf("flow session bridge requires a chat service")
 	}
 
-	bridge := &flowSessionBridge{chats: opts.Chats}
+	bridge := &flowSessionBridge{pool: opts.Pool, chats: opts.Chats}
 	if opts.Executions != nil {
 		bridge.executions = opts.Executions
 	} else {
@@ -98,6 +100,10 @@ func (b *flowSessionBridge) EnsureNodeSession(ctx context.Context, execution rep
 		return *session, nil
 	}
 
+	if b.pool != nil {
+		return b.ensureNodeSessionTx(ctx, execution)
+	}
+
 	taskRecord, err := b.tasks.GetByID(ctx, execution.TaskID)
 	if err != nil {
 		return repo.ChatSession{}, err
@@ -125,6 +131,107 @@ func (b *flowSessionBridge) EnsureNodeSession(ctx context.Context, execution rep
 	_, err = b.executions.SetSessionID(ctx, execution.ID, session.ID)
 	if err != nil {
 		return repo.ChatSession{}, err
+	}
+	return *session, nil
+}
+
+func (b *flowSessionBridge) ensureNodeSessionTx(ctx context.Context, execution repo.FlowNodeExecution) (repo.ChatSession, error) {
+	tx, err := b.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return repo.ChatSession{}, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1::text))`, execution.ID.String()); err != nil {
+		return repo.ChatSession{}, err
+	}
+
+	var existingID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT id
+		FROM chat_session
+		WHERE mode = 'async'
+		  AND status = 'active'
+		  AND metadata->>'flow_node_execution_id' = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, execution.ID.String()).Scan(&existingID)
+	switch {
+	case err == nil:
+		if _, err := tx.Exec(ctx, `
+			UPDATE flow_node_execution
+			SET session_id = $2
+			WHERE id = $1
+			  AND (session_id IS NULL OR session_id = $2)
+		`, execution.ID, existingID); err != nil {
+			return repo.ChatSession{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return repo.ChatSession{}, err
+		}
+		session, err := b.chats.GetSession(ctx, existingID)
+		if err != nil {
+			return repo.ChatSession{}, err
+		}
+		if session == nil {
+			return repo.ChatSession{}, repo.ErrNotFound
+		}
+		return *session, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		// continue
+	default:
+		return repo.ChatSession{}, err
+	}
+
+	taskRecord, err := b.tasks.GetByID(ctx, execution.TaskID)
+	if err != nil {
+		return repo.ChatSession{}, err
+	}
+
+	metadata, err := json.Marshal(map[string]any{
+		"flow_node_execution_id": execution.ID.String(),
+		"flow_node_id":           execution.FlowNodeID.String(),
+	})
+	if err != nil {
+		return repo.ChatSession{}, err
+	}
+
+	var createdID uuid.UUID
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id,
+			scope_type,
+			scope_id,
+			mode,
+			status,
+			created_by_type,
+			created_by_id,
+			metadata
+		)
+		VALUES ($1, 'project_task', $2, 'async', 'active', 'system', $3, $4::jsonb)
+		RETURNING id
+	`, taskRecord.OrganizationID, execution.TaskID, uuid.Nil, metadata).Scan(&createdID); err != nil {
+		return repo.ChatSession{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE flow_node_execution
+		SET session_id = $2
+		WHERE id = $1
+	`, execution.ID, createdID); err != nil {
+		return repo.ChatSession{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return repo.ChatSession{}, err
+	}
+
+	session, err := b.chats.GetSession(ctx, createdID)
+	if err != nil {
+		return repo.ChatSession{}, err
+	}
+	if session == nil {
+		return repo.ChatSession{}, repo.ErrNotFound
 	}
 	return *session, nil
 }

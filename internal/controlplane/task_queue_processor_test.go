@@ -1065,6 +1065,85 @@ func TestEnsureFlowRunRepairsMissingNodeSessionBeforeCreatingWakeup(t *testing.T
 	}
 }
 
+func TestEnsureFlowTransitionRunRepairsMissingNodeSessionBeforeCreatingWakeup(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nextNodeID := uuid.New()
+	nextExecutionID := uuid.New()
+	agentID := uuid.New()
+	sessionID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{
+		session: &chat.ChatSession{ID: sessionID, Status: "active", Mode: "async"},
+	}
+	runService := &fakeTaskQueueRunStarter{}
+	sessionRepo := &fakeTaskQueueSessionRepository{
+		session: &repo.ChatSession{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Flow transition task",
+				FlowTemplateID: &nextNodeID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: nextExecutionID, TaskID: taskID, FlowNodeID: nextNodeID, SessionID: &sessionID},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{ID: nextNodeID, NodeType: "review"},
+		},
+		runs:     runService,
+		chats:    chatService,
+		sessions: sessionRepo,
+	}
+
+	taskRecord := repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		Title:          "Flow transition task",
+	}
+	nextNode := repo.FlowNode{ID: nextNodeID, NodeType: "review"}
+	nextExecution := repo.FlowNodeExecution{ID: nextExecutionID, TaskID: taskID, FlowNodeID: nextNodeID}
+
+	err := processor.ensureFlowTransitionRun(ctx, eventbus.DomainEvent{
+		ID:        uuid.New(),
+		EventType: "flow.advanced",
+	}, taskRecord, nextNode, nextExecution, agentID, "")
+	if err != nil {
+		t.Fatalf("ensureFlowTransitionRun() error = %v", err)
+	}
+
+	if len(chatService.getOrCreateNodeCalls) != 1 {
+		t.Fatalf("GetOrCreateNodeSession calls = %d, want 1", len(chatService.getOrCreateNodeCalls))
+	}
+	if chatService.getOrCreateNodeCalls[0].flowNodeExecutionID != nextExecutionID {
+		t.Fatalf("GetOrCreateNodeSession execution_id = %s, want %s", chatService.getOrCreateNodeCalls[0].flowNodeExecutionID, nextExecutionID)
+	}
+	if chatService.getOrCreateNodeCalls[0].agentID != agentID {
+		t.Fatalf("GetOrCreateNodeSession agent_id = %s, want %s", chatService.getOrCreateNodeCalls[0].agentID, agentID)
+	}
+	if len(runService.createRunInputs) != 1 {
+		t.Fatalf("CreateRun calls = %d, want 1", len(runService.createRunInputs))
+	}
+	if runService.createRunInputs[0].SessionID == nil || *runService.createRunInputs[0].SessionID != sessionID {
+		t.Fatalf("CreateRun session_id = %v, want %s", runService.createRunInputs[0].SessionID, sessionID)
+	}
+}
+
 func TestHandleTurnTerminalEventReleasesSpecificRunResolvedFromTurn(t *testing.T) {
 	ctx := context.Background()
 	taskID := uuid.New()

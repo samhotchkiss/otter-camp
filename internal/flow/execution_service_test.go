@@ -437,6 +437,154 @@ func TestAdvanceFlowTransitionsTaskToReviewWhenNextNodeIsReview(t *testing.T) {
 	}
 }
 
+func TestAdvanceFlowDoesNotFailAfterStateTransitionWhenSessionBindingFails(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	currentNodeID := uuid.New()
+	nextNodeID := uuid.New()
+	execID := uuid.New()
+
+	tasks := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				ProjectID:         projectID,
+				OrganizationID:    uuid.New(),
+				CurrentFlowNodeID: &currentNodeID,
+				WorkStatus:        "in_progress",
+				FlowTemplateID: func() *uuid.UUID {
+					id := uuid.New()
+					return &id
+				}(),
+			},
+		},
+	}
+	executions := &fakeExecutionRepo{
+		active: repo.FlowNodeExecution{
+			ID:         execID,
+			TaskID:     taskID,
+			FlowNodeID: currentNodeID,
+			Status:     "active",
+		},
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {{
+				ID:         execID,
+				TaskID:     taskID,
+				FlowNodeID: currentNodeID,
+				Status:     "active",
+			}},
+		},
+	}
+	taskTransitions := &fakeTaskCoordinator{tasks: tasks}
+	svc := &service{
+		tasks:       tasks,
+		flowNodes:   &fakeNodeRepo{items: map[uuid.UUID]repo.FlowNode{currentNodeID: {ID: currentNodeID, NodeType: "work", NextNodeID: &nextNodeID}, nextNodeID: {ID: nextNodeID, NodeType: "review"}}},
+		executions:  executions,
+		taskService: taskTransitions,
+		taskEvents:  &fakeTaskEventRepo{},
+		events:      &fakeEventBus{},
+		sessionBridge: &fakeFlowSessionBridge{
+			ensureErr: errors.New("session bind failed"),
+		},
+	}
+
+	nextExecution, err := svc.AdvanceFlow(context.Background(), taskID, Actor{Type: "agent", ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("AdvanceFlow: %v", err)
+	}
+	if nextExecution == nil {
+		t.Fatal("AdvanceFlow returned nil execution")
+	}
+	if nextExecution.FlowNodeID != nextNodeID {
+		t.Fatalf("next flow_node_id = %s, want %s", nextExecution.FlowNodeID, nextNodeID)
+	}
+	if nextExecution.SessionID != nil {
+		t.Fatalf("next execution session_id = %v, want nil after recoverable bind failure", nextExecution.SessionID)
+	}
+
+	updatedTask := tasks.items[taskID]
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nextNodeID {
+		t.Fatalf("task current_flow_node_id = %v, want %s", updatedTask.CurrentFlowNodeID, nextNodeID)
+	}
+}
+
+func TestRejectFlowNodeDoesNotFailAfterStateTransitionWhenSessionBindingFails(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	currentNodeID := uuid.New()
+	rejectNodeID := uuid.New()
+	execID := uuid.New()
+
+	tasks := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				ProjectID:         projectID,
+				OrganizationID:    uuid.New(),
+				CurrentFlowNodeID: &currentNodeID,
+				WorkStatus:        "review",
+				FlowTemplateID: func() *uuid.UUID {
+					id := uuid.New()
+					return &id
+				}(),
+			},
+		},
+	}
+	executions := &fakeExecutionRepo{
+		active: repo.FlowNodeExecution{
+			ID:         execID,
+			TaskID:     taskID,
+			FlowNodeID: currentNodeID,
+			Status:     "active",
+		},
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {{
+				ID:         execID,
+				TaskID:     taskID,
+				FlowNodeID: currentNodeID,
+				Status:     "active",
+			}},
+		},
+	}
+	taskTransitions := &fakeTaskCoordinator{tasks: tasks}
+	svc := &service{
+		tasks:       tasks,
+		flowNodes:   &fakeNodeRepo{items: map[uuid.UUID]repo.FlowNode{currentNodeID: {ID: currentNodeID, NodeType: "review", RejectNodeID: &rejectNodeID}, rejectNodeID: {ID: rejectNodeID, NodeType: "work", MaxVisits: 10}}},
+		executions:  executions,
+		taskService: taskTransitions,
+		taskEvents:  &fakeTaskEventRepo{},
+		events:      &fakeEventBus{},
+		sessionBridge: &fakeFlowSessionBridge{
+			ensureErr: errors.New("session bind failed"),
+		},
+	}
+
+	nextExecution, err := svc.RejectFlowNode(context.Background(), taskID, Actor{Type: "human_user", ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("RejectFlowNode: %v", err)
+	}
+	if nextExecution == nil {
+		t.Fatal("RejectFlowNode returned nil execution")
+	}
+	if nextExecution.FlowNodeID != rejectNodeID {
+		t.Fatalf("reject flow_node_id = %s, want %s", nextExecution.FlowNodeID, rejectNodeID)
+	}
+	if nextExecution.SessionID != nil {
+		t.Fatalf("reject execution session_id = %v, want nil after recoverable bind failure", nextExecution.SessionID)
+	}
+
+	updatedTask := tasks.items[taskID]
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != rejectNodeID {
+		t.Fatalf("task current_flow_node_id = %v, want %s", updatedTask.CurrentFlowNodeID, rejectNodeID)
+	}
+}
+
 func TestAdvanceFlowRejectsPausedProject(t *testing.T) {
 	taskID := uuid.New()
 	workNodeID := uuid.New()
@@ -817,6 +965,21 @@ func (f *fakeEventBus) Publish(context.Context, pgx.Tx, eventbus.DomainEvent) er
 
 func (f *fakeEventBus) Subscribe(string, *uuid.UUID, eventbus.EventHandler) eventbus.Subscription {
 	return eventbus.Subscription{}
+}
+
+type fakeFlowSessionBridge struct {
+	ensureErr error
+}
+
+func (f *fakeFlowSessionBridge) EnsureNodeSession(_ context.Context, _ repo.FlowNodeExecution) (repo.ChatSession, error) {
+	if f.ensureErr != nil {
+		return repo.ChatSession{}, f.ensureErr
+	}
+	return repo.ChatSession{ID: uuid.New()}, nil
+}
+
+func (f *fakeFlowSessionBridge) RecordCommitSHA(context.Context, uuid.UUID, string) error {
+	return nil
 }
 
 func TestCreateSubtaskMissingAgentReturnsErrAgentNotFound(t *testing.T) {

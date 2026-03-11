@@ -100,3 +100,72 @@ func TestFlowSessionBridgeEnsureNodeSessionIntegrationRoundTrip(t *testing.T) {
 		t.Fatalf("created_by = (%q,%s), want (system,%s)", storedSession.CreatedByType, storedSession.CreatedByID, uuid.Nil)
 	}
 }
+
+func TestFlowSessionBridgeEnsureNodeSessionCreatesDistinctSessionsPerExecution(t *testing.T) {
+	ctx := context.Background()
+	fx := newFlowFixture073(t)
+	template, nodes := createLinearTemplate073(t, ctx, fx, 1, false, 5)
+	taskRecord := createFlowTask073(t, ctx, fx, "bridge-distinct-executions", "in_progress", &template.ID)
+
+	firstExecution, err := fx.executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "completed",
+	})
+	if err != nil {
+		t.Fatalf("create first flow_node_execution: %v", err)
+	}
+	secondExecution, err := fx.executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 2,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create second flow_node_execution: %v", err)
+	}
+
+	bus := eventbus.New(fx.pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   fx.pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("new chat service: %v", err)
+	}
+	bridge, err := NewFlowSessionBridge(FlowSessionBridgeOptions{
+		Pool:  fx.pool,
+		Chats: chatService,
+	})
+	if err != nil {
+		t.Fatalf("new flow session bridge: %v", err)
+	}
+
+	firstSession, err := bridge.EnsureNodeSession(ctx, firstExecution)
+	if err != nil {
+		t.Fatalf("EnsureNodeSession first execution: %v", err)
+	}
+	secondSession, err := bridge.EnsureNodeSession(ctx, secondExecution)
+	if err != nil {
+		t.Fatalf("EnsureNodeSession second execution: %v", err)
+	}
+	if firstSession.ID == secondSession.ID {
+		t.Fatalf("session ids = (%s, %s), want distinct per flow execution", firstSession.ID, secondSession.ID)
+	}
+
+	updatedFirst, err := fx.executionRepo.GetByID(ctx, firstExecution.ID)
+	if err != nil {
+		t.Fatalf("GetByID first execution: %v", err)
+	}
+	updatedSecond, err := fx.executionRepo.GetByID(ctx, secondExecution.ID)
+	if err != nil {
+		t.Fatalf("GetByID second execution: %v", err)
+	}
+	if updatedFirst.SessionID == nil || *updatedFirst.SessionID != firstSession.ID {
+		t.Fatalf("first execution session_id = %v, want %s", updatedFirst.SessionID, firstSession.ID)
+	}
+	if updatedSecond.SessionID == nil || *updatedSecond.SessionID != secondSession.ID {
+		t.Fatalf("second execution session_id = %v, want %s", updatedSecond.SessionID, secondSession.ID)
+	}
+}
