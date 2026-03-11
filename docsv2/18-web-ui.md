@@ -537,7 +537,7 @@ Each completed or active flow step has a "View work log" link. Expanding it show
 - Artifacts produced.
 - Time spent and token usage.
 - For nodes with subtasks, work logs exist per subtask.
-- The work-log panel resolves the task's task-scoped execution session directly. Project-scoped PM/coordinator sessions are not fallbacks for task execution history.
+- The work-log panel resolves the selected flow execution's session directly (`flow_node_execution.session_id`, or the latest execution on the selected/current node when no specific execution is pinned). Project-scoped PM/coordinator sessions and the task discussion session are not fallbacks for task execution history.
 
 The work log is read-only. It shows what the agent did in its per-node async session. Discussion about the work happens in the task's sync session (chat pane), not in the work log.
 

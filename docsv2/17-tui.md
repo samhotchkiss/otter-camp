@@ -379,7 +379,7 @@ Progressive disclosure: board card -> task detail -> work log.
 - Scrollable. Sections are collapsible with keybindings.
 - Tab to switch focus to the chat pane for discussing the task.
 - In task detail, the right-pane `Discussion` tab must stay bound to the task's real sync discussion session while the operator cycles tabs/scopes. The `No task discussion session.` placeholder appears only when no discussion session can actually be resolved for that task.
-- In task detail, the right-pane `Journal`/work-log view must resolve the task's real task-scoped execution session. A same-project PM/project session is never a valid substitute for that task history.
+- In task detail, the right-pane `Journal`/work-log view must resolve the selected node's real execution session (`flow_node_execution.session_id`, or the latest execution session for the current node when no specific execution is selected). A same-project PM/project session or the task discussion session is never a valid substitute for that task history.
 - When a task is blocked by a deterministic validation loop, task detail must show both the blocked reason and the supported recovery action so the operator can resume it without leaving the product. That resume action re-queues the task through the normal scheduler/runtime path; it must not imply that the task becomes immediately active in-place.
 
 ### Inbox
