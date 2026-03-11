@@ -9654,6 +9654,195 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupPersistsWithoutExecu
 	)
 }
 
+func TestTurnEngineIntegrationProjectBootstrapNarrativeCannotOverrideMissingFirstWaveExecution(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: staff the project, persist setup, and open the first execution wave.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerA := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerB := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-wp-rebuild-v2-restart",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap Complete\n- scaffold tasks documented\n- staffing complete\n- execution plan ready"}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+
+		assignments := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+		for _, item := range []repo.AgentProjectAssignment{
+			{
+				AgentID:        pmAgent.ID,
+				ProjectID:      project.ID,
+				Role:           "pm",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+			{
+				AgentID:        workerA.ID,
+				ProjectID:      project.ID,
+				Role:           "worker",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+			{
+				AgentID:        workerB.ID,
+				ProjectID:      project.ID,
+				Role:           "worker",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+		} {
+			if _, err := assignments.Assign(ctx, item); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+		}
+
+		templateA := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		templateB := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+		workers := []uuid.UUID{workerA.ID, workerB.ID}
+		templates := []uuid.UUID{templateA.ID, templateB.ID}
+		for i := 0; i < 17; i++ {
+			description := fmt.Sprintf("Deliver bounded wp rebuild slice %d.", i+1)
+			assignedID := workers[i%len(workers)]
+			templateID := templates[i%len(templates)]
+			if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+				OrganizationID:  fixture.org.ID,
+				ProjectID:       project.ID,
+				Title:           fmt.Sprintf("Implement wp rebuild slice %d", i+1),
+				Description:     &description,
+				WorkStatus:      "draft",
+				FlowTemplateID:  &templateID,
+				AssignedAgentID: &assignedID,
+				Metadata: mustJSON(t, map[string]any{
+					"first_wave_index": i + 1,
+				}),
+				CreatedByType: "agent",
+				CreatedByID:   &lori.ID,
+			}); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+		}
+
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"assignment_count":    3,
+				"planned_tasks":       17,
+				"flow_template_count": 2,
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.ValidationStatus != projectBootstrapValidationFailed {
+		t.Fatalf("bootstrap validation_status = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationFailed)
+	}
+	if bootstrapState.ValidationFailureReason == "" {
+		t.Fatalf("bootstrap validation_failure_reason = %q, want non-empty machine failure detail", bootstrapState.ValidationFailureReason)
+	}
+	if bootstrapState.PlannedTaskCount != 17 {
+		t.Fatalf("bootstrap planned_task_count = %d, want 17", bootstrapState.PlannedTaskCount)
+	}
+	if bootstrapState.PlannedFlowTemplateCount != 2 {
+		t.Fatalf("bootstrap planned_flow_template_count = %d, want 2", bootstrapState.PlannedFlowTemplateCount)
+	}
+	if bootstrapState.FirstWaveTaskCount != 17 {
+		t.Fatalf("bootstrap first_wave_task_count = %d, want 17", bootstrapState.FirstWaveTaskCount)
+	}
+	if bootstrapState.FirstWaveExecutionCount != 0 || bootstrapState.FirstWaveJobCount != 0 {
+		t.Fatalf("bootstrap first-wave counts = %+v, want zero execution/job counts", bootstrapState)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if storedProject.Status != "archived" {
+		t.Fatalf("project status = %q, want archived", storedProject.Status)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForProject(t, ctx, fixture.pool, project.ID); jobs != 0 {
+		t.Fatalf("runnable project bootstrap jobs = %d, want 0", jobs)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	var sawNarrativeClaim bool
+	var sawFailureMessage bool
+	for _, message := range messages {
+		if strings.Contains(message.Content, "Bootstrap Complete") {
+			sawNarrativeClaim = true
+		}
+		if strings.Contains(message.Content, "Project bootstrap failed:") {
+			sawFailureMessage = true
+		}
+	}
+	if !sawNarrativeClaim {
+		t.Fatal("expected bootstrap narrative completion claim in session history")
+	}
+	if !sawFailureMessage {
+		t.Fatal("expected bootstrap failure system message after premature completion claim")
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsExplicitlyAfterRepeatedNoProgressTurns(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

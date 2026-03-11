@@ -229,6 +229,53 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 		}
 	})
 
+	t.Run("wp_rebuild_v2_restart_shape_without_live_promotion_fails_closed", func(t *testing.T) {
+		fixture := newIntegrationFixture(t)
+		ctx := context.Background()
+
+		result := runBootstrapInvariantScenario(t, ctx, fixture, bootstrapInvariantScenario{
+			assignments:            3,
+			topLevelTaskCount:      17,
+			flowTemplateCount:      2,
+			completeBootstrapSetup: true,
+			livePromotion:          false,
+		})
+
+		if result.assignmentCount != 3 {
+			t.Fatalf("assignment count = %d, want 3", result.assignmentCount)
+		}
+		if result.totalTaskCount != 25 {
+			t.Fatalf("task count = %d, want 25", result.totalTaskCount)
+		}
+		if result.bootstrapState.Status != projectBootstrapStatusFailed {
+			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusFailed)
+		}
+		if result.bootstrapState.PlannedFlowTemplateCount != 2 {
+			t.Fatalf("bootstrap planned_flow_template_count = %d, want 2", result.bootstrapState.PlannedFlowTemplateCount)
+		}
+		if result.bootstrapState.FirstWaveTaskCount != 17 {
+			t.Fatalf("bootstrap first_wave_task_count = %d, want 17", result.bootstrapState.FirstWaveTaskCount)
+		}
+		if result.bootstrapState.FirstWaveExecutionCount != 0 {
+			t.Fatalf("bootstrap first_wave_execution_count = %d, want 0", result.bootstrapState.FirstWaveExecutionCount)
+		}
+		if result.bootstrapState.FirstWaveJobCount != 0 {
+			t.Fatalf("bootstrap first_wave_job_count = %d, want 0", result.bootstrapState.FirstWaveJobCount)
+		}
+		if result.bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
+			t.Fatalf("bootstrap current_phase = %q, want %q", result.bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
+		}
+		if result.project.Status != "archived" {
+			t.Fatalf("project status = %q, want archived", result.project.Status)
+		}
+		if result.activeExecutions != 0 {
+			t.Fatalf("active flow executions = %d, want 0", result.activeExecutions)
+		}
+		if result.runnableJobs != 0 {
+			t.Fatalf("runnable first-wave jobs = %d, want 0", result.runnableJobs)
+		}
+	})
+
 	t.Run("wp_staging_parent_child_shape_promotes_runnable_child_executions", func(t *testing.T) {
 		fixture := newIntegrationFixture(t)
 		enableTaskQueueProcessor(t, fixture)
