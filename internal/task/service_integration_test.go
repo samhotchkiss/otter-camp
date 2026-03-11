@@ -965,6 +965,99 @@ func TestTaskServiceIntegrationParentDoneRequiresVerificationAndIntegration(t *t
 	}
 }
 
+func TestTaskServiceIntegrationCompletedChildReopenPersistsParentFeedback(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	parentID := uuid.New()
+	child, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Completed child",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentID, 2),
+	})
+	if err != nil {
+		t.Fatalf("CreateTask child: %v", err)
+	}
+
+	child.WorkStatus = "done"
+	now := time.Date(2026, 3, 11, 9, 30, 0, 0, time.UTC)
+	child.CompletedAt = &now
+	if _, err := taskRepo.Update(ctx, *child); err != nil {
+		t.Fatalf("Update child done: %v", err)
+	}
+
+	feedback := "Fix the checkout redirect mismatch discovered during parent integration."
+	queued, err := svc.TransitionStatusWithPayload(ctx, child.ID, "queued", Actor{
+		Type:                      "agent",
+		ID:                        uuid.New(),
+		AllowCompletedChildReopen: true,
+	}, map[string]any{"parent_integration_feedback": feedback})
+	if err != nil {
+		t.Fatalf("TransitionStatusWithPayload queued: %v", err)
+	}
+	if queued.WorkStatus != "queued" {
+		t.Fatalf("work_status = %q, want queued", queued.WorkStatus)
+	}
+	if queued.CompletedAt != nil {
+		t.Fatalf("completed_at = %v, want nil after reopen", queued.CompletedAt)
+	}
+
+	stored, err := taskRepo.GetByID(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("GetByID reopened child: %v", err)
+	}
+	metadata := taskMetadataMap(stored.Metadata)
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["parent_integration_feedback"])); got != feedback {
+		t.Fatalf("parent_integration_feedback = %q, want %q", got, feedback)
+	}
+	if strings.TrimSpace(fmt.Sprintf("%v", metadata["parent_integration_feedback_recorded_at"])) == "" {
+		t.Fatal("expected parent_integration_feedback_recorded_at")
+	}
+}
+
+func TestTaskServiceIntegrationCompletedChildReopenRequiresParentFeedback(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	parentID := uuid.New()
+	child, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Completed child",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentID, 2),
+	})
+	if err != nil {
+		t.Fatalf("CreateTask child: %v", err)
+	}
+
+	child.WorkStatus = "done"
+	now := time.Date(2026, 3, 11, 9, 31, 0, 0, time.UTC)
+	child.CompletedAt = &now
+	if _, err := taskRepo.Update(ctx, *child); err != nil {
+		t.Fatalf("Update child done: %v", err)
+	}
+
+	_, err = svc.TransitionStatusWithPayload(ctx, child.ID, "queued", Actor{
+		Type:                      "agent",
+		ID:                        uuid.New(),
+		AllowCompletedChildReopen: true,
+	}, map[string]any{})
+	if !errors.Is(err, ErrParentIntegrationFeedbackRequired) {
+		t.Fatalf("TransitionStatusWithPayload err = %v, want ErrParentIntegrationFeedbackRequired", err)
+	}
+}
+
 func TestTaskServiceIntegrationQueueRejectsOversizedUnsplittableWork(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
