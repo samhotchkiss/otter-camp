@@ -2406,6 +2406,145 @@ func TestTaskQueueProcessorIntegrationTaskReviewApproveAdvancesAndKickOffsNextAg
 	}
 }
 
+func TestTaskQueueProcessorIntegrationTaskReviewRejectReturnsToCanonicalWorkNode(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	worker := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "worker", "Review Reject Worker", "worker")
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Review Reject Reviewer", "reviewer")
+	template, nodeWorkA, nodeReview, _ := seedTaskQueueHumanReviewFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, worker.ID, reviewer.ID)
+
+	nodeRepo := repo.NewFlowNodeRepo(fx.pool)
+	nodeReview.RejectNodeID = &nodeWorkA.ID
+	if _, err := nodeRepo.Update(ctx, nodeReview); err != nil {
+		t.Fatalf("update review reject edge: %v", err)
+	}
+
+	reviewActor, err := repo.NewHumanUserRepo(fx.pool).Create(ctx, repo.HumanUser{
+		OrganizationID: fx.org.ID,
+		Email:          "review-reject-actor+" + uuid.NewString()[:8] + "@example.com",
+		DisplayName:    "Review Reject Actor",
+		Role:           "admin",
+		IsActive:       true,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create review actor: %v", err)
+	}
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Task review rejection flow",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	inboxRepo := repo.NewInboxItemRepo(fx.pool)
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		return taskRecord.WorkStatus == "in_progress" && taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID == nodeWorkA.ID, nil
+	})
+
+	if _, err := fx.flow.AdvanceFlow(ctx, created.ID, flowsvc.Actor{Type: "agent", ID: worker.ID}); err != nil {
+		t.Fatalf("AdvanceFlow work->review: %v", err)
+	}
+
+	var reviewInbox repo.InboxItem
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeReview.ID {
+			return false, nil
+		}
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+			return false, nil
+		}
+		items, err := inboxRepo.ListForUser(ctx, fx.org.ID, reviewActor.ID, repo.InboxListOptions{
+			ItemType:     "task_review",
+			IncludeActed: true,
+			Limit:        50,
+		})
+		if err != nil {
+			return false, err
+		}
+		for _, item := range items {
+			if item.SourceTaskID != nil && *item.SourceTaskID == created.ID {
+				reviewInbox = item
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+
+	reason := "needs a second pass"
+	if err := fx.tasks.ActOnInboxItem(ctx, reviewInbox.ID, reviewActor.ID, "reject", json.RawMessage(`{"reason":"`+reason+`"}`)); err != nil {
+		t.Fatalf("ActOnInboxItem reject: %v", err)
+	}
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeWorkA.ID {
+			return false, nil
+		}
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
+			return false, nil
+		}
+		execution, err := executionRepo.GetActive(ctx, created.ID, nodeWorkA.ID)
+		if err != nil {
+			if err == repo.ErrNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		return execution.VisitNumber == 2, nil
+	})
+
+	updatedInbox, err := inboxRepo.GetByID(ctx, reviewInbox.ID)
+	if err != nil {
+		t.Fatalf("GetByID review inbox: %v", err)
+	}
+	if !updatedInbox.IsActed {
+		t.Fatal("review inbox is_acted = false, want true")
+	}
+
+	var rejectedEvents int
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'task.review_rejected'
+		  AND payload->>'task_id' = $2
+		  AND payload->>'reason' = $3
+	`, fx.org.ID, created.ID.String(), reason).Scan(&rejectedEvents); err != nil {
+		t.Fatalf("count task.review_rejected domain events: %v", err)
+	}
+	if rejectedEvents != 1 {
+		t.Fatalf("task.review_rejected domain events = %d, want 1", rejectedEvents)
+	}
+}
+
 func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
