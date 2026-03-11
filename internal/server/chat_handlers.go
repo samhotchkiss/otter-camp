@@ -320,7 +320,7 @@ func (h chatHandlers) createSession(w http.ResponseWriter, r *http.Request) {
 	_, _ = h.service.AddParticipant(r.Context(), session.ID, participantType, principal.UserID, "owner")
 
 	if strings.EqualFold(scopeType, "project_task") {
-		if responderID, ok := h.resolveTaskResponderID(r.Context(), principal.OrganizationID, scopeID); ok {
+		if responderID, ok := h.resolveTaskResponderID(r.Context(), principal.OrganizationID, scopeID, req.Mode); ok {
 			_, _ = h.service.AddParticipant(r.Context(), session.ID, "agent", responderID, "responder")
 		}
 	}
@@ -338,16 +338,27 @@ func (h chatHandlers) createSession(w http.ResponseWriter, r *http.Request) {
 	responder.JSON(w, http.StatusCreated, toChatSessionResponse(session, nil))
 }
 
-func (h chatHandlers) resolveTaskResponderID(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, bool) {
+func (h chatHandlers) resolveTaskResponderID(ctx context.Context, organizationID, taskID uuid.UUID, mode string) (uuid.UUID, bool) {
 	if h.tasks != nil && taskID != uuid.Nil {
 		if taskRecord, err := h.tasks.GetByID(ctx, taskID); err == nil {
 			if taskRecord.OrganizationID == organizationID || taskRecord.OrganizationID == uuid.Nil {
-				if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
-					return *taskRecord.AssignedAgentID, true
-				}
-				if h.assignments != nil {
-					if pm, pmErr := h.assignments.GetPM(ctx, taskRecord.ProjectID); pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
-						return pm.AgentID, true
+				if strings.EqualFold(strings.TrimSpace(mode), "sync") {
+					if h.assignments != nil {
+						if pm, pmErr := h.assignments.GetPM(ctx, taskRecord.ProjectID); pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
+							return pm.AgentID, true
+						}
+					}
+					if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
+						return *taskRecord.AssignedAgentID, true
+					}
+				} else {
+					if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
+						return *taskRecord.AssignedAgentID, true
+					}
+					if h.assignments != nil {
+						if pm, pmErr := h.assignments.GetPM(ctx, taskRecord.ProjectID); pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
+							return pm.AgentID, true
+						}
 					}
 				}
 			}
