@@ -1030,8 +1030,7 @@ func TestTaskQueueProcessorIntegrationReviewEventSelfHealsMissingExecutionStateE
 	}
 }
 
-func TestTaskQueueProcessorIntegrationReviewCheckpointDoesNotFreezeParallelWorkEX248(t *testing.T) {
-	t.Skip("project-wide gate tasks now block later queueing under the enforced state-machine contract; deferred/non-gate parallelism is covered by newer flow tests")
+func TestTaskQueueProcessorIntegrationReviewCheckpointGateStillBlocksParallelWorkEX248(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
 	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
@@ -1092,28 +1091,28 @@ func TestTaskQueueProcessorIntegrationReviewCheckpointDoesNotFreezeParallelWorkE
 		if waitErr != nil {
 			return false, waitErr
 		}
-		if regularRecord.WorkStatus != "in_progress" {
-			return false, nil
-		}
-
-		runs, waitErr := runRepo.List(ctx, RunListFilter{
-			OrganizationID: fx.org.ID,
-			TaskID:         &regularTask.ID,
-			Status:         "in_progress",
-			TriggerType:    taskQueueTriggerType,
-			Limit:          10,
-		})
-		if waitErr != nil {
-			return false, waitErr
-		}
-		return len(runs) > 0, nil
+		return strings.EqualFold(strings.TrimSpace(gateRecord.WorkStatus), "review"), nil
 	})
 
 	if gateRecord.WorkStatus == "done" || gateRecord.WorkStatus == "cancelled" {
 		t.Fatalf("gate task work_status = %q, want non-terminal checkpoint state", gateRecord.WorkStatus)
 	}
-	if regularRecord.WorkStatus != "in_progress" {
-		t.Fatalf("regular task work_status = %q, want in_progress", regularRecord.WorkStatus)
+	if gateRecord.WorkStatus != "review" {
+		t.Fatalf("gate task work_status = %q, want review", gateRecord.WorkStatus)
+	}
+	if regularRecord.WorkStatus != "queued" {
+		t.Fatalf("regular task work_status = %q, want queued while gate review checkpoint is active", regularRecord.WorkStatus)
+	}
+	runs, err := runRepo.List(ctx, RunListFilter{
+		OrganizationID: fx.org.ID,
+		TaskID:         &regularTask.ID,
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("List regular task runs: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("regular task runs = %d, want 0 while gate review checkpoint is active", len(runs))
 	}
 }
 
