@@ -87,6 +87,8 @@ The complete set of tools that ship with OtterCamp before any external connectio
 | `schedule.delete` | Delete a task schedule | 2 (mutation) |
 | `flow.create_template` | Create a new flow template with nodes, edges, and skill declarations | 2 (mutation) |
 
+For DB-backed native task mutations, the tool layer is not allowed to invent its own task-state machine. When `task.update`, queue-decomposition helpers, or flow-completion helpers need to change `project_task.work_status` in the live product, they must persist non-status edits first and then call the canonical task/flow transition services. Direct `project_task` row mutation is only acceptable for non-status field updates or for pool-less/local executors that are not acting as the production worker runtime.
+
 ### Chat and Session Domain
 
 | Tool | Description | Tier |
