@@ -3576,6 +3576,15 @@ func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, asse
 	return strings.HasPrefix(decision, "wait"), nil
 }
 
+func toolPreservesExplicitTargetSessionID(name string) bool {
+	switch strings.TrimSpace(strings.ToLower(name)) {
+	case "message.send", "session.get", "session.history", "session.invite_agent":
+		return true
+	default:
+		return false
+	}
+}
+
 func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls []ModelToolCall) (bool, error) {
 	rt.stopReason = ""
 	if len(calls) == 0 {
@@ -3620,7 +3629,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		arguments := cloneMap(call.Arguments)
 		arguments["organization_id"] = rt.session.OrganizationID.String()
-		arguments["session_id"] = rt.session.ID.String()
+		if !toolPreservesExplicitTargetSessionID(name) {
+			arguments["session_id"] = rt.session.ID.String()
+		}
 		arguments["turn_id"] = rt.turn.ID.String()
 		arguments["agent_id"] = rt.agent.ID.String()
 		if binding.projectID != nil {

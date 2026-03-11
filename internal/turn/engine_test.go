@@ -1707,6 +1707,52 @@ func TestDispatchToolsProjectScopeOverridesStaleBoundIDs(t *testing.T) {
 	}
 }
 
+func TestDispatchToolsMessageSendPreservesExplicitTargetSessionID(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	projectID := uuid.New()
+	targetSessionID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	var dispatched ToolCall
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = call
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+	}
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(string) error) (ModelResponse, error) {
+		round++
+		if round == 1 {
+			return ModelResponse{
+				ToolCalls: []ModelToolCall{{
+					ID:   "tier1",
+					Name: "message.send",
+					Arguments: map[string]any{
+						"session_id": targetSessionID.String(),
+						"role":       "user",
+						"content":    "handoff",
+					},
+				}},
+			}, nil
+		}
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if got := dispatched.Arguments["session_id"]; got != targetSessionID.String() {
+		t.Fatalf("session_id = %v, want explicit target %s", got, targetSessionID)
+	}
+	if got := dispatched.Arguments["project_id"]; got != projectID.String() {
+		t.Fatalf("project_id = %v, want %s", got, projectID)
+	}
+	if got := dispatched.Arguments["agent_id"]; got != fixture.chat.participants[0].ParticipantID.String() {
+		t.Fatalf("agent_id = %v, want %s", got, fixture.chat.participants[0].ParticipantID)
+	}
+}
+
 func TestTierRoutingExecutesTier1ParallelThenTier2Sequential(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 
