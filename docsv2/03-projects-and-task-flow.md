@@ -221,6 +221,8 @@ Simple levels: `urgent`, `high`, `normal`, `low`.
 
 When a blocked task or subtask becomes unblocked (dependency resolved), it re-enters the scheduling queue at its original priority level. The scheduler picks it up when a slot opens, same as any other queued work.
 
+Validation and recovery resumes follow the same rule. When a blocked task is resumed after a validation loop or recovery checkpoint, the task returns to `queued` first and is restarted by the scheduler. It must not jump straight from `blocked` to `in_progress`, because resumed work still has to re-enter normal queueing, concurrency, and wakeup dispatch.
+
 ### Rejection Resumption
 
 When a reviewer rejects work and the flow loops back (`review → in_progress`), the task doesn't go back to `queued` — it stays `in_progress` because it's a continuation of the same work, not a fresh pickup. However, the agent's new run still requires a concurrency slot from the scheduler. The status transitions immediately (`in_progress`), but the async run kicks off only when the scheduler allocates a slot. This is the same mechanic as unblocking — status changes are immediate, but execution waits for capacity.
