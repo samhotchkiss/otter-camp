@@ -3578,6 +3578,99 @@ func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t
 	}
 }
 
+func TestIntegrationProjectSessionTaskUpdateRejectsInProgressPromotionWithoutCanonicalExecution(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap planning session",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	createOut, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":       project.ID.String(),
+		"title":            "WS1: Site Audit & Environment Verification",
+		"description":      "Verify repo, staging environment, and migration constraints before execution begins.",
+		"flow_template_id": template.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	taskID := mustUUIDValue(t, createOut["task"].(map[string]any)["id"])
+
+	queueOut, err := executor.Execute(projectCtx, "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update queue: %v", err)
+	}
+	if queueOut["error"] != nil {
+		t.Fatalf("task.update queue error = %v, want nil", queueOut["error"])
+	}
+
+	taskAfterQueue, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("load queued task: %v", err)
+	}
+	if taskAfterQueue.WorkStatus != "queued" {
+		t.Fatalf("task work_status after queue = %q, want queued", taskAfterQueue.WorkStatus)
+	}
+	if taskAfterQueue.CurrentFlowNodeID != nil {
+		t.Fatalf("current_flow_node_id after queue = %v, want nil before canonical execution claims it", taskAfterQueue.CurrentFlowNodeID)
+	}
+
+	updateOut, err := executor.Execute(projectCtx, "task.update", map[string]any{
+		"task_id":           taskID.String(),
+		"assigned_agent_id": assignee.ID.String(),
+		"work_status":       "in_progress",
+	})
+	if err == nil {
+		t.Fatalf("task.update error = nil, want active flow guard")
+	}
+	if !strings.Contains(err.Error(), "active flow") {
+		t.Fatalf("task.update error = %v, want active flow guard", err)
+	}
+	if updateOut != nil {
+		t.Fatalf("task.update output = %v, want nil on rejected direct promotion", updateOut)
+	}
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if taskRecord.WorkStatus != "queued" {
+		t.Fatalf("task work_status = %q, want queued after rejected direct promotion", taskRecord.WorkStatus)
+	}
+	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID != assignee.ID {
+		t.Fatalf("assigned_agent_id = %v, want %s after rejected promotion", taskRecord.AssignedAgentID, assignee.ID)
+	}
+	if taskRecord.CurrentFlowNodeID != nil {
+		t.Fatalf("current_flow_node_id = %v, want nil after rejected direct promotion", taskRecord.CurrentFlowNodeID)
+	}
+
+	executions, err := repo.NewFlowNodeExecutionRepo(pool).ListByTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("list flow executions: %v", err)
+	}
+	if len(executions) != 0 {
+		t.Fatalf("flow execution count = %d, want 0 after rejected direct promotion", len(executions))
+	}
+}
+
 func TestIntegrationParentTaskCanReopenCompletedChildWithFeedback(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
