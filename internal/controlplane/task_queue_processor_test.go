@@ -10,7 +10,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
 
 func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresIrrelevantStatusesAndEvents(t *testing.T) {
@@ -341,6 +343,48 @@ func TestProcessQueuedTaskSkipsPausedProject(t *testing.T) {
 
 	if err := processor.processQueuedTask(ctx, eventbus.DomainEvent{ID: uuid.New()}, taskID); err != nil {
 		t.Fatalf("processQueuedTask: %v", err)
+	}
+}
+
+func TestProcessQueuedTaskSuppressesStaleQueuedConflict(t *testing.T) {
+	ctx := context.Background()
+	projectID := uuid.New()
+	taskID := uuid.New()
+
+	taskRepo := &fakeTaskQueueTaskRepository{
+		taskLookupSequence: []repo.ProjectTask{
+			{
+				ID:         taskID,
+				ProjectID:  projectID,
+				WorkStatus: "queued",
+			},
+			{
+				ID:         taskID,
+				ProjectID:  projectID,
+				WorkStatus: "blocked",
+			},
+		},
+	}
+	taskService := &fakeTaskQueueStatusTransitioner{
+		transitionErr: repo.ErrConflict,
+	}
+	runService := &fakeTaskQueueRunStarter{}
+	processor := &TaskQueueProcessor{
+		tasks:       taskRepo,
+		projects:    &fakeTaskQueueProjectRepository{items: map[uuid.UUID]repo.Project{projectID: {ID: projectID}}},
+		taskService: taskService,
+		flow:        &fakeTaskQueueFlowStarter{},
+		runs:        runService,
+	}
+
+	if err := processor.processQueuedTask(ctx, eventbus.DomainEvent{ID: uuid.New()}, taskID); err != nil {
+		t.Fatalf("processQueuedTask: %v", err)
+	}
+	if len(taskService.transitionCalls) != 1 {
+		t.Fatalf("TransitionStatus calls = %d, want 1", len(taskService.transitionCalls))
+	}
+	if len(runService.createRunInputs) != 0 {
+		t.Fatalf("CreateRun calls = %d, want 0 after stale queued conflict", len(runService.createRunInputs))
 	}
 }
 
@@ -1482,14 +1526,24 @@ func (f *fakeTaskQueueSessionRepository) sessionKey(scopeType string, scopeID uu
 }
 
 type fakeTaskQueueTaskRepository struct {
-	task           repo.ProjectTask
-	tasksByProject []repo.ProjectTask
-	err            error
+	task               repo.ProjectTask
+	tasksByProject     []repo.ProjectTask
+	taskLookupSequence []repo.ProjectTask
+	taskLookupIndex    int
+	err                error
 }
 
 func (f *fakeTaskQueueTaskRepository) GetByID(context.Context, uuid.UUID) (repo.ProjectTask, error) {
 	if f.err != nil {
 		return repo.ProjectTask{}, f.err
+	}
+	if len(f.taskLookupSequence) > 0 {
+		idx := f.taskLookupIndex
+		if idx >= len(f.taskLookupSequence) {
+			idx = len(f.taskLookupSequence) - 1
+		}
+		f.taskLookupIndex++
+		return f.taskLookupSequence[idx], nil
 	}
 	return f.task, nil
 }
@@ -1501,10 +1555,74 @@ func (f *fakeTaskQueueTaskRepository) ListByProject(context.Context, uuid.UUID, 
 	if len(f.tasksByProject) > 0 {
 		return append([]repo.ProjectTask(nil), f.tasksByProject...), nil
 	}
+	if len(f.taskLookupSequence) > 0 {
+		last := f.taskLookupSequence[len(f.taskLookupSequence)-1]
+		return []repo.ProjectTask{last}, nil
+	}
 	if f.task.ID == uuid.Nil {
 		return nil, nil
 	}
 	return []repo.ProjectTask{f.task}, nil
+}
+
+type transitionTaskQueueCall struct {
+	taskID   uuid.UUID
+	toStatus string
+	actor    tasksvc.Actor
+}
+
+type fakeTaskQueueStatusTransitioner struct {
+	transitionCalls []transitionTaskQueueCall
+	transitionTask  *tasksvc.ProjectTask
+	transitionErr   error
+}
+
+func (f *fakeTaskQueueStatusTransitioner) TransitionStatus(_ context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+	f.transitionCalls = append(f.transitionCalls, transitionTaskQueueCall{
+		taskID:   taskID,
+		toStatus: toStatus,
+		actor:    actor,
+	})
+	if f.transitionErr != nil {
+		return nil, f.transitionErr
+	}
+	if f.transitionTask != nil {
+		return f.transitionTask, nil
+	}
+	return &tasksvc.ProjectTask{ID: taskID, WorkStatus: toStatus}, nil
+}
+
+func (f *fakeTaskQueueStatusTransitioner) CreateInboxItem(context.Context, tasksvc.CreateInboxItemRequest) (*tasksvc.InboxItem, error) {
+	return &tasksvc.InboxItem{}, nil
+}
+
+type fakeTaskQueueFlowStarter struct {
+	execution repo.FlowNodeExecution
+	err       error
+}
+
+func (f *fakeTaskQueueFlowStarter) StartFlow(context.Context, uuid.UUID) (*repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	execution := f.execution
+	return &execution, nil
+}
+
+func (f *fakeTaskQueueFlowStarter) EnsureActiveExecution(context.Context, uuid.UUID) (*repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	execution := f.execution
+	return &execution, nil
+}
+
+func (f *fakeTaskQueueFlowStarter) PauseAtReviewCheckpoint(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	execution := f.execution
+	return &execution, nil
 }
 
 type fakeTaskQueueProjectRepository struct {
