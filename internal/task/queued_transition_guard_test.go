@@ -24,6 +24,10 @@ func TestNoUnexpectedDirectLiveTaskStatusCreationInNonTestCode(t *testing.T) {
 	allowedLowLevelStatusMutation := map[string]struct{}{
 		filepath.Clean("internal/tools/native/mutation_tools.go"): {},
 	}
+	allowedSetFlowNode := map[string]struct{}{
+		filepath.Clean("internal/flow/execution_service.go"):      {},
+		filepath.Clean("internal/tools/native/mutation_tools.go"): {},
+	}
 	forbiddenStatuses := []string{"queued", "in_progress", "blocked", "review", "done", "cancelled"}
 
 	var offenders []string
@@ -63,6 +67,11 @@ func TestNoUnexpectedDirectLiveTaskStatusCreationInNonTestCode(t *testing.T) {
 		if strings.Contains(src, "e.tasks.UpdateStatus(ctx, taskID, targetStatus)") {
 			if _, ok := allowedLowLevelStatusMutation[rel]; !ok {
 				offenders = append(offenders, rel+":low-level-status-update")
+			}
+		}
+		if strings.Contains(src, ".SetFlowNode(ctx,") {
+			if _, ok := allowedSetFlowNode[rel]; !ok {
+				offenders = append(offenders, rel+":set-flow-node")
 			}
 		}
 		return nil
