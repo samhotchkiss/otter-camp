@@ -16,6 +16,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
 
 type DeployWorkerOptions struct {
@@ -106,6 +107,7 @@ type DeployWorker struct {
 	assignments assignmentRepository
 	inbox       inboxRepository
 	users       userRepository
+	taskService tasksvc.TaskService
 }
 
 func NewDeployWorker(opts DeployWorkerOptions) (*DeployWorker, error) {
@@ -118,7 +120,7 @@ func NewDeployWorker(opts DeployWorkerOptions) (*DeployWorker, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &DeployWorker{
+	worker := &DeployWorker{
 		pool:        opts.Pool,
 		events:      opts.Events,
 		clock:       opts.Clock,
@@ -129,7 +131,18 @@ func NewDeployWorker(opts DeployWorkerOptions) (*DeployWorker, error) {
 		assignments: repo.NewAgentProjectAssignmentRepo(opts.Pool),
 		inbox:       repo.NewInboxItemRepo(opts.Pool),
 		users:       repo.NewHumanUserRepo(opts.Pool),
-	}, nil
+	}
+	if opts.Events != nil {
+		taskService, err := tasksvc.NewService(tasksvc.Options{
+			Pool:     opts.Pool,
+			EventBus: opts.Events,
+		})
+		if err != nil {
+			return nil, err
+		}
+		worker.taskService = taskService
+	}
+	return worker, nil
 }
 
 func (w *DeployWorker) Execute(ctx context.Context, job jobqueue.Job) error {
@@ -225,20 +238,40 @@ func (w *DeployWorker) createContinuousDeployTask(ctx context.Context, payload d
 		title = fmt.Sprintf("Deploy %s", sha)
 	}
 
-	taskRecord, err := w.tasks.Create(ctx, repo.ProjectTask{
-		OrganizationID:      projectRecord.OrganizationID,
-		ProjectID:           payload.ProjectID,
-		Title:               title,
-		WorkStatus:          "queued",
-		FlowTemplateID:      projectRecord.DeployFlowTemplateID,
-		CreatedByType:       deliverySystemActorType,
-		CreatedByID:         nil,
-		AssignedAgentID:     assignedAgentID,
-		RequiresHumanReview: false,
-		Metadata:            metadata,
-	})
-	if err != nil {
-		return uuid.Nil, err
+	var taskRecord repo.ProjectTask
+	if w.taskService != nil {
+		created, createErr := w.taskService.CreateTask(ctx, tasksvc.CreateTaskRequest{
+			ProjectID:       payload.ProjectID,
+			Title:           title,
+			FlowTemplateID:  projectRecord.DeployFlowTemplateID,
+			AssignedAgentID: assignedAgentID,
+			CreatedByType:   deliverySystemActorType,
+			Metadata:        metadata,
+		})
+		if createErr != nil {
+			return uuid.Nil, createErr
+		}
+		queued, queueErr := w.taskService.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: deliverySystemActorType})
+		if queueErr != nil {
+			return uuid.Nil, queueErr
+		}
+		taskRecord = repo.ProjectTask(*queued)
+	} else {
+		taskRecord, err = w.tasks.Create(ctx, repo.ProjectTask{
+			OrganizationID:      projectRecord.OrganizationID,
+			ProjectID:           payload.ProjectID,
+			Title:               title,
+			WorkStatus:          "queued",
+			FlowTemplateID:      projectRecord.DeployFlowTemplateID,
+			CreatedByType:       deliverySystemActorType,
+			CreatedByID:         nil,
+			AssignedAgentID:     assignedAgentID,
+			RequiresHumanReview: false,
+			Metadata:            metadata,
+		})
+		if err != nil {
+			return uuid.Nil, err
+		}
 	}
 
 	if err := w.store.SetActiveEnvironmentDeployTask(ctx, payload.ProjectID, taskRecord.ID); err != nil {

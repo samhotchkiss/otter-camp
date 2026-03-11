@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -112,7 +113,8 @@ func TestDeliveryServiceCreateDeployTaskSetsEnvironmentDeployTaskID(t *testing.T
 	assignDeliveryPM(t, ctx, pool, pmAgent.ID, project.ID)
 
 	environment := seedDeliveryEnvironment(t, ctx, pool, project.ID, "production", "gated")
-	service, err := NewService(Options{Pool: pool})
+	bus := eventbus.New(pool, nil, eventbus.Config{})
+	service, err := NewService(Options{Pool: pool, Events: bus})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -146,6 +148,19 @@ func TestDeliveryServiceCreateDeployTaskSetsEnvironmentDeployTaskID(t *testing.T
 	}
 	if environmentRecord.DeployTaskID == nil || *environmentRecord.DeployTaskID != deployTask.ID {
 		t.Fatalf("environment deploy_task_id = %v, want %s", environmentRecord.DeployTaskID, deployTask.ID)
+	}
+	var statusEventCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		  AND payload->>'to_status' = 'queued'
+	`, deployTask.ID).Scan(&statusEventCount); err != nil {
+		t.Fatalf("count queued status events: %v", err)
+	}
+	if statusEventCount < 1 {
+		t.Fatalf("queued status events = %d, want >= 1", statusEventCount)
 	}
 }
 
@@ -249,6 +264,72 @@ func TestDeliveryServiceHandlePushFailureEscalatesAfterThreeAttempts(t *testing.
 	}
 }
 
+func TestRollbackServiceInitiateRollbackQueuesCanonicalTask(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedDeliveryOrgProject(t, ctx, pool)
+	pmUser := seedDeliveryUser(t, ctx, pool, org.ID, "rollback-pm", "admin")
+	pmAgent := seedDeliveryAgent(t, ctx, pool, org.ID, "Rollback PM", pmUser.ID)
+	assignDeliveryPM(t, ctx, pool, pmAgent.ID, project.ID)
+
+	bus := eventbus.New(pool, nil, eventbus.Config{})
+	service, err := NewRollbackService(RollbackServiceOptions{
+		Pool:   pool,
+		Git:    AllowAllCommitGitService{},
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("NewRollbackService: %v", err)
+	}
+
+	taskID, err := service.InitiateRollback(ctx, project.ID, "deadbeefcafebabe")
+	if err != nil {
+		t.Fatalf("InitiateRollback: %v", err)
+	}
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetByID rollback task: %v", err)
+	}
+	if taskRecord.WorkStatus != "queued" {
+		t.Fatalf("rollback task work_status = %q, want queued", taskRecord.WorkStatus)
+	}
+	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID != pmAgent.ID {
+		t.Fatalf("rollback task assigned_agent_id = %v, want %s", taskRecord.AssignedAgentID, pmAgent.ID)
+	}
+	if taskRecord.BranchName == nil || !strings.HasPrefix(*taskRecord.BranchName, "rollback-") {
+		t.Fatalf("rollback branch_name = %v, want rollback-*", taskRecord.BranchName)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal rollback task metadata: %v", err)
+	}
+	if metadata["task_type"] != deliveryTaskTypeDeploy {
+		t.Fatalf("rollback task_type = %v, want %q", metadata["task_type"], deliveryTaskTypeDeploy)
+	}
+	if metadata["rollback"] != true {
+		t.Fatalf("rollback metadata flag = %v, want true", metadata["rollback"])
+	}
+	if metadata["target_commit_sha"] != "deadbeefcafebabe" {
+		t.Fatalf("target_commit_sha = %v, want deadbeefcafebabe", metadata["target_commit_sha"])
+	}
+
+	var statusEventCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		  AND payload->>'to_status' = 'queued'
+	`, taskID).Scan(&statusEventCount); err != nil {
+		t.Fatalf("count rollback queued status events: %v", err)
+	}
+	if statusEventCount < 1 {
+		t.Fatalf("rollback queued status events = %d, want >= 1", statusEventCount)
+	}
+}
+
 func seedDeliveryOrgProject(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (repo.Organization, repo.Project) {
 	t.Helper()
 	orgRepo := repo.NewOrgRepo(pool)
@@ -287,6 +368,54 @@ func seedDeliveryOrgProject(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	})
 	if err != nil {
 		t.Fatalf("create project flow template: %v", err)
+	}
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Delivery Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      5,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create delivery work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Delivery Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      5,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create delivery review node: %v", err)
+	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Delivery Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      5,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create delivery merge node: %v", err)
+	}
+
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("update delivery work next node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update delivery review next node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := repo.NewFlowTemplateRepo(pool).Update(ctx, template); err != nil {
+		t.Fatalf("set delivery flow start node: %v", err)
 	}
 
 	project.DeployFlowTemplateID = &template.ID

@@ -13,6 +13,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
 
 var (
@@ -37,6 +38,7 @@ type RollbackService struct {
 	projects    *repo.ProjectRepo
 	tasks       *repo.ProjectTaskRepo
 	assignments *repo.AgentProjectAssignmentRepo
+	taskService tasksvc.TaskService
 }
 
 func NewRollbackService(opts RollbackServiceOptions) (*RollbackService, error) {
@@ -49,7 +51,7 @@ func NewRollbackService(opts RollbackServiceOptions) (*RollbackService, error) {
 	if opts.Clock == nil {
 		opts.Clock = clock.Real{}
 	}
-	return &RollbackService{
+	service := &RollbackService{
 		pool:        opts.Pool,
 		git:         opts.Git,
 		events:      opts.Events,
@@ -57,7 +59,18 @@ func NewRollbackService(opts RollbackServiceOptions) (*RollbackService, error) {
 		projects:    repo.NewProjectRepo(opts.Pool),
 		tasks:       repo.NewProjectTaskRepo(opts.Pool),
 		assignments: repo.NewAgentProjectAssignmentRepo(opts.Pool),
-	}, nil
+	}
+	if opts.Events != nil {
+		taskService, err := tasksvc.NewService(tasksvc.Options{
+			Pool:     opts.Pool,
+			EventBus: opts.Events,
+		})
+		if err != nil {
+			return nil, err
+		}
+		service.taskService = taskService
+	}
+	return service, nil
 }
 
 func (s *RollbackService) InitiateRollback(ctx context.Context, projectID uuid.UUID, targetCommitSHA string) (uuid.UUID, error) {
@@ -108,21 +121,47 @@ func (s *RollbackService) InitiateRollback(ctx context.Context, projectID uuid.U
 	}
 
 	branchCopy := branch
-	taskRecord, err := s.tasks.Create(ctx, repo.ProjectTask{
-		OrganizationID:      projectRecord.OrganizationID,
-		ProjectID:           projectID,
-		Title:               title,
-		WorkStatus:          "queued",
-		FlowTemplateID:      projectRecord.DeployFlowTemplateID,
-		BranchName:          &branchCopy,
-		RequiresHumanReview: false,
-		CreatedByType:       deliverySystemActorType,
-		CreatedByID:         nil,
-		AssignedAgentID:     assignedAgentID,
-		Metadata:            metadata,
-	})
-	if err != nil {
-		return uuid.Nil, err
+	var taskRecord repo.ProjectTask
+	if s.taskService != nil {
+		created, createErr := s.taskService.CreateTask(ctx, tasksvc.CreateTaskRequest{
+			ProjectID:       projectID,
+			Title:           title,
+			FlowTemplateID:  projectRecord.DeployFlowTemplateID,
+			AssignedAgentID: assignedAgentID,
+			CreatedByType:   deliverySystemActorType,
+			Metadata:        metadata,
+		})
+		if createErr != nil {
+			return uuid.Nil, createErr
+		}
+		taskRecord = repo.ProjectTask(*created)
+		taskRecord.BranchName = &branchCopy
+		updatedTask, updateErr := s.tasks.Update(ctx, taskRecord)
+		if updateErr != nil {
+			return uuid.Nil, updateErr
+		}
+		queued, queueErr := s.taskService.TransitionStatus(ctx, updatedTask.ID, "queued", tasksvc.Actor{Type: deliverySystemActorType})
+		if queueErr != nil {
+			return uuid.Nil, queueErr
+		}
+		taskRecord = repo.ProjectTask(*queued)
+	} else {
+		taskRecord, err = s.tasks.Create(ctx, repo.ProjectTask{
+			OrganizationID:      projectRecord.OrganizationID,
+			ProjectID:           projectID,
+			Title:               title,
+			WorkStatus:          "queued",
+			FlowTemplateID:      projectRecord.DeployFlowTemplateID,
+			BranchName:          &branchCopy,
+			RequiresHumanReview: false,
+			CreatedByType:       deliverySystemActorType,
+			CreatedByID:         nil,
+			AssignedAgentID:     assignedAgentID,
+			Metadata:            metadata,
+		})
+		if err != nil {
+			return uuid.Nil, err
+		}
 	}
 
 	if s.events != nil {

@@ -12,8 +12,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
 
 const (
@@ -84,7 +86,8 @@ type jobEnqueuer interface {
 }
 
 type Options struct {
-	Pool *pgxpool.Pool
+	Pool   *pgxpool.Pool
+	Events eventbus.EventBus
 
 	Remotes      projectRemoteRepository
 	Environments projectEnvironmentRepository
@@ -112,6 +115,7 @@ type Service struct {
 	mergeQueue   mergeQueueRepository
 	enqueuer     jobEnqueuer
 	clock        clock.Clock
+	taskService  tasksvc.TaskService
 
 	// lockAcquiredHook is test-only and runs after lock acquisition.
 	lockAcquiredHook func()
@@ -169,6 +173,16 @@ func NewService(opts Options) (*Service, error) {
 		svc.enqueuer = opts.Enqueuer
 	} else {
 		svc.enqueuer = jobqueue.New(opts.Pool, nil, jobqueue.Config{})
+	}
+	if opts.Events != nil {
+		taskService, err := tasksvc.NewService(tasksvc.Options{
+			Pool:     opts.Pool,
+			EventBus: opts.Events,
+		})
+		if err != nil {
+			return nil, err
+		}
+		svc.taskService = taskService
 	}
 
 	return svc, nil
@@ -305,19 +319,39 @@ func (s *Service) CreateDeployTask(ctx context.Context, environmentID uuid.UUID,
 		return repo.ProjectTask{}, fmt.Errorf("marshal deploy task metadata: %w", err)
 	}
 
-	deployTask, err := s.tasks.Create(ctx, repo.ProjectTask{
-		OrganizationID:  projectRecord.OrganizationID,
-		ProjectID:       environment.ProjectID,
-		Title:           formatDeployTaskTitle(environment.Name, remoteRecord.URL),
-		WorkStatus:      "queued",
-		FlowTemplateID:  projectRecord.DeployFlowTemplateID,
-		CreatedByType:   systemActorType,
-		CreatedByID:     nil,
-		AssignedAgentID: &pmAssignment.AgentID,
-		Metadata:        payloadJSON,
-	})
-	if err != nil {
-		return repo.ProjectTask{}, err
+	var deployTask repo.ProjectTask
+	if s.taskService != nil {
+		created, createErr := s.taskService.CreateTask(ctx, tasksvc.CreateTaskRequest{
+			ProjectID:       environment.ProjectID,
+			Title:           formatDeployTaskTitle(environment.Name, remoteRecord.URL),
+			FlowTemplateID:  projectRecord.DeployFlowTemplateID,
+			AssignedAgentID: &pmAssignment.AgentID,
+			CreatedByType:   systemActorType,
+			Metadata:        payloadJSON,
+		})
+		if createErr != nil {
+			return repo.ProjectTask{}, createErr
+		}
+		queued, queueErr := s.taskService.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: systemActorType})
+		if queueErr != nil {
+			return repo.ProjectTask{}, queueErr
+		}
+		deployTask = repo.ProjectTask(*queued)
+	} else {
+		deployTask, err = s.tasks.Create(ctx, repo.ProjectTask{
+			OrganizationID:  projectRecord.OrganizationID,
+			ProjectID:       environment.ProjectID,
+			Title:           formatDeployTaskTitle(environment.Name, remoteRecord.URL),
+			WorkStatus:      "queued",
+			FlowTemplateID:  projectRecord.DeployFlowTemplateID,
+			CreatedByType:   systemActorType,
+			CreatedByID:     nil,
+			AssignedAgentID: &pmAssignment.AgentID,
+			Metadata:        payloadJSON,
+		})
+		if err != nil {
+			return repo.ProjectTask{}, err
+		}
 	}
 
 	if _, err := s.environments.SetDeployTask(ctx, environmentID, &deployTask.ID); err != nil {
