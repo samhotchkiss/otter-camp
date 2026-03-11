@@ -697,6 +697,12 @@ func TestMobileDashboardAggregation(t *testing.T) {
 	if got := intValue(jsonPathValue(t, resp.Body, "data", "recent_sessions", "0", "unread_message_count")); got != 1 {
 		t.Fatalf("recent_sessions unread_message_count = %d, want 1 body=%s", got, string(resp.Body))
 	}
+	if got := jsonPathString(t, resp.Body, "data", "recent_sessions", "0", "label"); got != "Mobile Dashboard" {
+		t.Fatalf("recent_sessions label = %q, want %q body=%s", got, "Mobile Dashboard", string(resp.Body))
+	}
+	if got := jsonPathString(t, resp.Body, "data", "recent_sessions", "0", "project_name"); got != "Mobile Dashboard" {
+		t.Fatalf("recent_sessions project_name = %q, want %q body=%s", got, "Mobile Dashboard", string(resp.Body))
+	}
 }
 
 func TestMobileDashboardProjectsSurfaceTerminalStallState(t *testing.T) {

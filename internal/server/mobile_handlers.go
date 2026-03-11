@@ -65,6 +65,11 @@ type mobileDashboardSessionResponse struct {
 	ID                 uuid.UUID  `json:"id"`
 	ScopeType          string     `json:"scope_type"`
 	ScopeID            uuid.UUID  `json:"scope_id"`
+	Label              string     `json:"label,omitempty"`
+	ProjectID          *uuid.UUID `json:"project_id,omitempty"`
+	ProjectName        string     `json:"project_name,omitempty"`
+	ProjectSlug        string     `json:"project_slug,omitempty"`
+	TaskTitle          string     `json:"task_title,omitempty"`
 	LastMessageAt      *time.Time `json:"last_message_at,omitempty"`
 	UnreadMessageCount int        `json:"unread_message_count"`
 }
@@ -339,12 +344,24 @@ func (h mobileHandlers) loadRecentSessions(ctx context.Context, organizationID, 
 			s.id,
 			s.scope_type,
 			s.scope_id,
+			COALESCE(task_project.id, project_scope.id) AS project_id,
+			COALESCE(task_project.display_name, project_scope.display_name, '') AS project_name,
+			COALESCE(task_project.slug, project_scope.slug, '') AS project_slug,
+			COALESCE(task_scope.title, '') AS task_title,
 			s.last_message_at,
 			GREATEST(
 				COALESCE(MAX(m.sequence_number), 0) - COALESCE(rc.last_read_sequence, 0),
 				0
 			) AS unread_message_count
 		FROM chat_session s
+		LEFT JOIN project project_scope
+			ON s.scope_type = 'project'
+		   AND project_scope.id = s.scope_id
+		LEFT JOIN project_task task_scope
+			ON s.scope_type = 'project_task'
+		   AND task_scope.id = s.scope_id
+		LEFT JOIN project task_project
+			ON task_scope.project_id = task_project.id
 		LEFT JOIN chat_message m ON m.session_id = s.id
 		LEFT JOIN chat_read_cursor rc ON rc.session_id = s.id AND rc.user_id = $2
 		WHERE s.organization_id = $1
@@ -358,7 +375,10 @@ func (h mobileHandlers) loadRecentSessions(ctx context.Context, organizationID, 
 				SELECT 1 FROM project_task t WHERE t.id = s.scope_id AND t.organization_id = $1
 			))
 		  )
-		GROUP BY s.id, s.scope_type, s.scope_id, s.last_message_at, s.created_at, rc.last_read_sequence
+		GROUP BY
+			s.id, s.scope_type, s.scope_id, s.last_message_at, s.created_at, rc.last_read_sequence,
+			project_scope.id, project_scope.display_name, project_scope.slug,
+			task_scope.title, task_project.id, task_project.display_name, task_project.slug
 		ORDER BY COALESCE(s.last_message_at, s.created_at) DESC, s.created_at DESC
 		LIMIT $3
 	`, organizationID, userID, defaultRecentSessionLimit)
@@ -373,9 +393,20 @@ func (h mobileHandlers) loadRecentSessions(ctx context.Context, organizationID, 
 			item        mobileDashboardSessionResponse
 			unreadCount int64
 		)
-		if scanErr := rows.Scan(&item.ID, &item.ScopeType, &item.ScopeID, &item.LastMessageAt, &unreadCount); scanErr != nil {
+		if scanErr := rows.Scan(
+			&item.ID,
+			&item.ScopeType,
+			&item.ScopeID,
+			&item.ProjectID,
+			&item.ProjectName,
+			&item.ProjectSlug,
+			&item.TaskTitle,
+			&item.LastMessageAt,
+			&unreadCount,
+		); scanErr != nil {
 			return nil, scanErr
 		}
+		item.Label = resolveMobileDashboardSessionLabel(item)
 		item.UnreadMessageCount = int(unreadCount)
 		sessions = append(sessions, item)
 	}
@@ -383,6 +414,21 @@ func (h mobileHandlers) loadRecentSessions(ctx context.Context, organizationID, 
 		return nil, rows.Err()
 	}
 	return sessions, nil
+}
+
+func resolveMobileDashboardSessionLabel(item mobileDashboardSessionResponse) string {
+	if strings.EqualFold(strings.TrimSpace(item.ScopeType), "project_task") {
+		if label := strings.TrimSpace(item.TaskTitle); label != "" {
+			return label
+		}
+	}
+	if label := strings.TrimSpace(item.ProjectName); label != "" {
+		return label
+	}
+	if label := strings.TrimSpace(item.ProjectSlug); label != "" {
+		return label
+	}
+	return ""
 }
 
 func parseDashboardProjectIDs(raw string) ([]uuid.UUID, error) {
