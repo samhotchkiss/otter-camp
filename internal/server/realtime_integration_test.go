@@ -91,7 +91,7 @@ func TestRealtimeSSEFanoutFromChatAppendMessage(t *testing.T) {
 		t.Fatal("expected chat.message.created domain event row")
 	}
 
-	evt := stream.expectEvent(t, "chat.message.created", 500*time.Millisecond)
+	evt := stream.expectNamedEvent(t, "chat.message.created", 500*time.Millisecond)
 	if evt.id == "" {
 		t.Fatal("expected SSE event id")
 	}
@@ -556,6 +556,22 @@ func (s *sseStream) expectEvent(t *testing.T, name string, timeout time.Duration
 		t.Fatalf("event name = %q, want %q", evt.eventName, name)
 	}
 	return evt
+}
+
+func (s *sseStream) expectNamedEvent(t *testing.T, name string, timeout time.Duration) sseEvent {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatalf("timed out waiting for sse event %q", name)
+		}
+		evt := s.expectAnyEvent(t, remaining)
+		if evt.eventName == name {
+			return evt
+		}
+	}
 }
 
 func (s *sseStream) expectAnyEvent(t *testing.T, timeout time.Duration) sseEvent {

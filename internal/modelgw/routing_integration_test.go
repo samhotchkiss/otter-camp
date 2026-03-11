@@ -474,6 +474,8 @@ func TestPriorityQueue_OrderingUnderLoad(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	org := mustCreateOrg(t, pool, "priority-order")
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
 
 	provider := testutil.MakeProvider(t, pool, testutil.MakeProviderOptions{
 		OrganizationID:      org.ID,
@@ -513,7 +515,31 @@ func TestPriorityQueue_OrderingUnderLoad(t *testing.T) {
 		return gateway.GatewayResponse{}, nil
 	})
 
-	queue := mustNewQueue(t, pool, queueFixture{Connection: provider.Connection, Executor: executor, Global: 1})
+	health := gateway.NewHealthChecker()
+	selected := make(chan gateway.PriorityTier, 4)
+	releaseSelect := make(chan struct{})
+	router := notifyingRouter{
+		inner: gateway.NewRouter(profileRepo, connectionRepo, health),
+		onSelect: func(invocationPurpose string, priority gateway.PriorityTier) {
+			if invocationPurpose == "hold" {
+				return
+			}
+			selected <- priority
+			<-releaseSelect
+		},
+	}
+
+	queue, err := gateway.NewPriorityQueue(gateway.QueueOptions{
+		Concurrency:  gateway.NewConcurrencyManager(1, map[uuid.UUID]int{provider.Connection.ID: 1}),
+		Router:       router,
+		Executor:     executor,
+		Health:       health,
+		PollInterval: 2 * time.Millisecond,
+		Sleep:        func(context.Context, time.Duration) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("NewPriorityQueue: %v", err)
+	}
 	defer queue.Close()
 
 	go func() {
@@ -550,7 +576,11 @@ func TestPriorityQueue_OrderingUnderLoad(t *testing.T) {
 		}()
 	}
 
-	time.Sleep(30 * time.Millisecond)
+	for range tiers {
+		<-selected
+	}
+	close(releaseSelect)
+	time.Sleep(10 * time.Millisecond)
 	close(releaseHold)
 	for range tiers {
 		if err := <-done; err != nil {
@@ -870,6 +900,22 @@ type queueFixture struct {
 	Connection repo.ProviderConnection
 	Executor   gateway.GatewayExecutor
 	Global     int
+}
+
+type notifyingRouter struct {
+	inner    gateway.ConnectionSelector
+	onSelect func(invocationPurpose string, priority gateway.PriorityTier)
+}
+
+func (r notifyingRouter) SelectConnection(ctx context.Context, orgID uuid.UUID, profileID, invocationPurpose string, priority gateway.PriorityTier) (*repo.ProviderConnection, error) {
+	conn, err := r.inner.SelectConnection(ctx, orgID, profileID, invocationPurpose, priority)
+	if err != nil {
+		return nil, err
+	}
+	if r.onSelect != nil {
+		r.onSelect(invocationPurpose, priority)
+	}
+	return conn, nil
 }
 
 func mustNewQueue(t *testing.T, pool *pgxpool.Pool, fixture queueFixture) *gateway.PriorityQueue {
