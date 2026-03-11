@@ -408,7 +408,9 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 		w.logger.Debug("job queue: claiming pending jobs")
 		jobs, err := w.claimPending(ctx)
 		if err != nil {
-			w.logger.Error("job queue: claim failed", "error", err)
+			if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+				w.logger.Error("job queue: claim failed", "error", err)
+			}
 			return err
 		}
 		if len(jobs) == 0 {
@@ -424,7 +426,9 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 		for _, job := range jobs {
 			w.logger.Info("job queue: executing", "job_id", job.ID, "job_type", job.JobType, "attempts", job.Attempts)
 			if err := w.executeClaimedJob(ctx, job); err != nil {
-				w.logger.Error("failed to execute claimed job", "job_id", job.ID, "job_type", job.JobType, "error", err)
+				if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+					w.logger.Error("failed to execute claimed job", "job_id", job.ID, "job_type", job.JobType, "error", err)
+				}
 			}
 		}
 	}
