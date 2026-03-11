@@ -1489,6 +1489,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			return nil, err
 		}
 		transitionActor := taskActorFromExecutionActor(actor)
+		transitionActor.ExpectedFromStatus = previousStatus
 		if extraStatusPayload != nil {
 			if _, hasFeedback := extraStatusPayload["parent_integration_feedback"]; hasFeedback {
 				transitionActor.AllowCompletedChildReopen = true
