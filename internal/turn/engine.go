@@ -2419,9 +2419,19 @@ func classifyProjectProviderFailure(err error) (string, string, bool) {
 	}
 }
 
-func projectFailureActionForProgress(progress projectBootstrapProgress, failureCategory string) string {
+func projectFailureActionForProgress(progress projectBootstrapProgress, failureCategory, failureClass string) string {
 	if failureCategory == projectFailureCategoryProvider {
-		return projectFailureActionPause
+		switch strings.TrimSpace(failureClass) {
+		case projectFailureClassProviderAuth:
+			return projectFailureActionPause
+		case projectFailureClassProviderRateLimit, projectFailureClassProviderTransient:
+			if projectBootstrapSetupPersisted(progress) || projectBootstrapReachedFirstWaveClaim(progress) {
+				return projectFailureActionPause
+			}
+			return projectFailureActionArchive
+		default:
+			return projectFailureActionPause
+		}
 	}
 	if projectBootstrapReachedFirstWaveClaim(progress) {
 		return projectFailureActionPause
@@ -2514,7 +2524,7 @@ func projectBootstrapSetupPersisted(progress projectBootstrapProgress) bool {
 func buildProjectBootstrapAutomaticFailureRecord(progress projectBootstrapProgress, failureCategory, failureClass, failureReason string, now time.Time) projectAutomaticFailureRecord {
 	checkpoint := projectBootstrapFailureCheckpoint(progress, failureClass)
 	return projectAutomaticFailureRecord{
-		Action:                   projectFailureActionForProgress(progress, failureCategory),
+		Action:                   projectFailureActionForProgress(progress, failureCategory, failureClass),
 		Source:                   projectBootstrapSource,
 		FailureCategory:          strings.TrimSpace(failureCategory),
 		FailureClass:             strings.TrimSpace(failureClass),

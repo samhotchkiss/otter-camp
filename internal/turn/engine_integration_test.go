@@ -9034,6 +9034,61 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 	}
 }
 
+func TestTurnEngineIntegrationBootstrapTransientProviderFailureRestartsBeforeSetupPersists(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and bootstrap setup for this project.")
+
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{}, ErrModelTransient
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage transient bootstrap failure: %v", err)
+	}
+
+	archived := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if archived.Status != "archived" {
+		t.Fatalf("project status = %q, want archived after transient pre-setup bootstrap failure", archived.Status)
+	}
+
+	failureState := projectfailure.Parse(archived.Settings)
+	if failureState.Action != projectFailureActionArchive {
+		t.Fatalf("automatic_failure action = %q, want %q", failureState.Action, projectFailureActionArchive)
+	}
+	if failureState.FailureClass != projectFailureClassProviderTransient {
+		t.Fatalf("automatic_failure failure_class = %q, want %q", failureState.FailureClass, projectFailureClassProviderTransient)
+	}
+	if failureState.SetupPersisted {
+		t.Fatal("automatic_failure setup_persisted = true, want false before bootstrap setup persists")
+	}
+	if failureState.RetryBudget != defaultProjectBootstrapRestartRetryBudget {
+		t.Fatalf("automatic_failure retry_budget = %d, want %d", failureState.RetryBudget, defaultProjectBootstrapRestartRetryBudget)
+	}
+
+	restartBundle := mustProjectBootstrapRestartBundle(t, archived)
+	if restartBundle.RetryAttemptCount != 1 {
+		t.Fatalf("restart bundle retry_attempt_count = %d, want 1", restartBundle.RetryAttemptCount)
+	}
+	restartProjectID, err := uuid.Parse(restartBundle.RestartProjectID)
+	if err != nil {
+		t.Fatalf("Parse restart project id: %v", err)
+	}
+
+	restarted := mustGetProjectByID(t, ctx, fixture.pool, restartProjectID)
+	if restarted.Status != "active" {
+		t.Fatalf("restart project status = %q, want active", restarted.Status)
+	}
+	pauseState := projectpause.Parse(restarted.Settings)
+	if pauseState.IsPaused {
+		t.Fatalf("restart project pause state = %+v, want active restart instead of paused project", pauseState)
+	}
+}
+
 func TestTurnEngineIntegrationBootstrapRestartFailsClosedWhenRestartOnlyRecreatesScaffoldEX364(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
