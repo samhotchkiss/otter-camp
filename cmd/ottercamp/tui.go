@@ -431,10 +431,10 @@ func runTUICommand(args []string) int {
 					return fmt.Errorf("failed to parse session token")
 				}
 
-				// Step 2: create admin-scoped API key
+				// Step 2: create a TUI-capable API key
 				keyBody, _ := json.Marshal(map[string]any{
 					"display_name": "tui-admin",
-					"scopes":       []string{"admin:*"},
+					"scopes":       interactiveClientAPIKeyScopes(),
 				})
 				keyReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/api-keys", bytes.NewReader(keyBody))
 				keyReq.Header.Set("Content-Type", "application/json")

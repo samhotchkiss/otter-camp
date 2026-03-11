@@ -92,6 +92,17 @@ var (
 	memoryImportSleep        = time.Sleep
 )
 
+func interactiveClientAPIKeyScopes() []string {
+	return []string{
+		"realtime:read",
+		"workspace:read",
+		"chat:read",
+		"chat:write",
+		"projects:read",
+		"agents:read",
+	}
+}
+
 type memoryImportStartFunc func(ctx context.Context, orgID uuid.UUID, fileKey string, store storage.Store) (uuid.UUID, error)
 
 type memoryImportStatusClient interface {
@@ -2553,7 +2564,7 @@ func runAuthLogin(args []string) int {
 	// Step 2: create a persistent API key using the session token.
 	keyBody, _ := json.Marshal(map[string]any{
 		"display_name": "ottercamp-cli",
-		"scopes":       []string{"realtime:read", "workspace:read", "chat:read", "chat:write"},
+		"scopes":       interactiveClientAPIKeyScopes(),
 	})
 	keyReq, _ := http.NewRequest(http.MethodPost, strings.TrimRight(serverURL, "/")+"/v1/api-keys", bytes.NewReader(keyBody))
 	keyReq.Header.Set("Content-Type", "application/json")

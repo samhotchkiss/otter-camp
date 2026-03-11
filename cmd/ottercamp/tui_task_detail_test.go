@@ -20,8 +20,8 @@ func TestLoadTUITaskDetailPopulatesSessionBindingsEX254(t *testing.T) {
 		sessions              []map[string]any
 		wantSessionID         string
 		wantDiscussionID      string
-		wantActiveExecutionID string
-		wantRecentExecutionID string
+		wantActiveExecutionSessionID string
+		wantRecentExecutionSessionID string
 	}{
 		{
 			name: "discussion and active execution",
@@ -51,8 +51,8 @@ func TestLoadTUITaskDetailPopulatesSessionBindingsEX254(t *testing.T) {
 			},
 			wantSessionID:         "00000000-0000-0000-0000-000000000442",
 			wantDiscussionID:      "00000000-0000-0000-0000-000000000441",
-			wantActiveExecutionID: "00000000-0000-0000-0000-000000000442",
-			wantRecentExecutionID: "00000000-0000-0000-0000-000000000442",
+			wantActiveExecutionSessionID: "00000000-0000-0000-0000-000000000442",
+			wantRecentExecutionSessionID: "00000000-0000-0000-0000-000000000442",
 		},
 		{
 			name: "discussion only",
@@ -99,7 +99,7 @@ func TestLoadTUITaskDetailPopulatesSessionBindingsEX254(t *testing.T) {
 			},
 			wantSessionID:         "00000000-0000-0000-0000-000000000445",
 			wantDiscussionID:      "00000000-0000-0000-0000-000000000444",
-			wantRecentExecutionID: "00000000-0000-0000-0000-000000000445",
+			wantRecentExecutionSessionID: "00000000-0000-0000-0000-000000000445",
 		},
 	}
 
@@ -158,11 +158,11 @@ func TestLoadTUITaskDetailPopulatesSessionBindingsEX254(t *testing.T) {
 			if item.DiscussionSessionID != tc.wantDiscussionID {
 				t.Fatalf("DiscussionSessionID = %q, want %q", item.DiscussionSessionID, tc.wantDiscussionID)
 			}
-			if item.ActiveExecutionID != tc.wantActiveExecutionID {
-				t.Fatalf("ActiveExecutionID = %q, want %q", item.ActiveExecutionID, tc.wantActiveExecutionID)
+			if item.ActiveExecutionSessionID != tc.wantActiveExecutionSessionID {
+				t.Fatalf("ActiveExecutionSessionID = %q, want %q", item.ActiveExecutionSessionID, tc.wantActiveExecutionSessionID)
 			}
-			if item.RecentExecutionID != tc.wantRecentExecutionID {
-				t.Fatalf("RecentExecutionID = %q, want %q", item.RecentExecutionID, tc.wantRecentExecutionID)
+			if item.RecentExecutionSessionID != tc.wantRecentExecutionSessionID {
+				t.Fatalf("RecentExecutionSessionID = %q, want %q", item.RecentExecutionSessionID, tc.wantRecentExecutionSessionID)
 			}
 			if item.SessionID != tc.wantSessionID {
 				t.Fatalf("SessionID = %q, want %q", item.SessionID, tc.wantSessionID)
