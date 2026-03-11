@@ -108,6 +108,26 @@ func (s *runService) syncRuntimeStateDeferred(ctx context.Context, state Runtime
 	return nil
 }
 
+func (s *runService) syncRuntimeStateHeldDeferred(ctx context.Context, state RuntimeState, deferredRun Run, reason string) error {
+	contract := runtimeContractFromStateAndRun(state, deferredRun)
+	now := s.clock.Now().UTC()
+	contract.Status = "resumable"
+	contract.LastProgressAt = &now
+	contract.LastProgressEvent = "wakeup_held"
+	contract.PendingWakeReason = strings.TrimSpace(reason)
+	deferredRunID := deferredRun.ID
+	contract.DeferredRunID = &deferredRunID
+	contract.ResumeDisposition = "resumable"
+	contract.FailureClass = ""
+	contract.FailureReason = ""
+	contract.RetiredAt = nil
+	contract.RetireReason = ""
+	if _, err := s.runtime.UpdateMetadata(ctx, state.ID, contract.JSON()); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *runService) syncRuntimeStateStale(ctx context.Context, state RuntimeState, runRecord Run, reason string) error {
 	contract := runtimeContractFromStateAndRun(state, runRecord)
 	now := s.clock.Now().UTC()

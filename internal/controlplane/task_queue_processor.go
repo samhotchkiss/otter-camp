@@ -82,6 +82,15 @@ type taskQueueRunStarter interface {
 	RetireRuntimeStateForProject(ctx context.Context, projectID uuid.UUID, reason string) error
 }
 
+type taskQueueDeferredWakeupReleaser interface {
+	ReleaseExecutionOwnerHoldingDeferred(ctx context.Context, taskID, sessionID uuid.UUID, reason string) (executionWakeupResult, error)
+	ReleaseExecutionOwnerForRunHoldingDeferred(ctx context.Context, taskID, sessionID, runID uuid.UUID, reason string) (executionWakeupResult, error)
+}
+
+type taskQueueDeferredProjectPromoter interface {
+	PromoteDeferredWakeupsForProject(ctx context.Context, projectID uuid.UUID) ([]Run, error)
+}
+
 type taskQueueChatService interface {
 	GetSession(ctx context.Context, id uuid.UUID) (*chat.ChatSession, error)
 	GetMessage(ctx context.Context, id uuid.UUID) (*chat.ChatMessage, error)
@@ -1066,6 +1075,17 @@ func (p *TaskQueueProcessor) handleProjectResumedEvent(ctx context.Context, even
 	if payload.ProjectID == uuid.Nil {
 		return nil
 	}
+	if promoter, ok := p.runs.(taskQueueDeferredProjectPromoter); ok {
+		runs, err := promoter.PromoteDeferredWakeupsForProject(ctx, payload.ProjectID)
+		if err != nil {
+			return err
+		}
+		for _, runRecord := range runs {
+			if err := p.dispatchWakeupRun(ctx, runRecord); err != nil {
+				return err
+			}
+		}
+	}
 	return p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID)
 }
 
@@ -1119,10 +1139,22 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 	if err != nil {
 		return err
 	}
-
 	releaseRunID, err := p.resolveTurnRunID(ctx, payload.TurnID)
 	if err != nil {
 		return err
+	}
+	if paused, err := p.projectPaused(ctx, taskRecord.ProjectID); err != nil {
+		return err
+	} else if paused {
+		if releaser, ok := p.runs.(taskQueueDeferredWakeupReleaser); ok {
+			if releaseRunID != uuid.Nil {
+				_, err = releaser.ReleaseExecutionOwnerForRunHoldingDeferred(ctx, session.ScopeID, session.ID, releaseRunID, event.EventType)
+			} else {
+				_, err = releaser.ReleaseExecutionOwnerHoldingDeferred(ctx, session.ScopeID, session.ID, event.EventType)
+			}
+			return err
+		}
+		return nil
 	}
 	var result executionWakeupResult
 	if releaseRunID != uuid.Nil {

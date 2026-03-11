@@ -154,14 +154,22 @@ func (s *runService) CreateExecutionWakeup(ctx context.Context, input executionW
 }
 
 func (s *runService) ReleaseExecutionOwner(ctx context.Context, taskID, sessionID uuid.UUID, reason string) (executionWakeupResult, error) {
-	return s.releaseExecutionOwner(ctx, taskID, sessionID, nil, reason)
+	return s.releaseExecutionOwner(ctx, taskID, sessionID, nil, reason, true)
 }
 
 func (s *runService) ReleaseExecutionOwnerForRun(ctx context.Context, taskID, sessionID, runID uuid.UUID, reason string) (executionWakeupResult, error) {
-	return s.releaseExecutionOwner(ctx, taskID, sessionID, &runID, reason)
+	return s.releaseExecutionOwner(ctx, taskID, sessionID, &runID, reason, true)
 }
 
-func (s *runService) releaseExecutionOwner(ctx context.Context, taskID, sessionID uuid.UUID, expectedRunID *uuid.UUID, reason string) (executionWakeupResult, error) {
+func (s *runService) ReleaseExecutionOwnerHoldingDeferred(ctx context.Context, taskID, sessionID uuid.UUID, reason string) (executionWakeupResult, error) {
+	return s.releaseExecutionOwner(ctx, taskID, sessionID, nil, reason, false)
+}
+
+func (s *runService) ReleaseExecutionOwnerForRunHoldingDeferred(ctx context.Context, taskID, sessionID, runID uuid.UUID, reason string) (executionWakeupResult, error) {
+	return s.releaseExecutionOwner(ctx, taskID, sessionID, &runID, reason, false)
+}
+
+func (s *runService) releaseExecutionOwner(ctx context.Context, taskID, sessionID uuid.UUID, expectedRunID *uuid.UUID, reason string, promoteDeferred bool) (executionWakeupResult, error) {
 	if s.runtime == nil {
 		return executionWakeupResult{}, nil
 	}
@@ -210,11 +218,60 @@ func (s *runService) releaseExecutionOwner(ctx context.Context, taskID, sessionI
 		}
 		return executionWakeupResult{}, err
 	}
+	if !promoteDeferred {
+		if syncErr := s.syncRuntimeStateHeldDeferred(ctx, state, deferred, strings.TrimSpace(reason)); syncErr != nil {
+			return executionWakeupResult{}, syncErr
+		}
+		return executionWakeupResult{Run: deferred, Decision: executionWakeupDeferred}, nil
+	}
 	promoted, err := s.promoteDeferredWakeup(ctx, state, deferred, strings.TrimSpace(reason))
 	if err != nil {
 		return executionWakeupResult{}, err
 	}
 	return executionWakeupResult{Run: promoted, Decision: executionWakeupPromoted}, nil
+}
+
+func (s *runService) PromoteDeferredWakeupsForProject(ctx context.Context, projectID uuid.UUID) ([]Run, error) {
+	if s.runtime == nil || projectID == uuid.Nil {
+		return nil, nil
+	}
+	states, err := s.runtime.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	promoted := make([]Run, 0, len(states))
+	for _, state := range states {
+		if state.ActiveRunID != nil && *state.ActiveRunID != uuid.Nil {
+			continue
+		}
+		contract := state.Contract()
+		if contract.DeferredRunID == nil || *contract.DeferredRunID == uuid.Nil {
+			continue
+		}
+		deferred, err := s.runs.Get(ctx, *contract.DeferredRunID)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		scope := executionScope{Type: state.ScopeType, ID: state.ScopeID}
+		if !isDeferredWakeupRun(deferred, scope) || !strings.EqualFold(strings.TrimSpace(deferred.Status), "created") {
+			continue
+		}
+		runRecord, err := s.promoteDeferredWakeup(ctx, state, deferred, "project_resumed")
+		if err != nil {
+			return nil, err
+		}
+		promoted = append(promoted, runRecord)
+	}
+	sort.Slice(promoted, func(i, j int) bool {
+		if promoted[i].CreatedAt.Equal(promoted[j].CreatedAt) {
+			return promoted[i].ID.String() < promoted[j].ID.String()
+		}
+		return promoted[i].CreatedAt.Before(promoted[j].CreatedAt)
+	})
+	return promoted, nil
 }
 
 func (s *runService) startFreshWakeup(ctx context.Context, state RuntimeState, input executionWakeupInput, scope executionScope) (Run, error) {
