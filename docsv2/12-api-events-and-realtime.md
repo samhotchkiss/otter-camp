@@ -696,6 +696,8 @@ Each consumer independently tracks its position in the event log using a `consum
 
 **LISTEN/NOTIFY optimization:** PostgreSQL `LISTEN/NOTIFY` provides near-instant wake-up when new events are written. Consumers also poll on a fallback interval (every 5 seconds) to recover from missed notifications (which can happen if the connection drops momentarily). LISTEN/NOTIFY is a latency optimization, not a durability mechanism — the `consumer_cursor` table is the source of truth for each consumer's position.
 
+**Attach-gap rule:** any consumer or SSE stream that reads backlog and then attaches `LISTEN` must immediately re-read backlog once after `LISTEN` succeeds and before it blocks on `WaitForNotification`. Without that post-attach drain/read, an event written in the gap between the initial backlog fetch and the completed `LISTEN` can be missed until the fallback poll interval. The implementation rule is: `read backlog -> attach LISTEN -> read backlog again -> block on notifications`.
+
 ### DDL: consumer_cursor
 
 ```sql
@@ -1155,7 +1157,7 @@ returning *;
 
 `FOR UPDATE SKIP LOCKED` ensures multiple workers can poll concurrently without contention or double-claiming. Each worker gets a different job.
 
-The job queue also uses PostgreSQL `LISTEN/NOTIFY` for immediate wake-up when new jobs are inserted (matching doc 08's `WORKER_POLL_INTERVAL` description). Workers fall back to polling on a configurable interval (default 1 second) if a notification is missed.
+The job queue also uses PostgreSQL `LISTEN/NOTIFY` for immediate wake-up when new jobs are inserted (matching doc 08's `WORKER_POLL_INTERVAL` description). Workers fall back to polling on a configurable interval (default 1 second) if a notification is missed. The same attach-gap rule applies there: once `LISTEN` is established, the worker immediately does one synthetic wake/drain pass before sleeping on notifications so jobs inserted just before the subscription attached are not left waiting for the next poll tick.
 
 ### Retry Policy
 
