@@ -140,7 +140,7 @@ Discoverability beyond the sidebar is handled by the command bar (Superhuman-sty
 ### Scope and Agent Availability
 
 - **Org session**: starter trio (Frank, Lori, Ellie) and any org-level staff agents.
-- **Project session**: starter trio + project-assigned staff agents + project temps.
+- **Project session**: the project manager, project-assigned staff agents, and any project temps that need sync visibility. The starter trio are not default project-session participants once bootstrap/setup is complete; Frank, Lori, and Ellie stay org/bootstrap-level unless explicitly brought in for staffing, escalation, memory, or governance work.
 - **Task sync session**: PM (default responder) + agents assigned to the task + Ellie. Specific agents can be @mentioned.
 - **Per-node async sessions**: the agent assigned to that flow node + Ellie.
 
