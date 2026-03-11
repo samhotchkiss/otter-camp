@@ -353,6 +353,8 @@ func (r *ProjectTaskRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status
 }
 
 func (r *ProjectTaskRepo) UpdateStatusTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, status string) (ProjectTask, error) {
+	// This is a low-level persistence method. Callers must not use it as a substitute for
+	// task/flow state transitions; status-bearing runtime changes belong in the canonical services.
 	normalizedStatus := strings.TrimSpace(status)
 	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `
 		UPDATE project_task
