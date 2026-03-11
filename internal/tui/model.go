@@ -896,9 +896,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var projectLoadStatus string
 		var projectLoadActivity string
 		if typed.ProjectsErr != nil {
-			projects = nil
-			projectLoadStatus = "Project list reload failed — stale project state cleared."
-			projectLoadActivity = "project list reload failed; stale project state cleared"
+			projects = m.workspace.existingProjects()
+			projectLoadStatus = "Project list reload failed — showing last known project state."
+			projectLoadActivity = "project list reload failed; preserved last known project state"
 		} else if len(projects) == 0 && len(m.workspace.knownActiveProjects()) > 0 {
 			projectLoadStatus = "Project list returned empty — stale project state cleared."
 			projectLoadActivity = "project list returned empty; stale project state cleared"
