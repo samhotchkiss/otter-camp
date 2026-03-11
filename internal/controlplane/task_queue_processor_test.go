@@ -999,6 +999,72 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 	}
 }
 
+func TestEnsureFlowRunRepairsMissingNodeSessionBeforeCreatingWakeup(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	executionID := uuid.New()
+	agentID := uuid.New()
+	sessionID := uuid.New()
+	runID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{
+		session: &chat.ChatSession{ID: sessionID, Status: "active", Mode: "async"},
+	}
+	runService := &fakeTaskQueueRunStarter{
+		run: Run{ID: runID, SessionID: &sessionID},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Flow task",
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID},
+		},
+		runs:  runService,
+		chats: chatService,
+	}
+
+	err := processor.ensureFlowRun(ctx, eventbus.DomainEvent{ID: uuid.New()}, repo.ProjectTask{
+		ID:                taskID,
+		OrganizationID:    orgID,
+		ProjectID:         projectID,
+		FlowTemplateID:    &flowTemplateID,
+		WorkStatus:        "in_progress",
+		Title:             "Flow task",
+		CurrentFlowNodeID: &flowNodeID,
+		AssignedAgentID:   &agentID,
+	})
+	if err != nil {
+		t.Fatalf("ensureFlowRun() error = %v", err)
+	}
+
+	if len(chatService.getOrCreateNodeCalls) != 1 {
+		t.Fatalf("GetOrCreateNodeSession calls = %d, want 1", len(chatService.getOrCreateNodeCalls))
+	}
+	if chatService.getOrCreateNodeCalls[0].flowNodeExecutionID != executionID {
+		t.Fatalf("GetOrCreateNodeSession execution_id = %s, want %s", chatService.getOrCreateNodeCalls[0].flowNodeExecutionID, executionID)
+	}
+	if chatService.getOrCreateNodeCalls[0].agentID != agentID {
+		t.Fatalf("GetOrCreateNodeSession agent_id = %s, want %s", chatService.getOrCreateNodeCalls[0].agentID, agentID)
+	}
+	if len(runService.createRunInputs) != 1 {
+		t.Fatalf("CreateRun calls = %d, want 1", len(runService.createRunInputs))
+	}
+	if runService.createRunInputs[0].SessionID == nil || *runService.createRunInputs[0].SessionID != sessionID {
+		t.Fatalf("CreateRun session_id = %v, want %s", runService.createRunInputs[0].SessionID, sessionID)
+	}
+}
+
 func TestHandleTurnTerminalEventReleasesSpecificRunResolvedFromTurn(t *testing.T) {
 	ctx := context.Background()
 	taskID := uuid.New()
@@ -1527,11 +1593,16 @@ type addParticipantCall struct {
 }
 
 type fakeTaskQueueChatService struct {
-	calls               []string
-	session             *chat.ChatSession
-	turn                *chat.ChatTurn
-	createSessionInputs []chat.CreateSessionInput
-	createSessionErr    error
+	calls                []string
+	session              *chat.ChatSession
+	turn                 *chat.ChatTurn
+	createSessionInputs  []chat.CreateSessionInput
+	createSessionErr     error
+	getOrCreateNodeCalls []struct {
+		flowNodeExecutionID uuid.UUID
+		agentID             uuid.UUID
+	}
+	getOrCreateNodeErr  error
 	onCreateSession     func(*chat.ChatSession)
 	addParticipantCalls []addParticipantCall
 	addParticipantErr   error
@@ -1577,6 +1648,30 @@ func (f *fakeTaskQueueChatService) CreateSession(_ context.Context, input chat.C
 	if f.onCreateSession != nil {
 		f.onCreateSession(session)
 	}
+	return session, nil
+}
+
+func (f *fakeTaskQueueChatService) GetOrCreateNodeSession(_ context.Context, flowNodeExecutionID, agentID uuid.UUID) (*chat.ChatSession, error) {
+	f.calls = append(f.calls, "get_or_create_node_session")
+	f.getOrCreateNodeCalls = append(f.getOrCreateNodeCalls, struct {
+		flowNodeExecutionID uuid.UUID
+		agentID             uuid.UUID
+	}{
+		flowNodeExecutionID: flowNodeExecutionID,
+		agentID:             agentID,
+	})
+	if f.getOrCreateNodeErr != nil {
+		return nil, f.getOrCreateNodeErr
+	}
+	if f.session != nil {
+		return f.session, nil
+	}
+	session := &chat.ChatSession{
+		ID:     uuid.New(),
+		Status: "active",
+		Mode:   "async",
+	}
+	f.session = session
 	return session, nil
 }
 

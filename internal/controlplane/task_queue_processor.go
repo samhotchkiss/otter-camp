@@ -98,6 +98,7 @@ type taskQueueChatService interface {
 	GetMessage(ctx context.Context, id uuid.UUID) (*chat.ChatMessage, error)
 	GetTurn(ctx context.Context, id uuid.UUID) (*chat.ChatTurn, error)
 	CreateSession(ctx context.Context, input chat.CreateSessionInput) (*chat.ChatSession, error)
+	GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionID, agentID uuid.UUID) (*chat.ChatSession, error)
 	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
 	ListMessages(ctx context.Context, sessionID uuid.UUID, filter chat.MessageFilter) ([]*chat.ChatMessage, error)
@@ -561,6 +562,19 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 	if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
 		principalType = "agent"
 		principalID = *taskRecord.AssignedAgentID
+	}
+	if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+		if principalType != "agent" || principalID == uuid.Nil {
+			return fmt.Errorf("task %s execution %s missing session_id and no assigned agent available to repair it", taskRecord.ID, execution.ID)
+		}
+		session, err := p.chats.GetOrCreateNodeSession(ctx, execution.ID, principalID)
+		if err != nil {
+			return err
+		}
+		if session == nil || session.ID == uuid.Nil {
+			return fmt.Errorf("task %s execution %s failed to repair node session", taskRecord.ID, execution.ID)
+		}
+		execution.SessionID = &session.ID
 	}
 
 	wakeupPayload := map[string]any{
