@@ -582,6 +582,12 @@ func (s *service) ListSessions(ctx context.Context, filter SessionFilter) ([]*Ch
 		if mode != "" && item.Mode != mode {
 			continue
 		}
+		if err := s.ensureProjectActiveForScope(ctx, item.ScopeType, item.ScopeID, item.OrganizationID); err != nil {
+			if errors.Is(err, ErrProjectArchived) {
+				continue
+			}
+			return nil, err
+		}
 		items = append(items, item)
 	}
 

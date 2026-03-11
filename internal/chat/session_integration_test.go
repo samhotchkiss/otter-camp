@@ -413,6 +413,58 @@ func TestSession_Create_TaskScopeAsyncRejectsArchivedProjectSessions(t *testing.
 	}
 }
 
+func TestSession_ListSessionsIgnoresArchivedProjectScopeSessions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	svc := newIntegrationService(t, pool, nil)
+	projectRepo := repo.NewProjectRepo(pool)
+	sessionRepo := repo.NewChatSessionRepo(pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "archived-project-sessions-" + uuid.NewString()[:8],
+		DisplayName:    "Archived Project Sessions",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	live, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"chat-session-test","kind":"stale-project"}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale archived project session: %v", err)
+	}
+	if err := projectRepo.Archive(ctx, project.ID); err != nil {
+		t.Fatalf("Archive project: %v", err)
+	}
+
+	sessions, err := svc.ListSessions(ctx, SessionFilter{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		Status:         "active",
+	})
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	for _, session := range sessions {
+		if session.ID == live.ID {
+			t.Fatalf("ListSessions returned archived project session %s", live.ID)
+		}
+	}
+}
+
 func TestSession_PerNodeAsync_AutoCreated(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
