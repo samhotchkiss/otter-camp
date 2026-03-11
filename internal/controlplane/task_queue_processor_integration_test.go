@@ -3506,14 +3506,36 @@ func publishTaskTurnCompletedForRun(t *testing.T, ctx context.Context, pool *pgx
 		t.Fatalf("list session turns: %v", err)
 	}
 	var turnID uuid.UUID
+	maxTurnNumber := 0
 	for _, turn := range turns {
+		if turn.TurnNumber > maxTurnNumber {
+			maxTurnNumber = turn.TurnNumber
+		}
 		if turn.TriggerMessageID != nil && *turn.TriggerMessageID == triggerMessageID {
 			turnID = turn.ID
 		}
 	}
 	if turnID == uuid.Nil {
-		publishTaskTurnCompleted(t, ctx, pool, bus, organizationID, sessionID)
-		return
+		runRecord, err := NewRunRepository(pool).Get(ctx, runID)
+		if err != nil {
+			t.Fatalf("load run for synthetic turn: %v", err)
+		}
+		now := time.Now().UTC()
+		triggerID := triggerMessageID
+		syntheticTurn, err := turnRepo.Create(ctx, repo.ChatTurn{
+			SessionID:        sessionID,
+			TurnNumber:       maxTurnNumber + 1,
+			RespondingType:   runRecord.PrincipalType,
+			RespondingID:     runRecord.PrincipalID,
+			Status:           "completed",
+			StartedAt:        &now,
+			CompletedAt:      &now,
+			TriggerMessageID: &triggerID,
+		})
+		if err != nil {
+			t.Fatalf("create synthetic turn for run completion: %v", err)
+		}
+		turnID = syntheticTurn.ID
 	}
 
 	payload, err := json.Marshal(map[string]any{

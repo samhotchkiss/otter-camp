@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -69,19 +70,7 @@ func TestEventBusPublishSubscribeAndCursorAdvance(t *testing.T) {
 	lastSeq := recv[2].Seq
 	mu.Unlock()
 
-	var cursorSeq int64
-	err := pool.QueryRow(context.Background(), `
-		SELECT last_seq
-		FROM consumer_cursor
-		WHERE consumer_name = $1
-		  AND organization_id = $2
-	`, "eventbus.order.consumer", org.ID).Scan(&cursorSeq)
-	if err != nil {
-		t.Fatalf("query cursor failed: %v", err)
-	}
-	if cursorSeq != lastSeq {
-		t.Fatalf("cursor last_seq = %d, want %d", cursorSeq, lastSeq)
-	}
+	waitForConsumerCursor(t, pool, "eventbus.order.consumer", org.ID, lastSeq, 2*time.Second)
 }
 
 func TestEventBusAtLeastOnceRedeliveryAfterRestart(t *testing.T) {
@@ -133,18 +122,30 @@ func TestEventBusAtLeastOnceRedeliveryAfterRestart(t *testing.T) {
 		t.Fatal("timed out waiting for replayed event")
 	}
 
-	var cursorSeq int64
-	err := pool.QueryRow(context.Background(), `
-		SELECT last_seq
-		FROM consumer_cursor
-		WHERE consumer_name = $1
-		  AND organization_id = $2
-	`, "eventbus.redelivery.consumer", org.ID).Scan(&cursorSeq)
-	if err != nil {
-		t.Fatalf("query cursor failed: %v", err)
-	}
-	if cursorSeq != event.Seq {
-		t.Fatalf("cursor last_seq = %d, want %d", cursorSeq, event.Seq)
+	waitForConsumerCursor(t, pool, "eventbus.redelivery.consumer", org.ID, event.Seq, 2*time.Second)
+}
+
+func waitForConsumerCursor(t *testing.T, pool *pgxpool.Pool, consumerName string, orgID uuid.UUID, wantSeq int64, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		var cursorSeq int64
+		err := pool.QueryRow(context.Background(), `
+			SELECT last_seq
+			FROM consumer_cursor
+			WHERE consumer_name = $1
+			  AND organization_id = $2
+		`, consumerName, orgID).Scan(&cursorSeq)
+		if err == nil && cursorSeq == wantSeq {
+			return
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				t.Fatalf("query cursor failed before timeout: %v", err)
+			}
+			t.Fatalf("cursor last_seq = %d, want %d", cursorSeq, wantSeq)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
