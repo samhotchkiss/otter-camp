@@ -171,6 +171,12 @@ func (e *NativeToolExecutor) handleTaskList(ctx context.Context, input map[strin
 			return nil, err
 		}
 		taskRows = append(taskRows, tasks...)
+	} else if scope.projectID != nil && *scope.projectID != uuid.Nil {
+		tasks, err := e.tasks.ListByProject(ctx, *scope.projectID)
+		if err != nil {
+			return nil, err
+		}
+		taskRows = append(taskRows, tasks...)
 	} else if e.projects != nil {
 		projects, err := e.projects.List(ctx, scope.organizationID)
 		if err != nil {

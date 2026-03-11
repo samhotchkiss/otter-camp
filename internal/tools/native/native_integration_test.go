@@ -3261,6 +3261,68 @@ func TestIntegrationProjectArchiveClosesScopedSessions(t *testing.T) {
 	}
 }
 
+func TestIntegrationTaskListDefaultsToCurrentProjectSessionScope(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	projectA := testutil.MakeProject(t, pool, orgID)
+	projectB := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+
+	taskA := testutil.MakeTask(t, pool, projectA.ID, testutil.MakeTaskOptions{
+		Title:      "Archived rebuild workstream",
+		WorkStatus: "draft",
+	})
+	taskB := testutil.MakeTask(t, pool, projectB.ID, testutil.MakeTaskOptions{
+		Title:      "Fresh project kickoff",
+		WorkStatus: "draft",
+	})
+
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	projectSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project",
+		ScopeID:        projectB.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"native-task-list-scope-test"}`),
+	})
+	if err != nil {
+		t.Fatalf("create project session: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWithSession(orgID, actor.ID, projectSession.ID), "task.list", map[string]any{})
+	if err != nil {
+		t.Fatalf("task.list: %v", err)
+	}
+
+	tasksPayload, ok := out["tasks"].([]map[string]any)
+	if !ok {
+		raw, ok := out["tasks"].([]any)
+		if !ok {
+			t.Fatalf("task.list tasks payload = %T, want []map[string]any", out["tasks"])
+		}
+		tasksPayload = make([]map[string]any, 0, len(raw))
+		for _, item := range raw {
+			record, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("task.list task item = %T, want map[string]any", item)
+			}
+			tasksPayload = append(tasksPayload, record)
+		}
+	}
+
+	if len(tasksPayload) != 1 {
+		t.Fatalf("task.list returned %d tasks, want 1 in current project scope: %#v", len(tasksPayload), tasksPayload)
+	}
+	if got := mustUUIDValue(t, tasksPayload[0]["id"]); got != taskB.ID {
+		t.Fatalf("task.list returned task %s, want current project task %s and not foreign task %s", got, taskB.ID, taskA.ID)
+	}
+}
+
 func TestIntegrationSessionListAndCreateIgnoreArchivedProjectTaskSessions(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
