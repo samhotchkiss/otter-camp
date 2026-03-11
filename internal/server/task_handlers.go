@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -760,8 +761,22 @@ func (h taskHandlers) patchTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateTaskRequest
+	bodyBytes, err := readRequestBody(r)
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	if len(bodyBytes) == 0 {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	restoreRequestBody(r, bodyBytes)
 	if err := decodeJSONLenient(r, &req); err != nil {
 		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid request body")
+		return
+	}
+	if forbiddenTaskPatchField(bodyBytes, "work_status", "flow_template_id", "current_flow_node_id") {
+		responder.Error(w, http.StatusUnprocessableEntity, api.ErrCodeValidation, "PATCH /tasks may not change task state-machine fields")
 		return
 	}
 
@@ -3249,6 +3264,40 @@ func optionalBoolPtr(value bool, set bool) *bool {
 }
 
 var errEmptyBody = errors.New("empty body")
+
+func readRequestBody(r *http.Request) ([]byte, error) {
+	if r == nil || r.Body == nil {
+		return nil, nil
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func restoreRequestBody(r *http.Request, body []byte) {
+	if r == nil {
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+}
+
+func forbiddenTaskPatchField(body []byte, fields ...string) bool {
+	if len(body) == 0 {
+		return false
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	for _, field := range fields {
+		if _, ok := payload[field]; ok {
+			return true
+		}
+	}
+	return false
+}
 
 func decodeJSONLenient(r *http.Request, out any) error {
 	if r.Body == nil {

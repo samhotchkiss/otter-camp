@@ -108,7 +108,7 @@ func TestMapTaskErrorProjectPausedReturnsConflict(t *testing.T) {
 	}
 }
 
-func TestPatchTaskUnknownFieldIgnoredNot400(t *testing.T) {
+func TestPatchTaskRejectsForbiddenStateFields(t *testing.T) {
 	taskID := uuid.New()
 	orgID := uuid.New()
 
@@ -128,16 +128,23 @@ func TestPatchTaskUnknownFieldIgnoredNot400(t *testing.T) {
 	}
 	h := taskHandlers{tasks: fakeTasks}
 
-	req := httptest.NewRequest(http.MethodPatch, "/v1/tasks/"+taskID.String(), bytes.NewBufferString(`{"unknown_field":"value"}`))
-	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{UserID: uuid.New(), OrganizationID: orgID, Role: "member"}))
-	req = withRouteParams(req, map[string]string{"id": taskID.String()})
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
+	cases := []string{
+		`{"work_status":"done"}`,
+		`{"flow_template_id":"` + uuid.NewString() + `"}`,
+		`{"current_flow_node_id":"` + uuid.NewString() + `"}`,
+	}
+	for _, body := range cases {
+		req := httptest.NewRequest(http.MethodPatch, "/v1/tasks/"+taskID.String(), bytes.NewBufferString(body))
+		req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{UserID: uuid.New(), OrganizationID: orgID, Role: "member"}))
+		req = withRouteParams(req, map[string]string{"id": taskID.String()})
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
 
-	h.patchTask(rr, req)
+		h.patchTask(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+		if rr.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("body=%s status = %d, want %d body=%s", body, rr.Code, http.StatusUnprocessableEntity, rr.Body.String())
+		}
 	}
 }
 
