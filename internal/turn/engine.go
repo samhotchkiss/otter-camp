@@ -1107,6 +1107,14 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	if err != nil {
 		return err
 	}
+	normalizeProjectBootstrapValidationFailure(&progress, projectBootstrapNarrativeClaimsCompletion(assistant))
+	if projectBootstrapNarrativeClaimsCompletion(assistant) && !progress.Materialized() {
+		rt := &turnRuntime{session: session, turn: &chat.ChatTurn{ID: turnID}}
+		if latestCompleted.RespondingID != uuid.Nil {
+			rt.agent.ID = latestCompleted.RespondingID
+		}
+		return e.failProjectBootstrapValidation(ctx, rt, progress, now)
+	}
 
 	madeProgress := progress.AssignmentCount > state.AssignmentCount ||
 		progress.PlannedTaskCount > state.PlannedTaskCount ||
@@ -1222,6 +1230,7 @@ func (e *TurnEngine) failProjectBootstrapValidation(ctx context.Context, rt *tur
 	if rt == nil || rt.session == nil || rt.turn == nil {
 		return nil
 	}
+	normalizeProjectBootstrapValidationFailure(&progress, false)
 
 	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
 	if state.StartedAt == nil {
@@ -1427,6 +1436,7 @@ func (e *TurnEngine) refreshProjectBootstrapSessionState(ctx context.Context, se
 	if e == nil || session == nil {
 		return nil
 	}
+	normalizeProjectBootstrapValidationFailure(&progress, false)
 
 	state := projectBootstrapStateFromMetadata(session.Metadata)
 	now := e.now().UTC()
@@ -2118,6 +2128,58 @@ func buildProjectBootstrapFirstWaveExecutionFailureReason(progress projectBootst
 	default:
 		return "kickoff validation failed: first-wave execution never materialized after persisted setup was created"
 	}
+}
+
+func buildProjectBootstrapPrematureCompletionFailure(progress projectBootstrapProgress) (string, string) {
+	switch {
+	case progress.ValidationFailed():
+		return progress.ValidationFailureClass, progress.ValidationFailureReason
+	case progress.FirstWaveTaskCount == 0:
+		return projectBootstrapFailureCompoundParent, "kickoff validation failed: project-session narrative claimed bootstrap complete before any executable first-wave child tasks were selected"
+	default:
+		reason := buildProjectBootstrapFirstWaveExecutionFailureReason(progress)
+		reason = strings.TrimPrefix(reason, "kickoff validation failed: ")
+		return projectBootstrapFailureFirstWaveExecution, "kickoff validation failed: project-session narrative claimed bootstrap complete, but " + reason
+	}
+}
+
+func normalizeProjectBootstrapValidationFailure(progress *projectBootstrapProgress, completionClaimed bool) {
+	if progress == nil {
+		return
+	}
+	if completionClaimed && !progress.Materialized() {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass, progress.ValidationFailureReason = buildProjectBootstrapPrematureCompletionFailure(*progress)
+		return
+	}
+	if !progress.ValidationFailed() || (progress.ValidationFailureClass != "" && progress.ValidationFailureReason != "") {
+		return
+	}
+	switch {
+	case progress.FirstWaveTaskCount > 0:
+		progress.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
+		progress.ValidationFailureReason = buildProjectBootstrapFirstWaveExecutionFailureReason(*progress)
+	case progress.PlannedTaskCount == 0 && progress.AssignmentCount > 0:
+		progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
+		progress.ValidationFailureReason = "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave"
+	default:
+		progress.ValidationFailureClass = projectBootstrapFailureRuntime
+		progress.ValidationFailureReason = "kickoff validation failed: bootstrap transitioned to a failed state without recording a machine-readable reason"
+	}
+}
+
+func projectBootstrapNarrativeClaimsCompletion(message *repo.ChatMessage) bool {
+	if message == nil {
+		return false
+	}
+	content := strings.ToLower(strings.TrimSpace(message.Content))
+	if content == "" {
+		return false
+	}
+	return strings.Contains(content, "bootstrap complete") ||
+		strings.Contains(content, "bootstrap completed") ||
+		strings.Contains(content, "bootstrap is complete") ||
+		strings.Contains(content, "bootstrap setup is complete")
 }
 
 func buildProjectBootstrapFirstWaveStatusFailureReason(status string) string {
