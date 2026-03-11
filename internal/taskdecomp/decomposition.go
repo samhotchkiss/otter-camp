@@ -23,6 +23,7 @@ var ErrBoundedTaskTooLarge = errors.New("task exceeds bounded size policy and mu
 
 var (
 	enumeratedBatchTitlePattern = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build)\s+\d+\b`)
+	actionVerbPattern          = regexp.MustCompile(`^(?:generate|create|draft|write|produce|compile|research|collect|design|build)\b`)
 	toolHeavySignals = []string{
 		"api",
 		"cli",
@@ -153,11 +154,21 @@ func titleSuggestsCompoundBoundedWork(title string) bool {
 	if normalized == "" {
 		return false
 	}
+	if enumeratedBatchTitlePattern.MatchString(normalized) && strings.Contains(normalized, " and ") {
+		if _, ok := splitCompoundActionTitle(title); ok {
+			return true
+		}
+	}
 	if enumeratedBatchTitlePattern.MatchString(normalized) && containsAny(normalized, broadScopeSignals) {
 		return true
 	}
 	if strings.Count(normalized, " and ") >= 2 || strings.Count(normalized, " across ") >= 1 {
 		if containsAny(normalized, broadScopeSignals) {
+			return true
+		}
+	}
+	if strings.Contains(normalized, " and ") {
+		if _, ok := splitCompoundActionTitle(title); ok {
 			return true
 		}
 	}
@@ -172,7 +183,31 @@ func inferTitleDeliverables(title string) []string {
 	if trimmed == "" {
 		return nil
 	}
+	if deliverables, ok := splitCompoundActionTitle(trimmed); ok {
+		return deliverables
+	}
 	return []string{trimmed, trimmed}
+}
+
+func splitCompoundActionTitle(title string) ([]string, bool) {
+	trimmed := strings.TrimSpace(title)
+	if trimmed == "" {
+		return nil, false
+	}
+	lower := strings.ToLower(trimmed)
+	idx := strings.Index(lower, " and ")
+	if idx < 0 {
+		return nil, false
+	}
+	left := strings.TrimSpace(trimmed[:idx])
+	right := strings.TrimSpace(trimmed[idx+5:])
+	if left == "" || right == "" {
+		return nil, false
+	}
+	if !actionVerbPattern.MatchString(strings.ToLower(left)) || !actionVerbPattern.MatchString(strings.ToLower(right)) {
+		return nil, false
+	}
+	return []string{left, right}, true
 }
 
 func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecomposition, error) {

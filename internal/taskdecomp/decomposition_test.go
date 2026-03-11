@@ -49,6 +49,24 @@ func TestAnalyzeFlagsEnumeratedCompoundTitlesWithoutStructuredDescriptions(t *te
 	}
 }
 
+func TestAnalyzeFlagsEnumeratedCompoundActionTitles(t *testing.T) {
+	description := "Develop the second half of the idea backlog."
+
+	plan := Analyze("Generate blog post concepts 11-20 and compile final list", &description)
+	if !plan.RequiresDecomposition {
+		t.Fatal("RequiresDecomposition = false, want true for enumerated compound action title")
+	}
+	if plan.PrimaryDeliverable != "Generate blog post concepts 11-20" {
+		t.Fatalf("PrimaryDeliverable = %q, want %q", plan.PrimaryDeliverable, "Generate blog post concepts 11-20")
+	}
+	if len(plan.ChildDeliverables) < 1 {
+		t.Fatalf("ChildDeliverables len = %d, want >= 1", len(plan.ChildDeliverables))
+	}
+	if plan.ChildDeliverables[0] != "compile final list" {
+		t.Fatalf("ChildDeliverables[0] = %q, want %q", plan.ChildDeliverables[0], "compile final list")
+	}
+}
+
 func TestParsePrimaryDeliverableFromMetadata(t *testing.T) {
 	raw := json.RawMessage(`{"decomposition":{"primary_deliverable":"Migrate posts in canonical order"}}`)
 
