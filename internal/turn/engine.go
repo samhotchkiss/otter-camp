@@ -114,6 +114,7 @@ const (
 	projectFailureClassProviderRateLimit      = projectBootstrapFailureProviderRateLimit
 	projectFailureClassProviderTransient      = projectBootstrapFailureProviderTransient
 	projectBootstrapSource                    = "project_bootstrap"
+	projectBootstrapTemplateSlug              = "bootstrap-governance-gate"
 	bootstrapFrankSignOffStepSlug             = "record-frank-sign-off"
 	bootstrapChildTaskBoundednessError        = "parent integration follow-on tasks must already be bounded before they are created"
 )
@@ -1682,7 +1683,7 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	if err != nil {
 		return projectBootstrapProgress{}, err
 	}
-	progress.AssignmentCount = len(assignments)
+	progress.AssignmentCount = e.countBootstrapMaterializedAssignments(ctx, assignments)
 
 	tasks, err := repo.NewProjectTaskRepo(e.pool).ListByProject(ctx, projectID)
 	if err != nil {
@@ -1725,14 +1726,16 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	}
 	progress.PlannedTaskCount = len(plannedTasks)
 	if len(plannedTasks) == 0 {
-		if progress.AssignmentCount > 0 {
+		if progress.AssignmentCount > 0 || len(assignments) > 0 {
 			progress.PlannedFlowTemplateCount, err = e.countProjectBootstrapCurrentFlowTemplates(ctx, projectID)
 			if err != nil {
 				return projectBootstrapProgress{}, err
 			}
-			progress.ValidationStatus = projectBootstrapValidationFailed
-			progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
-			progress.ValidationFailureReason = "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave"
+			if progress.AssignmentCount > 0 || progress.PlannedFlowTemplateCount > 0 {
+				progress.ValidationStatus = projectBootstrapValidationFailed
+				progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
+				progress.ValidationFailureReason = "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave"
+			}
 		}
 		return progress, nil
 	}
@@ -2040,10 +2043,34 @@ func (e *TurnEngine) countProjectBootstrapCurrentFlowTemplates(ctx context.Conte
 		FROM flow_template
 		WHERE project_id = $1
 		  AND is_current = true
-	`, projectID).Scan(&count); err != nil {
+		  AND slug <> $2
+	`, projectID, projectBootstrapTemplateSlug).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
+}
+
+func (e *TurnEngine) countBootstrapMaterializedAssignments(ctx context.Context, assignments []repo.AgentProjectAssignment) int {
+	if len(assignments) == 0 {
+		return 0
+	}
+	if e == nil || e.agents == nil {
+		return len(assignments)
+	}
+
+	count := 0
+	for _, assignment := range assignments {
+		agentRecord, err := e.agents.GetByID(ctx, assignment.AgentID)
+		if err != nil {
+			count++
+			continue
+		}
+		if agentRecord.IsStarterTrio {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func (e *TurnEngine) countProjectBootstrapFirstWaveJobs(ctx context.Context, taskIDs []uuid.UUID) (int, error) {

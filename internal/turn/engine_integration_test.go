@@ -7928,8 +7928,8 @@ func TestTurnEngineIntegrationProjectBootstrapExactV7DraftOnlyShapeWaitsForBoots
 	if err != nil {
 		t.Fatalf("ListByProject assignments: %v", err)
 	}
-	if len(assignments) != 4 {
-		t.Fatalf("assignment count = %d, want 4", len(assignments))
+	if got := countNonStarterAssignments(t, ctx, fixture.pool, assignments); got != 4 {
+		t.Fatalf("assignment count = %d, want 4", got)
 	}
 
 	tasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
@@ -9785,17 +9785,12 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupPersistsWithoutExecu
 		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
 	}
 
-	var assignmentCount int
-	if err := fixture.pool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM agent_project_assignment
-		WHERE project_id = $1
-		  AND is_active = true
-	`, project.ID).Scan(&assignmentCount); err != nil {
-		t.Fatalf("count project assignments: %v", err)
+	assignments, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject assignments: %v", err)
 	}
-	if assignmentCount != 2 {
-		t.Fatalf("project assignments = %d, want 2", assignmentCount)
+	if got := countNonStarterAssignments(t, ctx, fixture.pool, assignments); got != 2 {
+		t.Fatalf("project assignments = %d, want 2", got)
 	}
 
 	var taskCount int
@@ -9858,8 +9853,8 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupPersistsWithoutExecu
 	if bootstrapState.PlannedTaskCount != 0 {
 		t.Fatalf("bootstrap planned_task_count = %d, want 0 because only bootstrap setup tasks exist", bootstrapState.PlannedTaskCount)
 	}
-	if bootstrapState.PlannedFlowTemplateCount != 1 {
-		t.Fatalf("bootstrap planned_flow_template_count = %d, want 1", bootstrapState.PlannedFlowTemplateCount)
+	if bootstrapState.PlannedFlowTemplateCount != 0 {
+		t.Fatalf("bootstrap planned_flow_template_count = %d, want 0 because only the bootstrap gate template exists", bootstrapState.PlannedFlowTemplateCount)
 	}
 	if bootstrapState.FirstWaveTaskCount != 0 || bootstrapState.FirstWaveExecutionCount != 0 || bootstrapState.FirstWaveJobCount != 0 {
 		t.Fatalf("bootstrap first-wave counts = %+v, want zero", bootstrapState)

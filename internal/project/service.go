@@ -687,7 +687,7 @@ func (s *service) ensureBootstrapAssignments(ctx context.Context, projectID uuid
 		if _, err := s.assignments.Assign(ctx, repo.AgentProjectAssignment{
 			AgentID:        *agents.loriID,
 			ProjectID:      projectID,
-			Role:           "project_manager",
+			Role:           "worker",
 			AssignedByType: createdByType,
 			AssignedByID:   actorIDPointer(createdByID),
 		}); err != nil {

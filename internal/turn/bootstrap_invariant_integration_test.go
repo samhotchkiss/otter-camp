@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
@@ -439,6 +440,27 @@ type bootstrapInvariantResult struct {
 	runnableJobs       int
 }
 
+func countNonStarterAssignments(t *testing.T, ctx context.Context, pool *pgxpool.Pool, assignments []repo.AgentProjectAssignment) int {
+	t.Helper()
+
+	if len(assignments) == 0 {
+		return 0
+	}
+	agents := repo.NewAgentRepo(pool)
+	count := 0
+	for _, assignment := range assignments {
+		agentRecord, err := agents.GetByID(ctx, assignment.AgentID)
+		if err != nil {
+			t.Fatalf("GetByID assignment agent %s: %v", assignment.AgentID, err)
+		}
+		if agentRecord.IsStarterTrio {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *integrationFixture, scenario bootstrapInvariantScenario) bootstrapInvariantResult {
 	t.Helper()
 
@@ -682,7 +704,7 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 	return bootstrapInvariantResult{
 		bootstrapState:     projectBootstrapStateFromMetadata(sessionRecord.Metadata),
 		project:            projectRecord,
-		assignmentCount:    len(assignments),
+		assignmentCount:    countNonStarterAssignments(t, ctx, fixture.pool, assignments),
 		totalTaskCount:     len(tasks),
 		totalDraftCount:    totalDraftCount,
 		parentDraftCount:   parentDraftCount,
