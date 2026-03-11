@@ -2853,6 +2853,21 @@ type fakeParticipantRepo struct {
 }
 
 func (f *fakeParticipantRepo) Create(_ context.Context, p repo.ChatParticipant) (repo.ChatParticipant, error) {
+	for _, existing := range f.participants {
+		if existing.RemovedAt != nil {
+			continue
+		}
+		if existing.SessionID != p.SessionID {
+			continue
+		}
+		if existing.ParticipantType != p.ParticipantType {
+			continue
+		}
+		if existing.ParticipantID != p.ParticipantID {
+			continue
+		}
+		return repo.ChatParticipant{}, repo.ErrConflict
+	}
 	p.ID = uuid.New()
 	f.participants = append(f.participants, p)
 	return p, nil
@@ -3113,6 +3128,45 @@ func TestSessionCreateProjectScopeReusesCanonicalSession(t *testing.T) {
 	}
 	if autoParticipants, ok := second["auto_participants"]; ok && autoParticipants != nil {
 		t.Fatalf("second auto_participants = %v, want nil/absent when reusing participants", autoParticipants)
+	}
+}
+
+func TestSessionInviteAgentIsIdempotent(t *testing.T) {
+	agentID := uuid.New()
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	sessionID := uuid.New()
+
+	participants := &fakeParticipantRepo{
+		participants: []repo.ChatParticipant{{
+			ID:                     uuid.New(),
+			SessionID:              sessionID,
+			ParticipantType:        "agent",
+			ParticipantID:          agentID,
+			Role:                   "member",
+			NotificationPreference: "all",
+		}},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.participants = participants
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+	})
+
+	out, err := executor.Execute(ctx, "session.invite_agent", map[string]any{
+		"session_id": sessionID.String(),
+		"agent_id":   agentID.String(),
+	})
+	if err != nil {
+		t.Fatalf("session.invite_agent duplicate: %v", err)
+	}
+	if got := out["already_present"]; got != true {
+		t.Fatalf("already_present = %v, want true", got)
+	}
+	if len(participants.participants) != 1 {
+		t.Fatalf("participant rows = %d, want 1", len(participants.participants))
 	}
 }
 

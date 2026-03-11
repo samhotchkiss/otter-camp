@@ -3785,6 +3785,24 @@ func (e *NativeToolExecutor) handleSessionInviteAgent(ctx context.Context, input
 	if !ok || agentID == uuid.Nil {
 		return map[string]any{"error": "agent_id_required"}, nil
 	}
+	existingParticipants, err := e.participants.ListBySession(ctx, sessionID)
+	if err == nil {
+		for _, participant := range existingParticipants {
+			if participant.RemovedAt != nil {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") {
+				continue
+			}
+			if participant.ParticipantID != agentID {
+				continue
+			}
+			return map[string]any{
+				"participant_id": participant.ID,
+				"already_present": true,
+			}, nil
+		}
+	}
 	created, err := e.participants.Create(ctx, repo.ChatParticipant{
 		SessionID:              sessionID,
 		ParticipantType:        "agent",
@@ -3793,9 +3811,32 @@ func (e *NativeToolExecutor) handleSessionInviteAgent(ctx context.Context, input
 		Role:                   "member",
 	})
 	if err != nil {
+		if errors.Is(err, repo.ErrConflict) {
+			existingParticipants, listErr := e.participants.ListBySession(ctx, sessionID)
+			if listErr == nil {
+				for _, participant := range existingParticipants {
+					if participant.RemovedAt != nil {
+						continue
+					}
+					if !strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") {
+						continue
+					}
+					if participant.ParticipantID != agentID {
+						continue
+					}
+					return map[string]any{
+						"participant_id": participant.ID,
+						"already_present": true,
+					}, nil
+				}
+			}
+		}
 		return nil, err
 	}
-	return map[string]any{"participant_id": created.ID}, nil
+	return map[string]any{
+		"participant_id": created.ID,
+		"already_present": false,
+	}, nil
 }
 
 func (e *NativeToolExecutor) handleMessageSend(ctx context.Context, input map[string]any) (map[string]any, error) {
