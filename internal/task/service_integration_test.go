@@ -208,6 +208,86 @@ func TestTaskServiceIntegrationAllowsReviewToBlockedWithFlowContext(t *testing.T
 	}
 }
 
+func TestTaskServiceIntegrationFlowBackedOnHoldResumesThroughQueued(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Flow-backed hold task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	taskRecord.CurrentFlowNodeID = template.StartNodeID
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update task current_flow_node_id: %v", err)
+	}
+
+	execRepo := repo.NewFlowNodeExecutionRepo(pool)
+	activeExecution, err := execRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      created.ID,
+		FlowNodeID:  *template.StartNodeID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("Create active flow execution: %v", err)
+	}
+
+	inProgress, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+	if inProgress.CurrentFlowNodeID == nil || *inProgress.CurrentFlowNodeID != *template.StartNodeID {
+		t.Fatalf("current_flow_node_id in_progress = %v, want %s", inProgress.CurrentFlowNodeID, *template.StartNodeID)
+	}
+
+	onHold, err := svc.TransitionStatus(ctx, created.ID, "on_hold", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus on_hold: %v", err)
+	}
+	if onHold.WorkStatus != "on_hold" {
+		t.Fatalf("on_hold work_status = %q, want on_hold", onHold.WorkStatus)
+	}
+	if onHold.CurrentFlowNodeID == nil || *onHold.CurrentFlowNodeID != *template.StartNodeID {
+		t.Fatalf("current_flow_node_id on_hold = %v, want %s", onHold.CurrentFlowNodeID, *template.StartNodeID)
+	}
+
+	resumed, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued from on_hold: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+	if resumed.CurrentFlowNodeID == nil || *resumed.CurrentFlowNodeID != *template.StartNodeID {
+		t.Fatalf("current_flow_node_id resumed = %v, want %s", resumed.CurrentFlowNodeID, *template.StartNodeID)
+	}
+
+	refreshedExecution, err := execRepo.GetByID(ctx, activeExecution.ID)
+	if err != nil {
+		t.Fatalf("GetByID active execution: %v", err)
+	}
+	if refreshedExecution.Status != "active" {
+		t.Fatalf("flow execution status after on_hold->queued = %q, want active", refreshedExecution.Status)
+	}
+}
+
 func TestTaskServiceIntegrationRejectsQueueWhenOutstandingProjectGateExistsEX256(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

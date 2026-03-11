@@ -153,6 +153,7 @@ There is no separate approval state machine. Review and approval are handled by 
 - `cancelled`: abandoned. Terminal.
 
 For tasks backed by a flow template, `in_progress` and `review` are runtime-backed states, not cosmetic labels. A task must not enter or remain in either status unless the control plane can point to a concrete `current_flow_node_id` and at least one corresponding `flow_node_execution` row for that task. The task status must also match that node type: work/merge-style nodes map to `in_progress`, review nodes map to `review`, and a reject/advance transition that changes nodes must update the task/runtime state together as one state-machine step. If execution state is missing, the scheduler/runtime must deterministically repair it before leaving the task active; if it cannot repair the state, the task must fail closed instead of staying active with zero flow lineage.
+`on_hold` is the paused variant of that same flow-backed state. A flow-backed task placed on hold keeps its canonical `current_flow_node_id` and execution lineage, but resume still goes back through `queued` so the scheduler regains control before work restarts.
 Successful execution is also part of the same invariant: when a work node has satisfied its contract and produced the required durable output, the runtime must promote that task to the next legal node exactly once. Repeated successful rewrites of the same artifact without promotion are a state-machine failure, not "extra iteration."
 
 ### Valid Transitions
