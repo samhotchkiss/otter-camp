@@ -108,6 +108,79 @@ func TestTaskHTTPCreateQueueReviewDecisionLifecycle(t *testing.T) {
 	}
 }
 
+func TestTaskHTTPReviewDecisionRejectPreservesCanonicalFlowLineage(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-review-reject", true)
+	seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/tasks", map[string]any{
+		"title":       "Reject review task",
+		"description": "verify reject uses canonical flow lineage",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if created.StatusCode != http.StatusCreated {
+		t.Fatalf("create task status = %d, want %d body=%s", created.StatusCode, http.StatusCreated, string(created.Body))
+	}
+	taskID := jsonPathString(t, created.Body, "data", "id")
+	taskUUID := uuid.MustParse(taskID)
+
+	seedReviewedTerminalFlowState(t, testServer.Pool, org.ID, project.ID, taskUUID)
+
+	body := "Review this task"
+	_, err := repo.NewInboxItemRepo(testServer.Pool).Create(context.Background(), repo.InboxItem{
+		OrganizationID:  org.ID,
+		TargetUserID:    &adminUser.ID,
+		ItemType:        "task_review",
+		SourceProjectID: &project.ID,
+		SourceTaskID:    &taskUUID,
+		CreatedByType:   "system",
+		Title:           "Task review required",
+		Body:            &body,
+		ActionPayload:   json.RawMessage(`{"action":"review"}`),
+	})
+	if err != nil {
+		t.Fatalf("create task_review inbox: %v", err)
+	}
+
+	rejected := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskID+"/review-decision", map[string]any{
+		"decision": "reject",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if rejected.StatusCode != http.StatusOK {
+		t.Fatalf("review reject status = %d, want %d body=%s", rejected.StatusCode, http.StatusOK, string(rejected.Body))
+	}
+
+	got := mustJSON(t, http.MethodGet, testServer.URL+"/v1/tasks/"+taskID, nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if got.StatusCode != http.StatusOK {
+		t.Fatalf("get task status = %d, want %d body=%s", got.StatusCode, http.StatusOK, string(got.Body))
+	}
+	if status := jsonPathString(t, got.Body, "data", "work_status"); status != "in_progress" {
+		t.Fatalf("work_status = %q, want %q body=%s", status, "in_progress", string(got.Body))
+	}
+	if nodeType := jsonPathString(t, got.Body, "data", "current_flow_node", "node_type"); nodeType != "work" {
+		t.Fatalf("current_flow_node.node_type = %q, want %q body=%s", nodeType, "work", string(got.Body))
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	taskRecord, err := taskRepo.GetByID(context.Background(), taskUUID)
+	if err != nil {
+		t.Fatalf("GetByID rejected task: %v", err)
+	}
+	if taskRecord.CurrentFlowNodeID == nil {
+		t.Fatal("current_flow_node_id is nil after reject")
+	}
+	execution, err := executionRepo.GetActive(context.Background(), taskUUID, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		t.Fatalf("GetActive reject execution: %v", err)
+	}
+	if execution.Status != "active" {
+		t.Fatalf("reject execution status = %q, want active", execution.Status)
+	}
+}
+
 func TestTaskHTTPQueueRequiresFlowTemplate(t *testing.T) {
 	testServer, org, adminUser, _ := newTaskTestServer(t)
 	defer testServer.Close()
