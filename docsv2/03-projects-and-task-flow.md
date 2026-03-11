@@ -581,6 +581,7 @@ Dependencies govern execution order. They are separate from the task/subtask con
 
 - This is a scheduler gate, not a dependency edge in the DAG.
 - It applies at project scope: while a gate task is outstanding (`work_status` not in `done`, `cancelled`), no other task can start.
+- Queue attempts behind an outstanding gate are rejected as well; the blocked task stays in `draft` instead of entering a misleading queued/runnable state.
 - If multiple gate tasks are outstanding, they are processed in strict `task_number` order (lowest first).
 - Use this for governance checkpoints (for example: staffing/decomposition kickoff approval) where broad sequencing is required.
 
@@ -741,7 +742,7 @@ create index on project_task (schedule_id) where schedule_id is not null;  -- qu
 
 - Tasks are flat at the project level. No `parent_task_id` — large efforts are multiple tasks with dependencies.
 - `task_number` is auto-incremented per project. Display format: `{project_slug}-{task_number}` (e.g., `OC-5`).
-- `blocks_scope = 'all'` creates a project-wide scheduler gate. While the task is outstanding, only the lowest-numbered outstanding gate task in the project may start.
+- `blocks_scope = 'all'` creates a project-wide scheduler gate. While the task is outstanding, only the lowest-numbered outstanding gate task in the project may start, and queue attempts for other tasks are rejected until that gate clears.
 
 ### flow_node_execution
 
@@ -982,7 +983,7 @@ create index on project_task_event (task_id, created_at);
 - **Rejection loops create new flow_node_execution records.** Visit counter tracks which attempt. Each visit has its own subtasks, session, timestamps, and commit_sha.
 - **`commit_sha` on flow_node_execution for review diff base.** Each reviewer sees only changes since the last completed node, not the full branch diff.
 - **Blockers are tasks, not a separate entity.** Agent files a new task with a dependency link. PM triages. Escalation: PM → Frank → human.
-- **`blocks_scope = 'all'` is a project-wide execution gate.** While any gate task is outstanding, only the lowest-numbered outstanding gate task in that project may start.
+- **`blocks_scope = 'all'` is a project-wide execution gate.** While any gate task is outstanding, only the lowest-numbered outstanding gate task in that project may start, and non-gate tasks stay `draft` if someone tries to queue them early.
 - **Every new project starts with a canonical bootstrap task tree.** Task 1 is a `blocks_scope = 'all'` governance gate, and project creation also seeds bounded bootstrap setup child tasks for repo/environment binding, staffing, decomposition, task-shape validation, flow attachment/validation, first-wave selection, and Frank sign-off. Those setup tasks remain orchestration-only, and any bounded first-wave project-task children they emit remain planned `draft` work until the parent bootstrap gate verifies the setup outputs together and records Frank's sign-off.
   The kickoff/bootstrap conversation in the canonical project session is an active bounded workflow, not a passive chat plan. After Frank hands off to Lori, the system may enqueue automatic follow-on bootstrap turns until persisted setup records exist or the session records an explicit bootstrap failure instead of silently idling.
   If prompt/context guardrails or continuation-depth limits exhaust before persisted setup exists, the session must settle to `project_bootstrap.status='failed'` with machine-visible `failure_class` and `failure_reason` instead of remaining ambiguously active.
