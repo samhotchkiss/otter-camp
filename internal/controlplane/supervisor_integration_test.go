@@ -5,6 +5,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1079,6 +1080,28 @@ func TestSupervisor_ImpossibleInProgressTaskWithoutRuntimeOrExecutionBlocksTask(
 	}
 	if len(executions) != 0 {
 		t.Fatalf("flow execution count = %d, want 0 for impossible-state fixture", len(executions))
+	}
+
+	var eventType string
+	var payload json.RawMessage
+	if err := pool.QueryRow(ctx, `
+		SELECT event_type, payload
+		FROM project_task_event
+		WHERE task_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, taskRecord.ID).Scan(&eventType, &payload); err != nil {
+		t.Fatalf("load latest task event: %v", err)
+	}
+	if eventType != "status.changed" {
+		t.Fatalf("latest event_type = %q, want status.changed", eventType)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal latest payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", decoded["blocker_reason"])); got == "" || !strings.Contains(got, "impossible live task state") {
+		t.Fatalf("blocker_reason = %q, want impossible live task detail", got)
 	}
 }
 

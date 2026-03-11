@@ -60,6 +60,7 @@ type supervisorChatService interface {
 
 type supervisorTaskService interface {
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
+	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
 }
 
 type SupervisorOptions struct {
@@ -285,6 +286,7 @@ func (s *Supervisor) detectImpossibleLiveTasks(ctx context.Context) error {
 		Type:                  "supervisor",
 		AllowFlowRuntimeBypass: true,
 	}
+	const impossibleLiveTaskReason = "supervisor detected impossible live task state: task remained in_progress without a runtime owner or active flow execution"
 	for rows.Next() {
 		var taskID uuid.UUID
 		if scanErr := rows.Scan(&taskID); scanErr != nil {
@@ -293,7 +295,9 @@ func (s *Supervisor) detectImpossibleLiveTasks(ctx context.Context) error {
 		if taskID == uuid.Nil {
 			continue
 		}
-		if _, transitionErr := s.taskService.TransitionStatus(ctx, taskID, "blocked", actor); transitionErr != nil {
+		if _, transitionErr := s.taskService.TransitionStatusWithPayload(ctx, taskID, "blocked", actor, map[string]any{
+			"blocker_reason": impossibleLiveTaskReason,
+		}); transitionErr != nil {
 			var invalid tasksvc.ErrInvalidStatusTransition
 			if errors.As(transitionErr, &invalid) {
 				continue
