@@ -12127,6 +12127,13 @@ func assertAutomaticFailureState(t *testing.T, projectRecord repo.Project, actio
 	if failureState.LastCheckpoint != phase {
 		t.Fatalf("automatic failure last_checkpoint = %q, want %q", failureState.LastCheckpoint, phase)
 	}
+	expectedSource := projectBootstrapSource
+	if category == projectFailureCategoryExecution {
+		expectedSource = "execution_runtime"
+	}
+	if failureState.Source != expectedSource {
+		t.Fatalf("automatic failure source = %q, want %q", failureState.Source, expectedSource)
+	}
 	if strings.TrimSpace(failureState.FailureReason) == "" {
 		t.Fatal("expected automatic failure reason")
 	}
