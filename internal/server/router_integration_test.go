@@ -1035,37 +1035,51 @@ func sha256Hex(raw string) string {
 func assertLatestAuditMetadataField(t *testing.T, pool *pgxpool.Pool, eventType, field, want string) {
 	t.Helper()
 
-	var value string
-	err := pool.QueryRow(context.Background(), `
-		SELECT COALESCE(metadata ->> $2, '')
-		FROM audit_event
-		WHERE event_type = $1
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, eventType, field).Scan(&value)
-	if err != nil {
-		t.Fatalf("query audit metadata event=%s field=%s: %v", eventType, field, err)
-	}
-	if value != want {
-		t.Fatalf("audit metadata event=%s field=%s got=%q want=%q", eventType, field, value, want)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var value string
+		err := pool.QueryRow(context.Background(), `
+			SELECT COALESCE(metadata ->> $2, '')
+			FROM audit_event
+			WHERE event_type = $1
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, eventType, field).Scan(&value)
+		if err == nil && value == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				t.Fatalf("query audit metadata event=%s field=%s: %v", eventType, field, err)
+			}
+			t.Fatalf("audit metadata event=%s field=%s got=%q want=%q", eventType, field, value, want)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
 func assertLatestAuditPrincipalID(t *testing.T, pool *pgxpool.Pool, eventType, want string) {
 	t.Helper()
 
-	var principalID string
-	err := pool.QueryRow(context.Background(), `
-		SELECT principal_id::text
-		FROM audit_event
-		WHERE event_type = $1
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, eventType).Scan(&principalID)
-	if err != nil {
-		t.Fatalf("query audit principal event=%s: %v", eventType, err)
-	}
-	if principalID != want {
-		t.Fatalf("audit principal event=%s got=%q want=%q", eventType, principalID, want)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var principalID string
+		err := pool.QueryRow(context.Background(), `
+			SELECT principal_id::text
+			FROM audit_event
+			WHERE event_type = $1
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, eventType).Scan(&principalID)
+		if err == nil && principalID == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				t.Fatalf("query audit principal event=%s: %v", eventType, err)
+			}
+			t.Fatalf("audit principal event=%s got=%q want=%q", eventType, principalID, want)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
