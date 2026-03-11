@@ -3187,7 +3187,101 @@ func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
 		}
 		return e.describeTurnTransitionError(ctx, rt.turn.ID, "completeTurn CompleteTurn", "in_progress->completed", err)
 	}
+	if err := e.ensureProjectKickoffHandoff(ctx, rt); err != nil {
+		return err
+	}
 	return e.ensureRecoveryTurnDurableTaskState(ctx, rt)
+}
+
+func (e *TurnEngine) ensureProjectKickoffHandoff(ctx context.Context, rt *turnRuntime) error {
+	if e == nil || e.chat == nil || e.messages == nil || rt == nil || rt.session == nil || rt.projectIdentity == nil {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "organization") {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.agent.DisplayName), "frank") && !strings.EqualFold(strings.TrimSpace(rt.agent.AgentType), "general") {
+		return nil
+	}
+
+	projectSession, err := e.chat.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: rt.session.OrganizationID,
+		ScopeType:      "project",
+		ScopeID:        rt.projectIdentity.id,
+		Mode:           "async",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := e.chat.GetSession(ctx, projectSession.ID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if err := e.ensureAgentParticipant(ctx, projectSession.ID, rt.agent.ID); err != nil {
+		return err
+	}
+	loriID, err := e.resolveLoriStarterID(ctx, rt.session.OrganizationID)
+	if err == nil && loriID != uuid.Nil {
+		if ensureErr := e.ensureAgentParticipant(ctx, projectSession.ID, loriID); ensureErr != nil {
+			return ensureErr
+		}
+	}
+
+	projectMessages, err := e.messages.ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		return err
+	}
+	for _, message := range projectMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		if message.AuthorID != nil && *message.AuthorID == rt.agent.ID && strings.EqualFold(stringValue(message.AuthorType), "agent") {
+			return nil
+		}
+	}
+
+	handoff, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  projectSession.ID,
+		AuthorType: stringPtr("agent"),
+		AuthorID:   &rt.agent.ID,
+		Role:       "user",
+		Content:    e.buildSyntheticProjectKickoffHandoff(ctx, rt),
+	})
+	if err != nil {
+		return err
+	}
+	if loriID == uuid.Nil {
+		return nil
+	}
+	_, err = e.enqueueAgentTurnIfActive(ctx, projectSession, AgentTurnPayload{
+		SessionID: projectSession.ID,
+		MessageID: handoff.ID,
+		AgentID:   &loriID,
+	}, nil)
+	return err
+}
+
+func (e *TurnEngine) buildSyntheticProjectKickoffHandoff(ctx context.Context, rt *turnRuntime) string {
+	if rt == nil || rt.projectIdentity == nil {
+		return "Frank handoff: create the initial staffed work plan for this project."
+	}
+	originatingRequest := ""
+	if e != nil && e.messages != nil && rt.initialMessageID != uuid.Nil {
+		if source, err := e.messages.GetByID(ctx, rt.initialMessageID); err == nil && strings.EqualFold(strings.TrimSpace(source.Role), "user") {
+			originatingRequest = normalizeInstructionText(source.Content)
+		}
+	}
+	lines := []string{
+		"Frank handoff: create the initial staffed work plan for this project.",
+		fmt.Sprintf("Created project: slug=%s project_id=%s.", strings.TrimSpace(rt.projectIdentity.slug), rt.projectIdentity.id),
+	}
+	if originatingRequest != "" {
+		lines = append(lines, fmt.Sprintf("Originating user request: %s", originatingRequest))
+	}
+	lines = append(lines, "Use the canonical bootstrap workflow: staff the project, create bounded tasks/subtasks, attach runnable flows, and move the first executable wave into execution.")
+	return strings.Join(lines, "\n\n")
 }
 
 func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {

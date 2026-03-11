@@ -10724,6 +10724,134 @@ func TestTurnEngineIntegrationKickoffSummaryCarriesOriginatingWorkstreams(t *tes
 	}
 }
 
+func TestTurnEngineIntegrationBackfillsMissingProjectKickoffHandoffAfterProjectCreate(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	request := "Create Sam.blog with workstreams for imported legacy posts, design options, content strategy, and photography archive migration."
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateContent(ctx, fixture.userMessage.ID, request); err != nil {
+		t.Fatalf("UpdateContent originating user request: %v", err)
+	}
+
+	var createdProject repo.Project
+	var projectSession *chat.ChatSession
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		switch call.ID {
+		case "create-project":
+			createdProject = mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+			createdProject.Slug = "sam-blog-auto-handoff"
+			createdProject.DisplayName = "Sam.blog"
+			updatedProject, err := repo.NewProjectRepo(fixture.pool).Update(ctx, createdProject)
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			createdProject = updatedProject
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"project": map[string]any{
+						"id":   createdProject.ID,
+						"slug": createdProject.Slug,
+						"name": createdProject.DisplayName,
+					},
+				},
+			}, nil
+		case "create-session":
+			session, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+				OrganizationID: fixture.org.ID,
+				ScopeType:      "project",
+				ScopeID:        createdProject.ID,
+				Mode:           "async",
+			})
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			projectSession = session
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"session": map[string]any{
+						"id":         session.ID,
+						"scope_type": session.ScopeType,
+						"scope_id":   session.ScopeID,
+						"mode":       session.Mode,
+					},
+				},
+			}, nil
+		default:
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool_call"}, nil
+		}
+	}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "create-project",
+				Name: "project.create",
+				Tier: "tier1",
+				Arguments: map[string]any{
+					"name": "Sam.blog",
+					"slug": "sam-blog-auto-handoff",
+				},
+			}}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "create-session",
+				Name: "session.create",
+				Tier: "tier1",
+				Arguments: map[string]any{
+					"scope_type": "project",
+					"scope_id":   createdProject.ID.String(),
+					"mode":       "async",
+				},
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Project created and ready."}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if projectSession == nil {
+		t.Fatal("project session was not created")
+	}
+
+	projectMessages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project session messages: %v", err)
+	}
+	if len(projectMessages) != 1 {
+		t.Fatalf("project session messages = %d, want 1 synthetic handoff", len(projectMessages))
+	}
+	handoff := projectMessages[0]
+	if !strings.EqualFold(strings.TrimSpace(handoff.Role), "user") {
+		t.Fatalf("handoff role = %q, want user", handoff.Role)
+	}
+	if handoff.AuthorID == nil || *handoff.AuthorID != fixture.agent.ID {
+		t.Fatalf("handoff author_id = %v, want Frank %s", handoff.AuthorID, fixture.agent.ID)
+	}
+	if !strings.Contains(strings.ToLower(handoff.Content), "imported legacy posts") ||
+		!strings.Contains(strings.ToLower(handoff.Content), "design options") ||
+		!strings.Contains(strings.ToLower(handoff.Content), "content strategy") {
+		t.Fatalf("synthetic handoff missing originating request context: %q", handoff.Content)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable project kickoff jobs = %d, want 1", jobs)
+	}
+	_, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if payload.AgentID == nil || *payload.AgentID != lori.ID {
+		t.Fatalf("queued kickoff agent = %v, want Lori %s", payload.AgentID, lori.ID)
+	}
+}
+
 func TestTurnEngineIntegrationTier1ToolDispatchRoundTrip(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	modelCalls := 0
