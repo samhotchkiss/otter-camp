@@ -442,6 +442,8 @@ func (r *ProjectTaskRepo) UpdateMetadataTx(ctx context.Context, tx pgx.Tx, id uu
 }
 
 func (r *ProjectTaskRepo) UpdateTx(ctx context.Context, tx pgx.Tx, task ProjectTask) (ProjectTask, error) {
+	// This is a low-level persistence method. Callers must not use it as a substitute for
+	// task/flow state transitions; status-bearing runtime changes belong in the canonical services.
 	query := `
 		UPDATE project_task
 		SET
