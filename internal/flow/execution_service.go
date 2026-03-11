@@ -615,9 +615,11 @@ func (s *service) advanceNextFlowTx(ctx context.Context, taskRecord repo.Project
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tasksTx.SetFlowNodeTx(ctx, tx, taskRecord.ID, &nextNode.ID); err != nil {
+	updatedTaskRecord, err := tasksTx.SetFlowNodeTx(ctx, tx, taskRecord.ID, &nextNode.ID)
+	if err != nil {
 		return nil, err
 	}
+	taskRecord = updatedTaskRecord
 	taskRecord.CurrentFlowNodeID = &nextNode.ID
 	created, err := executionsTx.CreateTx(ctx, tx, repo.FlowNodeExecution{
 		TaskID:      taskRecord.ID,
@@ -993,9 +995,11 @@ func (s *service) rejectFlowNodeTx(ctx context.Context, taskRecord repo.ProjectT
 	if _, err := executionsTx.RejectTx(ctx, tx, activeExecution.ID); err != nil {
 		return nil, err
 	}
-	if _, err := tasksTx.SetFlowNodeTx(ctx, tx, taskRecord.ID, currentNode.RejectNodeID); err != nil {
+	updatedTaskRecord, err := tasksTx.SetFlowNodeTx(ctx, tx, taskRecord.ID, currentNode.RejectNodeID)
+	if err != nil {
 		return nil, err
 	}
+	taskRecord = updatedTaskRecord
 	taskRecord.CurrentFlowNodeID = currentNode.RejectNodeID
 	created, err := executionsTx.CreateTx(ctx, tx, repo.FlowNodeExecution{
 		TaskID:      taskRecord.ID,
