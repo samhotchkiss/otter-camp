@@ -46,6 +46,61 @@ func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresIrrelevantStatusesAndEven
 	}
 }
 
+func TestStatusChangeOwnedByFlowTransition(t *testing.T) {
+	executionID := uuid.New()
+	cases := []struct {
+		name             string
+		transitionSource string
+		flowEventType    string
+		executionID      *uuid.UUID
+		want             bool
+	}{
+		{
+			name:             "flow advanced transition",
+			transitionSource: "flow_transition",
+			flowEventType:    "flow.advanced",
+			executionID:      &executionID,
+			want:             true,
+		},
+		{
+			name:             "flow rejected transition",
+			transitionSource: "flow_transition",
+			flowEventType:    "flow.rejected",
+			executionID:      &executionID,
+			want:             true,
+		},
+		{
+			name:             "missing execution id",
+			transitionSource: "flow_transition",
+			flowEventType:    "flow.rejected",
+			want:             false,
+		},
+		{
+			name:             "wrong source",
+			transitionSource: "manual",
+			flowEventType:    "flow.rejected",
+			executionID:      &executionID,
+			want:             false,
+		},
+		{
+			name:             "unknown flow event",
+			transitionSource: "flow_transition",
+			flowEventType:    "flow.started",
+			executionID:      &executionID,
+			want:             false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := statusChangeOwnedByFlowTransition(tc.transitionSource, tc.flowEventType, tc.executionID)
+			if got != tc.want {
+				t.Fatalf("statusChangeOwnedByFlowTransition(%q, %q, %v) = %v, want %v", tc.transitionSource, tc.flowEventType, tc.executionID, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTaskQueueProcessorHandleTaskQueuedEventCreatesOrReusesCanonicalTaskSessionForInProgressTask(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()

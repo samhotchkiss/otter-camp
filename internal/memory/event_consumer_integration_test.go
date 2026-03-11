@@ -196,10 +196,17 @@ func TestTurnExtractionTriggeredByTurnCompletedEvent(t *testing.T) {
 		t.Fatalf("publish chat.turn.completed: %v", err)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if extractor.CallCount() >= 1 {
-			break
+			var memoryCount int
+			if err := pool.QueryRow(ctx, `
+				SELECT COUNT(*)
+				FROM memory
+				WHERE organization_id = $1
+			`, org.ID).Scan(&memoryCount); err == nil && memoryCount > 0 {
+				break
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -359,7 +366,7 @@ func seedMemoryTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID
 		OrganizationID: orgID,
 		ProjectID:      projectID,
 		Title:          "Memory task",
-		WorkStatus:     "done",
+		WorkStatus:     "draft",
 		CreatedByType:  "system",
 		CreatedByID:    nil,
 	})

@@ -56,7 +56,7 @@ func TestRealtimeSSEFanoutFromChatAppendMessage(t *testing.T) {
 	defer fixture.Close()
 
 	token := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
-	sessionID := createChatSessionForTest(t, fixture.URL, token)
+	sessionID := createChatSessionForTest(t, fixture.URL, token, fixture.Org.ID)
 	lastSeq := fixture.currentMaxSeq(t)
 
 	stream := openSSEStream(t, fixture.URL, token, fmt.Sprintf("session:%s", sessionID), lastSeq)
@@ -103,7 +103,7 @@ func TestRealtimeSSEReconnectReplay(t *testing.T) {
 	defer fixture.Close()
 
 	token := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
-	sessionID := createChatSessionForTest(t, fixture.URL, token)
+	sessionID := createChatSessionForTest(t, fixture.URL, token, fixture.Org.ID)
 	sessionUUID := mustUUID(t, sessionID)
 	lastSeq := fixture.currentMaxSeq(t)
 
@@ -148,8 +148,8 @@ func TestRealtimeSSEMultiScopeRouting(t *testing.T) {
 	defer fixture.Close()
 
 	token := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
-	sessionA := createChatSessionForTest(t, fixture.URL, token)
-	sessionC := createChatSessionForTest(t, fixture.URL, token)
+	sessionA := createChatSessionForTest(t, fixture.URL, token, fixture.Org.ID)
+	sessionC := createChatSessionForTest(t, fixture.URL, token, fixture.Org.ID)
 	projectB := fixture.createProject(t)
 	lastSeq := fixture.currentMaxSeq(t)
 
@@ -185,7 +185,7 @@ func TestRealtimeWebSocketTypingBroadcast(t *testing.T) {
 	defer fixture.Close()
 
 	token := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
-	sessionID := createChatSessionForTest(t, fixture.URL, token)
+	sessionID := createChatSessionForTest(t, fixture.URL, token, fixture.Org.ID)
 	lastSeq := fixture.currentMaxSeq(t)
 
 	ws1 := openWebSocket(t, fixture.URL, token, fmt.Sprintf("session:%s", sessionID), lastSeq)
@@ -311,7 +311,7 @@ func TestRealtimeSSEReconnectFromHeaderReplaysExpectedEvents(t *testing.T) {
 	defer fixture.Close()
 
 	token := loginToken(t, fixture.URL, fixture.Admin.Email, "admin-password")
-	sessionID := createChatSessionForTest(t, fixture.URL, token)
+	sessionID := createChatSessionForTest(t, fixture.URL, token, fixture.Org.ID)
 	sessionUUID := mustUUID(t, sessionID)
 
 	baseSeq := fixture.currentMaxSeq(t)

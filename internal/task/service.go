@@ -218,6 +218,7 @@ type CreateInboxItemRequest struct {
 type TaskService interface {
 	CreateTask(ctx context.Context, req CreateTaskRequest) (*ProjectTask, error)
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor) (*ProjectTask, error)
+	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor, extraPayload map[string]any) (*ProjectTask, error)
 	ResumeValidationBlockedTask(ctx context.Context, taskID uuid.UUID, actor Actor) (*ProjectTask, error)
 	RequestHumanApproval(ctx context.Context, taskID uuid.UUID) (*InboxItem, error)
 	ApproveTask(ctx context.Context, taskID, actedByUserID uuid.UUID) (*ProjectTask, error)
@@ -505,6 +506,10 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 
 func (s *service) TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor) (*ProjectTask, error) {
 	return s.transitionStatus(ctx, taskID, toStatus, actor, nil, false)
+}
+
+func (s *service) TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor, extraPayload map[string]any) (*ProjectTask, error) {
+	return s.transitionStatus(ctx, taskID, toStatus, actor, extraPayload, false)
 }
 
 func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor, extraPayload map[string]any, approvalOverride bool) (*ProjectTask, error) {

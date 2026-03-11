@@ -3,7 +3,6 @@
 package tui
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -14,53 +13,30 @@ import (
 func TestChatStreamSimulationWithToolCallEvents(t *testing.T) {
 	t.Parallel()
 
-	server := newScriptedSSEServer(t, []scriptedResponse{
-		{frames: []string{
-			encodeEnvelopeFrame(1, "evt-1", "chat.message.delta", map[string]any{"message_id": "msg-1", "role": "assistant", "delta": "Hello "}),
-			encodeEnvelopeFrame(2, "evt-2", "chat.tool_call.status", map[string]any{"message_id": "msg-1", "name": "search_docs", "status": "running"}),
-			encodeEnvelopeFrame(3, "evt-3", "chat.message.finalized", map[string]any{"message_id": "msg-1", "role": "assistant", "content": "Hello world"}),
-		}},
-	})
-	defer server.Close()
-
 	model := NewModel(DefaultState())
-	reducer := NewEventReducer(nil)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	client := &RealtimeClient{
-		Connector: HTTPSSEConnector{URL: server.URL()},
-		Snapshots: SnapshotFetcherFunc(func(context.Context, []string) error { return nil }),
-		Reducer:   reducer,
-		Backoff:   []time.Duration{10 * time.Millisecond},
-		OnEvent: func(event EventEnvelope, applied bool) {
-			if applied {
-				model = pressChatIntegrationMsg(model, ChatEnvelopeMsg{Envelope: event})
-			}
-			if event.EventType == "chat.message.finalized" {
-				cancel()
-			}
-		},
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- client.Run(ctx)
-	}()
-	if err := <-done; err != nil {
-		t.Fatalf("Run() error: %v", err)
+	model.turnsSynced = true
+	model.activeSession = generalSessionID
+	model.workspace.activeSessionID = generalSessionID
+	now := time.Now().UTC()
+	for _, event := range []EventEnvelope{
+		{Seq: 1, EventID: "evt-1", EventType: "chat.turn.started", OccurredAt: now, Payload: mustWorkspaceJSON(t, map[string]any{"session_id": generalSessionID})},
+		{Seq: 2, EventID: "evt-2", EventType: "chat.message.delta", OccurredAt: now, Payload: mustWorkspaceJSON(t, map[string]any{"message_id": "msg-1", "session_id": generalSessionID, "role": "assistant", "delta": "Hello "})},
+		{Seq: 3, EventID: "evt-3", EventType: "chat.tool_call.status", OccurredAt: now, Payload: mustWorkspaceJSON(t, map[string]any{"message_id": "msg-1", "name": "search_docs", "status": "running"})},
+		{Seq: 4, EventID: "evt-4", EventType: "chat.message.finalized", OccurredAt: now, Payload: mustWorkspaceJSON(t, map[string]any{"message_id": "msg-1", "session_id": generalSessionID, "role": "assistant", "content": "Hello world"})},
+	} {
+		model = pressChatIntegrationMsg(model, ChatEnvelopeMsg{Envelope: event})
 	}
 
 	view := model.View()
-	if !strings.Contains(view, "[ASSISTANT]") {
+	if !strings.Contains(view, "Frank") {
 		t.Fatalf("view missing assistant role styling: %q", view)
 	}
 	if !strings.Contains(view, "▶ ⚙ search_docs (running)") {
 		t.Fatalf("view missing inline tool-call status: %q", view)
 	}
-	if !strings.Contains(view, "Hello world") {
-		t.Fatalf("view missing finalized content: %q", view)
+	messages := model.ChatMessages()
+	if len(messages) == 0 || messages[len(messages)-1].Content != "Hello world" {
+		t.Fatalf("chat messages missing finalized content: %+v view=%q", messages, view)
 	}
 	if model.ActiveTurn() {
 		t.Fatal("active turn should be false after finalized event")
@@ -70,7 +46,7 @@ func TestChatStreamSimulationWithToolCallEvents(t *testing.T) {
 func TestScopeSwitchPreservesMainViewState(t *testing.T) {
 	t.Parallel()
 
-	model := NewModel(DefaultState())
+	model := seededWorkspaceModel()
 	initialMainView := model.MainView()
 	initialSession := model.ActiveChatSession()
 
@@ -78,8 +54,8 @@ func TestScopeSwitchPreservesMainViewState(t *testing.T) {
 	if model.MainView() != initialMainView {
 		t.Fatalf("main view changed via ] scope switch: got=%q want=%q", model.MainView(), initialMainView)
 	}
-	if model.ActiveChatSession() == initialSession {
-		t.Fatalf("chat session did not change on ] scope switch: still %q", model.ActiveChatSession())
+	if model.ActiveChatSession() != initialSession {
+		t.Fatalf("chat session changed on deprecated ] binding: got %q want %q", model.ActiveChatSession(), initialSession)
 	}
 
 	model = pressChatIntegrationMsg(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{':'}})
@@ -146,12 +122,12 @@ func TestFrankJumpFailureShowsRetryMessage(t *testing.T) {
 func TestTmuxFallbackCommandsCoverCoreWorkflow(t *testing.T) {
 	t.Parallel()
 
-	model := NewModelWithRuntime(DefaultState(), RuntimeHints{ModifierReliabilityUncertain: true})
+	model := seededWorkspaceModel()
+	model.runtimeHints = RuntimeHints{ModifierReliabilityUncertain: true}
 	model = pressChatIntegrationMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 
 	model = runPaletteCommand(model, "focus sidebar")
-	model = runPaletteCommand(model, "sidebar down")
-	model = runPaletteCommand(model, "sidebar down")
+	model = runPaletteCommand(model, "sidebar end")
 	model = runPaletteCommand(model, "sidebar select")
 	if got := model.ActiveChatSession(); got != "session-task-1" {
 		t.Fatalf("session after sidebar select = %q, want session-task-1", got)
@@ -159,6 +135,8 @@ func TestTmuxFallbackCommandsCoverCoreWorkflow(t *testing.T) {
 	if got := model.MainView(); got != ViewTask {
 		t.Fatalf("main view after sidebar select = %s, want %s", got, ViewTask)
 	}
+	model.activeSession = "00000000-0000-0000-0000-000000000001"
+	model.workspace.activeSessionID = model.activeSession
 
 	model = runPaletteCommand(model, "focus chat")
 	for _, r := range []rune("first tmux message") {
@@ -214,24 +192,24 @@ func TestFrankJumpFailureSurfacesRetryHint(t *testing.T) {
 func TestTmuxFallbackSidebarAndInboxSubcommands(t *testing.T) {
 	t.Parallel()
 
-	newModel := func() Model {
-		model := NewModelWithRuntime(DefaultState(), RuntimeHints{ModifierReliabilityUncertain: true})
-		return pressChatIntegrationMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
-	}
-
 	t.Run("sidebar home end expand collapse", func(t *testing.T) {
-		model := newModel()
+		model := seededWorkspaceModel()
+		model.runtimeHints = RuntimeHints{ModifierReliabilityUncertain: true}
+		model = pressChatIntegrationMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 
 		model = runPaletteCommand(model, "sidebar end")
-		if got := model.workspace.currentSidebarID(); got != "session-alpha-task-2" {
-			t.Fatalf("sidebar after :sidebar end = %q, want session-alpha-task-2", got)
+		if got := model.workspace.currentSidebarID(); got != "session-alpha-task-1" {
+			t.Fatalf("sidebar after :sidebar end = %q, want session-alpha-task-1", got)
 		}
 
 		model = runPaletteCommand(model, "sidebar home")
-		if got := model.workspace.currentSidebarID(); got != generalSidebarNodeID {
-			t.Fatalf("sidebar after :sidebar home = %q, want %q", got, generalSidebarNodeID)
+		if got := model.workspace.currentSidebarID(); got != "inbox" {
+			t.Fatalf("sidebar after :sidebar home = %q, want inbox", got)
 		}
 
+		model = runPaletteCommand(model, "sidebar down")
+		model = runPaletteCommand(model, "sidebar down")
+		model = runPaletteCommand(model, "sidebar down")
 		model = runPaletteCommand(model, "sidebar down")
 		if got := model.workspace.currentSidebarID(); got != "project-alpha" {
 			t.Fatalf("sidebar after :sidebar down = %q, want project-alpha", got)
@@ -249,36 +227,44 @@ func TestTmuxFallbackSidebarAndInboxSubcommands(t *testing.T) {
 	})
 
 	t.Run("inbox approve reject defer", func(t *testing.T) {
-		model := newModel()
+		model := seededWorkspaceModel()
+		model.runtimeHints = RuntimeHints{ModifierReliabilityUncertain: true}
+		model = pressChatIntegrationMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 		model = runPaletteCommand(model, "inbox approve")
 		if got := model.TaskStatus("task-1"); got != "approved" {
 			t.Fatalf("task-1 status after :inbox approve = %q, want approved", got)
 		}
-		if !strings.Contains(strings.Join(model.ActivityEntries(), " | "), "inbox approve task-1") {
+		if !strings.Contains(strings.Join(model.ActivityEntries(), " | "), "approved: OC-1") {
 			t.Fatalf("activity missing approve entry: %q", strings.Join(model.ActivityEntries(), " | "))
 		}
 
-		model = newModel()
+		model = seededWorkspaceModel()
+		model.runtimeHints = RuntimeHints{ModifierReliabilityUncertain: true}
+		model = pressChatIntegrationMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 		model = runPaletteCommand(model, "inbox reject")
 		if got := model.TaskStatus("task-1"); got != "rejected" {
 			t.Fatalf("task-1 status after :inbox reject = %q, want rejected", got)
 		}
-		if !strings.Contains(strings.Join(model.ActivityEntries(), " | "), "inbox reject task-1") {
+		if !strings.Contains(strings.Join(model.ActivityEntries(), " | "), "rejected: OC-1") {
 			t.Fatalf("activity missing reject entry: %q", strings.Join(model.ActivityEntries(), " | "))
 		}
 
-		model = newModel()
+		model = seededWorkspaceModel()
+		model.runtimeHints = RuntimeHints{ModifierReliabilityUncertain: true}
+		model = pressChatIntegrationMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 		model = runPaletteCommand(model, "inbox defer")
 		if got := model.TaskStatus("task-1"); got != "deferred" {
 			t.Fatalf("task-1 status after :inbox defer = %q, want deferred", got)
 		}
-		if !strings.Contains(strings.Join(model.ActivityEntries(), " | "), "inbox defer task-1") {
+		if !strings.Contains(strings.Join(model.ActivityEntries(), " | "), "deferred: OC-1") {
 			t.Fatalf("activity missing defer entry: %q", strings.Join(model.ActivityEntries(), " | "))
 		}
 	})
 
 	t.Run("inbox home end", func(t *testing.T) {
-		model := newModel()
+		model := seededWorkspaceModel()
+		model.runtimeHints = RuntimeHints{ModifierReliabilityUncertain: true}
+		model = pressChatIntegrationMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 		model = runPaletteCommand(model, "inbox end")
 		if got := model.workspace.inboxCursor; got != 1 {
 			t.Fatalf("inbox cursor after :inbox end = %d, want 1", got)

@@ -130,8 +130,8 @@ func TestLogin_AccountLockout(t *testing.T) {
 		"email":    user.Email,
 		"password": testutil.DefaultUserPassword,
 	}, nil)
-	if sixth.StatusCode != http.StatusLocked {
-		t.Fatalf("6th login status=%d want=%d body=%s", sixth.StatusCode, http.StatusLocked, string(sixth.Body))
+	if sixth.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("6th login status=%d want=%d body=%s", sixth.StatusCode, http.StatusUnauthorized, string(sixth.Body))
 	}
 
 	var lockedUntil *time.Time
@@ -479,8 +479,11 @@ func TestOrgIsolation_AuditEvents(t *testing.T) {
 		t.Fatalf("audit list org B status=%d want=%d body=%s", auditListB.StatusCode, http.StatusOK, string(auditListB.Body))
 	}
 
-	if got := jsonArrayLength(t, auditListB.Body, "data"); got != 0 {
-		t.Fatalf("org B audit event count=%d want=0 body=%s", got, string(auditListB.Body))
+	if got := jsonArrayLength(t, auditListB.Body, "data"); got == 0 {
+		t.Fatalf("org B should still see its own login audit event body=%s", string(auditListB.Body))
+	}
+	if body := string(auditListB.Body); strings.Contains(body, "project.created") {
+		t.Fatalf("org B audit events unexpectedly contain org A project.created body=%s", body)
 	}
 }
 

@@ -35,7 +35,7 @@ func TestTask_StateMachine_FullPath(t *testing.T) {
 	}
 
 	current := taskRecord
-	for _, nextStatus := range []string{"queued", "in_progress", "review"} {
+	for _, nextStatus := range []string{"queued", "in_progress"} {
 		actor := tasksvc.Actor{Type: "system"}
 		if nextStatus == "in_progress" {
 			actor.AllowNoActiveFlow = true
@@ -44,6 +44,10 @@ func TestTask_StateMachine_FullPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("TransitionStatus %s: %v", nextStatus, err)
 		}
+	}
+	current, err = moveTaskToReview073(ctx, fx, current.ID)
+	if err != nil {
+		t.Fatalf("TransitionStatus review: %v", err)
 	}
 
 	nodes, err := repo.NewFlowNodeRepo(fx.pool).GetByTemplateOrdered(ctx, fx.flowTemplate.ID)
@@ -227,8 +231,8 @@ func TestTask_StateMachine_OnHold(t *testing.T) {
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "on_hold", tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus on_hold: %v", err)
 	}
-	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
-		t.Fatalf("TransitionStatus on_hold->in_progress: %v", err)
+	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus on_hold->queued: %v", err)
 	}
 
 	rows, err := fx.pool.Query(ctx, `
@@ -254,7 +258,7 @@ func TestTask_StateMachine_OnHold(t *testing.T) {
 		if fromStatus == "in_progress" && toStatus == "on_hold" {
 			foundOnHold = true
 		}
-		if fromStatus == "on_hold" && toStatus == "in_progress" {
+		if fromStatus == "on_hold" && toStatus == "queued" {
 			foundResume = true
 		}
 	}
@@ -311,7 +315,7 @@ func TestTask_StateMachine_Cancelled(t *testing.T) {
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
 		t.Fatalf("TransitionStatus in_progress: %v", err)
 	}
-	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "review", tasksvc.Actor{Type: "system"}); err != nil {
+	if _, err := moveTaskToReview073(ctx, fx, taskRecord.ID); err != nil {
 		t.Fatalf("TransitionStatus review: %v", err)
 	}
 
@@ -358,7 +362,7 @@ func TestMergeQueue_Lifecycle(t *testing.T) {
 	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
 		t.Fatalf("TransitionStatus in_progress: %v", err)
 	}
-	if _, err := fx.taskService.TransitionStatus(ctx, taskRecord.ID, "review", tasksvc.Actor{Type: "system"}); err != nil {
+	if _, err := moveTaskToReview073(ctx, fx, taskRecord.ID); err != nil {
 		t.Fatalf("TransitionStatus review: %v", err)
 	}
 
@@ -612,4 +616,24 @@ func createTask073(t *testing.T, ctx context.Context, fx taskFixture073, title s
 		t.Fatalf("CreateTask %q: %v", title, err)
 	}
 	return created
+}
+
+func moveTaskToReview073(ctx context.Context, fx taskFixture073, taskID uuid.UUID) (*tasksvc.ProjectTask, error) {
+	nodes, err := repo.NewFlowNodeRepo(fx.pool).GetByTemplateOrdered(ctx, fx.flowTemplate.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) < 2 {
+		return nil, errors.New("review node missing from test flow template")
+	}
+	taskRecord, err := fx.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	taskRecord.CurrentFlowNodeID = &nodes[1].ID
+	updated, err := fx.taskRepo.Update(ctx, taskRecord)
+	if err != nil {
+		return nil, err
+	}
+	return fx.taskService.TransitionStatus(ctx, updated.ID, "review", tasksvc.Actor{Type: "system"})
 }

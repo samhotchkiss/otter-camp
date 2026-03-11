@@ -213,9 +213,12 @@ func (p *TaskQueueProcessor) handleTaskQueuedEvent(ctx context.Context, event ev
 	}
 
 	var payload struct {
-		TaskID    uuid.UUID `json:"task_id"`
-		ProjectID uuid.UUID `json:"project_id"`
-		ToStatus  string    `json:"to_status"`
+		TaskID            uuid.UUID  `json:"task_id"`
+		ProjectID         uuid.UUID  `json:"project_id"`
+		ToStatus          string     `json:"to_status"`
+		TransitionSource  string     `json:"transition_source"`
+		FlowEventType     string     `json:"flow_event_type"`
+		ToFlowExecutionID *uuid.UUID `json:"to_flow_execution_id"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return nil
@@ -223,8 +226,26 @@ func (p *TaskQueueProcessor) handleTaskQueuedEvent(ctx context.Context, event ev
 	if payload.TaskID == uuid.Nil || !taskStatusStartsAsyncWork(payload.ToStatus) {
 		return nil
 	}
+	if statusChangeOwnedByFlowTransition(payload.TransitionSource, payload.FlowEventType, payload.ToFlowExecutionID) {
+		return nil
+	}
 
 	return p.processQueuedTask(ctx, event, payload.TaskID)
+}
+
+func statusChangeOwnedByFlowTransition(transitionSource, flowEventType string, toFlowExecutionID *uuid.UUID) bool {
+	if !strings.EqualFold(strings.TrimSpace(transitionSource), "flow_transition") {
+		return false
+	}
+	if toFlowExecutionID == nil || *toFlowExecutionID == uuid.Nil {
+		return false
+	}
+	switch strings.TrimSpace(flowEventType) {
+	case "flow.advanced", "flow.rejected":
+		return true
+	default:
+		return false
+	}
 }
 
 func taskStatusStartsAsyncWork(status string) bool {

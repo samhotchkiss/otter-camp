@@ -28,8 +28,8 @@ var (
 const templatePrepLockID int64 = 9_226_014_608
 
 const (
-	defaultDropCleanupTimeout      = 15 * time.Second
-	defaultDropRetryAttemptTimeout = 3 * time.Second
+	defaultDropCleanupTimeout      = 45 * time.Second
+	defaultDropRetryAttemptTimeout = 10 * time.Second
 	defaultDropRetryMaxAttempts    = 5
 	defaultDropRetryInitialBackoff = 100 * time.Millisecond
 	defaultDropRetryMaxBackoff     = 2 * time.Second

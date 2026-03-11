@@ -1250,6 +1250,7 @@ func TestTaskHTTPRollbackCreatesQueuedDeployTask(t *testing.T) {
 	defer testServer.Close()
 
 	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "rollback", false)
+	seedDeployFlowTemplate(t, testServer.Pool, project.ID)
 	seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
 
@@ -1546,6 +1547,81 @@ func seedTaskProject(t *testing.T, pool *pgxpool.Pool, orgID, createdByID uuid.U
 	return project
 }
 
+func seedDeployFlowTemplate(t *testing.T, pool *pgxpool.Pool, projectID uuid.UUID) repo.FlowTemplate {
+	t.Helper()
+
+	projectRepo := repo.NewProjectRepo(pool)
+	project, err := projectRepo.GetByID(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("load project for deploy flow template: %v", err)
+	}
+	if project.OrganizationID == uuid.Nil {
+		t.Fatalf("project %s missing organization id", projectID)
+	}
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	template, err := templateRepo.Create(context.Background(), repo.FlowTemplate{
+		OrganizationID: &project.OrganizationID,
+		ProjectID:      &projectID,
+		Slug:           "deploy-" + uuid.NewString()[:8],
+		DisplayName:    "Deploy Flow",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create deploy flow template: %v", err)
+	}
+	workNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Deploy",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create deploy work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Verify",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create deploy review node: %v", err)
+	}
+	mergeNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Complete",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create deploy merge node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(context.Background(), workNode); err != nil {
+		t.Fatalf("link deploy work node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(context.Background(), reviewNode); err != nil {
+		t.Fatalf("link deploy review node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(context.Background(), template); err != nil {
+		t.Fatalf("set deploy flow start node: %v", err)
+	}
+
+	project.DeployFlowTemplateID = &template.ID
+	if _, err := projectRepo.Update(context.Background(), project); err != nil {
+		t.Fatalf("attach deploy flow template: %v", err)
+	}
+	return template
+}
+
 func seedPMAssignment(t *testing.T, pool *pgxpool.Pool, orgID, projectID, userID uuid.UUID) repo.Agent {
 	t.Helper()
 
@@ -1580,17 +1656,82 @@ func seedTaskRecord(t *testing.T, pool *pgxpool.Pool, orgID, projectID uuid.UUID
 	t.Helper()
 
 	branchPtr := branch
-	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(context.Background(), repo.ProjectTask{
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	template, err := templateRepo.Create(context.Background(), repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "task-http-" + uuid.NewString()[:8],
+		DisplayName:    "Task HTTP Flow",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create task flow template: %v", err)
+	}
+	workNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create task work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create task review node: %v", err)
+	}
+	mergeNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create task merge node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(context.Background(), workNode); err != nil {
+		t.Fatalf("link task work node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(context.Background(), reviewNode); err != nil {
+		t.Fatalf("link task review node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(context.Background(), template); err != nil {
+		t.Fatalf("update task flow template start node: %v", err)
+	}
+
+	taskRecord, err := taskRepo.Create(context.Background(), repo.ProjectTask{
 		OrganizationID: orgID,
 		ProjectID:      projectID,
 		Title:          title,
 		WorkStatus:     status,
+		FlowTemplateID: &template.ID,
 		BranchName:     &branchPtr,
 		CreatedByType:  "system",
 		Metadata:       json.RawMessage(`{}`),
 	})
 	if err != nil {
 		t.Fatalf("seed task: %v", err)
+	}
+	if status == "done" {
+		if _, err := taskRepo.SetFlowNode(context.Background(), taskRecord.ID, &mergeNode.ID); err != nil {
+			t.Fatalf("set done task flow node: %v", err)
+		}
+		taskRecord.CurrentFlowNodeID = &mergeNode.ID
 	}
 	return taskRecord
 }

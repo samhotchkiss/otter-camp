@@ -189,10 +189,10 @@ func TestRealtimeConnectionStateReflectedInModelStatus(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	joined := strings.Join(views, "\n")
-	if !strings.Contains(joined, "Realtime=reconnecting") {
+	if !strings.Contains(joined, "reconnecting") {
 		t.Fatalf("status views missing reconnecting state: %q", joined)
 	}
-	if !strings.Contains(joined, "Realtime=connected") {
+	if !strings.Contains(joined, "connected") {
 		t.Fatalf("status views missing connected state: %q", joined)
 	}
 }

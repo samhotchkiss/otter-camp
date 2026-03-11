@@ -794,6 +794,11 @@ func (f *fakeTaskCoordinator) TransitionStatus(_ context.Context, taskID uuid.UU
 	}
 	return &tasksvc.ProjectTask{}, nil
 }
+
+func (f *fakeTaskCoordinator) TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, status string, actor tasksvc.Actor, _ map[string]any) (*tasksvc.ProjectTask, error) {
+	return f.TransitionStatus(ctx, taskID, status, actor)
+}
+
 func (f *fakeTaskCoordinator) MarkBlocked(context.Context, uuid.UUID, string, tasksvc.Actor) (*tasksvc.ProjectTask, error) {
 	return &tasksvc.ProjectTask{}, nil
 }

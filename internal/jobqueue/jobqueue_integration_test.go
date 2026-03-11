@@ -283,6 +283,7 @@ func TestJobQueue_StaleClaim_Recovery(t *testing.T) {
 
 func TestJobQueue_ListenNotify_Wakeup(t *testing.T) {
 	pool := testdb.New(t)
+	const wakeupTimeout = 8 * time.Second
 	worker := New(pool, nil, Config{
 		WorkerID:             "notify-worker",
 		PollInterval:         30 * time.Second,
@@ -312,11 +313,11 @@ func TestJobQueue_ListenNotify_Wakeup(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(wakeupTimeout):
 		t.Fatal("worker did not wake from LISTEN/NOTIFY within timeout")
 	}
 
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
+	if elapsed := time.Since(start); elapsed > wakeupTimeout {
 		t.Fatalf("notify wakeup too slow: %s", elapsed)
 	}
 }

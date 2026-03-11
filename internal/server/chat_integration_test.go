@@ -24,11 +24,11 @@ import (
 func TestChatHTTPSessionCreateListGetRoundTrip(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
-	testServer, adminUser, _ := newChatTestServer(t)
+	testServer, org, adminUser, _ := newChatTestServer(t)
 	defer testServer.Close()
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
-	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken, org.ID)
 
 	listed := mustJSON(t, http.MethodGet, testServer.URL+"/v1/chat-sessions", nil, map[string]string{"Authorization": "Bearer " + adminToken})
 	if listed.StatusCode != http.StatusOK {
@@ -42,7 +42,7 @@ func TestChatHTTPSessionCreateListGetRoundTrip(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		_ = createChatSessionForTest(t, testServer.URL, adminToken)
+		_ = createChatSessionForTest(t, testServer.URL, adminToken, org.ID)
 	}
 	paged := mustJSON(t, http.MethodGet, testServer.URL+"/v1/chat-sessions?limit=2", nil, map[string]string{"Authorization": "Bearer " + adminToken})
 	if paged.StatusCode != http.StatusOK {
@@ -71,11 +71,11 @@ func TestChatHTTPSessionCreateListGetRoundTrip(t *testing.T) {
 func TestChatHTTPMessageSendAndList(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
-	testServer, adminUser, _ := newChatTestServer(t)
+	testServer, org, adminUser, _ := newChatTestServer(t)
 	defer testServer.Close()
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
-	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken, org.ID)
 
 	sent := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages", map[string]any{
 		"content": "hello from integration",
@@ -112,11 +112,11 @@ func TestChatHTTPMessageSendAndList(t *testing.T) {
 func TestChatHTTPSessionPatchSupportsArchivedStatus(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
-	testServer, adminUser, _ := newChatTestServer(t)
+	testServer, org, adminUser, _ := newChatTestServer(t)
 	defer testServer.Close()
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
-	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken, org.ID)
 
 	patched := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/chat-sessions/"+sessionID, map[string]any{
 		"status": "archived",
@@ -140,11 +140,11 @@ func TestChatHTTPSessionPatchSupportsArchivedStatus(t *testing.T) {
 func TestChatHTTPCancelAliasCancelsInProgressTurn(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
-	testServer, adminUser, _ := newChatTestServer(t)
+	testServer, org, adminUser, _ := newChatTestServer(t)
 	defer testServer.Close()
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
-	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken, org.ID)
 	sessionUUID, err := uuid.Parse(sessionID)
 	if err != nil {
 		t.Fatalf("parse session id: %v", err)
@@ -208,11 +208,11 @@ func TestChatHTTPCancelAliasCancelsInProgressTurn(t *testing.T) {
 func TestChatHTTPSessionExportJSONL(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
-	testServer, adminUser, _ := newChatTestServer(t)
+	testServer, org, adminUser, _ := newChatTestServer(t)
 	defer testServer.Close()
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
-	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken, org.ID)
 
 	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages", map[string]any{
 		"content": "export this line",
@@ -272,12 +272,12 @@ func TestChatHTTPSessionExportJSONL(t *testing.T) {
 func TestChatHTTPMessageRedactionAndPermissions(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
-	testServer, adminUser, memberUser := newChatTestServer(t)
+	testServer, org, adminUser, memberUser := newChatTestServer(t)
 	defer testServer.Close()
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
 	memberToken := loginToken(t, testServer.URL, memberUser.Email, "member-password")
-	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken, org.ID)
 
 	memberMessage := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages", map[string]any{
 		"content": "member-authored content",
@@ -357,12 +357,12 @@ func TestChatHTTPMessageRedactionAndPermissions(t *testing.T) {
 func TestChatHTTPReactionLifecycle(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
-	testServer, adminUser, memberUser := newChatTestServer(t)
+	testServer, org, adminUser, memberUser := newChatTestServer(t)
 	defer testServer.Close()
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
 	memberToken := loginToken(t, testServer.URL, memberUser.Email, "member-password")
-	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken, org.ID)
 	messageID := appendChatMessageForTest(t, testServer.URL, adminToken, sessionID, "react to this")
 
 	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions/"+sessionID+"/messages/"+messageID+"/reactions", map[string]any{
@@ -423,11 +423,11 @@ func TestChatHTTPReactionLifecycle(t *testing.T) {
 func TestChatHTTPReadCursorSupportsBackwardUpdate(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
-	testServer, adminUser, _ := newChatTestServer(t)
+	testServer, org, adminUser, _ := newChatTestServer(t)
 	defer testServer.Close()
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
-	sessionID := createChatSessionForTest(t, testServer.URL, adminToken)
+	sessionID := createChatSessionForTest(t, testServer.URL, adminToken, org.ID)
 
 	first := mustJSON(t, http.MethodPut, testServer.URL+"/v1/chat-sessions/"+sessionID+"/read-cursor", map[string]any{
 		"last_read_sequence": 5,
@@ -460,12 +460,12 @@ func TestChatHTTPReadCursorSupportsBackwardUpdate(t *testing.T) {
 	}
 }
 
-func createChatSessionForTest(t *testing.T, baseURL, token string) string {
+func createChatSessionForTest(t *testing.T, baseURL, token string, orgID uuid.UUID) string {
 	t.Helper()
 	created := mustJSON(t, http.MethodPost, baseURL+"/v1/chat-sessions", map[string]any{
-		"scope_type": "project",
-		"scope_id":   uuid.NewString(),
-		"mode":       "sync",
+		"scope_type": "organization",
+		"scope_id":   orgID.String(),
+		"mode":       "async",
 		"title":      "integration session",
 	}, map[string]string{"Authorization": "Bearer " + token})
 	if created.StatusCode != http.StatusCreated {
@@ -485,7 +485,7 @@ func appendChatMessageForTest(t *testing.T, baseURL, token, sessionID, content s
 	return jsonPathString(t, resp.Body, "data", "id")
 }
 
-func newChatTestServer(t *testing.T) (*authIntegrationServer, repo.HumanUser, repo.HumanUser) {
+func newChatTestServer(t *testing.T) (*authIntegrationServer, repo.Organization, repo.HumanUser, repo.HumanUser) {
 	t.Helper()
 
 	pool := testdb.New(t)
@@ -521,5 +521,5 @@ func newChatTestServer(t *testing.T) (*authIntegrationServer, repo.HumanUser, re
 	})
 
 	ts := httptest.NewServer(handler)
-	return &authIntegrationServer{URL: ts.URL, Pool: pool, ts: ts}, adminUser, memberUser
+	return &authIntegrationServer{URL: ts.URL, Pool: pool, ts: ts}, org, adminUser, memberUser
 }

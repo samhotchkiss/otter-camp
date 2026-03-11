@@ -52,7 +52,7 @@ func TestProjectHTTPAPIKeyScopeEnforcement(t *testing.T) {
 func TestChatHTTPAPIKeyScopeEnforcement(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
-	testServer, adminUser, _ := newChatTestServer(t)
+	testServer, org, adminUser, _ := newChatTestServer(t)
 	defer testServer.Close()
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
@@ -64,8 +64,8 @@ func TestChatHTTPAPIKeyScopeEnforcement(t *testing.T) {
 	}
 
 	readOnlyCreate := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions", map[string]any{
-		"scope_type": "project",
-		"scope_id":   "11111111-1111-1111-1111-111111111111",
+		"scope_type": "organization",
+		"scope_id":   org.ID.String(),
 		"mode":       "sync",
 		"title":      "scope test",
 	}, map[string]string{"X-API-Key": readKey})
@@ -75,8 +75,8 @@ func TestChatHTTPAPIKeyScopeEnforcement(t *testing.T) {
 
 	writeKey := issueAPIKeyRaw(t, testServer.URL, adminToken, []string{"write:chat"})
 	created := mustJSON(t, http.MethodPost, testServer.URL+"/v1/chat-sessions", map[string]any{
-		"scope_type": "project",
-		"scope_id":   "22222222-2222-2222-2222-222222222222",
+		"scope_type": "organization",
+		"scope_id":   org.ID.String(),
 		"mode":       "sync",
 		"title":      "scope write",
 	}, map[string]string{"X-API-Key": writeKey})

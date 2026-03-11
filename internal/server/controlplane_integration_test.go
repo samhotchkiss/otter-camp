@@ -219,37 +219,20 @@ func TestControlPlaneAPICostSummaryTotals(t *testing.T) {
 	defer testServer.Close()
 	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
 
-	runRepo := controlplane.NewRunRepository(testServer.Pool)
-	stepRepo := controlplane.NewRunStepRepository(testServer.Pool)
-	attemptRepo := controlplane.NewRunAttemptRepository(testServer.Pool)
-
-	runRecord, err := runRepo.Create(context.Background(), controlplane.Run{
-		OrganizationID: orgA.ID,
-		PrincipalType:  "human_user",
-		PrincipalID:    adminA.ID,
-		Status:         "completed",
-		TriggerType:    "api",
-	})
-	if err != nil {
-		t.Fatalf("seed run: %v", err)
-	}
-	step1, err := stepRepo.Create(context.Background(), controlplane.RunStep{RunID: runRecord.ID, StepNumber: 1, Status: "completed"})
-	if err != nil {
-		t.Fatalf("seed step1: %v", err)
-	}
-	step2, err := stepRepo.Create(context.Background(), controlplane.RunStep{RunID: runRecord.ID, StepNumber: 2, Status: "completed"})
-	if err != nil {
-		t.Fatalf("seed step2: %v", err)
-	}
-
-	for _, attempt := range []controlplane.RunAttempt{
-		{RunStepID: step1.ID, AttemptNumber: 1, Trigger: "initial", Status: "completed", InputTokens: 10, OutputTokens: 5},
-		{RunStepID: step1.ID, AttemptNumber: 2, Trigger: "retry_transient", Status: "completed", InputTokens: 3, OutputTokens: 2},
-		{RunStepID: step2.ID, AttemptNumber: 1, Trigger: "initial", Status: "completed", InputTokens: 20, OutputTokens: 10},
-	} {
-		if _, err := attemptRepo.Create(context.Background(), attempt); err != nil {
-			t.Fatalf("seed attempt %+v: %v", attempt, err)
-		}
+	rollupRepo := repo.NewModelUsageRollupRepo(testServer.Pool)
+	projectID := uuid.New()
+	today := time.Now().UTC()
+	if _, err := rollupRepo.Upsert(context.Background(), repo.ModelUsageRollup{
+		OrganizationID:      orgA.ID,
+		RollupDate:          today,
+		RollupType:          "project",
+		RollupID:            &projectID,
+		TotalInvocations:    3,
+		TotalInputTokens:    33,
+		TotalOutputTokens:   17,
+		TotalCostMicrocents: 5000,
+	}); err != nil {
+		t.Fatalf("seed model usage rollup: %v", err)
 	}
 
 	summary := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/cost/summary?period=30d&group_by=project", nil, map[string]string{"Authorization": "Bearer " + token})

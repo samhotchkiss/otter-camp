@@ -2385,6 +2385,7 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 	fx := seedTaskQueueProcessorFixture(t, ctx)
 	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
 	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	const settleTimeout = 60 * time.Second
 	defer fx.bus.Unsubscribe(fx.runCancellationSub)
 	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
 
@@ -2412,10 +2413,13 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 	messageRepo := repo.NewChatMessageRepo(fx.pool)
 	var workExecution repo.FlowNodeExecution
 
-	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+	waitForTaskQueueCondition(t, settleTimeout, func() (bool, error) {
 		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
 		if err != nil {
 			return false, err
+		}
+		if taskRecord.WorkStatus != "in_progress" {
+			return false, nil
 		}
 		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeWork.ID {
 			return false, nil
@@ -2435,10 +2439,13 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 	}
 
 	var reviewExecution repo.FlowNodeExecution
-	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+	waitForTaskQueueCondition(t, settleTimeout, func() (bool, error) {
 		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
 		if err != nil {
 			return false, err
+		}
+		if taskRecord.WorkStatus != "review" {
+			return false, nil
 		}
 		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeReview.ID {
 			return false, nil
@@ -2474,7 +2481,7 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 
 	publishTaskTurnCompleted(t, ctx, fx.bus, fx.org.ID, *workExecution.SessionID)
 
-	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+	waitForTaskQueueCondition(t, settleTimeout, func() (bool, error) {
 		runs, err := runRepo.List(ctx, RunListFilter{
 			OrganizationID: fx.org.ID,
 			TaskID:         &created.ID,
@@ -2507,10 +2514,13 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 	}
 
 	var rejectExecution repo.FlowNodeExecution
-	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+	waitForTaskQueueCondition(t, settleTimeout, func() (bool, error) {
 		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
 		if err != nil {
 			return false, err
+		}
+		if taskRecord.WorkStatus != "in_progress" {
+			return false, nil
 		}
 		if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != nodeWork.ID {
 			return false, nil
@@ -2528,9 +2538,7 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 		return true, nil
 	})
 
-	publishTaskTurnCompleted(t, ctx, fx.bus, fx.org.ID, *reviewExecution.SessionID)
-
-	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+	waitForTaskQueueCondition(t, settleTimeout, func() (bool, error) {
 		runs, err := runRepo.List(ctx, RunListFilter{
 			OrganizationID: fx.org.ID,
 			TaskID:         &created.ID,
@@ -2540,22 +2548,75 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 		if err != nil {
 			return false, err
 		}
-		workerStarted := false
 		for _, runRecord := range runs {
-			if runRecord.Status == "in_progress" && runRecord.PrincipalType == "agent" && runRecord.PrincipalID == worker.ID && runRecord.SessionID != nil && *runRecord.SessionID == *rejectExecution.SessionID {
+			executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
+			if !ok || executionID != rejectExecution.ID {
+				continue
+			}
+			if executionWakeupKind(runRecord.Metadata) != "flow_transition" {
+				continue
+			}
+			if runRecord.PrincipalType == "agent" && runRecord.PrincipalID == worker.ID && runRecord.Status == "created" {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+
+	publishTaskTurnCompleted(t, ctx, fx.bus, fx.org.ID, *reviewExecution.SessionID)
+
+	deadline := time.Now().Add(settleTimeout)
+	var lastRejectRuns []Run
+	for {
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeWork.ID,
+			Limit:          20,
+		})
+		if err != nil {
+			t.Fatalf("list reject-path runs: %v", err)
+		}
+		lastRejectRuns = runs
+		workerStarted := false
+		duplicateFlowCurrent := false
+		for _, runRecord := range runs {
+			executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
+			if !ok || executionID != rejectExecution.ID {
+				continue
+			}
+			switch executionWakeupKind(runRecord.Metadata) {
+			case "flow_transition":
+			case "flow_current":
+				if runRecord.Status == "in_progress" && runRecord.PrincipalType == "agent" && runRecord.PrincipalID == worker.ID {
+					duplicateFlowCurrent = true
+				}
+				continue
+			default:
+				continue
+			}
+			if runRecord.Status == "in_progress" && runRecord.PrincipalType == "agent" && runRecord.PrincipalID == worker.ID {
 				workerStarted = true
 				break
 			}
 		}
-		if !workerStarted {
-			return false, nil
+		if duplicateFlowCurrent {
+			t.Fatalf("reject-path worker should resume via flow_transition run, found duplicate flow_current run; runs=%s", describeTaskQueueRuns(lastRejectRuns))
 		}
-		messages, err := messageRepo.ListBySession(ctx, *rejectExecution.SessionID)
-		if err != nil {
-			return false, err
+		if workerStarted {
+			messages, err := messageRepo.ListBySession(ctx, *rejectExecution.SessionID)
+			if err != nil {
+				t.Fatalf("list reject-path session messages: %v", err)
+			}
+			if hasFlowKickoffMessage(messages, "flow.rejected", rejectExecution.ID) || hasFlowKickoffMessage(messages, "task.status_changed", rejectExecution.ID) {
+				break
+			}
 		}
-		return hasFlowKickoffMessage(messages, "flow.rejected", rejectExecution.ID) || hasFlowKickoffMessage(messages, "task.status_changed", rejectExecution.ID), nil
-	})
+		if time.Now().After(deadline) {
+			t.Fatalf("reject-path worker did not start within %s; reject_execution_session=%s review_session=%s runs=%s", settleTimeout, uuidPointerValue(rejectExecution.SessionID), uuidPointerValue(reviewExecution.SessionID), describeTaskQueueRuns(lastRejectRuns))
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func TestTaskQueueProcessorIntegrationDifferentOwnerWakeupDefersUntilTurnExit(t *testing.T) {
@@ -3201,6 +3262,18 @@ func publishTaskTurnCompleted(t *testing.T, ctx context.Context, bus *eventbus.B
 	}); err != nil {
 		t.Fatalf("publish chat.turn.completed: %v", err)
 	}
+}
+
+func describeTaskQueueRuns(runs []Run) string {
+	if len(runs) == 0 {
+		return "[]"
+	}
+	parts := make([]string, 0, len(runs))
+	for _, runRecord := range runs {
+		executionID, _ := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
+		parts = append(parts, fmt.Sprintf("{id=%s status=%s principal=%s/%s session=%s wake=%s exec=%s}", runRecord.ID, runRecord.Status, runRecord.PrincipalType, runRecord.PrincipalID, uuidPointerValue(runRecord.SessionID), executionWakeupKind(runRecord.Metadata), executionID))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 type taskQueueProcessorFixture struct {

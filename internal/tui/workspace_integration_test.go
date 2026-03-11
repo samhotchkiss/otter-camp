@@ -16,7 +16,7 @@ import (
 func TestInboxActionUpdatesBoardDetailAndActivity(t *testing.T) {
 	t.Parallel()
 
-	model := NewModel(DefaultState())
+	model := seededWorkspaceModel()
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 30})
 	model.focus = MainPanel
 
@@ -34,13 +34,14 @@ func TestInboxActionUpdatesBoardDetailAndActivity(t *testing.T) {
 	}
 
 	model.workspace.setMainView(ViewTask)
+	model.workspace.selectedTaskID = "task-1"
 	taskDetail := model.WorkspaceRender(SizeM)
 	if !strings.Contains(taskDetail, "status=approved") {
 		t.Fatalf("task detail missing approved status: %q", taskDetail)
 	}
 
 	activity := strings.Join(model.ActivityEntries(), " | ")
-	if !strings.Contains(activity, "inbox approve task-1") {
+	if !strings.Contains(activity, "approved: OC-1") {
 		t.Fatalf("activity feed missing inbox approve entry: %q", activity)
 	}
 }
@@ -48,12 +49,16 @@ func TestInboxActionUpdatesBoardDetailAndActivity(t *testing.T) {
 func TestKeyboardOnlyNavigationOpenInContextFlow(t *testing.T) {
 	t.Parallel()
 
-	model := NewModel(DefaultState())
+	model := seededWorkspaceModel()
 	model = pressMsg(model, tea.WindowSizeMsg{Width: 160, Height: 34})
 
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}}) // sidebar
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}) // project
-	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}) // first task session
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}) // task-1 session
 	model = pressKey(model, tea.KeyMsg{Type: tea.KeyEnter})                     // select
 	if got := model.WorkspaceSession(); got != "session-task-1" {
 		t.Fatalf("session after sidebar select = %q, want session-task-1", got)
@@ -88,14 +93,15 @@ func TestKeyboardOnlyNavigationOpenInContextFlow(t *testing.T) {
 		Envelope: EventEnvelope{
 			Seq:        20,
 			EventID:    "evt-flow",
-			EventType:  "task.flow.advanced",
+			EventType:  "flow.advanced",
 			OccurredAt: time.Now().UTC(),
 			OrgID:      "org-1",
-			Payload:    mustWorkspaceJSON(t, map[string]any{"task_id": "task-1", "flow_step": 4, "session_id": "session-task-1"}),
+			Payload:    mustWorkspaceJSON(t, map[string]any{"task_id": "task-1"}),
 		},
 	})
-	if got := model.TaskFlow("task-1"); got != 4 {
-		t.Fatalf("task flow after realtime update = %d, want 4", got)
+	activity := strings.Join(model.ActivityEntries(), " | ")
+	if !strings.Contains(activity, "OC-1: flow advanced") {
+		t.Fatalf("activity after realtime flow advance missing entry: %q", activity)
 	}
 }
 

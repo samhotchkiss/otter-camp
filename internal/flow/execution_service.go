@@ -59,6 +59,7 @@ type AddDependencyRequest struct {
 
 type taskCoordinator interface {
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
+	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
 	MarkBlocked(ctx context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 }
 
@@ -457,7 +458,13 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 		}
 		targetStatus := taskWorkStatusForNode(nextNode)
 		if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
-			if _, statusErr := s.taskService.TransitionStatus(ctx, taskRecord.ID, targetStatus, toTaskActor(actor)); statusErr != nil {
+			statusPayload := map[string]any{
+				"transition_source":    "flow_transition",
+				"flow_event_type":      "flow.advanced",
+				"to_flow_node_id":      nextNode.ID,
+				"to_flow_execution_id": created.ID,
+			}
+			if _, statusErr := s.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, targetStatus, toTaskActor(actor), statusPayload); statusErr != nil {
 				return nil, statusErr
 			}
 			taskRecord.WorkStatus = targetStatus
@@ -725,7 +732,13 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 	}
 	targetStatus := taskWorkStatusForNode(rejectNode)
 	if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
-		if _, err := s.taskService.TransitionStatus(ctx, taskRecord.ID, targetStatus, toTaskActor(actor)); err != nil {
+		statusPayload := map[string]any{
+			"transition_source":    "flow_transition",
+			"flow_event_type":      "flow.rejected",
+			"to_flow_node_id":      rejectNode.ID,
+			"to_flow_execution_id": created.ID,
+		}
+		if _, err := s.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, targetStatus, toTaskActor(actor), statusPayload); err != nil {
 			return nil, err
 		}
 		taskRecord.WorkStatus = targetStatus

@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -85,21 +86,7 @@ func TestProjectHTTPCRUDAndRBAC(t *testing.T) {
 		t.Fatalf("member delete status = %d, want %d body=%s", memberDelete.StatusCode, http.StatusForbidden, string(memberDelete.Body))
 	}
 
-	ensureProjectTaskTableForHTTP(t, testServer.Pool)
-	if _, err := testServer.Pool.Exec(context.Background(), `
-		INSERT INTO project_task (
-			organization_id,
-			project_id,
-			task_number,
-			title,
-			work_status,
-			created_by_type,
-			metadata
-		)
-		VALUES ($1, $2, $3, $4, 'in_progress', 'system', '{}'::jsonb)
-	`, org.ID, projectID, 1, "active task"); err != nil {
-		t.Fatalf("insert active project_task row: %v", err)
-	}
+	seedHTTPActiveProjectTask(t, testServer.Pool, org.ID, uuid.MustParse(projectID))
 
 	deleteWithActiveTasks := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/projects/"+projectID, nil, map[string]string{
 		"Authorization": "Bearer " + adminToken,
@@ -378,22 +365,7 @@ func TestProjectHTTPFlowTemplateScheduleAndNodes(t *testing.T) {
 		t.Fatalf("member create system node status = %d, want %d body=%s", memberSystemNodeCreate.StatusCode, http.StatusForbidden, string(memberSystemNodeCreate.Body))
 	}
 
-	ensureProjectTaskTableForHTTP(t, testServer.Pool)
-	if _, err := testServer.Pool.Exec(context.Background(), `
-		INSERT INTO project_task (
-			organization_id,
-			project_id,
-			task_number,
-			title,
-			work_status,
-			flow_template_id,
-			created_by_type,
-			metadata
-		)
-		VALUES ($1, $2, $3, $4, 'in_progress', $5, 'system', '{}'::jsonb)
-	`, org.ID, projectID, 1, "active task", templateID); err != nil {
-		t.Fatalf("insert template in-use row: %v", err)
-	}
+	seedHTTPTemplateUsageTask(t, testServer.Pool, org.ID, uuid.MustParse(projectID), uuid.MustParse(templateID))
 
 	updatedTemplate := mustJSON(t, http.MethodPatch, testServer.URL+"/v1/flow-templates/"+templateID, map[string]any{
 		"display_name": "Build Flow v2",
@@ -942,4 +914,102 @@ func ensureProjectTaskTableForHTTP(t *testing.T, pool *pgxpool.Pool) {
 	`); err != nil {
 		t.Fatalf("create project_task table: %v", err)
 	}
+}
+
+func seedHTTPActiveProjectTask(t *testing.T, pool *pgxpool.Pool, orgID, projectID uuid.UUID) repo.ProjectTask {
+	t.Helper()
+
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	template, err := templateRepo.Create(context.Background(), repo.FlowTemplate{
+		OrganizationID: &orgID,
+		ProjectID:      &projectID,
+		Slug:           "project-http-active-" + uuid.NewString()[:8],
+		DisplayName:    "Project Active Flow",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create active flow template: %v", err)
+	}
+	workNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create active work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      3,
+	})
+	if err != nil {
+		t.Fatalf("create active review node: %v", err)
+	}
+	mergeNode, err := nodeRepo.Create(context.Background(), repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create active merge node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(context.Background(), workNode); err != nil {
+		t.Fatalf("link active work node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(context.Background(), reviewNode); err != nil {
+		t.Fatalf("link active review node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(context.Background(), template); err != nil {
+		t.Fatalf("update active template start node: %v", err)
+	}
+
+	taskRecord, err := taskRepo.Create(context.Background(), repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		Title:          "active task",
+		WorkStatus:     "in_progress",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create active project task: %v", err)
+	}
+	if _, err := taskRepo.SetFlowNode(context.Background(), taskRecord.ID, &workNode.ID); err != nil {
+		t.Fatalf("set active project task flow node: %v", err)
+	}
+	taskRecord.CurrentFlowNodeID = &workNode.ID
+	return taskRecord
+}
+
+func seedHTTPTemplateUsageTask(t *testing.T, pool *pgxpool.Pool, orgID, projectID, templateID uuid.UUID) repo.ProjectTask {
+	t.Helper()
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(context.Background(), repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		Title:          "template in use",
+		WorkStatus:     "draft",
+		FlowTemplateID: &templateID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create template usage task: %v", err)
+	}
+	return taskRecord
 }

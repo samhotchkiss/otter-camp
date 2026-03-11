@@ -112,7 +112,6 @@ func (r *ModelRouteRegistrar) RegisterRoutes(router chi.Router) {
 
 	router.Get("/usage", r.handlers.getUsage)
 	router.Get("/usage/summary", r.handlers.getUsageSummary)
-	router.Get("/model/usage-rollup", r.handlers.getUsage) // spec alias
 }
 
 type modelHandlers struct {

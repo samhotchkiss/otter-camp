@@ -211,6 +211,51 @@ func seedScheduleFixtures(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 		t.Fatalf("create flow template: %v", err)
 	}
 
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Scheduled Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create schedule work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Scheduled Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create schedule review node: %v", err)
+	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Scheduled Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create schedule merge node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("link schedule work node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("link schedule review node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	template, err = templateRepo.Update(ctx, template)
+	if err != nil {
+		t.Fatalf("update schedule flow template start node: %v", err)
+	}
+
 	return org, project, template
 }
 
