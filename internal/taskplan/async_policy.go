@@ -98,10 +98,6 @@ func (d AsyncDecision) PausesTask() bool {
 	return d.Outcome == AsyncDecisionPrepareForReview || d.Outcome == AsyncDecisionHardStop
 }
 
-func (d AsyncDecision) AllowsParallelProgress() bool {
-	return d.Outcome == AsyncDecisionPrepareForReview
-}
-
 func AssessAsyncDecision(title string, description *string) AsyncDecision {
 	text := normalizeText(title, description)
 	if text == "" {
