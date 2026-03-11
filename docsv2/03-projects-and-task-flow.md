@@ -962,7 +962,7 @@ create index on project_task_event (task_id, created_at);
 ### Design Notes
 
 - **12 tables** for the project/task domain.
-- Tasks are flat — no parent-child between tasks. Dependencies handle ordering.
+- Tasks are flat in storage, but decomposition metadata can still create parent/child orchestration relationships between project tasks. Dependencies still handle ordering between independent tasks.
 - Subtasks are contained within tasks, scoped to flow nodes. They're the atomic work units.
 - The dependency table is polymorphic (task->task and subtask->subtask within the same parent) but enforces same-level dependencies via a check constraint — no cross-level dependencies (subtask depending on a task, or vice versa).
 - `inbox_item` carries enough context (`context` jsonb) to make decisions inline without navigating away.
