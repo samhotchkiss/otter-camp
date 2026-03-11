@@ -1,7 +1,7 @@
 ---
 ## Summary
 
-This spec defines OtterCamp's project and task management domain -- the core system for how work gets planned, executed, reviewed, and delivered. Every project is backed by a git repository. Tasks are always created through agents or chat (never through UI), and move through a state machine: `draft` -> `queued` -> `in_progress` -> `review` -> `done`, with `blocked`, `on_hold`, and `cancelled` as additional states. A `requires_human_review` flag on draft tasks controls whether the PM can autonomously queue them or must get human sign-off first. Tasks are flat at the project level (no parent-child hierarchy); large efforts are modeled as multiple tasks connected by dependencies that form a DAG.
+This spec defines OtterCamp's project and task management domain -- the core system for how work gets planned, executed, reviewed, and delivered. Every project is backed by a git repository. Tasks are always created through agents or chat (never through UI), and move through a state machine: `draft` -> `queued` -> `in_progress` -> `review` -> `done`, with `blocked`, `on_hold`, and `cancelled` as additional states. A `requires_human_review` flag on draft tasks controls whether the PM can autonomously queue them or must get human sign-off first. Tasks remain flat in storage at the project level (there is no dedicated `parent_task_id` column), but runtime decomposition can create explicit parent/child orchestration relationships between project tasks. Large efforts are modeled as bounded child tasks under orchestration parents plus dependencies that form a DAG.
 
 Each task is governed by a **flow template** -- an immutable, directed graph of `work` and `review` nodes designed conversationally through the project manager. Task flows are a robust state machine, not a loose convention: only legal transitions are permitted, success must advance exactly once, reject/block/pause/resume are explicit task/flow transitions, explicit retry attempts happen at the run/turn layer against the current node rather than as hidden flow advancement, and contradictory task/runtime states are invalid. Flow progression is always explicit: agents must signal "step done" to advance; run completion does not auto-advance. Review nodes gate quality with approve/reject decisions. Rejection loops create new `flow_node_execution` records (tracked by a visit counter), preserving full audit history per attempt. If a required transition service is unavailable, the runtime must fail the turn or wakeup loudly instead of directly mutating persisted task status as a degraded fallback. The one bootstrap-gate auto-complete exception is also routed through the same transition service as an explicit system-only bypass, rather than a bespoke row update. Tasks can optionally be decomposed into **subtasks** scoped to a specific flow node execution. Subtasks are sequential (they share the task branch to avoid git conflicts), have a reduced status set, and cannot have their own flows -- if a subtask needs a flow, the parent task is too big and should be split.
 
@@ -527,7 +527,7 @@ A **task** is a measurable output. It has a flow and moves through flow nodes. A
 
 **If a subtask would need its own flow, the task is too big.** The PM should break it into multiple tasks with dependencies instead. This is the PM's job during scoping — sizing tasks so that subtasks remain simple, atomic work units.
 
-Tasks are flat at the project level. There is no task-to-task parent-child hierarchy. Large efforts are modeled as multiple tasks connected by dependencies, not as a parent task containing child tasks.
+Tasks are flat at the storage layer. There is no dedicated task-to-task `parent_task_id` column. However, large efforts can still be decomposed into explicit parent/child project-task relationships through persisted decomposition metadata. In that model, the parent task becomes orchestration/integration-only and the bounded child tasks are the executable work items.
 
 ### How It Works
 
@@ -747,7 +747,7 @@ create index on project_task (flow_template_id);
 create index on project_task (schedule_id) where schedule_id is not null;  -- query instances of a schedule
 ```
 
-- Tasks are flat at the project level. No `parent_task_id` — large efforts are multiple tasks with dependencies.
+- Tasks are flat at the storage level. There is no dedicated `parent_task_id` column, but decomposition metadata can still create parent/child orchestration relationships between project tasks.
 - `task_number` is auto-incremented per project. Display format: `{project_slug}-{task_number}` (e.g., `OC-5`).
 - `blocks_scope = 'all'` creates a project-wide scheduler gate. While the task is outstanding, only the lowest-numbered outstanding gate task in the project may start, and queue attempts for other tasks are rejected until that gate clears.
 
@@ -979,7 +979,7 @@ create index on project_task_event (task_id, created_at);
 - **Tasks are always created through agents/chat, never through UI.** The human talks to agents; agents create tasks. No task creation forms, no "new task" buttons. The UI is for viewing, navigating, and reviewing.
 - **`requires_human_review` flag gates draft → queued transition.** Human-initiated ideas default to `true` (PM scopes but human approves). Agent-initiated work defaults to `false` (PM is trusted). Human can flip the flag at any time.
 - **No separate approval state machine.** Review and approval are handled by review nodes in the flow template. A review node's approve/reject advances or loops the flow.
-- **Tasks are flat at the project level.** No task-to-task parent-child hierarchy. Large efforts are modeled as multiple tasks with dependencies.
+- **Tasks are flat in storage, not in runtime intent.** There is no dedicated task-to-task `parent_task_id` column, but decomposition metadata can still define parent/child orchestration relationships. Parent tasks are orchestration/integration-only once executable child tasks exist.
 - **Subtasks are scoped to flow node executions, not tasks.** A subtask belongs to a specific visit of a specific node. If a review rejects and the flow loops back, the new visit gets fresh subtasks.
 - **Tasks have flows, subtasks do not.** If a subtask would need its own flow, the task is too big — break it into multiple tasks. The PM handles this during scoping.
 - **Subtasks run sequentially within a node.** They share the task branch, so serialization avoids git conflicts. This incentivizes keeping tasks small since multiple tasks run in parallel on separate branches.
