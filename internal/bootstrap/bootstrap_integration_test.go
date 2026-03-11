@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/samhotchkiss/otter-camp/internal/audit"
+	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/server"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -217,21 +218,7 @@ func TestBootstrapSeedsSystemFlowTemplatesIdempotently(t *testing.T) {
 		}
 	}
 
-	var totalNodes int
-	if err := pool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM flow_node n
-		JOIN flow_template t ON t.id = n.flow_template_id
-		WHERE t.organization_id IS NULL
-		  AND t.project_id IS NULL
-		  AND t.is_system = true
-		  AND t.slug IN ('default-single-agent', 'default-review', 'default-review-refinement')
-	`).Scan(&totalNodes); err != nil {
-		t.Fatalf("count system flow nodes: %v", err)
-	}
-	if totalNodes != 7 {
-		t.Fatalf("system flow node count = %d, want 7", totalNodes)
-	}
+	assertExecutableSystemTemplates(t, ctx, pool)
 }
 
 func TestBootstrapRunReconcilesMissingSystemFlowTemplatesOnExistingInstall(t *testing.T) {
@@ -272,14 +259,62 @@ func TestBootstrapRunReconcilesMissingSystemFlowTemplatesOnExistingInstall(t *te
 		t.Fatalf("delete review refinement template: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-		UPDATE flow_template
-		SET is_current = false,
-		    start_node_id = NULL
-		WHERE slug = 'default-single-agent'
-		  AND organization_id IS NULL
-		  AND project_id IS NULL
+		DELETE FROM flow_node
+		WHERE id IN (
+			SELECT n.id
+			FROM flow_node n
+			JOIN flow_template t ON t.id = n.flow_template_id
+			WHERE t.slug = 'default-single-agent'
+			  AND t.organization_id IS NULL
+			  AND t.project_id IS NULL
+			  AND n.node_type = 'merge'
+		)
 	`); err != nil {
-		t.Fatalf("deactivate single-agent template: %v", err)
+		t.Fatalf("delete single-agent merge node: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE flow_node
+		SET next_node_id = NULL
+		WHERE id IN (
+			SELECT n.id
+			FROM flow_node n
+			JOIN flow_template t ON t.id = n.flow_template_id
+			WHERE t.slug = 'default-review'
+			  AND t.organization_id IS NULL
+			  AND t.project_id IS NULL
+			  AND n.display_name = 'Internal Review'
+		)
+	`); err != nil {
+		t.Fatalf("break default-review path: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		DELETE FROM flow_node
+		WHERE id IN (
+			SELECT n.id
+			FROM flow_node n
+			JOIN flow_template t ON t.id = n.flow_template_id
+			WHERE t.slug = 'default-review-refinement'
+			  AND t.organization_id IS NULL
+			  AND t.project_id IS NULL
+			  AND n.node_type = 'merge'
+		)
+	`); err != nil {
+		t.Fatalf("delete review-refinement merge node: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE flow_node
+		SET next_node_id = NULL
+		WHERE id IN (
+			SELECT n.id
+			FROM flow_node n
+			JOIN flow_template t ON t.id = n.flow_template_id
+			WHERE t.slug = 'default-review-refinement'
+			  AND t.organization_id IS NULL
+			  AND t.project_id IS NULL
+			  AND n.display_name = 'Human Review'
+		)
+	`); err != nil {
+		t.Fatalf("break review-refinement path: %v", err)
 	}
 
 	if err := bootstrapper.Run(ctx); err != nil {
@@ -326,6 +361,55 @@ func TestBootstrapRunReconcilesMissingSystemFlowTemplatesOnExistingInstall(t *te
 		if !seen[slug] {
 			t.Fatalf("missing reconciled template %q", slug)
 		}
+	}
+	assertExecutableSystemTemplates(t, ctx, pool)
+}
+
+func assertExecutableSystemTemplates(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+
+	rows, err := pool.Query(ctx, `
+		SELECT id, slug, start_node_id
+		FROM flow_template
+		WHERE organization_id IS NULL
+		  AND project_id IS NULL
+		  AND is_system = true
+		  AND slug IN ('default-single-agent', 'default-review', 'default-review-refinement')
+		ORDER BY slug ASC
+	`)
+	if err != nil {
+		t.Fatalf("list executable system templates: %v", err)
+	}
+	defer rows.Close()
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	totalNodes := 0
+	for rows.Next() {
+		var (
+			templateID   uuid.UUID
+			slug         string
+			startNodeID  *uuid.UUID
+		)
+		if err := rows.Scan(&templateID, &slug, &startNodeID); err != nil {
+			t.Fatalf("scan executable system template row: %v", err)
+		}
+		if startNodeID == nil || *startNodeID == uuid.Nil {
+			t.Fatalf("template %q start_node_id = %v, want non-nil", slug, startNodeID)
+		}
+		nodes, err := nodeRepo.GetByTemplateOrdered(ctx, templateID)
+		if err != nil {
+			t.Fatalf("load nodes for %q: %v", slug, err)
+		}
+		totalNodes += len(nodes)
+		if err := flowpolicy.ValidateExecutableFlowTemplate(startNodeID, nodes); err != nil {
+			t.Fatalf("template %q executable validation err = %v, want nil", slug, err)
+		}
+	}
+	if rows.Err() != nil {
+		t.Fatalf("iterate executable system templates: %v", rows.Err())
+	}
+	if totalNodes != 10 {
+		t.Fatalf("system flow node count = %d, want 10", totalNodes)
 	}
 }
 

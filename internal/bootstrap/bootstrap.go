@@ -619,84 +619,136 @@ type flowNodeSeedSpec struct {
 type systemTemplateNodeSeedPlan struct {
 	StartNodeID *uuid.UUID
 	Seeds       []flowNodeSeedSpec
+	Reconcile   bool
 }
 
 func buildSystemTemplateNodeSeedPlan(template repo.FlowTemplate, existing []repo.FlowNode) (systemTemplateNodeSeedPlan, error) {
-	if len(existing) > 0 {
-		if template.StartNodeID != nil {
+	roleActor := "role"
+	mergeIndex := func(i int) *int {
+		v := i
+		return &v
+	}
+	var desired []flowNodeSeedSpec
+	switch template.Slug {
+	case "default-single-agent":
+		desired = []flowNodeSeedSpec{
+			{
+				DisplayName:   "Work",
+				NodeType:      "work",
+				Position:      0,
+				ActorType:     &roleActor,
+				NextSeedIndex: mergeIndex(1),
+			},
+			{
+				DisplayName:   "Review",
+				NodeType:      "review",
+				Position:      1,
+				NextSeedIndex: mergeIndex(2),
+			},
+			{
+				DisplayName: "Merge",
+				NodeType:    "merge",
+				Position:    2,
+			},
+		}
+	case "default-review":
+		desired = []flowNodeSeedSpec{
+			{
+				DisplayName:   "Work",
+				NodeType:      "work",
+				Position:      0,
+				ActorType:     &roleActor,
+				NextSeedIndex: mergeIndex(1),
+			},
+			{
+				DisplayName:   "Internal Review",
+				NodeType:      "review",
+				Position:      1,
+				NextSeedIndex: mergeIndex(2),
+			},
+			{
+				DisplayName: "Merge",
+				NodeType:    "merge",
+				Position:    2,
+			},
+		}
+	case "default-review-refinement":
+		desired = []flowNodeSeedSpec{
+			{
+				DisplayName:   "Generation",
+				NodeType:      "work",
+				Position:      0,
+				ActorType:     &roleActor,
+				NextSeedIndex: mergeIndex(1),
+			},
+			{
+				DisplayName:   "Internal Review",
+				NodeType:      "review",
+				Position:      1,
+				NextSeedIndex: mergeIndex(2),
+			},
+			{
+				DisplayName:         "Human Review",
+				NodeType:            "review",
+				Position:            2,
+				RequiresHumanReview: true,
+				NextSeedIndex:       mergeIndex(3),
+			},
+			{
+				DisplayName: "Merge",
+				NodeType:    "merge",
+				Position:    3,
+			},
+		}
+	default:
+		return systemTemplateNodeSeedPlan{}, fmt.Errorf("unsupported system flow template slug %q", template.Slug)
+	}
+
+	if len(existing) == 0 {
+		return systemTemplateNodeSeedPlan{Seeds: desired}, nil
+	}
+	if systemTemplateNodesMatchDesired(existing, desired) {
+		if template.StartNodeID != nil && *template.StartNodeID == existing[0].ID {
 			return systemTemplateNodeSeedPlan{}, nil
 		}
 		start := existing[0].ID
 		return systemTemplateNodeSeedPlan{StartNodeID: &start}, nil
 	}
+	return systemTemplateNodeSeedPlan{Seeds: desired, Reconcile: true}, nil
+}
 
-	roleActor := "role"
-	switch template.Slug {
-	case "default-single-agent":
-		nextIndex := 1
-		return systemTemplateNodeSeedPlan{
-			Seeds: []flowNodeSeedSpec{
-				{
-					DisplayName:   "Work",
-					NodeType:      "work",
-					Position:      0,
-					ActorType:     &roleActor,
-					NextSeedIndex: &nextIndex,
-				},
-				{
-					DisplayName: "Review",
-					NodeType:    "review",
-					Position:    1,
-				},
-			},
-		}, nil
-	case "default-review":
-		nextIndex := 1
-		return systemTemplateNodeSeedPlan{
-			Seeds: []flowNodeSeedSpec{
-				{
-					DisplayName:   "Work",
-					NodeType:      "work",
-					Position:      0,
-					ActorType:     &roleActor,
-					NextSeedIndex: &nextIndex,
-				},
-				{
-					DisplayName: "Internal Review",
-					NodeType:    "review",
-					Position:    1,
-				},
-			},
-		}, nil
-	case "default-review-refinement":
-		nextIndex := 1
-		finalIndex := 2
-		return systemTemplateNodeSeedPlan{
-			Seeds: []flowNodeSeedSpec{
-				{
-					DisplayName:   "Generation",
-					NodeType:      "work",
-					Position:      0,
-					ActorType:     &roleActor,
-					NextSeedIndex: &nextIndex,
-				},
-				{
-					DisplayName:   "Internal Review",
-					NodeType:      "review",
-					Position:      1,
-					NextSeedIndex: &finalIndex,
-				},
-				{
-					DisplayName:         "Human Review",
-					NodeType:            "review",
-					Position:            2,
-					RequiresHumanReview: true,
-				},
-			},
-		}, nil
-	default:
-		return systemTemplateNodeSeedPlan{}, fmt.Errorf("unsupported system flow template slug %q", template.Slug)
+func systemTemplateNodesMatchDesired(existing []repo.FlowNode, desired []flowNodeSeedSpec) bool {
+	if len(existing) != len(desired) {
+		return false
 	}
+	for i := range desired {
+		node := existing[i]
+		seed := desired[i]
+		if strings.TrimSpace(node.DisplayName) != seed.DisplayName {
+			return false
+		}
+		if strings.TrimSpace(node.NodeType) != seed.NodeType {
+			return false
+		}
+		if node.Position != seed.Position {
+			return false
+		}
+		if node.RequiresHumanReview != seed.RequiresHumanReview {
+			return false
+		}
+		wantNext := uuid.Nil
+		if seed.NextSeedIndex != nil && *seed.NextSeedIndex >= 0 && *seed.NextSeedIndex < len(existing) {
+			wantNext = existing[*seed.NextSeedIndex].ID
+		}
+		gotNext := uuid.Nil
+		if node.NextNodeID != nil {
+			gotNext = *node.NextNodeID
+		}
+		if gotNext != wantNext {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *Bootstrapper) seedSystemTemplateNodes(ctx context.Context, templates []repo.FlowTemplate) error {
@@ -733,7 +785,33 @@ func (b *Bootstrapper) applySystemTemplateNodeSeedPlan(ctx context.Context, temp
 	}
 
 	created := make([]repo.FlowNode, 0, len(plan.Seeds))
-	for _, seed := range plan.Seeds {
+	if plan.Reconcile {
+		existing, err := b.flowNodeRepo.GetByTemplateOrdered(ctx, template.ID)
+		if err != nil {
+			return err
+		}
+		created = append(created, existing...)
+	}
+	for i, seed := range plan.Seeds {
+		if i < len(created) {
+			node := created[i]
+			node.DisplayName = seed.DisplayName
+			node.NodeType = seed.NodeType
+			node.Position = seed.Position
+			node.ActorType = seed.ActorType
+			node.ActorID = nil
+			node.NextNodeID = nil
+			node.RejectNodeID = nil
+			node.RequiresHumanReview = seed.RequiresHumanReview
+			node.MaxVisits = 0
+			node.Metadata = nil
+			updated, err := b.flowNodeRepo.Update(ctx, node)
+			if err != nil {
+				return err
+			}
+			created[i] = updated
+			continue
+		}
 		node, err := b.flowNodeRepo.Create(ctx, repo.FlowNode{
 			FlowTemplateID:      template.ID,
 			DisplayName:         seed.DisplayName,
@@ -747,20 +825,29 @@ func (b *Bootstrapper) applySystemTemplateNodeSeedPlan(ctx context.Context, temp
 		}
 		created = append(created, node)
 	}
+	for i := len(created) - 1; i >= len(plan.Seeds); i-- {
+		if err := b.flowNodeRepo.Delete(ctx, created[i].ID); err != nil {
+			return err
+		}
+		created = created[:i]
+	}
 
 	for i := range created {
 		nextIndex := plan.Seeds[i].NextSeedIndex
-		if nextIndex == nil {
-			continue
-		}
-		if *nextIndex < 0 || *nextIndex >= len(created) {
-			return fmt.Errorf("seed plan next node index %d out of range for template %s", *nextIndex, template.Slug)
-		}
 		node := created[i]
-		node.NextNodeID = &created[*nextIndex].ID
-		if _, err := b.flowNodeRepo.Update(ctx, node); err != nil {
+		node.NextNodeID = nil
+		node.RejectNodeID = nil
+		if nextIndex != nil {
+			if *nextIndex < 0 || *nextIndex >= len(created) {
+				return fmt.Errorf("seed plan next node index %d out of range for template %s", *nextIndex, template.Slug)
+			}
+			node.NextNodeID = &created[*nextIndex].ID
+		}
+		updated, err := b.flowNodeRepo.Update(ctx, node)
+		if err != nil {
 			return err
 		}
+		created[i] = updated
 	}
 
 	return b.updateTemplateStartNode(ctx, template, created[0].ID)
