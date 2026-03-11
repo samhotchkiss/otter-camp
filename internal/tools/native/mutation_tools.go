@@ -3515,12 +3515,10 @@ func (e *NativeToolExecutor) handleSessionCreate(ctx context.Context, input map[
 		}
 	}
 
-	// Auto-add project-assigned agents as participants for project-scoped sessions.
-	// Workers are added before PMs so that resolveFirstAgentParticipant picks
-	// the worker as the primary responder.
+	// Auto-add project-assigned agents as participants for project/task sessions.
 	var participants []map[string]any
 	if (scopeType == "project" || scopeType == "project_task") && e.assignments != nil && e.participants != nil {
-		participants = e.autoAddProjectParticipants(ctx, created.ID, scopeType, scopeID)
+		participants = e.autoAddProjectParticipants(ctx, created.ID, scopeType, scopeID, mode)
 	}
 
 	result := map[string]any{
@@ -3637,9 +3635,9 @@ func resolveTaskBoundExecutionScope(scope workspaceScope, requestedScopeType str
 }
 
 // autoAddProjectParticipants looks up agents assigned to the project and adds
-// them as session participants. Workers are added first so that
-// resolveFirstAgentParticipant selects the worker as the primary responder.
-func (e *NativeToolExecutor) autoAddProjectParticipants(ctx context.Context, sessionID uuid.UUID, scopeType string, scopeID uuid.UUID) []map[string]any {
+// them as session participants. Ordering is mode-aware so the participant list
+// matches the intended responder model for the created session.
+func (e *NativeToolExecutor) autoAddProjectParticipants(ctx context.Context, sessionID uuid.UUID, scopeType string, scopeID uuid.UUID, mode string) []map[string]any {
 	// For project_task scope, resolve the project ID from the task.
 	projectID := scopeID
 	if scopeType == "project_task" && e.tasks != nil {
@@ -3670,9 +3668,10 @@ func (e *NativeToolExecutor) autoAddProjectParticipants(ctx context.Context, ses
 		existingAgentParticipants[participant.ParticipantID] = struct{}{}
 	}
 
-	// Sort: workers first, then PMs, then others — so the worker becomes
-	// the primary responder via resolveFirstAgentParticipant.
 	roleOrder := map[string]int{"worker": 0, "reviewer": 1, "project_manager": 2, "observer": 3}
+	if strings.EqualFold(strings.TrimSpace(mode), "sync") {
+		roleOrder = map[string]int{"project_manager": 0, "worker": 1, "reviewer": 2, "observer": 3}
+	}
 	sortedAssignments := make([]repo.AgentProjectAssignment, len(assignments))
 	copy(sortedAssignments, assignments)
 	for i := 0; i < len(sortedAssignments)-1; i++ {
