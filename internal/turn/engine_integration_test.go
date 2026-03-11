@@ -8801,8 +8801,12 @@ func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t 
 		t.Fatal("expected restarted project environment bindings")
 	}
 	restartedEnvironment := restartedEnvironments[0]
-	if pointerString(restartedEnvironment.RepoPath) != repoPath || restartedEnvironment.TargetBranch != "release" {
-		t.Fatalf("restarted environment = %+v, want copied repo path + target branch", restartedEnvironment)
+	wantRestartRepoPath, err := workspace.ProjectRoot(fixture.engine.dataDir, restartedProject.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot restarted project: %v", err)
+	}
+	if pointerString(restartedEnvironment.RepoPath) != wantRestartRepoPath || restartedEnvironment.TargetBranch != "release" {
+		t.Fatalf("restarted environment = %+v, want canonical restarted repo path %q + target branch", restartedEnvironment, wantRestartRepoPath)
 	}
 	if restartedEnvironment.RemoteID == nil || *restartedEnvironment.RemoteID == uuid.Nil {
 		t.Fatalf("restarted environment remote_id = %v, want copied remote binding", restartedEnvironment.RemoteID)
@@ -8919,6 +8923,44 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 	restart1Project := mustGetProjectByID(t, ctx, fixture.pool, restart1ID)
 	if restart1Project.Status != "active" {
 		t.Fatalf("restart1 project status = %q, want active", restart1Project.Status)
+	}
+	staleInitialArchived := initialArchived
+	staleBundle := mustProjectBootstrapRestartBundle(t, staleInitialArchived)
+	staleBundle.RestartProjectID = ""
+	staleInitialArchived.Settings, err = applyProjectBootstrapRestartBundle(staleInitialArchived.Settings, staleBundle)
+	if err != nil {
+		t.Fatalf("applyProjectBootstrapRestartBundle staleInitialArchived: %v", err)
+	}
+	if err := fixture.engine.maybeRestartArchivedBootstrapProject(ctx, staleInitialArchived, projectAutomaticFailureRecord{
+		Action:                   projectFailureActionArchive,
+		Source:                   projectBootstrapSource,
+		FailureCategory:          initialFailureState.FailureCategory,
+		FailureClass:             initialFailureState.FailureClass,
+		FailurePhase:             initialFailureState.FailurePhase,
+		LastCheckpoint:           initialFailureState.LastCheckpoint,
+		LastSuccessfulCheckpoint: initialFailureState.LastSuccessfulCheckpoint,
+		FailureReason:            initialFailureState.FailureReason,
+		SetupPersisted:           initialFailureState.SetupPersisted,
+		RecordedAt:               time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("maybeRestartArchivedBootstrapProject stale retry replay: %v", err)
+	}
+	projectsAfterReplay, err := repo.NewProjectRepo(fixture.pool).ListAll(ctx, fixture.org.ID)
+	if err != nil {
+		t.Fatalf("ListAll after stale retry replay: %v", err)
+	}
+	activeRestartsForInitial := 0
+	for _, item := range projectsAfterReplay {
+		if !strings.EqualFold(strings.TrimSpace(item.Status), "active") {
+			continue
+		}
+		bundle := mustProjectBootstrapRestartBundle(t, item)
+		if strings.EqualFold(strings.TrimSpace(bundle.SourceProjectID), initialArchived.ID.String()) && bundle.RetryAttemptCount == 1 {
+			activeRestartsForInitial++
+		}
+	}
+	if activeRestartsForInitial != 1 {
+		t.Fatalf("active restarts for initial archived project = %d, want 1 after stale replay", activeRestartsForInitial)
 	}
 	restart1Bundle := mustProjectBootstrapRestartBundle(t, restart1Project)
 	if restart1Bundle.RetryAttemptCount != 1 {
