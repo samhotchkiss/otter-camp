@@ -77,12 +77,15 @@ type taskQueueRunStarter interface {
 	GetRun(ctx context.Context, runID uuid.UUID) (Run, error)
 	ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]Run, error)
 	ReleaseExecutionOwner(ctx context.Context, taskID, sessionID uuid.UUID, reason string) (executionWakeupResult, error)
+	ReleaseExecutionOwnerForRun(ctx context.Context, taskID, sessionID, runID uuid.UUID, reason string) (executionWakeupResult, error)
 	RetireRuntimeStateForTask(ctx context.Context, taskID uuid.UUID, reason string) error
 	RetireRuntimeStateForProject(ctx context.Context, projectID uuid.UUID, reason string) error
 }
 
 type taskQueueChatService interface {
 	GetSession(ctx context.Context, id uuid.UUID) (*chat.ChatSession, error)
+	GetMessage(ctx context.Context, id uuid.UUID) (*chat.ChatMessage, error)
+	GetTurn(ctx context.Context, id uuid.UUID) (*chat.ChatTurn, error)
 	CreateSession(ctx context.Context, input chat.CreateSessionInput) (*chat.ChatSession, error)
 	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
@@ -1090,6 +1093,7 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 
 	var payload struct {
 		SessionID uuid.UUID `json:"session_id"`
+		TurnID    uuid.UUID `json:"turn_id"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return nil
@@ -1116,7 +1120,16 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 		return err
 	}
 
-	result, err := p.runs.ReleaseExecutionOwner(ctx, session.ScopeID, session.ID, event.EventType)
+	releaseRunID, err := p.resolveTurnRunID(ctx, payload.TurnID)
+	if err != nil {
+		return err
+	}
+	var result executionWakeupResult
+	if releaseRunID != uuid.Nil {
+		result, err = p.runs.ReleaseExecutionOwnerForRun(ctx, session.ScopeID, session.ID, releaseRunID, event.EventType)
+	} else {
+		result, err = p.runs.ReleaseExecutionOwner(ctx, session.ScopeID, session.ID, event.EventType)
+	}
 	if err != nil {
 		return err
 	}
@@ -1127,6 +1140,31 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 		return nil
 	}
 	return p.dispatchWakeupRun(ctx, result.Run)
+}
+
+func (p *TaskQueueProcessor) resolveTurnRunID(ctx context.Context, turnID uuid.UUID) (uuid.UUID, error) {
+	if turnID == uuid.Nil {
+		return uuid.Nil, nil
+	}
+	turn, err := p.chats.GetTurn(ctx, turnID)
+	if errors.Is(err, repo.ErrNotFound) || turn == nil {
+		return uuid.Nil, nil
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if turn.TriggerMessageID == nil || *turn.TriggerMessageID == uuid.Nil {
+		return uuid.Nil, nil
+	}
+	message, err := p.chats.GetMessage(ctx, *turn.TriggerMessageID)
+	if errors.Is(err, repo.ErrNotFound) || message == nil {
+		return uuid.Nil, nil
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	runID, _ := metadataUUIDValue(message.Metadata, "run_id")
+	return runID, nil
 }
 
 func (p *TaskQueueProcessor) ensureFlowTransitionRun(

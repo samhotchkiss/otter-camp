@@ -154,6 +154,14 @@ func (s *runService) CreateExecutionWakeup(ctx context.Context, input executionW
 }
 
 func (s *runService) ReleaseExecutionOwner(ctx context.Context, taskID, sessionID uuid.UUID, reason string) (executionWakeupResult, error) {
+	return s.releaseExecutionOwner(ctx, taskID, sessionID, nil, reason)
+}
+
+func (s *runService) ReleaseExecutionOwnerForRun(ctx context.Context, taskID, sessionID, runID uuid.UUID, reason string) (executionWakeupResult, error) {
+	return s.releaseExecutionOwner(ctx, taskID, sessionID, &runID, reason)
+}
+
+func (s *runService) releaseExecutionOwner(ctx context.Context, taskID, sessionID uuid.UUID, expectedRunID *uuid.UUID, reason string) (executionWakeupResult, error) {
 	if s.runtime == nil {
 		return executionWakeupResult{}, nil
 	}
@@ -175,6 +183,15 @@ func (s *runService) ReleaseExecutionOwner(ctx context.Context, taskID, sessionI
 		if runRecord, getErr := s.runs.Get(ctx, *state.ActiveRunID); getErr == nil {
 			releasedRun = runRecord
 		}
+	}
+	if releasedRun.ID == uuid.Nil {
+		return executionWakeupResult{}, nil
+	}
+	if expectedRunID != nil && *expectedRunID != uuid.Nil && releasedRun.ID != *expectedRunID {
+		return executionWakeupResult{}, nil
+	}
+	if releasedRun.SessionID == nil || *releasedRun.SessionID == uuid.Nil || *releasedRun.SessionID != sessionID {
+		return executionWakeupResult{}, nil
 	}
 	updatedState, err := s.runtime.ClearActive(ctx, state.ID)
 	if err != nil && !errors.Is(err, ErrNotFound) {

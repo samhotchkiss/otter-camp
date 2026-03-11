@@ -21,6 +21,15 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
+func mustJSONRawMessage(t *testing.T, payload map[string]any) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal json payload: %v", err)
+	}
+	return encoded
+}
+
 func TestCreateRunIdempotencyReturnsExistingRun(t *testing.T) {
 	repos := newFakeRunDeps()
 	svc := repos.newService(t)
@@ -463,6 +472,156 @@ func TestReleaseExecutionOwnerPromotesDeferredRuntimeState(t *testing.T) {
 	}
 	if contract.LastProgressEvent != "wakeup_promoted" {
 		t.Fatalf("runtime last_progress_event = %q, want wakeup_promoted", contract.LastProgressEvent)
+	}
+}
+
+func TestReleaseExecutionOwnerIgnoresCompletedSessionThatDoesNotOwnActiveRun(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+		ReleaseExecutionOwner(context.Context, uuid.UUID, uuid.UUID, string) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	activeSessionID := uuid.New()
+	staleSessionID := uuid.New()
+	workerID := uuid.New()
+	reviewerID := uuid.New()
+
+	started, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    workerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &activeSessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup started: %v", err)
+	}
+	deferred, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: started.Run.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &activeSessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup deferred: %v", err)
+	}
+	if deferred.Decision != executionWakeupDeferred {
+		t.Fatalf("deferred decision = %q, want %q", deferred.Decision, executionWakeupDeferred)
+	}
+
+	released, err := wakeSvc.ReleaseExecutionOwner(context.Background(), taskID, staleSessionID, "chat.turn.completed")
+	if err != nil {
+		t.Fatalf("ReleaseExecutionOwner stale session: %v", err)
+	}
+	if released.Decision != "" {
+		t.Fatalf("stale release decision = %q, want empty", released.Decision)
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	if state.ActiveRunID == nil || *state.ActiveRunID != started.Run.ID {
+		t.Fatalf("runtime active_run_id = %v, want %s", state.ActiveRunID, started.Run.ID)
+	}
+	contract := state.Contract()
+	if contract.DeferredRunID == nil || *contract.DeferredRunID != deferred.Run.ID {
+		t.Fatalf("runtime deferred_run_id = %v, want %s", contract.DeferredRunID, deferred.Run.ID)
+	}
+	if contract.LastProgressEvent != "wakeup_deferred" {
+		t.Fatalf("runtime last_progress_event = %q, want wakeup_deferred", contract.LastProgressEvent)
+	}
+}
+
+func TestReleaseExecutionOwnerPromotedRunOverridesRuntimeExecutionContract(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+		ReleaseExecutionOwner(context.Context, uuid.UUID, uuid.UUID, string) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	workNodeID := uuid.New()
+	reviewNodeID := uuid.New()
+	workExecutionID := uuid.New()
+	reviewExecutionID := uuid.New()
+	workerID := uuid.New()
+	reviewerID := uuid.New()
+
+	started, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    workerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			FlowNodeID:     &workNodeID,
+			Metadata:       mustJSONRawMessage(t, map[string]any{"run_mode": "async", "flow_node_execution_id": workExecutionID.String()}),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup started: %v", err)
+	}
+	deferred, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: started.Run.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			FlowNodeID:     &reviewNodeID,
+			Metadata:       mustJSONRawMessage(t, map[string]any{"run_mode": "async", "flow_node_execution_id": reviewExecutionID.String()}),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup deferred: %v", err)
+	}
+	if deferred.Decision != executionWakeupDeferred {
+		t.Fatalf("deferred decision = %q, want %q", deferred.Decision, executionWakeupDeferred)
+	}
+
+	promoted, err := wakeSvc.ReleaseExecutionOwner(context.Background(), taskID, sessionID, "chat.turn.completed")
+	if err != nil {
+		t.Fatalf("ReleaseExecutionOwner: %v", err)
+	}
+	if promoted.Decision != executionWakeupPromoted {
+		t.Fatalf("promoted decision = %q, want %q", promoted.Decision, executionWakeupPromoted)
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	contract := state.Contract()
+	if contract.FlowNodeID == nil || *contract.FlowNodeID != reviewNodeID {
+		t.Fatalf("runtime flow_node_id = %v, want %s", contract.FlowNodeID, reviewNodeID)
+	}
+	if contract.FlowNodeExecutionID == nil || *contract.FlowNodeExecutionID != reviewExecutionID {
+		t.Fatalf("runtime flow_node_execution_id = %v, want %s", contract.FlowNodeExecutionID, reviewExecutionID)
 	}
 }
 

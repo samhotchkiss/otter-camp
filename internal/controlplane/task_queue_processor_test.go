@@ -999,6 +999,70 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 	}
 }
 
+func TestHandleTurnTerminalEventReleasesSpecificRunResolvedFromTurn(t *testing.T) {
+	ctx := context.Background()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	turnID := uuid.New()
+	messageID := uuid.New()
+	runID := uuid.New()
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": sessionID.String(),
+		"turn_id":    turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	runService := &fakeTaskQueueRunStarter{}
+	chatService := &fakeTaskQueueChatService{
+		session: &chat.ChatSession{
+			ID:        sessionID,
+			ScopeType: "project_task",
+			ScopeID:   taskID,
+		},
+		turn: &chat.ChatTurn{
+			ID:               turnID,
+			SessionID:        sessionID,
+			Status:           "completed",
+			TriggerMessageID: &messageID,
+		},
+		listMessages: []*chat.ChatMessage{
+			{
+				ID:        messageID,
+				SessionID: sessionID,
+				Role:      "user",
+				Metadata:  json.RawMessage(`{"run_id":"` + runID.String() + `"}`),
+			},
+		},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:         taskID,
+				WorkStatus: "in_progress",
+			},
+		},
+		runs:  runService,
+		chats: chatService,
+	}
+
+	if err := processor.handleTurnTerminalEvent(ctx, eventbus.DomainEvent{
+		EventType: "chat.turn.completed",
+		Payload:   payload,
+	}); err != nil {
+		t.Fatalf("handleTurnTerminalEvent: %v", err)
+	}
+
+	if len(runService.releaseExecutionCalls) != 1 {
+		t.Fatalf("releaseExecutionCalls = %d, want 1", len(runService.releaseExecutionCalls))
+	}
+	if runService.releaseExecutionCalls[0].runID != runID {
+		t.Fatalf("released run_id = %s, want %s", runService.releaseExecutionCalls[0].runID, runID)
+	}
+}
+
 func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -1207,6 +1271,7 @@ type listRunsByTaskCall struct {
 type releaseExecutionCall struct {
 	taskID    uuid.UUID
 	sessionID uuid.UUID
+	runID     uuid.UUID
 	reason    string
 }
 
@@ -1376,6 +1441,16 @@ func (f *fakeTaskQueueRunStarter) ReleaseExecutionOwner(_ context.Context, taskI
 	return executionWakeupResult{}, nil
 }
 
+func (f *fakeTaskQueueRunStarter) ReleaseExecutionOwnerForRun(_ context.Context, taskID, sessionID, runID uuid.UUID, reason string) (executionWakeupResult, error) {
+	f.releaseExecutionCalls = append(f.releaseExecutionCalls, releaseExecutionCall{
+		taskID:    taskID,
+		sessionID: sessionID,
+		reason:    reason,
+		runID:     runID,
+	})
+	return executionWakeupResult{}, nil
+}
+
 func (f *fakeTaskQueueRunStarter) RetireRuntimeStateForTask(_ context.Context, taskID uuid.UUID, reason string) error {
 	f.retireRuntimeTaskCalls = append(f.retireRuntimeTaskCalls, retireRuntimeTaskCall{
 		taskID: taskID,
@@ -1454,6 +1529,7 @@ type addParticipantCall struct {
 type fakeTaskQueueChatService struct {
 	calls               []string
 	session             *chat.ChatSession
+	turn                *chat.ChatTurn
 	createSessionInputs []chat.CreateSessionInput
 	createSessionErr    error
 	onCreateSession     func(*chat.ChatSession)
@@ -1502,6 +1578,22 @@ func (f *fakeTaskQueueChatService) CreateSession(_ context.Context, input chat.C
 		f.onCreateSession(session)
 	}
 	return session, nil
+}
+
+func (f *fakeTaskQueueChatService) GetTurn(_ context.Context, id uuid.UUID) (*chat.ChatTurn, error) {
+	if f.turn != nil && f.turn.ID == id {
+		return f.turn, nil
+	}
+	return nil, repo.ErrNotFound
+}
+
+func (f *fakeTaskQueueChatService) GetMessage(_ context.Context, id uuid.UUID) (*chat.ChatMessage, error) {
+	for _, message := range f.listMessages {
+		if message != nil && message.ID == id {
+			return message, nil
+		}
+	}
+	return nil, repo.ErrNotFound
 }
 
 func (f *fakeTaskQueueChatService) AddParticipant(_ context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error) {
