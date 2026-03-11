@@ -1312,8 +1312,8 @@ func TestActOnInboxItemTaskReviewApproveAdvancesFlowAndMarksActed(t *testing.T) 
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus != "in_progress" {
-		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review without direct service-layer status mutation", updatedTask.WorkStatus)
 	}
 }
 
@@ -1394,8 +1394,8 @@ func TestActOnInboxItemTaskReviewRejectCallsRejectWithReasonAndMarksActed(t *tes
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus != "in_progress" {
-		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review without direct service-layer status mutation", updatedTask.WorkStatus)
 	}
 
 	foundReviewRejectedEvent := false

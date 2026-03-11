@@ -1366,9 +1366,6 @@ func (s *service) ActOnInboxItem(ctx context.Context, itemID, userID uuid.UUID, 
 			if err := s.flowReviews.AdvanceTaskReview(ctx, taskID, actor); err != nil {
 				return err
 			}
-			if err := s.resumeTaskFromReview(ctx, taskID, actor); err != nil {
-				return err
-			}
 			_, err := s.inbox.MarkActed(ctx, item.ID, userID)
 			return err
 		case "reject":
@@ -1380,9 +1377,6 @@ func (s *service) ActOnInboxItem(ctx context.Context, itemID, userID uuid.UUID, 
 				return err
 			}
 			if err := s.recordTaskReviewRejection(ctx, taskID, userID, reason); err != nil {
-				return err
-			}
-			if err := s.resumeTaskFromReview(ctx, taskID, actor); err != nil {
 				return err
 			}
 			_, err := s.inbox.MarkActed(ctx, item.ID, userID)
@@ -1436,19 +1430,6 @@ func (s *service) recordTaskReviewRejection(ctx context.Context, taskID, userID 
 		return err
 	}
 	return s.publishTaskDomainEvent(ctx, taskRecord.OrganizationID, "task.review_rejected", "human_user", &userID, payload)
-}
-
-func (s *service) resumeTaskFromReview(ctx context.Context, taskID uuid.UUID, actor Actor) error {
-	taskRecord, err := s.tasks.GetByID(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
-		if _, err := s.transitionStatus(ctx, taskID, "in_progress", actor, nil, false); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *service) EnqueueForMerge(ctx context.Context, taskID uuid.UUID) (*MergeQueueEntry, error) {
