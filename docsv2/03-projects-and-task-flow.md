@@ -156,7 +156,7 @@ Successful execution is also part of the same invariant: when a work node has sa
 
 ### Valid Transitions
 
-```
+``` 
 draft ──→ queued ──→ in_progress ──→ review ──→ done
             │         ↑    │  ↑        │
             │         │    │  │        │ (rejected — back to work)
@@ -164,9 +164,9 @@ draft ──→ queued ──→ in_progress ──→ review ──→ done
             │         │  blocked    in_progress
             │         │    │  │
             │         │    │  └──→ cancelled
-            │         │    │ (dependency resolved)
+            │         │    │ (dependency resolved / explicit recovery resume)
             │         │    ▼
-            │         │  in_progress
+            │         │   queued
             │         │
             ├─────────┼── on_hold ◄── in_progress
             │         │     │
@@ -182,7 +182,7 @@ Explicit transition table:
 - `draft` → `queued`, `cancelled`
 - `queued` → `in_progress`, `on_hold`, `cancelled`
 - `in_progress` → `review`, `blocked`, `on_hold`, `cancelled`
-- `blocked` → `in_progress` (dependency resolved), `on_hold`, `cancelled`
+- `blocked` → `queued` (dependency resolved or explicit recovery resume), `in_progress` (direct operator/manual continuation only when a live execution already exists), `on_hold`, `cancelled`
 - `on_hold` → `queued` (goes back through the queue, not straight to in_progress), `cancelled`
 - `review` → `done` (approved), `in_progress` (rejected/needs changes), `cancelled`
 - `done` → terminal. If work needs revisiting, create a new task.
@@ -568,10 +568,10 @@ Dependencies govern execution order. They are separate from the task/subtask con
 - A task can depend on other tasks. "What must finish before this can start?"
 - Dependencies declared during scoping are respected by the scheduler: a `queued` task with unresolved dependencies remains `queued` but is ineligible for pickup until all dependencies are `done` (see Queue Mechanics). Its status does not change — the dependency is visible via the dependency table, not via work status.
 - If a dependency is added to a task that is already `in_progress` (e.g., the agent files a blocker), the task transitions to `blocked`.
-- When all dependencies are resolved: a blocked task returns to `in_progress`; a queued task becomes eligible for the scheduler.
+- When all dependencies are resolved: a blocked task returns to `queued` so the scheduler can restart it; a queued task simply becomes eligible for pickup.
 - Dependencies are the mechanism behind blockers (see Blockers and Escalation).
 - Dependencies form a DAG -- cycles are rejected at creation time. Cross-level dependencies (task depending on a subtask of another task, or vice versa) are not allowed. Dependencies can only be task->task or subtask->subtask within the same parent task.
-- **Removing dependencies**: the PM can remove a dependency at any time. When a dependency is removed from a `blocked` task and no other unresolved dependencies remain, the task transitions to its previous active state (`in_progress` or `queued`). Dependency removal is logged in `project_task_event`.
+- **Removing dependencies**: the PM can remove a dependency at any time. When a dependency is removed from a `blocked` task and no other unresolved dependencies remain, the task re-enters `queued` and is restarted by the scheduler. Dependency removal is logged in `project_task_event`.
 
 **Project-wide gate tasks (`blocks_scope = 'all'`):**
 
