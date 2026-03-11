@@ -3452,6 +3452,7 @@ func TestIntegrationParentTaskCanReopenCompletedChildWithFeedback(t *testing.T) 
 	project := testutil.MakeProject(t, pool, orgID)
 	agent := testutil.MakeAgent(t, pool, orgID)
 	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
 
 	taskRepo := repo.NewProjectTaskRepo(pool)
 	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
@@ -3486,7 +3487,7 @@ func TestIntegrationParentTaskCanReopenCompletedChildWithFeedback(t *testing.T) 
 		t.Fatalf("update parent metadata: %v", err)
 	}
 
-	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	executor := NewExecutor(ExecutorOptions{Pool: pool, Events: bus, WorkspaceRoot: t.TempDir()})
 	if _, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
 		"task_id":         childTask.ID.String(),
 		"work_status":     "queued",
@@ -3504,6 +3505,16 @@ func TestIntegrationParentTaskCanReopenCompletedChildWithFeedback(t *testing.T) 
 	}
 	if reopened.Description == nil || !strings.Contains(*reopened.Description, "Fix the checkout mismatch found during parent integration verification.") {
 		t.Fatalf("child description = %v, want reopen feedback", reopened.Description)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(reopened.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal reopened metadata: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["parent_integration_feedback"])); got != "Fix the checkout mismatch found during parent integration verification." {
+		t.Fatalf("parent_integration_feedback = %q, want reopen feedback", got)
+	}
+	if strings.TrimSpace(fmt.Sprintf("%v", metadata["parent_integration_feedback_recorded_at"])) == "" {
+		t.Fatal("expected parent_integration_feedback_recorded_at")
 	}
 }
 
