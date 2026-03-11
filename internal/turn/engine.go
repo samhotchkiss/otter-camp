@@ -118,6 +118,11 @@ const (
 	bootstrapChildTaskBoundednessError        = "parent integration follow-on tasks must already be bounded before they are created"
 )
 
+const (
+	errMissingTaskTransitionServiceForValidationBlock = "turn engine requires task transition service to block validation-loop tasks"
+	errMissingTaskTransitionServiceForRecoveryBlock   = "turn engine requires task transition service to block recovery tasks"
+)
+
 var (
 	ErrModelTransient           = errors.New("transient model failure")
 	errTurnDeferred             = errors.New("turn deferred")
@@ -5585,16 +5590,12 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	}
 
 	if !strings.EqualFold(strings.TrimSpace(updatedTask.WorkStatus), "blocked") {
+		if e.taskTransitions == nil {
+			return false, fmt.Errorf(errMissingTaskTransitionServiceForValidationBlock)
+		}
 		blockReason := buildValidationLoopBlockReason(next)
-		if e.taskTransitions != nil {
-			if _, err := e.taskTransitions.MarkBlocked(ctx, updatedTask.ID, blockReason, tasksvc.Actor{Type: "system"}); err != nil {
-				return false, err
-			}
-		} else {
-			updatedTask.WorkStatus = "blocked"
-			if _, err := e.tasks.Update(ctx, updatedTask); err != nil {
-				return false, err
-			}
+		if _, err := e.taskTransitions.MarkBlocked(ctx, updatedTask.ID, blockReason, tasksvc.Actor{Type: "system"}); err != nil {
+			return false, err
 		}
 	}
 
@@ -7416,27 +7417,23 @@ func (e *TurnEngine) ensureRecoveryTurnDurableTaskState(ctx context.Context, rt 
 		return nil
 	}
 
-	if e.taskTransitions != nil {
-		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
-			var transitionErr tasksvc.ErrInvalidStatusTransition
-			if errors.As(err, &transitionErr) {
-				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
-				if refreshErr == nil {
-					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
-					if nextStatus == "blocked" || nextStatus == "done" || nextStatus == "cancelled" {
-						return nil
-					}
+	if e.taskTransitions == nil {
+		return fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+	if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+		var transitionErr tasksvc.ErrInvalidStatusTransition
+		if errors.As(err, &transitionErr) {
+			refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+			if refreshErr == nil {
+				nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+				if nextStatus == "blocked" || nextStatus == "done" || nextStatus == "cancelled" {
+					return nil
 				}
 			}
-			return err
 		}
-		return nil
+		return err
 	}
-
-	taskRecord.WorkStatus = "blocked"
-	taskRecord.CompletedAt = nil
-	_, err = e.tasks.Update(ctx, taskRecord)
-	return err
+	return nil
 }
 
 func buildRecoveryTaskBlockedReason(metadata json.RawMessage, turnID uuid.UUID, stopReason *string) string {

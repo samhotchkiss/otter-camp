@@ -19,6 +19,7 @@ const (
 	strandedExecutionPendingWakeReason = "no_live_task_turn"
 	strandedExecutionRecoveryReason    = "active execution lost live task turn"
 	strandedExecutionFailureReason     = "active execution lost live task turn and automatic recovery failed"
+	errMissingTaskTransitionServiceForStrandedExecution = "supervisor requires task transition service to block stranded executions"
 )
 
 type strandedExecutionCandidate struct {
@@ -468,29 +469,25 @@ func (s *Supervisor) transitionTaskToBlocked(ctx context.Context, taskID uuid.UU
 		return nil
 	}
 
-	if s.taskService != nil {
-		if _, err := s.taskService.TransitionStatus(ctx, taskID, "blocked", tasksvc.Actor{Type: "system"}); err != nil {
-			var transitionErr tasksvc.ErrInvalidStatusTransition
-			if !errors.As(err, &transitionErr) {
-				return err
-			}
+	if s.taskService == nil {
+		return fmt.Errorf(errMissingTaskTransitionServiceForStrandedExecution)
+	}
+	if _, err := s.taskService.TransitionStatus(ctx, taskID, "blocked", tasksvc.Actor{Type: "system"}); err != nil {
+		var transitionErr tasksvc.ErrInvalidStatusTransition
+		if !errors.As(err, &transitionErr) {
+			return err
+		}
 
-			refreshed, refreshErr := taskRepo.GetByID(ctx, taskID)
-			if refreshErr == nil {
-				nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
-				if nextStatus == "blocked" || nextStatus == "done" || nextStatus == "cancelled" {
-					return nil
-				}
+		refreshed, refreshErr := taskRepo.GetByID(ctx, taskID)
+		if refreshErr == nil {
+			nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+			if nextStatus == "blocked" || nextStatus == "done" || nextStatus == "cancelled" {
+				return nil
 			}
-			return nil
 		}
 		return nil
 	}
-
-	taskRecord.WorkStatus = "blocked"
-	taskRecord.CompletedAt = nil
-	_, err = taskRepo.Update(ctx, taskRecord)
-	return err
+	return nil
 }
 
 func (s *Supervisor) abandonActiveExecution(ctx context.Context, executionID uuid.UUID) error {

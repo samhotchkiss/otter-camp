@@ -1011,6 +1011,136 @@ func TestSupervisor_StrandedActiveExecutionFailureBlocksTaskAndAbandonsExecution
 	}
 }
 
+func TestSupervisor_StrandedActiveExecutionFailureFailsWithoutTaskService(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord := seedRunProject(t, ctx, pool, org.ID)
+	template, node := seedSupervisorFlowTemplateNode(t, ctx, pool, org.ID, projectRecord.ID, nil, nil)
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         projectRecord.ID,
+		Title:             "Stranded execution without task service",
+		WorkStatus:        "in_progress",
+		CurrentFlowNodeID: &node.ID,
+		FlowTemplateID:    &template.ID,
+		CreatedByType:     "system",
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("chat.NewService: %v", err)
+	}
+	session, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"supervisor_integration"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  node.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+	wakeSvc := runService.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+	started, err := wakeSvc.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: org.ID,
+			ProjectID:      &projectRecord.ID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     &node.ID,
+			SessionID:      &session.ID,
+			PrincipalType:  "system",
+			PrincipalID:    uuid.Nil,
+			TriggerType:    "scheduler",
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+		WakeupPayload: map[string]any{
+			"flow_node_execution_id": execution.ID.String(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup: %v", err)
+	}
+
+	staleAt := time.Now().UTC().Add(-5 * time.Minute)
+	backdateStrandedExecutionFixture(t, ctx, pool, taskRecord.ID, session.ID, execution.ID, staleAt)
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:        pool,
+		RunService:  runService,
+		ChatService: chatService,
+		EventBus:    bus,
+		Logger:      newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	supervisor.taskService = nil
+
+	err = supervisor.detectStrandedActiveExecutions(ctx)
+	if err == nil || !strings.Contains(err.Error(), errMissingTaskTransitionServiceForStrandedExecution) {
+		t.Fatalf("detectStrandedActiveExecutions error = %v, want contains %q", err, errMissingTaskTransitionServiceForStrandedExecution)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	}
+
+	updatedExecution, err := repo.NewFlowNodeExecutionRepo(pool).GetByID(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("GetByID execution: %v", err)
+	}
+	if updatedExecution.Status != "active" {
+		t.Fatalf("execution status = %q, want active", updatedExecution.Status)
+	}
+
+	updatedRun, err := NewRunRepository(pool).Get(ctx, started.Run.ID)
+	if err != nil {
+		t.Fatalf("Get started run: %v", err)
+	}
+	if updatedRun.Status != "failed" {
+		t.Fatalf("started run status = %q, want failed", updatedRun.Status)
+	}
+}
+
 func countSupervisorEventsForRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID uuid.UUID) int {
 	t.Helper()
 	var count int

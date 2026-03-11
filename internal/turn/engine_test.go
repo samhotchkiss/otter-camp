@@ -2389,6 +2389,71 @@ func TestHandleUserMessageBlocksRepeatedToolValidationFailures(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageFailsWhenValidationLoopBlockLacksTaskTransitions(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				Title:           "Write file",
+				WorkStatus:      "in_progress",
+				AssignedAgentID: &assignedAgentID,
+				Metadata:        json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = nil
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("write"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{
+			ToolCalls: []ModelToolCall{{
+				ID:   "write-1",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"_raw": `{"content":"hello"}`,
+				},
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(ctx context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output:     map[string]any{"error": "path_required"},
+			RunID:      &runID,
+		}, nil
+	}
+
+	err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID)
+	if err == nil || !strings.Contains(err.Error(), errMissingTaskTransitionServiceForValidationBlock) {
+		t.Fatalf("HandleUserMessage error = %v, want contains %q", err, errMissingTaskTransitionServiceForValidationBlock)
+	}
+
+	taskRecord, getErr := taskRepo.GetByID(context.Background(), taskID)
+	if getErr != nil {
+		t.Fatalf("GetByID: %v", getErr)
+	}
+	if taskRecord.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", taskRecord.WorkStatus)
+	}
+}
+
 func TestHandleUserMessageSkipsBlockedValidationLoop(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -2446,6 +2511,50 @@ func TestHandleUserMessageSkipsBlockedValidationLoop(t *testing.T) {
 	}
 	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
 		t.Fatalf("agent turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestEnsureRecoveryTurnDurableTaskStateFailsWithoutTaskTransitions(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Recovery blocked task",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = nil
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID: uuid.New(),
+		},
+		recoveryBlockReason: "provider auth failed",
+	}
+
+	err := fixture.engine.ensureRecoveryTurnDurableTaskState(context.Background(), rt)
+	if err == nil || !strings.Contains(err.Error(), errMissingTaskTransitionServiceForRecoveryBlock) {
+		t.Fatalf("ensureRecoveryTurnDurableTaskState error = %v, want contains %q", err, errMissingTaskTransitionServiceForRecoveryBlock)
+	}
+
+	taskRecord, getErr := taskRepo.GetByID(context.Background(), taskID)
+	if getErr != nil {
+		t.Fatalf("GetByID: %v", getErr)
+	}
+	if taskRecord.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", taskRecord.WorkStatus)
 	}
 }
 
