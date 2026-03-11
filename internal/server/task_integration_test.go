@@ -1298,6 +1298,71 @@ func TestTaskHTTPRollbackCreatesQueuedDeployTask(t *testing.T) {
 	}
 }
 
+func TestTaskHTTPDeployEnvironmentCreatesQueuedDeployTask(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "deploy-environment", false)
+	seedDeployFlowTemplate(t, testServer.Pool, project.ID)
+	seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+
+	remoteRecord, err := repo.NewProjectRemoteRepo(testServer.Pool).Create(context.Background(), repo.ProjectRemote{
+		ProjectID: project.ID,
+		Name:      "origin",
+		URL:       "https://example.com/repo.git",
+		IsDefault: true,
+		Transport: "https",
+	})
+	if err != nil {
+		t.Fatalf("create remote: %v", err)
+	}
+	environmentRecord, err := repo.NewProjectEnvironmentRepo(testServer.Pool).Create(context.Background(), repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "production",
+		DeliveryMode: "gated",
+		RemoteID:     &remoteRecord.ID,
+		TargetBranch: "main",
+		IsActive:     true,
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/environments/"+environmentRecord.ID.String()+"/deploy", map[string]any{
+		"commit_sha": "deadbeefcafefeed",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("deploy environment status = %d, want %d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	deployTaskID := uuid.MustParse(jsonPathString(t, resp.Body, "data", "id"))
+	taskRecord, err := repo.NewProjectTaskRepo(testServer.Pool).GetByID(context.Background(), deployTaskID)
+	if err != nil {
+		t.Fatalf("get deploy task: %v", err)
+	}
+	if taskRecord.ProjectID != project.ID {
+		t.Fatalf("deploy task project_id = %s, want %s", taskRecord.ProjectID, project.ID)
+	}
+	if taskRecord.WorkStatus != "queued" {
+		t.Fatalf("deploy task work_status = %q, want queued", taskRecord.WorkStatus)
+	}
+
+	var queuedStatusEventCount int
+	if err := testServer.Pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		  AND payload->>'to_status' = 'queued'
+	`, deployTaskID).Scan(&queuedStatusEventCount); err != nil {
+		t.Fatalf("count deploy queued status events: %v", err)
+	}
+	if queuedStatusEventCount < 1 {
+		t.Fatalf("deploy queued status events = %d, want >= 1", queuedStatusEventCount)
+	}
+}
+
 func newTaskTestServer(t *testing.T) (*authIntegrationServer, repo.Organization, repo.HumanUser, repo.HumanUser) {
 	t.Helper()
 
