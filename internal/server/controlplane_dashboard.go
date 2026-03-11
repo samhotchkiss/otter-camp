@@ -401,9 +401,11 @@ func (l operatorDashboardLoader) countReviewBlockedTasks(ctx context.Context, or
 	var count int
 	err := l.pool.QueryRow(ctx, `
 		SELECT COUNT(*)
-		FROM project_task
-		WHERE organization_id = $1
-		  AND (requires_human_review = true OR work_status = 'review')
+		FROM project_task t
+		JOIN project p ON p.id = t.project_id
+		WHERE t.organization_id = $1
+		  AND p.status = 'active'
+		  AND (t.requires_human_review = true OR t.work_status = 'review')
 	`, organizationID).Scan(&count)
 	return count, err
 }
@@ -416,7 +418,9 @@ func (l operatorDashboardLoader) countStrandedExecutions(ctx context.Context, or
 		JOIN project_task t
 		  ON rs.scope_type = 'task'
 		 AND rs.scope_id = t.id
+		JOIN project p ON p.id = t.project_id
 		WHERE t.organization_id = $1
+		  AND p.status = 'active'
 		  AND t.work_status = 'blocked'
 		  AND rs.metadata->>'status' = 'stranded'
 	`, organizationID).Scan(&count)
@@ -428,10 +432,12 @@ func (l operatorDashboardLoader) countValidationBlockedTasks(ctx context.Context
 	err := l.pool.QueryRow(ctx, `
 		SELECT COUNT(*)
 		FROM project_task t
+		JOIN project p ON p.id = t.project_id
 		LEFT JOIN runtime_state rs
 		  ON rs.scope_type = 'task'
 		 AND rs.scope_id = t.id
 		WHERE t.organization_id = $1
+		  AND p.status = 'active'
 		  AND t.work_status = 'blocked'
 		  AND COALESCE((t.metadata->'agent_turn_validation_guard'->>'blocked')::boolean, false)
 		  AND COALESCE(NULLIF(rs.metadata->>'status', ''), '') <> 'stranded'
@@ -1008,6 +1014,7 @@ func (l operatorDashboardLoader) loadStrandedExecutionItems(ctx context.Context,
 		 AND rs.scope_id = t.id
 		JOIN project p ON p.id = t.project_id
 		WHERE t.organization_id = $1
+		  AND p.status = 'active'
 		  AND t.work_status = 'blocked'
 		  AND rs.metadata->>'status' = 'stranded'
 		ORDER BY
@@ -1079,6 +1086,7 @@ func (l operatorDashboardLoader) loadValidationBlockedItems(ctx context.Context,
 		  ON rs.scope_type = 'task'
 		 AND rs.scope_id = t.id
 		WHERE t.organization_id = $1
+		  AND p.status = 'active'
 		  AND t.work_status = 'blocked'
 		  AND COALESCE((t.metadata->'agent_turn_validation_guard'->>'blocked')::boolean, false)
 		  AND COALESCE(NULLIF(rs.metadata->>'status', ''), '') <> 'stranded'
@@ -1140,6 +1148,7 @@ func (l operatorDashboardLoader) loadReviewBlockedItems(ctx context.Context, org
 		FROM project_task t
 		JOIN project p ON p.id = t.project_id
 		WHERE t.organization_id = $1
+		  AND p.status = 'active'
 		  AND (t.requires_human_review = true OR t.work_status = 'review')
 		ORDER BY t.updated_at DESC, t.id DESC
 		LIMIT $2

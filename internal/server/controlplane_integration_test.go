@@ -490,6 +490,77 @@ func TestOperatorDashboardIgnoresArchivedProjectTasksInActiveAndStaleCounts(t *t
 	}
 }
 
+func TestOperatorDashboardIgnoresArchivedProjectTasksInBlockedCounts(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-archived-blocked",
+		DisplayName:    "Ops Dashboard Archived Blocked",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		Slug:           "ops-dashboard-archived-blocked-template",
+		DisplayName:    "Ops Dashboard Archived Blocked Template",
+		Description:    "template for archived blocked dashboard integration tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	createdByID := adminA.ID
+	reviewTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:      orgA.ID,
+		ProjectID:           project.ID,
+		Title:               "Archived blocked task",
+		WorkStatus:          "review",
+		FlowTemplateID:      &template.ID,
+		RequiresHumanReview: true,
+		CreatedByType:       "human_user",
+		CreatedByID:         &createdByID,
+	})
+	if err != nil {
+		t.Fatalf("create review task: %v", err)
+	}
+	if err := projectRepo.Archive(ctx, project.ID); err != nil {
+		t.Fatalf("archive project: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=6", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	if payload.Summary.BlockedItems != 0 {
+		t.Fatalf("blocked_items=%d want=0 body=%s", payload.Summary.BlockedItems, string(resp.Body))
+	}
+	if item := findOperatorDashboardItem(payload.Blocked.Items, "review_blocked", reviewTask.ID); item != nil {
+		t.Fatalf("blocked item for archived project should be hidden: %+v body=%s", *item, string(resp.Body))
+	}
+}
+
 func TestOperatorDashboardSummaryAttentionRequiredWhenOnlyBlockedItemsPresent(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 
