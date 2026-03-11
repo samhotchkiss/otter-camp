@@ -516,6 +516,7 @@ func TestReleaseExecutionOwnerPromotesOldestDeferredWakeup(t *testing.T) {
 	if firstDeferred.Decision != executionWakeupDeferred {
 		t.Fatalf("first deferred decision = %q, want %q", firstDeferred.Decision, executionWakeupDeferred)
 	}
+	repos.fakeClock.Advance(1 * time.Second)
 
 	secondDeferred, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
 		CreateRunInput: CreateRunInput{
@@ -1000,14 +1001,17 @@ type fakeRunDeps struct {
 	policy        *fakeRunPolicyService
 	budget        *fakeBudgetChecker
 	sessionBridge runSessionRouter
+	fakeClock     *clock.Fake
 }
 
 func newFakeRunDeps() *fakeRunDeps {
+	fakeClock := clock.NewFake(time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC))
 	return &fakeRunDeps{
 		runs: &fakeRunRepo{
 			byID:          make(map[uuid.UUID]Run),
 			idempotency:   make(map[string]uuid.UUID),
 			statusHistory: make([]string, 0),
+			nowFn:         fakeClock.Now,
 		},
 		steps: &fakeRunStepRepo{
 			byID:    make(map[uuid.UUID]RunStep),
@@ -1025,6 +1029,7 @@ func newFakeRunDeps() *fakeRunDeps {
 		bus:    &fakeDomainBus{},
 		policy: &fakeRunPolicyService{decision: RunCreationPolicyDecision{Allowed: true}},
 		budget: &fakeBudgetChecker{result: &budget.BudgetCheckResult{Allowed: true}},
+		fakeClock: fakeClock,
 	}
 }
 
@@ -1045,7 +1050,7 @@ func (d *fakeRunDeps) newService(t *testing.T) RunService {
 		Assignments:   &noopAssignments{},
 		Agents:        &noopAgentReader{},
 		Users:         &noopUserReader{},
-		Clock:         clock.NewFake(time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)),
+		Clock:         d.fakeClock,
 	})
 	if err != nil {
 		t.Fatalf("NewRunService: %v", err)
@@ -1081,6 +1086,7 @@ type fakeRunRepo struct {
 	idempotency   map[string]uuid.UUID
 	createCalls   int
 	statusHistory []string
+	nowFn         func() time.Time
 }
 
 func (r *fakeRunRepo) Create(_ context.Context, runRecord Run) (Run, error) {
@@ -1094,6 +1100,9 @@ func (r *fakeRunRepo) Create(_ context.Context, runRecord Run) (Run, error) {
 		runRecord.Version = 1
 	}
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
+	if r.nowFn != nil {
+		now = r.nowFn().UTC()
+	}
 	if runRecord.CreatedAt.IsZero() {
 		runRecord.CreatedAt = now
 	}

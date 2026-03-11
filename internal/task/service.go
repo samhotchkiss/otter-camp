@@ -74,6 +74,7 @@ var validStatusTransitions = map[string]map[string]struct{}{
 		"cancelled": {},
 	},
 	"blocked": {
+		"queued":      {},
 		"in_progress": {},
 		"on_hold":     {},
 		"cancelled":   {},
@@ -717,8 +718,7 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 			payload[key] = value
 		}
 	}
-	actor.AllowNoActiveFlow = true
-	return s.transitionTaskRecord(ctx, taskRecord, "in_progress", actor, payload, false)
+	return s.transitionTaskRecord(ctx, taskRecord, "queued", actor, payload, false)
 }
 
 func (s *service) loadLatestBlockedTaskReason(ctx context.Context, taskID uuid.UUID) string {
