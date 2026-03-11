@@ -236,6 +236,10 @@ type nativeTaskTransitionService interface {
 	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
 }
 
+type nativeProjectMutationService interface {
+	Create(ctx context.Context, req projectsvc.CreateProjectRequest) (*projectsvc.Project, error)
+}
+
 type NativeToolExecutor struct {
 	pool           *pgxpool.Pool
 	dataDir        string
@@ -250,6 +254,7 @@ type NativeToolExecutor struct {
 	chatSessions   chatSessionReader
 	organizations  organizationReader
 	projects       projectReader
+	projectService nativeProjectMutationService
 	tasks          taskReader
 	inbox          inboxReader
 	participants   chatParticipantReader
@@ -339,6 +344,18 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 			if taskErr == nil {
 				exec.taskService = taskService
 			}
+		}
+		projectEvents := eventbus.EventBus(publishOnlyEventBus{publisher: exec.events})
+		if bus, ok := exec.events.(eventbus.EventBus); ok {
+			projectEvents = bus
+		}
+		projectService, projectErr := projectsvc.NewService(projectsvc.Options{
+			Pool:    opts.Pool,
+			DataDir: dataDir,
+			Events:  projectEvents,
+		})
+		if projectErr == nil {
+			exec.projectService = projectService
 		}
 		if exec.agentService == nil {
 			var agentEvents eventbus.EventBus = publishOnlyEventBus{publisher: exec.events}

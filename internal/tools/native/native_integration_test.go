@@ -2978,6 +2978,67 @@ func TestIntegrationSessionCreateProjectScopeReusesExistingSession(t *testing.T)
 	}
 }
 
+func TestIntegrationProjectCreateReusesArchivedSlugThroughProjectService(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	projectRepo := repo.NewProjectRepo(pool)
+	archived, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgID,
+		Slug:           "samblog",
+		DisplayName:    "Sam.blog",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("seed archived project: %v", err)
+	}
+	if err := projectRepo.Archive(ctx, archived.ID); err != nil {
+		t.Fatalf("archive seeded project: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "project.create", map[string]any{
+		"name": "Sam.blog",
+		"slug": "samblog",
+	})
+	if err != nil {
+		t.Fatalf("project.create archived slug reuse: %v", err)
+	}
+
+	projectOut, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", out["project"])
+	}
+	createdID := mustUUIDValue(t, projectOut["id"])
+	if createdID == archived.ID {
+		t.Fatalf("created project id = %s, want fresh project distinct from archived %s", createdID, archived.ID)
+	}
+	gotSlug := strings.TrimSpace(fmt.Sprintf("%v", projectOut["slug"]))
+	if gotSlug == "samblog" {
+		t.Fatalf("created slug = %q, want archived slug suffixing", gotSlug)
+	}
+
+	created, err := projectRepo.GetByID(ctx, createdID)
+	if err != nil {
+		t.Fatalf("GetByID created project: %v", err)
+	}
+	if created.Status != "active" {
+		t.Fatalf("created project status = %q, want active", created.Status)
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListByProject bootstrap tasks: %v", err)
+	}
+	if len(tasks) == 0 {
+		t.Fatal("expected bootstrap task tree to be created through native project.create")
+	}
+}
+
 func TestIntegrationSessionCreateTaskBoundAsyncWorkUsesTaskSession(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

@@ -26,6 +26,7 @@ import (
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
@@ -927,7 +928,7 @@ func (e *NativeToolExecutor) handleMemoryRecord(ctx context.Context, input map[s
 }
 
 func (e *NativeToolExecutor) handleProjectCreate(ctx context.Context, input map[string]any) (map[string]any, error) {
-	if e.projects == nil {
+	if e.projects == nil && e.projectService == nil {
 		return map[string]any{"error": "project_repository_unavailable"}, nil
 	}
 	scope, err := e.resolveScope(ctx)
@@ -952,46 +953,65 @@ func (e *NativeToolExecutor) handleProjectCreate(ctx context.Context, input map[
 		return map[string]any{"error": err.Error()}, nil
 	}
 	actor := actorFromContext(ctx)
-	created, err := e.projects.Create(ctx, repo.Project{
-		OrganizationID: scope.organizationID,
-		Slug:           slug,
-		DisplayName:    name,
-		Description:    description,
-		DeliveryMode:   deliveryMode,
-		CreatedByType:  actor.createdByType,
-		CreatedByID:    actor.createdByID,
-		Settings:       settings,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if _, err := e.ensureProjectRepoBinding(ctx, created.ID); err != nil {
-		return nil, err
-	}
-	if e.events != nil {
-		payload, marshalErr := json.Marshal(map[string]any{
-			"project_id":                  created.ID,
-			"slug":                        created.Slug,
-			"requires_human_confirmation": true,
-			"pm_required":                 true,
+	var created repo.Project
+	if e.projectService != nil {
+		record, createErr := e.projectService.Create(ctx, projectsvc.CreateProjectRequest{
+			OrganizationID: scope.organizationID,
+			Slug:           slug,
+			DisplayName:    name,
+			Description:    description,
+			DeliveryMode:   deliveryMode,
+			Settings:       settings,
+			CreatedByType:  actor.createdByType,
+			CreatedByID:    actor.createdByID,
 		})
-		if marshalErr != nil {
-			return nil, marshalErr
+		if createErr != nil {
+			return nil, createErr
 		}
-		_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
+		created = repo.Project(*record)
+	} else {
+		record, createErr := e.projects.Create(ctx, repo.Project{
 			OrganizationID: scope.organizationID,
-			EventType:      "project.created",
-			ActorType:      actor.createdByType,
-			ActorID:        actor.createdByPtr,
-			Payload:        payload,
+			Slug:           slug,
+			DisplayName:    name,
+			Description:    description,
+			DeliveryMode:   deliveryMode,
+			CreatedByType:  actor.createdByType,
+			CreatedByID:    actor.createdByID,
+			Settings:       settings,
 		})
-		_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
-			OrganizationID: scope.organizationID,
-			EventType:      "project.staffing_needed",
-			ActorType:      actor.createdByType,
-			ActorID:        actor.createdByPtr,
-			Payload:        payload,
-		})
+		if createErr != nil {
+			return nil, createErr
+		}
+		created = record
+		if _, err := e.ensureProjectRepoBinding(ctx, created.ID); err != nil {
+			return nil, err
+		}
+		if e.events != nil {
+			payload, marshalErr := json.Marshal(map[string]any{
+				"project_id":                  created.ID,
+				"slug":                        created.Slug,
+				"requires_human_confirmation": true,
+				"pm_required":                 true,
+			})
+			if marshalErr != nil {
+				return nil, marshalErr
+			}
+			_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
+				OrganizationID: scope.organizationID,
+				EventType:      "project.created",
+				ActorType:      actor.createdByType,
+				ActorID:        actor.createdByPtr,
+				Payload:        payload,
+			})
+			_ = e.events.Publish(ctx, nil, eventbus.DomainEvent{
+				OrganizationID: scope.organizationID,
+				EventType:      "project.staffing_needed",
+				ActorType:      actor.createdByType,
+				ActorID:        actor.createdByPtr,
+				Payload:        payload,
+			})
+		}
 	}
 
 	projectResponse := map[string]any{
