@@ -10,7 +10,10 @@ import (
 	"strings"
 )
 
-var branchAheadBehindRegex = regexp.MustCompile(`^([^\.\s]+)(?:\.\.\.[^\s]+)?(?: \[(.*)\])?$`)
+var (
+	branchAheadBehindRegex = regexp.MustCompile(`^([^\.\s]+)(?:\.\.\.[^\s]+)?(?: \[(.*)\])?$`)
+	unbornBranchRegex      = regexp.MustCompile(`^No commits yet on ([^\s]+)$`)
+)
 
 func (e *NativeToolExecutor) handleGitStatus(ctx context.Context, input map[string]any) (map[string]any, error) {
 	wd, _, dir, err := e.resolveInputPath(ctx, input, "path")
@@ -253,6 +256,9 @@ func parsePorcelainStatus(code string) string {
 
 func parseBranchState(raw string) (branch string, ahead int, behind int) {
 	branch = strings.TrimSpace(raw)
+	if match := unbornBranchRegex.FindStringSubmatch(branch); len(match) == 2 {
+		return strings.TrimSpace(match[1]), 0, 0
+	}
 	matches := branchAheadBehindRegex.FindStringSubmatch(raw)
 	if len(matches) == 3 {
 		branch = strings.TrimSpace(matches[1])

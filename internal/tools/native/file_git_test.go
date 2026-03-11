@@ -105,6 +105,16 @@ func TestFileListRecursiveTruncatesAt1000(t *testing.T) {
 	}
 }
 
+func TestParseBranchStateHandlesUnbornMainBranch(t *testing.T) {
+	branch, ahead, behind := parseBranchState("No commits yet on main")
+	if branch != "main" {
+		t.Fatalf("branch = %q, want main", branch)
+	}
+	if ahead != 0 || behind != 0 {
+		t.Fatalf("ahead/behind = %d/%d, want 0/0", ahead, behind)
+	}
+}
+
 func TestFileSearchContextLines(t *testing.T) {
 	root := t.TempDir()
 	content := strings.Join([]string{

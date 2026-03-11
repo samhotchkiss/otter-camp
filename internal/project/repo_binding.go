@@ -3,6 +3,8 @@ package project
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -42,6 +44,9 @@ func EnsureRepoBindingAtPath(ctx context.Context, environments RepoBindingEnviro
 	if trimmedRepoPath == "" {
 		return repo.ProjectEnvironment{}, false, nil
 	}
+	if err := ensureGitWorkspace(trimmedRepoPath); err != nil {
+		return repo.ProjectEnvironment{}, false, err
+	}
 
 	environmentsByProject, err := environments.ListByProject(ctx, projectRecord.ID)
 	if err != nil {
@@ -65,6 +70,28 @@ func EnsureRepoBindingAtPath(ctx context.Context, environments RepoBindingEnviro
 		return repo.ProjectEnvironment{}, false, err
 	}
 	return created, true, nil
+}
+
+func ensureGitWorkspace(repoPath string) error {
+	trimmed := strings.TrimSpace(repoPath)
+	if trimmed == "" {
+		return nil
+	}
+	if err := os.MkdirAll(trimmed, 0o755); err != nil {
+		return err
+	}
+	if info, err := os.Stat(filepath.Join(trimmed, ".git")); err == nil && info.IsDir() {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	cmd := exec.Command("git", "init", "-b", defaultWorkspaceTargetBranch)
+	cmd.Dir = trimmed
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("initialize git repo at %s: %w: %s", trimmed, err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func HasProjectRepoBinding(environments []repo.ProjectEnvironment) bool {

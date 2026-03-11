@@ -3720,6 +3720,17 @@ func TestIntegrationProjectKickoffTaskCreateBindsCanonicalRepoBeforeTaskTree(t *
 	if len(tasks) != 2 {
 		t.Fatalf("project task count = %d, want 2", len(tasks))
 	}
+
+	gitStatus, err := executor.Execute(projectCtx, "git.status", map[string]any{})
+	if err != nil {
+		t.Fatalf("git.status after kickoff repo binding: %v", err)
+	}
+	if got, _ := gitStatus["error"].(string); got != "" {
+		t.Fatalf("git.status error = %q, want empty after canonical repo binding", got)
+	}
+	if branch := strings.TrimSpace(fmt.Sprintf("%v", gitStatus["branch"])); branch != "main" {
+		t.Fatalf("git.status branch = %q, want main", branch)
+	}
 }
 
 func TestIntegrationBootstrapGateAllowsPlanningTaskCreateBeforeGateClears(t *testing.T) {
