@@ -3594,6 +3594,15 @@ func toolPreservesExplicitTargetAgentID(name string) bool {
 	}
 }
 
+func toolPreservesExplicitTargetTaskID(name string) bool {
+	switch strings.TrimSpace(strings.ToLower(name)) {
+	case "task.get", "task.update":
+		return true
+	default:
+		return false
+	}
+}
+
 func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls []ModelToolCall) (bool, error) {
 	rt.stopReason = ""
 	if len(calls) == 0 {
@@ -3650,7 +3659,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		if binding.taskID != nil {
 			arguments["task_id"] = binding.taskID.String()
-		} else if strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
+		} else if strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") && !toolPreservesExplicitTargetTaskID(name) {
 			delete(arguments, "task_id")
 		}
 		if strings.EqualFold(name, "project.create") && rt.projectIdentity != nil {
