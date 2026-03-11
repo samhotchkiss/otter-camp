@@ -134,6 +134,80 @@ func TestTaskServiceIntegrationStatusLifecycleAndEvents(t *testing.T) {
 	}
 }
 
+func TestTaskServiceIntegrationAllowsReviewToBlockedWithFlowContext(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "review-blocked-pm", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "Review Blocked PM", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Review blocker task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+
+	workNode, err := repo.NewFlowNodeRepo(pool).GetByID(ctx, *template.StartNodeID)
+	if err != nil {
+		t.Fatalf("GetByID work node: %v", err)
+	}
+	if workNode.NextNodeID == nil {
+		t.Fatal("work node next_node_id is nil")
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task before review: %v", err)
+	}
+	taskRecord.CurrentFlowNodeID = workNode.NextNodeID
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update task current_flow_node_id for review: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "review", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus review: %v", err)
+	}
+
+	blocked, err := svc.MarkBlocked(ctx, created.ID, "external dependency discovered during review", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("MarkBlocked review->blocked: %v", err)
+	}
+	if blocked.WorkStatus != "blocked" {
+		t.Fatalf("blocked work_status = %q, want blocked", blocked.WorkStatus)
+	}
+	if blocked.CurrentFlowNodeID == nil || *blocked.CurrentFlowNodeID != *workNode.NextNodeID {
+		t.Fatalf("current_flow_node_id = %v, want review node %s", blocked.CurrentFlowNodeID, *workNode.NextNodeID)
+	}
+
+	var blockedEvents int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'task.status_changed'
+		  AND payload->>'task_id' = $2
+		  AND payload->>'from_status' = 'review'
+		  AND payload->>'to_status' = 'blocked'
+	`, org.ID, created.ID.String()).Scan(&blockedEvents); err != nil {
+		t.Fatalf("count review->blocked domain events: %v", err)
+	}
+	if blockedEvents != 1 {
+		t.Fatalf("review->blocked domain events = %d, want 1", blockedEvents)
+	}
+}
+
 func TestTaskServiceIntegrationRejectsQueueWhenOutstandingProjectGateExistsEX256(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

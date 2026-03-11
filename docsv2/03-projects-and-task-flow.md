@@ -182,10 +182,10 @@ Explicit transition table:
 
 - `draft` → `queued`, `cancelled`
 - `queued` → `in_progress`, `on_hold`, `cancelled`
-- `in_progress` → `review`, `blocked`, `on_hold`, `cancelled`
+- `in_progress` → `review`, `blocked`, `on_hold`, `done` (only when the active flow node is the terminal merge/completion step or an explicit system-only bypass such as the bootstrap governance gate applies), `cancelled`
 - `blocked` → `queued` (dependency resolved or explicit recovery resume), `in_progress` (direct operator/manual continuation only when a live execution already exists), `on_hold`, `cancelled`
 - `on_hold` → `queued` (goes back through the queue, not straight to in_progress), `cancelled`
-- `review` → `done` (approved), `in_progress` (rejected/needs changes), `cancelled`
+- `review` → `done` (approved), `in_progress` (rejected/needs changes), `blocked` (review uncovered an external blocker or the review/reject path exhausted its bounded retries and must surface a real blocker), `cancelled`
 - `done` → terminal. If work needs revisiting, create a new task. The one narrow exception is orchestration-driven child rework: a completed child task may reopen to `queued` only when a parent integration gate records concrete `parent_integration_feedback` for the missing slice.
 - `cancelled` → terminal. Reachable from any non-terminal state.
 
