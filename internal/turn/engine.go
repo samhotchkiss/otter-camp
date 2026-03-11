@@ -311,6 +311,7 @@ type taskRepository interface {
 
 type taskTransitionService interface {
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
+	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
 	MarkBlocked(ctx context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 }
 
@@ -1407,46 +1408,19 @@ func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskI
 		return err
 	}
 
-	fromStatus := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
-	if fromStatus == "" {
-		fromStatus = "draft"
-	}
-	completedAt := e.now().UTC()
-	taskRecord.WorkStatus = "done"
-	taskRecord.CompletedAt = &completedAt
 	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
 		return err
 	}
-	payload, err := json.Marshal(map[string]any{
-		"from_status":                  fromStatus,
-		"to_status":                    "done",
-		"task_id":                      taskRecord.ID,
-		"project_id":                   taskRecord.ProjectID,
+	if e.taskTransitions == nil {
+		return fmt.Errorf("turn engine requires task transition service to auto-complete bootstrap gate tasks")
+	}
+	_, err = e.taskTransitions.TransitionStatusWithPayload(ctx, taskRecord.ID, "done", tasksvc.Actor{
+		Type:                           "system",
+		AllowBootstrapGateAutoComplete: true,
+	}, map[string]any{
 		"bootstrap_gate_auto_complete": true,
 	})
-	if err != nil {
-		return err
-	}
-	if _, err := repo.NewProjectTaskEventRepo(e.pool).Record(ctx, repo.ProjectTaskEvent{
-		TaskID:     taskRecord.ID,
-		ProjectID:  taskRecord.ProjectID,
-		EventType:  "status.changed",
-		ActorType:  "system",
-		ActorID:    nil,
-		FlowNodeID: taskRecord.CurrentFlowNodeID,
-		Payload:    payload,
-	}); err != nil {
-		return err
-	}
-	if e.events == nil {
-		return nil
-	}
-	return e.events.Publish(ctx, nil, eventbus.DomainEvent{
-		OrganizationID: taskRecord.OrganizationID,
-		EventType:      "task.status_changed",
-		ActorType:      "system",
-		Payload:        payload,
-	})
+	return err
 }
 
 func (e *TurnEngine) refreshProjectBootstrapSessionState(ctx context.Context, session *chat.ChatSession, progress projectBootstrapProgress) error {

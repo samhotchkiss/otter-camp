@@ -3601,6 +3601,10 @@ func (f *fakeTaskTransitionService) TransitionStatus(_ context.Context, taskID u
 	return &transitioned, nil
 }
 
+func (f *fakeTaskTransitionService) TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, _ map[string]any) (*tasksvc.ProjectTask, error) {
+	return f.TransitionStatus(ctx, taskID, toStatus, actor)
+}
+
 func (f *fakeTaskTransitionService) MarkBlocked(_ context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
 	if f.err != nil {
 		return nil, f.err

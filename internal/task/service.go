@@ -143,11 +143,12 @@ func (e ErrTaskFlowStateConflict) Is(target error) bool {
 }
 
 type Actor struct {
-	Type              string
-	ID                uuid.UUID
-	AllowNoActiveFlow bool
-	AllowDoneBypass   bool
-	AllowGateBypass   bool
+	Type                           string
+	ID                             uuid.UUID
+	AllowNoActiveFlow              bool
+	AllowDoneBypass                bool
+	AllowGateBypass                bool
+	AllowBootstrapGateAutoComplete bool
 }
 
 type ErrInProgressRequiresActiveFlow struct {
@@ -530,7 +531,8 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 	if target == "" {
 		return nil, ErrTransitionTargetRequired
 	}
-	if !isTransitionAllowed(from, target) {
+	bootstrapGateAutoComplete := allowsBootstrapGateAutoComplete(taskRecord, from, target, actor)
+	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete {
 		return nil, ErrInvalidStatusTransition{From: from, To: target}
 	}
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
@@ -605,7 +607,7 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 			return nil, ErrInProgressRequiresActiveFlow{TaskID: taskRecord.ID}
 		}
 	}
-	if target == "done" && !actor.AllowDoneBypass {
+	if target == "done" && !actor.AllowDoneBypass && !bootstrapGateAutoComplete {
 		if report, reportErr := taskplan.CompletionReport(taskRecord.Metadata); reportErr != nil {
 			return nil, reportErr
 		} else if payload := report.Payload(); len(payload) > 0 {
@@ -1678,6 +1680,35 @@ func isTransitionAllowed(fromStatus, toStatus string) bool {
 	}
 	_, ok = allowedTargets[target]
 	return ok
+}
+
+func allowsBootstrapGateAutoComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
+	if !actor.AllowBootstrapGateAutoComplete {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(actor.Type), "system") {
+		return false
+	}
+	if normalizeStatus(from) != "draft" || normalizeStatus(target) != "done" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.BlocksScope), "all") {
+		return false
+	}
+	metadata := taskMetadataMap(taskRecord.Metadata)
+	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
+	return bootstrapGate
+}
+
+func taskMetadataMap(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	metadata := make(map[string]any)
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return map[string]any{}
+	}
+	return metadata
 }
 
 func normalizeStatus(value string) string {

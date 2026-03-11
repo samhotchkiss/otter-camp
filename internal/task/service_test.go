@@ -136,6 +136,72 @@ func TestTransitionStatusInvalidReturnsTypedError(t *testing.T) {
 	}
 }
 
+func TestTransitionStatusAllowsBootstrapGateAutoComplete(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				BlocksScope:    "all",
+				Title:          "Bootstrap governance gate",
+				CreatedByType:  "system",
+				Metadata:       json.RawMessage(`{"bootstrap_gate":true}`),
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	doneTask, err := svc.TransitionStatusWithPayload(context.Background(), taskID, "done", Actor{
+		Type:                           "system",
+		AllowBootstrapGateAutoComplete: true,
+	}, map[string]any{"bootstrap_gate_auto_complete": true})
+	if err != nil {
+		t.Fatalf("TransitionStatusWithPayload done: %v", err)
+	}
+	if doneTask.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", doneTask.WorkStatus)
+	}
+	if doneTask.CompletedAt == nil {
+		t.Fatal("completed_at is nil for bootstrap auto-complete")
+	}
+}
+
+func TestTransitionStatusRejectsBootstrapAutoCompleteForNonBootstrapTask(t *testing.T) {
+	taskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "draft",
+				BlocksScope:    "all",
+				Title:          "Ordinary gate",
+				CreatedByType:  "system",
+				Metadata:       json.RawMessage(`{"bootstrap_gate":false}`),
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	_, err := svc.TransitionStatusWithPayload(context.Background(), taskID, "done", Actor{
+		Type:                           "system",
+		AllowBootstrapGateAutoComplete: true,
+	}, map[string]any{"bootstrap_gate_auto_complete": true})
+	var transitionErr ErrInvalidStatusTransition
+	if !errors.As(err, &transitionErr) {
+		t.Fatalf("TransitionStatusWithPayload err = %v, want ErrInvalidStatusTransition", err)
+	}
+	if transitionErr.From != "draft" || transitionErr.To != "done" {
+		t.Fatalf("transition error = %+v, want from=draft to=done", transitionErr)
+	}
+}
+
 func TestResumeValidationBlockedTaskRequiresResumableBlockedState(t *testing.T) {
 	taskID := uuid.New()
 	taskRepo := &fakeTaskRepo{
