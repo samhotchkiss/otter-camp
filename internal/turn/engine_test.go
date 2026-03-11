@@ -3557,6 +3557,19 @@ func (f *fakeTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.Pr
 	return task, nil
 }
 
+func (f *fakeTaskRepo) UpdateMetadata(_ context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error) {
+	if f.err != nil {
+		return repo.ProjectTask{}, f.err
+	}
+	item, ok := f.items[id]
+	if !ok {
+		return repo.ProjectTask{}, repo.ErrNotFound
+	}
+	item.Metadata = append(json.RawMessage(nil), metadata...)
+	f.items[id] = item
+	return item, nil
+}
+
 type fakeTaskTransitionService struct {
 	repo            *fakeTaskRepo
 	calls           []blockedTaskCall

@@ -306,18 +306,12 @@ type agentRepository interface {
 
 type taskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error)
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
-type taskMetadataUpdater interface {
-	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error)
-}
-
 func updateTurnTaskMetadata(ctx context.Context, tasks taskRepository, taskRecord repo.ProjectTask) (repo.ProjectTask, error) {
-	if updater, ok := tasks.(taskMetadataUpdater); ok {
-		return updater.UpdateMetadata(ctx, taskRecord.ID, taskRecord.Metadata)
-	}
-	return tasks.Update(ctx, taskRecord)
+	return tasks.UpdateMetadata(ctx, taskRecord.ID, taskRecord.Metadata)
 }
 
 type taskTransitionService interface {
