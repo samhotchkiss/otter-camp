@@ -6789,7 +6789,7 @@ func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session 
 	}
 	scopeType := strings.TrimSpace(session.ScopeType)
 	if strings.EqualFold(scopeType, "project_task") {
-		agentID, err := e.resolveTaskScopeAgent(ctx, session.OrganizationID, session.ScopeID)
+		agentID, err := e.resolveTaskScopeAgentForSession(ctx, session)
 		if err != nil {
 			return uuid.Nil, err
 		}
@@ -6848,7 +6848,21 @@ func (e *TurnEngine) ensureAgentParticipant(ctx context.Context, sessionID, agen
 	return nil
 }
 
+func (e *TurnEngine) resolveTaskScopeAgentForSession(ctx context.Context, session *chat.ChatSession) (uuid.UUID, error) {
+	if session == nil {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	if strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return e.resolveTaskScopeAssignedAgent(ctx, session.OrganizationID, session.ScopeID)
+	}
+	return e.resolveTaskScopeDiscussionAgent(ctx, session.OrganizationID, session.ScopeID)
+}
+
 func (e *TurnEngine) resolveTaskScopeAgent(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {
+	return e.resolveTaskScopeAssignedAgent(ctx, organizationID, taskID)
+}
+
+func (e *TurnEngine) resolveTaskScopeAssignedAgent(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {
 	if e.tasks == nil {
 		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing task repository")
 	}
@@ -6864,6 +6878,35 @@ func (e *TurnEngine) resolveTaskScopeAgent(ctx context.Context, organizationID, 
 	}
 	if taskRecord.OrganizationID != uuid.Nil && taskRecord.OrganizationID != organizationID {
 		return uuid.Nil, repo.ErrNotFound
+	}
+	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing assigned agent")
+	}
+	return *taskRecord.AssignedAgentID, nil
+}
+
+func (e *TurnEngine) resolveTaskScopeDiscussionAgent(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {
+	if e.tasks == nil {
+		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing task repository")
+	}
+	if taskID == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing task_id")
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session task binding was not found")
+		}
+		return uuid.Nil, err
+	}
+	if taskRecord.OrganizationID != uuid.Nil && taskRecord.OrganizationID != organizationID {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	if e.assignments != nil && taskRecord.ProjectID != uuid.Nil {
+		pm, pmErr := e.assignments.GetPM(ctx, taskRecord.ProjectID)
+		if pmErr == nil && pm.IsActive && pm.AgentID != uuid.Nil {
+			return pm.AgentID, nil
+		}
 	}
 	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID == uuid.Nil {
 		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing assigned agent")

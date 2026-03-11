@@ -295,6 +295,72 @@ func TestTurnEngineIntegrationTaskSessionEventRoutesJobToAssignedAgent(t *testin
 	}
 }
 
+func TestTurnEngineIntegrationTaskSyncSessionEventRoutesJobToProjectPM(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	pmAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	assignedAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, pmAgent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, assignedAgent.ID)
+
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "sync",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope sync: %v", err)
+	}
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "discuss task status",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	actorID := fixture.user.ID
+	if err := fixture.engine.HandleUserMessageEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.message.user_sent",
+		ActorType:      "human",
+		ActorID:        &actorID,
+		Payload:        mustJSON(t, map[string]any{"session_id": taskSession.ID.String(), "message_id": userMessage.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleUserMessageEvent: %v", err)
+	}
+
+	payload := mustLatestAgentTurnPayloadForSession(t, ctx, fixture.pool, taskSession.ID)
+	if payload.AgentID == nil {
+		t.Fatalf("payload.agent_id = nil, want %s", pmAgent.ID)
+	}
+	if *payload.AgentID != pmAgent.ID {
+		t.Fatalf("payload.agent_id = %s, want %s", *payload.AgentID, pmAgent.ID)
+	}
+
+	participants, err := fixture.chatService.ListParticipants(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListParticipants: %v", err)
+	}
+	hasPM := false
+	for _, participant := range participants {
+		if participant != nil && participant.ParticipantType == "agent" && participant.ParticipantID == pmAgent.ID {
+			hasPM = true
+			break
+		}
+	}
+	if !hasPM {
+		t.Fatalf("expected PM %s in session participants", pmAgent.ID)
+	}
+}
+
 func TestTurnEngineIntegrationProjectSessionEventRoutesJobToPMAndAddsParticipant(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

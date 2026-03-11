@@ -1039,6 +1039,81 @@ func TestHandleUserMessageTaskScopeRoutesToAssignedAgent(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageTaskScopeSyncRoutesToProjectPMAndAddsParticipant(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	pmID := uuid.New()
+	assignedID := uuid.New()
+	frankID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.participants = []*chat.ChatParticipant{{
+		ID:              uuid.New(),
+		SessionID:       fixture.session.ID,
+		ParticipantType: "agent",
+		ParticipantID:   frankID,
+	}}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		items: map[uuid.UUID]repo.AgentProjectAssignment{
+			projectID: {ProjectID: projectID, AgentID: pmID, IsActive: true},
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			pmID:       {ID: pmID, OrganizationID: fixture.session.OrganizationID},
+			assignedID: {ID: assignedID, OrganizationID: fixture.session.OrganizationID},
+			frankID:    {ID: frankID, OrganizationID: fixture.session.OrganizationID},
+		},
+		starter: []repo.Agent{{ID: frankID, DisplayName: "Frank", AgentType: "general"}},
+	}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.RespondingID != pmID {
+		t.Fatalf("turn responding_id = %s, want %s", turn.RespondingID, pmID)
+	}
+
+	participants, err := fixture.chat.ListParticipants(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListParticipants: %v", err)
+	}
+	hasPM := false
+	for _, participant := range participants {
+		if participant != nil && strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") && participant.ParticipantID == pmID {
+			hasPM = true
+			break
+		}
+	}
+	if !hasPM {
+		t.Fatalf("expected project PM %s to be added as a session participant", pmID)
+	}
+}
+
 func TestHandleUserMessageTaskScopeRequiresAssignedAgent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
