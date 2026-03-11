@@ -309,6 +309,17 @@ type taskRepository interface {
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
+type taskMetadataUpdater interface {
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error)
+}
+
+func updateTurnTaskMetadata(ctx context.Context, tasks taskRepository, taskRecord repo.ProjectTask) (repo.ProjectTask, error) {
+	if updater, ok := tasks.(taskMetadataUpdater); ok {
+		return updater.UpdateMetadata(ctx, taskRecord.ID, taskRecord.Metadata)
+	}
+	return tasks.Update(ctx, taskRecord)
+}
+
 type taskTransitionService interface {
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
@@ -1408,7 +1419,7 @@ func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskI
 		return err
 	}
 
-	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+	if _, err := updateTurnTaskMetadata(ctx, e.tasks, taskRecord); err != nil {
 		return err
 	}
 	if e.taskTransitions == nil {
@@ -3356,7 +3367,7 @@ func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *t
 		return false, err
 	}
 	taskRecord.Metadata = mergedMetadata
-	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+	if _, err := updateTurnTaskMetadata(ctx, e.tasks, taskRecord); err != nil {
 		return false, err
 	}
 	rt.historyStartID = &message.ID
@@ -5159,7 +5170,7 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 		return err
 	}
 	taskRecord.Metadata = merged
-	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+	if _, err := updateTurnTaskMetadata(ctx, e.tasks, taskRecord); err != nil {
 		return err
 	}
 	rt.historyStartID = &messageID
@@ -5198,7 +5209,7 @@ func (e *TurnEngine) maybeClearRecoveryFileWriteCheckpoint(ctx context.Context, 
 		return false, err
 	}
 	taskRecord.Metadata = cleared
-	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+	if _, err := updateTurnTaskMetadata(ctx, e.tasks, taskRecord); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -5532,7 +5543,7 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 			return false, clearErr
 		}
 		taskRecord.Metadata = cleared
-		if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+		if _, err := updateTurnTaskMetadata(ctx, e.tasks, taskRecord); err != nil {
 			return false, err
 		}
 		return false, nil
@@ -5554,7 +5565,7 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 		return false, mergeErr
 	}
 	taskRecord.Metadata = merged
-	updatedTask, err := e.tasks.Update(ctx, taskRecord)
+	updatedTask, err := updateTurnTaskMetadata(ctx, e.tasks, taskRecord)
 	if err != nil {
 		return false, err
 	}

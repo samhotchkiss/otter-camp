@@ -398,6 +398,49 @@ func (r *ProjectTaskRepo) Update(ctx context.Context, task ProjectTask) (Project
 	return r.UpdateTx(ctx, nil, task)
 }
 
+func (r *ProjectTaskRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (ProjectTask, error) {
+	return r.UpdateMetadataTx(ctx, nil, id, metadata)
+}
+
+func (r *ProjectTaskRepo) UpdateMetadataTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, metadata json.RawMessage) (ProjectTask, error) {
+	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `
+		UPDATE project_task
+		SET metadata = $2::jsonb
+		WHERE id = $1
+		RETURNING
+			id,
+			organization_id,
+			project_id,
+			task_number,
+			title,
+			description,
+			work_status,
+			blocks_scope,
+			current_flow_node_id,
+			flow_template_id,
+			schedule_id,
+			branch_name,
+			requires_human_review,
+			priority,
+			created_by_type,
+			created_by_id,
+			assigned_agent_id,
+			metadata,
+			created_at,
+			updated_at,
+			completed_at
+	`, id, normalizeProjectTaskJSON(metadata, json.RawMessage(`{}`)))
+
+	updated, err := scanProjectTask(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ProjectTask{}, ErrNotFound
+	}
+	if err != nil {
+		return ProjectTask{}, mapDBError(err)
+	}
+	return updated, nil
+}
+
 func (r *ProjectTaskRepo) UpdateTx(ctx context.Context, tx pgx.Tx, task ProjectTask) (ProjectTask, error) {
 	query := `
 		UPDATE project_task

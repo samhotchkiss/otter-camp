@@ -294,6 +294,10 @@ type taskRepository interface {
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
+type taskMetadataUpdater interface {
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error)
+}
+
 type modelInvocationProjectCleaner interface {
 	ClearProjectReferences(ctx context.Context, projectID uuid.UUID) error
 }
@@ -636,7 +640,11 @@ func (s *service) createBootstrapTaskTree(ctx context.Context, projectRecord rep
 		}
 		rootTask.Metadata = taskdecomp.AppendChildTaskID(rootTask.Metadata, childTask.ID)
 	}
-	if _, err := s.tasks.Update(ctx, rootTask); err != nil {
+	if updater, ok := s.tasks.(taskMetadataUpdater); ok {
+		if _, err := updater.UpdateMetadata(ctx, rootTask.ID, rootTask.Metadata); err != nil {
+			return err
+		}
+	} else if _, err := s.tasks.Update(ctx, rootTask); err != nil {
 		return err
 	}
 

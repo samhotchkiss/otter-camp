@@ -192,6 +192,43 @@ func TestProjectTaskRepoUpdateRejectsStaleSnapshot(t *testing.T) {
 	}
 }
 
+func TestProjectTaskRepoUpdateMetadataPreservesWorkStatus(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskRepoOrgProject(t, ctx, pool)
+	taskRepo := NewProjectTaskRepo(pool)
+
+	created, err := taskRepo.Create(ctx, ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Metadata-only update",
+		WorkStatus:     "blocked",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{"before":true}`),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	updated, err := taskRepo.UpdateMetadata(ctx, created.ID, json.RawMessage(`{"after":true}`))
+	if err != nil {
+		t.Fatalf("UpdateMetadata: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("work_status = %q, want blocked", updated.WorkStatus)
+	}
+	var decoded map[string]bool
+	if err := json.Unmarshal(updated.Metadata, &decoded); err != nil {
+		t.Fatalf("Unmarshal metadata: %v", err)
+	}
+	if !decoded["after"] {
+		t.Fatalf("metadata = %s, want after=true", string(updated.Metadata))
+	}
+	if !updated.UpdatedAt.After(created.UpdatedAt) {
+		t.Fatalf("updated_at = %s, want after %s", updated.UpdatedAt, created.UpdatedAt)
+	}
+}
+
 func TestProjectTaskEventRepoRecordAndListByTaskOrder(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
