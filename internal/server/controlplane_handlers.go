@@ -780,13 +780,6 @@ func (h controlPlaneHandlers) streamRunEventsByListenNotify(w http.ResponseWrite
 	}()
 
 	for {
-		waitCtx, cancel := context.WithTimeout(r.Context(), runEventStreamPoll)
-		_, waitErr := conn.Conn().WaitForNotification(waitCtx)
-		cancel()
-		if waitErr != nil && !errors.Is(waitErr, context.DeadlineExceeded) && !errors.Is(waitErr, context.Canceled) {
-			return
-		}
-
 		nextEvents, err := h.runEvents.ListByRun(r.Context(), runID, sequence)
 		if err != nil {
 			return
@@ -807,6 +800,13 @@ func (h controlPlaneHandlers) streamRunEventsByListenNotify(w http.ResponseWrite
 			return
 		}
 		if r.Context().Err() != nil {
+			return
+		}
+
+		waitCtx, cancel := context.WithTimeout(r.Context(), runEventStreamPoll)
+		_, waitErr := conn.Conn().WaitForNotification(waitCtx)
+		cancel()
+		if waitErr != nil && !errors.Is(waitErr, context.DeadlineExceeded) && !errors.Is(waitErr, context.Canceled) {
 			return
 		}
 	}
