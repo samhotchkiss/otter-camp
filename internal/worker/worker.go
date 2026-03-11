@@ -200,6 +200,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		GetRun(ctx context.Context, runID uuid.UUID) (controlplane.Run, error)
 		ListRunsByTask(ctx context.Context, organizationID, taskID uuid.UUID, status, triggerType string) ([]controlplane.Run, error)
 		ReleaseExecutionOwner(ctx context.Context, taskID, sessionID uuid.UUID, reason string) (controlplane.ExecutionWakeupResult, error)
+		ReleaseExecutionOwnerForRun(ctx context.Context, taskID, sessionID, runID uuid.UUID, reason string) (controlplane.ExecutionWakeupResult, error)
 		RetireRuntimeStateForTask(ctx context.Context, taskID uuid.UUID, reason string) error
 		RetireRuntimeStateForProject(ctx context.Context, projectID uuid.UUID, reason string) error
 	})
