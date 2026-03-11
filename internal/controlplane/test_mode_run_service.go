@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
@@ -25,6 +26,8 @@ type TestModeRunServiceOptions struct {
 	Pool            *pgxpool.Pool
 	PolicyEvaluator *policy.PolicyEvaluator
 	Logger          *slog.Logger
+	Clock           clock.Clock
+	Sleep           func(context.Context, time.Duration) error
 }
 
 type testModeRunService struct {
@@ -36,6 +39,8 @@ type testModeRunService struct {
 	audits      *repo.AuditEventRepo
 	policy      *policy.PolicyEvaluator
 	logger      *slog.Logger
+	now         func() time.Time
+	sleep       func(context.Context, time.Duration) error
 }
 
 func NewTestModeRunService(opts TestModeRunServiceOptions) (RunService, error) {
@@ -49,6 +54,14 @@ func NewTestModeRunService(opts TestModeRunServiceOptions) (RunService, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	nowFn := time.Now
+	if opts.Clock != nil {
+		nowFn = opts.Clock.Now
+	}
+	sleepFn := opts.Sleep
+	if sleepFn == nil {
+		sleepFn = sleepWithContext
+	}
 	return &testModeRunService{
 		RunService:  opts.Base,
 		tasks:       repo.NewProjectTaskRepo(opts.Pool),
@@ -57,6 +70,8 @@ func NewTestModeRunService(opts TestModeRunServiceOptions) (RunService, error) {
 		audits:      repo.NewAuditEventRepo(opts.Pool),
 		policy:      opts.PolicyEvaluator,
 		logger:      logger,
+		now:         nowFn,
+		sleep:       sleepFn,
 	}, nil
 }
 
@@ -163,7 +178,7 @@ func (s *testModeRunService) simulateTier2ToolCall(ctx context.Context, runRecor
 		auditDecision = "deny"
 	}
 
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	capabilityCopy := capability
 	metadata, _ := json.Marshal(map[string]any{
 		"reason":    reason,
@@ -247,8 +262,8 @@ func (s *testModeRunService) autoConfirmCancellation(runID uuid.UUID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := s.now().Add(3 * time.Second)
+	for s.now().Before(deadline) {
 		runRecord, err := s.RunService.GetRun(ctx, runID)
 		if err != nil {
 			s.logger.Warn("test mode cancel confirm get run failed", "run_id", runID, "error", err)
@@ -266,6 +281,8 @@ func (s *testModeRunService) autoConfirmCancellation(runID uuid.UUID) {
 		if _, terminal := runTerminalStatuses[runRecord.Status]; terminal {
 			return
 		}
-		time.Sleep(100 * time.Millisecond)
+		if err := s.sleep(ctx, 100*time.Millisecond); err != nil {
+			return
+		}
 	}
 }
