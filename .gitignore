@@ -29,6 +29,7 @@ Thumbs.db
 *.log
 npm-debug.log*
 data/repos/
+data/workspaces/
 /issues/
 .autowork/
 scripts/*
@@ -73,6 +74,7 @@ bridge/.env
 /server
 /otter
 /queue-dance.py
+reports/oc-test-human-interventions.md
 
 # Avatar PNGs (keep webp, ignore large PNGs)
 data/agents/*/avatar.png
