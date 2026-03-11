@@ -2557,7 +2557,7 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 		time.Sleep(25 * time.Millisecond)
 	}
 
-	publishTaskTurnCompleted(t, ctx, fx.pool, fx.bus, fx.org.ID, *workRun.SessionID)
+	publishTaskTurnCompletedForRun(t, ctx, fx.pool, fx.bus, fx.org.ID, *workRun.SessionID, workRun.ID)
 
 	waitForTaskQueueCondition(t, settleTimeout, func() (bool, error) {
 		runs, err := runRepo.List(ctx, RunListFilter{
