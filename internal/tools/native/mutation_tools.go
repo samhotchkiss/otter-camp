@@ -1653,7 +1653,7 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 	missing := make([]string, 0)
 	signoffSummary, _ := readString(input, "sign_off_summary")
 	for _, rawSlug := range stepSlugs {
-		slug := strings.TrimSpace(rawSlug)
+		slug := normalizeBootstrapStepSlug(rawSlug)
 		if slug == "" {
 			continue
 		}
@@ -1704,6 +1704,26 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		"status":          "persisted",
 		"completed_steps": completed,
 	}, nil
+}
+
+func normalizeBootstrapStepSlug(value string) string {
+	slug := strings.ToLower(strings.TrimSpace(value))
+	switch slug {
+	case "bind-repo-and-environment":
+		return "bind-repo-environment"
+	case "staff-the-project":
+		return "staff-project"
+	case "validate-task-sizing":
+		return "validate-task-shape"
+	case "attach-flow-templates", "attach-validate-flows", "attach-flow-template":
+		return "attach-validate-flow-templates"
+	case "first-wave-selection":
+		return "select-first-wave"
+	case "frank-sign-off", "record-sign-off":
+		return "record-frank-sign-off"
+	default:
+		return slug
+	}
 }
 
 func (e *NativeToolExecutor) projectRequiresPMBeforeQueue(ctx context.Context, projectID uuid.UUID) bool {

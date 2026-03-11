@@ -3836,6 +3836,77 @@ func TestIntegrationBootstrapSetupPersistCompletesRequestedSetupSteps(t *testing
 	}
 }
 
+func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Persist Aliases",
+		"slug":        "bootstrap-persist-aliases-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap.setup.persist accepts natural alias slugs.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap persist aliases",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{
+			"bind-repo-and-environment",
+			"staff-the-project",
+			"validate-task-sizing",
+			"attach-flow-templates",
+			"frank-sign-off",
+		},
+		"sign_off_summary": "Frank approved the bootstrap setup.",
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist aliases: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("bootstrap.setup.persist aliases error = %v, want nil", out["error"])
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list project tasks: %v", err)
+	}
+	statuses := map[string]string{}
+	for _, taskRecord := range tasks {
+		metadata := metadataObject(taskRecord.Metadata)
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
+			continue
+		}
+		statuses[readStringValue(metadata["bootstrap_step_slug"])] = taskRecord.WorkStatus
+	}
+	for _, slug := range []string{
+		"bind-repo-environment",
+		"staff-project",
+		"validate-task-shape",
+		"attach-validate-flow-templates",
+		"record-frank-sign-off",
+	} {
+		if got := statuses[slug]; got != "done" {
+			t.Fatalf("bootstrap alias mapped step %q status = %q, want done", slug, got)
+		}
+	}
+}
+
 func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
