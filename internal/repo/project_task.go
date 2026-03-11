@@ -117,6 +117,8 @@ func NewProjectTaskRepo(pool *pgxpool.Pool) *ProjectTaskRepo {
 }
 
 func (r *ProjectTaskRepo) Create(ctx context.Context, task ProjectTask) (ProjectTask, error) {
+	// This is a low-level persistence method. Most product code should create tasks through the
+	// canonical task service so validation, event emission, and queue semantics stay consistent.
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return ProjectTask{}, mapDBError(err)
