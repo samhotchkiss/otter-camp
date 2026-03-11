@@ -187,7 +187,7 @@ func TestCreateSessionProjectTaskSyncPrefersProjectPMResponder(t *testing.T) {
 		participantID   uuid.UUID
 		role            string
 	}
-	addCalls := make([]addCall, 0, 2)
+	addCalls := make([]addCall, 0, 3)
 
 	svc := &fakeChatService{
 		createSessionFn: func(context.Context, chat.CreateSessionInput) (*chat.ChatSession, error) {
@@ -213,10 +213,9 @@ func TestCreateSessionProjectTaskSyncPrefersProjectPMResponder(t *testing.T) {
 			ProjectID:       projectID,
 			AssignedAgentID: &assignedID,
 		}},
-		assignments: fakePMAssignmentReader{assignment: repo.AgentProjectAssignment{
-			ProjectID: projectID,
-			AgentID:   pmID,
-			IsActive:  true,
+		assignments: fakeProjectAssignmentReader{assignments: []repo.AgentProjectAssignment{
+			{ProjectID: projectID, AgentID: assignedID, Role: "worker", IsActive: true},
+			{ProjectID: projectID, AgentID: pmID, Role: "project_manager", IsActive: true},
 		}},
 	}
 
@@ -232,14 +231,17 @@ func TestCreateSessionProjectTaskSyncPrefersProjectPMResponder(t *testing.T) {
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusCreated, rr.Body.String())
 	}
-	if len(addCalls) != 2 {
-		t.Fatalf("add participant calls = %d, want 2", len(addCalls))
+	if len(addCalls) != 3 {
+		t.Fatalf("add participant calls = %d, want 3", len(addCalls))
 	}
 	if addCalls[0].participantType != "human_user" || addCalls[0].participantID != principalID || addCalls[0].role != "owner" {
 		t.Fatalf("owner add call = %+v, want human_user owner", addCalls[0])
 	}
 	if addCalls[1].participantType != "agent" || addCalls[1].participantID != pmID || addCalls[1].role != "responder" {
 		t.Fatalf("responder add call = %+v, want PM responder", addCalls[1])
+	}
+	if addCalls[2].participantType != "agent" || addCalls[2].participantID != assignedID || addCalls[2].role != "member" {
+		t.Fatalf("worker add call = %+v, want assigned worker member", addCalls[2])
 	}
 }
 
@@ -424,6 +426,87 @@ func TestCreateSessionProjectScopeDoesNotAutoAddStarterTrio(t *testing.T) {
 	}
 	if addCalls[0].participantType != "human_user" || addCalls[0].participantID != principalID || addCalls[0].role != "owner" {
 		t.Fatalf("owner add call = %+v, want human_user owner", addCalls[0])
+	}
+}
+
+func TestCreateSessionProjectScopeAutoAddsAssignedProjectAgentsButNotStarterTrio(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	sessionID := uuid.New()
+	principalID := uuid.New()
+	workerID := uuid.New()
+	pmID := uuid.New()
+	starterFrankID := uuid.New()
+
+	type addCall struct {
+		participantType string
+		participantID   uuid.UUID
+		role            string
+	}
+	addCalls := make([]addCall, 0, 4)
+
+	svc := &fakeChatService{
+		createSessionFn: func(context.Context, chat.CreateSessionInput) (*chat.ChatSession, error) {
+			return &chat.ChatSession{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "sync",
+				Status:         "active",
+			}, nil
+		},
+		addParticipantFn: func(_ context.Context, _ uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error) {
+			addCalls = append(addCalls, addCall{participantType: participantType, participantID: participantID, role: role})
+			return &chat.ChatParticipant{}, nil
+		},
+	}
+	h := chatHandlers{
+		service: svc,
+		assignments: fakeProjectAssignmentReader{assignments: []repo.AgentProjectAssignment{
+			{ProjectID: projectID, AgentID: workerID, Role: "worker", IsActive: true},
+			{ProjectID: projectID, AgentID: pmID, Role: "project_manager", IsActive: true},
+		}},
+		agents: fakeStarterAgentLister{agents: []repo.Agent{
+			{ID: starterFrankID, DisplayName: "Frank", AgentType: "general"},
+			{ID: uuid.New(), DisplayName: "Lori", AgentType: "pm"},
+			{ID: uuid.New(), DisplayName: "Ellie", AgentType: "general"},
+		}},
+	}
+
+	req := newChatRequest(t, http.MethodPost, "/v1/chat-sessions", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID,
+		"mode":       "sync",
+	}, middleware.Principal{UserID: principalID, OrganizationID: orgID, Role: "member"})
+	rr := httptest.NewRecorder()
+
+	h.createSession(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+	if len(addCalls) != 3 {
+		t.Fatalf("add participant calls = %d, want 3", len(addCalls))
+	}
+	if addCalls[0].participantType != "human_user" || addCalls[0].participantID != principalID || addCalls[0].role != "owner" {
+		t.Fatalf("owner add call = %+v, want human_user owner", addCalls[0])
+	}
+	seenAgents := map[uuid.UUID]bool{}
+	for _, call := range addCalls[1:] {
+		if call.participantType != "agent" || call.role != "member" {
+			t.Fatalf("auto add call = %+v, want agent member", call)
+		}
+		seenAgents[call.participantID] = true
+	}
+	if !seenAgents[workerID] {
+		t.Fatalf("expected worker %s to be auto-added", workerID)
+	}
+	if !seenAgents[pmID] {
+		t.Fatalf("expected pm %s to be auto-added", pmID)
+	}
+	if seenAgents[starterFrankID] {
+		t.Fatalf("starter trio agent %s should not be auto-added", starterFrankID)
 	}
 }
 
@@ -899,6 +982,40 @@ func (f fakePMAssignmentReader) GetPM(context.Context, uuid.UUID) (repo.AgentPro
 		return repo.AgentProjectAssignment{}, f.err
 	}
 	return f.assignment, nil
+}
+
+func (f fakePMAssignmentReader) ListByProject(context.Context, uuid.UUID) ([]repo.AgentProjectAssignment, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.assignment.AgentID == uuid.Nil {
+		return nil, nil
+	}
+	return []repo.AgentProjectAssignment{f.assignment}, nil
+}
+
+type fakeProjectAssignmentReader struct {
+	assignments []repo.AgentProjectAssignment
+	err         error
+}
+
+func (f fakeProjectAssignmentReader) GetPM(context.Context, uuid.UUID) (repo.AgentProjectAssignment, error) {
+	if f.err != nil {
+		return repo.AgentProjectAssignment{}, f.err
+	}
+	for _, assignment := range f.assignments {
+		if assignment.IsActive && strings.EqualFold(strings.TrimSpace(assignment.Role), "project_manager") {
+			return assignment, nil
+		}
+	}
+	return repo.AgentProjectAssignment{}, repo.ErrNotFound
+}
+
+func (f fakeProjectAssignmentReader) ListByProject(context.Context, uuid.UUID) ([]repo.AgentProjectAssignment, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]repo.AgentProjectAssignment(nil), f.assignments...), nil
 }
 
 type fakeStarterAgentLister struct {

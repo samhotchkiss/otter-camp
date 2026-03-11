@@ -113,6 +113,7 @@ type projectTaskReader interface {
 
 type projectPMAssignmentReader interface {
 	GetPM(ctx context.Context, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error)
 }
 
 type chatHandlers struct {
@@ -319,11 +320,14 @@ func (h chatHandlers) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = h.service.AddParticipant(r.Context(), session.ID, participantType, principal.UserID, "owner")
 
+	taskResponderID := uuid.Nil
 	if strings.EqualFold(scopeType, "project_task") {
 		if responderID, ok := h.resolveTaskResponderID(r.Context(), principal.OrganizationID, scopeID, req.Mode); ok {
+			taskResponderID = responderID
 			_, _ = h.service.AddParticipant(r.Context(), session.ID, "agent", responderID, "responder")
 		}
 	}
+	h.autoAddAssignedProjectParticipants(r.Context(), session.ID, scopeType, scopeID, taskResponderID)
 
 	// For org-scope sessions, automatically add starter-trio staff agents as
 	// participants so they are immediately available for conversations.
@@ -365,6 +369,42 @@ func (h chatHandlers) resolveTaskResponderID(ctx context.Context, organizationID
 		}
 	}
 	return h.resolveFrankStarterID(ctx, organizationID)
+}
+
+func (h chatHandlers) autoAddAssignedProjectParticipants(ctx context.Context, sessionID uuid.UUID, scopeType string, scopeID uuid.UUID, skipAgentID uuid.UUID) {
+	if h.assignments == nil || sessionID == uuid.Nil || scopeID == uuid.Nil {
+		return
+	}
+
+	projectID := scopeID
+	if strings.EqualFold(scopeType, "project_task") {
+		if h.tasks == nil {
+			return
+		}
+		taskRecord, err := h.tasks.GetByID(ctx, scopeID)
+		if err != nil {
+			return
+		}
+		projectID = taskRecord.ProjectID
+	}
+	if !strings.EqualFold(scopeType, "project") && !strings.EqualFold(scopeType, "project_task") {
+		return
+	}
+
+	assignments, err := h.assignments.ListByProject(ctx, projectID)
+	if err != nil || len(assignments) == 0 {
+		return
+	}
+
+	for _, assignment := range assignments {
+		if !assignment.IsActive || assignment.AgentID == uuid.Nil {
+			continue
+		}
+		if assignment.AgentID == skipAgentID {
+			continue
+		}
+		_, _ = h.service.AddParticipant(ctx, sessionID, "agent", assignment.AgentID, "member")
+	}
 }
 
 func (h chatHandlers) resolveFrankStarterID(ctx context.Context, organizationID uuid.UUID) (uuid.UUID, bool) {
