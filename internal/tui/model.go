@@ -886,6 +886,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sidebarDataLoadedMsg:
 		m.sidebarLoaded = true
 		m.workspace.inboxCount = typed.InboxCount
+		var cmds []tea.Cmd
 		// EX-494: when a sidebar section failed to load (e.g. 429 rate-limit),
 		// preserve the existing data so a failed reload doesn't wipe the sidebar.
 		chats := typed.Chats
@@ -905,6 +906,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if projectLoadStatus != "" {
 			m.statusMessage = projectLoadStatus
+			m.statusGeneration++
+			cmds = append(cmds, statusAutoClearCmd(m.statusGeneration))
 			m.workspace.activity = appendActivity(m.workspace.activity, projectLoadActivity)
 		}
 
@@ -928,6 +931,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.workspace.activity = appendActivity(m.workspace.activity, "selected project no longer active; context cleared")
 			m.statusMessage = "Selected project is no longer active."
+			m.statusGeneration++
+			cmds = append(cmds, statusAutoClearCmd(m.statusGeneration))
 		}
 		if m.workspace.selectedProjectID != "" {
 			m.workspace.ensureSelectedProjectShell()
@@ -949,7 +954,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Also load agents for the AGENTS view.
 		// If a project is the persisted selected project, expand its sidebar node so the user
 		// sees their active project's task list on startup without needing to click.
-		var cmds []tea.Cmd
 		for _, proj := range projects {
 			expand := m.workspace.selectedProjectID == proj.ID
 			cmds = append(cmds, loadProjectTasksCmd(proj.ID, m.runtimeHints, expand))

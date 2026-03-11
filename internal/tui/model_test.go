@@ -16308,6 +16308,45 @@ func TestSidebarDataLoadedClearsInvalidSelectedProjectContextAfterArchive(t *tes
 	}
 }
 
+func TestSidebarDataLoadedInvalidProjectWarningAutoClears(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.rebuildSidebar(
+		"org-old",
+		nil,
+		[]SidebarProjectItem{
+			{ID: "proj-archived", DisplayName: "Archived Project"},
+			{ID: "proj-active", DisplayName: "Active Project"},
+		},
+	)
+	model.workspace.selectedProjectID = "proj-archived"
+	model.workspace.selectedProject = &ProjectDetail{ID: "proj-archived", DisplayName: "Archived Project"}
+	model.workspace.mainView = ViewProject
+	model.activeScope = ScopeProject
+
+	updated, cmd := model.Update(sidebarDataLoadedMsg{
+		OrgSessionID: "org-new",
+		Projects: []SidebarProjectItem{
+			{ID: "proj-active", DisplayName: "Active Project"},
+		},
+	})
+	if cmd == nil {
+		t.Fatal("sidebarDataLoadedMsg should schedule auto-clear for invalid-project warning")
+	}
+
+	model = updated.(Model)
+	if got := model.statusMessage; got != "Selected project is no longer active." {
+		t.Fatalf("statusMessage = %q, want %q", got, "Selected project is no longer active.")
+	}
+	clearMsg, ok := cmd().(statusClearMsg)
+	if !ok {
+		t.Fatalf("sidebarDataLoadedMsg cmd returned %T, want statusClearMsg", cmd())
+	}
+	model = pressMsg(model, clearMsg)
+	if model.statusMessage != "" {
+		t.Fatalf("statusMessage after auto-clear = %q, want empty", model.statusMessage)
+	}
+}
+
 func TestSidebarDataLoadedClearsKnownProjectsOnUnexpectedEmptyProjectsEX244(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.workspace.selectedProjectID = "proj-active"
