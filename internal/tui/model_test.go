@@ -6718,6 +6718,34 @@ func TestChatHistoryLoadErrorShowsStatusMessage(t *testing.T) {
 	}
 }
 
+func TestChatHistoryLoadSuccessClearsPreviousErrorStatus(t *testing.T) {
+	t.Parallel()
+
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{})
+	model.activeSession = "sess-success-clear"
+	model.chatHistoryLoading = true
+	model.statusMessage = "History load failed — api GET /v1/chat-sessions/foo/messages returned 429: too many requests"
+
+	updated, _ := model.Update(chatHistoryLoadedMsg{
+		SessionID: "sess-success-clear",
+		Messages: []ChatMessage{{
+			ID:        "msg-1",
+			Role:      "assistant",
+			Content:   "Recovered history",
+			Finalized: true,
+			Timestamp: time.Now(),
+		}},
+	})
+	m2 := updated.(Model)
+
+	if m2.chatHistoryLoading {
+		t.Fatal("chatHistoryLoading should be cleared after success")
+	}
+	if strings.HasPrefix(m2.statusMessage, "History load failed") {
+		t.Fatalf("statusMessage = %q, want cleared previous history error", m2.statusMessage)
+	}
+}
+
 // TestTPressWithNoTaskShowsFeedback verifies EX-199: pressing 't' with no
 // task selected shows a status message instead of silently doing nothing.
 func TestTPressWithNoTaskShowsFeedback(t *testing.T) {

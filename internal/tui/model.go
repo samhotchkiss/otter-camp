@@ -854,6 +854,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "History load failed — " + strings.TrimSpace(typed.Err.Error())
 			return m, nil
 		}
+		if strings.HasPrefix(m.statusMessage, "History load failed") {
+			m.statusMessage = ""
+		}
 		if len(typed.Messages) == 0 {
 			return m, nil
 		}
