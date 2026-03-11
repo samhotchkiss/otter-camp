@@ -31,6 +31,8 @@ Testing is how we know the system works. Unit tests verify logic. Integration te
 
 6. **Tests run fast.** Unit tests complete in seconds. Integration tests complete in low minutes. E2E tests complete in minutes, not hours. Slow tests get optimized or restructured. CI pipeline has strict time budgets per stage.
 
+7. **Architectural invariants get guard tests, not just behavior tests.** When a bug class repeats because developers can bypass the intended service boundary, add a small source-level or architecture-level guard test that makes the forbidden pattern explicit. Example: direct creation of live-status tasks (`queued`, `in_progress`, `blocked`, `review`, `done`, `cancelled`) or low-level task status mutation outside the canonical task/flow services should fail a focused test even if no current behavior test happens to exercise the leaked code path.
+
 ## Test Mode Configuration
 
 ### The `OTTERCAMP_MODE` Flag
