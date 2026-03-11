@@ -679,6 +679,8 @@ func loadTUIProjects(ctx context.Context, apiClient *cliAPIClient) ([]tuiapp.Sid
 			ID          string    `json:"id"`
 			Slug        string    `json:"slug"`
 			DisplayName string    `json:"display_name"`
+			IsPaused    bool      `json:"is_paused"`
+			PauseReason string    `json:"pause_reason"`
 			UpdatedAt   time.Time `json:"updated_at"`
 		} `json:"data"`
 	}
@@ -691,6 +693,8 @@ func loadTUIProjects(ctx context.Context, apiClient *cliAPIClient) ([]tuiapp.Sid
 			ID:          p.ID,
 			Slug:        strings.TrimSpace(p.Slug),
 			DisplayName: tuiapp.ResolveProjectLabel(p.DisplayName, p.Slug, ""),
+			IsPaused:    p.IsPaused,
+			PauseReason: strings.TrimSpace(p.PauseReason),
 			UpdatedAt:   p.UpdatedAt,
 		})
 	}

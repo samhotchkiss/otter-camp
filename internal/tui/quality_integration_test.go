@@ -664,6 +664,27 @@ func TestProjectViewShowsPauseBanner(t *testing.T) {
 	}
 }
 
+func TestSidebarShowsPausedProjectMarker(t *testing.T) {
+	model := NewModel(DefaultState())
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 36})
+	model.runtimeHints.LoadProjects = func(_ context.Context) ([]SidebarProjectItem, error) {
+		return []SidebarProjectItem{{
+			ID:          "proj-paused",
+			Slug:        "paused-project",
+			DisplayName: "Paused Project",
+			IsPaused:    true,
+			PauseReason: "waiting for operator review",
+		}}, nil
+	}
+
+	model = pressRealtimeMsg(model, loadSidebarDataCmd(model.runtimeHints)())
+
+	rendered := model.renderSidebar(40, 30)
+	if !strings.Contains(rendered, "Paused Project [paused]") {
+		t.Fatalf("sidebar missing paused project marker:\n%s", rendered)
+	}
+}
+
 func connectAndLoadSidebar(t *testing.T, model Model) Model {
 	t.Helper()
 

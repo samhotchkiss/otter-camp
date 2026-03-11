@@ -75,6 +75,8 @@ type SidebarProjectItem struct {
 	ID          string
 	Slug        string
 	DisplayName string
+	IsPaused    bool
+	PauseReason string
 	UpdatedAt   time.Time
 }
 

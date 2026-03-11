@@ -190,7 +190,7 @@ func TestLoadTUIProjectsResolvesDisplayNameFallback(t *testing.T) {
 		writeTUITestJSON(t, w, map[string]any{
 			"data": []map[string]any{
 				{"id": "proj-name", "slug": "name-slug", "display_name": "Project Name", "updated_at": "2026-03-06T00:00:00Z"},
-				{"id": "proj-slug", "slug": "slug-only", "display_name": "", "updated_at": "2026-03-06T00:00:00Z"},
+				{"id": "proj-slug", "slug": "slug-only", "display_name": "", "is_paused": true, "pause_reason": "waiting on review", "updated_at": "2026-03-06T00:00:00Z"},
 			},
 		})
 	}))
@@ -213,6 +213,12 @@ func TestLoadTUIProjectsResolvesDisplayNameFallback(t *testing.T) {
 	}
 	if items[1].DisplayName != "slug-only" {
 		t.Fatalf("items[1].DisplayName = %q, want slug-only", items[1].DisplayName)
+	}
+	if !items[1].IsPaused {
+		t.Fatal("items[1].IsPaused = false, want true")
+	}
+	if items[1].PauseReason != "waiting on review" {
+		t.Fatalf("items[1].PauseReason = %q, want waiting on review", items[1].PauseReason)
 	}
 }
 

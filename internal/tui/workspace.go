@@ -1367,7 +1367,7 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 		id := "project-" + proj.ID
 		newNodes[id] = &sidebarNode{
 			ID:          id,
-			Label:       ResolveProjectLabel(proj.DisplayName, proj.Slug, ""),
+			Label:       projectSidebarLabel(proj.DisplayName, proj.Slug, proj.IsPaused),
 			Kind:        sidebarKindProject,
 			ProjectID:   proj.ID,
 			ProjectSlug: strings.TrimSpace(proj.Slug),
@@ -1448,6 +1448,14 @@ func (w *workspaceState) knownActiveProjects() []SidebarProjectItem {
 	}
 
 	return out
+}
+
+func projectSidebarLabel(displayName, slug string, isPaused bool) string {
+	label := ResolveProjectLabel(displayName, slug, "")
+	if isPaused {
+		return label + " [paused]"
+	}
+	return label
 }
 
 func (w *workspaceState) projectDisplayName(projectID string) string {
