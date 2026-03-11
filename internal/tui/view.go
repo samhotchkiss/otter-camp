@@ -957,7 +957,7 @@ func (m Model) renderDashboardView(width, maxLines int) []string {
 		lines = append(lines, divider(width, "Runtime Health"))
 		lines = append(lines, styleText.Render("  "+operatorDashboardHeadline(dashboard.Summary)))
 		lines = append(lines, styleMuted.Render(fmt.Sprintf(
-			"  Active %d project(s) · %d task(s) · %d run(s)",
+			"  Active work across %d project(s) · %d task(s) · %d run(s)",
 			dashboard.Summary.ActiveProjects,
 			dashboard.Summary.ActiveTasks,
 			dashboard.Summary.ActiveRuns,

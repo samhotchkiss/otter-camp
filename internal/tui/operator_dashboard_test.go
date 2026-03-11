@@ -98,6 +98,9 @@ func TestDashboardRendersRuntimeHealthSection(t *testing.T) {
 	if !strings.Contains(rendered, "Attention required") {
 		t.Fatalf("render missing runtime health headline:\n%s", rendered)
 	}
+	if !strings.Contains(rendered, "Active work across 1 project(s) · 2 task(s) · 1 run(s)") {
+		t.Fatalf("render missing active-work summary copy:\n%s", rendered)
+	}
 	if !strings.Contains(rendered, "4. OC-12: Ship runtime dashboard") {
 		t.Fatalf("render missing runtime shortcut row:\n%s", rendered)
 	}
