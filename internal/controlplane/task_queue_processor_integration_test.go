@@ -507,11 +507,19 @@ func TestTaskQueueProcessorIntegrationResumeRepairedDurableCheckpointCreatesFoll
 	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus queued: %v", err)
 	}
-	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
-		t.Fatalf("TransitionStatus in_progress: %v", err)
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	currentTask, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after queue: %v", err)
+	}
+	if strings.EqualFold(strings.TrimSpace(currentTask.WorkStatus), "queued") {
+		if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+			t.Fatalf("TransitionStatus in_progress: %v", err)
+		}
+	} else if !strings.EqualFold(strings.TrimSpace(currentTask.WorkStatus), "in_progress") {
+		t.Fatalf("task work_status after queue = %q, want queued or in_progress", currentTask.WorkStatus)
 	}
 
-	taskRepo := repo.NewProjectTaskRepo(fx.pool)
 	const (
 		targetPath    = "docs/content-strategy.md"
 		artifactPath  = ".ottercamp/recovery/docs/content-strategy.md"
