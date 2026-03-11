@@ -567,6 +567,10 @@ func (f *fakeTaskFlowService) EnsureActiveExecution(context.Context, uuid.UUID) 
 	return &repo.FlowNodeExecution{}, nil
 }
 
+func (f *fakeTaskFlowService) PauseAtReviewCheckpoint(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+	return &repo.FlowNodeExecution{}, nil
+}
+
 func (f *fakeTaskFlowService) AdvanceFlow(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error) {
 	return &repo.FlowNodeExecution{}, nil
 }

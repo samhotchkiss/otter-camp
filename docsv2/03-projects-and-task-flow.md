@@ -205,6 +205,7 @@ When a task transitions to `queued`, it enters the scheduling queue. The schedul
 - **Project gate scheduling (`blocks_scope = 'all'`)**: if any task in a project has `blocks_scope = 'all'` and `work_status` not in (`done`, `cancelled`), the scheduler may only start the lowest `task_number` among those gate tasks. No other task in that project may start until that gate task reaches `done` or `cancelled`.
 - Subtasks within a node also go through the scheduler. They are queued as work units and picked up when slots are available, respecting inter-subtask dependencies.
 - Review pauses triggered by runtime policy (for example, async hard-stop checkpoints) still require real flow execution lineage. An artifact, chat message, or inbox item by itself must never be treated as sufficient evidence that a task is legitimately in `review`.
+- When runtime policy pauses a task for async review before the next owner should execute, the system must advance onto the real review checkpoint and persist that `flow_node_execution`, but hold the follow-on run. The task is legitimately in `review` because the flow moved there, not because a status flag was toggled without flow state.
 
 ### Priority
 

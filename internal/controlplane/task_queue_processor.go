@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
@@ -51,6 +52,7 @@ type taskQueueStatusTransitioner interface {
 type taskQueueFlowStarter interface {
 	StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
 	EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
+	PauseAtReviewCheckpoint(ctx context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error)
 }
 
 type taskQueueFlowExecutionRepository interface {
@@ -377,10 +379,16 @@ func (p *TaskQueueProcessor) applyAsyncDecisionPolicy(ctx context.Context, event
 	if _, err := p.ensureTaskFlowExecutionState(ctx, taskRecord); err != nil {
 		return false, err
 	}
-	if _, err := p.taskService.TransitionStatus(ctx, taskRecord.ID, "review", tasksvc.Actor{Type: "system"}); err != nil {
-		var transitionErr tasksvc.ErrInvalidStatusTransition
-		if !errors.As(err, &transitionErr) {
+	if taskRecord.FlowTemplateID != nil {
+		if _, err := p.flow.PauseAtReviewCheckpoint(ctx, taskRecord.ID, flowsvc.Actor{Type: "system"}); err != nil {
 			return false, err
+		}
+	} else {
+		if _, err := p.taskService.TransitionStatus(ctx, taskRecord.ID, "review", tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if !errors.As(err, &transitionErr) {
+				return false, err
+			}
 		}
 	}
 	if err := p.processNextEligibleQueuedTask(ctx, event, taskRecord.ProjectID); err != nil {
@@ -1004,6 +1012,7 @@ func (p *TaskQueueProcessor) handleFlowAdvancedEvent(ctx context.Context, event 
 		ToFlowExecutionID      *uuid.UUID `json:"to_flow_execution_id"`
 		TerminalTransitionDone bool       `json:"terminal_transition_done"`
 		RejectionFeedback      string     `json:"rejection_feedback"`
+		HoldForAsyncReview     bool       `json:"hold_for_async_review"`
 	}
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return nil
@@ -1047,6 +1056,9 @@ func (p *TaskQueueProcessor) handleFlowAdvancedEvent(ctx context.Context, event 
 		return err
 	}
 	if !taskFlowEventMatchesRuntime(taskRecord, nextNode, nextExecution) {
+		return nil
+	}
+	if payload.HoldForAsyncReview {
 		return nil
 	}
 

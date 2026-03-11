@@ -36,6 +36,7 @@ var (
 	ErrAgentNotFound             = errors.New("agent not found")
 	ErrUserNotFound              = errors.New("user not found")
 	ErrSelfReviewForbidden       = errors.New("review actor must differ from the actor who completed the work being reviewed")
+	ErrReviewCheckpointRequired  = errors.New("current flow node does not advance to a review checkpoint")
 )
 
 type Actor struct {
@@ -168,6 +169,7 @@ type Options struct {
 type FlowExecutionService interface {
 	StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
 	EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
+	PauseAtReviewCheckpoint(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error)
 	AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error)
 	RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error)
 	RecordNodeCommit(ctx context.Context, taskID uuid.UUID, commitSHA, branchName string) (*repo.FlowNodeExecution, error)
@@ -387,6 +389,75 @@ func (s *service) EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (
 		return nil, err
 	}
 	return &activeExecution, nil
+}
+
+func (s *service) PauseAtReviewCheckpoint(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error) {
+	taskRecord, currentNode, activeExecution, err := s.loadActiveFlowState(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureProjectNotPaused(ctx, taskRecord.ProjectID); err != nil {
+		return nil, err
+	}
+	if currentNode.NextNodeID == nil {
+		return nil, ErrFlowNotStarted
+	}
+	nextNode, err := s.flowNodes.GetByID(ctx, *currentNode.NextNodeID)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(nextNode.NodeType), "review") && !nextNode.RequiresHumanReview {
+		return nil, ErrReviewCheckpointRequired
+	}
+	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+	completedExecution, err := s.executions.Complete(ctx, activeExecution.ID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.tasks.SetFlowNode(ctx, taskRecord.ID, currentNode.NextNodeID); err != nil {
+		return nil, err
+	}
+	created, err := s.executions.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  *currentNode.NextNodeID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureExecutionSession(ctx, &created); err != nil {
+		return nil, err
+	}
+	statusPayload := map[string]any{
+		"transition_source":    "flow_transition",
+		"flow_event_type":      "flow.advanced",
+		"to_flow_node_id":      nextNode.ID,
+		"to_flow_execution_id": created.ID,
+		"hold_for_async_review": true,
+	}
+	if _, err := s.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, "review", toTaskActor(actor), statusPayload); err != nil {
+		return nil, err
+	}
+	payload := map[string]any{
+		"task_id":                  taskRecord.ID,
+		"project_id":               taskRecord.ProjectID,
+		"from_flow_node_id":        currentNode.ID,
+		"from_flow_execution_id":   completedExecution.ID,
+		"to_flow_node_id":          nextNode.ID,
+		"to_flow_execution_id":     created.ID,
+		"terminal_transition_done": false,
+		"hold_for_async_review":    true,
+	}
+	if err := s.recordTaskEvent(ctx, taskRecord, "flow.advanced", actor, payload); err != nil {
+		return nil, err
+	}
+	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.advanced", actor.Type, actorIDPtr(actor), payload); err != nil {
+		return nil, err
+	}
+	return &created, nil
 }
 
 func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor) (*repo.FlowNodeExecution, error) {

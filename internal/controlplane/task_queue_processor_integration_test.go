@@ -830,7 +830,6 @@ func TestTaskQueueProcessorIntegrationLowRiskAsyncDecisionContinuesAndEmitsRevie
 }
 
 func TestTaskQueueProcessorIntegrationHighRiskAsyncDecisionPausesTaskEX248(t *testing.T) {
-	t.Skip("high-risk async decision pause behavior is superseded by newer review/runtime coverage under the enforced flow state machine")
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
 	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
@@ -867,21 +866,18 @@ func TestTaskQueueProcessorIntegrationHighRiskAsyncDecisionPausesTaskEX248(t *te
 		execution  repo.FlowNodeExecution
 		artifact   repo.InboxItem
 	)
-	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
 		var waitErr error
 		taskRecord, waitErr = taskRepo.GetByID(ctx, created.ID)
 		if waitErr != nil {
-			return false, waitErr
+			t.Fatalf("GetByID task: %v", waitErr)
 		}
-		if taskRecord.WorkStatus != "review" || taskRecord.CurrentFlowNodeID == nil {
-			return false, nil
-		}
-		execution, waitErr = executionRepo.GetActive(ctx, created.ID, *taskRecord.CurrentFlowNodeID)
-		if waitErr != nil {
-			if errors.Is(waitErr, repo.ErrNotFound) {
-				return false, nil
+		if taskRecord.WorkStatus == "review" && taskRecord.CurrentFlowNodeID != nil {
+			execution, waitErr = executionRepo.GetActive(ctx, created.ID, *taskRecord.CurrentFlowNodeID)
+			if waitErr != nil && !errors.Is(waitErr, repo.ErrNotFound) {
+				t.Fatalf("GetActive execution: %v", waitErr)
 			}
-			return false, waitErr
 		}
 
 		items, waitErr := inboxRepo.ListBroadcast(ctx, fx.org.ID, repo.InboxListOptions{
@@ -890,12 +886,26 @@ func TestTaskQueueProcessorIntegrationHighRiskAsyncDecisionPausesTaskEX248(t *te
 			Limit:        50,
 		})
 		if waitErr != nil {
-			return false, waitErr
+			t.Fatalf("ListBroadcast inbox: %v", waitErr)
 		}
-		var found bool
-		artifact, found = findAsyncDecisionArtifact(items, created.ID, taskplan.AsyncDecisionHardStop)
-		return found, nil
-	})
+		foundArtifact := false
+		artifact, foundArtifact = findAsyncDecisionArtifact(items, created.ID, taskplan.AsyncDecisionHardStop)
+		if taskRecord.WorkStatus == "review" && taskRecord.CurrentFlowNodeID != nil && execution.ID != uuid.Nil && foundArtifact {
+			break
+		}
+		if time.Now().After(deadline) {
+			runs, err := runRepo.List(ctx, RunListFilter{
+				OrganizationID: fx.org.ID,
+				TaskID:         &created.ID,
+				Limit:          20,
+			})
+			if err != nil {
+				t.Fatalf("timeout listing runs: %v", err)
+			}
+			t.Fatalf("high-risk async decision did not settle to review pause; work_status=%s current_flow_node=%s execution=%s artifact=%t runs=%s", taskRecord.WorkStatus, uuidPointerValue(taskRecord.CurrentFlowNodeID), execution.ID, foundArtifact, describeTaskQueueRuns(runs))
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 
 	runs, err := runRepo.List(ctx, RunListFilter{
 		OrganizationID: fx.org.ID,
@@ -2774,7 +2784,7 @@ func TestTaskQueueProcessorIntegrationDifferentOwnerWakeupDefersUntilTurnExit(t 
 		t.Fatalf("runtime deferred_run_id = %v, want %s", contract.DeferredRunID, reviewRun.ID)
 	}
 
-	publishTaskTurnCompleted(t, ctx, fx.pool, fx.bus, fx.org.ID, *workExecution.SessionID)
+	publishTaskTurnCompletedForRun(t, ctx, fx.pool, fx.bus, fx.org.ID, *workExecution.SessionID, workRun.ID)
 
 	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
 		runRecord, err := runRepo.Get(ctx, reviewRun.ID)
@@ -2861,6 +2871,7 @@ func TestTaskQueueProcessorIntegrationPausedProjectDoesNotPromoteDeferredWakeupO
 	runRepo := NewRunRepository(fx.pool)
 
 	var workExecution repo.FlowNodeExecution
+	var workRun Run
 	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
 		taskRecord, err := taskRepo.GetByID(ctx, created.ID)
 		if err != nil {
@@ -2876,7 +2887,26 @@ func TestTaskQueueProcessorIntegrationPausedProjectDoesNotPromoteDeferredWakeupO
 			}
 			return false, err
 		}
-		return workExecution.SessionID != nil && *workExecution.SessionID != uuid.Nil, nil
+		if workExecution.SessionID == nil || *workExecution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		runs, err := runRepo.List(ctx, RunListFilter{
+			OrganizationID: fx.org.ID,
+			TaskID:         &created.ID,
+			FlowNodeID:     &nodeWork.ID,
+			Status:         "in_progress",
+			Limit:          20,
+		})
+		if err != nil {
+			return false, err
+		}
+		for _, candidate := range runs {
+			if candidate.PrincipalType == "agent" && candidate.PrincipalID == worker.ID {
+				workRun = candidate
+				return true, nil
+			}
+		}
+		return false, nil
 	})
 
 	if _, err := fx.flow.AdvanceFlow(ctx, created.ID, flowsvc.Actor{Type: "agent", ID: worker.ID}); err != nil {
@@ -2924,7 +2954,7 @@ func TestTaskQueueProcessorIntegrationPausedProjectDoesNotPromoteDeferredWakeupO
 		t.Fatalf("Pause project: %v", err)
 	}
 
-	publishTaskTurnCompleted(t, ctx, fx.pool, fx.bus, fx.org.ID, *workExecution.SessionID)
+	publishTaskTurnCompletedForRun(t, ctx, fx.pool, fx.bus, fx.org.ID, *workExecution.SessionID, workRun.ID)
 
 	time.Sleep(750 * time.Millisecond)
 
@@ -3441,6 +3471,77 @@ func publishTaskTurnCompleted(t *testing.T, ctx context.Context, pool *pgxpool.P
 	}); err != nil {
 		t.Fatalf("publish chat.turn.completed: %v", err)
 	}
+}
+
+func publishTaskTurnCompletedForRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, bus *eventbus.Bus, organizationID, sessionID, runID uuid.UUID) {
+	t.Helper()
+	if runID == uuid.Nil {
+		publishTaskTurnCompleted(t, ctx, pool, bus, organizationID, sessionID)
+		return
+	}
+
+	messageRepo := repo.NewChatMessageRepo(pool)
+	turnRepo := repo.NewChatTurnRepo(pool)
+
+	messages, err := messageRepo.ListBySession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("list session messages: %v", err)
+	}
+	var triggerMessageID uuid.UUID
+	for _, message := range messages {
+		if strings.TrimSpace(message.Role) != "user" {
+			continue
+		}
+		if strings.TrimSpace(valueAsString(parseJSONMap(message.Metadata)["run_id"])) == runID.String() {
+			triggerMessageID = message.ID
+		}
+	}
+	if triggerMessageID == uuid.Nil {
+		publishTaskTurnCompleted(t, ctx, pool, bus, organizationID, sessionID)
+		return
+	}
+
+	turns, err := turnRepo.ListBySession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("list session turns: %v", err)
+	}
+	var turnID uuid.UUID
+	for _, turn := range turns {
+		if turn.TriggerMessageID != nil && *turn.TriggerMessageID == triggerMessageID {
+			turnID = turn.ID
+		}
+	}
+	if turnID == uuid.Nil {
+		publishTaskTurnCompleted(t, ctx, pool, bus, organizationID, sessionID)
+		return
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": sessionID.String(),
+		"turn_id":    turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal turn completed payload: %v", err)
+	}
+	if err := bus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: organizationID,
+		EventType:      "chat.turn.completed",
+		ActorType:      "system",
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("publish chat.turn.completed: %v", err)
+	}
+}
+
+func parseJSONMap(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil
+	}
+	return decoded
 }
 
 func describeTaskQueueRuns(runs []Run) string {
