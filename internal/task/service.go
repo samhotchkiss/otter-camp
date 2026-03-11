@@ -54,6 +54,7 @@ var (
 	ErrFlowServiceUnavailable          = errors.New("flow service unavailable")
 	ErrTaskMustRemainOrchestrationOnly = errors.New("task must remain orchestration-only while executable child tasks exist")
 	ErrTaskFlowStateInvariant          = errors.New("task flow state invariant violated")
+	ErrParentIntegrationFeedbackRequired = errors.New("completed child reopen requires parent integration feedback")
 )
 
 var validStatusTransitions = map[string]map[string]struct{}{
@@ -565,6 +566,13 @@ func (s *service) transitionTaskRecordTx(ctx context.Context, tx pgx.Tx, taskRec
 	}
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
 		return nil, ErrRequiresHumanApproval
+	}
+	if childReopen {
+		feedback := strings.TrimSpace(extraPayloadString(extraPayload, "parent_integration_feedback"))
+		if feedback == "" {
+			return nil, ErrParentIntegrationFeedbackRequired
+		}
+		taskRecord.Metadata = applyParentIntegrationFeedback(taskRecord.Metadata, feedback, s.clock.Now().UTC())
 	}
 	if target == "queued" {
 		if err := s.ensureQueueEligible(ctx, taskRecord, actor); err != nil {
@@ -1796,6 +1804,24 @@ func taskMetadataMap(raw json.RawMessage) map[string]any {
 
 func normalizeStatus(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func extraPayloadString(payload map[string]any, key string) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", payload[key]))
+}
+
+func applyParentIntegrationFeedback(existing json.RawMessage, feedback string, now time.Time) json.RawMessage {
+	metadata := taskMetadataMap(existing)
+	metadata["parent_integration_feedback"] = strings.TrimSpace(feedback)
+	metadata["parent_integration_feedback_recorded_at"] = now.UTC().Format(time.RFC3339Nano)
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return existing
+	}
+	return encoded
 }
 
 func statusRequiresFlowTemplate(status string) bool {

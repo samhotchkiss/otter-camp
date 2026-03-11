@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -265,6 +266,52 @@ func TestTransitionStatusAllowsCompletedChildReopenToQueued(t *testing.T) {
 	}
 	if queuedTask.CompletedAt != nil {
 		t.Fatalf("completed_at = %v, want nil after reopen", queuedTask.CompletedAt)
+	}
+	metadata := taskMetadataMap(queuedTask.Metadata)
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["parent_integration_feedback"])); got != "Fix integration issue" {
+		t.Fatalf("parent_integration_feedback = %q, want %q", got, "Fix integration issue")
+	}
+	if strings.TrimSpace(fmt.Sprintf("%v", metadata["parent_integration_feedback_recorded_at"])) == "" {
+		t.Fatal("expected parent_integration_feedback_recorded_at")
+	}
+}
+
+func TestTransitionStatusCompletedChildReopenRequiresParentIntegrationFeedback(t *testing.T) {
+	taskID := uuid.New()
+	parentID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "done",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Completed child",
+				CreatedByType:  "system",
+				Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentID, 2),
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.flowTemplates = &fakeFlowTemplateRepo{
+		templates: map[uuid.UUID]repo.FlowTemplate{
+			flowTemplateID: {ID: flowTemplateID},
+		},
+	}
+	svc.flowNodes = &fakeFlowNodeRepo{
+		nodes: validExecutableTemplateNodes(flowTemplateID),
+	}
+
+	_, err := svc.TransitionStatusWithPayload(context.Background(), taskID, "queued", Actor{
+		Type:                      "agent",
+		ID:                        uuid.New(),
+		AllowCompletedChildReopen: true,
+	}, map[string]any{})
+	if !errors.Is(err, ErrParentIntegrationFeedbackRequired) {
+		t.Fatalf("TransitionStatusWithPayload err = %v, want ErrParentIntegrationFeedbackRequired", err)
 	}
 }
 
