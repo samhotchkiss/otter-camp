@@ -351,8 +351,8 @@ func TestTaskServiceIntegrationMarkBlockedDoesNotCreateResolutionTaskByDefault(t
 		t.Fatal("expected blocker_filed inbox item")
 	}
 
-	if _, err := svc.TransitionStatus(ctx, blocked.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
-		t.Fatalf("TransitionStatus blocked->in_progress: %v", err)
+	if _, err := svc.TransitionStatus(ctx, blocked.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); !errors.Is(err, ErrActiveFlowRequired) {
+		t.Fatalf("TransitionStatus blocked->in_progress err = %v, want ErrActiveFlowRequired", err)
 	}
 }
 

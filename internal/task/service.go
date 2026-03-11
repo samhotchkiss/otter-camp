@@ -591,7 +591,7 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 		return nil, ErrTaskMustRemainOrchestrationOnly
 	}
 	if target == "in_progress" {
-		allowNoActiveFlow := actor.AllowNoActiveFlow
+		allowNoActiveFlow := actor.AllowNoActiveFlow && !strings.EqualFold(strings.TrimSpace(from), "blocked")
 		hasActiveFlow, flowErr := s.hasActiveFlowExecution(ctx, taskRecord.ID)
 		if flowErr != nil {
 			return nil, flowErr

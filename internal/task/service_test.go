@@ -978,6 +978,37 @@ func TestTransitionStatusInProgressSystemOverrideBypassesFlowValidation(t *testi
 	}
 }
 
+func TestTransitionStatusBlockedToInProgressStillRequiresActiveFlow(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "blocked",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Blocked task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+
+	_, err := svc.TransitionStatus(context.Background(), taskID, "in_progress", Actor{
+		Type:              "system",
+		AllowNoActiveFlow: true,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrActiveFlowRequired) {
+		t.Fatalf("TransitionStatus err = %v, want ErrActiveFlowRequired", err)
+	}
+}
+
 func TestTransitionStatusCancelledArchivesActiveMergeQueueEntries(t *testing.T) {
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 	taskID := uuid.New()
