@@ -2113,7 +2113,7 @@ func buildProjectBootstrapFirstWaveExecutionFailureReason(progress projectBootst
 	case progress.FirstWaveExecutionCount < progress.FirstWaveTaskCount:
 		return fmt.Sprintf("kickoff validation failed: only %d of %d selected first-wave child tasks created flow_node_execution rows, so bootstrap never materialized the full runnable child wave", progress.FirstWaveExecutionCount, progress.FirstWaveTaskCount)
 	case progress.FirstWaveJobCount == 0:
-		return "kickoff validation failed: first-wave child tasks entered flow execution, but no runnable agent_turn jobs were created for the task sessions"
+		return "kickoff validation failed: first-wave child tasks entered flow execution, but no runnable agent_turn jobs were created for their execution sessions"
 	case progress.FirstWaveJobCount < progress.FirstWaveTaskCount:
 		return fmt.Sprintf("kickoff validation failed: only %d of %d selected first-wave child tasks produced runnable agent_turn jobs, so bootstrap never claimed the full runnable child wave", progress.FirstWaveJobCount, progress.FirstWaveTaskCount)
 	default:

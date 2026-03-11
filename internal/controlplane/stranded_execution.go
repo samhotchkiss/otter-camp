@@ -220,10 +220,10 @@ func (s *Supervisor) recoverStrandedActiveExecution(ctx context.Context, candida
 		return errStrandedExecutionUnrecoverable{reason: "active execution record is incomplete"}
 	}
 	if candidate.SessionID == uuid.Nil {
-		return errStrandedExecutionUnrecoverable{reason: "active execution has no task async session"}
+		return errStrandedExecutionUnrecoverable{reason: "active execution has no execution session"}
 	}
 	if !strings.EqualFold(candidate.SessionStatus, "active") {
-		return errStrandedExecutionUnrecoverable{reason: fmt.Sprintf("task async session is %q", candidate.SessionStatus)}
+		return errStrandedExecutionUnrecoverable{reason: fmt.Sprintf("execution session is %q", candidate.SessionStatus)}
 	}
 
 	agentID, ok, err := s.resolveStrandedExecutionAgent(ctx, candidate)
