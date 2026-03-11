@@ -424,6 +424,16 @@ GET    /v1/health                        Health check (unauthenticated)
 GET    /v1/version                       API version info (unauthenticated)
 ```
 
+`GET /v1/version` returns the binary build identity that operators and clients can use to reason about freshness:
+
+- `version`: semantic application version (`MAJOR.MINOR.PATCH` or `dev` locally)
+- `commit`: embedded VCS revision for the running binary
+- `built_at`: UTC build timestamp for the running binary
+- `go_version`: Go runtime version used to build the binary
+- `repo_version`: monotonic repo-stored build counter from `internal/version/repo_version.txt`
+
+`repo_version` is part of the stale-binary contract described in doc 08 and surfaced in the TUI status bar (doc 17).
+
 ---
 
 ## 5. Request/Response Envelope
