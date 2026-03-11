@@ -2855,10 +2855,6 @@ func (e *NativeToolExecutor) handleFlowAdvance(ctx context.Context, input map[st
 	if err != nil {
 		return nil, err
 	}
-	originalTask, loadOriginalTaskErr := repo.ProjectTask{}, error(nil)
-	if e.tasks != nil {
-		originalTask, loadOriginalTaskErr = e.tasks.GetByID(ctx, taskID)
-	}
 	if commitSHA, ok := readString(input, "commit_sha"); ok && commitSHA != "" {
 		if _, err := e.flowService.RecordNodeCommit(ctx, taskID, commitSHA, ""); err != nil {
 			return nil, err
@@ -2866,18 +2862,6 @@ func (e *NativeToolExecutor) handleFlowAdvance(ctx context.Context, input map[st
 	}
 	execution, err := e.flowService.AdvanceFlow(ctx, taskID, flowActorFromExecutionActor(actorFromContext(ctx)))
 	if err != nil {
-		if e.tasks != nil && loadOriginalTaskErr == nil {
-			currentTask, currentTaskErr := e.tasks.GetByID(ctx, taskID)
-			if currentTaskErr == nil {
-				currentNodeID, originalNodeID := currentTask.CurrentFlowNodeID, originalTask.CurrentFlowNodeID
-				nodeUnchanged := (currentNodeID == nil && originalNodeID == nil) ||
-					(currentNodeID != nil && originalNodeID != nil && *currentNodeID == *originalNodeID)
-				if currentTask.WorkStatus != originalTask.WorkStatus || !nodeUnchanged {
-					_, _ = e.tasks.UpdateStatus(ctx, taskID, originalTask.WorkStatus)
-					_, _ = e.tasks.SetFlowNode(ctx, taskID, originalTask.CurrentFlowNodeID)
-				}
-			}
-		}
 		return nil, err
 	}
 

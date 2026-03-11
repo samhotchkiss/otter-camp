@@ -4059,6 +4059,250 @@ func TestIntegrationFlowAdvanceTerminalRollsBackTaskUpdateWhenEventPublishFails(
 	}
 }
 
+func TestIntegrationFlowAdvanceToNextNodeRollsBackRuntimeStateWhenEventPublishFails(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(context.Background(), template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("nodes count = %d, want 2", len(nodes))
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "in_progress",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(context.Background(), task.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	originalExecution, err := executionRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:          pool,
+		WorkspaceRoot: t.TempDir(),
+		Events:        &failEventPublisher{failOn: "flow.advanced"},
+	})
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+	if _, err := executor.Execute(ctx, "flow.advance", map[string]any{
+		"flow_node_execution_id": originalExecution.ID.String(),
+	}); err == nil {
+		t.Fatal("expected flow.advance failure when flow.advanced publish fails")
+	}
+
+	updatedTask, err := taskRepo.GetByID(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("load updated task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress after rollback", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[0].ID {
+		t.Fatalf("task current_flow_node_id = %v, want %s after rollback", updatedTask.CurrentFlowNodeID, nodes[0].ID)
+	}
+
+	executions, err := executionRepo.ListByTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("list executions: %v", err)
+	}
+	if len(executions) != 1 {
+		t.Fatalf("execution count = %d, want 1 after rollback", len(executions))
+	}
+	if executions[0].ID != originalExecution.ID {
+		t.Fatalf("execution[0].id = %s, want original %s", executions[0].ID, originalExecution.ID)
+	}
+	if executions[0].Status != "active" {
+		t.Fatalf("execution[0].status = %q, want active after rollback", executions[0].Status)
+	}
+
+	var advancedEvents int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'flow.advanced'
+		  AND payload->>'task_id' = $2
+	`, orgID, task.ID.String()).Scan(&advancedEvents); err != nil {
+		t.Fatalf("count flow.advanced domain events: %v", err)
+	}
+	if advancedEvents != 0 {
+		t.Fatalf("flow.advanced domain events = %d, want 0 after rollback", advancedEvents)
+	}
+}
+
+func TestIntegrationFlowRejectRollsBackRuntimeStateWhenEventPublishFails(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &projectRecord.OrganizationID,
+		ProjectID:      &project.ID,
+		Slug:           "reject-flow-" + strings.ToLower(uuid.NewString()[:8]),
+		DisplayName:    "Reject Flow " + uuid.NewString()[:8],
+		Description:    "test flow template with reject path",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create merge node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("update work node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	reviewNode.RejectNodeID = &workNode.ID
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update review node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("update template: %v", err)
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "review",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &reviewNode.ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	originalExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  reviewNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create review execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:          pool,
+		WorkspaceRoot: t.TempDir(),
+		Events:        &failEventPublisher{failOn: "flow.rejected"},
+	})
+	execCtx := integrationExecCtxWith(orgID, agent.ID)
+	if _, err := executor.Execute(execCtx, "flow.review_decision", map[string]any{
+		"flow_node_execution_id": originalExecution.ID.String(),
+		"decision":               "reject",
+	}); err == nil {
+		t.Fatal("expected flow.review_decision rejection failure when flow.rejected publish fails")
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("load updated task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review after rollback", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != reviewNode.ID {
+		t.Fatalf("task current_flow_node_id = %v, want %s after rollback", updatedTask.CurrentFlowNodeID, reviewNode.ID)
+	}
+
+	executions, err := executionRepo.ListByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("list executions: %v", err)
+	}
+	if len(executions) != 1 {
+		t.Fatalf("execution count = %d, want 1 after rollback", len(executions))
+	}
+	if executions[0].ID != originalExecution.ID {
+		t.Fatalf("execution[0].id = %s, want original %s", executions[0].ID, originalExecution.ID)
+	}
+	if executions[0].Status != "active" {
+		t.Fatalf("execution[0].status = %q, want active after rollback", executions[0].Status)
+	}
+
+	var rejectedEvents int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'flow.rejected'
+		  AND payload->>'task_id' = $2
+	`, orgID, task.ID.String()).Scan(&rejectedEvents); err != nil {
+		t.Fatalf("count flow.rejected domain events: %v", err)
+	}
+	if rejectedEvents != 0 {
+		t.Fatalf("flow.rejected domain events = %d, want 0 after rollback", rejectedEvents)
+	}
+}
+
 func integrationExecCtxWith(orgID, agentID uuid.UUID) context.Context {
 	return mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
 		OrganizationID: orgID,

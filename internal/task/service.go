@@ -146,6 +146,7 @@ type Actor struct {
 	Type                           string
 	ID                             uuid.UUID
 	AllowNoActiveFlow              bool
+	AllowFlowRuntimeBypass         bool
 	AllowDoneBypass                bool
 	AllowGateBypass                bool
 	AllowBootstrapGateAutoComplete bool
@@ -569,8 +570,10 @@ func (s *service) transitionTaskRecordTx(ctx context.Context, tx pgx.Tx, taskRec
 			return nil, ErrFlowTemplateReviewRequired
 		}
 	}
-	if err := s.validateFlowRuntimeStatus(ctx, taskRecord, target); err != nil {
-		return nil, err
+	if !actor.AllowFlowRuntimeBypass {
+		if err := s.validateFlowRuntimeStatus(ctx, taskRecord, target); err != nil {
+			return nil, err
+		}
 	}
 
 	decomposition := queueDecompositionResult{}

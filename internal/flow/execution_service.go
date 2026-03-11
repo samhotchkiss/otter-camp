@@ -88,7 +88,9 @@ type flowNodeExecutionRepository interface {
 }
 
 type flowNodeExecutionRepositoryTx interface {
+	CreateTx(ctx context.Context, tx pgx.Tx, execution repo.FlowNodeExecution) (repo.FlowNodeExecution, error)
 	CompleteTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (repo.FlowNodeExecution, error)
+	RejectTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (repo.FlowNodeExecution, error)
 	UpdateMetadataTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error)
 }
 
@@ -455,10 +457,10 @@ func (s *service) PauseAtReviewCheckpoint(ctx context.Context, taskID uuid.UUID,
 		return nil, err
 	}
 	statusPayload := map[string]any{
-		"transition_source":    "flow_transition",
-		"flow_event_type":      "flow.advanced",
-		"to_flow_node_id":      nextNode.ID,
-		"to_flow_execution_id": created.ID,
+		"transition_source":     "flow_transition",
+		"flow_event_type":       "flow.advanced",
+		"to_flow_node_id":       nextNode.ID,
+		"to_flow_execution_id":  created.ID,
 		"hold_for_async_review": true,
 	}
 	if _, err := s.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, "review", toTaskActor(actor), statusPayload); err != nil {
@@ -512,85 +514,11 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 		}
 		return s.advanceTerminalFlowTx(ctx, taskRecord, currentNode, activeExecution, actor)
 	}
-	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
-		return nil, err
-	}
-
-	completedExecution, err := s.executions.Complete(ctx, activeExecution.ID)
+	nextNode, err := s.flowNodes.GetByID(ctx, *currentNode.NextNodeID)
 	if err != nil {
 		return nil, err
 	}
-
-	var nextExecution *repo.FlowNodeExecution
-	if currentNode.NextNodeID == nil {
-		if _, err := s.taskService.TransitionStatus(ctx, taskRecord.ID, "done", toTaskActor(actor)); err != nil {
-			return nil, err
-		}
-		if _, err := s.tasks.SetFlowNode(ctx, taskRecord.ID, nil); err != nil {
-			return nil, err
-		}
-	} else {
-		if _, err := s.tasks.SetFlowNode(ctx, taskRecord.ID, currentNode.NextNodeID); err != nil {
-			return nil, err
-		}
-		created, createErr := s.executions.Create(ctx, repo.FlowNodeExecution{
-			TaskID:      taskRecord.ID,
-			FlowNodeID:  *currentNode.NextNodeID,
-			VisitNumber: 1,
-			Status:      "active",
-		})
-		if createErr != nil {
-			return nil, createErr
-		}
-		if err := s.ensureExecutionSession(ctx, &created); err != nil {
-			return nil, err
-		}
-		nextExecution = &created
-
-		nextNode, nodeErr := s.flowNodes.GetByID(ctx, *currentNode.NextNodeID)
-		if nodeErr != nil {
-			return nil, nodeErr
-		}
-		targetStatus := taskWorkStatusForNode(nextNode)
-		if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
-			statusPayload := map[string]any{
-				"transition_source":    "flow_transition",
-				"flow_event_type":      "flow.advanced",
-				"to_flow_node_id":      nextNode.ID,
-				"to_flow_execution_id": created.ID,
-			}
-			if _, statusErr := s.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, targetStatus, toTaskActor(actor), statusPayload); statusErr != nil {
-				return nil, statusErr
-			}
-			taskRecord.WorkStatus = targetStatus
-		}
-		if nextNode.RequiresHumanReview {
-			if err := s.createTaskReviewInbox(ctx, taskRecord, nextNode.ID, actor); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	payload := map[string]any{
-		"task_id":                  taskRecord.ID,
-		"project_id":               taskRecord.ProjectID,
-		"from_flow_node_id":        currentNode.ID,
-		"from_flow_execution_id":   completedExecution.ID,
-		"to_flow_node_id":          currentNode.NextNodeID,
-		"to_flow_execution_id":     nilUUID(nextExecution),
-		"terminal_transition_done": currentNode.NextNodeID == nil,
-	}
-	if err := s.recordTaskEvent(ctx, taskRecord, "flow.advanced", actor, payload); err != nil {
-		return nil, err
-	}
-	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.advanced", actor.Type, actorIDPtr(actor), payload); err != nil {
-		return nil, err
-	}
-
-	if nextExecution != nil {
-		return nextExecution, nil
-	}
-	return &completedExecution, nil
+	return s.advanceNextFlowTx(ctx, taskRecord, currentNode, activeExecution, nextNode, actor)
 }
 
 func (s *service) advanceTerminalFlowTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, actor Actor) (*repo.FlowNodeExecution, error) {
@@ -655,6 +583,161 @@ func (s *service) advanceTerminalFlowTx(ctx context.Context, taskRecord repo.Pro
 	return &completedExecution, nil
 }
 
+func (s *service) advanceNextFlowTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, nextNode repo.FlowNode, actor Actor) (*repo.FlowNodeExecution, error) {
+	if s.pool == nil {
+		return s.advanceNextFlowNonTx(ctx, taskRecord, currentNode, activeExecution, nextNode, actor)
+	}
+	executionsTx, ok := s.executions.(flowNodeExecutionRepositoryTx)
+	if !ok {
+		return s.advanceNextFlowNonTx(ctx, taskRecord, currentNode, activeExecution, nextNode, actor)
+	}
+	tasksTx, ok := s.tasks.(projectTaskRepositoryTx)
+	if !ok {
+		return s.advanceNextFlowNonTx(ctx, taskRecord, currentNode, activeExecution, nextNode, actor)
+	}
+	taskServiceTx, ok := s.taskService.(taskCoordinatorTx)
+	if !ok {
+		return s.advanceNextFlowNonTx(ctx, taskRecord, currentNode, activeExecution, nextNode, actor)
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := executionsTx.UpdateMetadataTx(ctx, tx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+	completedExecution, err := executionsTx.CompleteTx(ctx, tx, activeExecution.ID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tasksTx.SetFlowNodeTx(ctx, tx, taskRecord.ID, &nextNode.ID); err != nil {
+		return nil, err
+	}
+	taskRecord.CurrentFlowNodeID = &nextNode.ID
+	created, err := executionsTx.CreateTx(ctx, tx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  nextNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	targetStatus := taskWorkStatusForNode(nextNode)
+	if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
+		statusPayload := map[string]any{
+			"transition_source":    "flow_transition",
+			"flow_event_type":      "flow.advanced",
+			"to_flow_node_id":      nextNode.ID,
+			"to_flow_execution_id": created.ID,
+		}
+		taskActor := toTaskActor(actor)
+		taskActor.AllowFlowRuntimeBypass = true
+		transitionedTask, err := taskServiceTx.TransitionStatusWithPayloadTx(ctx, tx, taskRecord, targetStatus, taskActor, statusPayload)
+		if err != nil {
+			return nil, err
+		}
+		taskRecord.WorkStatus = transitionedTask.WorkStatus
+	}
+	if nextNode.RequiresHumanReview {
+		if err := s.createTaskReviewInboxTx(ctx, tx, taskRecord, nextNode.ID, actor); err != nil {
+			return nil, err
+		}
+	}
+
+	payload := map[string]any{
+		"task_id":                  taskRecord.ID,
+		"project_id":               taskRecord.ProjectID,
+		"from_flow_node_id":        currentNode.ID,
+		"from_flow_execution_id":   completedExecution.ID,
+		"to_flow_node_id":          nextNode.ID,
+		"to_flow_execution_id":     created.ID,
+		"terminal_transition_done": false,
+	}
+	if err := s.recordTaskEventTx(ctx, tx, taskRecord, "flow.advanced", actor, payload); err != nil {
+		return nil, err
+	}
+	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.advanced", actor.Type, actorIDPtr(actor), payload, tx); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.ensureExecutionSession(ctx, &created); err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
+func (s *service) advanceNextFlowNonTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, nextNode repo.FlowNode, actor Actor) (*repo.FlowNodeExecution, error) {
+	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+	completedExecution, err := s.executions.Complete(ctx, activeExecution.ID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.tasks.SetFlowNode(ctx, taskRecord.ID, &nextNode.ID); err != nil {
+		return nil, err
+	}
+	taskRecord.CurrentFlowNodeID = &nextNode.ID
+	created, err := s.executions.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  nextNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureExecutionSession(ctx, &created); err != nil {
+		return nil, err
+	}
+	targetStatus := taskWorkStatusForNode(nextNode)
+	if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
+		statusPayload := map[string]any{
+			"transition_source":    "flow_transition",
+			"flow_event_type":      "flow.advanced",
+			"to_flow_node_id":      nextNode.ID,
+			"to_flow_execution_id": created.ID,
+		}
+		taskActor := toTaskActor(actor)
+		taskActor.AllowFlowRuntimeBypass = true
+		if _, err := s.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, targetStatus, taskActor, statusPayload); err != nil {
+			return nil, err
+		}
+		taskRecord.WorkStatus = targetStatus
+	}
+	if nextNode.RequiresHumanReview {
+		if err := s.createTaskReviewInbox(ctx, taskRecord, nextNode.ID, actor); err != nil {
+			return nil, err
+		}
+	}
+
+	payload := map[string]any{
+		"task_id":                  taskRecord.ID,
+		"project_id":               taskRecord.ProjectID,
+		"from_flow_node_id":        currentNode.ID,
+		"from_flow_execution_id":   completedExecution.ID,
+		"to_flow_node_id":          nextNode.ID,
+		"to_flow_execution_id":     created.ID,
+		"terminal_transition_done": false,
+	}
+	if err := s.recordTaskEvent(ctx, taskRecord, "flow.advanced", actor, payload); err != nil {
+		return nil, err
+	}
+	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.advanced", actor.Type, actorIDPtr(actor), payload); err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
 func taskWorkStatusForNode(node repo.FlowNode) string {
 	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") || node.RequiresHumanReview {
 		return "review"
@@ -663,6 +746,10 @@ func taskWorkStatusForNode(node repo.FlowNode) string {
 }
 
 func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.ProjectTask, flowNodeID uuid.UUID, actor Actor) error {
+	return s.createTaskReviewInboxTx(ctx, nil, taskRecord, flowNodeID, actor)
+}
+
+func (s *service) createTaskReviewInboxTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, flowNodeID uuid.UUID, actor Actor) error {
 	title := "Task review required"
 	body := "Flow advancement paused pending human review."
 	payload, _ := json.Marshal(map[string]any{
@@ -762,7 +849,7 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 			})
 		}
 	}
-	created, err := s.inbox.Create(ctx, repo.InboxItem{
+	item := repo.InboxItem{
 		OrganizationID:  taskRecord.OrganizationID,
 		ItemType:        "task_review",
 		SourceProjectID: &taskRecord.ProjectID,
@@ -771,14 +858,27 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 		Title:           title,
 		Body:            &body,
 		ActionPayload:   payload,
-	})
+	}
+	var (
+		created repo.InboxItem
+		err     error
+	)
+	if tx != nil {
+		recorder, ok := s.inbox.(inboxRepositoryTx)
+		if !ok {
+			return fmt.Errorf("inbox repository does not support transactions")
+		}
+		created, err = recorder.CreateTx(ctx, tx, item)
+	} else {
+		created, err = s.inbox.Create(ctx, item)
+	}
 	if err != nil {
 		return err
 	}
 	_ = s.publishDomainEvent(ctx, taskRecord.OrganizationID, "inbox.item_created", "system", nil, map[string]any{
 		"inbox_item_id": created.ID,
 		"item_type":     created.ItemType,
-	})
+	}, tx)
 	return nil
 }
 
@@ -844,13 +944,6 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 	if err := s.ensureProjectNotPaused(ctx, taskRecord.ProjectID); err != nil {
 		return nil, err
 	}
-
-	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
-		return nil, err
-	}
-	if _, err := s.executions.Reject(ctx, activeExecution.ID); err != nil {
-		return nil, err
-	}
 	if currentNode.RejectNodeID == nil {
 		return nil, ErrNoRejectionPath
 	}
@@ -870,11 +963,105 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 		}
 		return nil, ErrMaxVisitsExceeded
 	}
+	return s.rejectFlowNodeTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+}
 
+func (s *service) rejectFlowNodeTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, rejectNode repo.FlowNode, nextVisit int, actor Actor) (*repo.FlowNodeExecution, error) {
+	if s.pool == nil {
+		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+	}
+	executionsTx, ok := s.executions.(flowNodeExecutionRepositoryTx)
+	if !ok {
+		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+	}
+	tasksTx, ok := s.tasks.(projectTaskRepositoryTx)
+	if !ok {
+		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+	}
+	taskServiceTx, ok := s.taskService.(taskCoordinatorTx)
+	if !ok {
+		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := executionsTx.UpdateMetadataTx(ctx, tx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+	if _, err := executionsTx.RejectTx(ctx, tx, activeExecution.ID); err != nil {
+		return nil, err
+	}
+	if _, err := tasksTx.SetFlowNodeTx(ctx, tx, taskRecord.ID, currentNode.RejectNodeID); err != nil {
+		return nil, err
+	}
+	taskRecord.CurrentFlowNodeID = currentNode.RejectNodeID
+	created, err := executionsTx.CreateTx(ctx, tx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  rejectNode.ID,
+		VisitNumber: nextVisit,
+		Status:      "active",
+	})
+	if err != nil {
+		return nil, err
+	}
+	targetStatus := taskWorkStatusForNode(rejectNode)
+	if targetStatus != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), targetStatus) {
+		statusPayload := map[string]any{
+			"transition_source":    "flow_transition",
+			"flow_event_type":      "flow.rejected",
+			"to_flow_node_id":      rejectNode.ID,
+			"to_flow_execution_id": created.ID,
+		}
+		taskActor := toTaskActor(actor)
+		taskActor.AllowFlowRuntimeBypass = true
+		transitionedTask, err := taskServiceTx.TransitionStatusWithPayloadTx(ctx, tx, taskRecord, targetStatus, taskActor, statusPayload)
+		if err != nil {
+			return nil, err
+		}
+		taskRecord.WorkStatus = transitionedTask.WorkStatus
+	}
+
+	payload := map[string]any{
+		"task_id":               taskRecord.ID,
+		"project_id":            taskRecord.ProjectID,
+		"from_flow_node_id":     currentNode.ID,
+		"to_flow_node_id":       rejectNode.ID,
+		"to_flow_execution_id":  created.ID,
+		"to_flow_visit_number":  created.VisitNumber,
+		"rejected_execution_id": activeExecution.ID,
+	}
+	if err := s.recordTaskEventTx(ctx, tx, taskRecord, "flow.rejected", actor, payload); err != nil {
+		return nil, err
+	}
+	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.rejected", actor.Type, actorIDPtr(actor), payload, tx); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.ensureExecutionSession(ctx, &created); err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
+func (s *service) rejectFlowNodeNonTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, rejectNode repo.FlowNode, nextVisit int, actor Actor) (*repo.FlowNodeExecution, error) {
+	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+	if _, err := s.executions.Reject(ctx, activeExecution.ID); err != nil {
+		return nil, err
+	}
 	if _, err := s.tasks.SetFlowNode(ctx, taskRecord.ID, currentNode.RejectNodeID); err != nil {
 		return nil, err
 	}
-
+	taskRecord.CurrentFlowNodeID = currentNode.RejectNodeID
 	created, err := s.executions.Create(ctx, repo.FlowNodeExecution{
 		TaskID:      taskRecord.ID,
 		FlowNodeID:  rejectNode.ID,
@@ -895,7 +1082,9 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 			"to_flow_node_id":      rejectNode.ID,
 			"to_flow_execution_id": created.ID,
 		}
-		if _, err := s.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, targetStatus, toTaskActor(actor), statusPayload); err != nil {
+		taskActor := toTaskActor(actor)
+		taskActor.AllowFlowRuntimeBypass = true
+		if _, err := s.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, targetStatus, taskActor, statusPayload); err != nil {
 			return nil, err
 		}
 		taskRecord.WorkStatus = targetStatus
@@ -916,7 +1105,6 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.rejected", actor.Type, actorIDPtr(actor), payload); err != nil {
 		return nil, err
 	}
-
 	return &created, nil
 }
 
