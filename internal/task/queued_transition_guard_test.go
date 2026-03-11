@@ -21,6 +21,9 @@ func TestNoUnexpectedDirectLiveTaskStatusCreationInNonTestCode(t *testing.T) {
 		filepath.Clean("internal/delivery/rollback.go"):      {},
 		filepath.Clean("internal/tools/native/mutation_tools.go"): {},
 	}
+	allowedLowLevelStatusMutation := map[string]struct{}{
+		filepath.Clean("internal/tools/native/mutation_tools.go"): {},
+	}
 	forbiddenStatuses := []string{"queued", "in_progress", "blocked", "review", "done", "cancelled"}
 
 	var offenders []string
@@ -56,6 +59,11 @@ func TestNoUnexpectedDirectLiveTaskStatusCreationInNonTestCode(t *testing.T) {
 				}
 			}
 			offenders = append(offenders, rel+":"+status)
+		}
+		if strings.Contains(src, "e.tasks.UpdateStatus(ctx, taskID, targetStatus)") {
+			if _, ok := allowedLowLevelStatusMutation[rel]; !ok {
+				offenders = append(offenders, rel+":low-level-status-update")
+			}
 		}
 		return nil
 	})
