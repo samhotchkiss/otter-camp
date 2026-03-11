@@ -271,6 +271,137 @@ func TestReviewDecisionNonTargetUserReturns403(t *testing.T) {
 	}
 }
 
+func TestReviewDecisionApproveUsesFlowAdvanceNotRawStatusTransition(t *testing.T) {
+	taskID := uuid.New()
+	orgID := uuid.New()
+	userID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+
+	fakeTasks := &fakeProjectTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         uuid.New(),
+				Title:             "review task",
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+				CreatedAt:         time.Now().UTC(),
+				UpdatedAt:         time.Now().UTC(),
+				Metadata:          json.RawMessage(`{}`),
+			},
+		},
+	}
+	fakeService := &fakeTaskService{}
+	fakeFlow := &fakeTaskFlowService{
+		advanceFlowFn: func(_ context.Context, gotTaskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+			if gotTaskID != taskID {
+				t.Fatalf("advance task id = %s, want %s", gotTaskID, taskID)
+			}
+			if actor.Type != "human_user" || actor.ID != userID {
+				t.Fatalf("advance actor = %+v, want human_user %s", actor, userID)
+			}
+			return &repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, Status: "completed"}, nil
+		},
+	}
+	h := taskHandlers{
+		tasks:       fakeTasks,
+		taskService: fakeService,
+		flowService: fakeFlow,
+		findPendingReviewInbox: func(context.Context, uuid.UUID) (*repo.InboxItem, error) {
+			return nil, repo.ErrNotFound
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+taskID.String()+"/review-decision", bytes.NewBufferString(`{"decision":"approve"}`))
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{UserID: userID, OrganizationID: orgID, Role: "member"}))
+	req = withRouteParams(req, map[string]string{"id": taskID.String()})
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.reviewDecision(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if fakeFlow.advanceCalls != 1 {
+		t.Fatalf("advance calls = %d, want 1", fakeFlow.advanceCalls)
+	}
+	if fakeFlow.rejectCalls != 0 {
+		t.Fatalf("reject calls = %d, want 0", fakeFlow.rejectCalls)
+	}
+	if fakeService.transitionCalls != 0 {
+		t.Fatalf("transition calls = %d, want 0", fakeService.transitionCalls)
+	}
+}
+
+func TestReviewDecisionRejectUsesFlowRejectNotRawStatusTransition(t *testing.T) {
+	taskID := uuid.New()
+	orgID := uuid.New()
+	userID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+
+	fakeTasks := &fakeProjectTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         uuid.New(),
+				Title:             "review task",
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+				CreatedAt:         time.Now().UTC(),
+				UpdatedAt:         time.Now().UTC(),
+				Metadata:          json.RawMessage(`{}`),
+			},
+		},
+	}
+	fakeService := &fakeTaskService{}
+	fakeFlow := &fakeTaskFlowService{
+		rejectFlowFn: func(_ context.Context, gotTaskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+			if gotTaskID != taskID {
+				t.Fatalf("reject task id = %s, want %s", gotTaskID, taskID)
+			}
+			if actor.Type != "human_user" || actor.ID != userID {
+				t.Fatalf("reject actor = %+v, want human_user %s", actor, userID)
+			}
+			return &repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, Status: "completed"}, nil
+		},
+	}
+	h := taskHandlers{
+		tasks:       fakeTasks,
+		taskService: fakeService,
+		flowService: fakeFlow,
+		findPendingReviewInbox: func(context.Context, uuid.UUID) (*repo.InboxItem, error) {
+			return nil, repo.ErrNotFound
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+taskID.String()+"/review-decision", bytes.NewBufferString(`{"decision":"reject"}`))
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{UserID: userID, OrganizationID: orgID, Role: "member"}))
+	req = withRouteParams(req, map[string]string{"id": taskID.String()})
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.reviewDecision(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if fakeFlow.rejectCalls != 1 {
+		t.Fatalf("reject calls = %d, want 1", fakeFlow.rejectCalls)
+	}
+	if fakeFlow.advanceCalls != 0 {
+		t.Fatalf("advance calls = %d, want 0", fakeFlow.advanceCalls)
+	}
+	if fakeService.transitionCalls != 0 {
+		t.Fatalf("transition calls = %d, want 0", fakeService.transitionCalls)
+	}
+}
+
 func TestListProjectFilesReturnsTreeForConfiguredProject(t *testing.T) {
 	orgID := uuid.New()
 	projectID := uuid.New()
@@ -553,7 +684,11 @@ func (f *fakeTaskService) DequeueFromMerge(context.Context, uuid.UUID, string) (
 }
 
 type fakeTaskFlowService struct {
-	startFlowFn func(context.Context, uuid.UUID) (*repo.FlowNodeExecution, error)
+	startFlowFn     func(context.Context, uuid.UUID) (*repo.FlowNodeExecution, error)
+	advanceFlowFn   func(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error)
+	rejectFlowFn    func(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error)
+	advanceCalls    int
+	rejectCalls     int
 }
 
 func (f *fakeTaskFlowService) StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error) {
@@ -571,11 +706,19 @@ func (f *fakeTaskFlowService) PauseAtReviewCheckpoint(context.Context, uuid.UUID
 	return &repo.FlowNodeExecution{}, nil
 }
 
-func (f *fakeTaskFlowService) AdvanceFlow(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+func (f *fakeTaskFlowService) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+	f.advanceCalls++
+	if f.advanceFlowFn != nil {
+		return f.advanceFlowFn(ctx, taskID, actor)
+	}
 	return &repo.FlowNodeExecution{}, nil
 }
 
-func (f *fakeTaskFlowService) RejectFlowNode(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+func (f *fakeTaskFlowService) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+	f.rejectCalls++
+	if f.rejectFlowFn != nil {
+		return f.rejectFlowFn(ctx, taskID, actor)
+	}
 	return &repo.FlowNodeExecution{}, nil
 }
 

@@ -70,20 +70,11 @@ func TestTaskHTTPCreateQueueReviewDecisionLifecycle(t *testing.T) {
 		t.Fatalf("human_approval_required inbox count = %d, want 1", inboxCount)
 	}
 
-	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
 	taskUUID := uuid.MustParse(taskID)
 	seedReviewedTerminalFlowState(t, testServer.Pool, org.ID, project.ID, taskUUID)
-	taskRecord, err := taskRepo.GetByID(context.Background(), taskUUID)
-	if err != nil {
-		t.Fatalf("get task after queue: %v", err)
-	}
-	taskRecord.WorkStatus = "review"
-	if _, err := taskRepo.Update(context.Background(), taskRecord); err != nil {
-		t.Fatalf("set task to review: %v", err)
-	}
 
 	body := "Review this task"
-	_, err = repo.NewInboxItemRepo(testServer.Pool).Create(context.Background(), repo.InboxItem{
+	_, err := repo.NewInboxItemRepo(testServer.Pool).Create(context.Background(), repo.InboxItem{
 		OrganizationID:  org.ID,
 		TargetUserID:    &adminUser.ID,
 		ItemType:        "task_review",
@@ -109,8 +100,11 @@ func TestTaskHTTPCreateQueueReviewDecisionLifecycle(t *testing.T) {
 	if got.StatusCode != http.StatusOK {
 		t.Fatalf("get task status = %d, want %d body=%s", got.StatusCode, http.StatusOK, string(got.Body))
 	}
-	if status := jsonPathString(t, got.Body, "data", "work_status"); status != "done" {
-		t.Fatalf("work_status = %q, want %q body=%s", status, "done", string(got.Body))
+	if status := jsonPathString(t, got.Body, "data", "work_status"); status != "in_progress" {
+		t.Fatalf("work_status = %q, want %q body=%s", status, "in_progress", string(got.Body))
+	}
+	if nodeType := jsonPathString(t, got.Body, "data", "current_flow_node", "node_type"); nodeType != "merge" {
+		t.Fatalf("current_flow_node.node_type = %q, want %q body=%s", nodeType, "merge", string(got.Body))
 	}
 }
 
@@ -1871,21 +1865,29 @@ func seedReviewedTerminalFlowState(t *testing.T, pool *pgxpool.Pool, orgID, proj
 		t.Fatalf("get task for terminal flow seed: %v", err)
 	}
 	taskRecord.FlowTemplateID = &template.ID
-	taskRecord.CurrentFlowNodeID = &doneNode.ID
+	taskRecord.WorkStatus = "review"
+	taskRecord.CurrentFlowNodeID = &reviewNode.ID
 	if _, err := taskRepo.Update(context.Background(), taskRecord); err != nil {
 		t.Fatalf("update task terminal flow state: %v", err)
 	}
 
-	for index, nodeID := range []uuid.UUID{workNode.ID, reviewNode.ID, doneNode.ID} {
-		if _, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
-			TaskID:      taskID,
-			FlowNodeID:  nodeID,
-			VisitNumber: index + 1,
-			Status:      "completed",
-			Metadata:    json.RawMessage(`{}`),
-		}); err != nil {
-			t.Fatalf("create completed execution %d: %v", index+1, err)
-		}
+	if _, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskID,
+		FlowNodeID:  workNode.ID,
+		VisitNumber: 1,
+		Status:      "completed",
+		Metadata:    json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("create completed work execution: %v", err)
+	}
+	if _, err := execRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskID,
+		FlowNodeID:  reviewNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		Metadata:    json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("create active review execution: %v", err)
 	}
 }
 

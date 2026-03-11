@@ -657,6 +657,10 @@ func (h taskHandlers) createTask(w http.ResponseWriter, r *http.Request) {
 		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "task service unavailable")
 		return
 	}
+	if h.flowService == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "flow service unavailable")
+		return
+	}
 
 	projectID, err := parseUUIDParam(r, "id")
 	if err != nil {
@@ -1100,21 +1104,39 @@ func (h taskHandlers) reviewDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := "done"
+	actor := flowsvc.Actor{Type: "human_user", ID: principal.UserID}
+	var advanceErr error
 	if decision == "reject" {
-		status = "in_progress"
+		_, advanceErr = h.flowService.RejectFlowNode(r.Context(), taskID, actor)
+	} else {
+		_, advanceErr = h.flowService.AdvanceFlow(r.Context(), taskID, actor)
 	}
-	updated, err := h.taskService.TransitionStatus(r.Context(), taskID, status, tasksvc.Actor{Type: "human_user", ID: principal.UserID})
-	if err != nil {
-		h.respondTaskError(responder, w, err)
+	if advanceErr != nil {
+		if errors.Is(advanceErr, flowsvc.ErrFlowNotStarted) || errors.Is(advanceErr, repo.ErrNotFound) {
+			responder.Error(w, http.StatusNotFound, api.ErrCodeNotFound, "resource not found")
+			return
+		}
+		h.respondTaskError(responder, w, advanceErr)
 		return
+	}
+
+	updated, ok := h.getTaskForOrg(r.Context(), taskID, principal.OrganizationID, responder, w)
+	if !ok {
+		return
+	}
+
+	if decision == "approve" && h.taskService != nil && updated.WorkStatus == "done" && updated.BranchName != nil && strings.TrimSpace(*updated.BranchName) != "" {
+		if _, enqueueErr := h.taskService.EnqueueForMerge(r.Context(), taskID); enqueueErr != nil {
+			h.respondTaskError(responder, w, enqueueErr)
+			return
+		}
 	}
 
 	if pendingItem != nil && h.inbox != nil && !pendingItem.IsActed {
 		_, _ = h.inbox.MarkActed(r.Context(), pendingItem.ID, principal.UserID)
 	}
 
-	responder.JSON(w, http.StatusOK, h.toTaskResponse(r.Context(), *updated))
+	responder.JSON(w, http.StatusOK, h.toTaskResponse(r.Context(), updated))
 }
 
 func (h taskHandlers) getTaskFlow(w http.ResponseWriter, r *http.Request) {
