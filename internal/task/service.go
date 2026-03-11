@@ -240,8 +240,16 @@ type taskRepository interface {
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
+type taskRepositoryTx interface {
+	UpdateTx(ctx context.Context, tx pgx.Tx, task repo.ProjectTask) (repo.ProjectTask, error)
+}
+
 type taskEventRepository interface {
 	Record(ctx context.Context, event repo.ProjectTaskEvent) (repo.ProjectTaskEvent, error)
+}
+
+type taskEventRepositoryTx interface {
+	RecordTx(ctx context.Context, tx pgx.Tx, event repo.ProjectTaskEvent) (repo.ProjectTaskEvent, error)
 }
 
 type inboxRepository interface {
@@ -514,6 +522,10 @@ func (s *service) TransitionStatusWithPayload(ctx context.Context, taskID uuid.U
 	return s.transitionStatus(ctx, taskID, toStatus, actor, extraPayload, false)
 }
 
+func (s *service) TransitionStatusWithPayloadTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, toStatus string, actor Actor, extraPayload map[string]any) (*ProjectTask, error) {
+	return s.transitionTaskRecordTx(ctx, tx, taskRecord, toStatus, actor, extraPayload, false)
+}
+
 func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor, extraPayload map[string]any, approvalOverride bool) (*ProjectTask, error) {
 	if taskID == uuid.Nil {
 		return nil, ErrTaskIDRequired
@@ -523,10 +535,14 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if err != nil {
 		return nil, err
 	}
-	return s.transitionTaskRecord(ctx, taskRecord, toStatus, actor, extraPayload, approvalOverride)
+	return s.transitionTaskRecordTx(ctx, nil, taskRecord, toStatus, actor, extraPayload, approvalOverride)
 }
 
 func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.ProjectTask, toStatus string, actor Actor, extraPayload map[string]any, approvalOverride bool) (*ProjectTask, error) {
+	return s.transitionTaskRecordTx(ctx, nil, taskRecord, toStatus, actor, extraPayload, approvalOverride)
+}
+
+func (s *service) transitionTaskRecordTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, toStatus string, actor Actor, extraPayload map[string]any, approvalOverride bool) (*ProjectTask, error) {
 	from := normalizeStatus(taskRecord.WorkStatus)
 	target := normalizeStatus(toStatus)
 	if target == "" {
@@ -633,9 +649,12 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 		taskRecord.CompletedAt = nil
 	}
 
-	updated, err := s.tasks.Update(ctx, taskRecord)
+	updated, err := s.updateTaskTx(ctx, tx, taskRecord)
 	if err != nil {
 		return nil, err
+	}
+	if tx != nil && target == "cancelled" {
+		return nil, fmt.Errorf("transactional task cancellation is not supported")
 	}
 	if target == "cancelled" {
 		if err := s.archiveActiveMergeEntriesForTask(ctx, updated); err != nil {
@@ -662,10 +681,10 @@ func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.Proj
 		payload[key] = value
 	}
 
-	if err := s.recordTaskEvent(ctx, updated, "status.changed", actorType, actorID, payload); err != nil {
+	if err := s.recordTaskEventTx(ctx, tx, updated, "status.changed", actorType, actorID, payload); err != nil {
 		return nil, err
 	}
-	if err := s.publishTaskDomainEvent(ctx, updated.OrganizationID, "task.status_changed", actorType, actorID, payload); err != nil {
+	if err := s.publishTaskDomainEventTx(ctx, tx, updated.OrganizationID, "task.status_changed", actorType, actorID, payload); err != nil {
 		return nil, err
 	}
 
@@ -1577,34 +1596,62 @@ func (s *service) findPendingApprovalItem(ctx context.Context, taskRecord repo.P
 }
 
 func (s *service) recordTaskEvent(ctx context.Context, taskRecord repo.ProjectTask, eventType, actorType string, actorID *uuid.UUID, payload map[string]any) error {
+	return s.recordTaskEventTx(ctx, nil, taskRecord, eventType, actorType, actorID, payload)
+}
+
+func (s *service) recordTaskEventTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, eventType, actorType string, actorID *uuid.UUID, payload map[string]any) error {
 	encodedPayload, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	_, err = s.events.Record(ctx, repo.ProjectTaskEvent{
+	event := repo.ProjectTaskEvent{
 		TaskID:    taskRecord.ID,
 		ProjectID: taskRecord.ProjectID,
 		EventType: strings.TrimSpace(eventType),
 		ActorType: normalizeActorTypeForTask(actorType),
 		ActorID:   actorID,
 		Payload:   encodedPayload,
-	})
+	}
+	if tx != nil {
+		recorder, ok := s.events.(taskEventRepositoryTx)
+		if !ok {
+			return fmt.Errorf("task event repository does not support transactions")
+		}
+		_, err = recorder.RecordTx(ctx, tx, event)
+		return err
+	}
+	_, err = s.events.Record(ctx, event)
 	return err
 }
 
 func (s *service) publishTaskDomainEvent(ctx context.Context, organizationID uuid.UUID, eventType, actorType string, actorID *uuid.UUID, payload map[string]any) error {
+	return s.publishTaskDomainEventTx(ctx, nil, organizationID, eventType, actorType, actorID, payload)
+}
+
+func (s *service) publishTaskDomainEventTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, eventType, actorType string, actorID *uuid.UUID, payload map[string]any) error {
 	domainActorType, domainActorID := toDomainActor(actorType, actorID)
 	encodedPayload, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	return s.eventBus.Publish(ctx, nil, eventbus.DomainEvent{
+	return s.eventBus.Publish(ctx, tx, eventbus.DomainEvent{
 		OrganizationID: organizationID,
 		EventType:      eventType,
 		ActorType:      domainActorType,
 		ActorID:        domainActorID,
 		Payload:        encodedPayload,
 	})
+}
+
+func (s *service) updateTaskTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask) (repo.ProjectTask, error) {
+	if tx != nil {
+		updater, ok := s.tasks.(taskRepositoryTx)
+		if !ok {
+			return repo.ProjectTask{}, fmt.Errorf("task repository does not support transactions")
+		}
+		return updater.UpdateTx(ctx, tx, taskRecord)
+	}
+	return s.tasks.Update(ctx, taskRecord)
 }
 
 func normalizeCreatedBy(actorType string, actorID uuid.UUID) (string, *uuid.UUID, error) {

@@ -108,6 +108,10 @@ type ProjectTaskRepo struct {
 	pool *pgxpool.Pool
 }
 
+type queryRower interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 func NewProjectTaskRepo(pool *pgxpool.Pool) *ProjectTaskRepo {
 	return &ProjectTaskRepo{pool: pool}
 }
@@ -345,8 +349,12 @@ func (r *ProjectTaskRepo) ListByProject(ctx context.Context, projectID uuid.UUID
 }
 
 func (r *ProjectTaskRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) (ProjectTask, error) {
+	return r.UpdateStatusTx(ctx, nil, id, status)
+}
+
+func (r *ProjectTaskRepo) UpdateStatusTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, status string) (ProjectTask, error) {
 	normalizedStatus := strings.TrimSpace(status)
-	row := r.pool.QueryRow(ctx, `
+	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `
 		UPDATE project_task
 		SET
 			work_status = $2,
@@ -387,7 +395,11 @@ func (r *ProjectTaskRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status
 }
 
 func (r *ProjectTaskRepo) Update(ctx context.Context, task ProjectTask) (ProjectTask, error) {
-	row := r.pool.QueryRow(ctx, `
+	return r.UpdateTx(ctx, nil, task)
+}
+
+func (r *ProjectTaskRepo) UpdateTx(ctx context.Context, tx pgx.Tx, task ProjectTask) (ProjectTask, error) {
+	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `
 		UPDATE project_task
 		SET
 			title = $2,
@@ -454,7 +466,11 @@ func (r *ProjectTaskRepo) Update(ctx context.Context, task ProjectTask) (Project
 }
 
 func (r *ProjectTaskRepo) SetFlowNode(ctx context.Context, id uuid.UUID, flowNodeID *uuid.UUID) (ProjectTask, error) {
-	row := r.pool.QueryRow(ctx, `
+	return r.SetFlowNodeTx(ctx, nil, id, flowNodeID)
+}
+
+func (r *ProjectTaskRepo) SetFlowNodeTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, flowNodeID *uuid.UUID) (ProjectTask, error) {
+	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `
 		UPDATE project_task
 		SET current_flow_node_id = $2
 		WHERE id = $1
@@ -490,6 +506,13 @@ func (r *ProjectTaskRepo) SetFlowNode(ctx context.Context, id uuid.UUID, flowNod
 		return ProjectTask{}, mapDBError(err)
 	}
 	return updated, nil
+}
+
+func projectTaskQueryRower(pool *pgxpool.Pool, tx pgx.Tx) queryRower {
+	if tx != nil {
+		return tx
+	}
+	return pool
 }
 
 func (r *ProjectTaskRepo) SetBranch(ctx context.Context, id uuid.UUID, branchName *string) (ProjectTask, error) {
@@ -546,7 +569,11 @@ func NewProjectTaskEventRepo(pool *pgxpool.Pool) *ProjectTaskEventRepo {
 }
 
 func (r *ProjectTaskEventRepo) Record(ctx context.Context, event ProjectTaskEvent) (ProjectTaskEvent, error) {
-	row := r.pool.QueryRow(ctx, `
+	return r.RecordTx(ctx, nil, event)
+}
+
+func (r *ProjectTaskEventRepo) RecordTx(ctx context.Context, tx pgx.Tx, event ProjectTaskEvent) (ProjectTaskEvent, error) {
+	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `
 		INSERT INTO project_task_event (
 			task_id,
 			project_id,
@@ -637,7 +664,11 @@ func NewInboxItemRepo(pool *pgxpool.Pool) *InboxItemRepo {
 }
 
 func (r *InboxItemRepo) Create(ctx context.Context, item InboxItem) (InboxItem, error) {
-	row := r.pool.QueryRow(ctx, `
+	return r.CreateTx(ctx, nil, item)
+}
+
+func (r *InboxItemRepo) CreateTx(ctx context.Context, tx pgx.Tx, item InboxItem) (InboxItem, error) {
+	row := projectTaskQueryRower(r.pool, tx).QueryRow(ctx, `
 		INSERT INTO inbox_item (
 			organization_id,
 			target_user_id,

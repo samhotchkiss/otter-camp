@@ -64,6 +64,10 @@ type taskCoordinator interface {
 	MarkBlocked(ctx context.Context, taskID uuid.UUID, reason string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 }
 
+type taskCoordinatorTx interface {
+	TransitionStatusWithPayloadTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
+}
+
 type flowTemplateRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowTemplate, error)
 }
@@ -83,10 +87,19 @@ type flowNodeExecutionRepository interface {
 	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error)
 }
 
+type flowNodeExecutionRepositoryTx interface {
+	CompleteTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (repo.FlowNodeExecution, error)
+	UpdateMetadataTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error)
+}
+
 type projectTaskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
 	SetFlowNode(ctx context.Context, id uuid.UUID, flowNodeID *uuid.UUID) (repo.ProjectTask, error)
 	SetBranch(ctx context.Context, id uuid.UUID, branchName *string) (repo.ProjectTask, error)
+}
+
+type projectTaskRepositoryTx interface {
+	SetFlowNodeTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, flowNodeID *uuid.UUID) (repo.ProjectTask, error)
 }
 
 type projectRepository interface {
@@ -123,8 +136,16 @@ type inboxRepository interface {
 	Create(ctx context.Context, item repo.InboxItem) (repo.InboxItem, error)
 }
 
+type inboxRepositoryTx interface {
+	CreateTx(ctx context.Context, tx pgx.Tx, item repo.InboxItem) (repo.InboxItem, error)
+}
+
 type taskEventRepository interface {
 	Record(ctx context.Context, event repo.ProjectTaskEvent) (repo.ProjectTaskEvent, error)
+}
+
+type taskEventRepositoryTx interface {
+	RecordTx(ctx context.Context, tx pgx.Tx, event repo.ProjectTaskEvent) (repo.ProjectTaskEvent, error)
 }
 
 type eventBus interface {
@@ -185,6 +206,7 @@ type FlowExecutionService interface {
 }
 
 type service struct {
+	pool           *pgxpool.Pool
 	flowTemplates  flowTemplateRepository
 	flowNodes      flowNodeRepository
 	executions     flowNodeExecutionRepository
@@ -226,6 +248,7 @@ func NewService(opts Options) (FlowExecutionService, error) {
 	}
 
 	svc := &service{
+		pool:   opts.Pool,
 		events: opts.Events,
 	}
 	var flowReviewBindTarget any
@@ -487,6 +510,7 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 		if err := s.validateTerminalAdvance(ctx, taskRecord.ID, activeExecution, currentNode, actor); err != nil {
 			return nil, err
 		}
+		return s.advanceTerminalFlowTx(ctx, taskRecord, currentNode, activeExecution, actor)
 	}
 	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
 		return nil, err
@@ -565,6 +589,68 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 
 	if nextExecution != nil {
 		return nextExecution, nil
+	}
+	return &completedExecution, nil
+}
+
+func (s *service) advanceTerminalFlowTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, actor Actor) (*repo.FlowNodeExecution, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("flow execution service requires a database pool for transactional terminal advance")
+	}
+	executionsTx, ok := s.executions.(flowNodeExecutionRepositoryTx)
+	if !ok {
+		return nil, fmt.Errorf("flow execution repository does not support transactions")
+	}
+	tasksTx, ok := s.tasks.(projectTaskRepositoryTx)
+	if !ok {
+		return nil, fmt.Errorf("project task repository does not support transactions")
+	}
+	taskServiceTx, ok := s.taskService.(taskCoordinatorTx)
+	if !ok {
+		return nil, fmt.Errorf("task transition service does not support transactions")
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := executionsTx.UpdateMetadataTx(ctx, tx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+	completedExecution, err := executionsTx.CompleteTx(ctx, tx, activeExecution.ID)
+	if err != nil {
+		return nil, err
+	}
+	doneActor := toTaskActor(actor)
+	doneActor.AllowDoneBypass = true
+	if _, err := taskServiceTx.TransitionStatusWithPayloadTx(ctx, tx, taskRecord, "done", doneActor, nil); err != nil {
+		return nil, err
+	}
+	if _, err := tasksTx.SetFlowNodeTx(ctx, tx, taskRecord.ID, nil); err != nil {
+		return nil, err
+	}
+
+	payload := map[string]any{
+		"task_id":                  taskRecord.ID,
+		"project_id":               taskRecord.ProjectID,
+		"from_flow_node_id":        currentNode.ID,
+		"from_flow_execution_id":   completedExecution.ID,
+		"to_flow_node_id":          nil,
+		"to_flow_execution_id":     nil,
+		"terminal_transition_done": true,
+	}
+	if err := s.recordTaskEventTx(ctx, tx, taskRecord, "flow.advanced", actor, payload); err != nil {
+		return nil, err
+	}
+	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.advanced", actor.Type, actorIDPtr(actor), payload, tx); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return &completedExecution, nil
 }
@@ -1401,28 +1487,45 @@ func (s *service) checkCycle(ctx context.Context, nodeType string, sourceID, dep
 }
 
 func (s *service) recordTaskEvent(ctx context.Context, taskRecord repo.ProjectTask, eventType string, actor Actor, payload map[string]any) error {
+	return s.recordTaskEventTx(ctx, nil, taskRecord, eventType, actor, payload)
+}
+
+func (s *service) recordTaskEventTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, eventType string, actor Actor, payload map[string]any) error {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	_, err = s.taskEvents.Record(ctx, repo.ProjectTaskEvent{
+	event := repo.ProjectTaskEvent{
 		TaskID:    taskRecord.ID,
 		ProjectID: taskRecord.ProjectID,
 		EventType: strings.TrimSpace(eventType),
 		ActorType: normalizeTaskActorType(actor.Type),
 		ActorID:   actorIDPtr(actor),
 		Payload:   encoded,
-	})
+	}
+	if tx != nil {
+		recorder, ok := s.taskEvents.(taskEventRepositoryTx)
+		if !ok {
+			return fmt.Errorf("task event repository does not support transactions")
+		}
+		_, err = recorder.RecordTx(ctx, tx, event)
+		return err
+	}
+	_, err = s.taskEvents.Record(ctx, event)
 	return err
 }
 
-func (s *service) publishDomainEvent(ctx context.Context, organizationID uuid.UUID, eventType, actorType string, actorID *uuid.UUID, payload map[string]any) error {
+func (s *service) publishDomainEvent(ctx context.Context, organizationID uuid.UUID, eventType, actorType string, actorID *uuid.UUID, payload map[string]any, tx ...pgx.Tx) error {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 	domainType, domainActorID := normalizeDomainActor(actorType, actorID)
-	return s.events.Publish(ctx, nil, eventbus.DomainEvent{
+	var eventTx pgx.Tx
+	if len(tx) > 0 {
+		eventTx = tx[0]
+	}
+	return s.events.Publish(ctx, eventTx, eventbus.DomainEvent{
 		OrganizationID: organizationID,
 		EventType:      strings.TrimSpace(eventType),
 		ActorType:      domainType,

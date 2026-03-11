@@ -72,7 +72,11 @@ func NewFlowNodeExecutionRepo(pool *pgxpool.Pool) *FlowNodeExecutionRepo {
 }
 
 func (r *FlowNodeExecutionRepo) Create(ctx context.Context, execution FlowNodeExecution) (FlowNodeExecution, error) {
-	row := r.pool.QueryRow(ctx, `
+	return r.CreateTx(ctx, nil, execution)
+}
+
+func (r *FlowNodeExecutionRepo) CreateTx(ctx context.Context, tx pgx.Tx, execution FlowNodeExecution) (FlowNodeExecution, error) {
+	row := flowExecutionQueryRower(r.pool, tx).QueryRow(ctx, `
 		INSERT INTO flow_node_execution (
 			task_id,
 			flow_node_id,
@@ -170,19 +174,31 @@ func (r *FlowNodeExecutionRepo) ListByTask(ctx context.Context, taskID uuid.UUID
 }
 
 func (r *FlowNodeExecutionRepo) Complete(ctx context.Context, id uuid.UUID) (FlowNodeExecution, error) {
-	return r.updateStatus(ctx, id, "completed")
+	return r.updateStatus(ctx, nil, id, "completed")
 }
 
 func (r *FlowNodeExecutionRepo) Reject(ctx context.Context, id uuid.UUID) (FlowNodeExecution, error) {
-	return r.updateStatus(ctx, id, "rejected")
+	return r.updateStatus(ctx, nil, id, "rejected")
 }
 
 func (r *FlowNodeExecutionRepo) Abandon(ctx context.Context, id uuid.UUID) (FlowNodeExecution, error) {
-	return r.updateStatus(ctx, id, "abandoned")
+	return r.updateStatus(ctx, nil, id, "abandoned")
 }
 
-func (r *FlowNodeExecutionRepo) updateStatus(ctx context.Context, id uuid.UUID, status string) (FlowNodeExecution, error) {
-	row := r.pool.QueryRow(ctx, `
+func (r *FlowNodeExecutionRepo) CompleteTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (FlowNodeExecution, error) {
+	return r.updateStatus(ctx, tx, id, "completed")
+}
+
+func (r *FlowNodeExecutionRepo) RejectTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (FlowNodeExecution, error) {
+	return r.updateStatus(ctx, tx, id, "rejected")
+}
+
+func (r *FlowNodeExecutionRepo) AbandonTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (FlowNodeExecution, error) {
+	return r.updateStatus(ctx, tx, id, "abandoned")
+}
+
+func (r *FlowNodeExecutionRepo) updateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status string) (FlowNodeExecution, error) {
+	row := flowExecutionQueryRower(r.pool, tx).QueryRow(ctx, `
 		UPDATE flow_node_execution
 		SET
 			status = $2,
@@ -221,7 +237,11 @@ func (r *FlowNodeExecutionRepo) RecordCommitSHA(ctx context.Context, id uuid.UUI
 }
 
 func (r *FlowNodeExecutionRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (FlowNodeExecution, error) {
-	row := r.pool.QueryRow(ctx, `
+	return r.UpdateMetadataTx(ctx, nil, id, metadata)
+}
+
+func (r *FlowNodeExecutionRepo) UpdateMetadataTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, metadata json.RawMessage) (FlowNodeExecution, error) {
+	row := flowExecutionQueryRower(r.pool, tx).QueryRow(ctx, `
 		UPDATE flow_node_execution
 		SET metadata = $2::jsonb
 		WHERE id = $1
@@ -236,6 +256,13 @@ func (r *FlowNodeExecutionRepo) UpdateMetadata(ctx context.Context, id uuid.UUID
 		return FlowNodeExecution{}, mapDBError(err)
 	}
 	return updated, nil
+}
+
+func flowExecutionQueryRower(pool *pgxpool.Pool, tx pgx.Tx) queryRower {
+	if tx != nil {
+		return tx
+	}
+	return pool
 }
 
 func (r *FlowNodeExecutionRepo) SetSessionID(ctx context.Context, id, sessionID uuid.UUID) (FlowNodeExecution, error) {
