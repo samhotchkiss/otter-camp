@@ -380,7 +380,7 @@ Progressive disclosure: board card -> task detail -> work log.
 - Tab to switch focus to the chat pane for discussing the task.
 - In task detail, the right-pane `Discussion` tab must stay bound to the task's real sync discussion session while the operator cycles tabs/scopes. The `No task discussion session.` placeholder appears only when no discussion session can actually be resolved for that task.
 - In task detail, the right-pane `Journal`/work-log view must resolve the task's real task-scoped execution session. A same-project PM/project session is never a valid substitute for that task history.
-- When a task is blocked by a deterministic validation loop, task detail must show both the blocked reason and the supported recovery action so the operator can resume it without leaving the product.
+- When a task is blocked by a deterministic validation loop, task detail must show both the blocked reason and the supported recovery action so the operator can resume it without leaving the product. That resume action re-queues the task through the normal scheduler/runtime path; it must not imply that the task becomes immediately active in-place.
 
 ### Inbox
 
@@ -781,7 +781,7 @@ The `otter` binary also provides non-interactive commands for scripting and quic
 | `otter send "<message>"` | Send a message to the active session (or specify with `--session`) |
 | `otter send --to frank "<message>"` | Send a message to a specific agent |
 | `otter task <id>` | Show task detail |
-| `otter task resume <id>` | Explicitly resume a deterministic validation-blocked task |
+| `otter task resume <id>` | Explicitly resume a deterministic validation-blocked task (re-queues it for the scheduler) |
 | `otter tasks [--project <name>]` | List tasks, optionally filtered by project |
 | `otter projects` | List projects |
 | `otter agents` | List agents and their status |
