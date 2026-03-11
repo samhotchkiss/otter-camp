@@ -15,6 +15,8 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/projectfailure"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -1102,6 +1104,34 @@ func TestSupervisor_ImpossibleInProgressTaskWithoutRuntimeOrExecutionBlocksTask(
 	}
 	if got := strings.TrimSpace(fmt.Sprintf("%v", decoded["blocker_reason"])); got == "" || !strings.Contains(got, "impossible live task state") {
 		t.Fatalf("blocker_reason = %q, want impossible live task detail", got)
+	}
+
+	updatedProject, err := repo.NewProjectRepo(pool).GetByID(ctx, projectRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID project: %v", err)
+	}
+	pauseState := projectpause.Parse(updatedProject.Settings)
+	if !pauseState.IsPaused {
+		t.Fatalf("project pause state = %+v, want paused", pauseState)
+	}
+	if !strings.Contains(pauseState.Reason, "impossible live task state") {
+		t.Fatalf("project pause reason = %q, want impossible live task detail", pauseState.Reason)
+	}
+	failureState := projectfailure.Parse(updatedProject.Settings)
+	if failureState.Action != "pause" {
+		t.Fatalf("automatic failure action = %q, want pause", failureState.Action)
+	}
+	if failureState.Source != "execution_runtime" {
+		t.Fatalf("automatic failure source = %q, want execution_runtime", failureState.Source)
+	}
+	if failureState.FailureCategory != "execution_runtime" {
+		t.Fatalf("automatic failure category = %q, want execution_runtime", failureState.FailureCategory)
+	}
+	if failureState.FailureClass != "impossible_live_task_state" {
+		t.Fatalf("automatic failure class = %q, want impossible_live_task_state", failureState.FailureClass)
+	}
+	if !strings.Contains(failureState.FailureReason, "impossible live task state") {
+		t.Fatalf("automatic failure reason = %q, want impossible live task detail", failureState.FailureReason)
 	}
 }
 

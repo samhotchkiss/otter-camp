@@ -16,6 +16,10 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
+	"github.com/samhotchkiss/otter-camp/internal/projectfailure"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 )
 
@@ -63,6 +67,10 @@ type supervisorTaskService interface {
 	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
 }
 
+type supervisorProjectService interface {
+	Pause(ctx context.Context, orgID, projectID uuid.UUID, req projectsvc.PauseProjectRequest) (*projectsvc.Project, error)
+}
+
 type SupervisorOptions struct {
 	Pool *pgxpool.Pool
 
@@ -71,6 +79,7 @@ type SupervisorOptions struct {
 	RunEvents   supervisorRunEventRepository
 	ChatService supervisorChatService
 	TaskService supervisorTaskService
+	ProjectService supervisorProjectService
 
 	EventBus eventbus.EventBus
 	Clock    clock.Clock
@@ -88,6 +97,7 @@ type Supervisor struct {
 	notifier    deadLetterNotifier
 	chatService supervisorChatService
 	taskService supervisorTaskService
+	projectService supervisorProjectService
 	eventBus    eventbus.EventBus
 	clock       clock.Clock
 	logger      *slog.Logger
@@ -135,6 +145,9 @@ func NewSupervisor(opts SupervisorOptions) (*Supervisor, error) {
 	if opts.TaskService != nil {
 		supervisor.taskService = opts.TaskService
 	}
+	if opts.ProjectService != nil {
+		supervisor.projectService = opts.ProjectService
+	}
 
 	if internalService, ok := opts.RunService.(*runService); ok {
 		if runRepo, castOK := internalService.runs.(*RunRepository); castOK {
@@ -161,6 +174,16 @@ func NewSupervisor(opts SupervisorOptions) (*Supervisor, error) {
 			return nil, err
 		}
 		supervisor.taskService = taskService
+	}
+	if supervisor.projectService == nil && supervisor.pool != nil && supervisor.eventBus != nil {
+		projectService, err := projectsvc.NewService(projectsvc.Options{
+			Pool:   supervisor.pool,
+			Events: supervisor.eventBus,
+		})
+		if err != nil {
+			return nil, err
+		}
+		supervisor.projectService = projectService
 	}
 
 	if supervisor.runs == nil {
@@ -262,7 +285,7 @@ func (s *Supervisor) detectImpossibleLiveTasks(ctx context.Context) error {
 
 	cutoff := s.clock.Now().UTC().Add(-impossibleLiveTaskGraceLimit)
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.id
+		SELECT t.id, t.project_id, t.organization_id
 		FROM project_task t
 		LEFT JOIN runtime_state rs
 		  ON rs.scope_type = 'task'
@@ -288,8 +311,8 @@ func (s *Supervisor) detectImpossibleLiveTasks(ctx context.Context) error {
 	}
 	const impossibleLiveTaskReason = "supervisor detected impossible live task state: task remained in_progress without a runtime owner or active flow execution"
 	for rows.Next() {
-		var taskID uuid.UUID
-		if scanErr := rows.Scan(&taskID); scanErr != nil {
+		var taskID, projectID, organizationID uuid.UUID
+		if scanErr := rows.Scan(&taskID, &projectID, &organizationID); scanErr != nil {
 			return scanErr
 		}
 		if taskID == uuid.Nil {
@@ -304,8 +327,56 @@ func (s *Supervisor) detectImpossibleLiveTasks(ctx context.Context) error {
 			}
 			return transitionErr
 		}
+		if err := s.pauseProjectForImpossibleLiveTask(ctx, organizationID, projectID, impossibleLiveTaskReason); err != nil {
+			return err
+		}
 	}
 	return rows.Err()
+}
+
+func (s *Supervisor) pauseProjectForImpossibleLiveTask(ctx context.Context, organizationID, projectID uuid.UUID, reason string) error {
+	if s.pool == nil || s.projectService == nil || organizationID == uuid.Nil || projectID == uuid.Nil {
+		return nil
+	}
+
+	projectRepo := repo.NewProjectRepo(s.pool)
+	projectRecord, err := projectRepo.GetByID(ctx, projectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(projectRecord.Status), "archived") {
+		return nil
+	}
+	if pauseState := projectpause.Parse(projectRecord.Settings); pauseState.IsPaused {
+		return nil
+	}
+
+	now := s.clock.Now().UTC()
+	settings, err := projectfailure.Apply(projectRecord.Settings, projectfailure.State{
+		Action:          "pause",
+		Source:          "execution_runtime",
+		FailureCategory: "execution_runtime",
+		FailureClass:    "impossible_live_task_state",
+		FailureReason:   strings.TrimSpace(reason),
+		RecordedAt:      &now,
+	})
+	if err != nil {
+		return err
+	}
+	projectRecord.Settings = settings
+	if _, err := projectRepo.Update(ctx, projectRecord); err != nil {
+		return err
+	}
+
+	_, err = s.projectService.Pause(ctx, organizationID, projectID, projectsvc.PauseProjectRequest{
+		Reason:       strings.TrimSpace(reason),
+		Metadata:     projectfailure.State{Action: "pause", Source: "execution_runtime", FailureCategory: "execution_runtime", FailureClass: "impossible_live_task_state", FailureReason: strings.TrimSpace(reason), RecordedAt: &now}.JSON(),
+		PausedByType: "system",
+	})
+	return err
 }
 
 func (s *Supervisor) detectStaleCreatedRuns(ctx context.Context) error {
