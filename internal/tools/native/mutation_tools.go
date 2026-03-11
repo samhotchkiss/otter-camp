@@ -1261,6 +1261,9 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		}
 		created = *createdRecord
 	} else {
+		if e.pool != nil {
+			return map[string]any{"error": "canonical_task_service_unavailable"}, nil
+		}
 		// Pool-less/native test executors can still fall back to direct repo creation. The
 		// production runtime must use the canonical task service so create-time invariants and
 		// domain events stay aligned with the task state machine.
@@ -1529,6 +1532,9 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		updated = repo.ProjectTask(*transitioned)
 	} else {
 		if statusChanged {
+			if e.pool != nil {
+				return map[string]any{"error": "canonical_task_service_unavailable"}, nil
+			}
 			// No-task-service execution is a narrow fallback/test seam; pool-backed executors auto-build
 			// the canonical service and should not persist status transitions through raw task updates.
 			current.WorkStatus = desiredStatus
@@ -2460,6 +2466,9 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 			}
 			createdChild = *createdRecord
 		} else {
+			if e.pool != nil {
+				return queueDecompositionResult{}, fmt.Errorf("canonical task service unavailable")
+			}
 			// Pool-less/native test executors can still fall back to direct repo creation. The
 			// production runtime must route decomposed child creation through the canonical task service.
 			createdRecord, createErr := e.tasks.Create(ctx, repo.ProjectTask{

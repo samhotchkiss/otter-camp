@@ -38,7 +38,6 @@ func TestNoUnexpectedDirectLiveTaskStatusCreationInNonTestCode(t *testing.T) {
 		filepath.Clean("internal/delivery/deploy_worker.go"): {},
 		filepath.Clean("internal/delivery/rollback.go"):      {},
 		filepath.Clean("internal/task/service.go"):           {},
-		filepath.Clean("internal/project/service.go"):        {},
 		filepath.Clean("internal/tools/native/mutation_tools.go"): {},
 	}
 	forbiddenStatuses := []string{"queued", "in_progress", "blocked", "review", "done", "cancelled"}

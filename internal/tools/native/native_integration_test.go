@@ -650,6 +650,76 @@ func TestIntegrationTaskCreateUsesCanonicalTaskServiceForHumanReviewOverride(t *
 	}
 }
 
+func TestIntegrationTaskCreateFailsClosedWithoutCanonicalTaskService(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	executor.taskService = nil
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id": project.ID.String(),
+		"title":      "Should fail closed",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if out["error"] != "canonical_task_service_unavailable" {
+		t.Fatalf("error = %v, want canonical_task_service_unavailable", out["error"])
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("task count = %d, want 0", len(tasks))
+	}
+}
+
+func TestIntegrationTaskUpdateFailsClosedWithoutCanonicalTaskService(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := seedReviewRefinementSystemTemplate(t, ctx, pool)
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Native update fail-closed",
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	executor.taskService = nil
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
+		"task_id":     taskRecord.ID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != "canonical_task_service_unavailable" {
+		t.Fatalf("error = %v, want canonical_task_service_unavailable", out["error"])
+	}
+
+	stored, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.WorkStatus != "draft" {
+		t.Fatalf("work_status = %q, want draft", stored.WorkStatus)
+	}
+}
+
 func TestIntegrationDelegatedCreativeWorkflowUsesInternalReviewWithoutHumanCheckpoint(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
