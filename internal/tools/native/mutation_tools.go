@@ -1659,6 +1659,14 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		}
 		taskRecord, exists := tasksBySlug[slug]
 		if !exists {
+			if slug == "bootstrap-governance-gate" {
+				completed = append(completed, map[string]any{
+					"step_slug": slug,
+					"status":    "accepted_noop",
+					"reason":    "bootstrap governance gate completion is derived from checklist progress and validation, not persisted directly",
+				})
+				continue
+			}
 			missing = append(missing, slug)
 			continue
 		}
@@ -1709,13 +1717,15 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 func normalizeBootstrapStepSlug(value string) string {
 	slug := strings.ToLower(strings.TrimSpace(value))
 	switch slug {
+	case "bootstrap-governance":
+		return "bootstrap-governance-gate"
 	case "bind-repo", "bind-repo-and-environment":
 		return "bind-repo-environment"
 	case "staff-the-project":
 		return "staff-project"
 	case "validate-sizing", "validate-task-sizing":
 		return "validate-task-shape"
-	case "attach-flows", "attach-flow-templates", "attach-validate-flows", "attach-flow-template":
+	case "attach-flows", "attach-flow-templates", "attach-validate-flows", "attach-flow-template", "attach-and-validate-flow-templates":
 		return "attach-validate-flow-templates"
 	case "first-wave-selection":
 		return "select-first-wave"

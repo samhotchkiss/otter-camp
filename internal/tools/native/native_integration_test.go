@@ -3952,10 +3952,11 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 
 	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
 		"completed_step_slugs": []string{
+			"bootstrap-governance",
 			"bind-repo",
 			"staff-the-project",
 			"validate-sizing",
-			"attach-flows",
+			"attach-and-validate-flow-templates",
 			"frank-sign-off",
 		},
 		"sign_off_summary": "Frank approved the bootstrap setup.",
@@ -3965,6 +3966,31 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 	}
 	if out["error"] != nil {
 		t.Fatalf("bootstrap.setup.persist aliases error = %v, want nil", out["error"])
+	}
+	completedSteps, ok := out["completed_steps"].([]map[string]any)
+	if !ok {
+		rawSteps, ok := out["completed_steps"].([]any)
+		if !ok {
+			t.Fatalf("completed_steps type = %T, want slice", out["completed_steps"])
+		}
+		completedSteps = make([]map[string]any, 0, len(rawSteps))
+		for _, item := range rawSteps {
+			typed, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("completed_steps item type = %T, want map[string]any", item)
+			}
+			completedSteps = append(completedSteps, typed)
+		}
+	}
+	var governanceAccepted bool
+	for _, item := range completedSteps {
+		if readStringValue(item["step_slug"]) != "bootstrap-governance-gate" {
+			continue
+		}
+		governanceAccepted = readStringValue(item["status"]) == "accepted_noop"
+	}
+	if !governanceAccepted {
+		t.Fatalf("completed_steps = %#v, want bootstrap-governance-gate accepted_noop marker", completedSteps)
 	}
 
 	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
