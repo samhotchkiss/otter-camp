@@ -1011,6 +1011,77 @@ func TestSupervisor_StrandedActiveExecutionFailureBlocksTaskAndAbandonsExecution
 	}
 }
 
+func TestSupervisor_ImpossibleInProgressTaskWithoutRuntimeOrExecutionBlocksTask(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord := seedRunProject(t, ctx, pool, org.ID)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Impossible State Worker")
+	template, node := seedSupervisorFlowTemplateNode(t, ctx, pool, org.ID, projectRecord.ID, nil, nil)
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         projectRecord.ID,
+		Title:             "Impossible live task",
+		WorkStatus:        "in_progress",
+		CurrentFlowNodeID: &node.ID,
+		FlowTemplateID:    &template.ID,
+		AssignedAgentID:   &worker.ID,
+		CreatedByType:     "system",
+		CreatedByID:       nil,
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE project_task SET updated_at = $2 WHERE id = $1`, taskRecord.ID, time.Now().UTC().Add(-20*time.Minute)); err != nil {
+		t.Fatalf("backdate impossible task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:       pool,
+		RunService: runService,
+		EventBus:   bus,
+		Logger:     newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectImpossibleLiveTasks(ctx); err != nil {
+		t.Fatalf("detectImpossibleLiveTasks: %v", err)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != node.ID {
+		t.Fatalf("current_flow_node_id = %v, want %s after impossible-state block", updatedTask.CurrentFlowNodeID, node.ID)
+	}
+
+	executions, err := repo.NewFlowNodeExecutionRepo(pool).ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("list flow executions: %v", err)
+	}
+	if len(executions) != 0 {
+		t.Fatalf("flow execution count = %d, want 0 for impossible-state fixture", len(executions))
+	}
+}
+
 func TestSupervisor_StrandedActiveExecutionFailureFailsWithoutTaskService(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

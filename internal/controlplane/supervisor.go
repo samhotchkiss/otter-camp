@@ -27,6 +27,7 @@ const (
 	orphanedEventSilenceLimit     = 10 * time.Minute
 	pausedTimeoutLimit            = 24 * time.Hour
 	strandedExecutionGraceLimit   = 30 * time.Second
+	impossibleLiveTaskGraceLimit  = 15 * time.Minute
 	urgentBlockerEscalationAfter  = 4 * time.Hour
 	normalBlockerEscalationAfter  = 24 * time.Hour
 	supervisorRecoveryMaxAttempts = 3
@@ -244,10 +245,63 @@ func (s *Supervisor) tick(ctx context.Context) error {
 	if err := s.detectStrandedActiveExecutions(ctx); err != nil {
 		return err
 	}
+	if err := s.detectImpossibleLiveTasks(ctx); err != nil {
+		return err
+	}
 	if err := s.detectExpiredBrowserHandoffs(ctx); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *Supervisor) detectImpossibleLiveTasks(ctx context.Context) error {
+	if s.pool == nil || s.taskService == nil {
+		return nil
+	}
+
+	cutoff := s.clock.Now().UTC().Add(-impossibleLiveTaskGraceLimit)
+	rows, err := s.pool.Query(ctx, `
+		SELECT t.id
+		FROM project_task t
+		LEFT JOIN runtime_state rs
+		  ON rs.scope_type = 'task'
+		 AND rs.scope_id = t.id
+		 AND rs.active_run_id IS NOT NULL
+		LEFT JOIN flow_node_execution e
+		  ON e.task_id = t.id
+		 AND e.status = 'active'
+		WHERE t.work_status = 'in_progress'
+		  AND t.updated_at < $1
+		  AND rs.id IS NULL
+		  AND e.id IS NULL
+		ORDER BY t.updated_at ASC, t.id ASC
+	`, cutoff)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	actor := tasksvc.Actor{
+		Type:                  "supervisor",
+		AllowFlowRuntimeBypass: true,
+	}
+	for rows.Next() {
+		var taskID uuid.UUID
+		if scanErr := rows.Scan(&taskID); scanErr != nil {
+			return scanErr
+		}
+		if taskID == uuid.Nil {
+			continue
+		}
+		if _, transitionErr := s.taskService.TransitionStatus(ctx, taskID, "blocked", actor); transitionErr != nil {
+			var invalid tasksvc.ErrInvalidStatusTransition
+			if errors.As(transitionErr, &invalid) {
+				continue
+			}
+			return transitionErr
+		}
+	}
+	return rows.Err()
 }
 
 func (s *Supervisor) detectStaleCreatedRuns(ctx context.Context) error {
