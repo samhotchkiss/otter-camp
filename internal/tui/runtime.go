@@ -181,8 +181,8 @@ type TaskDetailItem struct {
 	Priority                 int
 	SessionID                string // preferred execution session (active when present, otherwise recent)
 	DiscussionSessionID      string
-	ActiveExecutionID        string
-	RecentExecutionID        string
+	ActiveExecutionSessionID        string
+	RecentExecutionSessionID        string
 	AgentName                string // display_name of the assigned agent, if any
 	FlowNodeName             string // current flow node display_name, if any
 	FlowCurrentNodeID        string

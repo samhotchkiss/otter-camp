@@ -282,7 +282,7 @@ func TestTaskDetailUsesActiveExecutionSessionInRightPaneEX249(t *testing.T) {
 		ID:                  "task-249-live",
 		Title:               "Live work",
 		SessionID:           "00000000-0000-0000-0000-000000002498",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002498",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002498",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002499",
 	}})
 	model = updated.(Model)
@@ -327,8 +327,8 @@ func TestTaskDetailRendersBoundDiscussionAndExecutionSessionsEX254(t *testing.T)
 		ID:                  "task-254-live",
 		Title:               "UX Task Detail Sandbox",
 		SessionID:           executionSessionID,
-		ActiveExecutionID:   executionSessionID,
-		RecentExecutionID:   executionSessionID,
+		ActiveExecutionSessionID:   executionSessionID,
+		RecentExecutionSessionID:   executionSessionID,
 		DiscussionSessionID: discussionSessionID,
 	}})
 	model = updated.(Model)
@@ -341,11 +341,11 @@ func TestTaskDetailRendersBoundDiscussionAndExecutionSessionsEX254(t *testing.T)
 	if task.DiscussionSessionID != discussionSessionID {
 		t.Fatalf("DiscussionSessionID = %q, want %q", task.DiscussionSessionID, discussionSessionID)
 	}
-	if task.ActiveExecutionID != executionSessionID {
-		t.Fatalf("ActiveExecutionID = %q, want %q", task.ActiveExecutionID, executionSessionID)
+	if task.ActiveExecutionSessionID != executionSessionID {
+		t.Fatalf("ActiveExecutionSessionID = %q, want %q", task.ActiveExecutionSessionID, executionSessionID)
 	}
-	if task.RecentExecutionID != executionSessionID {
-		t.Fatalf("RecentExecutionID = %q, want %q", task.RecentExecutionID, executionSessionID)
+	if task.RecentExecutionSessionID != executionSessionID {
+		t.Fatalf("RecentExecutionSessionID = %q, want %q", task.RecentExecutionSessionID, executionSessionID)
 	}
 	if model.ActiveChatSession() != executionSessionID {
 		t.Fatalf("active session = %q, want execution session", model.ActiveChatSession())
@@ -384,8 +384,8 @@ func TestJumpToSessionByNameKeepsTaskDetailInSyncEX254(t *testing.T) {
 				ID:                  id,
 				Title:               "UX Task Detail Sandbox",
 				SessionID:           executionSessionID,
-				ActiveExecutionID:   executionSessionID,
-				RecentExecutionID:   executionSessionID,
+				ActiveExecutionSessionID:   executionSessionID,
+				RecentExecutionSessionID:   executionSessionID,
 				DiscussionSessionID: discussionSessionID,
 			}, nil
 		},
@@ -450,7 +450,7 @@ func TestOpenSidebarTaskChatKeepsDiscussionBindingAcrossTabNavigationEX285(t *te
 				ProjectID:         projectID,
 				Title:             "OC-75: HTML Layout Templates",
 				SessionID:         executionSession,
-				ActiveExecutionID: executionSession,
+				ActiveExecutionSessionID: executionSession,
 			}, nil
 		},
 		LoadChatHistory: func(_ context.Context, sessionID string) ([]ChatMessage, error) {
@@ -575,7 +575,7 @@ func TestTaskPaneNavigationWithDiscussionSessionDoesNotShowPlaceholderEX285(t *t
 		Title:               "Real discussion session",
 		Status:              "in_progress",
 		SessionID:           executionSession,
-		ActiveExecutionID:   executionSession,
+		ActiveExecutionSessionID:   executionSession,
 		DiscussionSessionID: discussionSession,
 	}
 	model.focus = ChatPanel
@@ -655,7 +655,7 @@ func TestTaskPaneNavigationShowsDiscussionPlaceholderOnlyWhenMissingEX285(t *tes
 		Title:             "No discussion session",
 		Status:            "in_progress",
 		SessionID:         executionSession,
-		ActiveExecutionID: executionSession,
+		ActiveExecutionSessionID: executionSession,
 	}
 	model.focus = ChatPanel
 	model.activeScope = ScopeTask
@@ -737,7 +737,7 @@ func TestTaskPaneTabSwitchPreservesScrollStateEX249(t *testing.T) {
 		Title:               "Preserve scroll",
 		Status:              "in_progress",
 		SessionID:           "00000000-0000-0000-0000-000000002500",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002500",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002500",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002501",
 	}
 	model.focus = ChatPanel
@@ -783,7 +783,7 @@ func TestCompletedTaskFallsBackDeterministicallyEX249(t *testing.T) {
 		Title:             "Recent execution",
 		WorkStatus:        "done",
 		SessionID:         "00000000-0000-0000-0000-000000002502",
-		RecentExecutionID: "00000000-0000-0000-0000-000000002502",
+		RecentExecutionSessionID: "00000000-0000-0000-0000-000000002502",
 	}})
 	model = updated.(Model)
 	if model.taskPaneTab != taskPaneTabJournal {
@@ -872,7 +872,7 @@ func TestTaskPaneScopeCycleKeepsContentAndTabsInSyncEX259(t *testing.T) {
 		ProjectID:           "project-259",
 		Title:               "Cycle right pane",
 		SessionID:           executionSession,
-		ActiveExecutionID:   executionSession,
+		ActiveExecutionSessionID:   executionSession,
 		DiscussionSessionID: discussionSession,
 	}})
 	model = applyImmediateCmdMessages(updated.(Model), cmd)
@@ -940,7 +940,7 @@ func TestTaskPaneProjectScopeWithoutSessionShowsExplicitStateEX259(t *testing.T)
 		ProjectID:           "project-259-missing",
 		Title:               "Missing project chat",
 		SessionID:           "00000000-0000-0000-0000-000000002598",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002598",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002598",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002599",
 	}})
 	model = applyImmediateCmdMessages(updated.(Model), cmd)
@@ -1010,7 +1010,7 @@ func TestTaskPaneStreamingEscAndCancelEX249(t *testing.T) {
 		Title:               "Streaming work",
 		Status:              "in_progress",
 		SessionID:           "00000000-0000-0000-0000-000000002506",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002506",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002506",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002507",
 	}
 	model.focus = ChatPanel
@@ -1098,7 +1098,7 @@ func TestTaskPaneEnterCancelCommandDoesNotPostLiteralMessageEX260(t *testing.T) 
 		Title:               "Cancel via composer",
 		Status:              "in_progress",
 		SessionID:           "00000000-0000-0000-0000-000000002602",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002602",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002602",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002603",
 	}
 	model.focus = ChatPanel
@@ -1181,7 +1181,7 @@ func TestTaskPanePointerRefocusActivatesComposerEX252(t *testing.T) {
 		Title:               "Pointer composer",
 		Status:              "in_progress",
 		SessionID:           "00000000-0000-0000-0000-000000002526",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002526",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002526",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002527",
 	}
 	model.focus = ChatPanel
@@ -1235,7 +1235,7 @@ func TestTaskPanePointerTabsSwitchContentAndRoutingEX252(t *testing.T) {
 		Title:               "Pointer tabs",
 		Status:              "in_progress",
 		SessionID:           executionSession,
-		ActiveExecutionID:   executionSession,
+		ActiveExecutionSessionID:   executionSession,
 		DiscussionSessionID: discussionSession,
 		Events: []TaskEvent{{
 			EventType: "task.created",
@@ -1346,7 +1346,7 @@ func TestTaskTraceShowsFullToolResultDetailEX252(t *testing.T) {
 		Title:               "Trace detail",
 		Status:              "in_progress",
 		SessionID:           "00000000-0000-0000-0000-000000002530",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002530",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002530",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002531",
 	}
 	model.focus = ChatPanel

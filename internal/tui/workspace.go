@@ -81,8 +81,8 @@ type taskRecord struct {
 	Subtasks                 []string
 	SessionID                string // preferred execution session (active when present, otherwise recent)
 	DiscussionSessionID      string
-	ActiveExecutionID        string
-	RecentExecutionID        string
+	ActiveExecutionSessionID        string
+	RecentExecutionSessionID        string
 	Status                   string
 	Priority                 int
 	Flow                     int
@@ -541,8 +541,8 @@ func (w *workspaceState) taskTitleForScopeSession(sessionID string) string {
 		}
 		if strings.TrimSpace(task.SessionID) == sessionID ||
 			strings.TrimSpace(task.DiscussionSessionID) == sessionID ||
-			strings.TrimSpace(task.ActiveExecutionID) == sessionID ||
-			strings.TrimSpace(task.RecentExecutionID) == sessionID {
+			strings.TrimSpace(task.ActiveExecutionSessionID) == sessionID ||
+			strings.TrimSpace(task.RecentExecutionSessionID) == sessionID {
 			title := strings.TrimSpace(task.Title)
 			if task.TaskNumber > 0 {
 				return fmt.Sprintf("OC-%d: %s", task.TaskNumber, title)
@@ -557,10 +557,10 @@ func (w *workspaceState) taskSessionID(taskID string) string {
 	task := w.tasks[taskID]
 	if task != nil {
 		switch {
-		case strings.TrimSpace(task.ActiveExecutionID) != "":
-			return strings.TrimSpace(task.ActiveExecutionID)
-		case strings.TrimSpace(task.RecentExecutionID) != "":
-			return strings.TrimSpace(task.RecentExecutionID)
+		case strings.TrimSpace(task.ActiveExecutionSessionID) != "":
+			return strings.TrimSpace(task.ActiveExecutionSessionID)
+		case strings.TrimSpace(task.RecentExecutionSessionID) != "":
+			return strings.TrimSpace(task.RecentExecutionSessionID)
 		case strings.TrimSpace(task.SessionID) != "":
 			return strings.TrimSpace(task.SessionID)
 		case strings.TrimSpace(task.DiscussionSessionID) != "":

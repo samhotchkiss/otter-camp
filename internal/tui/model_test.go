@@ -1228,7 +1228,7 @@ func TestTaskDetailDefaultRightPaneSourceEX249(t *testing.T) {
 				ID:                  "task-249-active",
 				Title:               "Watch active execution",
 				SessionID:           "00000000-0000-0000-0000-000000002491",
-				ActiveExecutionID:   "00000000-0000-0000-0000-000000002491",
+				ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002491",
 				DiscussionSessionID: "00000000-0000-0000-0000-000000002492",
 			},
 			wantTab:     taskPaneTabJournal,
@@ -1240,7 +1240,7 @@ func TestTaskDetailDefaultRightPaneSourceEX249(t *testing.T) {
 				ID:                  "task-249-recent",
 				Title:               "Watch recent execution",
 				SessionID:           "00000000-0000-0000-0000-000000002493",
-				RecentExecutionID:   "00000000-0000-0000-0000-000000002493",
+				RecentExecutionSessionID:   "00000000-0000-0000-0000-000000002493",
 				DiscussionSessionID: "00000000-0000-0000-0000-000000002494",
 			},
 			wantTab:     taskPaneTabJournal,
@@ -1302,7 +1302,7 @@ func TestTaskDetailLoadPreservesSelectedDiscussionSessionEX254(t *testing.T) {
 		ID:                  "task-254-selected-discussion",
 		Title:               "Selected discussion",
 		SessionID:           "00000000-0000-0000-0000-000000002542",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002542",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002542",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002541",
 	}})
 	got := updated.(Model)
@@ -1343,7 +1343,7 @@ func TestTaskDetailLoadUsesSidebarDiscussionFallbackEX285(t *testing.T) {
 		ProjectID:         "project-285",
 		Title:             "Sidebar discussion fallback",
 		SessionID:         executionSession,
-		ActiveExecutionID: executionSession,
+		ActiveExecutionSessionID: executionSession,
 	}})
 	got := updated.(Model)
 
@@ -1579,7 +1579,7 @@ func TestTaskPaneNavigationStateMachineEX249(t *testing.T) {
 		Title:               "Navigate task pane",
 		Status:              "in_progress",
 		SessionID:           "00000000-0000-0000-0000-000000002504",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002504",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002504",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002505",
 	}
 	model.activeScope = ScopeTask
@@ -1638,7 +1638,7 @@ func TestTaskPaneSessionIDUsesTaskProjectContextEX259(t *testing.T) {
 		ID:                  "task-259-session",
 		ProjectID:           "project-real",
 		DiscussionSessionID: "task-discussion-session",
-		ActiveExecutionID:   "task-execution-session",
+		ActiveExecutionSessionID:   "task-execution-session",
 	}
 	model.workspace.tasks[task.ID] = task
 	model.workspace.selectedTaskID = task.ID
@@ -1693,7 +1693,7 @@ func TestTaskDetailLoadResetsRightPaneToTaskScopeEX259(t *testing.T) {
 		ProjectID:           "project-real",
 		Title:               "Open task",
 		SessionID:           "00000000-0000-0000-0000-000000002591",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002591",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002591",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002592",
 	}})
 	model = updated.(Model)
@@ -1720,7 +1720,7 @@ func TestTaskPaneScopeSwitchCoercesDiscussionAndShowsMissingSessionEX259(t *test
 		ID:                  "task-259-switch",
 		ProjectID:           "project-real",
 		DiscussionSessionID: "task-discussion",
-		ActiveExecutionID:   "task-execution",
+		ActiveExecutionSessionID:   "task-execution",
 	}
 	model.workspace.setMainView(ViewTask)
 	model.workspace.selectedTaskID = task.ID
@@ -1807,7 +1807,7 @@ func TestTaskPaneEscNavigatesAndCancelIsExplicitEX249(t *testing.T) {
 		Title:               "Active work",
 		Status:              "in_progress",
 		SessionID:           "00000000-0000-0000-0000-000000002496",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002496",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002496",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002497",
 	}
 	model.focus = ChatPanel
@@ -1939,7 +1939,7 @@ func TestTaskPaneMouseFocusIntoChatResetsComposeEX252(t *testing.T) {
 		Title:               "Pointer focus",
 		Status:              "in_progress",
 		SessionID:           "00000000-0000-0000-0000-000000002520",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002520",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002520",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002521",
 	}
 	model.focus = MainPanel
@@ -1977,7 +1977,7 @@ func TestTaskPanePointerRefocusPreservesDraftEX252(t *testing.T) {
 		Title:               "Preserve draft",
 		Status:              "in_progress",
 		SessionID:           "00000000-0000-0000-0000-000000002522",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002522",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002522",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002523",
 	}
 	model.focus = ChatPanel
@@ -2016,7 +2016,7 @@ func TestTaskPaneMouseClickTabsEX252(t *testing.T) {
 		Title:               "Clickable tabs",
 		Status:              "in_progress",
 		SessionID:           "00000000-0000-0000-0000-000000002524",
-		ActiveExecutionID:   "00000000-0000-0000-0000-000000002524",
+		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002524",
 		DiscussionSessionID: "00000000-0000-0000-0000-000000002525",
 	}
 	model.focus = ChatPanel

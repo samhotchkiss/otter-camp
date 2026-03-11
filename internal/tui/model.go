@@ -419,10 +419,10 @@ func (m Model) taskExecutionSessionID(task *taskRecord) string {
 	switch {
 	case strings.TrimSpace(task.selectedFlowNodeSessionID()) != "":
 		return strings.TrimSpace(task.selectedFlowNodeSessionID())
-	case strings.TrimSpace(task.ActiveExecutionID) != "":
-		return strings.TrimSpace(task.ActiveExecutionID)
-	case strings.TrimSpace(task.RecentExecutionID) != "":
-		return strings.TrimSpace(task.RecentExecutionID)
+	case strings.TrimSpace(task.ActiveExecutionSessionID) != "":
+		return strings.TrimSpace(task.ActiveExecutionSessionID)
+	case strings.TrimSpace(task.RecentExecutionSessionID) != "":
+		return strings.TrimSpace(task.RecentExecutionSessionID)
 	case strings.TrimSpace(task.SessionID) != "":
 		return strings.TrimSpace(task.SessionID)
 	default:
@@ -1084,8 +1084,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		rec.SessionID = typed.Detail.SessionID
 		rec.DiscussionSessionID = typed.Detail.DiscussionSessionID
-		rec.ActiveExecutionID = typed.Detail.ActiveExecutionID
-		rec.RecentExecutionID = typed.Detail.RecentExecutionID
+		rec.ActiveExecutionSessionID = typed.Detail.ActiveExecutionSessionID
+		rec.RecentExecutionSessionID = typed.Detail.RecentExecutionSessionID
 		rec.TaskNumber = typed.Detail.TaskNumber
 		rec.Priority = typed.Detail.Priority
 		rec.AgentName = typed.Detail.AgentName
