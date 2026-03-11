@@ -235,6 +235,33 @@ func TestTaskServiceIntegrationHumanApprovalGate(t *testing.T) {
 	}
 }
 
+func TestTaskServiceIntegrationCreateTaskAllowsExplicitHumanReviewOverride(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{"requires_human_review":false}`))
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	override := true
+	taskRecord, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:           project.ID,
+		Title:               "Explicit review override",
+		FlowTemplateID:      &template.ID,
+		CreatedByType:       "system",
+		RequiresHumanReview: &override,
+		Priority:            4,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if !taskRecord.RequiresHumanReview {
+		t.Fatal("requires_human_review = false, want true")
+	}
+	if taskRecord.Priority != 4 {
+		t.Fatalf("priority = %d, want 4", taskRecord.Priority)
+	}
+}
+
 func TestTaskServiceIntegrationRejectsFlowTemplateWithoutReviewNode(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

@@ -231,6 +231,7 @@ type ExecutorOptions struct {
 }
 
 type nativeTaskTransitionService interface {
+	CreateTask(ctx context.Context, req tasksvc.CreateTaskRequest) (*tasksvc.ProjectTask, error)
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
 }

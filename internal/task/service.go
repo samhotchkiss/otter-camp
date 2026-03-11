@@ -24,37 +24,37 @@ import (
 )
 
 var (
-	ErrOrganizationIDRequired          = errors.New("organization_id is required")
-	ErrProjectIDRequired               = errors.New("project_id is required")
-	ErrTaskIDRequired                  = errors.New("task_id is required")
-	ErrTitleRequired                   = errors.New("title is required")
-	ErrInvalidCreatedByType            = errors.New("created_by_type must be human_user, agent, or system")
-	ErrCreatedByIDRequired             = errors.New("created_by_id is required for human_user and agent")
-	ErrAgentNotAssigned                = errors.New("assigned_agent_id is not actively assigned to the project")
-	ErrHumanReviewNotRequired          = errors.New("task does not require human review")
-	ErrInboxItemNotFound               = errors.New("inbox item not found")
-	ErrInboxActionForbidden            = errors.New("inbox action forbidden for this user")
-	ErrUnknownInboxItemType            = errors.New("unknown inbox item type")
-	ErrUnknownInboxAction              = errors.New("unknown inbox action")
-	ErrNoTaskBranch                    = errors.New("task has no branch name")
-	ErrPMNotAssigned                   = errors.New("project has no active PM assignment")
-	ErrInboxItemTypeInvalid            = errors.New("invalid inbox item type")
-	ErrSourceTaskRequired              = errors.New("source_task_id is required for this inbox item type")
-	ErrSourceProjectIDRequired         = errors.New("source_project_id is required for this inbox item type")
-	ErrRequiresHumanApproval           = errors.New("task requires human approval before queueing")
-	ErrFlowTemplateRequired            = errors.New("task requires a flow template before it can be queued")
-	ErrFlowTemplateReviewRequired      = errors.New("flow template must define a work -> review -> completion path")
-	ErrProjectGateBlockingQueue        = errors.New("task is blocked by an outstanding project gate and cannot be queued yet")
-	ErrInvalidBlocksScope              = errors.New("blocks_scope must be one of: none, all")
-	ErrDoneRequiresTerminalFlow        = errors.New("task can only be marked done when its flow reaches a terminal node")
-	ErrTransitionTargetRequired        = errors.New("target status is required")
-	ErrActorTypeInvalidForAction       = errors.New("actor_type is invalid for action")
-	ErrBrowserHandoffUnavailable       = errors.New("browser handoff service unavailable")
-	ErrActiveFlowRequired              = errors.New("task requires an active flow to be in_progress")
-	ErrFlowServiceUnavailable          = errors.New("flow service unavailable")
-	ErrTaskMustRemainOrchestrationOnly = errors.New("task must remain orchestration-only while executable child tasks exist")
-	ErrTaskFlowStateInvariant          = errors.New("task flow state invariant violated")
-	ErrParentIntegrationFeedbackRequired = errors.New("completed child reopen requires parent integration feedback")
+	ErrOrganizationIDRequired              = errors.New("organization_id is required")
+	ErrProjectIDRequired                   = errors.New("project_id is required")
+	ErrTaskIDRequired                      = errors.New("task_id is required")
+	ErrTitleRequired                       = errors.New("title is required")
+	ErrInvalidCreatedByType                = errors.New("created_by_type must be human_user, agent, or system")
+	ErrCreatedByIDRequired                 = errors.New("created_by_id is required for human_user and agent")
+	ErrAgentNotAssigned                    = errors.New("assigned_agent_id is not actively assigned to the project")
+	ErrHumanReviewNotRequired              = errors.New("task does not require human review")
+	ErrInboxItemNotFound                   = errors.New("inbox item not found")
+	ErrInboxActionForbidden                = errors.New("inbox action forbidden for this user")
+	ErrUnknownInboxItemType                = errors.New("unknown inbox item type")
+	ErrUnknownInboxAction                  = errors.New("unknown inbox action")
+	ErrNoTaskBranch                        = errors.New("task has no branch name")
+	ErrPMNotAssigned                       = errors.New("project has no active PM assignment")
+	ErrInboxItemTypeInvalid                = errors.New("invalid inbox item type")
+	ErrSourceTaskRequired                  = errors.New("source_task_id is required for this inbox item type")
+	ErrSourceProjectIDRequired             = errors.New("source_project_id is required for this inbox item type")
+	ErrRequiresHumanApproval               = errors.New("task requires human approval before queueing")
+	ErrFlowTemplateRequired                = errors.New("task requires a flow template before it can be queued")
+	ErrFlowTemplateReviewRequired          = errors.New("flow template must define a work -> review -> completion path")
+	ErrProjectGateBlockingQueue            = errors.New("task is blocked by an outstanding project gate and cannot be queued yet")
+	ErrInvalidBlocksScope                  = errors.New("blocks_scope must be one of: none, all")
+	ErrDoneRequiresTerminalFlow            = errors.New("task can only be marked done when its flow reaches a terminal node")
+	ErrTransitionTargetRequired            = errors.New("target status is required")
+	ErrActorTypeInvalidForAction           = errors.New("actor_type is invalid for action")
+	ErrBrowserHandoffUnavailable           = errors.New("browser handoff service unavailable")
+	ErrActiveFlowRequired                  = errors.New("task requires an active flow to be in_progress")
+	ErrFlowServiceUnavailable              = errors.New("flow service unavailable")
+	ErrTaskMustRemainOrchestrationOnly     = errors.New("task must remain orchestration-only while executable child tasks exist")
+	ErrTaskFlowStateInvariant              = errors.New("task flow state invariant violated")
+	ErrParentIntegrationFeedbackRequired   = errors.New("completed child reopen requires parent integration feedback")
 	ErrBlockedInProgressRequiresHumanActor = errors.New("blocked to in_progress requires direct human operator continuation")
 )
 
@@ -195,16 +195,18 @@ type InboxItem = repo.InboxItem
 type MergeQueueEntry = repo.MergeQueueEntry
 
 type CreateTaskRequest struct {
-	ProjectID       uuid.UUID
-	Title           string
-	Description     *string
-	FlowTemplateID  *uuid.UUID
-	ScheduleID      *uuid.UUID
-	BlocksScope     string
-	AssignedAgentID *uuid.UUID
-	CreatedByType   string
-	CreatedByID     uuid.UUID
-	Metadata        json.RawMessage
+	ProjectID           uuid.UUID
+	Title               string
+	Description         *string
+	FlowTemplateID      *uuid.UUID
+	ScheduleID          *uuid.UUID
+	BlocksScope         string
+	Priority            int
+	AssignedAgentID     *uuid.UUID
+	CreatedByType       string
+	CreatedByID         uuid.UUID
+	RequiresHumanReview *bool
+	Metadata            json.RawMessage
 }
 
 type CreateInboxItemRequest struct {
@@ -484,6 +486,9 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 	}
 
 	requiresHumanReview := projectRequiresHumanReview(projectRecord.Settings)
+	if req.RequiresHumanReview != nil {
+		requiresHumanReview = *req.RequiresHumanReview
+	}
 	created, err := s.tasks.Create(ctx, repo.ProjectTask{
 		OrganizationID:      projectRecord.OrganizationID,
 		ProjectID:           req.ProjectID,
@@ -493,6 +498,7 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 		BlocksScope:         blocksScope,
 		FlowTemplateID:      req.FlowTemplateID,
 		ScheduleID:          req.ScheduleID,
+		Priority:            req.Priority,
 		RequiresHumanReview: requiresHumanReview,
 		CreatedByType:       createdByType,
 		CreatedByID:         createdByID,

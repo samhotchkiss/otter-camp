@@ -1243,20 +1243,43 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			return response, nil
 		}
 	}
-	created, err := e.tasks.Create(ctx, repo.ProjectTask{
-		OrganizationID:      scope.organizationID,
-		ProjectID:           projectID,
-		Title:               title,
-		Description:         description,
-		BlocksScope:         blocksScope,
-		FlowTemplateID:      resolvedFlowTemplateID,
-		RequiresHumanReview: requiresHumanReview,
-		CreatedByType:       actor.createdByType,
-		CreatedByID:         actor.createdByPtr,
-		Metadata:            enrichedMetadata,
-	})
-	if err != nil {
-		return nil, err
+	var created repo.ProjectTask
+	if e.taskService != nil {
+		createdRecord, createErr := e.taskService.CreateTask(ctx, tasksvc.CreateTaskRequest{
+			ProjectID:           projectID,
+			Title:               title,
+			Description:         description,
+			FlowTemplateID:      resolvedFlowTemplateID,
+			BlocksScope:         blocksScope,
+			CreatedByType:       actor.createdByType,
+			CreatedByID:         actor.createdByID,
+			RequiresHumanReview: &requiresHumanReview,
+			Metadata:            enrichedMetadata,
+		})
+		if createErr != nil {
+			return nil, createErr
+		}
+		created = *createdRecord
+	} else {
+		// Pool-less/native test executors can still fall back to direct repo creation. The
+		// production runtime must use the canonical task service so create-time invariants and
+		// domain events stay aligned with the task state machine.
+		createdRecord, createErr := e.tasks.Create(ctx, repo.ProjectTask{
+			OrganizationID:      scope.organizationID,
+			ProjectID:           projectID,
+			Title:               title,
+			Description:         description,
+			BlocksScope:         blocksScope,
+			FlowTemplateID:      resolvedFlowTemplateID,
+			RequiresHumanReview: requiresHumanReview,
+			CreatedByType:       actor.createdByType,
+			CreatedByID:         actor.createdByPtr,
+			Metadata:            enrichedMetadata,
+		})
+		if createErr != nil {
+			return nil, createErr
+		}
+		created = createdRecord
 	}
 	if parentTask != nil {
 		parentTask.Metadata = taskdecomp.AppendChildTaskID(parentTask.Metadata, created.ID)
@@ -2418,25 +2441,50 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 			childTaskIDs = append(childTaskIDs, repairedChild.ID)
 			continue
 		}
-		createdChild, createErr := e.tasks.Create(ctx, repo.ProjectTask{
-			OrganizationID:      taskRecord.OrganizationID,
-			ProjectID:           taskRecord.ProjectID,
-			Title:               childDraft.Title,
-			Description:         childDraft.Description,
-			WorkStatus:          "draft",
-			FlowTemplateID:      taskRecord.FlowTemplateID,
-			RequiresHumanReview: taskRecord.RequiresHumanReview,
-			Priority:            taskRecord.Priority,
-			CreatedByType:       actor.createdByType,
-			CreatedByID:         actor.createdByPtr,
-			Metadata:            childDraft.Metadata,
-		})
-		if createErr != nil {
-			return queueDecompositionResult{}, createErr
+		var createdChild repo.ProjectTask
+		if e.taskService != nil {
+			requiresHumanReview := taskRecord.RequiresHumanReview
+			createdRecord, createErr := e.taskService.CreateTask(ctx, tasksvc.CreateTaskRequest{
+				ProjectID:           taskRecord.ProjectID,
+				Title:               childDraft.Title,
+				Description:         childDraft.Description,
+				FlowTemplateID:      taskRecord.FlowTemplateID,
+				Priority:            taskRecord.Priority,
+				CreatedByType:       actor.createdByType,
+				CreatedByID:         actor.createdByID,
+				RequiresHumanReview: &requiresHumanReview,
+				Metadata:            childDraft.Metadata,
+			})
+			if createErr != nil {
+				return queueDecompositionResult{}, createErr
+			}
+			createdChild = *createdRecord
+		} else {
+			// Pool-less/native test executors can still fall back to direct repo creation. The
+			// production runtime must route decomposed child creation through the canonical task service.
+			createdRecord, createErr := e.tasks.Create(ctx, repo.ProjectTask{
+				OrganizationID:      taskRecord.OrganizationID,
+				ProjectID:           taskRecord.ProjectID,
+				Title:               childDraft.Title,
+				Description:         childDraft.Description,
+				WorkStatus:          "draft",
+				FlowTemplateID:      taskRecord.FlowTemplateID,
+				RequiresHumanReview: taskRecord.RequiresHumanReview,
+				Priority:            taskRecord.Priority,
+				CreatedByType:       actor.createdByType,
+				CreatedByID:         actor.createdByPtr,
+				Metadata:            childDraft.Metadata,
+			})
+			if createErr != nil {
+				return queueDecompositionResult{}, createErr
+			}
+			createdChild = createdRecord
 		}
 		childTaskIDs = append(childTaskIDs, createdChild.ID)
-		if err := e.publishTaskCreatedEvent(ctx, nil, createdChild, &taskRecord.ID, true); err != nil {
-			return queueDecompositionResult{}, err
+		if e.taskService == nil {
+			if err := e.publishTaskCreatedEvent(ctx, nil, createdChild, &taskRecord.ID, true); err != nil {
+				return queueDecompositionResult{}, err
+			}
 		}
 	}
 

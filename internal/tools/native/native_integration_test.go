@@ -61,8 +61,8 @@ func TestIntegrationExecutorAutoBuildsTaskServiceWhenPoolAndEventsProvided(t *te
 	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
 
 	executor := NewExecutor(ExecutorOptions{
-		Pool:         pool,
-		Events:       bus,
+		Pool:          pool,
+		Events:        bus,
 		WorkspaceRoot: t.TempDir(),
 	})
 	if executor.taskService == nil {
@@ -610,6 +610,43 @@ func TestIntegrationTaskCreateSubjectiveMultiOptionUsesReviewRefinementPlanning(
 	}
 	if nodes[0].DisplayName != "Generation" || nodes[1].DisplayName != "Internal Review" || nodes[2].DisplayName != "Human Review" || nodes[3].DisplayName != "Complete" {
 		t.Fatalf("unexpected node sequence = [%s %s %s %s]", nodes[0].DisplayName, nodes[1].DisplayName, nodes[2].DisplayName, nodes[3].DisplayName)
+	}
+}
+
+func TestIntegrationTaskCreateUsesCanonicalTaskServiceForHumanReviewOverride(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := seedReviewRefinementSystemTemplate(t, ctx, pool)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":            project.ID.String(),
+		"title":                 "Needs explicit human review",
+		"description":           "Build options, then require an explicit human checkpoint before merge.",
+		"flow_template_id":      template.ID.String(),
+		"requires_human_review": true,
+		"blocks_scope":          "all",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+
+	taskID := nestedUUID(t, out, "task", "id")
+	taskRecord, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if !taskRecord.RequiresHumanReview {
+		t.Fatal("requires_human_review = false, want true")
+	}
+	if taskRecord.WorkStatus != "draft" {
+		t.Fatalf("work_status = %q, want draft", taskRecord.WorkStatus)
+	}
+	if taskRecord.BlocksScope != "all" {
+		t.Fatalf("blocks_scope = %q, want all", taskRecord.BlocksScope)
 	}
 }
 
