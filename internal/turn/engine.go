@@ -1325,7 +1325,7 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 		return updated, nil
 	}
 
-	deadline := time.Now().Add(defaultProjectBootstrapPromotionTimeout)
+	deadline := e.now().Add(defaultProjectBootstrapPromotionTimeout)
 	for {
 		updated, err = e.loadProjectBootstrapProgress(ctx, projectID)
 		if err != nil {
@@ -1334,7 +1334,7 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 		if updated.FirstWaveMaterialized() || updated.ValidationFailed() {
 			return updated, nil
 		}
-		if time.Now().After(deadline) {
+		if e.now().After(deadline) {
 			updated.ValidationStatus = projectBootstrapValidationFailed
 			updated.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
 			updated.ValidationFailureReason = buildProjectBootstrapFirstWaveExecutionFailureReason(updated)
@@ -1343,7 +1343,9 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 		if ctx.Err() != nil {
 			return progress, ctx.Err()
 		}
-		time.Sleep(defaultProjectBootstrapPromotionPollDelay)
+		if err := e.sleep(ctx, defaultProjectBootstrapPromotionPollDelay); err != nil {
+			return progress, err
+		}
 	}
 }
 
