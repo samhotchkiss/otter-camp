@@ -1709,13 +1709,13 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 func normalizeBootstrapStepSlug(value string) string {
 	slug := strings.ToLower(strings.TrimSpace(value))
 	switch slug {
-	case "bind-repo-and-environment":
+	case "bind-repo", "bind-repo-and-environment":
 		return "bind-repo-environment"
 	case "staff-the-project":
 		return "staff-project"
-	case "validate-task-sizing":
+	case "validate-sizing", "validate-task-sizing":
 		return "validate-task-shape"
-	case "attach-flow-templates", "attach-validate-flows", "attach-flow-template":
+	case "attach-flows", "attach-flow-templates", "attach-validate-flows", "attach-flow-template":
 		return "attach-validate-flow-templates"
 	case "first-wave-selection":
 		return "select-first-wave"

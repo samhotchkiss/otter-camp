@@ -3878,10 +3878,10 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 
 	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
 		"completed_step_slugs": []string{
-			"bind-repo-and-environment",
+			"bind-repo",
 			"staff-the-project",
-			"validate-task-sizing",
-			"attach-flow-templates",
+			"validate-sizing",
+			"attach-flows",
 			"frank-sign-off",
 		},
 		"sign_off_summary": "Frank approved the bootstrap setup.",
