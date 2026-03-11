@@ -1655,6 +1655,58 @@ func TestDispatchToolsTaskScopeInjectsBoundProjectAndTaskIDs(t *testing.T) {
 	}
 }
 
+func TestDispatchToolsProjectScopeOverridesStaleBoundIDs(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	projectID := uuid.New()
+	staleProjectID := uuid.New()
+	staleSessionID := uuid.New()
+	staleTaskID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	var dispatched ToolCall
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = call
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+	}
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(string) error) (ModelResponse, error) {
+		round++
+		if round == 1 {
+			return ModelResponse{
+				ToolCalls: []ModelToolCall{{
+					ID:   "tier1",
+					Name: "task.list",
+					Arguments: map[string]any{
+						"project_id": staleProjectID.String(),
+						"session_id": staleSessionID.String(),
+						"task_id":    staleTaskID.String(),
+						"agent_id":   uuid.New().String(),
+					},
+				}},
+			}, nil
+		}
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if got := dispatched.Arguments["project_id"]; got != projectID.String() {
+		t.Fatalf("project_id = %v, want %s", got, projectID)
+	}
+	if got := dispatched.Arguments["session_id"]; got != fixture.session.ID.String() {
+		t.Fatalf("session_id = %v, want %s", got, fixture.session.ID)
+	}
+	if got := dispatched.Arguments["agent_id"]; got != fixture.chat.participants[0].ParticipantID.String() {
+		t.Fatalf("agent_id = %v, want %s", got, fixture.chat.participants[0].ParticipantID)
+	}
+	if _, exists := dispatched.Arguments["task_id"]; exists {
+		t.Fatalf("task_id = %v, want stale task binding cleared for project-scoped dispatch", dispatched.Arguments["task_id"])
+	}
+}
+
 func TestTierRoutingExecutesTier1ParallelThenTier2Sequential(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 

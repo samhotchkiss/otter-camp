@@ -3620,22 +3620,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		arguments := cloneMap(call.Arguments)
 		arguments["organization_id"] = rt.session.OrganizationID.String()
-		if _, exists := arguments["session_id"]; !exists {
-			arguments["session_id"] = rt.session.ID.String()
-		}
+		arguments["session_id"] = rt.session.ID.String()
 		arguments["turn_id"] = rt.turn.ID.String()
-		if _, exists := arguments["agent_id"]; !exists {
-			arguments["agent_id"] = rt.agent.ID.String()
-		}
+		arguments["agent_id"] = rt.agent.ID.String()
 		if binding.projectID != nil {
-			if _, exists := arguments["project_id"]; !exists {
-				arguments["project_id"] = binding.projectID.String()
-			}
+			arguments["project_id"] = binding.projectID.String()
 		}
 		if binding.taskID != nil {
-			if _, exists := arguments["task_id"]; !exists {
-				arguments["task_id"] = binding.taskID.String()
-			}
+			arguments["task_id"] = binding.taskID.String()
+		} else if strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
+			delete(arguments, "task_id")
 		}
 		if strings.EqualFold(name, "project.create") && rt.projectIdentity != nil {
 			blockedCalls = append(blockedCalls, ToolResult{
