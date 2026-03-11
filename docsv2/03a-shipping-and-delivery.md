@@ -130,7 +130,7 @@ The agent doing the deploy work uses whatever tools are needed — CLI commands,
 
 Deploy tasks appear on the task board, have flow progression, can be blocked, can have subtasks. The PM configures the deploy flow template during project setup. Agents with the relevant skills execute the work.
 
-**Canonical task-state rule.** Background delivery services do not write deploy or rollback tasks directly into `queued`. They create the task through the canonical task service in `draft`, then transition it through the normal state machine to `queued`. This guarantees the same validation, event emission, runtime bookkeeping, and queue wakeups as any other task in the system. If a deploy flow template is structurally invalid, delivery task creation must fail closed instead of bypassing the state machine.
+**Canonical task-state rule.** Background delivery services do not write deploy or rollback tasks directly into `queued`. They create the task through the canonical task service in `draft`, then transition it through the normal state machine to `queued`. This guarantees the same validation, event emission, runtime bookkeeping, and queue wakeups as any other task in the system. If a deploy flow template is structurally invalid, or if the canonical task service is not wired for a pool-backed runtime path, delivery task creation must fail closed instead of bypassing the state machine.
 
 ### What a Deploy Task Knows
 

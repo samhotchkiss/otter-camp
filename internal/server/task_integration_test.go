@@ -1317,7 +1317,7 @@ func newTaskTestServer(t *testing.T) (*authIntegrationServer, repo.Organization,
 	if err != nil {
 		t.Fatalf("new flow service: %v", err)
 	}
-	deliveryService, err := deliverysvc.NewService(deliverysvc.Options{Pool: pool})
+	deliveryService, err := deliverysvc.NewService(deliverysvc.Options{Pool: pool, Events: bus})
 	if err != nil {
 		t.Fatalf("new delivery service: %v", err)
 	}

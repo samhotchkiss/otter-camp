@@ -188,6 +188,9 @@ func (w *DeployWorker) Execute(ctx context.Context, job jobqueue.Job) error {
 }
 
 func (w *DeployWorker) createContinuousDeployTask(ctx context.Context, payload deployTaskCreatePayload) (uuid.UUID, error) {
+	if w.pool != nil && w.taskService == nil {
+		return uuid.Nil, ErrCanonicalTaskServiceRequired
+	}
 	projectRecord, err := w.projects.GetByID(ctx, payload.ProjectID)
 	if err != nil {
 		return uuid.Nil, err

@@ -35,7 +35,8 @@ const (
 )
 
 var (
-	ErrEnvironmentIDRequired = errors.New("environment_id is required")
+	ErrEnvironmentIDRequired        = errors.New("environment_id is required")
+	ErrCanonicalTaskServiceRequired = errors.New("canonical task service is required for delivery task creation")
 )
 
 type pushExecutePayload struct {
@@ -287,6 +288,9 @@ func (s *Service) RequestGatedDelivery(ctx context.Context, environmentID uuid.U
 func (s *Service) CreateDeployTask(ctx context.Context, environmentID uuid.UUID, commitSHA string) (repo.ProjectTask, error) {
 	if environmentID == uuid.Nil {
 		return repo.ProjectTask{}, ErrEnvironmentIDRequired
+	}
+	if s.pool != nil && s.taskService == nil {
+		return repo.ProjectTask{}, ErrCanonicalTaskServiceRequired
 	}
 
 	environment, err := s.environments.GetByID(ctx, environmentID)

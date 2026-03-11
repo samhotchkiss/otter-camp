@@ -164,6 +164,25 @@ func TestDeliveryServiceCreateDeployTaskSetsEnvironmentDeployTaskID(t *testing.T
 	}
 }
 
+func TestDeliveryServiceCreateDeployTaskRequiresCanonicalTaskService(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedDeliveryOrgProject(t, ctx, pool)
+	pmUser := seedDeliveryUser(t, ctx, pool, org.ID, "pm-user", "admin")
+	pmAgent := seedDeliveryAgent(t, ctx, pool, org.ID, "PM Agent", pmUser.ID)
+	assignDeliveryPM(t, ctx, pool, pmAgent.ID, project.ID)
+	environment := seedDeliveryEnvironment(t, ctx, pool, project.ID, "production", "gated")
+
+	service, err := NewService(Options{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if _, err := service.CreateDeployTask(ctx, environment.ID, "deadbeef"); !errors.Is(err, ErrCanonicalTaskServiceRequired) {
+		t.Fatalf("CreateDeployTask err = %v, want ErrCanonicalTaskServiceRequired", err)
+	}
+}
+
 func TestDeliveryServiceRecordDeploymentUpdatesCommitAndTimestamp(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -327,6 +346,23 @@ func TestRollbackServiceInitiateRollbackQueuesCanonicalTask(t *testing.T) {
 	}
 	if statusEventCount < 1 {
 		t.Fatalf("rollback queued status events = %d, want >= 1", statusEventCount)
+	}
+}
+
+func TestRollbackServiceInitiateRollbackRequiresCanonicalTaskService(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	_, project := seedDeliveryOrgProject(t, ctx, pool)
+	service, err := NewRollbackService(RollbackServiceOptions{
+		Pool: pool,
+		Git:  AllowAllCommitGitService{},
+	})
+	if err != nil {
+		t.Fatalf("NewRollbackService: %v", err)
+	}
+
+	if _, err := service.InitiateRollback(ctx, project.ID, "deadbeefcafebabe"); !errors.Is(err, ErrCanonicalTaskServiceRequired) {
+		t.Fatalf("InitiateRollback err = %v, want ErrCanonicalTaskServiceRequired", err)
 	}
 }
 

@@ -23,10 +23,11 @@ var (
 )
 
 type RollbackServiceOptions struct {
-	Pool   *pgxpool.Pool
-	Git    GitService
-	Events eventbus.EventBus
-	Clock  clock.Clock
+	Pool        *pgxpool.Pool
+	Git         GitService
+	Events      eventbus.EventBus
+	TaskService tasksvc.TaskService
+	Clock       clock.Clock
 }
 
 type RollbackService struct {
@@ -60,7 +61,9 @@ func NewRollbackService(opts RollbackServiceOptions) (*RollbackService, error) {
 		tasks:       repo.NewProjectTaskRepo(opts.Pool),
 		assignments: repo.NewAgentProjectAssignmentRepo(opts.Pool),
 	}
-	if opts.Events != nil {
+	if opts.TaskService != nil {
+		service.taskService = opts.TaskService
+	} else if opts.Events != nil {
 		taskService, err := tasksvc.NewService(tasksvc.Options{
 			Pool:     opts.Pool,
 			EventBus: opts.Events,
@@ -76,6 +79,9 @@ func NewRollbackService(opts RollbackServiceOptions) (*RollbackService, error) {
 func (s *RollbackService) InitiateRollback(ctx context.Context, projectID uuid.UUID, targetCommitSHA string) (uuid.UUID, error) {
 	if s == nil {
 		return uuid.Nil, fmt.Errorf("rollback service is not configured")
+	}
+	if s.pool != nil && s.taskService == nil {
+		return uuid.Nil, ErrCanonicalTaskServiceRequired
 	}
 	if projectID == uuid.Nil {
 		return uuid.Nil, ErrProjectIDRequired

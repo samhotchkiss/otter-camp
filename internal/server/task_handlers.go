@@ -138,8 +138,9 @@ func NewTaskRouteRegistrar(taskService tasksvc.TaskService, flowService flowsvc.
 		h.rollbackService = rollbackService
 	} else if pool != nil {
 		rollbackService, err := deliverysvc.NewRollbackService(deliverysvc.RollbackServiceOptions{
-			Pool: pool,
-			Git:  deliverysvc.AllowAllCommitGitService{},
+			Pool:        pool,
+			Git:         deliverysvc.AllowAllCommitGitService{},
+			TaskService: taskService,
 		})
 		if err == nil {
 			h.rollbackService = rollbackService
