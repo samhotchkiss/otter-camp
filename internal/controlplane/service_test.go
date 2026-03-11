@@ -549,6 +549,87 @@ func TestReleaseExecutionOwnerIgnoresCompletedSessionThatDoesNotOwnActiveRun(t *
 	}
 }
 
+func TestReleaseExecutionOwnerPromotesDeferredWhenActiveOwnerAlreadyCleared(t *testing.T) {
+	repos := newFakeRunDeps()
+	svc := repos.newService(t)
+	wakeSvc := svc.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+		ReleaseExecutionOwner(context.Context, uuid.UUID, uuid.UUID, string) (executionWakeupResult, error)
+	})
+
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	workerID := uuid.New()
+	reviewerID := uuid.New()
+
+	started, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: uuid.New(),
+			PrincipalType:  "agent",
+			PrincipalID:    workerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup started: %v", err)
+	}
+	deferred, err := wakeSvc.CreateExecutionWakeup(context.Background(), executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: started.Run.OrganizationID,
+			PrincipalType:  "agent",
+			PrincipalID:    reviewerID,
+			TriggerType:    "scheduler",
+			TaskID:         &taskID,
+			SessionID:      &sessionID,
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_transition",
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup deferred: %v", err)
+	}
+	if deferred.Decision != executionWakeupDeferred {
+		t.Fatalf("deferred decision = %q, want %q", deferred.Decision, executionWakeupDeferred)
+	}
+
+	state, err := repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state: %v", err)
+	}
+	if _, err := repos.runtimeStates.ClearActive(context.Background(), state.ID); err != nil {
+		t.Fatalf("ClearActive runtime state: %v", err)
+	}
+
+	promoted, err := wakeSvc.ReleaseExecutionOwner(context.Background(), taskID, sessionID, "chat.turn.completed")
+	if err != nil {
+		t.Fatalf("ReleaseExecutionOwner after clear: %v", err)
+	}
+	if promoted.Decision != executionWakeupPromoted {
+		t.Fatalf("promoted decision = %q, want %q", promoted.Decision, executionWakeupPromoted)
+	}
+	if promoted.Run.ID != deferred.Run.ID {
+		t.Fatalf("promoted run = %s, want deferred run %s", promoted.Run.ID, deferred.Run.ID)
+	}
+
+	state, err = repos.runtimeStates.GetByScope(context.Background(), "task", taskID)
+	if err != nil {
+		t.Fatalf("GetByScope runtime state after promote: %v", err)
+	}
+	if state.ActiveRunID == nil || *state.ActiveRunID != deferred.Run.ID {
+		t.Fatalf("runtime active_run_id = %v, want %s", state.ActiveRunID, deferred.Run.ID)
+	}
+	contract := state.Contract()
+	if contract.LastProgressEvent != "wakeup_promoted" {
+		t.Fatalf("runtime last_progress_event = %q, want wakeup_promoted", contract.LastProgressEvent)
+	}
+}
+
 func TestReleaseExecutionOwnerPromotedRunOverridesRuntimeExecutionContract(t *testing.T) {
 	repos := newFakeRunDeps()
 	svc := repos.newService(t)

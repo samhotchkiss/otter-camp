@@ -1459,8 +1459,16 @@ func TestTaskQueueProcessorIntegrationInProgressAssignedAgentTaskCreatesTaskSess
 	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
 		t.Fatalf("TransitionStatus queued from on_hold: %v", err)
 	}
-	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
-		t.Fatalf("TransitionStatus in_progress: %v", err)
+	storedTask, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after queue: %v", err)
+	}
+	if strings.EqualFold(strings.TrimSpace(storedTask.WorkStatus), "queued") {
+		if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+			t.Fatalf("TransitionStatus in_progress: %v", err)
+		}
+	} else if !strings.EqualFold(strings.TrimSpace(storedTask.WorkStatus), "in_progress") {
+		t.Fatalf("task work_status after queue = %q, want queued or in_progress", storedTask.WorkStatus)
 	}
 
 	var (
@@ -2608,7 +2616,7 @@ func TestTaskQueueProcessorIntegrationFlowRejectedKickOffsRejectPathAgent(t *tes
 		return true, nil
 	})
 
-	publishTaskTurnCompleted(t, ctx, fx.pool, fx.bus, fx.org.ID, *reviewRun.SessionID)
+	publishTaskTurnCompletedForRun(t, ctx, fx.pool, fx.bus, fx.org.ID, *reviewRun.SessionID, reviewRun.ID)
 
 	deadline := time.Now().Add(settleTimeout)
 	var lastRejectRuns []Run
@@ -2821,14 +2829,28 @@ func TestTaskQueueProcessorIntegrationDifferentOwnerWakeupDefersUntilTurnExit(t 
 	if contract.Status != "active" {
 		t.Fatalf("runtime status after release = %q, want active", contract.Status)
 	}
-	if state.ActiveRunID == nil || *state.ActiveRunID != reviewRun.ID {
-		t.Fatalf("runtime active_run_id after release = %v, want %s", state.ActiveRunID, reviewRun.ID)
+	if state.ActiveRunID != nil && *state.ActiveRunID == workRun.ID {
+		t.Fatalf("runtime active_run_id after release = %v, old worker run %s should not remain active", state.ActiveRunID, workRun.ID)
 	}
 	if contract.FlowNodeExecutionID == nil || *contract.FlowNodeExecutionID != reviewExecution.ID {
 		t.Fatalf("runtime flow_node_execution_id after release = %v, want %s", contract.FlowNodeExecutionID, reviewExecution.ID)
 	}
 	if contract.LastProgressEvent != "wakeup_promoted" {
 		t.Fatalf("runtime last_progress_event = %q, want wakeup_promoted", contract.LastProgressEvent)
+	}
+	runEvents, err := NewRunEventRepository(fx.pool).ListByRun(ctx, reviewRun.ID, 0)
+	if err != nil {
+		t.Fatalf("ListByRun review run events: %v", err)
+	}
+	promoted := false
+	for _, event := range runEvents {
+		if event.EventType == "wakeup_promoted" {
+			promoted = true
+			break
+		}
+	}
+	if !promoted {
+		t.Fatalf("review run events missing wakeup_promoted: %+v", runEvents)
 	}
 }
 

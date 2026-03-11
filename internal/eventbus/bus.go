@@ -259,6 +259,8 @@ func (b *Bus) listenNotifications(ctx context.Context, notifyCh chan<- struct{})
 			}
 			continue
 		}
+		// Drain any events that landed before LISTEN was fully attached.
+		signal(notifyCh)
 
 		for {
 			_, err := pgConn.WaitForNotification(ctx)

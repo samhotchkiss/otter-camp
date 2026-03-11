@@ -186,6 +186,23 @@ func (s *runService) releaseExecutionOwner(ctx context.Context, taskID, sessionI
 	if err != nil {
 		return executionWakeupResult{}, err
 	}
+	if state.ActiveRunID == nil || *state.ActiveRunID == uuid.Nil {
+		deferred, found, err := s.findDeferredWakeup(ctx, state.OrganizationID, scope, "", nil)
+		if err != nil || !found {
+			return executionWakeupResult{}, err
+		}
+		if !promoteDeferred {
+			if syncErr := s.syncRuntimeStateHeldDeferred(ctx, state, deferred, strings.TrimSpace(reason)); syncErr != nil {
+				return executionWakeupResult{}, syncErr
+			}
+			return executionWakeupResult{Run: deferred, Decision: executionWakeupDeferred}, nil
+		}
+		promoted, err := s.promoteDeferredWakeup(ctx, state, deferred, strings.TrimSpace(reason))
+		if err != nil {
+			return executionWakeupResult{}, err
+		}
+		return executionWakeupResult{Run: promoted, Decision: executionWakeupPromoted}, nil
+	}
 	var releasedRun Run
 	if state.ActiveRunID != nil && *state.ActiveRunID != uuid.Nil {
 		if runRecord, getErr := s.runs.Get(ctx, *state.ActiveRunID); getErr == nil {
