@@ -939,6 +939,48 @@ func TestTaskUpdateQueuedOversizedTaskAutoDecomposesCompoundWork(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateQueuedBroadEnumeratedTitleAutoDecomposesCompoundWork(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := "Develop the content backlog for the launch."
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			Title:          "Generate 20 new blog post ideas across all pillars",
+			Description:    &description,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+			Metadata:       json.RawMessage(`{}`),
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: validExecutableTemplateNodeList(flowTemplateID),
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if tasks.createCalls < 1 {
+		t.Fatalf("create calls = %d, want >= 1 for broad enumerated title", tasks.createCalls)
+	}
+	if _, ok := out["decomposition"]; !ok {
+		t.Fatalf("decomposition output missing for broad enumerated title: %v", out)
+	}
+	if tasks.task.Description == nil || !strings.Contains(*tasks.task.Description, "Generate 20 new blog post ideas across all pillars") {
+		t.Fatalf("updated description = %v, want focused primary deliverable copied from title", tasks.task.Description)
+	}
+}
+
 func TestTaskUpdateQueuedOversizedTaskPublishesTaskCreatedEventsForDecomposedChildren(t *testing.T) {
 	taskID := uuid.New()
 	flowTemplateID := uuid.New()

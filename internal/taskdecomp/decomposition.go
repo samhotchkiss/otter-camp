@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ const (
 var ErrBoundedTaskTooLarge = errors.New("task exceeds bounded size policy and must be split before queueing")
 
 var (
+	enumeratedBatchTitlePattern = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build)\s+\d+\b`)
 	toolHeavySignals = []string{
 		"api",
 		"cli",
@@ -104,17 +106,27 @@ type QueueDecomposition struct {
 }
 
 func Analyze(title string, description *string) Plan {
+	trimmedTitle := strings.TrimSpace(title)
 	rawDescription := strings.TrimSpace(deref(description))
-	if rawDescription == "" {
-		return Plan{}
-	}
 
+	titleDriven := titleSuggestsCompoundBoundedWork(trimmedTitle)
 	deliverables := extractDeliverables(rawDescription)
+	if titleDriven {
+		titleDeliverables := inferTitleDeliverables(trimmedTitle)
+		if len(titleDeliverables) > 0 {
+			deliverables = append(titleDeliverables, deliverables...)
+		}
+	} else if len(deliverables) < 2 {
+		deliverables = append(deliverables, inferTitleDeliverables(trimmedTitle)...)
+	}
 	if len(deliverables) < 2 {
-		return Plan{}
+		if !titleDriven {
+			return Plan{}
+		}
+		deliverables = []string{trimmedTitle, trimmedTitle}
 	}
 
-	requires := len(deliverables) >= 2 || len(rawDescription) >= descriptionThresholdChars
+	requires := len(deliverables) >= 2 || len(rawDescription) >= descriptionThresholdChars || titleDriven
 	if !requires {
 		return Plan{}
 	}
@@ -134,6 +146,33 @@ func Analyze(title string, description *string) Plan {
 		ChildDeliverables:     children,
 		Deliverables:          all,
 	}
+}
+
+func titleSuggestsCompoundBoundedWork(title string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(title))
+	if normalized == "" {
+		return false
+	}
+	if enumeratedBatchTitlePattern.MatchString(normalized) && containsAny(normalized, broadScopeSignals) {
+		return true
+	}
+	if strings.Count(normalized, " and ") >= 2 || strings.Count(normalized, " across ") >= 1 {
+		if containsAny(normalized, broadScopeSignals) {
+			return true
+		}
+	}
+	return false
+}
+
+func inferTitleDeliverables(title string) []string {
+	if !titleSuggestsCompoundBoundedWork(title) {
+		return nil
+	}
+	trimmed := strings.TrimSpace(title)
+	if trimmed == "" {
+		return nil
+	}
+	return []string{trimmed, trimmed}
 }
 
 func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecomposition, error) {

@@ -37,6 +37,18 @@ func TestAnalyzeSkipsSmallSingleDeliverableSpecs(t *testing.T) {
 	}
 }
 
+func TestAnalyzeFlagsEnumeratedCompoundTitlesWithoutStructuredDescriptions(t *testing.T) {
+	description := "Develop the content backlog for the launch."
+
+	plan := Analyze("Generate 20 new blog post ideas across all pillars", &description)
+	if !plan.RequiresDecomposition {
+		t.Fatal("RequiresDecomposition = false, want true for enumerated compound title")
+	}
+	if plan.PrimaryDeliverable == "" {
+		t.Fatal("PrimaryDeliverable is empty, want non-empty")
+	}
+}
+
 func TestParsePrimaryDeliverableFromMetadata(t *testing.T) {
 	raw := json.RawMessage(`{"decomposition":{"primary_deliverable":"Migrate posts in canonical order"}}`)
 
