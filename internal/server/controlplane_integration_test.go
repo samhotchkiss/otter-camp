@@ -561,6 +561,94 @@ func TestOperatorDashboardIgnoresArchivedProjectTasksInBlockedCounts(t *testing.
 	}
 }
 
+func TestOperatorDashboardIgnoresArchivedProjectsInActiveProjectCount(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	templateRepo := repo.NewFlowTemplateRepo(testServer.Pool)
+
+	activeProject, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-active-count-live",
+		DisplayName:    "Ops Dashboard Active Count Live",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active project: %v", err)
+	}
+	archivedProject, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "ops-dashboard-active-count-archived",
+		DisplayName:    "Ops Dashboard Active Count Archived",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create archived project: %v", err)
+	}
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &orgA.ID,
+		Slug:           "ops-dashboard-active-count-template",
+		DisplayName:    "Ops Dashboard Active Count Template",
+		Description:    "template for active project count dashboard tests",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	createdByID := adminA.ID
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      activeProject.ID,
+		Title:          "Live queued task",
+		WorkStatus:     "queued",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	}); err != nil {
+		t.Fatalf("create live queued task: %v", err)
+	}
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgA.ID,
+		ProjectID:      archivedProject.ID,
+		Title:          "Archived queued task",
+		WorkStatus:     "queued",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &createdByID,
+	}); err != nil {
+		t.Fatalf("create archived queued task: %v", err)
+	}
+	if err := projectRepo.Archive(ctx, archivedProject.ID); err != nil {
+		t.Fatalf("archive project: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=6", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	if payload.Summary.ActiveProjects != 1 {
+		t.Fatalf("active_projects=%d want=1 body=%s", payload.Summary.ActiveProjects, string(resp.Body))
+	}
+}
+
 func TestOperatorDashboardSummaryAttentionRequiredWhenOnlyBlockedItemsPresent(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 

@@ -281,16 +281,20 @@ func (l operatorDashboardLoader) countActiveProjects(ctx context.Context, organi
 	err := l.pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT project_id)
 		FROM (
-			SELECT project_id
-			FROM project_task
-			WHERE organization_id = $1
+			SELECT t.project_id
+			FROM project_task t
+			JOIN project p ON p.id = t.project_id
+			WHERE t.organization_id = $1
+			  AND p.status = 'active'
 			  AND work_status IN ('queued', 'in_progress', 'on_hold')
 			UNION
 			SELECT COALESCE(r.project_id, t.project_id) AS project_id
 			FROM runtime_state rs
 			JOIN run r ON r.id = rs.active_run_id
 			LEFT JOIN project_task t ON t.id = r.task_id
+			JOIN project p ON p.id = COALESCE(r.project_id, t.project_id)
 			WHERE r.organization_id = $1
+			  AND p.status = 'active'
 			  AND rs.active_run_id IS NOT NULL
 			  AND COALESCE(r.project_id, t.project_id) IS NOT NULL
 		) active_projects
