@@ -367,6 +367,19 @@ func TestProjectServiceCreateAutoGeneratesCanonicalBootstrapTaskTree(t *testing.
 	if bind := seen["bind-repo-environment"]; bind.AssignedAgentID == nil || *bind.AssignedAgentID != loriID {
 		t.Fatalf("bind-repo assigned_agent_id = %v, want Lori %s", bind.AssignedAgentID, loriID)
 	}
+
+	var createdEventCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task_event
+		WHERE project_id = $1
+		  AND event_type = 'task.created'
+	`, created.ID).Scan(&createdEventCount); err != nil {
+		t.Fatalf("count bootstrap task.created events: %v", err)
+	}
+	if createdEventCount != len(bootstrapSetupTaskSpecs)+1 {
+		t.Fatalf("bootstrap task.created count = %d, want %d", createdEventCount, len(bootstrapSetupTaskSpecs)+1)
+	}
 }
 
 func TestProjectServiceCreateBootstrapTaskTreeSurvivesProjectSessionRotation(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/validation"
 )
@@ -295,6 +296,14 @@ type taskRepository interface {
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
+type bootstrapTaskService interface {
+	CreateTask(ctx context.Context, req tasksvc.CreateTaskRequest) (*tasksvc.ProjectTask, error)
+}
+
+type projectAssignmentRepository interface {
+	Assign(ctx context.Context, assignment repo.AgentProjectAssignment) (repo.AgentProjectAssignment, error)
+}
+
 type modelInvocationProjectCleaner interface {
 	ClearProjectReferences(ctx context.Context, projectID uuid.UUID) error
 }
@@ -323,6 +332,8 @@ type Options struct {
 	Nodes            flowNodeRepository
 	Schedules        taskScheduleRepository
 	Tasks            taskRepository
+	TaskService      bootstrapTaskService
+	Assignments      projectAssignmentRepository
 	ModelInvocations modelInvocationProjectCleaner
 	ChatSessions     chatSessionProjectCleaner
 	Agents           agentRepository
@@ -341,6 +352,8 @@ type service struct {
 	nodes            flowNodeRepository
 	schedules        taskScheduleRepository
 	tasks            taskRepository
+	taskService      bootstrapTaskService
+	assignments      projectAssignmentRepository
 	modelInvocations modelInvocationProjectCleaner
 	chatSessions     chatSessionProjectCleaner
 	agents           agentRepository
@@ -400,6 +413,23 @@ func NewService(opts Options) (ProjectService, error) {
 		svc.tasks = opts.Tasks
 	} else {
 		svc.tasks = repo.NewProjectTaskRepo(opts.Pool)
+	}
+	if opts.TaskService != nil {
+		svc.taskService = opts.TaskService
+	} else {
+		taskService, taskErr := tasksvc.NewService(tasksvc.Options{
+			Pool:     opts.Pool,
+			EventBus: opts.Events,
+		})
+		if taskErr != nil {
+			return nil, taskErr
+		}
+		svc.taskService = taskService
+	}
+	if opts.Assignments != nil {
+		svc.assignments = opts.Assignments
+	} else {
+		svc.assignments = repo.NewAgentProjectAssignmentRepo(opts.Pool)
 	}
 	if opts.ModelInvocations != nil {
 		svc.modelInvocations = opts.ModelInvocations
@@ -508,6 +538,9 @@ func (s *service) createBootstrapTaskTree(ctx context.Context, projectRecord rep
 	if err != nil {
 		return err
 	}
+	if err := s.ensureBootstrapAssignments(ctx, projectRecord.ID, createdByType, createdByID, agents); err != nil {
+		return err
+	}
 
 	orgID := projectRecord.OrganizationID
 	projectID := projectRecord.ID
@@ -595,23 +628,22 @@ func (s *service) createBootstrapTaskTree(ctx context.Context, projectRecord rep
 	}
 
 	description := "Project bootstrap gate: the canonical setup task tree must complete and Frank must sign off before other tasks can start."
-	rootTask, err := s.tasks.Create(ctx, repo.ProjectTask{
-		OrganizationID:      projectRecord.OrganizationID,
+	rootTaskRecord, err := s.taskService.CreateTask(ctx, tasksvc.CreateTaskRequest{
 		ProjectID:           projectRecord.ID,
 		Title:               "Bootstrap governance gate",
 		Description:         &description,
-		WorkStatus:          "draft",
-		BlocksScope:         bootstrapBlocksScopeAll,
 		FlowTemplateID:      &template.ID,
-		RequiresHumanReview: false,
-		CreatedByType:       createdByType,
-		CreatedByID:         actorIDPointer(createdByID),
+		BlocksScope:         bootstrapBlocksScopeAll,
 		AssignedAgentID:     agents.loriID,
+		CreatedByType:       createdByType,
+		CreatedByID:         createdByID,
+		RequiresHumanReview: boolPtr(false),
 		Metadata:            json.RawMessage(`{"bootstrap_gate":true,"bootstrap_tree_root":true}`),
 	})
 	if err != nil {
 		return err
 	}
+	rootTask := repo.ProjectTask(*rootTaskRecord)
 
 	for idx, spec := range bootstrapSetupTaskSpecs {
 		assigneeID := agents.loriID
@@ -619,28 +651,60 @@ func (s *service) createBootstrapTaskTree(ctx context.Context, projectRecord rep
 			assigneeID = agents.frankID
 		}
 		taskDescription := spec.Description
-		childTask, err := s.tasks.Create(ctx, repo.ProjectTask{
-			OrganizationID:      projectRecord.OrganizationID,
+		childTaskRecord, err := s.taskService.CreateTask(ctx, tasksvc.CreateTaskRequest{
 			ProjectID:           projectRecord.ID,
 			Title:               spec.Title,
 			Description:         &taskDescription,
-			WorkStatus:          "draft",
 			FlowTemplateID:      &template.ID,
-			RequiresHumanReview: false,
-			CreatedByType:       createdByType,
-			CreatedByID:         actorIDPointer(createdByID),
 			AssignedAgentID:     assigneeID,
+			CreatedByType:       createdByType,
+			CreatedByID:         createdByID,
+			RequiresHumanReview: boolPtr(false),
 			Metadata:            bootstrapSetupTaskMetadata(rootTask.ID, spec.Slug, idx+1),
 		})
 		if err != nil {
 			return err
 		}
+		childTask := repo.ProjectTask(*childTaskRecord)
 		rootTask.Metadata = taskdecomp.AppendChildTaskID(rootTask.Metadata, childTask.ID)
 	}
 	if _, err := s.tasks.UpdateMetadata(ctx, rootTask.ID, rootTask.Metadata); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func (s *service) ensureBootstrapAssignments(ctx context.Context, projectID uuid.UUID, createdByType string, createdByID uuid.UUID, agents bootstrapAgents) error {
+	if s.assignments == nil {
+		return nil
+	}
+	if agents.loriID != nil && *agents.loriID != uuid.Nil {
+		if _, err := s.assignments.Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        *agents.loriID,
+			ProjectID:      projectID,
+			Role:           "project_manager",
+			AssignedByType: createdByType,
+			AssignedByID:   actorIDPointer(createdByID),
+		}); err != nil {
+			return err
+		}
+	}
+	if agents.frankID != nil && *agents.frankID != uuid.Nil {
+		if _, err := s.assignments.Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        *agents.frankID,
+			ProjectID:      projectID,
+			Role:           "reviewer",
+			AssignedByType: createdByType,
+			AssignedByID:   actorIDPointer(createdByID),
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
