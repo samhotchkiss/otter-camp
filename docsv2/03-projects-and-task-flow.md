@@ -206,6 +206,7 @@ When a task transitions to `queued`, it enters the scheduling queue. The schedul
 - Subtasks within a node also go through the scheduler. They are queued as work units and picked up when slots are available, respecting inter-subtask dependencies.
 - Review pauses triggered by runtime policy (for example, async hard-stop checkpoints) still require real flow execution lineage. An artifact, chat message, or inbox item by itself must never be treated as sufficient evidence that a task is legitimately in `review`.
 - When runtime policy pauses a task for async review before the next owner should execute, the system must advance onto the real review checkpoint and persist that `flow_node_execution`, but hold the follow-on run. The task is legitimately in `review` because the flow moved there, not because a status flag was toggled without flow state.
+- Human review actions follow that same rule. Approve/reject decisions from either the task endpoint or inbox must call the canonical flow advance/reject transition; they must not mutate `work_status` directly as a shortcut around flow lineage.
 
 ### Priority
 
