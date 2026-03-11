@@ -638,6 +638,8 @@ func (w *Worker) listenForEnqueue(ctx context.Context, wake chan<- struct{}) {
 			}
 			continue
 		}
+		// Drain any jobs that were enqueued before LISTEN was fully established.
+		signal(wake)
 
 		for {
 			_, err := pgConn.WaitForNotification(ctx)

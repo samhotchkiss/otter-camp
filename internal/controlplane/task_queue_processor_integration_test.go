@@ -1044,20 +1044,6 @@ func TestTaskQueueProcessorIntegrationReviewCheckpointGateStillBlocksParallelWor
 	template := seedTaskQueueReviewCompletionFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, fx.agent.ID, reviewer.ID)
 	reviewDescription := "Prepare the launch direction, then pause for review before finalizing the selected concept."
 
-	regularTask, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
-		ProjectID:       fx.project.ID,
-		Title:           "Implement onboarding API",
-		FlowTemplateID:  &template.ID,
-		AssignedAgentID: &fx.agent.ID,
-		BlocksScope:     "none",
-		CreatedByType:   "system",
-	})
-	if err != nil {
-		t.Fatalf("CreateTask regular: %v", err)
-	}
-	if _, err := fx.tasks.TransitionStatus(ctx, regularTask.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
-		t.Fatalf("TransitionStatus regular queued: %v", err)
-	}
 	gateTask, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
 		ProjectID:       fx.project.ID,
 		Title:           "Launch direction checkpoint",
@@ -1078,16 +1064,11 @@ func TestTaskQueueProcessorIntegrationReviewCheckpointGateStillBlocksParallelWor
 	}
 
 	var (
-		gateRecord    repo.ProjectTask
-		regularRecord repo.ProjectTask
+		gateRecord repo.ProjectTask
 	)
 	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
 		var waitErr error
 		gateRecord, waitErr = taskRepo.GetByID(ctx, gateTask.ID)
-		if waitErr != nil {
-			return false, waitErr
-		}
-		regularRecord, waitErr = taskRepo.GetByID(ctx, regularTask.ID)
 		if waitErr != nil {
 			return false, waitErr
 		}
@@ -1100,8 +1081,28 @@ func TestTaskQueueProcessorIntegrationReviewCheckpointGateStillBlocksParallelWor
 	if gateRecord.WorkStatus != "review" {
 		t.Fatalf("gate task work_status = %q, want review", gateRecord.WorkStatus)
 	}
-	if regularRecord.WorkStatus != "queued" {
-		t.Fatalf("regular task work_status = %q, want queued while gate review checkpoint is active", regularRecord.WorkStatus)
+	regularTask, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Implement onboarding API",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		BlocksScope:     "none",
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask regular: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, regularTask.ID, "queued", tasksvc.Actor{Type: "system"}); err == nil {
+		t.Fatal("TransitionStatus regular queued succeeded, want project gate block error")
+	} else if !errors.Is(err, tasksvc.ErrProjectGateBlockingQueue) {
+		t.Fatalf("TransitionStatus regular queued error = %v, want project gate block", err)
+	}
+	regularRecord, err := taskRepo.GetByID(ctx, regularTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID regular: %v", err)
+	}
+	if regularRecord.WorkStatus != "draft" {
+		t.Fatalf("regular task work_status = %q, want draft while gate review checkpoint blocks queueing", regularRecord.WorkStatus)
 	}
 	runs, err := runRepo.List(ctx, RunListFilter{
 		OrganizationID: fx.org.ID,
