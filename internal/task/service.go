@@ -242,6 +242,10 @@ type taskRepository interface {
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
+type taskMetadataUpdater interface {
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error)
+}
+
 type taskRepositoryTx interface {
 	UpdateTx(ctx context.Context, tx pgx.Tx, task repo.ProjectTask) (repo.ProjectTask, error)
 }
@@ -614,7 +618,7 @@ func (s *service) transitionTaskRecordTx(ctx context.Context, tx pgx.Tx, taskRec
 		if err := s.queueDecompositionChildren(ctx, taskRecord, executableChildren, actor); err != nil {
 			return nil, err
 		}
-		updated, err := s.tasks.Update(ctx, taskRecord)
+		updated, err := s.updateTaskMetadata(ctx, taskRecord)
 		if err != nil {
 			return nil, err
 		}
@@ -1658,6 +1662,13 @@ func (s *service) updateTaskTx(ctx context.Context, tx pgx.Tx, taskRecord repo.P
 			return repo.ProjectTask{}, fmt.Errorf("task repository does not support transactions")
 		}
 		return updater.UpdateTx(ctx, tx, taskRecord)
+	}
+	return s.tasks.Update(ctx, taskRecord)
+}
+
+func (s *service) updateTaskMetadata(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, error) {
+	if updater, ok := s.tasks.(taskMetadataUpdater); ok {
+		return updater.UpdateMetadata(ctx, taskRecord.ID, taskRecord.Metadata)
 	}
 	return s.tasks.Update(ctx, taskRecord)
 }

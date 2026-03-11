@@ -142,7 +142,7 @@ func (s *service) maybeRepairDurableRecoveryCheckpoint(ctx context.Context, task
 		return taskRecord, false, err
 	}
 	taskRecord.Metadata = merged
-	updated, err := s.tasks.Update(ctx, taskRecord)
+	updated, err := s.updateTaskMetadata(ctx, taskRecord)
 	if err != nil {
 		return taskRecord, false, err
 	}
