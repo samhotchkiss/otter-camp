@@ -6586,8 +6586,12 @@ func TestTurnEngineIntegrationProjectBootstrapOpensFirstWaveAfterSetupTasksAndFr
 		t.Fatalf("ListByProject tasks: %v", err)
 	}
 	firstWaveTaskIDs := make([]uuid.UUID, 0, len(tasks))
+	bootstrapGateID := uuid.Nil
 	for _, item := range tasks {
 		metadata := messageMetadataMap(item.Metadata)
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			bootstrapGateID = item.ID
+		}
 		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
 			continue
 		}
@@ -6616,6 +6620,31 @@ func TestTurnEngineIntegrationProjectBootstrapOpensFirstWaveAfterSetupTasksAndFr
 	}
 	if jobCount := waitForRunnableAgentTurnJobsForTasks(t, ctx, fixture.pool, firstWaveTaskIDs, 1); jobCount == 0 {
 		t.Fatal("expected runnable first-wave agent_turn jobs after bootstrap gate opened")
+	}
+	if bootstrapGateID == uuid.Nil {
+		t.Fatal("expected bootstrap gate task")
+	}
+	bootstrapEvents, err := repo.NewProjectTaskEventRepo(fixture.pool).ListByTask(ctx, bootstrapGateID)
+	if err != nil {
+		t.Fatalf("ListByTask bootstrap gate events: %v", err)
+	}
+	foundBootstrapAutoComplete := false
+	for _, event := range bootstrapEvents {
+		if event.EventType != "status.changed" {
+			continue
+		}
+		payload := messageMetadataMap(event.Payload)
+		if payload["to_status"] != "done" {
+			continue
+		}
+		if raw, _ := payload["bootstrap_gate_auto_complete"].(bool); !raw {
+			continue
+		}
+		foundBootstrapAutoComplete = true
+		break
+	}
+	if !foundBootstrapAutoComplete {
+		t.Fatal("expected bootstrap gate auto-complete to record a task event with bootstrap_gate_auto_complete=true")
 	}
 
 	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)

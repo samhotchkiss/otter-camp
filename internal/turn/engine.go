@@ -1412,10 +1412,6 @@ func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskI
 	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
 		return err
 	}
-	if e.events == nil {
-		return nil
-	}
-
 	payload, err := json.Marshal(map[string]any{
 		"from_status":                  fromStatus,
 		"to_status":                    "done",
@@ -1425,6 +1421,20 @@ func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskI
 	})
 	if err != nil {
 		return err
+	}
+	if _, err := repo.NewProjectTaskEventRepo(e.pool).Record(ctx, repo.ProjectTaskEvent{
+		TaskID:     taskRecord.ID,
+		ProjectID:  taskRecord.ProjectID,
+		EventType:  "status.changed",
+		ActorType:  "system",
+		ActorID:    nil,
+		FlowNodeID: taskRecord.CurrentFlowNodeID,
+		Payload:    payload,
+	}); err != nil {
+		return err
+	}
+	if e.events == nil {
+		return nil
 	}
 	return e.events.Publish(ctx, nil, eventbus.DomainEvent{
 		OrganizationID: taskRecord.OrganizationID,
