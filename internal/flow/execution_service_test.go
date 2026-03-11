@@ -231,6 +231,68 @@ func TestRejectFlowNodeMaxVisitsExceeded(t *testing.T) {
 	}
 }
 
+func TestRejectFlowNodeRejectsTaskRuntimeStatusMismatchBeforeMutatingExecution(t *testing.T) {
+	taskID := uuid.New()
+	currentNodeID := uuid.New()
+	rejectNodeID := uuid.New()
+	execID := uuid.New()
+
+	executions := &fakeExecutionRepo{
+		active: repo.FlowNodeExecution{
+			ID:         execID,
+			TaskID:     taskID,
+			FlowNodeID: currentNodeID,
+			Status:     "active",
+		},
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{
+					ID:         execID,
+					TaskID:     taskID,
+					FlowNodeID: currentNodeID,
+					Status:     "active",
+				},
+			},
+		},
+	}
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					ProjectID:         uuid.New(),
+					OrganizationID:    uuid.New(),
+					CurrentFlowNodeID: &currentNodeID,
+					WorkStatus:        "review",
+				},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				currentNodeID: {ID: currentNodeID, NodeType: "work", RejectNodeID: &rejectNodeID},
+				rejectNodeID:  {ID: rejectNodeID, NodeType: "work", MaxVisits: 3},
+			},
+		},
+		executions:  executions,
+		taskService: &fakeTaskCoordinator{},
+	}
+
+	_, err := svc.RejectFlowNode(context.Background(), taskID, Actor{Type: "agent", ID: uuid.New()})
+	var conflict tasksvc.ErrTaskFlowStateConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("RejectFlowNode err = %v, want ErrTaskFlowStateConflict", err)
+	}
+	if conflict.TargetStatus != "review" || conflict.CurrentNodeType != "work" {
+		t.Fatalf("flow conflict = %+v, want target=review current_node_type=work", conflict)
+	}
+	if executions.rejectCalls != 0 {
+		t.Fatalf("reject calls = %d, want 0", executions.rejectCalls)
+	}
+	if executions.updateMetadataCalls != 0 {
+		t.Fatalf("update metadata calls = %d, want 0", executions.updateMetadataCalls)
+	}
+}
+
 func TestAdvanceFlowRejectsSelfReview(t *testing.T) {
 	taskID := uuid.New()
 	workNodeID := uuid.New()
