@@ -1657,6 +1657,7 @@ func (s *projectBootstrapState) setFirstWaveJobCount(count int) {
 type projectBootstrapTimeoutError struct {
 	InvocationID uuid.UUID
 	Timeout      time.Duration
+	Progress     projectBootstrapProgress
 }
 
 func (e *projectBootstrapTimeoutError) Error() string {
@@ -2357,16 +2358,33 @@ func buildProjectBootstrapFailureReason(autoTurnCount int) string {
 func buildProjectBootstrapWatchdogFailureReason(timeoutErr *projectBootstrapTimeoutError) string {
 	timeout := defaultProjectBootstrapTurnTimeout
 	invocationID := uuid.Nil
+	progress := projectBootstrapProgress{}
 	if timeoutErr != nil {
 		if timeoutErr.Timeout > 0 {
 			timeout = timeoutErr.Timeout
 		}
 		invocationID = timeoutErr.InvocationID
+		progress = timeoutErr.Progress
 	}
-	reason := fmt.Sprintf(
-		"bootstrap setup watchdog timed out after %s with zero persisted project assignments, scoped tasks, or flow templates",
-		timeout.String(),
-	)
+	var reason string
+	if progress.AssignmentCount == 0 && progress.PlannedTaskCount == 0 && progress.PlannedFlowTemplateCount == 0 {
+		reason = fmt.Sprintf(
+			"bootstrap setup watchdog timed out after %s with zero persisted project assignments, scoped tasks, or flow templates",
+			timeout.String(),
+		)
+	} else {
+		reason = fmt.Sprintf(
+			"bootstrap setup watchdog timed out after %s after partial persisted setup (assignments=%d, scoped_tasks=%d, flow_templates=%d, first_wave_tasks=%d, first_wave_promoted=%d, first_wave_execution=%d, first_wave_jobs=%d)",
+			timeout.String(),
+			progress.AssignmentCount,
+			progress.PlannedTaskCount,
+			progress.PlannedFlowTemplateCount,
+			progress.FirstWaveTaskCount,
+			progress.FirstWavePromotedCount,
+			progress.FirstWaveExecutionCount,
+			progress.FirstWaveJobCount,
+		)
+	}
 	if invocationID != uuid.Nil {
 		reason += fmt.Sprintf("; model invocation %s remained in_flight", invocationID)
 	}
@@ -6404,9 +6422,6 @@ func (e *TurnEngine) projectBootstrapStreamWatchdog(ctx context.Context, rt *tur
 	if !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) || progress.Materialized() || progress.ValidationFailed() {
 		return projectBootstrapWatchdog{}, false, nil
 	}
-	if progress.AssignmentCount != 0 || progress.PlannedTaskCount != 0 || progress.PlannedFlowTemplateCount != 0 {
-		return projectBootstrapWatchdog{}, false, nil
-	}
 
 	elapsed := e.now().UTC().Sub(rt.startedAt)
 	remaining := e.projectBootstrapTurnTimeout - elapsed
@@ -6791,6 +6806,9 @@ func (e *TurnEngine) callMainModel(
 				timeoutErr := &projectBootstrapTimeoutError{
 					InvocationID: invocation.ID,
 					Timeout:      watchdog.Timeout,
+				}
+				if progress, progressErr := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID); progressErr == nil {
+					timeoutErr.Progress = progress
 				}
 				errorCode := stringPtr("bootstrap_watchdog_timeout")
 				errorText := stringPtr(timeoutErr.Error())
