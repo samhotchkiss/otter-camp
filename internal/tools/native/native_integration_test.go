@@ -24,6 +24,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
@@ -3320,6 +3321,59 @@ func TestIntegrationTaskListDefaultsToCurrentProjectSessionScope(t *testing.T) {
 	}
 	if got := mustUUIDValue(t, tasksPayload[0]["id"]); got != taskB.ID {
 		t.Fatalf("task.list returned task %s, want current project task %s and not foreign task %s", got, taskB.ID, taskA.ID)
+	}
+}
+
+func TestIntegrationTaskCreateRejectsNonBootstrapWorkWhileBootstrapGateIsOpen(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Bootstrap governance gate",
+		WorkStatus:     "draft",
+		BlocksScope:    "all",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{"bootstrap_gate":true}`),
+	}); err != nil {
+		t.Fatalf("create gate task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap gated project session",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+
+	_, err = executor.Execute(integrationExecCtxWithSession(orgID, actor.ID, sessionID), "task.create", map[string]any{
+		"project_id":       project.ID.String(),
+		"title":            "WS1: Regular workstream before bootstrap",
+		"description":      "This should be blocked until bootstrap is complete.",
+		"flow_template_id": template.ID.String(),
+	})
+	if !errors.Is(err, tasksvc.ErrProjectGateBlockingCreate) {
+		t.Fatalf("task.create err = %v, want ErrProjectGateBlockingCreate", err)
+	}
+
+	tasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("task count after blocked native task.create = %d, want 1 gate task only", len(tasks))
 	}
 }
 

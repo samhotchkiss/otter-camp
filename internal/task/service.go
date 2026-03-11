@@ -45,6 +45,7 @@ var (
 	ErrFlowTemplateRequired                = errors.New("task requires a flow template before it can be queued")
 	ErrFlowTemplateReviewRequired          = errors.New("flow template must define a work -> review -> completion path")
 	ErrProjectGateBlockingQueue            = errors.New("task is blocked by an outstanding project gate and cannot be queued yet")
+	ErrProjectGateBlockingCreate           = errors.New("task is blocked by an outstanding project gate and cannot be created yet")
 	ErrInvalidBlocksScope                  = errors.New("blocks_scope must be one of: none, all")
 	ErrDoneRequiresTerminalFlow            = errors.New("task can only be marked done when its flow reaches a terminal node")
 	ErrTransitionTargetRequired            = errors.New("target status is required")
@@ -187,6 +188,27 @@ func (e ErrQueueBlockedByProjectGate) Error() string {
 
 func (e ErrQueueBlockedByProjectGate) Is(target error) bool {
 	return target == ErrProjectGateBlockingQueue
+}
+
+type ErrCreateBlockedByProjectGate struct {
+	GateTaskID     uuid.UUID
+	GateTaskNumber int
+	GateTaskTitle  string
+}
+
+func (e ErrCreateBlockedByProjectGate) Error() string {
+	switch {
+	case e.GateTaskNumber > 0 && strings.TrimSpace(e.GateTaskTitle) != "":
+		return fmt.Sprintf("task creation is blocked by outstanding project gate task %d (%s)", e.GateTaskNumber, strings.TrimSpace(e.GateTaskTitle))
+	case e.GateTaskNumber > 0:
+		return fmt.Sprintf("task creation is blocked by outstanding project gate task %d", e.GateTaskNumber)
+	default:
+		return ErrProjectGateBlockingCreate.Error()
+	}
+}
+
+func (e ErrCreateBlockedByProjectGate) Is(target error) bool {
+	return target == ErrProjectGateBlockingCreate
 }
 
 type ProjectTask = repo.ProjectTask
@@ -477,6 +499,10 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 	if blocksScope == "" {
 		return nil, ErrInvalidBlocksScope
 	}
+	normalizedMetadata := normalizeJSON(req.Metadata)
+	if err := s.ensureCreateEligible(ctx, req.ProjectID, normalizedMetadata); err != nil {
+		return nil, err
+	}
 
 	if req.AssignedAgentID != nil {
 		assignment, getErr := s.assignments.GetByAgentAndProject(ctx, *req.AssignedAgentID, req.ProjectID)
@@ -503,7 +529,7 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 		CreatedByType:       createdByType,
 		CreatedByID:         createdByID,
 		AssignedAgentID:     req.AssignedAgentID,
-		Metadata:            normalizeJSON(req.Metadata),
+		Metadata:            normalizedMetadata,
 	})
 	if err != nil {
 		return nil, err
@@ -526,6 +552,24 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 	}
 
 	return &created, nil
+}
+
+func (s *service) ensureCreateEligible(ctx context.Context, projectID uuid.UUID, metadata json.RawMessage) error {
+	if bootstrapGateCreationExempt(metadata) {
+		return nil
+	}
+	gateTask, err := s.lowestOutstandingProjectGate(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if gateTask == nil {
+		return nil
+	}
+	return ErrCreateBlockedByProjectGate{
+		GateTaskID:     gateTask.ID,
+		GateTaskNumber: gateTask.TaskNumber,
+		GateTaskTitle:  gateTask.Title,
+	}
 }
 
 func (s *service) TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor Actor) (*ProjectTask, error) {
@@ -1797,6 +1841,17 @@ func allowsBootstrapGateAutoComplete(taskRecord repo.ProjectTask, from, target s
 	metadata := taskMetadataMap(taskRecord.Metadata)
 	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
 	return bootstrapGate
+}
+
+func bootstrapGateCreationExempt(metadata json.RawMessage) bool {
+	payload := taskMetadataMap(metadata)
+	if bootstrapGate, _ := payload["bootstrap_gate"].(bool); bootstrapGate {
+		return true
+	}
+	if bootstrapStep, _ := payload["bootstrap_setup_task"].(bool); bootstrapStep {
+		return true
+	}
+	return false
 }
 
 func allowsCompletedChildReopen(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {

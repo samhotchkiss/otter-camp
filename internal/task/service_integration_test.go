@@ -310,14 +310,16 @@ func TestTaskServiceIntegrationRejectsQueueWhenOutstandingProjectGateExistsEX256
 		t.Fatalf("create gate task: %v", err)
 	}
 
-	regularTask, err := svc.CreateTask(ctx, CreateTaskRequest{
+	regularTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
 		ProjectID:      project.ID,
 		Title:          "Regular queued task",
+		WorkStatus:     "draft",
 		FlowTemplateID: &template.ID,
 		CreatedByType:  "system",
 	})
 	if err != nil {
-		t.Fatalf("CreateTask regular: %v", err)
+		t.Fatalf("create regular task: %v", err)
 	}
 
 	_, err = svc.TransitionStatus(ctx, regularTask.ID, "queued", Actor{Type: "system"})
@@ -334,6 +336,50 @@ func TestTaskServiceIntegrationRejectsQueueWhenOutstandingProjectGateExistsEX256
 	}
 	if stored.WorkStatus != "draft" {
 		t.Fatalf("regular task work_status = %q, want draft after blocked queue attempt", stored.WorkStatus)
+	}
+}
+
+func TestTaskServiceIntegrationRejectsCreateWhenOutstandingProjectGateExists(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	gateTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Bootstrap governance gate",
+		WorkStatus:     "draft",
+		BlocksScope:    "all",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{"bootstrap_gate":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create gate task: %v", err)
+	}
+
+	_, err = svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Regular workstream task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if !errors.Is(err, ErrProjectGateBlockingCreate) {
+		t.Fatalf("CreateTask err = %v, want ErrProjectGateBlockingCreate", err)
+	}
+	if !strings.Contains(err.Error(), gateTask.Title) {
+		t.Fatalf("error = %q, want gate title context", err.Error())
+	}
+
+	allTasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	if len(allTasks) != 1 {
+		t.Fatalf("task count after blocked create = %d, want 1 gate task only", len(allTasks))
 	}
 }
 
