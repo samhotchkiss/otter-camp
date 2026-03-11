@@ -69,6 +69,76 @@ func TestRouterSelectConnectionSkipsUnavailable(t *testing.T) {
 	}
 }
 
+func TestRouterSelectConnectionSkipsPersistedUnavailableOnColdStart(t *testing.T) {
+	orgID := uuid.New()
+	providerID := uuid.New()
+	unavailableID := uuid.New()
+	healthyID := uuid.New()
+
+	router := NewRouter(
+		&stubProfileLookup{
+			profiles: map[string]repo.ModelProfile{
+				"standard": {
+					LogicalProfileID: "standard",
+					ProviderID:       providerID,
+				},
+			},
+		},
+		&stubConnectionLookup{
+			items: map[uuid.UUID][]repo.ProviderConnection{
+				providerID: {
+					{ID: unavailableID, ProviderID: providerID, IsEnabled: true, FailoverPriority: 1, HealthStatus: string(HealthStateUnavailable)},
+					{ID: healthyID, ProviderID: providerID, IsEnabled: true, FailoverPriority: 2, HealthStatus: string(HealthStateHealthy)},
+				},
+			},
+		},
+		NewHealthChecker(),
+	)
+
+	selected, err := router.SelectConnection(context.Background(), orgID, "standard", "agent_turn", PrioritySyncInteractive)
+	if err != nil {
+		t.Fatalf("SelectConnection: %v", err)
+	}
+	if selected.ID != healthyID {
+		t.Fatalf("selected connection = %s, want %s", selected.ID, healthyID)
+	}
+}
+
+func TestRouterSelectConnectionPrefersPersistedHealthyOverRateLimitedOnColdStart(t *testing.T) {
+	orgID := uuid.New()
+	providerID := uuid.New()
+	rateLimitedID := uuid.New()
+	healthyID := uuid.New()
+
+	router := NewRouter(
+		&stubProfileLookup{
+			profiles: map[string]repo.ModelProfile{
+				"standard": {
+					LogicalProfileID: "standard",
+					ProviderID:       providerID,
+				},
+			},
+		},
+		&stubConnectionLookup{
+			items: map[uuid.UUID][]repo.ProviderConnection{
+				providerID: {
+					{ID: rateLimitedID, ProviderID: providerID, IsEnabled: true, FailoverPriority: 1, HealthStatus: string(HealthStateRateLimited)},
+					{ID: healthyID, ProviderID: providerID, IsEnabled: true, FailoverPriority: 2, HealthStatus: string(HealthStateHealthy)},
+				},
+			},
+		},
+		NewHealthChecker(),
+	)
+
+	selected, err := router.SelectConnection(context.Background(), orgID, "standard", "agent_turn", PrioritySyncInteractive)
+	if err != nil {
+		t.Fatalf("SelectConnection: %v", err)
+	}
+	if selected.ID != healthyID {
+		t.Fatalf("selected connection = %s, want %s", selected.ID, healthyID)
+	}
+}
+
 func TestRouterSelectConnectionUsesFallbackProfileChain(t *testing.T) {
 	orgID := uuid.New()
 	providerA := uuid.New()

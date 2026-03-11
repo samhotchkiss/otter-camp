@@ -113,7 +113,12 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 			continue
 		}
 
-		state := r.health.GetState(connection.ID)
+		state := persistedHealthState(connection.HealthStatus)
+		if r.health != nil {
+			if inMemory, known := r.health.GetStateKnown(connection.ID); known {
+				state = inMemory
+			}
+		}
 		if state == HealthStateUnavailable {
 			continue
 		}
@@ -130,6 +135,21 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 	}
 	selected := connections[bestIndex]
 	return &selected, nil
+}
+
+func persistedHealthState(value string) HealthState {
+	switch HealthState(strings.TrimSpace(value)) {
+	case HealthStateHealthy:
+		return HealthStateHealthy
+	case HealthStateDegraded:
+		return HealthStateDegraded
+	case HealthStateRateLimited:
+		return HealthStateRateLimited
+	case HealthStateUnavailable:
+		return HealthStateUnavailable
+	default:
+		return HealthStateHealthy
+	}
 }
 
 func healthRank(state HealthState) int {

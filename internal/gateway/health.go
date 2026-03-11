@@ -53,22 +53,27 @@ func newHealthCheckerWithClock(now func() time.Time) *HealthChecker {
 }
 
 func (h *HealthChecker) GetState(connectionID uuid.UUID) HealthState {
+	state, _ := h.GetStateKnown(connectionID)
+	return state
+}
+
+func (h *HealthChecker) GetStateKnown(connectionID uuid.UUID) (HealthState, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	record := h.records[connectionID]
 	if record == nil {
-		return HealthStateHealthy
+		return HealthStateHealthy, false
 	}
 	if record.state == "" {
-		return HealthStateHealthy
+		return HealthStateHealthy, false
 	}
 	if (record.state == HealthStateUnavailable || record.state == HealthStateDegraded) &&
 		!record.recoveryReadyAt.IsZero() &&
 		!h.now().UTC().Before(record.recoveryReadyAt) {
-		return HealthStateDegraded
+		return HealthStateDegraded, true
 	}
-	return record.state
+	return record.state, true
 }
 
 func (h *HealthChecker) RecordSuccess(connectionID uuid.UUID) {
