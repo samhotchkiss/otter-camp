@@ -260,6 +260,7 @@ func (w *DeployWorker) createContinuousDeployTask(ctx context.Context, payload d
 		}
 		taskRecord = repo.ProjectTask(*queued)
 	} else {
+		// No-pool unit seams still use the raw repo path; pool-backed callers fail closed above.
 		taskRecord, err = w.tasks.Create(ctx, repo.ProjectTask{
 			OrganizationID:      projectRecord.OrganizationID,
 			ProjectID:           payload.ProjectID,

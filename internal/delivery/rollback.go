@@ -152,6 +152,7 @@ func (s *RollbackService) InitiateRollback(ctx context.Context, projectID uuid.U
 		}
 		taskRecord = repo.ProjectTask(*queued)
 	} else {
+		// No-pool unit seams still use the raw repo path; pool-backed callers fail closed above.
 		taskRecord, err = s.tasks.Create(ctx, repo.ProjectTask{
 			OrganizationID:      projectRecord.OrganizationID,
 			ProjectID:           projectID,
