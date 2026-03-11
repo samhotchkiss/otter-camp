@@ -1290,18 +1290,18 @@ func loadTUITaskDetail(ctx context.Context, apiClient *cliAPIClient, taskID stri
 	if err == nil {
 		populateTUITaskDetailSessions(item, sessions.Data)
 	}
-	if item.ActiveExecutionID == "" {
-		item.ActiveExecutionID = flowActiveExecutionID
+	if item.ActiveExecutionSessionID == "" {
+		item.ActiveExecutionSessionID = flowActiveExecutionID
 	}
-	if item.RecentExecutionID == "" {
-		item.RecentExecutionID = flowRecentExecutionID
+	if item.RecentExecutionSessionID == "" {
+		item.RecentExecutionSessionID = flowRecentExecutionID
 	}
 	if item.SessionID == "" {
 		switch {
-		case item.ActiveExecutionID != "":
-			item.SessionID = item.ActiveExecutionID
-		case item.RecentExecutionID != "":
-			item.SessionID = item.RecentExecutionID
+		case item.ActiveExecutionSessionID != "":
+			item.SessionID = item.ActiveExecutionSessionID
+		case item.RecentExecutionSessionID != "":
+			item.SessionID = item.RecentExecutionSessionID
 		}
 	}
 
@@ -1315,8 +1315,8 @@ func populateTUITaskDetailSessions(item *tuiapp.TaskDetailItem, sessions []cliCh
 
 	item.SessionID = ""
 	item.DiscussionSessionID = ""
-	item.ActiveExecutionID = ""
-	item.RecentExecutionID = ""
+	item.ActiveExecutionSessionID = ""
+	item.RecentExecutionSessionID = ""
 
 	for _, session := range sessions {
 		if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
@@ -1328,20 +1328,20 @@ func populateTUITaskDetailSessions(item *tuiapp.TaskDetailItem, sessions []cliCh
 				item.DiscussionSessionID = session.ID.String()
 			}
 		case "async":
-			if item.RecentExecutionID == "" {
-				item.RecentExecutionID = session.ID.String()
+			if item.RecentExecutionSessionID == "" {
+				item.RecentExecutionSessionID = session.ID.String()
 			}
-			if strings.EqualFold(strings.TrimSpace(session.Status), "active") && item.ActiveExecutionID == "" {
-				item.ActiveExecutionID = session.ID.String()
+			if strings.EqualFold(strings.TrimSpace(session.Status), "active") && item.ActiveExecutionSessionID == "" {
+				item.ActiveExecutionSessionID = session.ID.String()
 			}
 		}
 	}
 
 	switch {
-	case item.ActiveExecutionID != "":
-		item.SessionID = item.ActiveExecutionID
-	case item.RecentExecutionID != "":
-		item.SessionID = item.RecentExecutionID
+	case item.ActiveExecutionSessionID != "":
+		item.SessionID = item.ActiveExecutionSessionID
+	case item.RecentExecutionSessionID != "":
+		item.SessionID = item.RecentExecutionSessionID
 	}
 }
 
