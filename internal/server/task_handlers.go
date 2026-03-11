@@ -705,13 +705,13 @@ func (h taskHandlers) createTask(w http.ResponseWriter, r *http.Request) {
 				createdTask = *queued
 			}
 		}
+		if createdTask.WorkStatus == "queued" && createdTask.CurrentFlowNodeID == nil {
+			_, _ = h.flowService.StartFlow(r.Context(), createdTask.ID)
+		}
 		if createdTask.WorkStatus == "queued" {
 			if inProgress, queueErr := h.taskService.TransitionStatus(r.Context(), createdTask.ID, "in_progress", actor); queueErr == nil {
 				createdTask = *inProgress
 			}
-		}
-		if createdTask.WorkStatus == "in_progress" && createdTask.CurrentFlowNodeID == nil {
-			_, _ = h.flowService.StartFlow(r.Context(), createdTask.ID)
 		}
 		if h.tasks != nil {
 			if refreshed, getErr := h.tasks.GetByID(r.Context(), createdTask.ID); getErr == nil {

@@ -14,6 +14,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -490,14 +492,22 @@ func strPtrTaskHandler(value string) *string {
 
 type fakeTaskService struct {
 	transitionCalls int
+	createTaskFn    func(context.Context, tasksvc.CreateTaskRequest) (*tasksvc.ProjectTask, error)
+	transitionFn    func(context.Context, uuid.UUID, string, tasksvc.Actor) (*tasksvc.ProjectTask, error)
 }
 
-func (f *fakeTaskService) CreateTask(context.Context, tasksvc.CreateTaskRequest) (*tasksvc.ProjectTask, error) {
+func (f *fakeTaskService) CreateTask(ctx context.Context, req tasksvc.CreateTaskRequest) (*tasksvc.ProjectTask, error) {
+	if f.createTaskFn != nil {
+		return f.createTaskFn(ctx, req)
+	}
 	return nil, nil
 }
 
-func (f *fakeTaskService) TransitionStatus(_ context.Context, _ uuid.UUID, _ string, _ tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+func (f *fakeTaskService) TransitionStatus(ctx context.Context, taskID uuid.UUID, status string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
 	f.transitionCalls++
+	if f.transitionFn != nil {
+		return f.transitionFn(ctx, taskID, status, actor)
+	}
 	return &tasksvc.ProjectTask{}, nil
 }
 
@@ -536,6 +546,189 @@ func (f *fakeTaskService) EnqueueForMerge(context.Context, uuid.UUID) (*tasksvc.
 
 func (f *fakeTaskService) DequeueFromMerge(context.Context, uuid.UUID, string) (*tasksvc.MergeQueueEntry, error) {
 	return nil, nil
+}
+
+type fakeTaskFlowService struct {
+	startFlowFn func(context.Context, uuid.UUID) (*repo.FlowNodeExecution, error)
+}
+
+func (f *fakeTaskFlowService) StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error) {
+	if f.startFlowFn != nil {
+		return f.startFlowFn(ctx, taskID)
+	}
+	return &repo.FlowNodeExecution{}, nil
+}
+
+func (f *fakeTaskFlowService) EnsureActiveExecution(context.Context, uuid.UUID) (*repo.FlowNodeExecution, error) {
+	return &repo.FlowNodeExecution{}, nil
+}
+
+func (f *fakeTaskFlowService) AdvanceFlow(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+	return &repo.FlowNodeExecution{}, nil
+}
+
+func (f *fakeTaskFlowService) RejectFlowNode(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+	return &repo.FlowNodeExecution{}, nil
+}
+
+func (f *fakeTaskFlowService) RecordNodeCommit(context.Context, uuid.UUID, string, string) (*repo.FlowNodeExecution, error) {
+	return &repo.FlowNodeExecution{}, nil
+}
+
+func (f *fakeTaskFlowService) CreateSubtask(context.Context, uuid.UUID, string, *string, flowsvc.SubtaskAssignee) (*repo.ProjectSubtask, error) {
+	return &repo.ProjectSubtask{}, nil
+}
+
+func (f *fakeTaskFlowService) UpdateSubtaskStatus(context.Context, uuid.UUID, string) (*repo.ProjectSubtask, error) {
+	return &repo.ProjectSubtask{}, nil
+}
+
+func (f *fakeTaskFlowService) ListSubtasks(context.Context, uuid.UUID) ([]repo.ProjectSubtask, error) {
+	return nil, nil
+}
+
+func (f *fakeTaskFlowService) AddDependency(context.Context, flowsvc.AddDependencyRequest) (*repo.ProjectTaskDependency, error) {
+	return &repo.ProjectTaskDependency{}, nil
+}
+
+func (f *fakeTaskFlowService) RemoveDependency(context.Context, string, uuid.UUID, string, uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeTaskFlowService) OnTaskCancelled(context.Context, uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeTaskFlowService) SubscribeTaskCancellationHandler(*uuid.UUID) eventbus.Subscription {
+	return eventbus.Subscription{}
+}
+
+func TestCreateTaskTestModeStartsFlowBeforeInProgressTransition(t *testing.T) {
+	t.Setenv("OTTERCAMP_MODE", "test")
+
+	projectID := uuid.New()
+	taskID := uuid.New()
+	orgID := uuid.New()
+	userID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowStarted := false
+	callOrder := make([]string, 0, 3)
+	taskRepo := &fakeProjectTaskRepo{items: map[uuid.UUID]repo.ProjectTask{}}
+
+	taskSvc := &fakeTaskService{}
+	taskSvc.createTaskFn = func(_ context.Context, req tasksvc.CreateTaskRequest) (*tasksvc.ProjectTask, error) {
+		created := tasksvc.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      req.ProjectID,
+			Title:          req.Title,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+		}
+		taskRepo.items[taskID] = repo.ProjectTask{
+			ID:             created.ID,
+			OrganizationID: created.OrganizationID,
+			ProjectID:      created.ProjectID,
+			Title:          created.Title,
+			WorkStatus:     created.WorkStatus,
+			FlowTemplateID: created.FlowTemplateID,
+		}
+		return &created, nil
+	}
+	taskSvc.transitionFn = func(_ context.Context, gotTaskID uuid.UUID, status string, _ tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+		if gotTaskID != taskID {
+			t.Fatalf("task id = %s, want %s", gotTaskID, taskID)
+		}
+		callOrder = append(callOrder, status)
+		switch status {
+		case "queued":
+			queued := tasksvc.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Test task",
+				WorkStatus:     "queued",
+				FlowTemplateID: &flowTemplateID,
+			}
+			taskRepo.items[taskID] = repo.ProjectTask{
+				ID:             queued.ID,
+				OrganizationID: queued.OrganizationID,
+				ProjectID:      queued.ProjectID,
+				Title:          queued.Title,
+				WorkStatus:     queued.WorkStatus,
+				FlowTemplateID: queued.FlowTemplateID,
+			}
+			return &queued, nil
+		case "in_progress":
+			if !flowStarted {
+				return nil, tasksvc.ErrActiveFlowRequired
+			}
+			nodeID := uuid.New()
+			inProgress := tasksvc.ProjectTask{
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				Title:             "Test task",
+				WorkStatus:        "in_progress",
+				FlowTemplateID:    &flowTemplateID,
+				CurrentFlowNodeID: &nodeID,
+			}
+			taskRepo.items[taskID] = repo.ProjectTask{
+				ID:                inProgress.ID,
+				OrganizationID:    inProgress.OrganizationID,
+				ProjectID:         inProgress.ProjectID,
+				Title:             inProgress.Title,
+				WorkStatus:        inProgress.WorkStatus,
+				FlowTemplateID:    inProgress.FlowTemplateID,
+				CurrentFlowNodeID: inProgress.CurrentFlowNodeID,
+			}
+			return &inProgress, nil
+		default:
+			t.Fatalf("unexpected status transition %q", status)
+			return nil, nil
+		}
+	}
+
+	flowSvc := &fakeTaskFlowService{
+		startFlowFn: func(_ context.Context, gotTaskID uuid.UUID) (*repo.FlowNodeExecution, error) {
+			if gotTaskID != taskID {
+				t.Fatalf("StartFlow task id = %s, want %s", gotTaskID, taskID)
+			}
+			flowStarted = true
+			callOrder = append(callOrder, "start_flow")
+			return &repo.FlowNodeExecution{ID: uuid.New(), TaskID: taskID, FlowNodeID: uuid.New(), Status: "active"}, nil
+		},
+	}
+
+	h := taskHandlers{
+		taskService: taskSvc,
+		flowService: flowSvc,
+		tasks:       taskRepo,
+		projects: &fakeProjectRepoForTaskHandlers{items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				DisplayName:    "Test project",
+			},
+		}},
+	}
+
+	body := bytes.NewBufferString(`{"title":"Test task","flow_template_id":"` + flowTemplateID.String() + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID.String()+"/tasks", body)
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{UserID: userID, OrganizationID: orgID, Role: "member"}))
+	req = withRouteParams(req, map[string]string{"id": projectID.String()})
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.createTask(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+	gotOrder := strings.Join(callOrder, ",")
+	if gotOrder != "queued,start_flow,in_progress" {
+		t.Fatalf("call order = %q, want %q", gotOrder, "queued,start_flow,in_progress")
+	}
 }
 
 func (f *fakeTaskService) GetMergeQueueStatus(context.Context, uuid.UUID) ([]*tasksvc.MergeQueueEntry, error) {
