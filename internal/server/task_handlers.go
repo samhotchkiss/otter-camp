@@ -45,6 +45,7 @@ type rollbackInitiator interface {
 
 type projectTaskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error)
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
 
@@ -2523,7 +2524,7 @@ func (h taskHandlers) attachDeployMetadata(ctx context.Context, deployTask repo.
 	}
 	taskRecord.Metadata = encoded
 
-	updated, err := h.tasks.Update(ctx, taskRecord)
+	updated, err := h.tasks.UpdateMetadata(ctx, taskRecord.ID, taskRecord.Metadata)
 	if err != nil {
 		return repo.ProjectTask{}, err
 	}

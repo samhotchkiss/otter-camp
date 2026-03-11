@@ -509,6 +509,21 @@ func (m *mockTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.Pr
 	return m.task, nil
 }
 
+func (m *mockTaskRepo) UpdateMetadata(_ context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error) {
+	m.updateCalls++
+	if m.updateErr != nil {
+		return repo.ProjectTask{}, m.updateErr
+	}
+	task, err := m.GetByID(context.Background(), id)
+	if err != nil {
+		return repo.ProjectTask{}, err
+	}
+	task.Metadata = append(json.RawMessage(nil), metadata...)
+	m.task = task
+	m.storeTask(task)
+	return task, nil
+}
+
 func (m *mockTaskRepo) storeTask(task repo.ProjectTask) {
 	if task.ID == uuid.Nil {
 		return

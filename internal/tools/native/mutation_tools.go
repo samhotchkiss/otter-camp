@@ -78,6 +78,10 @@ func actorFromContext(ctx context.Context) executionActor {
 	}
 }
 
+func updateTaskMetadataOnly(ctx context.Context, tasks taskReader, taskRecord repo.ProjectTask) (repo.ProjectTask, error) {
+	return tasks.UpdateMetadata(ctx, taskRecord.ID, taskRecord.Metadata)
+}
+
 func derefString(value *string) string {
 	if value == nil {
 		return ""
@@ -1218,7 +1222,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 					return nil, err
 				}
 				if !bytes.Equal(beforeSync.Metadata, reused.Metadata) {
-					if updated, updateErr := e.tasks.Update(ctx, reused); updateErr != nil {
+					if updated, updateErr := updateTaskMetadataOnly(ctx, e.tasks, reused); updateErr != nil {
 						return nil, updateErr
 					} else {
 						reused = updated
@@ -1256,7 +1260,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	}
 	if parentTask != nil {
 		parentTask.Metadata = taskdecomp.AppendChildTaskID(parentTask.Metadata, created.ID)
-		updatedParent, updateErr := e.tasks.Update(ctx, *parentTask)
+		updatedParent, updateErr := updateTaskMetadataOnly(ctx, e.tasks, *parentTask)
 		if updateErr != nil {
 			return nil, updateErr
 		}
@@ -1267,7 +1271,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		if err != nil {
 			return nil, err
 		}
-		if updated, updateErr := e.tasks.Update(ctx, created); updateErr != nil {
+		if updated, updateErr := updateTaskMetadataOnly(ctx, e.tasks, created); updateErr != nil {
 			return nil, updateErr
 		} else {
 			created = updated

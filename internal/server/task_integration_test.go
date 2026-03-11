@@ -638,6 +638,11 @@ func TestTaskHTTPQueueRejectsOutstandingProjectGateEX256(t *testing.T) {
 
 	gateTask, templateID, _, _ := seedFlowTask(t, testServer.Pool, org.ID, project.ID)
 	taskRepo := repo.NewProjectTaskRepo(testServer.Pool)
+	refreshedGateTask, err := taskRepo.GetByID(context.Background(), gateTask.ID)
+	if err != nil {
+		t.Fatalf("reload gate task: %v", err)
+	}
+	gateTask = refreshedGateTask
 	gateTask.Title = "Bootstrap governance gate"
 	gateTask.BlocksScope = "all"
 	if _, err := taskRepo.Update(context.Background(), gateTask); err != nil {

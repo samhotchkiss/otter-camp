@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -334,6 +335,16 @@ func (s *stubTaskRepo) SetFlowNode(context.Context, uuid.UUID, *uuid.UUID) (repo
 
 func (s *stubTaskRepo) UpdateStatus(context.Context, uuid.UUID, string) (repo.ProjectTask, error) {
 	return repo.ProjectTask{}, repo.ErrNotFound
+}
+
+func (s *stubTaskRepo) UpdateMetadata(_ context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error) {
+	task, ok := s.byID[id]
+	if !ok {
+		return repo.ProjectTask{}, repo.ErrNotFound
+	}
+	task.Metadata = append(json.RawMessage(nil), metadata...)
+	s.byID[id] = task
+	return task, nil
 }
 
 func (s *stubTaskRepo) Update(context.Context, repo.ProjectTask) (repo.ProjectTask, error) {

@@ -552,6 +552,16 @@ func (f *fakeProjectTaskRepo) Update(_ context.Context, task repo.ProjectTask) (
 	return task, nil
 }
 
+func (f *fakeProjectTaskRepo) UpdateMetadata(_ context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error) {
+	item, ok := f.items[id]
+	if !ok {
+		return repo.ProjectTask{}, repo.ErrNotFound
+	}
+	item.Metadata = append(json.RawMessage(nil), metadata...)
+	f.items[id] = item
+	return item, nil
+}
+
 type fakeProjectRepoForTaskHandlers struct {
 	items map[uuid.UUID]repo.Project
 }
@@ -684,11 +694,11 @@ func (f *fakeTaskService) DequeueFromMerge(context.Context, uuid.UUID, string) (
 }
 
 type fakeTaskFlowService struct {
-	startFlowFn     func(context.Context, uuid.UUID) (*repo.FlowNodeExecution, error)
-	advanceFlowFn   func(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error)
-	rejectFlowFn    func(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error)
-	advanceCalls    int
-	rejectCalls     int
+	startFlowFn   func(context.Context, uuid.UUID) (*repo.FlowNodeExecution, error)
+	advanceFlowFn func(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error)
+	rejectFlowFn  func(context.Context, uuid.UUID, flowsvc.Actor) (*repo.FlowNodeExecution, error)
+	advanceCalls  int
+	rejectCalls   int
 }
 
 func (f *fakeTaskFlowService) StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error) {
