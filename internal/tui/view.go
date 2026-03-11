@@ -1440,6 +1440,14 @@ func (m Model) renderProjectView(width, maxLines int) []string {
 		}
 		lines = append(lines, "")
 	}
+	if proj != nil && proj.IsPaused {
+		pauseText := "  Project paused"
+		if strings.TrimSpace(proj.PauseReason) != "" {
+			pauseText += ": " + strings.TrimSpace(proj.PauseReason)
+		}
+		lines = append(lines, styleDegraded.Render(pauseText))
+		lines = append(lines, "")
+	}
 
 	// Agent roster
 	if proj != nil && len(proj.Agents) > 0 {

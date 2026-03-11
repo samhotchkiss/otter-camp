@@ -705,6 +705,8 @@ func loadTUIProjectDetail(ctx context.Context, apiClient *cliAPIClient, projectI
 			DisplayName  string `json:"display_name"`
 			Description  string `json:"description"`
 			DeliveryMode string `json:"delivery_mode"`
+			IsPaused     bool   `json:"is_paused"`
+			PauseReason  string `json:"pause_reason"`
 		} `json:"data"`
 	}
 	if err := apiClient.request(ctx, "GET", "/v1/projects/"+url.PathEscape(projectID), nil, &projResp); err != nil {
@@ -808,6 +810,8 @@ func loadTUIProjectDetail(ctx context.Context, apiClient *cliAPIClient, projectI
 		DisplayName:  tuiapp.ResolveProjectLabel(proj.DisplayName, proj.Slug, ""),
 		Description:  proj.Description,
 		DeliveryMode: proj.DeliveryMode,
+		IsPaused:     proj.IsPaused,
+		PauseReason:  strings.TrimSpace(proj.PauseReason),
 		RepoURL:      repoURL,
 		RepoPath:     repoPath,
 		Files:        projectFiles,

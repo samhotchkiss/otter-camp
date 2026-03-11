@@ -638,6 +638,32 @@ func TestProjectViewUsesHumanReadableLabelInsteadOfSyntheticIDEX292(t *testing.T
 	}
 }
 
+func TestProjectViewShowsPauseBanner(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.focus = MainPanel
+	model.workspace.mainView = ViewProject
+	model = pressMsg(model, tea.WindowSizeMsg{Width: 120, Height: 36})
+	projectID := "proj-paused"
+	model.workspace.selectedProjectID = projectID
+	model.workspace.nodes["project-"+projectID] = &sidebarNode{
+		ID:        "project-" + projectID,
+		Kind:      sidebarKindProject,
+		ProjectID: projectID,
+		Label:     "Paused Project",
+	}
+	model.workspace.selectedProject = &ProjectDetail{
+		ID:          projectID,
+		DisplayName: "Paused Project",
+		IsPaused:    true,
+		PauseReason: "waiting for operator review",
+	}
+
+	rendered := strings.Join(model.renderProjectView(120, 36), "\n")
+	if !strings.Contains(rendered, "Project paused: waiting for operator review") {
+		t.Fatalf("project view missing pause banner:\n%s", rendered)
+	}
+}
+
 func connectAndLoadSidebar(t *testing.T, model Model) Model {
 	t.Helper()
 

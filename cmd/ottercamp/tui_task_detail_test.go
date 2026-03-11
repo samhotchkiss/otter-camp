@@ -262,3 +262,52 @@ func TestLoadTUIProjectDetailResolvesSlugFallback(t *testing.T) {
 		t.Fatalf("Slug = %q, want slug-only-project", detail.Slug)
 	}
 }
+
+func TestLoadTUIProjectDetailCarriesPauseState(t *testing.T) {
+	t.Parallel()
+
+	projectID := "proj-paused"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/projects/" + projectID:
+			writeTUITestJSON(t, w, map[string]any{
+				"data": map[string]any{
+					"id":            projectID,
+					"slug":          "paused-project",
+					"display_name":  "Paused Project",
+					"description":   "Paused project detail test",
+					"delivery_mode": "gated",
+					"is_paused":     true,
+					"pause_reason":  "waiting for operator review",
+				},
+			})
+		case "/v1/projects/" + projectID + "/tasks":
+			writeTUITestJSON(t, w, map[string]any{"data": []any{}})
+		case "/v1/projects/" + projectID + "/agents":
+			writeTUITestJSON(t, w, map[string]any{"data": []any{}})
+		case "/v1/projects/" + projectID + "/remotes":
+			writeTUITestJSON(t, w, map[string]any{"data": []any{}})
+		case "/v1/projects/" + projectID + "/files":
+			writeTUITestJSON(t, w, map[string]any{"data": map[string]any{"files": []any{}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newCLIAPIClient(server.URL, "test-key")
+	if err != nil {
+		t.Fatalf("newCLIAPIClient: %v", err)
+	}
+
+	detail, err := loadTUIProjectDetail(context.Background(), client, projectID)
+	if err != nil {
+		t.Fatalf("loadTUIProjectDetail: %v", err)
+	}
+	if !detail.IsPaused {
+		t.Fatal("IsPaused = false, want true")
+	}
+	if detail.PauseReason != "waiting for operator review" {
+		t.Fatalf("PauseReason = %q, want waiting for operator review", detail.PauseReason)
+	}
+}

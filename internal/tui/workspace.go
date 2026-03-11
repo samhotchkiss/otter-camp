@@ -147,6 +147,8 @@ type ProjectDetail struct {
 	DisplayName  string
 	Description  string
 	DeliveryMode string
+	IsPaused     bool
+	PauseReason  string
 	RepoURL      string // connected GitHub repository URL
 	RepoPath     string
 	Files        []ProjectFileEntry
