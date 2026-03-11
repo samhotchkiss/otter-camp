@@ -326,6 +326,152 @@ func TestLiveModelGatewayStreamCompleteReusesPrecreatedInvocation(t *testing.T) 
 	}
 }
 
+func TestLiveModelGatewayStreamCompleteBindsRoutingOnPrecreatedInvocationWithoutConnection(t *testing.T) {
+	t.Setenv("OTTERCAMP_MASTER_KEY", base64.StdEncoding.EncodeToString(testMasterKey()))
+	t.Setenv("OTTERCAMP_MASTER_KEY_FILE", "")
+	t.Setenv("OTTERCAMP_KMS_KEY_ID", "")
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+	invocationRepo := repo.NewModelInvocationRepo(pool)
+	secretSvc := secret.NewService(repo.NewSecretRepo(pool))
+
+	org := mustCreateOrg(t, ctx, orgRepo, repo.Organization{
+		Slug:        "live-gateway-precreated-routing-org",
+		DisplayName: "Live Gateway Precreated Routing Org",
+	})
+	if err := secretSvc.Set(ctx, org.ID, "gateway-key", "Gateway Key", "", "sk-live-test", secret.Principal{Type: "human", ID: uuid.Nil}); err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
+
+	sseBody := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"Hello "}}]}`,
+		"",
+		`data: {"choices":[{"delta":{"content":"routed"}}]}`,
+		"",
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":2}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	serverURL := testutil.MockProviderServer(t, testutil.MockProviderFixture{
+		Handlers: []testutil.MockHandler{{
+			StatusCode: http.StatusOK,
+			Headers: map[string]string{
+				"Content-Type": "text/event-stream",
+			},
+			Body: sseBody,
+		}},
+	})
+
+	provider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "openai",
+		DisplayName: "OpenAI",
+		APIBaseURL:  serverURL,
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	connection, err := connectionRepo.Create(ctx, repo.ProviderConnection{
+		OrganizationID:     org.ID,
+		ProviderID:         provider.ID,
+		DisplayName:        "OpenAI Primary",
+		APIKeyRef:          "ref:gateway-key",
+		APIBaseURLOverride: &serverURL,
+		FailoverPriority:   1,
+		MaxConcurrent:      1,
+		IsEnabled:          true,
+	})
+	if err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+
+	orgID := org.ID
+	profile, err := profileRepo.Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    "high-capability",
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          provider.ID,
+		ModelName:           "gpt-4o-mini",
+		DisplayName:         "Standard",
+		ContextWindowTokens: 128000,
+		MaxOutputTokens:     2048,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
+	})
+	if err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+
+	precreated, err := invocationRepo.Create(ctx, repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   provider.ID,
+		ModelProfileID:    stringPtr(profile.LogicalProfileID),
+		InvocationPurpose: "agent_turn",
+		Status:            "in_flight",
+		ModelName:         profile.ModelName,
+		IsStreaming:       true,
+	})
+	if err != nil {
+		t.Fatalf("precreate invocation: %v", err)
+	}
+
+	health := NewHealthChecker()
+	gw, err := NewLiveModelGateway(LiveModelGatewayOptions{
+		Router:      NewRouter(profileRepo, connectionRepo, health),
+		Providers:   providerRepo,
+		Secrets:     secretSvc,
+		Invocations: invocationRepo,
+		Health:      health,
+	})
+	if err != nil {
+		t.Fatalf("NewLiveModelGateway: %v", err)
+	}
+
+	invocationID := precreated.ID
+	response, err := gw.StreamComplete(ctx, turn.ModelRequest{
+		OrganizationID: org.ID,
+		Purpose:        "agent_turn",
+		Profile:        profile,
+		InvocationID:   &invocationID,
+		Prompt: &prompt.AssembledPrompt{
+			Messages: []prompt.PromptMessage{
+				{Role: "system", Content: "You are helpful."},
+				{Role: "user", Content: "Say hello with routing"},
+			},
+			TotalTokens: 9,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("StreamComplete: %v", err)
+	}
+	if response.Content != "Hello routed" {
+		t.Fatalf("response.Content = %q, want %q", response.Content, "Hello routed")
+	}
+
+	stored, err := invocationRepo.GetByID(ctx, precreated.ID)
+	if err != nil {
+		t.Fatalf("GetByID invocation: %v", err)
+	}
+	if stored.ProviderConnectionID == nil || *stored.ProviderConnectionID != connection.ID {
+		t.Fatalf("provider_connection_id = %v, want %s", stored.ProviderConnectionID, connection.ID)
+	}
+	if stored.ModelProviderID != provider.ID {
+		t.Fatalf("model_provider_id = %s, want %s", stored.ModelProviderID, provider.ID)
+	}
+	if stored.Status != "completed" {
+		t.Fatalf("status = %q, want completed", stored.Status)
+	}
+}
+
 func TestLiveModelGatewayMapsAuthErrors(t *testing.T) {
 	t.Setenv("OTTERCAMP_MASTER_KEY", base64.StdEncoding.EncodeToString(testMasterKey()))
 	t.Setenv("OTTERCAMP_MASTER_KEY_FILE", "")

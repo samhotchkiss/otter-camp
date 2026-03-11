@@ -55,6 +55,7 @@ type SecretResolver interface {
 type liveModelInvocationRepo interface {
 	modelInvocationLookup
 	Create(ctx context.Context, invocation repo.ModelInvocation) (repo.ModelInvocation, error)
+	UpdateRouting(ctx context.Context, id, providerID, connectionID uuid.UUID) (repo.ModelInvocation, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorCode, errorMessage *string) (repo.ModelInvocation, error)
 	UpdateFailure(ctx context.Context, id uuid.UUID, status string, failureClass, errorCode, errorMessage *string) (repo.ModelInvocation, error)
 }
@@ -250,6 +251,14 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 		var invocation repo.ModelInvocation
 		if precreatedInvocation != nil {
 			invocation = *precreatedInvocation
+			if invocation.ProviderConnectionID == nil || *invocation.ProviderConnectionID != connection.ID || invocation.ModelProviderID != provider.ID {
+				updated, updateErr := g.invocations.UpdateRouting(ctx, invocation.ID, provider.ID, connection.ID)
+				if updateErr != nil {
+					return turn.ModelResponse{}, updateErr
+				}
+				invocation = updated
+				precreatedInvocation = &updated
+			}
 		} else {
 			invocation, err = g.createInvocation(ctx, orgID, req, provider, connection, stream)
 			if err != nil {

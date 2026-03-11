@@ -149,6 +149,28 @@ func (r *ModelInvocationRepo) UpdateStatus(ctx context.Context, id uuid.UUID, st
 	return r.UpdateFailure(ctx, id, status, nil, errorCode, errorMessage)
 }
 
+func (r *ModelInvocationRepo) UpdateRouting(ctx context.Context, id, providerID, connectionID uuid.UUID) (ModelInvocation, error) {
+	row := r.db.QueryRow(ctx, `
+		UPDATE model_invocation
+		SET model_provider_id = $2,
+		    provider_connection_id = $3
+		WHERE id = $1
+		RETURNING id, organization_id, model_provider_id, provider_connection_id, model_profile_id, invocation_purpose, status, prompt_storage_key, response_storage_key,
+		          input_tokens, output_tokens, cache_read_tokens, model_name, is_streaming, latency_ms, total_duration_ms, attempt_number,
+		          fallback_from_invocation_id, failure_class, error_code, error_message, metadata, agent_id, project_id, project_task_id, session_id, turn_id,
+		          run_id, run_step_id, run_attempt_id, created_at, completed_at
+	`, id, providerID, connectionID)
+
+	updated, err := scanModelInvocation(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ModelInvocation{}, ErrNotFound
+	}
+	if err != nil {
+		return ModelInvocation{}, mapDBError(err)
+	}
+	return updated, nil
+}
+
 func (r *ModelInvocationRepo) UpdateFailure(ctx context.Context, id uuid.UUID, status string, failureClass, errorCode, errorMessage *string) (ModelInvocation, error) {
 	row := r.db.QueryRow(ctx, `
 		UPDATE model_invocation
