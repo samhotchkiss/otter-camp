@@ -1177,14 +1177,137 @@ func TestTransitionStatusBlockedToInProgressStillRequiresActiveFlow(t *testing.T
 	svc := newUnitService(taskRepo)
 
 	_, err := svc.TransitionStatus(context.Background(), taskID, "in_progress", Actor{
-		Type:              "system",
-		AllowNoActiveFlow: true,
+		Type: "human_user",
+		ID:   uuid.New(),
 	})
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !errors.Is(err, ErrActiveFlowRequired) {
 		t.Fatalf("TransitionStatus err = %v, want ErrActiveFlowRequired", err)
+	}
+}
+
+func TestTransitionStatusBlockedToInProgressRejectsAgentEvenWithActiveFlow(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "blocked",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Blocked task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	flowRepo := &fakeFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: uuid.New(), Status: "active"},
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.executions = flowRepo
+
+	_, err := svc.TransitionStatus(context.Background(), taskID, "in_progress", Actor{Type: "agent", ID: uuid.New()})
+	if !errors.Is(err, ErrBlockedInProgressRequiresHumanActor) {
+		t.Fatalf("TransitionStatus err = %v, want ErrBlockedInProgressRequiresHumanActor", err)
+	}
+}
+
+func TestTransitionStatusBlockedToInProgressAllowsHumanUserWithActiveFlow(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "blocked",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Blocked task",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	flowRepo := &fakeFlowExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: uuid.New(), Status: "active"},
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.executions = flowRepo
+
+	updated, err := svc.TransitionStatus(context.Background(), taskID, "in_progress", Actor{Type: "human_user", ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("TransitionStatus err = %v, want nil", err)
+	}
+	if updated.WorkStatus != "in_progress" {
+		t.Fatalf("work_status = %q, want in_progress", updated.WorkStatus)
+	}
+}
+
+func TestMarkBlockedRetriesOnceOnRepoConflict(t *testing.T) {
+	taskID := uuid.New()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	pmAgentID := uuid.New()
+	pmUserID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "in_progress",
+				Title:          "Task",
+				CreatedByType:  "system",
+				Metadata:       json.RawMessage(`{}`),
+			},
+		},
+		conflictUpdates: 1,
+	}
+
+	svc := newUnitService(taskRepo)
+	svc.project = &fakeProjectRepo{projects: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: orgID, Slug: "alpha"},
+	}}
+	svc.assignments = &fakeAssignmentRepo{pmByProject: map[uuid.UUID]repo.AgentProjectAssignment{
+		projectID: {ProjectID: projectID, AgentID: pmAgentID, Role: "pm", IsActive: true},
+	}}
+	svc.agents = &fakeAgentRepo{agents: map[uuid.UUID]repo.Agent{
+		pmAgentID: {ID: pmAgentID, OrganizationID: orgID, AgentClass: "staff", CreatedByType: "human_user", CreatedByID: pmUserID},
+	}}
+	svc.users = &fakeUserRepo{
+		usersByID: map[uuid.UUID]repo.HumanUser{
+			pmUserID: {ID: pmUserID, OrganizationID: orgID, Role: "admin", IsActive: true},
+		},
+		usersByOrg: map[uuid.UUID][]repo.HumanUser{
+			orgID: {{ID: pmUserID, OrganizationID: orgID, Role: "admin", IsActive: true}},
+		},
+	}
+
+	blocked, err := svc.MarkBlocked(context.Background(), taskID, "dependency missing", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("MarkBlocked err = %v, want nil", err)
+	}
+	if blocked.WorkStatus != "blocked" {
+		t.Fatalf("work_status = %q, want blocked", blocked.WorkStatus)
+	}
+	if taskRepo.updateCalls != 2 {
+		t.Fatalf("update_calls = %d, want 2", taskRepo.updateCalls)
 	}
 }
 
@@ -1661,6 +1784,8 @@ func newUnitService(taskRepo *fakeTaskRepo) *service {
 type fakeTaskRepo struct {
 	tasks        map[uuid.UUID]repo.ProjectTask
 	createdTasks []repo.ProjectTask
+	conflictUpdates int
+	updateCalls     int
 }
 
 func (f *fakeTaskRepo) Create(_ context.Context, task repo.ProjectTask) (repo.ProjectTask, error) {
@@ -1714,6 +1839,11 @@ func (f *fakeTaskRepo) ListByProject(_ context.Context, projectID uuid.UUID, sta
 func (f *fakeTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.ProjectTask, error) {
 	if _, ok := f.tasks[task.ID]; !ok {
 		return repo.ProjectTask{}, repo.ErrNotFound
+	}
+	f.updateCalls++
+	if f.conflictUpdates > 0 {
+		f.conflictUpdates--
+		return repo.ProjectTask{}, repo.ErrConflict
 	}
 	f.tasks[task.ID] = task
 	return task, nil

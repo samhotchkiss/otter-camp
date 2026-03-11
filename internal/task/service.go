@@ -55,6 +55,7 @@ var (
 	ErrTaskMustRemainOrchestrationOnly = errors.New("task must remain orchestration-only while executable child tasks exist")
 	ErrTaskFlowStateInvariant          = errors.New("task flow state invariant violated")
 	ErrParentIntegrationFeedbackRequired = errors.New("completed child reopen requires parent integration feedback")
+	ErrBlockedInProgressRequiresHumanActor = errors.New("blocked to in_progress requires direct human operator continuation")
 )
 
 var validStatusTransitions = map[string]map[string]struct{}{
@@ -542,14 +543,18 @@ func (s *service) transitionStatus(ctx context.Context, taskID uuid.UUID, toStat
 	if err != nil {
 		return nil, err
 	}
-	return s.transitionTaskRecordTx(ctx, nil, taskRecord, toStatus, actor, extraPayload, approvalOverride)
+	return s.transitionTaskRecordTxWithRetry(ctx, nil, taskRecord, toStatus, actor, extraPayload, approvalOverride, true)
 }
 
 func (s *service) transitionTaskRecord(ctx context.Context, taskRecord repo.ProjectTask, toStatus string, actor Actor, extraPayload map[string]any, approvalOverride bool) (*ProjectTask, error) {
-	return s.transitionTaskRecordTx(ctx, nil, taskRecord, toStatus, actor, extraPayload, approvalOverride)
+	return s.transitionTaskRecordTxWithRetry(ctx, nil, taskRecord, toStatus, actor, extraPayload, approvalOverride, true)
 }
 
 func (s *service) transitionTaskRecordTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, toStatus string, actor Actor, extraPayload map[string]any, approvalOverride bool) (*ProjectTask, error) {
+	return s.transitionTaskRecordTxWithRetry(ctx, tx, taskRecord, toStatus, actor, extraPayload, approvalOverride, false)
+}
+
+func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, toStatus string, actor Actor, extraPayload map[string]any, approvalOverride bool, retryOnConflict bool) (*ProjectTask, error) {
 	from := normalizeStatus(taskRecord.WorkStatus)
 	target := normalizeStatus(toStatus)
 	expectedFrom := normalizeStatus(actor.ExpectedFromStatus)
@@ -636,6 +641,9 @@ func (s *service) transitionTaskRecordTx(ctx context.Context, tx pgx.Tx, taskRec
 		return nil, ErrTaskMustRemainOrchestrationOnly
 	}
 	if target == "in_progress" {
+		if from == "blocked" && normalizeActorTypeForTask(actor.Type) != "human_user" {
+			return nil, ErrBlockedInProgressRequiresHumanActor
+		}
 		allowNoActiveFlow := actor.AllowNoActiveFlow && !strings.EqualFold(strings.TrimSpace(from), "blocked")
 		hasActiveFlow, flowErr := s.hasActiveFlowExecution(ctx, taskRecord.ID)
 		if flowErr != nil {
@@ -671,6 +679,12 @@ func (s *service) transitionTaskRecordTx(ctx context.Context, tx pgx.Tx, taskRec
 
 	updated, err := s.updateTaskTx(ctx, tx, taskRecord)
 	if err != nil {
+		if retryOnConflict && tx == nil && expectedFrom == "" && errors.Is(err, repo.ErrConflict) {
+			latest, getErr := s.tasks.GetByID(ctx, taskRecord.ID)
+			if getErr == nil {
+				return s.transitionTaskRecordTxWithRetry(ctx, nil, latest, toStatus, actor, extraPayload, approvalOverride, false)
+			}
+		}
 		return nil, err
 	}
 	if tx != nil && target == "cancelled" {
