@@ -1346,9 +1346,21 @@ func (w *workspaceState) rebuildSidebar(orgSessionID string, chats []SidebarChat
 		if chat.ScopeType == "project" {
 			projectID = chat.ScopeID
 		}
+		label := strings.TrimSpace(chat.DisplayName)
+		if chat.ScopeType == "project" {
+			for _, project := range projects {
+				if strings.EqualFold(strings.TrimSpace(project.ID), strings.TrimSpace(projectID)) {
+					label = ResolveProjectLabel(project.DisplayName, project.Slug, label)
+					break
+				}
+			}
+			if strings.TrimSpace(label) == "" {
+				label = ResolveProjectLabel("", "", chat.DisplayName)
+			}
+		}
 		newNodes[id] = &sidebarNode{
 			ID:           id,
-			Label:        chat.DisplayName,
+			Label:        label,
 			Kind:         sidebarKindSession,
 			SessionID:    chat.SessionID,
 			SessionScope: chat.ScopeType,

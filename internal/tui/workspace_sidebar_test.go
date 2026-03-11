@@ -122,3 +122,30 @@ func TestRebuildSidebarBuildsProjectNodesFromActiveItems(t *testing.T) {
 		t.Fatalf("second project = %+v, want proj-beta/Beta", got[1])
 	}
 }
+
+func TestRebuildSidebarNormalizesProjectChatLabelsFromProjectMetadata(t *testing.T) {
+	workspace := newWorkspaceState()
+
+	workspace.rebuildSidebar(
+		"org-1",
+		[]SidebarChatItem{{
+			SessionID:   "chat-project-1",
+			DisplayName: "Project 19b5a684-0e1b-4ef5-98f0-12bb7f542111",
+			ScopeType:   "project",
+			ScopeID:     "proj-alpha",
+		}},
+		[]SidebarProjectItem{{
+			ID:          "proj-alpha",
+			Slug:        "sam-blog",
+			DisplayName: "Sam.blog Rebuild",
+		}},
+	)
+
+	chats := workspace.existingChats()
+	if len(chats) != 1 {
+		t.Fatalf("chat count = %d, want 1", len(chats))
+	}
+	if chats[0].DisplayName != "Sam.blog Rebuild" {
+		t.Fatalf("project chat label = %q, want %q", chats[0].DisplayName, "Sam.blog Rebuild")
+	}
+}

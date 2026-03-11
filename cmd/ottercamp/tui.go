@@ -632,15 +632,17 @@ func loadTUIRecentChats(ctx context.Context, apiClient *cliAPIClient) ([]tuiapp.
 				}
 			}
 		}
-		if name == "" && strings.EqualFold(s.ScopeType, "project") && s.ScopeID != uuid.Nil {
+		if strings.EqualFold(s.ScopeType, "project") {
 			var projResp struct {
 				Data struct {
 					DisplayName string `json:"display_name"`
 					Slug        string `json:"slug"`
 				} `json:"data"`
 			}
-			if apiClient.request(ctx, "GET", "/v1/projects/"+s.ScopeID.String(), nil, &projResp) == nil {
-				name = tuiapp.ResolveProjectLabel(projResp.Data.DisplayName, projResp.Data.Slug, "")
+			if s.ScopeID != uuid.Nil && apiClient.request(ctx, "GET", "/v1/projects/"+s.ScopeID.String(), nil, &projResp) == nil {
+				name = tuiapp.ResolveProjectLabel(projResp.Data.DisplayName, projResp.Data.Slug, name)
+			} else {
+				name = tuiapp.ResolveProjectLabel(name, "", "")
 			}
 		}
 		if name == "" {

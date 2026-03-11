@@ -16239,7 +16239,7 @@ func TestSidebarDataLoadedPreservesChatsOnChatsErrEX494(t *testing.T) {
 	})
 
 	gotChats := model.workspace.existingChats()
-	if len(gotChats) != 1 || gotChats[0].SessionID != "chat-old" || gotChats[0].DisplayName != "Old Chat" {
+	if len(gotChats) != 1 || gotChats[0].SessionID != "chat-old" || gotChats[0].DisplayName != "Old Project" {
 		t.Fatalf("EX-494: chats should be preserved on ChatsErr, got %+v", gotChats)
 	}
 	gotProjects := model.workspace.existingProjects()
@@ -16263,7 +16263,7 @@ func TestSidebarDataLoadedReplacesSidebarOnSuccessEX494(t *testing.T) {
 	})
 
 	gotChats := model.workspace.existingChats()
-	if len(gotChats) != 1 || gotChats[0].SessionID != "chat-new" || gotChats[0].DisplayName != "New Chat" {
+	if len(gotChats) != 1 || gotChats[0].SessionID != "chat-new" || gotChats[0].DisplayName != "New Project" {
 		t.Fatalf("EX-494: chats should be replaced on successful reload, got %+v", gotChats)
 	}
 	gotProjects := model.workspace.existingProjects()
