@@ -299,6 +299,64 @@ func TestCreateSessionProjectTaskFallsBackToFrank(t *testing.T) {
 	}
 }
 
+func TestCreateSessionProjectScopeDoesNotAutoAddStarterTrio(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	sessionID := uuid.New()
+	principalID := uuid.New()
+
+	type addCall struct {
+		participantType string
+		participantID   uuid.UUID
+		role            string
+	}
+	addCalls := make([]addCall, 0, 4)
+
+	svc := &fakeChatService{
+		createSessionFn: func(context.Context, chat.CreateSessionInput) (*chat.ChatSession, error) {
+			return &chat.ChatSession{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "sync",
+				Status:         "active",
+			}, nil
+		},
+		addParticipantFn: func(_ context.Context, _ uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error) {
+			addCalls = append(addCalls, addCall{participantType: participantType, participantID: participantID, role: role})
+			return &chat.ChatParticipant{}, nil
+		},
+	}
+	h := chatHandlers{
+		service: svc,
+		agents: fakeStarterAgentLister{agents: []repo.Agent{
+			{ID: uuid.New(), DisplayName: "Frank", AgentType: "general"},
+			{ID: uuid.New(), DisplayName: "Lori", AgentType: "pm"},
+			{ID: uuid.New(), DisplayName: "Ellie", AgentType: "general"},
+		}},
+	}
+
+	req := newChatRequest(t, http.MethodPost, "/v1/chat-sessions", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID,
+		"mode":       "sync",
+	}, middleware.Principal{UserID: principalID, OrganizationID: orgID, Role: "member"})
+	rr := httptest.NewRecorder()
+
+	h.createSession(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+	if len(addCalls) != 1 {
+		t.Fatalf("add participant calls = %d, want 1 (owner only)", len(addCalls))
+	}
+	if addCalls[0].participantType != "human_user" || addCalls[0].participantID != principalID || addCalls[0].role != "owner" {
+		t.Fatalf("owner add call = %+v, want human_user owner", addCalls[0])
+	}
+}
+
 func TestEditQueuedMessageRejectsAgentAPIKey(t *testing.T) {
 	svc := &fakeChatService{}
 	h := chatHandlers{service: svc}
