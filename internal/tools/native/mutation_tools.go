@@ -1506,6 +1506,8 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		updated = repo.ProjectTask(*transitioned)
 	} else {
 		if statusChanged {
+			// No-task-service execution is a narrow fallback/test seam; pool-backed executors auto-build
+			// the canonical service and should not persist status transitions through raw task updates.
 			current.WorkStatus = desiredStatus
 		} else {
 			current.WorkStatus = previousStatus
@@ -2130,6 +2132,8 @@ func (e *NativeToolExecutor) queueDecompositionChildren(ctx context.Context, par
 			}
 			continue
 		}
+		// No-task-service execution is a narrow fallback/test seam; pool-backed executors auto-build
+		// the canonical service and should not queue child work through raw task updates.
 		queuedChild := child
 		queuedChild.WorkStatus = "queued"
 		if _, err := e.tasks.Update(ctx, queuedChild); err != nil {
