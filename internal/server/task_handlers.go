@@ -2373,7 +2373,13 @@ func (h taskHandlers) createDeployTask(ctx context.Context, environmentRecord re
 	}
 
 	if isTestMode() && h.taskService != nil {
-		actor := tasksvc.Actor{Type: "human_user", ID: userID}
+		actor := tasksvc.Actor{Type: "system", AllowDoneBypass: true}
+		if deployTask.FlowTemplateID == nil {
+			actor.AllowNoActiveFlow = true
+		}
+		if deployTask.FlowTemplateID != nil && deployTask.CurrentFlowNodeID == nil && h.flowService != nil {
+			_, _ = h.flowService.StartFlow(ctx, deployTask.ID)
+		}
 		inProgress, err := h.taskService.TransitionStatus(ctx, deployTask.ID, "in_progress", actor)
 		if err != nil {
 			return repo.ProjectTask{}, err

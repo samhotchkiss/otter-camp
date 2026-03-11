@@ -603,6 +603,26 @@ func (f *fakeTaskFlowService) SubscribeTaskCancellationHandler(*uuid.UUID) event
 	return eventbus.Subscription{}
 }
 
+type fakeDeliveryTaskCreator struct {
+	createDeployTaskFn func(context.Context, uuid.UUID, string) (repo.ProjectTask, error)
+}
+
+func (f *fakeDeliveryTaskCreator) CreateDeployTask(ctx context.Context, environmentID uuid.UUID, commitSHA string) (repo.ProjectTask, error) {
+	if f.createDeployTaskFn != nil {
+		return f.createDeployTaskFn(ctx, environmentID, commitSHA)
+	}
+	return repo.ProjectTask{}, nil
+}
+
+type fakeDeployCompletionUpdater struct {
+	completed []uuid.UUID
+}
+
+func (f *fakeDeployCompletionUpdater) OnDeployCompleted(_ context.Context, deployTaskID uuid.UUID) error {
+	f.completed = append(f.completed, deployTaskID)
+	return nil
+}
+
 func TestCreateTaskTestModeStartsFlowBeforeInProgressTransition(t *testing.T) {
 	t.Setenv("OTTERCAMP_MODE", "test")
 
@@ -728,6 +748,110 @@ func TestCreateTaskTestModeStartsFlowBeforeInProgressTransition(t *testing.T) {
 	gotOrder := strings.Join(callOrder, ",")
 	if gotOrder != "queued,start_flow,in_progress" {
 		t.Fatalf("call order = %q, want %q", gotOrder, "queued,start_flow,in_progress")
+	}
+}
+
+func TestCreateDeployTaskTestModeStartsFlowBeforeInProgressTransition(t *testing.T) {
+	t.Setenv("OTTERCAMP_MODE", "test")
+
+	environmentID := uuid.New()
+	projectID := uuid.New()
+	orgID := uuid.New()
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowStarted := false
+	callOrder := make([]string, 0, 3)
+
+	taskSvc := &fakeTaskService{}
+	taskSvc.transitionFn = func(_ context.Context, gotTaskID uuid.UUID, status string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+		if gotTaskID != taskID {
+			t.Fatalf("task id = %s, want %s", gotTaskID, taskID)
+		}
+		callOrder = append(callOrder, status)
+		switch status {
+		case "in_progress":
+			if !flowStarted {
+				return nil, tasksvc.ErrActiveFlowRequired
+			}
+			nodeID := uuid.New()
+			return &tasksvc.ProjectTask{
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				Title:             "Deploy test task",
+				WorkStatus:        "in_progress",
+				FlowTemplateID:    &flowTemplateID,
+				CurrentFlowNodeID: &nodeID,
+			}, nil
+		case "done":
+			if !actor.AllowDoneBypass {
+				t.Fatal("expected AllowDoneBypass in test-mode deploy completion")
+			}
+			return &tasksvc.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Deploy test task",
+				WorkStatus:     "done",
+				FlowTemplateID: &flowTemplateID,
+			}, nil
+		default:
+			t.Fatalf("unexpected status transition %q", status)
+			return nil, nil
+		}
+	}
+
+	flowSvc := &fakeTaskFlowService{
+		startFlowFn: func(_ context.Context, gotTaskID uuid.UUID) (*repo.FlowNodeExecution, error) {
+			if gotTaskID != taskID {
+				t.Fatalf("StartFlow task id = %s, want %s", gotTaskID, taskID)
+			}
+			flowStarted = true
+			callOrder = append(callOrder, "start_flow")
+			return &repo.FlowNodeExecution{ID: uuid.New(), TaskID: taskID, FlowNodeID: uuid.New(), Status: "active"}, nil
+		},
+	}
+
+	deliverySvc := &fakeDeliveryTaskCreator{
+		createDeployTaskFn: func(_ context.Context, gotEnvironmentID uuid.UUID, commitSHA string) (repo.ProjectTask, error) {
+			if gotEnvironmentID != environmentID {
+				t.Fatalf("environment id = %s, want %s", gotEnvironmentID, environmentID)
+			}
+			if commitSHA != "deadbeef" {
+				t.Fatalf("commit sha = %q, want deadbeef", commitSHA)
+			}
+			return repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Deploy test task",
+				WorkStatus:     "queued",
+				FlowTemplateID: &flowTemplateID,
+			}, nil
+		},
+	}
+
+	envUpdater := &fakeDeployCompletionUpdater{}
+	h := taskHandlers{
+		taskService:     taskSvc,
+		flowService:     flowSvc,
+		deliveryService: deliverySvc,
+		envUpdater:      envUpdater,
+	}
+
+	deployTask, err := h.createDeployTask(context.Background(), repo.ProjectEnvironment{ID: environmentID, ProjectID: projectID}, uuid.New(), "deadbeef", nil)
+	if err != nil {
+		t.Fatalf("createDeployTask: %v", err)
+	}
+	if deployTask.WorkStatus != "done" {
+		t.Fatalf("deploy task work_status = %q, want done", deployTask.WorkStatus)
+	}
+	gotOrder := strings.Join(callOrder, ",")
+	if gotOrder != "start_flow,in_progress,done" {
+		t.Fatalf("call order = %q, want %q", gotOrder, "start_flow,in_progress,done")
+	}
+	if len(envUpdater.completed) != 1 || envUpdater.completed[0] != taskID {
+		t.Fatalf("completed deploy callbacks = %v, want [%s]", envUpdater.completed, taskID)
 	}
 }
 
