@@ -1260,7 +1260,7 @@ func (s *service) MarkBlocked(ctx context.Context, taskID uuid.UUID, reason stri
 			ProjectID:           blocked.ProjectID,
 			Title:               title,
 			Description:         pointerString("Automatically created to resolve blocker"),
-			WorkStatus:          "queued",
+			WorkStatus:          "draft",
 			FlowTemplateID:      blocked.FlowTemplateID,
 			CreatedByType:       normalizeActorTypeForTask(actor.Type),
 			CreatedByID:         createdByID,
@@ -1285,6 +1285,9 @@ func (s *service) MarkBlocked(ctx context.Context, taskID uuid.UUID, reason stri
 			"auto_resolution": true,
 		}); err != nil {
 			return nil, err
+		}
+		if _, queueErr := s.TransitionStatus(ctx, resolutionTask.ID, "queued", Actor{Type: actor.Type, ID: actor.ID}); queueErr != nil {
+			return nil, queueErr
 		}
 	}
 

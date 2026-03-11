@@ -598,6 +598,7 @@ Dependencies govern execution order. They are separate from the task/subtask con
 - If a dependency task is cancelled, the downstream task becomes `blocked` and the PM receives a blocker signal (inbox/supervision) tied to that blocked task.
 - The downstream task stays `blocked` until the PM resolves the dependency situation — by removing the dependency, creating a replacement task, re-scoping the downstream task, or cancelling it too.
 - A separate top-level blocker-resolution task is optional, not automatic. Flows or task metadata can opt into that pattern when a dedicated coordination task is genuinely required, but the default blocker path must not silently enlarge the project's baseline task set.
+- When a blocker policy does opt into an automatic blocker-resolution task, that follow-on task must still be created through the canonical task service in `draft` and then transitioned to `queued`. System-generated follow-on work is not allowed to bypass task validation, event emission, or queue wakeups by writing `work_status='queued'` directly.
 
 **Modeling large efforts:**
 

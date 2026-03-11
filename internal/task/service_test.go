@@ -1434,8 +1434,18 @@ func TestMarkBlockedCreatesResolutionTaskWhenPolicyRequiresIt(t *testing.T) {
 	taskID := uuid.New()
 	orgID := uuid.New()
 	projectID := uuid.New()
+	flowTemplateID := uuid.New()
 	pmAgentID := uuid.New()
 	pmUserID := uuid.New()
+	validNodes := validExecutableTemplateNodes(flowTemplateID)
+	var startNodeID *uuid.UUID
+	for _, node := range validNodes {
+		if node.NodeType == "work" {
+			id := node.ID
+			startNodeID = &id
+			break
+		}
+	}
 
 	taskRepo := &fakeTaskRepo{
 		tasks: map[uuid.UUID]repo.ProjectTask{
@@ -1446,6 +1456,7 @@ func TestMarkBlockedCreatesResolutionTaskWhenPolicyRequiresIt(t *testing.T) {
 				TaskNumber:     3,
 				Title:          "Blocked task",
 				WorkStatus:     "in_progress",
+				FlowTemplateID: &flowTemplateID,
 				CreatedByType:  "system",
 				Metadata:       ApplyBlockerAutoResolutionTask(json.RawMessage(`{}`), true),
 			},
@@ -1496,6 +1507,13 @@ func TestMarkBlockedCreatesResolutionTaskWhenPolicyRequiresIt(t *testing.T) {
 	svc.agents = agents
 	svc.users = users
 	svc.clock = clock.NewFake(now)
+	svc.flowTemplates = &fakeFlowTemplateRepo{templates: map[uuid.UUID]repo.FlowTemplate{
+		flowTemplateID: {
+			ID:          flowTemplateID,
+			StartNodeID: startNodeID,
+		},
+	}}
+	svc.flowNodes = &fakeFlowNodeRepo{nodes: validNodes}
 
 	_, err := svc.MarkBlocked(context.Background(), taskID, "blocked by dependency", Actor{Type: "system"})
 	if err != nil {
@@ -1508,6 +1526,16 @@ func TestMarkBlockedCreatesResolutionTaskWhenPolicyRequiresIt(t *testing.T) {
 	resolution := taskRepo.createdTasks[len(taskRepo.createdTasks)-1]
 	if resolution.Title != "Resolve blocker for task alpha-3" {
 		t.Fatalf("resolution title = %q, want %q", resolution.Title, "Resolve blocker for task alpha-3")
+	}
+	if resolution.WorkStatus != "draft" {
+		t.Fatalf("created resolution work_status = %q, want draft", resolution.WorkStatus)
+	}
+	stored, ok := taskRepo.tasks[resolution.ID]
+	if !ok {
+		t.Fatal("expected created resolution task to persist in repo")
+	}
+	if stored.WorkStatus != "queued" {
+		t.Fatalf("stored resolution work_status = %q, want queued after canonical transition", stored.WorkStatus)
 	}
 }
 
