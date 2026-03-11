@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +140,42 @@ func TestChatListShowsRelativeLastActivity(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "2 minutes ago") {
 		t.Fatalf("stdout = %q, want relative time", stdout)
+	}
+}
+
+func TestCLIAPIClientListChatMessagesRetriesTransientRateLimit(t *testing.T) {
+	t.Parallel()
+
+	sessionID := uuid.New()
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"code":"rate_limited","message":"too many requests"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"` + uuid.NewString() + `","session_id":"` + sessionID.String() + `","sequence_number":1,"role":"assistant","content":"ok","status":"finalized","is_redacted":false,"metadata":{},"created_at":"2026-03-11T00:00:00Z"}]}`))
+	}))
+	defer server.Close()
+
+	client := &cliAPIClient{
+		baseURL: server.URL,
+		apiKey:  "test-key",
+		client:  server.Client(),
+	}
+
+	result, err := client.ListChatMessages(context.Background(), sessionID, chatListMessagesFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListChatMessages: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("request attempts = %d, want 2", attempts)
+	}
+	if len(result.Data) != 1 || strings.TrimSpace(result.Data[0].Content) != "ok" {
+		t.Fatalf("result = %+v, want one successful message payload", result.Data)
 	}
 }
 

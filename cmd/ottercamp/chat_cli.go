@@ -1044,11 +1044,25 @@ func (c *cliAPIClient) ListChatMessages(ctx context.Context, sessionID uuid.UUID
 		path += "?" + encoded
 	}
 
-	var response chatMessageListEnvelope
-	if err := c.request(ctx, http.MethodGet, path, nil, &response); err != nil {
-		return chatMessageListEnvelope{}, err
+	backoff := []time.Duration{150 * time.Millisecond, 300 * time.Millisecond}
+	for attempt := 0; ; attempt++ {
+		var response chatMessageListEnvelope
+		err := c.request(ctx, http.MethodGet, path, nil, &response)
+		if err == nil {
+			return response, nil
+		}
+		apiErr, ok := asCLIAPIError(err)
+		if !ok || apiErr.StatusCode != http.StatusTooManyRequests || attempt >= len(backoff) {
+			return chatMessageListEnvelope{}, err
+		}
+		timer := time.NewTimer(backoff[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return chatMessageListEnvelope{}, ctx.Err()
+		case <-timer.C:
+		}
 	}
-	return response, nil
 }
 
 func (c *cliAPIClient) ListChatParticipants(ctx context.Context, sessionID uuid.UUID) ([]cliChatParticipant, error) {
