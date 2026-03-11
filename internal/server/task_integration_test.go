@@ -1282,6 +1282,20 @@ func TestTaskHTTPRollbackCreatesQueuedDeployTask(t *testing.T) {
 	if got, _ := metadata["target_commit_sha"].(string); got != "deadbeefcafefeed" {
 		t.Fatalf("target_commit_sha = %q, want deadbeefcafefeed", got)
 	}
+
+	var queuedStatusEventCount int
+	if err := testServer.Pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		  AND payload->>'to_status' = 'queued'
+	`, rollbackTaskID).Scan(&queuedStatusEventCount); err != nil {
+		t.Fatalf("count rollback queued status events: %v", err)
+	}
+	if queuedStatusEventCount < 1 {
+		t.Fatalf("rollback queued status events = %d, want >= 1", queuedStatusEventCount)
+	}
 }
 
 func newTaskTestServer(t *testing.T) (*authIntegrationServer, repo.Organization, repo.HumanUser, repo.HumanUser) {
