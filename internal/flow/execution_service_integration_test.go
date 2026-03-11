@@ -437,6 +437,59 @@ func TestFlowExecutionServiceDependencyCycleDetection(t *testing.T) {
 	}
 }
 
+func TestFlowExecutionServiceAddDependencyIsIdempotentForDuplicateEdge(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, _ := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskA := seedFlowTask(t, ctx, fixture, "Task A", "in_progress", &template.ID)
+	taskB := seedFlowTask(t, ctx, fixture, "Task B", "in_progress", &template.ID)
+
+	first, err := fixture.service.AddDependency(ctx, AddDependencyRequest{
+		SourceType:    "project_task",
+		SourceID:      taskA.ID,
+		DependsOnType: "project_task",
+		DependsOnID:   taskB.ID,
+		CreatedByType: "system",
+	})
+	if err != nil {
+		t.Fatalf("AddDependency first A->B: %v", err)
+	}
+
+	second, err := fixture.service.AddDependency(ctx, AddDependencyRequest{
+		SourceType:    "project_task",
+		SourceID:      taskA.ID,
+		DependsOnType: "project_task",
+		DependsOnID:   taskB.ID,
+		CreatedByType: "system",
+	})
+	if err != nil {
+		t.Fatalf("AddDependency duplicate A->B: %v", err)
+	}
+	if second == nil || first == nil {
+		t.Fatal("expected dependency records from idempotent AddDependency")
+	}
+	if second.ID != first.ID {
+		t.Fatalf("duplicate dependency id = %s, want existing %s", second.ID, first.ID)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task_dependency
+		WHERE source_type = 'project_task'
+		  AND source_id = $1
+		  AND depends_on_type = 'project_task'
+		  AND depends_on_id = $2
+	`, taskA.ID, taskB.ID).Scan(&count); err != nil {
+		t.Fatalf("count duplicate dependency edge: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("duplicate dependency edge count = %d, want 1", count)
+	}
+}
+
 func TestFlowExecutionServiceOnTaskCancelledMarksDependentsBlocked(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

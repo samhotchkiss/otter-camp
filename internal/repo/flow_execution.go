@@ -433,6 +433,8 @@ func (r *ProjectTaskDependencyRepo) Add(ctx context.Context, dependency ProjectT
 			created_by_id
 		)
 		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (source_type, source_id, depends_on_type, depends_on_id)
+		DO UPDATE SET source_type = project_task_dependency.source_type
 		RETURNING id, source_type, source_id, depends_on_type, depends_on_id, created_by_type, created_by_id, created_at
 	`,
 		strings.TrimSpace(dependency.SourceType),

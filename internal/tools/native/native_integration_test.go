@@ -514,6 +514,32 @@ func TestIntegrationTaskDependencyCreateRemoveAndCycleDetection(t *testing.T) {
 		t.Fatalf("dependency count = %d, want 1", count)
 	}
 
+	duplicateResp, err := executor.Execute(ctx, "task.add_dependency", map[string]any{
+		"source_type":     "project_task",
+		"source_id":       taskAID.String(),
+		"depends_on_type": "project_task",
+		"depends_on_id":   taskBID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.add_dependency duplicate A->B: %v", err)
+	}
+	if got := mustUUIDValue(t, duplicateResp["dependency_id"]); got != dependencyID {
+		t.Fatalf("duplicate dependency_id = %s, want existing %s", got, dependencyID)
+	}
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM project_task_dependency
+		WHERE source_type = 'project_task'
+		  AND source_id = $1
+		  AND depends_on_type = 'project_task'
+		  AND depends_on_id = $2
+	`, taskAID, taskBID).Scan(&count); err != nil {
+		t.Fatalf("count duplicate dependency edge: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("duplicate dependency edge count = %d, want 1", count)
+	}
+
 	if _, err := executor.Execute(ctx, "task.remove_dependency", map[string]any{
 		"dependency_id": dependencyID.String(),
 	}); err != nil {
