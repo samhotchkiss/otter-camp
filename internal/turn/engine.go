@@ -3585,6 +3585,15 @@ func toolPreservesExplicitTargetSessionID(name string) bool {
 	}
 }
 
+func toolPreservesExplicitTargetAgentID(name string) bool {
+	switch strings.TrimSpace(strings.ToLower(name)) {
+	case "agent.assign_project", "agent.update", "agent.get", "session.invite_agent":
+		return true
+	default:
+		return false
+	}
+}
+
 func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls []ModelToolCall) (bool, error) {
 	rt.stopReason = ""
 	if len(calls) == 0 {
@@ -3633,7 +3642,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			arguments["session_id"] = rt.session.ID.String()
 		}
 		arguments["turn_id"] = rt.turn.ID.String()
-		arguments["agent_id"] = rt.agent.ID.String()
+		if !toolPreservesExplicitTargetAgentID(name) {
+			arguments["agent_id"] = rt.agent.ID.String()
+		}
 		if binding.projectID != nil {
 			arguments["project_id"] = binding.projectID.String()
 		}
