@@ -33,6 +33,14 @@ func TestNoUnexpectedDirectLiveTaskStatusCreationInNonTestCode(t *testing.T) {
 		filepath.Clean("internal/task/service.go"):           {},
 		filepath.Clean("internal/tools/native/mutation_tools.go"): {},
 	}
+	allowedTaskCreate := map[string]struct{}{
+		filepath.Clean("internal/delivery/service.go"):       {},
+		filepath.Clean("internal/delivery/deploy_worker.go"): {},
+		filepath.Clean("internal/delivery/rollback.go"):      {},
+		filepath.Clean("internal/task/service.go"):           {},
+		filepath.Clean("internal/project/service.go"):        {},
+		filepath.Clean("internal/tools/native/mutation_tools.go"): {},
+	}
 	forbiddenStatuses := []string{"queued", "in_progress", "blocked", "review", "done", "cancelled"}
 
 	var offenders []string
@@ -82,6 +90,11 @@ func TestNoUnexpectedDirectLiveTaskStatusCreationInNonTestCode(t *testing.T) {
 		if strings.Contains(src, ".tasks.Update(ctx,") {
 			if _, ok := allowedGenericTaskUpdate[rel]; !ok {
 				offenders = append(offenders, rel+":generic-task-update")
+			}
+		}
+		if strings.Contains(src, ".tasks.Create(ctx, repo.ProjectTask{") {
+			if _, ok := allowedTaskCreate[rel]; !ok {
+				offenders = append(offenders, rel+":task-create")
 			}
 		}
 		return nil
