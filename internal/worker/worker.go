@@ -293,6 +293,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		DataDir:  strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR")),
 		Memory:   memoryRetriever,
 		CLI:      cliExecutor,
+		Events:   bus,
 		Secrets:  secretService,
 		Profiles: profileCatalog,
 	})

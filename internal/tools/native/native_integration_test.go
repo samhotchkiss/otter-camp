@@ -56,6 +56,20 @@ func TestIntegrationFileReadRoundTripAndTraversal(t *testing.T) {
 	}
 }
 
+func TestIntegrationExecutorAutoBuildsTaskServiceWhenPoolAndEventsProvided(t *testing.T) {
+	pool := testdb.New(t)
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:         pool,
+		Events:       bus,
+		WorkspaceRoot: t.TempDir(),
+	})
+	if executor.taskService == nil {
+		t.Fatal("taskService = nil, want auto-built canonical task service")
+	}
+}
+
 func TestIntegrationFileSearchDirectoryTree(t *testing.T) {
 	root := t.TempDir()
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})

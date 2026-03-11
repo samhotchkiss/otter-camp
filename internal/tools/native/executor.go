@@ -296,6 +296,14 @@ func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
 		taskService:    opts.TaskService,
 		workspaces:     make(map[string]SessionWorkDir),
 	}
+	if exec.taskService == nil && opts.Pool != nil && opts.Events != nil {
+		if svc, err := tasksvc.NewService(tasksvc.Options{
+			Pool:     opts.Pool,
+			EventBus: publishOnlyEventBus{publisher: opts.Events},
+		}); err == nil {
+			exec.taskService = svc
+		}
+	}
 
 	if opts.Pool != nil {
 		agentRepo := repo.NewAgentRepo(opts.Pool)
