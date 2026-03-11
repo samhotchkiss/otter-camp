@@ -1041,6 +1041,9 @@ func TestTurnEngineIntegrationResumeValidationBlockedTaskStopsSuppression(t *tes
 	if err != nil {
 		t.Fatalf("GetByID resumed task: %v", err)
 	}
+	// ResumeValidationBlockedTask now re-queues work. This test exercises the
+	// direct engine enqueue path, so it manually simulates the queue processor
+	// having already claimed the resumed task and moved it back into execution.
 	resumedTask.WorkStatus = "in_progress"
 	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
 		t.Fatalf("Update resumed task in_progress: %v", err)
@@ -2544,6 +2547,8 @@ func TestTurnEngineIntegrationRecoveryTurnPersistsCheckpointForRepeatedEmptyCLIE
 	if err != nil {
 		t.Fatalf("GetByID resumed task: %v", err)
 	}
+	// Seed the task as actively executing after resume so this test can drive the
+	// recovery turn directly without going through the scheduler/queue runtime.
 	resumedTask.WorkStatus = "in_progress"
 	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
 		t.Fatalf("Update resumed task in_progress: %v", err)
@@ -2796,6 +2801,8 @@ func TestTurnEngineIntegrationRecoveryTurnMirrorsArtifactIntoLegacyWorkspaceRoot
 	if err != nil {
 		t.Fatalf("GetByID resumed task: %v", err)
 	}
+	// Seed the task as actively executing after resume so this test can drive the
+	// recovery turn directly without going through the scheduler/queue runtime.
 	resumedTask.WorkStatus = "in_progress"
 	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
 		t.Fatalf("Update resumed task in_progress: %v", err)
