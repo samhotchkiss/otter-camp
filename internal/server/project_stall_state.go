@@ -44,6 +44,8 @@ type projectTerminalStallTaskRow struct {
 	TaskNumber              int
 	TaskTitle               string
 	WorkStatus              string
+	FlowBacked              bool
+	CurrentFlowNodeMissing  bool
 	RuntimeStatus           string
 	RuntimeFailureReason    string
 	ValidationToolName      string
@@ -302,6 +304,8 @@ func (d projectStallDetector) loadTerminalProjectBlockingTasks(ctx context.Conte
 			t.task_number,
 			t.title,
 			t.work_status,
+			(t.flow_template_id IS NOT NULL) AS flow_backed,
+			(t.current_flow_node_id IS NULL) AS current_flow_node_missing,
 			COALESCE(NULLIF(rs.metadata->>'status', ''), ''),
 			COALESCE(NULLIF(rs.metadata->>'failure_reason', ''), ''),
 			COALESCE(NULLIF(t.metadata->'agent_turn_validation_guard'->>'tool_name', ''), ''),
@@ -356,6 +360,8 @@ func (d projectStallDetector) loadTerminalProjectBlockingTasks(ctx context.Conte
 			&row.TaskNumber,
 			&row.TaskTitle,
 			&row.WorkStatus,
+			&row.FlowBacked,
+			&row.CurrentFlowNodeMissing,
 			&row.RuntimeStatus,
 			&row.RuntimeFailureReason,
 			&row.ValidationToolName,
@@ -411,6 +417,8 @@ func terminalProjectTaskReason(row projectTerminalStallTaskRow) string {
 		return strings.TrimSpace(row.RuntimeFailureReason)
 	case strings.TrimSpace(row.BlockerReason) != "":
 		return strings.TrimSpace(row.BlockerReason)
+	case strings.EqualFold(strings.TrimSpace(row.WorkStatus), "blocked") && row.FlowBacked && row.CurrentFlowNodeMissing && strings.TrimSpace(row.RuntimeStatus) == "":
+		return "automatic repair blocked impossible live task state: flow-backed task lost runtime owner and active execution"
 	default:
 		return "blocked without recorded reason"
 	}
