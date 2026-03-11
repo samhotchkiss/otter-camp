@@ -18,6 +18,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/security"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
+	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 	"github.com/samhotchkiss/otter-camp/internal/web"
 )
 
@@ -67,9 +68,10 @@ func NewHandlerWithOptions(opts HandlerOptions) http.Handler {
 	}
 	mobileHandlers := newMobileHandlers(opts.Pool)
 	versionHandler := api.NewVersionHandler(api.BuildInfo{
-		Version: opts.Version,
-		Commit:  opts.Commit,
-		BuiltAt: opts.BuiltAt,
+		Version:     opts.Version,
+		Commit:      opts.Commit,
+		BuiltAt:     opts.BuiltAt,
+		RepoVersion: versionpkg.RepoVersion,
 	})
 	searchHandler := api.NewSearchHandler(opts.Pool)
 	diffHandler := api.NewDiffHandler(opts.Pool, opts.GitService)

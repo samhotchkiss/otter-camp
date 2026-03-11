@@ -9,9 +9,10 @@ import (
 
 func TestVersionHandlerReturnsBuildInfo(t *testing.T) {
 	handler := NewVersionHandler(BuildInfo{
-		Version: "0.1.0",
-		Commit:  "a3f8c1d",
-		BuiltAt: "2024-01-15T10:00:00Z",
+		Version:     "0.1.0",
+		Commit:      "a3f8c1d",
+		BuiltAt:     "2024-01-15T10:00:00Z",
+		RepoVersion: "2258",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/version", nil)
@@ -36,5 +37,8 @@ func TestVersionHandlerReturnsBuildInfo(t *testing.T) {
 	}
 	if got := data["built_at"]; got != "2024-01-15T10:00:00Z" {
 		t.Fatalf("built_at = %v, want %q", got, "2024-01-15T10:00:00Z")
+	}
+	if got := data["repo_version"]; got != "2258" {
+		t.Fatalf("repo_version = %v, want %q", got, "2258")
 	}
 }

@@ -632,6 +632,14 @@ OtterCamp follows semantic versioning: `MAJOR.MINOR.PATCH`.
 - **MINOR** (e.g., 1.2 to 1.3): new features, additive schema migrations. Backward-compatible — the previous version's binary can run against the new schema.
 - **MAJOR** (e.g., 1.x to 2.x): breaking changes. May require manual migration steps. Upgrade guide published with every major release.
 
+In addition to semantic versioning, the repository carries a monotonic build counter in `internal/version/repo_version.txt`. Local development installs are expected to enable the repo hook path (`git config core.hooksPath .githooks`), which increments that counter on every commit via `.githooks/pre-commit`. The compiled binary embeds the current repo counter and commit metadata at build time.
+
+That repo-stored counter is part of the operational freshness contract:
+
+- `ottercamp version` and `GET /v1/version` must both report `repo_version` alongside semantic version, commit, and build time.
+- Startup freshness checks compare the binary's embedded commit and repo counter against the current checkout.
+- If the binary is behind the checkout, missing build metadata, or running against a tracked-dirty worktree, the operator must see a warning rather than silently trusting the binary.
+
 ### Self-Host Upgrade Process
 
 For minor version upgrades, the process is:

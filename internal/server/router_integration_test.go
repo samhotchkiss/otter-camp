@@ -328,6 +328,9 @@ func TestVersionAndPrefixEnforcement(t *testing.T) {
 	if got := jsonPathString(t, versionResp.Body, "data", "version"); got != "test-version" {
 		t.Fatalf("version = %q, want %q", got, "test-version")
 	}
+	if got := jsonPathString(t, versionResp.Body, "data", "repo_version"); strings.TrimSpace(got) == "" {
+		t.Fatalf("repo_version = %q, want non-empty", got)
+	}
 
 	prefixResp := mustJSON(t, http.MethodPost, testServer.URL+"/api/projects", map[string]any{}, nil)
 	if prefixResp.StatusCode != http.StatusNotFound {

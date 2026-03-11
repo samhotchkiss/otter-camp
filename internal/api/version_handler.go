@@ -7,9 +7,10 @@ import (
 )
 
 type BuildInfo struct {
-	Version string
-	Commit  string
-	BuiltAt string
+	Version     string
+	Commit      string
+	BuiltAt     string
+	RepoVersion string
 }
 
 type VersionHandler struct {
@@ -39,9 +40,10 @@ func (h VersionHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responder.JSON(w, http.StatusOK, map[string]string{
-		"version":    version,
-		"commit":     commit,
-		"built_at":   builtAt,
-		"go_version": runtime.Version(),
+		"version":      version,
+		"commit":       commit,
+		"built_at":     builtAt,
+		"go_version":   runtime.Version(),
+		"repo_version": strings.TrimSpace(h.info.RepoVersion),
 	})
 }

@@ -672,8 +672,17 @@ A persistent status bar at the bottom of the terminal shows context and hints:
 - Current navigation context (project > task).
 - Active chat session name and scope.
 - Inbox item count.
+- Repo build counter from `internal/version/repo_version.txt`, rendered as `rv<counter>`.
 - Worker-offline warnings are only shown when there is no recent worker heartbeat/activity signal; an actively claiming or heartbeat-producing worker must not be labeled offline.
 - Keybinding hints for command palette and help.
+
+Freshness markers on the repo build counter make binary drift visible at a glance:
+
+- `rv2258` = binary matches the current checkout metadata and repo counter.
+- `rv2258?` = binary commit metadata is missing, so the operator should treat freshness as uncertain.
+- `rv2258!` = the binary is stale relative to the current checkout or the working tree has tracked changes that require a rebuild.
+
+The TUI does not silently guess around stale binaries. Launch paths emit a startup warning, and the status bar keeps the stale/uncertain marker visible throughout the session.
 
 The status bar also shows contextual keybinding hints based on the focused panel and current state.
 
