@@ -576,9 +576,16 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 	if err != nil {
 		return err
 	}
+	var targetAgentID *uuid.UUID
+	if loriID, loriErr := e.resolveLoriStarterID(ctx, created.OrganizationID); loriErr == nil && loriID != uuid.Nil {
+		targetAgentID = &loriID
+	} else if frankID, frankErr := e.resolveFrankStarterID(ctx, created.OrganizationID); frankErr == nil && frankID != uuid.Nil {
+		targetAgentID = &frankID
+	}
 	payload := AgentTurnPayload{
 		SessionID: restartSession.ID,
 		MessageID: restartMessage.ID,
+		AgentID:   targetAgentID,
 	}
 	if _, err := e.enqueueAgentTurnIfActive(ctx, restartSession, payload, nil); err != nil {
 		return err

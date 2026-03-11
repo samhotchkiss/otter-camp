@@ -8847,6 +8847,9 @@ func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t 
 	}
 
 	restartJobID, restartPayload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, restartedSession.ID)
+	if restartPayload.AgentID == nil || *restartPayload.AgentID != lori.ID {
+		t.Fatalf("restart queued agent = %v, want Lori %s", restartPayload.AgentID, lori.ID)
+	}
 	if err := fixture.engine.handleUserMessage(ctx, restartPayload.SessionID, restartPayload.MessageID, restartPayload.AgentID, restartPayload.RetryCount, &restartJobID); err != nil {
 		t.Fatalf("handleUserMessage clean bootstrap restart: %v", err)
 	}
