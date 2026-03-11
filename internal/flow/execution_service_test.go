@@ -143,6 +143,50 @@ func TestEnsureActiveExecutionBackfillsMissingCurrentNodeExecution(t *testing.T)
 	}
 }
 
+func TestEnsureActiveExecutionRejectsTaskRuntimeStatusMismatch(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	currentNodeID := uuid.New()
+
+	executions := &fakeExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {},
+		},
+	}
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					ProjectID:         uuid.New(),
+					OrganizationID:    uuid.New(),
+					FlowTemplateID:    &flowTemplateID,
+					CurrentFlowNodeID: &currentNodeID,
+					WorkStatus:        "in_progress",
+				},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				currentNodeID: {ID: currentNodeID, NodeType: "review"},
+			},
+		},
+		executions: executions,
+	}
+
+	_, err := svc.EnsureActiveExecution(context.Background(), taskID)
+	var conflict tasksvc.ErrTaskFlowStateConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("EnsureActiveExecution err = %v, want ErrTaskFlowStateConflict", err)
+	}
+	if conflict.TargetStatus != "in_progress" || conflict.CurrentNodeType != "review" {
+		t.Fatalf("flow conflict = %+v, want target=in_progress current_node_type=review", conflict)
+	}
+	if executions.createCalls != 0 {
+		t.Fatalf("create calls = %d, want 0", executions.createCalls)
+	}
+}
+
 func TestRejectFlowNodeMaxVisitsExceeded(t *testing.T) {
 	taskID := uuid.New()
 	currentNodeID := uuid.New()
@@ -374,6 +418,66 @@ func TestAdvanceFlowRejectsPausedProject(t *testing.T) {
 
 	if _, err := svc.AdvanceFlow(context.Background(), taskID, Actor{Type: "agent", ID: uuid.New()}); !errors.Is(err, projectpause.ErrProjectPaused) {
 		t.Fatalf("AdvanceFlow err = %v, want ErrProjectPaused", err)
+	}
+}
+
+func TestAdvanceFlowRejectsTaskRuntimeStatusMismatchBeforeMutatingExecution(t *testing.T) {
+	taskID := uuid.New()
+	workNodeID := uuid.New()
+	executionID := uuid.New()
+
+	executions := &fakeExecutionRepo{
+		active: repo.FlowNodeExecution{
+			ID:         executionID,
+			TaskID:     taskID,
+			FlowNodeID: workNodeID,
+			Status:     "active",
+		},
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{
+					ID:         executionID,
+					TaskID:     taskID,
+					FlowNodeID: workNodeID,
+					Status:     "active",
+				},
+			},
+		},
+	}
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					ProjectID:         uuid.New(),
+					OrganizationID:    uuid.New(),
+					CurrentFlowNodeID: &workNodeID,
+					WorkStatus:        "review",
+				},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				workNodeID: {ID: workNodeID, NodeType: "work"},
+			},
+		},
+		executions:  executions,
+		taskService: &fakeTaskCoordinator{},
+	}
+
+	_, err := svc.AdvanceFlow(context.Background(), taskID, Actor{Type: "agent", ID: uuid.New()})
+	var conflict tasksvc.ErrTaskFlowStateConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("AdvanceFlow err = %v, want ErrTaskFlowStateConflict", err)
+	}
+	if conflict.TargetStatus != "review" || conflict.CurrentNodeType != "work" {
+		t.Fatalf("flow conflict = %+v, want target=review current_node_type=work", conflict)
+	}
+	if executions.completeCalls != 0 {
+		t.Fatalf("complete calls = %d, want 0", executions.completeCalls)
+	}
+	if executions.updateMetadataCalls != 0 {
+		t.Fatalf("update metadata calls = %d, want 0", executions.updateMetadataCalls)
 	}
 }
 
