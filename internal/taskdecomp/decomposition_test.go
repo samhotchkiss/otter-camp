@@ -204,6 +204,23 @@ func TestExtractDeliverablesIgnoresBareTimingNotes(t *testing.T) {
 	}
 }
 
+func TestExtractDeliverablesIgnoresTemplateCompanionGuidanceLines(t *testing.T) {
+	description := strings.Join([]string{
+		"Create a standalone HTML+CSS template for Sam.blog with a minimalist editorial design direction",
+		"Clean typography, generous whitespace, reading-focused layout",
+		"Sections: hero with tagline, featured post, post grid, about blurb, photography showcase strip, footer with social links",
+		"Target: ~30 min.",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Create a standalone HTML+CSS template for Sam.blog with a minimalist editorial design direction",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
 func TestExtractDeliverablesIgnoresMarkdownDecoratedMetadataLines(t *testing.T) {
 	description := strings.Join([]string{
 		"Navigate technonymous.org, find the blog archive/index, and build a complete inventory of every blog post URL with title and date.",

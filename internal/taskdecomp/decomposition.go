@@ -25,6 +25,7 @@ var (
 	enumeratedBatchTitlePattern = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build)\s+\d+\b`)
 	enumeratedActionCountPattern = regexp.MustCompile(`(?i)^(generate|create|draft|write|produce|compile|research|collect|design|build)\s+(\d+)\s+(.+)$`)
 	actionVerbPattern          = regexp.MustCompile(`^(?:generate|create|draft|write|produce|compile|research|collect|design|build)\b`)
+	leadingTaskActionPattern   = regexp.MustCompile(`(?i)^(?:use|visit|navigate|build|create|design|define|draft|write|produce|compile|research|collect|implement|migrate|import|validate|review|compare|synthesize|map|prepare|develop|generate|outline|audit|document|wire|configure|run|test|scrape|store|rewrite|establish|include)\b`)
 	timingOnlyPattern          = regexp.MustCompile(`(?i)^~?\s*\d+\s*(?:-|to\s+)?\d*\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b(?:[[:punct:]\s].*)?$`)
 	toolHeavySignals = []string{
 		"api",
@@ -858,6 +859,9 @@ cleanedPrefixes:
 		"agent:",
 		"est. time:",
 		"est. time:**",
+		"target:",
+		"sections:",
+		"section:",
 		"wave:",
 		"output:",
 		"estimated time:",
@@ -880,6 +884,12 @@ cleanedPrefixes:
 		lower = strings.ToLower(item)
 	}
 	if timingOnlyPattern.MatchString(lower) {
+		return ""
+	}
+	if strings.Count(item, ",") >= 2 &&
+		!strings.Contains(item, "—") &&
+		!strings.Contains(item, " - ") &&
+		!leadingTaskActionPattern.MatchString(lower) {
 		return ""
 	}
 	if strings.HasSuffix(item, ":") {
