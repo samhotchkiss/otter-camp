@@ -2662,6 +2662,9 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 	if taskRecord == nil {
 		return queueDecompositionResult{}, nil
 	}
+	if taskdecomp.ParseParentTaskID(taskRecord.Metadata) != uuid.Nil {
+		return queueDecompositionResult{}, nil
+	}
 	prepared, err := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
 		ParentTaskID: taskRecord.ID,
 		Title:        taskRecord.Title,

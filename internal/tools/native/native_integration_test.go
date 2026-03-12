@@ -3654,6 +3654,76 @@ func TestIntegrationProjectSessionQueueKeepsPlannedTaskSetFlat(t *testing.T) {
 	}
 }
 
+func TestIntegrationQueueingDecomposedChildTaskDoesNotReDecomposeIt(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, context.Background(), pool, project.ID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "WS1: Content Migration",
+		Description:    stringPtr("Orchestration parent"),
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "WS1.1: Discover all blog post URLs on technonymous.org",
+		Description:    stringPtr("Use the browser to visit technonymous.org, navigate the site structure (homepage, archive pages, categories, pagination), and compile a complete list of all blog post URLs. Output: a text file listing every post URL found."),
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+		Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentTask.ID, 2),
+	})
+	if err != nil {
+		t.Fatalf("create child task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
+		"task_id":     childTask.ID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update queued child task: %v", err)
+	}
+	if _, hasDecomposition := out["decomposition"]; hasDecomposition {
+		t.Fatalf("queue response unexpectedly included decomposition for child task: %v", out["decomposition"])
+	}
+
+	tasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("project task count after queueing child = %d, want 2", len(tasks))
+	}
+	for _, task := range tasks {
+		if strings.Contains(task.Title, "(Workstream ") {
+			t.Fatalf("unexpected decomposed workstream task created from child queueing: %q", task.Title)
+		}
+	}
+	updatedChild, err := taskRepo.GetByID(ctx, childTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID child task: %v", err)
+	}
+	if updatedChild.WorkStatus != "queued" {
+		t.Fatalf("child work_status = %q, want queued", updatedChild.WorkStatus)
+	}
+}
+
 func TestIntegrationProjectKickoffTaskCreateBindsCanonicalRepoBeforeTaskTree(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
