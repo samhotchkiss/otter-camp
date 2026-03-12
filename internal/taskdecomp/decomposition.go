@@ -25,7 +25,8 @@ var (
 	enumeratedBatchTitlePattern = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build)\s+\d+\b`)
 	enumeratedActionCountPattern = regexp.MustCompile(`(?i)^(generate|create|draft|write|produce|compile|research|collect|design|build)\s+(\d+)\s+(.+)$`)
 	actionVerbPattern          = regexp.MustCompile(`^(?:generate|create|draft|write|produce|compile|research|collect|design|build)\b`)
-	leadingTaskActionPattern   = regexp.MustCompile(`(?i)^(?:use|visit|navigate|build|create|design|define|draft|write|produce|compile|research|collect|implement|migrate|import|validate|review|compare|synthesize|map|prepare|develop|generate|outline|audit|document|wire|configure|run|test|scrape|store|rewrite|establish|include)\b`)
+	leadingTaskActionPattern   = regexp.MustCompile(`(?i)^(?:use|visit|navigate|discover|identify|build|rebuild|create|design|define|draft|write|produce|compile|research|collect|implement|migrate|import|validate|review|compare|synthesize|map|prepare|develop|generate|outline|audit|document|wire|configure|run|test|scrape|store|rewrite|establish|include)\b`)
+	labelledTaskPattern        = regexp.MustCompile(`(?i)^(?:ws\d+(?:\.\d+[a-z]?)?|template\s+\d+|option\s+\d+|phase\s+\d+|wave\s+\d+|task\s+\d+)[:\-]`)
 	timingOnlyPattern          = regexp.MustCompile(`(?i)^~?\s*\d+\s*(?:-|to\s+)?\d*\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b(?:[[:punct:]\s].*)?$`)
 	toolHeavySignals = []string{
 		"api",
@@ -545,6 +546,9 @@ func extractDeliverables(description string) []string {
 			if isInstructionOnlyDeliverable(normalized) {
 				continue
 			}
+			if !isExecutableDeliverable(strings.TrimSpace(expanded), normalized) {
+				continue
+			}
 			if _, ok := seen[normalized]; ok {
 				continue
 			}
@@ -587,6 +591,22 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		strings.Contains(normalized, " must ") ||
 		strings.Contains(normalized, " needs to ") ||
 		strings.Contains(normalized, " need to ")
+}
+
+func isExecutableDeliverable(item, normalized string) bool {
+	if normalized == "" {
+		return false
+	}
+	if leadingTaskActionPattern.MatchString(normalized) {
+		return true
+	}
+	if labelledTaskPattern.MatchString(item) {
+		return true
+	}
+	if strings.Contains(item, "—") || strings.Contains(item, " - ") {
+		return true
+	}
+	return false
 }
 
 func expandCompoundDeliverable(item string) []string {
