@@ -108,7 +108,9 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 	}
 
 	bestIndex := -1
-	bestRank := int(^uint(0) >> 1)
+	var bestState HealthState
+	var bestUpdatedAt time.Time
+	var bestPriority int
 	for index, connection := range connections {
 		if !connection.IsEnabled {
 			continue
@@ -124,10 +126,11 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 			continue
 		}
 
-		rank := healthRank(state)*100000 + connection.FailoverPriority
-		if rank < bestRank {
-			bestRank = rank
+		if bestIndex == -1 || connectionPreferredOver(state, connection, bestState, bestUpdatedAt, bestPriority) {
 			bestIndex = index
+			bestState = state
+			bestUpdatedAt = connection.UpdatedAt
+			bestPriority = connection.FailoverPriority
 		}
 	}
 
@@ -161,6 +164,30 @@ func rateLimitBackoffExpired(updatedAt time.Time) bool {
 		return false
 	}
 	return time.Since(updatedAt.UTC()) >= healthProbeBackoffMax
+}
+
+func connectionPreferredOver(state HealthState, connection repo.ProviderConnection, bestState HealthState, bestUpdatedAt time.Time, bestPriority int) bool {
+	stateRank := healthRank(state)
+	bestRank := healthRank(bestState)
+	if stateRank != bestRank {
+		return stateRank < bestRank
+	}
+
+	if state != HealthStateHealthy {
+		leftUpdated := connection.UpdatedAt.UTC()
+		rightUpdated := bestUpdatedAt.UTC()
+		switch {
+		case leftUpdated.IsZero() != rightUpdated.IsZero():
+			return !leftUpdated.IsZero()
+		case !leftUpdated.Equal(rightUpdated):
+			return leftUpdated.Before(rightUpdated)
+		}
+	}
+
+	if connection.FailoverPriority != bestPriority {
+		return connection.FailoverPriority < bestPriority
+	}
+	return false
 }
 
 func healthRank(state HealthState) int {

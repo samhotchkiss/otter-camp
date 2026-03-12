@@ -189,6 +189,55 @@ func TestRouterSelectConnectionTreatsExpiredPersistedRateLimitAsDegraded(t *test
 	}
 }
 
+func TestRouterSelectConnectionPrefersOldestDegradedConnectionBeforePriority(t *testing.T) {
+	orgID := uuid.New()
+	providerID := uuid.New()
+	olderDegradedID := uuid.New()
+	newerDegradedID := uuid.New()
+
+	router := NewRouter(
+		&stubProfileLookup{
+			profiles: map[string]repo.ModelProfile{
+				"standard": {
+					LogicalProfileID: "standard",
+					ProviderID:       providerID,
+				},
+			},
+		},
+		&stubConnectionLookup{
+			items: map[uuid.UUID][]repo.ProviderConnection{
+				providerID: {
+					{
+						ID:               newerDegradedID,
+						ProviderID:       providerID,
+						IsEnabled:        true,
+						FailoverPriority: 1,
+						HealthStatus:     string(HealthStateDegraded),
+						UpdatedAt:        time.Now().UTC(),
+					},
+					{
+						ID:               olderDegradedID,
+						ProviderID:       providerID,
+						IsEnabled:        true,
+						FailoverPriority: 2,
+						HealthStatus:     string(HealthStateDegraded),
+						UpdatedAt:        time.Now().UTC().Add(-2 * time.Minute),
+					},
+				},
+			},
+		},
+		NewHealthChecker(),
+	)
+
+	selected, err := router.SelectConnection(context.Background(), orgID, "standard", "agent_turn", PrioritySyncInteractive)
+	if err != nil {
+		t.Fatalf("SelectConnection: %v", err)
+	}
+	if selected.ID != olderDegradedID {
+		t.Fatalf("selected connection = %s, want older degraded connection %s", selected.ID, olderDegradedID)
+	}
+}
+
 func TestRouterSelectConnectionUsesFallbackProfileChain(t *testing.T) {
 	orgID := uuid.New()
 	providerA := uuid.New()
