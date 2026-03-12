@@ -171,6 +171,18 @@ func TestExtractDeliverablesIgnoresPlanningOnlySentences(t *testing.T) {
 	}
 }
 
+func TestExtractDeliverablesIgnoresTaskMetadataLines(t *testing.T) {
+	description := "Define success metrics and KPIs for Sam.blog. What does success look like in 3, 6, and 12 months? Metrics should cover: traffic/engagement, content quality signals, conversion (speaking inquiries, consulting leads, recruiter outreach), SEO performance, and social amplification. Include a measurement plan.\n\n**Output:** strategy/success-metrics.md\n**Agent:** Naomi\n**Estimated time:** 20 min\n**Depends on:** WS3.4"
+
+	items := extractDeliverables(description)
+	if len(items) != 1 {
+		t.Fatalf("extractDeliverables len = %d, want 1 executable deliverable", len(items))
+	}
+	if items[0] != "Define success metrics and KPIs for Sam.blog. What does success look like in 3, 6, and 12 months? Metrics should cover: traffic/engagement, content quality signals, conversion (speaking inquiries, consulting leads, recruiter outreach), SEO performance, and social amplification. Include a measurement plan." {
+		t.Fatalf("items[0] = %q, want only the executable content", items[0])
+	}
+}
+
 func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",

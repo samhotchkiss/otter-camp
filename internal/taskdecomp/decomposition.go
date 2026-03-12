@@ -520,12 +520,12 @@ func extractDeliverables(description string) []string {
 			}
 		}
 	}
-	if len(candidates) < 2 {
+	if len(lines) <= 1 && len(candidates) < 2 {
 		if semicolonItems := splitSegments(description, ";"); len(semicolonItems) >= 2 {
 			candidates = append(candidates, semicolonItems...)
 		}
 	}
-	if len(candidates) < 2 {
+	if len(lines) <= 1 && len(candidates) < 2 {
 		if sentenceItems := splitSegments(description, ". "); len(sentenceItems) >= 2 {
 			candidates = append(candidates, sentenceItems...)
 		}
@@ -664,9 +664,19 @@ func metadataIntValue(raw any) (int, bool) {
 
 func cleanSegment(raw string) string {
 	item := strings.TrimSpace(raw)
-	item = strings.TrimPrefix(item, "-")
-	item = strings.TrimPrefix(item, "*")
-	item = strings.TrimSpace(item)
+	for {
+		trimmed := strings.TrimSpace(item)
+		switch {
+		case strings.HasPrefix(trimmed, "-"):
+			item = strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+		case strings.HasPrefix(trimmed, "*"):
+			item = strings.TrimSpace(strings.TrimPrefix(trimmed, "*"))
+		default:
+			item = trimmed
+			goto cleanedPrefixes
+		}
+	}
+cleanedPrefixes:
 	for len(item) > 2 && item[0] >= '0' && item[0] <= '9' {
 		item = strings.TrimSpace(item[1:])
 		item = strings.TrimPrefix(item, ".")
@@ -674,7 +684,21 @@ func cleanSegment(raw string) string {
 		item = strings.TrimSpace(item)
 	}
 	lower := strings.ToLower(item)
-	for _, prefix := range []string{"assigned to ", "blocked on ", "agent:", "wave:"} {
+	for _, prefix := range []string{
+		"assigned to ",
+		"blocked on ",
+		"agent:",
+		"wave:",
+		"output:",
+		"estimated time:",
+		"depends on:",
+		"dependency:",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return ""
+		}
+	}
+	for _, prefix := range []string{"**output:**", "**agent:**", "**estimated time:**", "**depends on:**", "**dependency:**"} {
 		if strings.HasPrefix(lower, prefix) {
 			return ""
 		}
