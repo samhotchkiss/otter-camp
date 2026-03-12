@@ -7314,7 +7314,7 @@ func (e *TurnEngine) callMainModel(
 			streamCtx, cancelWatchdog = context.WithTimeoutCause(ctx, remaining, errAsyncTurnWatchdog)
 		}
 
-		response, callErr := e.models.StreamComplete(streamCtx, ModelRequest{
+			response, callErr := e.models.StreamComplete(streamCtx, ModelRequest{
 			OrganizationID: rt.session.OrganizationID,
 			SessionID:      rt.session.ID,
 			TurnID:         rt.turn.ID,
@@ -7326,39 +7326,39 @@ func (e *TurnEngine) callMainModel(
 			Purpose:        "agent_turn",
 			Profile:        profile,
 			Prompt:         assembled,
-		}, func(token string) error {
-			if !streamingMarked {
-				if err := e.chat.UpdateMessageStatus(ctx, assistant.ID, "streaming", ""); err != nil {
-					return err
+			}, func(token string) error {
+				if !streamingMarked {
+					if err := e.chat.UpdateMessageStatus(streamCtx, assistant.ID, "streaming", ""); err != nil {
+						return err
+					}
+					streamingMarked = true
 				}
-				streamingMarked = true
-			}
 			if watchdogActive && watchdogStream.reset != nil {
 				watchdogStream.reset()
 			}
-			tokensSeen++
-			builder.WriteString(token)
-			if _, err := e.messages.UpdateContent(ctx, assistant.ID, builder.String()); err != nil {
-				return err
-			}
-			*chunkSeq++
-			if err := e.publishEvent(ctx, rt.session.OrganizationID, "chat.message.chunk", "agent", &rt.agent.ID, map[string]any{
-				"session_id": rt.session.ID,
-				"turn_id":    rt.turn.ID,
-				"message_id": assistant.ID,
+				tokensSeen++
+				builder.WriteString(token)
+				if _, err := e.messages.UpdateContent(streamCtx, assistant.ID, builder.String()); err != nil {
+					return err
+				}
+				*chunkSeq++
+				if err := e.publishEvent(streamCtx, rt.session.OrganizationID, "chat.message.chunk", "agent", &rt.agent.ID, map[string]any{
+					"session_id": rt.session.ID,
+					"turn_id":    rt.turn.ID,
+					"message_id": assistant.ID,
 				"delta":      token,
 				"sequence":   *chunkSeq,
 			}); err != nil {
 				return err
 			}
 
-			lastSteerPollChunks++
-			if lastSteerPollChunks >= chunkPollSteerEveryNChunks {
-				lastSteerPollChunks = 0
-				_, _ = e.findSteerMessages(ctx, rt.session.ID, rt.startedAt)
-			}
-			return nil
-		})
+				lastSteerPollChunks++
+				if lastSteerPollChunks >= chunkPollSteerEveryNChunks {
+					lastSteerPollChunks = 0
+					_, _ = e.findSteerMessages(streamCtx, rt.session.ID, rt.startedAt)
+				}
+				return nil
+			})
 		cancelWatchdog()
 
 		if callErr != nil {
