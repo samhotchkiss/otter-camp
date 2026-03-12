@@ -65,6 +65,64 @@ func TestJobWorkerProcessesEnqueuedJobs(t *testing.T) {
 	}
 }
 
+func TestJobWorkerClaimPendingLimitClaimsSingleJobEvenWhenBatchSizeIsLarger(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		BatchSize:            10,
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	if _, err := worker.Enqueue(context.Background(), nil, "test.slow", 100, map[string]any{"n": 1}, nil); err != nil {
+		t.Fatalf("enqueue slow failed: %v", err)
+	}
+	if _, err := worker.Enqueue(context.Background(), nil, "test.fast", 90, map[string]any{"n": 2}, nil); err != nil {
+		t.Fatalf("enqueue fast failed: %v", err)
+	}
+
+	claimed, err := worker.claimPendingLimit(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("claimPendingLimit failed: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed jobs = %d, want 1", len(claimed))
+	}
+	if claimed[0].JobType != "test.slow" {
+		t.Fatalf("claimed job type = %s, want test.slow", claimed[0].JobType)
+	}
+
+	var (
+		slowClaimed int
+		fastPending int
+		fastClaimed int
+	)
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM job_queue WHERE job_type = 'test.slow' AND status = 'claimed'
+	`).Scan(&slowClaimed); err != nil {
+		t.Fatalf("count slow claimed: %v", err)
+	}
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM job_queue WHERE job_type = 'test.fast' AND status = 'pending'
+	`).Scan(&fastPending); err != nil {
+		t.Fatalf("count fast pending: %v", err)
+	}
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM job_queue WHERE job_type = 'test.fast' AND status = 'claimed'
+	`).Scan(&fastClaimed); err != nil {
+		t.Fatalf("count fast claimed: %v", err)
+	}
+	if slowClaimed != 1 {
+		t.Fatalf("slow claimed = %d, want 1", slowClaimed)
+	}
+	if fastPending != 1 {
+		t.Fatalf("fast pending while slow blocked = %d, want 1", fastPending)
+	}
+	if fastClaimed != 0 {
+		t.Fatalf("fast claimed while slow blocked = %d, want 0", fastClaimed)
+	}
+}
+
 func TestAgentTurnEnqueueDedupesActiveAttempt(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

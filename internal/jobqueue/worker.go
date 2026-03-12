@@ -406,7 +406,7 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 func (w *Worker) processAvailableJobs(ctx context.Context) error {
 	for {
 		w.logger.Debug("job queue: claiming pending jobs")
-		jobs, err := w.claimPending(ctx)
+		jobs, err := w.claimPendingLimit(ctx, 1)
 		if err != nil {
 			if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 				w.logger.Error("job queue: claim failed", "error", err)
@@ -435,6 +435,13 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 }
 
 func (w *Worker) claimPending(ctx context.Context) ([]Job, error) {
+	return w.claimPendingLimit(ctx, w.batchSize)
+}
+
+func (w *Worker) claimPendingLimit(ctx context.Context, limit int) ([]Job, error) {
+	if limit <= 0 {
+		limit = 1
+	}
 	rows, err := w.pool.Query(ctx, `
 		WITH claimable AS (
 			SELECT id
@@ -455,7 +462,7 @@ func (w *Worker) claimPending(ctx context.Context) ([]Job, error) {
 		WHERE jq.id = claimable.id
 		RETURNING jq.id, jq.job_type, jq.priority, jq.payload, jq.status, jq.claimed_by, jq.claimed_at,
 		          jq.attempts, jq.max_attempts, jq.last_error, jq.run_after, jq.created_at, jq.updated_at
-	`, w.batchSize, w.workerID)
+	`, limit, w.workerID)
 	if err != nil {
 		return nil, fmt.Errorf("claim pending jobs: %w", err)
 	}
