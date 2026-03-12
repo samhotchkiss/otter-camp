@@ -11087,6 +11087,64 @@ func TestTurnEngineIntegrationBootstrapProgressCountsFlowTemplatesWithoutAssignm
 	}
 }
 
+func TestTurnEngineIntegrationBootstrapProgressCountsStaffingDraftsWithoutAssignments(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	startedAt := time.Now().UTC()
+
+	turn, err := repo.NewChatTurnRepo(fixture.pool).Create(ctx, repo.ChatTurn{
+		SessionID:      projectSession.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   lori.ID,
+		Status:         "completed",
+		StartedAt:      &startedAt,
+	})
+	if err != nil {
+		t.Fatalf("Create chat turn: %v", err)
+	}
+
+	_, err = repo.NewChatMessageRepo(fixture.pool).Create(ctx, repo.ChatMessage{
+		SessionID: projectSession.ID,
+		TurnID:    &turn.ID,
+		Role:      "tool_result",
+		Content:   `{"tool_name":"agent.create_staff","output":{"agent":{"id":"11111111-1111-1111-1111-111111111111"}}}`,
+		Status:    "final",
+		Metadata:  json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Create staffing tool_result: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if progress.AssignmentCount != 0 {
+		t.Fatalf("assignment_count = %d, want 0", progress.AssignmentCount)
+	}
+	if progress.StaffingDraftCount != 1 {
+		t.Fatalf("staffing_draft_count = %d, want 1", progress.StaffingDraftCount)
+	}
+	if checkpoint := projectBootstrapLastSuccessfulCheckpoint(progress); checkpoint != projectBootstrapCheckpointStaffingPersisted {
+		t.Fatalf("last_successful_checkpoint = %q, want %q", checkpoint, projectBootstrapCheckpointStaffingPersisted)
+	}
+	reason := buildProjectBootstrapWatchdogFailureReason(&projectBootstrapTimeoutError{
+		Timeout:  90 * time.Second,
+		Progress: progress,
+	})
+	if strings.Contains(reason, "zero persisted") {
+		t.Fatalf("watchdog failure reason = %q, want partial persisted setup", reason)
+	}
+	if !strings.Contains(reason, "staffing_drafts=1") {
+		t.Fatalf("watchdog failure reason = %q, want staffing_drafts count", reason)
+	}
+}
+
 func TestTurnEngineIntegrationAsyncOrgTurnFailsHungModelStreamAtDurationLimit(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

@@ -172,7 +172,7 @@ func projectBootstrapReachedCheckpoints(state projectBootstrapState) map[string]
 			state.UpdatedAt != nil ||
 			state.CompletedAt != nil ||
 			state.FailedAt != nil,
-		projectBootstrapCheckpointStaffingPersisted:      state.AssignmentCount > 0,
+		projectBootstrapCheckpointStaffingPersisted:      state.AssignmentCount > 0 || state.StaffingDraftCount > 0,
 		projectBootstrapCheckpointTaskTreePersisted:      state.PlannedTaskCount > 0,
 		projectBootstrapCheckpointFlowTemplatesPersisted: state.PlannedFlowTemplateCount > 0,
 		projectBootstrapCheckpointFirstWaveSelected:      state.FirstWaveTaskCount > 0,

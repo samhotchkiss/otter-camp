@@ -1132,6 +1132,7 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	}
 
 	madeProgress := progress.AssignmentCount > state.AssignmentCount ||
+		progress.StaffingDraftCount > state.StaffingDraftCount ||
 		progress.PlannedTaskCount > state.PlannedTaskCount ||
 		progress.PlannedFlowTemplateCount > state.PlannedFlowTemplateCount ||
 		progress.FirstWaveTaskCount > state.FirstWaveTaskCount ||
@@ -1495,6 +1496,7 @@ type projectBootstrapProgress struct {
 	BootstrapSetupDoneCount  int
 	FrankSignOffRecorded     bool
 	AssignmentCount          int
+	StaffingDraftCount       int
 	PlannedTaskCount         int
 	PlannedFlowTemplateCount int
 	FirstWaveTaskCount       int
@@ -1600,6 +1602,7 @@ type projectBootstrapState struct {
 	LastResponderID          string                              `json:"last_responder_id,omitempty"`
 	AutoTurnCount            int                                 `json:"auto_turn_count,omitempty"`
 	AssignmentCount          int                                 `json:"assignment_count,omitempty"`
+	StaffingDraftCount       int                                 `json:"staffing_draft_count,omitempty"`
 	PlannedTaskCount         int                                 `json:"planned_task_count,omitempty"`
 	PlannedFlowTemplateCount int                                 `json:"planned_flow_template_count,omitempty"`
 	FirstWaveTaskCount       int                                 `json:"first_wave_task_count,omitempty"`
@@ -1718,6 +1721,10 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		return projectBootstrapProgress{}, err
 	}
 	progress.AssignmentCount = e.countBootstrapMaterializedAssignments(ctx, assignments)
+	progress.StaffingDraftCount, err = e.countProjectBootstrapStaffingDrafts(ctx, projectID)
+	if err != nil {
+		return projectBootstrapProgress{}, err
+	}
 
 	tasks, err := repo.NewProjectTaskRepo(e.pool).ListByProject(ctx, projectID)
 	if err != nil {
@@ -2409,15 +2416,16 @@ func buildProjectBootstrapWatchdogFailureReason(timeoutErr *projectBootstrapTime
 		progress = timeoutErr.Progress
 	}
 	var reason string
-	if progress.AssignmentCount == 0 && progress.PlannedTaskCount == 0 && progress.PlannedFlowTemplateCount == 0 {
+	if progress.AssignmentCount == 0 && progress.StaffingDraftCount == 0 && progress.PlannedTaskCount == 0 && progress.PlannedFlowTemplateCount == 0 {
 		reason = fmt.Sprintf(
-			"bootstrap setup watchdog timed out after %s with zero persisted project assignments, scoped tasks, or flow templates",
+			"bootstrap setup watchdog timed out after %s with zero persisted staffing drafts, project assignments, scoped tasks, or flow templates",
 			timeout.String(),
 		)
 	} else {
 		reason = fmt.Sprintf(
-			"bootstrap setup watchdog timed out after %s after partial persisted setup (assignments=%d, scoped_tasks=%d, flow_templates=%d, first_wave_tasks=%d, first_wave_promoted=%d, first_wave_execution=%d, first_wave_jobs=%d)",
+			"bootstrap setup watchdog timed out after %s after partial persisted setup (staffing_drafts=%d, assignments=%d, scoped_tasks=%d, flow_templates=%d, first_wave_tasks=%d, first_wave_promoted=%d, first_wave_execution=%d, first_wave_jobs=%d)",
 			timeout.String(),
+			progress.StaffingDraftCount,
 			progress.AssignmentCount,
 			progress.PlannedTaskCount,
 			progress.PlannedFlowTemplateCount,
@@ -2431,6 +2439,30 @@ func buildProjectBootstrapWatchdogFailureReason(timeoutErr *projectBootstrapTime
 		reason += fmt.Sprintf("; model invocation %s remained in_flight", invocationID)
 	}
 	return reason
+}
+
+func (e *TurnEngine) countProjectBootstrapStaffingDrafts(ctx context.Context, projectID uuid.UUID) (int, error) {
+	if e == nil || e.pool == nil || projectID == uuid.Nil {
+		return 0, nil
+	}
+	var count int
+	err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message m
+		JOIN chat_session s ON s.id = m.session_id
+		WHERE s.scope_type = 'project'
+		  AND s.scope_id = $1
+		  AND m.role = 'tool_result'
+		  AND COALESCE(NULLIF(m.status, ''), 'pending') = 'final'
+		  AND (
+			m.content LIKE '%"tool_name":"agent.create_staff"%'
+			OR m.content LIKE '%"tool_name":"agent.create_temp"%'
+		  )
+	`, projectID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func buildProjectBootstrapGuardrailFailureReason(detail string) string {
@@ -2555,7 +2587,7 @@ func projectBootstrapLastSuccessfulCheckpoint(progress projectBootstrapProgress)
 		reached bool
 	}{
 		{name: projectBootstrapCheckpointProjectCreated, reached: true},
-		{name: projectBootstrapCheckpointStaffingPersisted, reached: progress.AssignmentCount > 0},
+		{name: projectBootstrapCheckpointStaffingPersisted, reached: progress.AssignmentCount > 0 || progress.StaffingDraftCount > 0},
 		{name: projectBootstrapCheckpointTaskTreePersisted, reached: progress.PlannedTaskCount > 0},
 		{name: projectBootstrapCheckpointFlowTemplatesPersisted, reached: progress.PlannedFlowTemplateCount > 0},
 		{name: projectBootstrapCheckpointFirstWaveSelected, reached: progress.FirstWaveTaskCount > 0},
@@ -2574,6 +2606,7 @@ func projectBootstrapLastSuccessfulCheckpoint(progress projectBootstrapProgress)
 
 func projectBootstrapSetupPersisted(progress projectBootstrapProgress) bool {
 	return progress.AssignmentCount > 0 ||
+		progress.StaffingDraftCount > 0 ||
 		progress.PlannedTaskCount > 0 ||
 		progress.PlannedFlowTemplateCount > 0 ||
 		progress.FirstWaveTaskCount > 0 ||
@@ -2722,6 +2755,7 @@ func applyProjectBootstrapProgressState(state *projectBootstrapState, progress p
 	state.Phase = checkpoint
 	state.LastCheckpoint = checkpoint
 	state.AssignmentCount = progress.AssignmentCount
+	state.StaffingDraftCount = progress.StaffingDraftCount
 	state.PlannedTaskCount = progress.PlannedTaskCount
 	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
 	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
@@ -6559,6 +6593,7 @@ func (e *TurnEngine) handleProjectBootstrapTerminalTurnFailure(ctx context.Conte
 		state.LastResponderID = rt.agent.ID.String()
 	}
 	state.AssignmentCount = progress.AssignmentCount
+	state.StaffingDraftCount = progress.StaffingDraftCount
 	state.PlannedTaskCount = progress.PlannedTaskCount
 	state.PlannedFlowTemplateCount = progress.PlannedFlowTemplateCount
 	state.FirstWaveTaskCount = progress.FirstWaveTaskCount
