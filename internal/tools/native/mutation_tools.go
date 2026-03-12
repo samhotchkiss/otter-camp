@@ -37,6 +37,7 @@ import (
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
 var bootstrapWorkstreamTitlePattern = regexp.MustCompile(`(?i)^(ws\d+|workstream\s+\d+)\s*:`)
+var parentChildOrdinalTitlePattern = regexp.MustCompile(`^([a-z]+)\s+(\d+)\s*:`)
 
 var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
 
@@ -1229,6 +1230,33 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		if childErr != nil {
 			return nil, childErr
 		}
+		desiredChild := repo.ProjectTask{
+			OrganizationID:      scope.organizationID,
+			ProjectID:           projectID,
+			Title:               title,
+			Description:         description,
+			WorkStatus:          "draft",
+			FlowTemplateID:      resolvedFlowTemplateID,
+			RequiresHumanReview: requiresHumanReview,
+			BlocksScope:         blocksScope,
+			Metadata:            enrichedMetadata,
+		}
+		if reusableChild, ok, reuseErr := e.findReusableParentScopedChildTask(ctx, *parentTask, children, desiredChild); reuseErr != nil {
+			return nil, reuseErr
+		} else if ok {
+			response := map[string]any{
+				"task": map[string]any{
+					"id":           reusableChild.ID,
+					"task_number":  reusableChild.TaskNumber,
+					"work_status":  reusableChild.WorkStatus,
+					"blocks_scope": reusableChild.BlocksScope,
+				},
+			}
+			if planning.HasSelection() {
+				response["planning"] = reviewPlanningResponse(planning)
+			}
+			return response, nil
+		}
 		enrichedMetadata = taskdecomp.ApplyChildMetadata(enrichedMetadata, parentTask.ID, nextManualChildWorkstreamIndex(*parentTask, children))
 	}
 	desiredTask := repo.ProjectTask{
@@ -1419,6 +1447,7 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 	}
 
 	existingChildren := map[int]repo.ProjectTask{}
+	existingChildrenByCanonicalTitle := map[string]repo.ProjectTask{}
 	projectTasks, err := e.tasks.ListByProject(ctx, parentTask.ProjectID)
 	if err != nil {
 		return nil, err
@@ -1433,6 +1462,11 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 		}
 		if current, exists := existingChildren[workstreamIndex]; !exists || taskCanonicalLess(projectTask, current) {
 			existingChildren[workstreamIndex] = projectTask
+		}
+		if key := canonicalParentChildTitleKey(projectTask.Title); key != "" {
+			if current, exists := existingChildrenByCanonicalTitle[key]; !exists || taskCanonicalLess(projectTask, current) {
+				existingChildrenByCanonicalTitle[key] = projectTask
+			}
 		}
 	}
 
@@ -1454,6 +1488,12 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 
 		var childTask repo.ProjectTask
 		if existingChild, ok := existingChildren[workstreamIndex]; ok {
+			repairedChild, repairErr := e.repairTaskIfNeeded(ctx, existingChild, desiredChild)
+			if repairErr != nil {
+				return nil, repairErr
+			}
+			childTask = repairedChild
+		} else if existingChild, ok := existingChildrenByCanonicalTitle[canonicalParentChildTitleKey(childDraft.Title)]; ok {
 			repairedChild, repairErr := e.repairTaskIfNeeded(ctx, existingChild, desiredChild)
 			if repairErr != nil {
 				return nil, repairErr
@@ -1497,6 +1537,11 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 				return nil, createErr
 			}
 			childTask = createdRecord
+		}
+		if key := canonicalParentChildTitleKey(childTask.Title); key != "" {
+			if current, exists := existingChildrenByCanonicalTitle[key]; !exists || taskCanonicalLess(childTask, current) {
+				existingChildrenByCanonicalTitle[key] = childTask
+			}
 		}
 		childTaskIDs = append(childTaskIDs, childTask.ID)
 		taskItems = append(taskItems, map[string]any{
@@ -2332,6 +2377,21 @@ func normalizeComparableText(value string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }
 
+func canonicalParentChildTitleKey(value string) string {
+	normalized := normalizeComparableText(value)
+	if normalized == "" {
+		return ""
+	}
+	normalized = strings.Trim(normalized, ":- ")
+	for _, suffix := range []string{" layout", " template", " design", " option"} {
+		normalized = strings.TrimSpace(strings.TrimSuffix(normalized, suffix))
+	}
+	if matches := parentChildOrdinalTitlePattern.FindStringSubmatch(normalized); len(matches) == 3 {
+		return matches[1] + " " + matches[2]
+	}
+	return normalized
+}
+
 func metadataObject(raw json.RawMessage) map[string]any {
 	if len(raw) == 0 {
 		return nil
@@ -2419,6 +2479,38 @@ func nextManualChildWorkstreamIndex(parentTask repo.ProjectTask, children []repo
 		}
 	}
 	return maxIndex + 1
+}
+
+func (e *NativeToolExecutor) findReusableParentScopedChildTask(ctx context.Context, parentTask repo.ProjectTask, children []repo.ProjectTask, desired repo.ProjectTask) (repo.ProjectTask, bool, error) {
+	desiredKey := canonicalParentChildTitleKey(desired.Title)
+	if desiredKey == "" {
+		return repo.ProjectTask{}, false, nil
+	}
+	var reusable *repo.ProjectTask
+	for i := range children {
+		child := children[i]
+		if isTaskTerminal(child.WorkStatus) {
+			continue
+		}
+		if taskdecomp.ParseParentTaskID(child.Metadata) != parentTask.ID {
+			continue
+		}
+		if canonicalParentChildTitleKey(child.Title) != desiredKey {
+			continue
+		}
+		if reusable == nil || taskCanonicalLess(child, *reusable) {
+			candidate := child
+			reusable = &candidate
+		}
+	}
+	if reusable == nil {
+		return repo.ProjectTask{}, false, nil
+	}
+	repaired, err := e.repairTaskIfNeeded(ctx, *reusable, desired)
+	if err != nil {
+		return repo.ProjectTask{}, false, err
+	}
+	return repaired, true, nil
 }
 
 func appendReopenFeedback(description *string, parentTaskID uuid.UUID, feedback string) *string {
@@ -2779,6 +2871,7 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 	actor := actorFromContext(ctx)
 
 	existingChildren := map[int]repo.ProjectTask{}
+	existingChildrenByCanonicalTitle := map[string]repo.ProjectTask{}
 	projectTasks, err := e.tasks.ListByProject(ctx, taskRecord.ProjectID)
 	if err != nil {
 		return queueDecompositionResult{}, err
@@ -2793,6 +2886,11 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 		}
 		if current, exists := existingChildren[workstreamIndex]; !exists || taskCanonicalLess(projectTask, current) {
 			existingChildren[workstreamIndex] = projectTask
+		}
+		if key := canonicalParentChildTitleKey(projectTask.Title); key != "" {
+			if current, exists := existingChildrenByCanonicalTitle[key]; !exists || taskCanonicalLess(projectTask, current) {
+				existingChildrenByCanonicalTitle[key] = projectTask
+			}
 		}
 	}
 
@@ -2811,6 +2909,14 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 			Metadata:            childDraft.Metadata,
 		}
 		if existingChild, ok := existingChildren[workstreamIndex]; ok {
+			repairedChild, repairErr := e.repairTaskIfNeeded(ctx, existingChild, desiredChild)
+			if repairErr != nil {
+				return queueDecompositionResult{}, repairErr
+			}
+			childTaskIDs = append(childTaskIDs, repairedChild.ID)
+			continue
+		}
+		if existingChild, ok := existingChildrenByCanonicalTitle[canonicalParentChildTitleKey(childDraft.Title)]; ok {
 			repairedChild, repairErr := e.repairTaskIfNeeded(ctx, existingChild, desiredChild)
 			if repairErr != nil {
 				return queueDecompositionResult{}, repairErr
@@ -2859,6 +2965,11 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 				return queueDecompositionResult{}, createErr
 			}
 			createdChild = createdRecord
+		}
+		if key := canonicalParentChildTitleKey(createdChild.Title); key != "" {
+			if current, exists := existingChildrenByCanonicalTitle[key]; !exists || taskCanonicalLess(createdChild, current) {
+				existingChildrenByCanonicalTitle[key] = createdChild
+			}
 		}
 		childTaskIDs = append(childTaskIDs, createdChild.ID)
 		if e.taskService == nil {

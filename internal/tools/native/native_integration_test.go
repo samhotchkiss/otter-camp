@@ -4556,6 +4556,227 @@ func TestIntegrationParentTaskCanDecomposeBroadFollowOnChildRequest(t *testing.T
 	}
 }
 
+func TestIntegrationParentTaskRepeatedDecompositionReusesCanonicalChildren(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Generate 20 new blog post ideas",
+		Description:    stringPtr("Break the ideas into bounded child tasks that can be reviewed independently."),
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	firstOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Generate 20 new blog post ideas across all pillars",
+		"description":    "Develop the launch backlog across every content pillar.",
+	})
+	if err != nil {
+		t.Fatalf("task.create first decomposition: %v", err)
+	}
+
+	secondOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Generate 20 new blog post ideas across all pillars",
+		"description":    "Retry with tighter descriptions for the same twenty launch backlog ideas.",
+	})
+	if err != nil {
+		t.Fatalf("task.create repeated decomposition: %v", err)
+	}
+
+	firstDecomposition, ok := firstOut["decomposition"].(map[string]any)
+	if !ok {
+		t.Fatalf("first decomposition = %T, want map", firstOut["decomposition"])
+	}
+	secondDecomposition, ok := secondOut["decomposition"].(map[string]any)
+	if !ok {
+		t.Fatalf("second decomposition = %T, want map", secondOut["decomposition"])
+	}
+
+	firstIDsAny := parseUUIDSlicePayload(t, firstDecomposition["child_task_ids"])
+	secondIDsAny := parseUUIDSlicePayload(t, secondDecomposition["child_task_ids"])
+	if len(firstIDsAny) == 0 {
+		t.Fatal("first decomposition child_task_ids empty")
+	}
+	if len(firstIDsAny) != len(secondIDsAny) {
+		t.Fatalf("repeated child_task_ids len = %d, want %d", len(secondIDsAny), len(firstIDsAny))
+	}
+	for i := range firstIDsAny {
+		if secondIDsAny[i] != firstIDsAny[i] {
+			t.Fatalf("repeated child_task_ids[%d] = %s, want %s", i, secondIDsAny[i], firstIDsAny[i])
+		}
+	}
+
+	updatedParent, err := taskRepo.GetByID(ctx, parentTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID updated parent: %v", err)
+	}
+	parentChildIDs := taskdecomp.ParseChildTaskIDs(updatedParent.Metadata)
+	if len(parentChildIDs) != len(firstIDsAny) {
+		t.Fatalf("parent child_task_ids len = %d, want %d", len(parentChildIDs), len(firstIDsAny))
+	}
+
+	projectTasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	childCount := 0
+	for _, projectTask := range projectTasks {
+		if taskdecomp.ParseParentTaskID(projectTask.Metadata) != parentTask.ID {
+			continue
+		}
+		childCount++
+	}
+	if childCount != len(firstIDsAny) {
+		t.Fatalf("project child count after repeated decomposition = %d, want %d", childCount, len(firstIDsAny))
+	}
+}
+
+func TestIntegrationParentTaskReusesOverlappingManualChildByCanonicalTitle(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Site Design — Build 10 HTML Layout Templates",
+		Description:    stringPtr("Parent workstream for layout options."),
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	firstOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Template 6: Asymmetric Modern layout",
+		"description":    "Build HTML template #6 with broken grid and overlapping elements.",
+	})
+	if err != nil {
+		t.Fatalf("task.create first child: %v", err)
+	}
+	firstTaskID := nestedUUIDPath(t, firstOut, "task", "id")
+
+	secondOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Template 6: Asymmetric Modern",
+		"description":    "Retry Template 6 with a shorter bounded description.",
+	})
+	if err != nil {
+		t.Fatalf("task.create overlapping child: %v", err)
+	}
+	secondTaskID := nestedUUIDPath(t, secondOut, "task", "id")
+
+	if secondTaskID != firstTaskID {
+		t.Fatalf("overlapping child id = %s, want reuse %s", secondTaskID, firstTaskID)
+	}
+
+	projectTasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	childCount := 0
+	for _, projectTask := range projectTasks {
+		if taskdecomp.ParseParentTaskID(projectTask.Metadata) != parentTask.ID {
+			continue
+		}
+		childCount++
+	}
+	if childCount != 1 {
+		t.Fatalf("project child count after overlapping retry = %d, want 1", childCount)
+	}
+}
+
+func nestedUUIDPath(t *testing.T, raw map[string]any, path ...string) uuid.UUID {
+	t.Helper()
+	var current any = raw
+	for _, key := range path {
+		typed, ok := current.(map[string]any)
+		if !ok {
+			t.Fatalf("nestedUUIDPath path %v hit %T", path, current)
+		}
+		current = typed[key]
+	}
+	switch typed := current.(type) {
+	case uuid.UUID:
+		return typed
+	case string:
+		parsed, err := uuid.Parse(strings.TrimSpace(typed))
+		if err != nil {
+			t.Fatalf("nestedUUIDPath parse %v: %v", path, err)
+		}
+		return parsed
+	default:
+		t.Fatalf("nestedUUIDPath path %v = %T", path, current)
+		return uuid.Nil
+	}
+}
+
+func parseUUIDSlicePayload(t *testing.T, raw any) []uuid.UUID {
+	t.Helper()
+	switch typed := raw.(type) {
+	case []uuid.UUID:
+		return append([]uuid.UUID(nil), typed...)
+	case []string:
+		out := make([]uuid.UUID, 0, len(typed))
+		for i, item := range typed {
+			parsed, err := uuid.Parse(strings.TrimSpace(item))
+			if err != nil {
+				t.Fatalf("uuid slice payload[%d] parse: %v", i, err)
+			}
+			out = append(out, parsed)
+		}
+		return out
+	case []any:
+		out := make([]uuid.UUID, 0, len(typed))
+		for i, item := range typed {
+			switch value := item.(type) {
+			case uuid.UUID:
+				out = append(out, value)
+			case string:
+				parsed, err := uuid.Parse(strings.TrimSpace(value))
+				if err != nil {
+					t.Fatalf("uuid slice payload[%d] parse: %v", i, err)
+				}
+				out = append(out, parsed)
+			default:
+				t.Fatalf("uuid slice payload[%d] = %T, want uuid/string", i, item)
+			}
+		}
+		return out
+	default:
+		t.Fatalf("uuid slice payload = %T, want []uuid.UUID/[]string/[]any", raw)
+		return nil
+	}
+}
+
 func TestIntegrationParentTaskRepeatedDecompositionRequestReusesExistingChildren(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
