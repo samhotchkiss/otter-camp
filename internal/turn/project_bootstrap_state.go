@@ -197,11 +197,29 @@ func projectBootstrapPrimaryFailureReason(state projectBootstrapState) string {
 }
 
 func projectBootstrapStateMarkedFailed(state projectBootstrapState) bool {
+	if projectBootstrapDeferredProviderFailure(state) {
+		return false
+	}
 	return strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusFailed) ||
 		strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) ||
 		strings.TrimSpace(state.ValidationFailureClass) != "" ||
 		strings.TrimSpace(state.FailureClass) != "" ||
 		state.FailedAt != nil
+}
+
+func projectBootstrapDeferredProviderFailure(state projectBootstrapState) bool {
+	if state.FailedAt != nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusFailed) {
+		return false
+	}
+	switch projectBootstrapPrimaryFailureClass(state) {
+	case projectBootstrapFailureProviderRateLimit, projectBootstrapFailureProviderTransient:
+		return true
+	default:
+		return false
+	}
 }
 
 func projectBootstrapFailurePhase(state projectBootstrapState) string {

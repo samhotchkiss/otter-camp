@@ -5188,6 +5188,9 @@ func (e *TurnEngine) handleProjectBootstrapUnhandledFailure(ctx context.Context,
 			failureReason = providerReason
 		}
 	}
+	if failureCategory == projectFailureCategoryProvider && projectBootstrapSetupPersisted(progress) {
+		return e.handleDeferredBootstrapProviderFailure(ctx, rt, progress, failureClass, failureReason, now)
+	}
 	record := buildProjectBootstrapAutomaticFailureRecord(progress, failureCategory, failureClass, failureReason, now)
 
 	state.Status = projectBootstrapStatusFailed
@@ -5229,6 +5232,73 @@ func (e *TurnEngine) handleProjectBootstrapUnhandledFailure(ctx context.Context,
 		return true, err
 	}
 	return true, nil
+}
+
+func (e *TurnEngine) handleDeferredBootstrapProviderFailure(ctx context.Context, rt *turnRuntime, progress projectBootstrapProgress, failureClass, failureReason string, now time.Time) (bool, error) {
+	if e == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if state.StartedAt == nil {
+		startedAt := rt.startedAt.UTC()
+		state.StartedAt = &startedAt
+	}
+	state.Status = projectBootstrapStatusActive
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	state.LastTurnID = rt.turn.ID.String()
+	if rt.agent.ID != uuid.Nil {
+		state.LastResponderID = rt.agent.ID.String()
+	}
+	applyProjectBootstrapProgressState(&state, progress)
+	state.ValidationStatus = projectBootstrapValidationFailed
+	state.ValidationFailureClass = failureClass
+	state.ValidationFailureReason = failureReason
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = nil
+	state.FailureCategory = projectFailureCategoryProvider
+	state.FailureClass = failureClass
+	state.FailurePhase = projectBootstrapLastCheckpoint(progress)
+	state.FailureReason = failureReason
+	state.ProviderFailureClass = failureClass
+	state.ProviderFailureReason = failureReason
+	if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
+		return true, err
+	}
+
+	// Provider-backed bootstrap retries are deferred work, not a distinct turn stop class.
+	rt.stopReason = stopReasonMaxDuration
+	if err := e.recordStopReason(ctx, rt); err != nil {
+		return true, err
+	}
+	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, failureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
+		return true, failErr
+	}
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapProviderRetryMessage(failureReason)); err != nil {
+		return true, err
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID: rt.session.ID,
+		MessageID: rt.initialMessageID,
+	}
+	if rt.agent.ID != uuid.Nil {
+		nextAgentID := rt.agent.ID
+		nextPayload.AgentID = &nextAgentID
+	}
+	runAfter := now.Add(retryBackoff(rt.modelRetryUsed + 1))
+	_, err := e.enqueueAgentTurnIfActive(ctx, rt.session, nextPayload, &runAfter)
+	return true, err
+}
+
+func buildProjectBootstrapProviderRetryMessage(reason string) string {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		trimmed = "provider outage"
+	}
+	return fmt.Sprintf("[Project bootstrap delayed: %s. Bootstrap setup has already persisted, so the project session remains active and will retry automatically.]", trimmed)
 }
 
 func (e *TurnEngine) pauseProjectAfterExecutionFailure(ctx context.Context, rt *turnRuntime, cause error) error {

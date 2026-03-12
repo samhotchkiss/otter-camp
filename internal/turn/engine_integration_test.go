@@ -6782,7 +6782,6 @@ func TestTurnEngineIntegrationProjectBootstrapOpensFirstWaveAfterSetupTasksAndFr
 	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
 		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
 	}
-
 	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
 	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
 		OrganizationID: fixture.org.ID,
@@ -6974,7 +6973,6 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupTaskOwnsExecutableCh
 	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
 		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
 	}
-
 	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
 	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
 		OrganizationID: fixture.org.ID,
@@ -7111,7 +7109,6 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupTaskViolatesBoundedS
 	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
 		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
 	}
-
 	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
 	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
 		OrganizationID: fixture.org.ID,
@@ -9349,6 +9346,160 @@ func TestTurnEngineIntegrationBootstrapTransientProviderFailureRestartsBeforeSet
 	pauseState := projectpause.Parse(restarted.Settings)
 	if pauseState.IsPaused {
 		t.Fatalf("restart project pause state = %+v, want active restart instead of paused project", pauseState)
+	}
+}
+
+func TestTurnEngineIntegrationBootstrapTransientProviderFailureAfterSetupPersistsKeepsSessionActive(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and bootstrap setup for this project.")
+
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerA := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerB := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{}
+
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+
+		assignments := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+		for _, item := range []repo.AgentProjectAssignment{
+			{
+				AgentID:        pmAgent.ID,
+				ProjectID:      project.ID,
+				Role:           "pm",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+			{
+				AgentID:        workerA.ID,
+				ProjectID:      project.ID,
+				Role:           "worker",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+			{
+				AgentID:        workerB.ID,
+				ProjectID:      project.ID,
+				Role:           "worker",
+				AssignedByType: "agent",
+				AssignedByID:   &lori.ID,
+			},
+		} {
+			if _, err := assignments.Assign(ctx, item); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+		}
+
+		templateA := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		templateB := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+		workers := []uuid.UUID{workerA.ID, workerB.ID}
+		templates := []uuid.UUID{templateA.ID, templateB.ID}
+		for i := 0; i < 4; i++ {
+			description := fmt.Sprintf("Deliver bounded bootstrap slice %d.", i+1)
+			assignedID := workers[i%len(workers)]
+			templateID := templates[i%len(templates)]
+			if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+				OrganizationID:  fixture.org.ID,
+				ProjectID:       project.ID,
+				Title:           fmt.Sprintf("Implement bootstrap slice %d", i+1),
+				Description:     &description,
+				WorkStatus:      "draft",
+				FlowTemplateID:  &templateID,
+				AssignedAgentID: &assignedID,
+				Metadata: mustJSON(t, map[string]any{
+					"first_wave_index": i + 1,
+				}),
+				CreatedByType: "agent",
+				CreatedByID:   &lori.ID,
+			}); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+		}
+
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"assignment_count":    3,
+				"planned_tasks":       4,
+				"flow_template_count": 2,
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-provider-transient-after-persist",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		}
+		return ModelResponse{}, ErrModelTransient
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage persisted bootstrap follow-on turn: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	if storedSession.Status != "active" {
+		t.Fatalf("project session status = %q, want active after transient provider failure", storedSession.Status)
+	}
+	state := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if state.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q", state.Status, projectBootstrapStatusActive)
+	}
+	if state.FailureClass != projectFailureClassProviderTransient {
+		t.Fatalf("bootstrap failure_class = %q, want %q", state.FailureClass, projectFailureClassProviderTransient)
+	}
+	if state.ValidationFailureClass != projectFailureClassProviderTransient {
+		t.Fatalf("bootstrap validation_failure_class = %q, want %q", state.ValidationFailureClass, projectFailureClassProviderTransient)
+	}
+	if state.AssignmentCount == 0 || state.PlannedTaskCount == 0 || state.PlannedFlowTemplateCount == 0 {
+		t.Fatalf("bootstrap progress counts = %+v, want persisted setup before retry", state)
+	}
+
+	updatedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if updatedProject.Status != "active" {
+		t.Fatalf("project status = %q, want active after transient provider failure with persisted setup", updatedProject.Status)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 retry after transient provider failure", jobs)
 	}
 }
 
