@@ -2098,6 +2098,69 @@ func TestEnsureTurnRunExitInvariantRejectsLeakedInProgressTurn(t *testing.T) {
 	}
 }
 
+func TestProjectBootstrapHasPriorMaxToolCallsContinuation(t *testing.T) {
+	cycleID := uuid.New()
+	previousStop := stopReasonMaxToolCalls
+	current := chat.ChatTurn{
+		ID:         uuid.New(),
+		TurnNumber: 2,
+		CycleID:    &cycleID,
+	}
+	turns := []repo.ChatTurn{
+		{
+			ID:         uuid.New(),
+			TurnNumber: 1,
+			CycleID:    &cycleID,
+			Status:     "completed",
+			StopReason: &previousStop,
+		},
+		{
+			ID:         current.ID,
+			TurnNumber: current.TurnNumber,
+			CycleID:    current.CycleID,
+			Status:     "pending",
+		},
+	}
+	if !projectBootstrapHasPriorMaxToolCallsContinuation(turns, current) {
+		t.Fatal("expected prior max-tool-calls continuation to be detected")
+	}
+
+	otherCycle := uuid.New()
+	current.CycleID = &otherCycle
+	if projectBootstrapHasPriorMaxToolCallsContinuation(turns, current) {
+		t.Fatal("did not expect continuation detection across different cycles")
+	}
+}
+
+func TestProjectBootstrapHasNewerLiveContinuationTurn(t *testing.T) {
+	cycleID := uuid.New()
+	completedStop := stopReasonMaxToolCalls
+	completed := repo.ChatTurn{
+		ID:         uuid.New(),
+		TurnNumber: 1,
+		CycleID:    &cycleID,
+		Status:     "completed",
+		StopReason: &completedStop,
+	}
+	turns := []repo.ChatTurn{
+		completed,
+		{
+			ID:         uuid.New(),
+			TurnNumber: 2,
+			CycleID:    &cycleID,
+			Status:     "in_progress",
+		},
+	}
+	if !projectBootstrapHasNewerLiveContinuationTurn(turns, completed) {
+		t.Fatal("expected newer live continuation turn")
+	}
+
+	turns[1].Status = "failed"
+	if projectBootstrapHasNewerLiveContinuationTurn(turns, completed) {
+		t.Fatal("did not expect failed turn to count as live continuation")
+	}
+}
+
 func TestMaxToolCallsContinuationDepthLimit(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.engine.maxToolCalls = 1

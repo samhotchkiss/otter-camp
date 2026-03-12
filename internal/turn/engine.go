@@ -1183,6 +1183,12 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	}
 
 	if progress.ValidationFailed() {
+		if projectBootstrapRecoverableMaxToolCallFailure(progress) && projectBootstrapHasNewerLiveContinuationTurn(turns, *latestCompleted) {
+			state.ValidationStatus = ""
+			state.ValidationFailureClass = ""
+			state.ValidationFailureReason = ""
+			return e.updateProjectBootstrapState(ctx, session, state)
+		}
 		rt := &turnRuntime{session: session, turn: &chat.ChatTurn{ID: turnID}}
 		if latestCompleted.RespondingID != uuid.Nil {
 			rt.agent.ID = latestCompleted.RespondingID
@@ -3040,6 +3046,13 @@ func (e *TurnEngine) handleProjectBootstrapPreflight(ctx context.Context, rt *tu
 	if !progress.ValidationFailed() {
 		return false, nil
 	}
+	deferFailure, err := e.shouldDeferRecoverableProjectBootstrapValidation(ctx, rt.session, rt.turn, progress)
+	if err != nil {
+		return false, err
+	}
+	if deferFailure {
+		return false, nil
+	}
 	if err := e.failProjectBootstrapValidation(ctx, rt, progress, e.now().UTC()); err != nil {
 		return true, err
 	}
@@ -3855,6 +3868,61 @@ func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProg
 	default:
 		return false
 	}
+}
+
+func (e *TurnEngine) shouldDeferRecoverableProjectBootstrapValidation(ctx context.Context, session *chat.ChatSession, currentTurn *chat.ChatTurn, progress projectBootstrapProgress) (bool, error) {
+	if e == nil || e.turns == nil || session == nil || currentTurn == nil || !progress.ValidationFailed() {
+		return false, nil
+	}
+	if !projectBootstrapRecoverableMaxToolCallFailure(progress) {
+		return false, nil
+	}
+	turns, err := e.turns.ListBySession(ctx, session.ID)
+	if err != nil {
+		return false, err
+	}
+	return projectBootstrapHasPriorMaxToolCallsContinuation(turns, *currentTurn), nil
+}
+
+func projectBootstrapHasPriorMaxToolCallsContinuation(turns []repo.ChatTurn, currentTurn chat.ChatTurn) bool {
+	if currentTurn.TurnNumber <= 1 {
+		return false
+	}
+	for _, turn := range turns {
+		if turn.TurnNumber >= currentTurn.TurnNumber {
+			continue
+		}
+		if currentTurn.CycleID != nil {
+			if turn.CycleID == nil || *turn.CycleID != *currentTurn.CycleID {
+				continue
+			}
+		}
+		if !strings.EqualFold(strings.TrimSpace(turn.Status), "completed") || turn.StopReason == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(*turn.StopReason), stopReasonMaxToolCalls) {
+			return true
+		}
+	}
+	return false
+}
+
+func projectBootstrapHasNewerLiveContinuationTurn(turns []repo.ChatTurn, completedTurn repo.ChatTurn) bool {
+	for _, turn := range turns {
+		if turn.TurnNumber <= completedTurn.TurnNumber {
+			continue
+		}
+		if completedTurn.CycleID != nil {
+			if turn.CycleID == nil || *turn.CycleID != *completedTurn.CycleID {
+				continue
+			}
+		}
+		switch strings.ToLower(strings.TrimSpace(turn.Status)) {
+		case "pending", "in_progress":
+			return true
+		}
+	}
+	return false
 }
 
 func (e *TurnEngine) cycleContinuationCount(ctx context.Context, rt *turnRuntime) (int, error) {
