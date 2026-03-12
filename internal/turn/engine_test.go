@@ -2405,6 +2405,48 @@ func TestContinuationTurnOnContextCompressed(t *testing.T) {
 	}
 }
 
+func TestContinuationTurnCapsSummaryBeforeReusingAsHistoryRoot(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: strings.Repeat("very long summary line\n", 2000)}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessage *repo.ChatMessage
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Continuation summary]") {
+			msgCopy := msg
+			summaryMessage = &msgCopy
+		}
+	}
+	if summaryMessage == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if len(summaryMessage.Content) > 5000 {
+		t.Fatalf("continuation summary length = %d, want <= 5000 chars", len(summaryMessage.Content))
+	}
+}
+
 func TestResolveModelProfileWorkerDefaultsToStandardWithoutOverrides(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.engine.resolver = nil

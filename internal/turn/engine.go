@@ -81,6 +81,7 @@ const (
 	recoveryFileWriteRepairBudget             = 1
 	recoveryArtifactDir                       = ".ottercamp/recovery"
 	recoveryResumeExcerptChars                = 3000
+	maxContinuationSummaryChars               = 4000
 	projectBootstrapMetadataKey               = "project_bootstrap"
 	projectBootstrapStatusActive              = "active"
 	projectBootstrapStatusCompleted           = "completed"
@@ -3526,12 +3527,32 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	if summary == "" {
 		summary = "Continuation summary unavailable."
 	}
+	summary = compactContinuationSummary(summary)
 	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Continuation summary] "+summary)
 	if err != nil {
 		return err
 	}
 	rt.historyStartID = &message.ID
 	return nil
+}
+
+func compactContinuationSummary(summary string) string {
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return "Continuation summary unavailable."
+	}
+	if len(trimmed) <= maxContinuationSummaryChars {
+		return trimmed
+	}
+	cut := trimmed[:maxContinuationSummaryChars]
+	if idx := strings.LastIndex(cut, "\n"); idx >= maxContinuationSummaryChars/2 {
+		cut = cut[:idx]
+	}
+	cut = strings.TrimSpace(cut)
+	if cut == "" {
+		return "Continuation summary unavailable."
+	}
+	return cut + "\n[Summary truncated]"
 }
 
 func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *turnRuntime) (bool, error) {
