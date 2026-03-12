@@ -11063,7 +11063,6 @@ func TestTurnEngineIntegrationKickoffSummaryCarriesOriginatingWorkstreams(t *tes
 	}
 	fixture.engine.assembler = &sessionHistoryAssembler{messages: repo.NewChatMessageRepo(fixture.pool)}
 
-	projectID := uuid.New()
 	projectSlug := "sam-blog-v2"
 	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
 		if call.ID != "create-1" {
@@ -11073,12 +11072,19 @@ func TestTurnEngineIntegrationKickoffSummaryCarriesOriginatingWorkstreams(t *tes
 				Error:      "unexpected_tool_call",
 			}, nil
 		}
+		project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+		project.Slug = projectSlug
+		project.DisplayName = "Sam Blog V2"
+		updatedProject, err := repo.NewProjectRepo(fixture.pool).Update(ctx, project)
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
 		return ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
 			Output: map[string]any{
 				"project": map[string]any{
-					"id":   projectID,
+					"id":   updatedProject.ID,
 					"slug": projectSlug,
 					"name": "Sam Blog V2",
 				},
@@ -11265,7 +11271,7 @@ func TestTurnEngineIntegrationBackfillsMissingProjectKickoffHandoffAfterProjectC
 	}
 }
 
-func TestTurnEngineIntegrationDoesNotDuplicateExistingProjectKickoffHandoff(t *testing.T) {
+func TestTurnEngineIntegrationBackfillsGenericProjectKickoffHandoffWithoutOriginatingContext(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
@@ -11380,8 +11386,25 @@ func TestTurnEngineIntegrationDoesNotDuplicateExistingProjectKickoffHandoff(t *t
 			userMessages++
 		}
 	}
-	if userMessages != 1 {
-		t.Fatalf("project session user messages = %d, want 1 natural handoff without synthetic duplicate", userMessages)
+	if userMessages != 2 {
+		t.Fatalf("project session user messages = %d, want 2 because generic handoff must be backfilled with synthetic context", userMessages)
+	}
+
+	var sawSynthetic bool
+	for _, message := range projectMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		if strings.Contains(strings.ToLower(message.Content), "originating user request:") &&
+			strings.Contains(strings.ToLower(message.Content), "imported legacy posts") &&
+			strings.Contains(strings.ToLower(message.Content), "design options") &&
+			strings.Contains(strings.ToLower(message.Content), "content strategy") {
+			sawSynthetic = true
+			break
+		}
+	}
+	if !sawSynthetic {
+		t.Fatal("expected synthetic handoff carrying originating request context")
 	}
 }
 

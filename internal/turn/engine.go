@@ -3251,8 +3251,14 @@ func (e *TurnEngine) ensureProjectKickoffHandoff(ctx context.Context, rt *turnRu
 	if err != nil {
 		return err
 	}
+	originatingRequest := ""
+	if rt.initialMessageID != uuid.Nil {
+		if source, err := e.messages.GetByID(ctx, rt.initialMessageID); err == nil && strings.EqualFold(strings.TrimSpace(source.Role), "user") {
+			originatingRequest = normalizeInstructionText(source.Content)
+		}
+	}
 	for _, message := range projectMessages {
-		if strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") && projectKickoffHandoffCarriesOriginatingContext(message.Content, originatingRequest) {
 			return nil
 		}
 	}
@@ -3276,6 +3282,23 @@ func (e *TurnEngine) ensureProjectKickoffHandoff(ctx context.Context, rt *turnRu
 		AgentID:   &loriID,
 	}, nil)
 	return err
+}
+
+func projectKickoffHandoffCarriesOriginatingContext(content, originatingRequest string) bool {
+	trimmedContent := strings.TrimSpace(content)
+	if trimmedContent == "" {
+		return false
+	}
+	trimmedRequest := strings.TrimSpace(originatingRequest)
+	if trimmedRequest == "" {
+		return true
+	}
+	lowerContent := strings.ToLower(normalizeInstructionText(trimmedContent))
+	lowerRequest := strings.ToLower(normalizeInstructionText(trimmedRequest))
+	if strings.Contains(lowerContent, "originating user request:") {
+		return true
+	}
+	return strings.Contains(lowerContent, lowerRequest)
 }
 
 func (e *TurnEngine) buildSyntheticProjectKickoffHandoff(ctx context.Context, rt *turnRuntime) string {
