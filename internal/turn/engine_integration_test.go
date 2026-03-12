@@ -11263,7 +11263,7 @@ func TestTurnEngineIntegrationAsyncOrgTurnFailsHungModelStreamAtDurationLimit(t 
 	}
 }
 
-func TestTurnEngineIntegrationProjectBootstrapWatchdogFailsHungTurnAfterPartialSetup(t *testing.T) {
+func TestTurnEngineIntegrationProjectBootstrapWatchdogContinuesAfterHungTurnWithPartialSetup(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
@@ -11374,8 +11374,8 @@ func TestTurnEngineIntegrationProjectBootstrapWatchdogFailsHungTurnAfterPartialS
 
 	waitForJobStatus(t, fixture.pool, hungJobID, "done", 3*time.Second)
 
-	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
-		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after partial-bootstrap watchdog timeout failure", jobs)
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 continuation after partial-bootstrap watchdog timeout", jobs)
 	}
 
 	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
@@ -11386,17 +11386,20 @@ func TestTurnEngineIntegrationProjectBootstrapWatchdogFailsHungTurnAfterPartialS
 		t.Fatalf("project session current_turn_id = %v, want nil after partial-bootstrap watchdog timeout failure", storedSession.CurrentTurnID)
 	}
 	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
-	if bootstrapState.Status != projectBootstrapStatusFailed {
-		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusActive)
 	}
-	if bootstrapState.FailureClass != projectBootstrapFailureStalled {
-		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureStalled)
+	if bootstrapState.FailureClass != "" {
+		t.Fatalf("bootstrap failure_class = %q, want empty", bootstrapState.FailureClass)
 	}
-	if !strings.Contains(bootstrapState.FailureReason, "partial persisted setup") {
-		t.Fatalf("bootstrap failure_reason = %q, want partial persisted setup detail", bootstrapState.FailureReason)
+	if bootstrapState.FailureReason != "" {
+		t.Fatalf("bootstrap failure_reason = %q, want empty", bootstrapState.FailureReason)
 	}
 	if bootstrapState.AssignmentCount == 0 || bootstrapState.PlannedTaskCount == 0 || bootstrapState.PlannedFlowTemplateCount == 0 {
 		t.Fatalf("bootstrap progress after watchdog timeout = %+v, want persisted partial setup counts", bootstrapState)
+	}
+	if bootstrapState.AutoTurnCount == 0 {
+		t.Fatalf("bootstrap auto_turn_count = %d, want incremented continuation count", bootstrapState.AutoTurnCount)
 	}
 
 	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
@@ -11433,9 +11436,30 @@ func TestTurnEngineIntegrationProjectBootstrapWatchdogFailsHungTurnAfterPartialS
 		t.Fatalf("watchdog invocation error_code = %v, want bootstrap_watchdog_timeout", failedInvocation.ErrorCode)
 	}
 
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	var failureMessages int
+	var continuationMessages int
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "system") && strings.Contains(message.Content, "watchdog timed out") {
+			failureMessages++
+		}
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") && strings.Contains(message.Content, "Continue the bounded project bootstrap setup workflow now.") {
+			continuationMessages++
+		}
+	}
+	if failureMessages != 0 {
+		t.Fatalf("watchdog bootstrap failure system messages = %d, want 0", failureMessages)
+	}
+	if continuationMessages != 2 {
+		t.Fatalf("bootstrap continuation messages = %d, want 2 (pre-timeout follow-on plus watchdog recovery)", continuationMessages)
+	}
+
 	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
-	if storedProject.Status != "archived" {
-		t.Fatalf("project status = %q, want archived", storedProject.Status)
+	if storedProject.Status != "active" {
+		t.Fatalf("project status = %q, want active", storedProject.Status)
 	}
 }
 

@@ -6493,6 +6493,54 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 		startedAt := rt.startedAt.UTC()
 		state.StartedAt = &startedAt
 	}
+	if projectBootstrapSetupPersisted(progress) && !progress.ValidationFailed() {
+		now = e.now().UTC()
+		state.Status = projectBootstrapStatusActive
+		state.LastTurnID = rt.turn.ID.String()
+		if rt.agent.ID != uuid.Nil {
+			state.LastResponderID = rt.agent.ID.String()
+		}
+		state.AutoTurnCount++
+		applyProjectBootstrapProgressState(&state, progress)
+		state.UpdatedAt = &now
+		state.FailedAt = nil
+		state.CompletedAt = nil
+		state.FailureCategory = ""
+		state.FailureClass = ""
+		state.FailurePhase = ""
+		state.FailureReason = ""
+		state.ProviderFailureClass = ""
+		state.ProviderFailureReason = ""
+		rt.stopReason = stopReasonMaxDuration
+
+		if err := e.recordStopReason(ctx, rt); err != nil {
+			return true, err
+		}
+		if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
+			return true, err
+		}
+		if failErr := e.chat.FailTurn(ctx, rt.turn.ID, buildProjectBootstrapWatchdogFailureReason(timeoutErr)); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
+			return true, failErr
+		}
+		continuationAgentID := e.projectBootstrapContinuationAgent(ctx, rt.session, rt.agent.ID)
+		continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, rt.session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount)
+		if err != nil {
+			return true, err
+		}
+		nextPayload := AgentTurnPayload{
+			SessionID: rt.session.ID,
+			MessageID: continuationMessage.ID,
+		}
+		if continuationAgentID != uuid.Nil {
+			nextAgentID := continuationAgentID
+			nextPayload.AgentID = &nextAgentID
+		}
+		runAfter := now.Add(defaultAutoContinueDelay)
+		if _, err := e.enqueueAgentTurnIfActive(ctx, rt.session, nextPayload, &runAfter); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
 	record := buildProjectBootstrapAutomaticFailureRecord(
 		progress,
 		projectFailureCategoryBootstrap,
