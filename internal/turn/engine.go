@@ -1315,6 +1315,12 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 			continue
 		}
 		if _, err := e.taskTransitions.TransitionStatus(ctx, task.ID, "queued", tasksvc.Actor{Type: "system", AllowGateBypass: true}); err != nil {
+			if errors.Is(err, taskdecomp.ErrBoundedTaskTooLarge) {
+				progress.ValidationStatus = projectBootstrapValidationFailed
+				progress.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
+				progress.ValidationFailureReason = err.Error()
+				return progress, nil
+			}
 			return progress, err
 		}
 		queuedAny = true
