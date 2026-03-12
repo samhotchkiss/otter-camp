@@ -562,10 +562,15 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		"these are ",
 		"each is ",
 		"each should ",
+		"commit to repo",
+		"save as ",
 	} {
 		if strings.HasPrefix(normalized, prefix) {
 			return true
 		}
+	}
+	if strings.Contains(normalized, "up to 60 min") || strings.Contains(normalized, "up to 30 min") {
+		return true
 	}
 	if !(strings.HasPrefix(normalized, "each ") || strings.HasPrefix(normalized, "every ")) {
 		return false

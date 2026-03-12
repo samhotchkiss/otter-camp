@@ -291,6 +291,27 @@ func TestExtractDeliverablesIgnoresExplanatoryCompanionSentences(t *testing.T) {
 	}
 }
 
+func TestExtractDeliverablesIgnoresCompanionInstructionAndSizingLines(t *testing.T) {
+	description := strings.Join([]string{
+		"Use browser tools to navigate technonymous.org, discover the site structure, identify all blog post URLs",
+		"Commit to repo.",
+		"Tool-heavy browser work — up to 60 min.",
+		"Research 5-7 exemplary personal brand sites (speakers, consultants, thought leaders)",
+		"Document layout patterns, navigation structures, CTA placement, typography choices, and what makes each effective",
+		"Save as design-templates/template-01.html through template-03.html",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Use browser tools to navigate technonymous.org, discover the site structure, identify all blog post URLs",
+		"Research 5-7 exemplary personal brand sites (speakers, consultants, thought leaders)",
+		"Document layout patterns, navigation structures, CTA placement, typography choices, and what makes each effective",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
 func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
