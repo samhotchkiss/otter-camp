@@ -230,6 +230,36 @@ func TestTurnEngineIntegrationBootstrapInvariantHarness(t *testing.T) {
 		}
 	})
 
+	t.Run("staffed_project_without_pm_fails_closed", func(t *testing.T) {
+		fixture := newIntegrationFixture(t)
+		ctx := context.Background()
+
+		result := runBootstrapInvariantScenario(t, ctx, fixture, bootstrapInvariantScenario{
+			assignments:            4,
+			topLevelTaskCount:      4,
+			flowTemplateCount:      1,
+			completeBootstrapSetup: true,
+			livePromotion:          false,
+			omitPM:                 true,
+		})
+
+		if result.bootstrapState.Status != projectBootstrapStatusFailed {
+			t.Fatalf("bootstrap status = %q, want %q", result.bootstrapState.Status, projectBootstrapStatusFailed)
+		}
+		if result.bootstrapState.ValidationFailureClass != projectBootstrapFailureMissingPM {
+			t.Fatalf("bootstrap validation_failure_class = %q, want %q", result.bootstrapState.ValidationFailureClass, projectBootstrapFailureMissingPM)
+		}
+		if result.bootstrapState.FailureClass != projectBootstrapFailureMissingPM {
+			t.Fatalf("bootstrap failure_class = %q, want %q", result.bootstrapState.FailureClass, projectBootstrapFailureMissingPM)
+		}
+		if result.project.Status != "archived" {
+			t.Fatalf("project status = %q, want archived", result.project.Status)
+		}
+		if result.runnableJobs != 0 {
+			t.Fatalf("runnable first-wave jobs = %d, want 0", result.runnableJobs)
+		}
+	})
+
 	t.Run("wp_rebuild_v2_restart_shape_without_live_promotion_fails_closed", func(t *testing.T) {
 		fixture := newIntegrationFixture(t)
 		ctx := context.Background()
@@ -425,6 +455,7 @@ type bootstrapInvariantScenario struct {
 	completeBootstrapSetup bool
 	livePromotion          bool
 	planningAwareTopLevel  bool
+	omitPM                 bool
 }
 
 type bootstrapInvariantResult struct {
@@ -505,6 +536,9 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 		}
 
 		roles := []string{"pm", "worker", "reviewer", "observer", "worker", "specialist"}
+		if scenario.omitPM {
+			roles = []string{"worker", "reviewer", "observer", "worker", "specialist", "worker"}
+		}
 		for i := 0; i < scenario.assignments && i < len(assignedAgents); i++ {
 			if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
 				AgentID:        assignedAgents[i].ID,
@@ -530,6 +564,9 @@ func runBootstrapInvariantScenario(t *testing.T, ctx context.Context, fixture *i
 		for i := 0; i < scenario.parentTaskCount; i++ {
 			description := fmt.Sprintf("Coordinate executable wave %d without absorbing deliverable work.", i+1)
 			assignedID := pmAgent.ID
+			if scenario.omitPM {
+				assignedID = workerA.ID
+			}
 			parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
 				OrganizationID:  fixture.org.ID,
 				ProjectID:       project.ID,

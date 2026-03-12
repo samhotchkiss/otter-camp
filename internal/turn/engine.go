@@ -88,6 +88,7 @@ const (
 	projectBootstrapFailureStalled            = "stalled"
 	projectBootstrapFailureGuardrail          = "guardrail_loop"
 	projectBootstrapFailureMissingAssignments = "missing_assignments"
+	projectBootstrapFailureMissingPM          = "pm_assignment_missing"
 	projectBootstrapFailureRepoBinding        = "project_repo_binding_missing"
 	projectBootstrapFailureCompoundParent     = "compound_parent_missing_children"
 	projectBootstrapFailureSetupTaskScope     = "bootstrap_setup_task_unbounded"
@@ -1853,6 +1854,17 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		progress.ValidationFailureClass = projectBootstrapFailureMissingAssignments
 		progress.ValidationFailureReason = "kickoff validation failed: planned tasks were created before any active project assignments were persisted"
 		return progress, nil
+	case e.pool != nil:
+		pmAssignment, pmErr := repo.NewAgentProjectAssignmentRepo(e.pool).GetPM(ctx, projectID)
+		if errors.Is(pmErr, repo.ErrNotFound) || pmAssignment.AgentID == uuid.Nil || !pmAssignment.IsActive {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = projectBootstrapFailureMissingPM
+			progress.ValidationFailureReason = "kickoff validation failed: staffed project persisted work but did not assign an active project manager"
+			return progress, nil
+		}
+		if pmErr != nil {
+			return projectBootstrapProgress{}, pmErr
+		}
 	case !repoBindingKnown:
 		return progress, nil
 	case !repoBindingPresent:
@@ -2484,7 +2496,7 @@ func formatBootstrapCheckpoint(checkpoint string) string {
 
 func projectBootstrapFailureCheckpoint(progress projectBootstrapProgress, failureClass string) string {
 	switch strings.TrimSpace(failureClass) {
-	case projectBootstrapFailureMissingAssignments:
+	case projectBootstrapFailureMissingAssignments, projectBootstrapFailureMissingPM:
 		if progress.PlannedTaskCount > 0 {
 			return projectBootstrapCheckpointTaskTree
 		}
