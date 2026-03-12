@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
@@ -941,6 +942,143 @@ func TestLiveModelGatewayClassifiesTransientProviderFailures(t *testing.T) {
 	}
 	if rows[0].FailureClass == nil || *rows[0].FailureClass != "provider_transient" {
 		t.Fatalf("failure_class = %v, want provider_transient", rows[0].FailureClass)
+	}
+}
+
+func TestLiveModelGatewayMarksInvocationFailedWhenRequestContextIsCanceled(t *testing.T) {
+	t.Setenv("OTTERCAMP_MASTER_KEY", base64.StdEncoding.EncodeToString(testMasterKey()))
+	t.Setenv("OTTERCAMP_MASTER_KEY_FILE", "")
+	t.Setenv("OTTERCAMP_KMS_KEY_ID", "")
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+	invocationRepo := repo.NewModelInvocationRepo(pool)
+	secretSvc := secret.NewService(repo.NewSecretRepo(pool))
+
+	org := mustCreateOrg(t, ctx, orgRepo, repo.Organization{
+		Slug:        "live-gateway-canceled-cleanup-org",
+		DisplayName: "Live Gateway Canceled Cleanup Org",
+	})
+	if err := secretSvc.Set(ctx, org.ID, "cancel-key", "Cancel Key", "", "sk-cancel", secret.Principal{Type: "human", ID: uuid.Nil}); err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
+
+	requestStarted := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		select {
+		case requestStarted <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	serverURL := server.URL
+
+	provider := mustCreateProvider(t, ctx, providerRepo, repo.ModelProvider{
+		Slug:        "openai-cancel-cleanup",
+		DisplayName: "OpenAI",
+		APIBaseURL:  serverURL,
+		IsEnabled:   true,
+	})
+	connection := mustCreateConnection(t, ctx, connectionRepo, repo.ProviderConnection{
+		OrganizationID:     org.ID,
+		ProviderID:         provider.ID,
+		DisplayName:        "OpenAI Cancel Cleanup",
+		APIKeyRef:          "ref:cancel-key",
+		APIBaseURLOverride: &serverURL,
+		FailoverPriority:   1,
+		MaxConcurrent:      1,
+		IsEnabled:          true,
+	})
+
+	orgID := org.ID
+	profile, err := profileRepo.Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    "cancel-cleanup-profile",
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          provider.ID,
+		ModelName:           "gpt-4o-mini",
+		DisplayName:         "Cancel Cleanup Profile",
+		ContextWindowTokens: 128000,
+		MaxOutputTokens:     2048,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
+	})
+	if err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+
+	health := NewHealthChecker()
+	gw, err := NewLiveModelGateway(LiveModelGatewayOptions{
+		Router:      NewRouter(profileRepo, connectionRepo, health),
+		Providers:   providerRepo,
+		Secrets:     secretSvc,
+		Invocations: invocationRepo,
+		HealthStore: connectionRepo,
+		Health:      health,
+	})
+	if err != nil {
+		t.Fatalf("NewLiveModelGateway: %v", err)
+	}
+
+	callCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, callErr := gw.StreamComplete(callCtx, turn.ModelRequest{
+			OrganizationID: org.ID,
+			Purpose:        "agent_turn",
+			Profile:        profile,
+			HumanMessages:  []string{"hello"},
+		}, nil)
+		errCh <- callErr
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for provider request to start")
+	}
+	cancel()
+
+	var callErr error
+	select {
+	case callErr = <-errCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for canceled gateway call to return")
+	}
+	if !errors.Is(callErr, context.Canceled) {
+		t.Fatalf("call err = %v, want context canceled", callErr)
+	}
+
+	rows, err := invocationRepo.ListByOrg(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("ListByOrg: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("invocation rows = %d, want 1", len(rows))
+	}
+	if rows[0].ProviderConnectionID == nil || *rows[0].ProviderConnectionID != connection.ID {
+		t.Fatalf("provider_connection_id = %v, want %s", rows[0].ProviderConnectionID, connection.ID)
+	}
+	if rows[0].Status != "failed" {
+		t.Fatalf("status = %q, want failed", rows[0].Status)
+	}
+	if rows[0].ErrorCode == nil || *rows[0].ErrorCode != "provider_transient_failure" {
+		t.Fatalf("error_code = %v, want provider_transient_failure", rows[0].ErrorCode)
 	}
 }
 

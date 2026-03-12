@@ -28,6 +28,7 @@ import (
 
 const (
 	defaultLiveGatewayTimeout       = 5 * time.Minute
+	defaultCleanupTimeout           = 5 * time.Second
 	defaultAnthropicVersion         = "2023-06-01"
 	defaultAnthropicMaxOutputTokens = 16384
 	anthropicAuthModeAPIKey         = "api_key"
@@ -379,11 +380,13 @@ func (g *LiveModelGateway) markInvocationFailed(ctx context.Context, invocationI
 	if invocationID == uuid.Nil || g == nil || g.invocations == nil {
 		return
 	}
+	cleanupCtx, cancel := detachedCleanupContext(ctx)
+	defer cancel()
 	failureClass := classifyInvocationFailure(cause)
 	if healthStatus, ok := healthStatusForInvocationFailure(failureClass); ok {
-		invocation, getErr := g.invocations.GetByID(ctx, invocationID)
+		invocation, getErr := g.invocations.GetByID(cleanupCtx, invocationID)
 		if getErr == nil && invocation.ProviderConnectionID != nil {
-			g.persistConnectionHealth(ctx, *invocation.ProviderConnectionID, healthStatus)
+			g.persistConnectionHealth(cleanupCtx, *invocation.ProviderConnectionID, healthStatus)
 		}
 	}
 	errCode := invocationErrorCode(failureClass)
@@ -391,9 +394,17 @@ func (g *LiveModelGateway) markInvocationFailed(ctx context.Context, invocationI
 	if errMsg == "" {
 		errMsg = "model provider call failed"
 	}
-	if _, err := g.invocations.UpdateFailure(ctx, invocationID, "failed", stringPtr(string(failureClass)), &errCode, &errMsg); err != nil {
+	if _, err := g.invocations.UpdateFailure(cleanupCtx, invocationID, "failed", stringPtr(string(failureClass)), &errCode, &errMsg); err != nil {
 		g.logger.Warn("failed to mark model invocation as failed", "invocation_id", invocationID, "error", err)
 	}
+}
+
+func detachedCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	return context.WithTimeout(base, defaultCleanupTimeout)
 }
 
 func (g *LiveModelGateway) recordSpan(
