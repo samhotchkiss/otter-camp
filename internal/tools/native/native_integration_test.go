@@ -4167,6 +4167,63 @@ func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t
 	}
 }
 
+func TestIntegrationTaskUpdateRejectsQueuedPromotionForOrchestrationParentWithoutChildren(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	description := "Coordinate the HTML template workstream and delegate the actual template builds into bounded child tasks."
+	plan := taskplan.Analyze("WS2: HTML Layout Templates", &description)
+	plan.FollowOnStopReason = "Parent task is orchestration-only; child subtasks provide the executable work."
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	parentTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "WS2: HTML Layout Templates",
+		Description:    &description,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
+		"task_id":     parentTask.ID.String(),
+		"work_status": "queued",
+	})
+	if err != nil {
+		t.Fatalf("task.update queued: %v", err)
+	}
+	if out["error"] != taskNeedsChildTasksMessage {
+		t.Fatalf("task.update error = %v, want %q", out["error"], taskNeedsChildTasksMessage)
+	}
+
+	storedTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, parentTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID parent task: %v", err)
+	}
+	if storedTask.WorkStatus != "draft" {
+		t.Fatalf("parent work_status = %q, want draft", storedTask.WorkStatus)
+	}
+
+	projectTasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks: %v", err)
+	}
+	if len(projectTasks) != 1 {
+		t.Fatalf("project task count = %d, want 1 with no synthesized children", len(projectTasks))
+	}
+}
+
 func TestIntegrationProjectSessionTaskUpdateRejectsInProgressPromotionWithoutCanonicalExecution(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

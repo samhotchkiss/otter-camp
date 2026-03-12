@@ -42,6 +42,7 @@ var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
 const (
 	taskDoneTerminalNodeMessage   = "task can only be marked done when its flow reaches a terminal node"
 	taskOrchestrationOnlyMessage  = "task must remain orchestration-only while executable child tasks exist"
+	taskNeedsChildTasksMessage    = "task must remain orchestration-only until bounded child tasks are created"
 	flowTemplateValidationMessage = "flow template must define a work -> review -> completion path"
 	memoryRecordEmbeddingDims     = 1536
 	memoryRecordDefaultConfidence = 0.85
@@ -1606,6 +1607,12 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			return nil, childErr
 		}
 		executableChildren := executableTasks(decompositionChildren)
+		requiresChildren := taskRequiresBoundedChildren(current)
+		if (strings.EqualFold(desiredStatus, "queued") || strings.EqualFold(desiredStatus, "in_progress")) &&
+			requiresChildren &&
+			len(executableChildren) == 0 {
+			return map[string]any{"error": taskNeedsChildTasksMessage}, nil
+		}
 		if strings.EqualFold(desiredStatus, "queued") && len(executableChildren) > 0 {
 			if err := e.queueDecompositionChildren(ctx, current, executableChildren); err != nil {
 				return nil, err
@@ -2455,6 +2462,34 @@ func executableTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
 		filtered = append(filtered, task)
 	}
 	return filtered
+}
+
+func taskRequiresBoundedChildren(task repo.ProjectTask) bool {
+	if taskMetadataMarksOrchestrationOnly(task.Metadata) {
+		return true
+	}
+	plan, ok := taskplan.Parse(task.Metadata)
+	if !ok {
+		return false
+	}
+	stopReason := strings.ToLower(strings.TrimSpace(plan.FollowOnStopReason))
+	return strings.Contains(stopReason, "parent task is orchestration-only")
+}
+
+func taskMetadataMarksOrchestrationOnly(metadata json.RawMessage) bool {
+	if len(metadata) == 0 {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return false
+	}
+	decomp, _ := payload["decomposition"].(map[string]any)
+	if decomp == nil {
+		return false
+	}
+	orchestrationOnly, _ := decomp["orchestration_only"].(bool)
+	return orchestrationOnly
 }
 
 func (e *NativeToolExecutor) findReusableScopedSession(ctx context.Context, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID, mode string) (*repo.ChatSession, error) {
