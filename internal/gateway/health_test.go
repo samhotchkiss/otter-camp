@@ -89,3 +89,29 @@ func TestHealthCheckerAutoRecoveryAfterBackoff(t *testing.T) {
 		t.Fatalf("state after successful probe = %q, want %q", state, HealthStateHealthy)
 	}
 }
+
+func TestHealthCheckerRateLimitedRecoversToDegradedAfterBackoff(t *testing.T) {
+	clock := &mutableClock{now: time.Date(2026, time.February, 24, 13, 0, 0, 0, time.UTC)}
+	checker := newHealthCheckerWithClock(clock.Now)
+	connectionID := uuid.New()
+
+	checker.MarkRateLimited(connectionID)
+	if state := checker.GetState(connectionID); state != HealthStateRateLimited {
+		t.Fatalf("state after mark rate limited = %q, want %q", state, HealthStateRateLimited)
+	}
+
+	clock.now = clock.now.Add(500 * time.Millisecond)
+	if state := checker.GetState(connectionID); state != HealthStateRateLimited {
+		t.Fatalf("state before rate-limit backoff elapsed = %q, want %q", state, HealthStateRateLimited)
+	}
+
+	clock.now = clock.now.Add(1 * time.Second)
+	if state := checker.GetState(connectionID); state != HealthStateDegraded {
+		t.Fatalf("state after rate-limit backoff elapsed = %q, want %q", state, HealthStateDegraded)
+	}
+
+	checker.RecordSuccess(connectionID)
+	if state := checker.GetState(connectionID); state != HealthStateHealthy {
+		t.Fatalf("state after successful recovery probe = %q, want %q", state, HealthStateHealthy)
+	}
+}

@@ -68,7 +68,7 @@ func (h *HealthChecker) GetStateKnown(connectionID uuid.UUID) (HealthState, bool
 	if record.state == "" {
 		return HealthStateHealthy, false
 	}
-	if (record.state == HealthStateUnavailable || record.state == HealthStateDegraded) &&
+	if (record.state == HealthStateUnavailable || record.state == HealthStateDegraded || record.state == HealthStateRateLimited) &&
 		!record.recoveryReadyAt.IsZero() &&
 		!h.now().UTC().Before(record.recoveryReadyAt) {
 		return HealthStateDegraded, true
