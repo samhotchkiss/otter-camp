@@ -301,6 +301,51 @@ func TestPrepareQueueDecompositionRejectsOversizedGeneratedChild(t *testing.T) {
 	}
 }
 
+func TestPrepareQueueDecompositionAutoAppliesForPhotographyArchiveWorkstream(t *testing.T) {
+	description := strings.Join([]string{
+		"ORCHESTRATION PARENT - do not execute directly.",
+		"Design the structure for showcasing Sam's photography within the site.",
+		"Define categories, presentation approach, gallery layout concepts, and integration with the overall site narrative.",
+		"Commit to git repo under photography/.",
+	}, "\n")
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "WS5: Photography Archive — Portfolio Structure & Design",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if !result.Applied {
+		t.Fatal("Applied = false, want true for photography archive workstream")
+	}
+	if len(result.ChildDrafts) < 3 {
+		t.Fatalf("ChildDrafts len = %d, want >= 3", len(result.ChildDrafts))
+	}
+}
+
+func TestPrepareQueueDecompositionAutoAppliesForStrategySynthesisWorkstream(t *testing.T) {
+	description := "Synthesize all strategy documents (personas, pillars, voice, positioning, calendar) into a master strategy brief. Include an executive summary and recommendations for the migrated Technonymous content integration."
+
+	result, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "WS3.6: Synthesize master content strategy brief",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("PrepareQueueDecomposition: %v", err)
+	}
+	if !result.Applied {
+		t.Fatal("Applied = false, want true for strategy synthesis workstream")
+	}
+	if len(result.ChildDrafts) < 3 {
+		t.Fatalf("ChildDrafts len = %d, want >= 3", len(result.ChildDrafts))
+	}
+}
+
 func TestParseDecompositionReferences(t *testing.T) {
 	parentID := uuid.New()
 	childID := uuid.New()

@@ -535,17 +535,142 @@ func extractDeliverables(description string) []string {
 	seen := map[string]struct{}{}
 	deduped := make([]string, 0, len(candidates))
 	for _, item := range candidates {
-		normalized := strings.ToLower(strings.TrimSpace(item))
-		if normalized == "" {
-			continue
+		for _, expanded := range expandCompoundDeliverable(item) {
+			normalized := strings.ToLower(strings.TrimSpace(expanded))
+			if normalized == "" {
+				continue
+			}
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			deduped = append(deduped, strings.TrimSpace(expanded))
 		}
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		deduped = append(deduped, strings.TrimSpace(item))
 	}
 	return deduped
+}
+
+func expandCompoundDeliverable(item string) []string {
+	trimmed := strings.TrimSpace(item)
+	if trimmed == "" {
+		return nil
+	}
+	if expanded := expandDefineList(trimmed); len(expanded) > 0 {
+		return expanded
+	}
+	if expanded := expandIncludeList(trimmed); len(expanded) > 0 {
+		return expanded
+	}
+	if expanded := expandSynthesisList(trimmed); len(expanded) > 0 {
+		return expanded
+	}
+	return []string{trimmed}
+}
+
+func expandDefineList(item string) []string {
+	lower := strings.ToLower(strings.TrimSpace(item))
+	if !strings.HasPrefix(lower, "define ") {
+		return nil
+	}
+	if strings.ContainsAny(item, "?:") {
+		return nil
+	}
+	item = strings.TrimSpace(strings.TrimPrefix(item, "Define "))
+	item = strings.TrimSpace(strings.TrimSuffix(item, "."))
+	normalized := strings.ReplaceAll(item, " and ", ", ")
+	parts := splitLooseList(normalized)
+	if len(parts) < 3 {
+		return nil
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, "Define "+part)
+	}
+	if len(out) < 3 {
+		return nil
+	}
+	return out
+}
+
+func expandIncludeList(item string) []string {
+	lower := strings.ToLower(strings.TrimSpace(item))
+	if !strings.HasPrefix(lower, "include ") {
+		return nil
+	}
+	if strings.ContainsAny(item, "?:") {
+		return nil
+	}
+	item = strings.TrimSpace(strings.TrimPrefix(item, "Include "))
+	item = strings.TrimSpace(strings.TrimSuffix(item, "."))
+	normalized := strings.ReplaceAll(item, " and ", ", ")
+	parts := splitLooseList(normalized)
+	if len(parts) < 2 {
+		return nil
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, "Include "+part)
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
+}
+
+func expandSynthesisList(item string) []string {
+	trimmed := strings.TrimSpace(item)
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "synthesize all ") {
+		return nil
+	}
+	open := strings.Index(trimmed, "(")
+	close := strings.Index(trimmed, ")")
+	intoIdx := strings.Index(lower, " into ")
+	if open < 0 || close <= open || intoIdx < 0 || intoIdx <= close {
+		return nil
+	}
+	listBody := trimmed[open+1 : close]
+	target := strings.TrimSpace(trimmed[intoIdx+len(" into "):])
+	if target == "" {
+		return nil
+	}
+	parts := splitLooseList(strings.ReplaceAll(listBody, " and ", ", "))
+	if len(parts) < 3 {
+		return nil
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("Draft %s section for the brief", part))
+	}
+	if len(out) < 3 {
+		return nil
+	}
+	return out
+}
+
+func splitLooseList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(part), "."))
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func validateBoundedTaskSize(title string, description *string) error {
@@ -563,6 +688,8 @@ func validateBoundedTaskSize(title string, description *string) error {
 func estimateTaskMinutes(title string, description *string) (int, int) {
 	rawDescription := strings.TrimSpace(deref(description))
 	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{title, rawDescription}, " ")))
+	isBoundedSectionDraft := strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), "draft ") &&
+		strings.Contains(strings.ToLower(strings.TrimSpace(title)), " section for the brief")
 
 	maxMinutes := defaultMaxTaskMinutes
 	if containsAny(text, toolHeavySignals) || containsAny(text, externalBoundSignals) {
@@ -586,7 +713,7 @@ func estimateTaskMinutes(title string, description *string) (int, int) {
 	if strings.Count(text, " and ") >= 2 || strings.Count(text, " plus ") >= 2 {
 		estimatedMinutes += 10
 	}
-	if containsAny(text, broadScopeSignals) {
+	if containsAny(text, broadScopeSignals) && !isBoundedSectionDraft {
 		estimatedMinutes += 15
 	}
 
