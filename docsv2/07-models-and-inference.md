@@ -104,6 +104,8 @@ Each connection tracks its operational health:
 
 Health status is updated on every invocation result for connections that are receiving traffic.
 
+Successful traffic must restore persisted connection health as well as in-memory routing health. If a connection completes an invocation after previously being `rate_limited` or `degraded`, the persisted `provider_connection.health_status` must move back to `healthy` immediately rather than waiting for a separate probe cycle. A connection cannot remain persistently marked `rate_limited` while later successful invocations are being recorded against it.
+
 **Active health probing.** Connections in `degraded`, `rate_limited`, or `unavailable` status receive periodic lightweight health checks (a minimal API call, e.g., a model list request) to detect recovery. Default interval: 60 seconds for `degraded`/`rate_limited`, 5 minutes for `unavailable`. When a probe succeeds, the connection transitions back to `healthy`.
 
 ### Connection Selection
@@ -416,6 +418,8 @@ If retries are exhausted and connection failover doesn't resolve the issue, and 
 ### What the Caller Sees
 
 The turn loop (or other caller) does not manage retries, connection failover, or profile fallbacks. It makes one request to the gateway and receives either a successful response or a terminal error. The gateway handles all recovery logic internally. The caller sees the final result, and the `model_invocation` records capture the full chain of attempts.
+
+A successful provider response is not enough to declare the call finished. The invocation record must also persist its completion state. If `model_invocation` completion persistence fails after the provider returns content, the caller must treat that as a terminal runtime failure for the turn rather than silently succeeding. Leaving a turn `in_progress` while its worker job settles and its invocation remains `in_flight` is invalid state.
 
 If all retries, connection failovers, and profile fallbacks fail, the gateway returns a terminal error to the caller with:
 
