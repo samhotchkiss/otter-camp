@@ -11059,6 +11059,34 @@ func TestTurnEngineIntegrationProjectBootstrapWatchdogAllowsLongStreamingProgres
 	}
 }
 
+func TestTurnEngineIntegrationBootstrapProgressCountsFlowTemplatesWithoutAssignments(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if progress.AssignmentCount != 0 {
+		t.Fatalf("assignment_count = %d, want 0", progress.AssignmentCount)
+	}
+	if progress.PlannedTaskCount != 0 {
+		t.Fatalf("planned_task_count = %d, want 0", progress.PlannedTaskCount)
+	}
+	if progress.PlannedFlowTemplateCount == 0 {
+		t.Fatalf("planned_flow_template_count = %d, want > 0 after persisted project template %s", progress.PlannedFlowTemplateCount, template.ID)
+	}
+	if progress.ValidationStatus != projectBootstrapValidationFailed {
+		t.Fatalf("validation_status = %q, want %q", progress.ValidationStatus, projectBootstrapValidationFailed)
+	}
+	if progress.ValidationFailureClass != projectBootstrapFailureCompoundParent {
+		t.Fatalf("validation_failure_class = %q, want %q", progress.ValidationFailureClass, projectBootstrapFailureCompoundParent)
+	}
+}
+
 func TestTurnEngineIntegrationAsyncOrgTurnFailsHungModelStreamAtDurationLimit(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

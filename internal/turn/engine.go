@@ -1760,16 +1760,14 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	}
 	progress.PlannedTaskCount = len(plannedTasks)
 	if len(plannedTasks) == 0 {
-		if progress.AssignmentCount > 0 || len(assignments) > 0 {
-			progress.PlannedFlowTemplateCount, err = e.countProjectBootstrapCurrentFlowTemplates(ctx, projectID)
-			if err != nil {
-				return projectBootstrapProgress{}, err
-			}
-			if progress.AssignmentCount > 0 || progress.PlannedFlowTemplateCount > 0 {
-				progress.ValidationStatus = projectBootstrapValidationFailed
-				progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
-				progress.ValidationFailureReason = "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave"
-			}
+		progress.PlannedFlowTemplateCount, err = e.countProjectBootstrapCurrentFlowTemplates(ctx, projectID)
+		if err != nil {
+			return projectBootstrapProgress{}, err
+		}
+		if progress.AssignmentCount > 0 || progress.PlannedFlowTemplateCount > 0 {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
+			progress.ValidationFailureReason = "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave"
 		}
 		return progress, nil
 	}
