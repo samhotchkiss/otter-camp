@@ -1845,11 +1845,13 @@ func normalizeBootstrapStepSlug(value string) string {
 		return "bootstrap-governance-gate"
 	case "bind-repo", "bind-repo-and-environment":
 		return "bind-repo-environment"
-	case "staff-the-project":
+	case "staff-the-project", "staffing":
 		return "staff-project"
-	case "validate-sizing", "validate-task-sizing":
+	case "task-decomposition", "task_decomposition":
+		return "decompose-workstreams"
+	case "validate-sizing", "validate-task-sizing", "dependency-wiring", "dependency_wiring":
 		return "validate-task-shape"
-	case "attach-flows", "attach-flow-templates", "attach-validate-flows", "attach-flow-template", "attach-and-validate-flow-templates":
+	case "attach-flows", "attach-flow-templates", "attach-validate-flows", "attach-flow-template", "attach-and-validate-flow-templates", "flow-templates", "flow_templates":
 		return "attach-validate-flow-templates"
 	case "first-wave-selection":
 		return "select-first-wave"

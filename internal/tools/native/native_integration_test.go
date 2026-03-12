@@ -4024,9 +4024,10 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 		"completed_step_slugs": []string{
 			"bootstrap-governance",
 			"bind-repo",
-			"staff-the-project",
-			"validate-sizing",
-			"attach-and-validate-flow-templates",
+			"staffing",
+			"task_decomposition",
+			"dependency_wiring",
+			"flow_templates",
 			"frank-sign-off",
 		},
 		"sign_off_summary": "Frank approved the bootstrap setup.",
@@ -4078,6 +4079,7 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 	for _, slug := range []string{
 		"bind-repo-environment",
 		"staff-project",
+		"decompose-workstreams",
 		"validate-task-shape",
 		"attach-validate-flow-templates",
 		"record-frank-sign-off",
