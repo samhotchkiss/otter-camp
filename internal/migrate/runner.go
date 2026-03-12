@@ -20,6 +20,7 @@ type Runner struct {
 	pool   *pgxpool.Pool
 	logger *slog.Logger
 	fsys   fs.FS
+	lockID int64
 }
 
 func NewRunner(pool *pgxpool.Pool, logger *slog.Logger) *Runner {
@@ -43,6 +44,7 @@ func NewRunnerWithFS(pool *pgxpool.Pool, logger *slog.Logger, fsys fs.FS) *Runne
 		pool:   pool,
 		logger: logger,
 		fsys:   fsys,
+		lockID: advisoryLockID,
 	}
 }
 
@@ -51,14 +53,20 @@ func (r *Runner) Run(ctx context.Context) error {
 		return fmt.Errorf("migration runner requires a database pool")
 	}
 
-	if _, err := r.pool.Exec(ctx, `SELECT pg_advisory_lock($1)`, advisoryLockID); err != nil {
+	conn, err := r.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, r.lockID); err != nil {
 		return fmt.Errorf("acquire advisory lock: %w", err)
 	}
 	defer func() {
-		_, _ = r.pool.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, advisoryLockID)
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, r.lockID)
 	}()
 
-	if err := r.ensureSchemaMigrations(ctx); err != nil {
+	if err := r.ensureSchemaMigrations(ctx, conn); err != nil {
 		return err
 	}
 
@@ -67,13 +75,13 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 
-	pending, err := PlanPending(ctx, r, all)
+	pending, err := PlanPending(ctx, &connRunner{conn: conn.Conn()}, all)
 	if err != nil {
 		return err
 	}
 
 	for _, m := range pending {
-		if err := r.applyMigration(ctx, m); err != nil {
+		if err := r.applyMigration(ctx, conn.Conn(), m); err != nil {
 			r.logger.Error("migration failed", "version", m.Version, "name", m.Name, "error", err)
 			return err
 		}
@@ -81,6 +89,10 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+type connRunner struct {
+	conn *pgx.Conn
 }
 
 func (r *Runner) AppliedVersions(ctx context.Context) (map[int]struct{}, error) {
@@ -106,8 +118,8 @@ func (r *Runner) AppliedVersions(ctx context.Context) (map[int]struct{}, error) 
 	return applied, nil
 }
 
-func (r *Runner) ensureSchemaMigrations(ctx context.Context) error {
-	_, err := r.pool.Exec(ctx, `
+func (r *Runner) ensureSchemaMigrations(ctx context.Context, conn *pgxpool.Conn) error {
+	_, err := conn.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version integer PRIMARY KEY,
 			applied_at timestamptz NOT NULL
@@ -119,12 +131,12 @@ func (r *Runner) ensureSchemaMigrations(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) applyMigration(ctx context.Context, migration Migration) error {
+func (r *Runner) applyMigration(ctx context.Context, conn *pgx.Conn, migration Migration) error {
 	if requiresNonTransactionalExecution(migration.SQL) {
-		return r.applyMigrationOutsideTransaction(ctx, migration)
+		return r.applyMigrationOutsideTransaction(ctx, conn, migration)
 	}
 
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin migration %04d: %w", migration.Version, err)
 	}
@@ -150,18 +162,18 @@ func (r *Runner) applyMigration(ctx context.Context, migration Migration) error 
 	return nil
 }
 
-func (r *Runner) applyMigrationOutsideTransaction(ctx context.Context, migration Migration) error {
+func (r *Runner) applyMigrationOutsideTransaction(ctx context.Context, conn *pgx.Conn, migration Migration) error {
 	statements := splitSQLStatements(migration.SQL)
 	for _, stmt := range statements {
 		if strings.TrimSpace(stmt) == "" {
 			continue
 		}
-		if _, err := r.pool.Exec(ctx, stmt); err != nil {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("execute migration %04d (%s): %w", migration.Version, migration.File, err)
 		}
 	}
 
-	if _, err := r.pool.Exec(ctx, `
+	if _, err := conn.Exec(ctx, `
 		INSERT INTO schema_migrations (version, applied_at)
 		VALUES ($1, now())
 	`, migration.Version); err != nil {
@@ -187,4 +199,27 @@ func splitSQLStatements(sql string) []string {
 		statements = append(statements, trimmed)
 	}
 	return statements
+}
+
+func (r *connRunner) AppliedVersions(ctx context.Context) (map[int]struct{}, error) {
+	rows, err := r.conn.Query(ctx, `SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("load applied migrations: %w", err)
+	}
+	defer rows.Close()
+
+	applied := make(map[int]struct{})
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			return nil, fmt.Errorf("scan applied migration: %w", err)
+		}
+		applied[version] = struct{}{}
+	}
+
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("iterate applied migrations: %w", rows.Err())
+	}
+
+	return applied, nil
 }

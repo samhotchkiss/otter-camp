@@ -109,6 +109,43 @@ func TestRunnerAdvisoryLockPreventsConcurrentDoubleApply(t *testing.T) {
 	}
 }
 
+func TestRunnerReleasesAdvisoryLockAfterRun(t *testing.T) {
+	ctx := context.Background()
+	dbURL, cleanup := createEmptyIntegrationDatabase(t)
+	defer cleanup()
+
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	defer pool.Close()
+
+	runner := NewRunnerWithFS(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), fstest.MapFS{
+		"0001_create_probe.sql": {Data: []byte("CREATE TABLE advisory_release_probe(id int primary key);")},
+	})
+	runner.lockID = time.Now().UnixNano()
+	if err := runner.Run(ctx); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer conn.Release()
+
+	var acquired bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, runner.lockID).Scan(&acquired); err != nil {
+		t.Fatalf("pg_try_advisory_lock: %v", err)
+	}
+	if !acquired {
+		t.Fatal("migration advisory lock is still held after Run returned")
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, runner.lockID); err != nil {
+		t.Fatalf("pg_advisory_unlock: %v", err)
+	}
+}
+
 func TestRunnerRollsBackFailedMigrationAndPreservesPriorApplied(t *testing.T) {
 	ctx := context.Background()
 	dbURL, cleanup := createEmptyIntegrationDatabase(t)
