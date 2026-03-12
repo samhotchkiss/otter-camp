@@ -7501,7 +7501,7 @@ func (e *TurnEngine) callMainModel(
 		if usage == nil {
 			usage = &ModelUsage{InputTokens: estimateTokensFromPrompt(assembled), OutputTokens: maxInt(tokensSeen, estimateTokens(content))}
 		}
-		_ = e.invocations.UpdateCompletion(ctx, invocation.ID,
+		if err := e.invocations.UpdateCompletion(ctx, invocation.ID,
 			usage.InputTokens,
 			usage.OutputTokens,
 			usage.CacheReadTokens,
@@ -7509,7 +7509,10 @@ func (e *TurnEngine) callMainModel(
 			maxInt(0, int(e.now().Sub(started).Milliseconds())),
 			nil,
 			nil,
-		)
+		); err != nil {
+			_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", err.Error())
+			return ModelResponse{}, fmt.Errorf("mark invocation complete: %w", err)
+		}
 		rollupInvocation := invocation
 		if rollupInvocation.RunID == nil {
 			rollupInvocation.RunID = cloneUUIDPointer(rt.runID)

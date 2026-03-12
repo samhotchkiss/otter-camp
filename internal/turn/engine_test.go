@@ -72,6 +72,31 @@ func TestListeningEvalRunsForAsyncSession(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageFailsWhenInvocationCompletionFails(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.invocations.updateCompletionErr = errors.New("update completion failed")
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "continue"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID)
+	if err == nil {
+		t.Fatal("HandleUserMessage err = nil, want invocation completion failure")
+	}
+	if !strings.Contains(err.Error(), "update completion failed") {
+		t.Fatalf("HandleUserMessage err = %v, want update completion failed", err)
+	}
+}
+
 func TestListeningEvalWaitReenqueuesAndSkipsPhase2(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700000000, 0).UTC()
@@ -4010,8 +4035,9 @@ func (f *fakeEnqueuer) agentTurnJobs() []enqueuedJob {
 }
 
 type fakeInvocationRepo struct {
-	mu      sync.Mutex
-	creates []repo.ModelInvocation
+	mu                  sync.Mutex
+	creates             []repo.ModelInvocation
+	updateCompletionErr error
 }
 
 func (f *fakeInvocationRepo) Create(ctx context.Context, invocation repo.ModelInvocation) (repo.ModelInvocation, error) {
@@ -4027,7 +4053,7 @@ func (f *fakeInvocationRepo) UpdateStatus(context.Context, uuid.UUID, string, *s
 }
 
 func (f *fakeInvocationRepo) UpdateCompletion(context.Context, uuid.UUID, int, int, int, int, int, *string, *string) error {
-	return nil
+	return f.updateCompletionErr
 }
 
 type fakeModelProfileRepo struct {
