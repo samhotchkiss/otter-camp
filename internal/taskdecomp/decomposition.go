@@ -540,6 +540,9 @@ func extractDeliverables(description string) []string {
 			if normalized == "" {
 				continue
 			}
+			if isInstructionOnlyDeliverable(normalized) {
+				continue
+			}
 			if _, ok := seen[normalized]; ok {
 				continue
 			}
@@ -548,6 +551,16 @@ func extractDeliverables(description string) []string {
 		}
 	}
 	return deduped
+}
+
+func isInstructionOnlyDeliverable(normalized string) bool {
+	if !(strings.HasPrefix(normalized, "each ") || strings.HasPrefix(normalized, "every ")) {
+		return false
+	}
+	return strings.Contains(normalized, " should ") ||
+		strings.Contains(normalized, " must ") ||
+		strings.Contains(normalized, " needs to ") ||
+		strings.Contains(normalized, " need to ")
 }
 
 func expandCompoundDeliverable(item string) []string {

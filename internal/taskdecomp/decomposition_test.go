@@ -3,6 +3,7 @@ package taskdecomp
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -343,6 +344,28 @@ func TestPrepareQueueDecompositionAutoAppliesForStrategySynthesisWorkstream(t *t
 	}
 	if len(result.ChildDrafts) < 3 {
 		t.Fatalf("ChildDrafts len = %d, want >= 3", len(result.ChildDrafts))
+	}
+}
+
+func TestExtractDeliverablesIgnoresInstructionOnlyRequirementLines(t *testing.T) {
+	description := strings.Join([]string{
+		"- Design and build layout templates 1-3 as self-contained HTML files with embedded CSS",
+		"- Each should have a distinct visual identity",
+		"- Template 1: Clean minimal/editorial",
+		"- Template 2: Magazine-style grid layout",
+		"- Template 3: Dark mode technical/modern",
+		"- Each must include sections for: hero/intro, blog listing, post view, photography gallery, about/bio, speaking/consulting CTA, and contact",
+	}, "\n")
+
+	got := extractDeliverables(description)
+	want := []string{
+		"Design and build layout templates 1-3 as self-contained HTML files with embedded CSS",
+		"Template 1: Clean minimal/editorial",
+		"Template 2: Magazine-style grid layout",
+		"Template 3: Dark mode technical/modern",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", got, want)
 	}
 }
 
