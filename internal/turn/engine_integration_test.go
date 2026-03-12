@@ -9754,6 +9754,87 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationForNonRunnableFirst
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapMaxToolCallsDoesNotContinueAfterValidationFailure(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: create the initial staffed work plan for this project.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "pm",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("Assign pm: %v", err)
+	}
+
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	description := "Generate 20 blog post concepts that span ethics, internet culture, parenting, AI, and orchestration."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Blog Post Ideation",
+		Description:     &description,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+	}); err != nil {
+		t.Fatalf("Create planned task: %v", err)
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+		UpdatedAt:        &now,
+	}); err != nil {
+		t.Fatalf("updateProjectBootstrapState: %v", err)
+	}
+
+	createdTurn, err := fixture.chatService.CreateTurn(ctx, projectSession.ID, lori.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chatService.StartTurn(ctx, createdTurn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	turnRecord, err := fixture.chatService.GetTurn(ctx, createdTurn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn: %v", err)
+	}
+	sessionRecord, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession updated project session: %v", err)
+	}
+
+	shouldContinue, err := fixture.engine.shouldContinueMaxToolCalls(ctx, &turnRuntime{
+		session:          sessionRecord,
+		turn:             turnRecord,
+		agent:            lori,
+		initialMessageID: handoff.ID,
+		stopReason:       stopReasonMaxToolCalls,
+	})
+	if err != nil {
+		t.Fatalf("shouldContinueMaxToolCalls: %v", err)
+	}
+	if shouldContinue {
+		t.Fatal("shouldContinueMaxToolCalls = true, want false after bootstrap validation failure")
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupPersistsWithoutExecutableFirstWaveTasks(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

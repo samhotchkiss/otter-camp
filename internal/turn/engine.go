@@ -3757,6 +3757,18 @@ func (e *TurnEngine) shouldContinueMaxToolCalls(ctx context.Context, rt *turnRun
 	if !strings.EqualFold(strings.TrimSpace(rt.stopReason), stopReasonMaxToolCalls) {
 		return false, nil
 	}
+	if strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
+		bootstrapState := projectBootstrapStateFromMetadata(rt.session.Metadata)
+		if projectBootstrapStateActive(bootstrapState) {
+			progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
+			if err != nil {
+				return false, err
+			}
+			if progress.ValidationFailed() {
+				return false, nil
+			}
+		}
+	}
 	continuations, err := e.cycleContinuationCount(ctx, rt)
 	if err != nil {
 		return false, err
