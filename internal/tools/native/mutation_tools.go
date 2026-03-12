@@ -1211,7 +1211,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			return nil, decompErr
 		}
 		if preparedChild.Applied {
-			return map[string]any{"error": "parent integration follow-on tasks must already be bounded before they are created"}, nil
+			return e.createDecomposedParentChildren(ctx, *parentTask, preparedChild, actor)
 		}
 		children, childErr := e.listDecompositionChildren(ctx, *parentTask)
 		if childErr != nil {
@@ -1335,6 +1335,129 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		response["planning"] = reviewPlanningResponse(planning)
 	}
 	return response, nil
+}
+
+func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context, parentTask repo.ProjectTask, prepared taskdecomp.QueueDecomposition, actor executionActor) (map[string]any, error) {
+	childDrafts := make([]taskdecomp.ChildDraft, 0, len(prepared.Plan.Deliverables))
+	for idx, deliverable := range prepared.Plan.Deliverables {
+		trimmed := strings.TrimSpace(deliverable)
+		if trimmed == "" {
+			continue
+		}
+		description := trimmed
+		childDrafts = append(childDrafts, taskdecomp.ChildDraft{
+			Title:       trimmed,
+			Description: &description,
+			Metadata:    taskdecomp.ApplyChildMetadata(nil, parentTask.ID, idx+2),
+		})
+	}
+	if len(childDrafts) == 0 {
+		childDrafts = prepared.ChildDrafts
+	}
+
+	existingChildren := map[int]repo.ProjectTask{}
+	projectTasks, err := e.tasks.ListByProject(ctx, parentTask.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	for _, projectTask := range projectTasks {
+		if isTaskTerminal(projectTask.WorkStatus) {
+			continue
+		}
+		workstreamIndex, ok := decompositionWorkstreamIndex(projectTask, parentTask.ID)
+		if !ok {
+			continue
+		}
+		if current, exists := existingChildren[workstreamIndex]; !exists || taskCanonicalLess(projectTask, current) {
+			existingChildren[workstreamIndex] = projectTask
+		}
+	}
+
+	childTaskIDs := make([]uuid.UUID, 0, len(childDrafts))
+	taskItems := make([]map[string]any, 0, len(childDrafts))
+	for _, childDraft := range childDrafts {
+		workstreamIndex, _ := metadataIntValue(metadataObject(childDraft.Metadata), "workstream_index")
+		desiredChild := repo.ProjectTask{
+			OrganizationID:      parentTask.OrganizationID,
+			ProjectID:           parentTask.ProjectID,
+			Title:               childDraft.Title,
+			Description:         childDraft.Description,
+			WorkStatus:          "draft",
+			FlowTemplateID:      parentTask.FlowTemplateID,
+			RequiresHumanReview: parentTask.RequiresHumanReview,
+			Priority:            parentTask.Priority,
+			Metadata:            childDraft.Metadata,
+		}
+
+		var childTask repo.ProjectTask
+		if existingChild, ok := existingChildren[workstreamIndex]; ok {
+			repairedChild, repairErr := e.repairTaskIfNeeded(ctx, existingChild, desiredChild)
+			if repairErr != nil {
+				return nil, repairErr
+			}
+			childTask = repairedChild
+		} else if e.taskService != nil {
+			requiresHumanReview := parentTask.RequiresHumanReview
+			createdRecord, createErr := e.taskService.CreateTask(ctx, tasksvc.CreateTaskRequest{
+				ProjectID:           parentTask.ProjectID,
+				Title:               childDraft.Title,
+				Description:         childDraft.Description,
+				FlowTemplateID:      parentTask.FlowTemplateID,
+				Priority:            parentTask.Priority,
+				CreatedByType:       actor.createdByType,
+				CreatedByID:         actor.createdByID,
+				RequiresHumanReview: &requiresHumanReview,
+				Metadata:            childDraft.Metadata,
+			})
+			if createErr != nil {
+				return nil, createErr
+			}
+			childTask = *createdRecord
+		} else {
+			if e.pool != nil {
+				return nil, fmt.Errorf("canonical task service unavailable")
+			}
+			createdRecord, createErr := e.tasks.Create(ctx, repo.ProjectTask{
+				OrganizationID:      parentTask.OrganizationID,
+				ProjectID:           parentTask.ProjectID,
+				Title:               childDraft.Title,
+				Description:         childDraft.Description,
+				WorkStatus:          "draft",
+				FlowTemplateID:      parentTask.FlowTemplateID,
+				RequiresHumanReview: parentTask.RequiresHumanReview,
+				Priority:            parentTask.Priority,
+				CreatedByType:       actor.createdByType,
+				CreatedByID:         actor.createdByPtr,
+				Metadata:            childDraft.Metadata,
+			})
+			if createErr != nil {
+				return nil, createErr
+			}
+			childTask = createdRecord
+		}
+		childTaskIDs = append(childTaskIDs, childTask.ID)
+		taskItems = append(taskItems, map[string]any{
+			"id":           childTask.ID,
+			"task_number":  childTask.TaskNumber,
+			"work_status":  childTask.WorkStatus,
+			"blocks_scope": childTask.BlocksScope,
+		})
+	}
+
+	for _, childTaskID := range childTaskIDs {
+		parentTask.Metadata = taskdecomp.AppendChildTaskID(parentTask.Metadata, childTaskID)
+	}
+	if _, err := updateTaskMetadataOnly(ctx, e.tasks, parentTask); err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"decomposition": map[string]any{
+			"applied":        true,
+			"child_task_ids": childTaskIDs,
+		},
+		"tasks": taskItems,
+	}, nil
 }
 
 func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[string]any) (map[string]any, error) {

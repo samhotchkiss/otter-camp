@@ -4338,6 +4338,84 @@ func TestIntegrationParentTaskCanCreateBoundedFollowOnChild(t *testing.T) {
 	}
 }
 
+func TestIntegrationParentTaskCanDecomposeBroadFollowOnChildRequest(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Generate 20 new blog post concepts",
+		Description:    stringPtr("Break the concepts into bounded batches that can be reviewed independently."),
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Generate 20 new blog post ideas across all pillars",
+		"description":    "Develop the content backlog for the launch.",
+	})
+	if err != nil {
+		t.Fatalf("task.create decomposed child follow-on: %v", err)
+	}
+
+	decomposition, ok := out["decomposition"].(map[string]any)
+	if !ok {
+		t.Fatalf("decomposition = %T, want map", out["decomposition"])
+	}
+	if applied, _ := decomposition["applied"].(bool); !applied {
+		t.Fatalf("decomposition.applied = %v, want true", decomposition["applied"])
+	}
+
+	rawTasks, ok := out["tasks"].([]map[string]any)
+	if !ok {
+		t.Fatalf("tasks = %T, want []map[string]any", out["tasks"])
+	}
+	if len(rawTasks) != 2 {
+		t.Fatalf("tasks len = %d, want 2 decomposed child tasks", len(rawTasks))
+	}
+
+	updatedParent, err := taskRepo.GetByID(ctx, parentTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID updated parent: %v", err)
+	}
+	childIDs := taskdecomp.ParseChildTaskIDs(updatedParent.Metadata)
+	if len(childIDs) != 2 {
+		t.Fatalf("parent child_task_ids len = %d, want 2", len(childIDs))
+	}
+
+	projectTasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	childCount := 0
+	for _, projectTask := range projectTasks {
+		if taskdecomp.ParseParentTaskID(projectTask.Metadata) != parentTask.ID {
+			continue
+		}
+		childCount++
+		if projectTask.FlowTemplateID == nil || *projectTask.FlowTemplateID != template.ID {
+			t.Fatalf("child flow_template_id = %v, want %s", projectTask.FlowTemplateID, template.ID)
+		}
+	}
+	if childCount != 2 {
+		t.Fatalf("project child count = %d, want 2", childCount)
+	}
+}
+
 func TestIntegrationProjectSessionCreateAutoAddsAssignedProjectAgentsButNotStarterTrio(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
