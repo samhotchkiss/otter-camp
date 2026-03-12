@@ -1447,6 +1447,7 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 	for _, childTaskID := range childTaskIDs {
 		parentTask.Metadata = taskdecomp.AppendChildTaskID(parentTask.Metadata, childTaskID)
 	}
+	parentTask.Metadata = taskdecomp.ApplyMetadata(parentTask.Metadata, prepared.Plan, prepared.SourceDescription, childTaskIDs)
 	if _, err := updateTaskMetadataOnly(ctx, e.tasks, parentTask); err != nil {
 		return nil, err
 	}

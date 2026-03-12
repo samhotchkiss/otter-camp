@@ -4416,6 +4416,89 @@ func TestIntegrationParentTaskCanDecomposeBroadFollowOnChildRequest(t *testing.T
 	}
 }
 
+func TestIntegrationParentTaskRepeatedDecompositionRequestReusesExistingChildren(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Build 10 HTML Layout Template Options",
+		Description:    stringPtr("Build Template 2: Long-form Essay. Build Template 3: Technical Post. Build Template 4: Photography Gallery. Build Template 5: About/Speaker Page. Build Template 6: Archive/Index."),
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	input := map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Build 10 HTML Layout Template Options",
+		"description":    "Build Template 2: Long-form Essay. Build Template 3: Technical Post. Build Template 4: Photography Gallery. Build Template 5: About/Speaker Page. Build Template 6: Archive/Index.",
+	}
+
+	firstOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", input)
+	if err != nil {
+		t.Fatalf("first task.create decomposition: %v", err)
+	}
+	firstTasks, ok := firstOut["tasks"].([]map[string]any)
+	if !ok {
+		t.Fatalf("first tasks = %T, want []map[string]any", firstOut["tasks"])
+	}
+	if len(firstTasks) != 5 {
+		t.Fatalf("first tasks len = %d, want 5", len(firstTasks))
+	}
+
+	secondOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", input)
+	if err != nil {
+		t.Fatalf("second task.create decomposition: %v", err)
+	}
+	secondTasks, ok := secondOut["tasks"].([]map[string]any)
+	if !ok {
+		t.Fatalf("second tasks = %T, want []map[string]any", secondOut["tasks"])
+	}
+	if len(secondTasks) != 5 {
+		t.Fatalf("second tasks len = %d, want 5 reused tasks", len(secondTasks))
+	}
+
+	updatedParent, err := taskRepo.GetByID(ctx, parentTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID updated parent: %v", err)
+	}
+	if primary := taskdecomp.ParsePrimaryDeliverable(updatedParent.Metadata); strings.TrimSpace(primary) == "" {
+		t.Fatalf("parent primary deliverable missing after decomposition metadata sync")
+	}
+	childIDs := taskdecomp.ParseChildTaskIDs(updatedParent.Metadata)
+	if len(childIDs) != 5 {
+		t.Fatalf("parent child_task_ids len = %d, want 5", len(childIDs))
+	}
+
+	projectTasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	childCount := 0
+	for _, projectTask := range projectTasks {
+		if taskdecomp.ParseParentTaskID(projectTask.Metadata) != parentTask.ID {
+			continue
+		}
+		childCount++
+	}
+	if childCount != 5 {
+		t.Fatalf("project child count after repeated decomposition = %d, want 5", childCount)
+	}
+}
+
 func TestIntegrationProjectSessionCreateAutoAddsAssignedProjectAgentsButNotStarterTrio(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
