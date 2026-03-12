@@ -161,6 +161,48 @@ func TestProjectServiceCreatePublishesStaffingNeededEvent(t *testing.T) {
 	}
 }
 
+func TestProjectServiceCreateDoesNotAutoAssignStarterTrioAsProjectStaff(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	svc := newIntegrationService(t, pool)
+	orgRepo := repo.NewOrgRepo(pool)
+	assignmentRepo := repo.NewAgentProjectAssignmentRepo(pool)
+
+	org, err := orgRepo.Create(ctx, repo.Organization{Slug: "proj-svc-no-starter-assign-" + uuid.NewString()[:8], DisplayName: "No Starter Assignment Org"})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	loriID := seedStarterAgent(t, ctx, pool, org.ID, "Lori", "pm")
+	frankID := seedStarterAgent(t, ctx, pool, org.ID, "Frank", "general")
+
+	created, err := svc.Create(ctx, CreateProjectRequest{
+		OrganizationID: org.ID,
+		Slug:           "starter-trio-not-project-staff",
+		DisplayName:    "Starter Trio Not Project Staff",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	assignments, err := assignmentRepo.ListByProject(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListByProject assignments: %v", err)
+	}
+	if len(assignments) != 0 {
+		t.Fatalf("project assignment count = %d, want 0 at bootstrap project creation", len(assignments))
+	}
+
+	if _, err := assignmentRepo.GetByAgentAndProject(ctx, loriID, created.ID); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("GetByAgentAndProject Lori err = %v, want repo.ErrNotFound", err)
+	}
+	if _, err := assignmentRepo.GetByAgentAndProject(ctx, frankID, created.ID); !errors.Is(err, repo.ErrNotFound) {
+		t.Fatalf("GetByAgentAndProject Frank err = %v, want repo.ErrNotFound", err)
+	}
+}
+
 func TestProjectServiceCreateBindsCanonicalWorkspaceEnvironment(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

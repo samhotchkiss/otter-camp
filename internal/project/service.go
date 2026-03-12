@@ -538,9 +538,6 @@ func (s *service) createBootstrapTaskTree(ctx context.Context, projectRecord rep
 	if err != nil {
 		return err
 	}
-	if err := s.ensureBootstrapAssignments(ctx, projectRecord.ID, createdByType, createdByID, agents); err != nil {
-		return err
-	}
 
 	orgID := projectRecord.OrganizationID
 	projectID := projectRecord.ID
@@ -634,7 +631,6 @@ func (s *service) createBootstrapTaskTree(ctx context.Context, projectRecord rep
 		Description:         &description,
 		FlowTemplateID:      &template.ID,
 		BlocksScope:         bootstrapBlocksScopeAll,
-		AssignedAgentID:     agents.loriID,
 		CreatedByType:       createdByType,
 		CreatedByID:         createdByID,
 		RequiresHumanReview: boolPtr(false),
@@ -677,35 +673,6 @@ func (s *service) createBootstrapTaskTree(ctx context.Context, projectRecord rep
 
 func boolPtr(value bool) *bool {
 	return &value
-}
-
-func (s *service) ensureBootstrapAssignments(ctx context.Context, projectID uuid.UUID, createdByType string, createdByID uuid.UUID, agents bootstrapAgents) error {
-	if s.assignments == nil {
-		return nil
-	}
-	if agents.loriID != nil && *agents.loriID != uuid.Nil {
-		if _, err := s.assignments.Assign(ctx, repo.AgentProjectAssignment{
-			AgentID:        *agents.loriID,
-			ProjectID:      projectID,
-			Role:           "worker",
-			AssignedByType: createdByType,
-			AssignedByID:   actorIDPointer(createdByID),
-		}); err != nil {
-			return err
-		}
-	}
-	if agents.frankID != nil && *agents.frankID != uuid.Nil {
-		if _, err := s.assignments.Assign(ctx, repo.AgentProjectAssignment{
-			AgentID:        *agents.frankID,
-			ProjectID:      projectID,
-			Role:           "reviewer",
-			AssignedByType: createdByType,
-			AssignedByID:   actorIDPointer(createdByID),
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func bootstrapSetupTaskMetadata(parentTaskID uuid.UUID, slug string, order int) json.RawMessage {

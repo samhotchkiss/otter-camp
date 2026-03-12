@@ -508,9 +508,13 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 	if req.AssignedAgentID != nil {
 		assignment, getErr := s.assignments.GetByAgentAndProject(ctx, *req.AssignedAgentID, req.ProjectID)
 		if getErr != nil || !assignment.IsActive {
+			if s.allowBootstrapSetupStarterTrioAssignment(ctx, *req.AssignedAgentID, normalizedMetadata) {
+				goto assignedAgentValidated
+			}
 			return nil, ErrAgentNotAssigned
 		}
 	}
+assignedAgentValidated:
 
 	requiresHumanReview := projectRequiresHumanReview(projectRecord.Settings)
 	if req.RequiresHumanReview != nil {
@@ -553,6 +557,22 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 	}
 
 	return &created, nil
+}
+
+func (s *service) allowBootstrapSetupStarterTrioAssignment(ctx context.Context, agentID uuid.UUID, metadata json.RawMessage) bool {
+	if s == nil || s.agents == nil || agentID == uuid.Nil {
+		return false
+	}
+	payload := taskMetadataMap(metadata)
+	setupTask, _ := payload["bootstrap_setup_task"].(bool)
+	if !setupTask {
+		return false
+	}
+	agentRecord, err := s.agents.GetByID(ctx, agentID)
+	if err != nil {
+		return false
+	}
+	return agentRecord.IsStarterTrio
 }
 
 func (s *service) ensureCreateEligible(ctx context.Context, projectID uuid.UUID, metadata json.RawMessage) error {
