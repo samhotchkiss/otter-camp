@@ -203,6 +203,22 @@ func TestExtractDeliverablesIgnoresBareTimingNotes(t *testing.T) {
 	}
 }
 
+func TestExtractDeliverablesIgnoresMarkdownDecoratedMetadataLines(t *testing.T) {
+	description := strings.Join([]string{
+		"Navigate technonymous.org, find the blog archive/index, and build a complete inventory of every blog post URL with title and date.",
+		"**Assigned to:** Riku",
+		"**Est. time:** 30 min (tool-heavy: browser scraping)",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	if len(items) != 1 {
+		t.Fatalf("extractDeliverables len = %d, want 1 executable deliverable", len(items))
+	}
+	if strings.Contains(strings.ToLower(items[0]), "assigned to") || strings.Contains(strings.ToLower(items[0]), "est. time") {
+		t.Fatalf("metadata line leaked into deliverables: %q", items[0])
+	}
+}
+
 func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",

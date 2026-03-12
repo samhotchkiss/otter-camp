@@ -687,11 +687,16 @@ cleanedPrefixes:
 	lower := strings.ToLower(item)
 	for _, prefix := range []string{
 		"assigned to ",
+		"assigned to:**",
+		"assigned to:",
 		"blocked on ",
 		"agent:",
+		"est. time:",
+		"est. time:**",
 		"wave:",
 		"output:",
 		"estimated time:",
+		"estimated time:**",
 		"depends on:",
 		"dependency:",
 	} {
