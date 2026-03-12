@@ -9992,6 +9992,198 @@ func TestTurnEngineIntegrationProjectBootstrapFailsWhenSetupPersistsWithoutExecu
 	)
 }
 
+func TestTurnEngineIntegrationProjectBootstrapAllowsSameTurnRecoveryAfterChildBoundednessToolError(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: persist the parent workstreams, then split each one into bounded executable child tasks.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	assignments := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+	for _, item := range []repo.AgentProjectAssignment{
+		{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		},
+		{
+			AgentID:        workerAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "worker",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		},
+	} {
+		if _, err := assignments.Assign(ctx, item); err != nil {
+			t.Fatalf("Assign(%s): %v", item.Role, err)
+		}
+	}
+
+	parentDescription := "Generate 20 blog post concepts that span ethics, internet culture, parenting, AI, and orchestration."
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "WS4: New Blog Post Ideas — 20 Concepts",
+		Description:     &parentDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+		UpdatedAt:        &now,
+	}); err != nil {
+		t.Fatalf("updateProjectBootstrapState: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "project_task.create.bad_child", Tier: "tier1"},
+		{Name: "project_task.create.good_children", Tier: "tier1"},
+	}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bad-child",
+				Name: "project_task.create.bad_child",
+				Tier: "tier1",
+			}}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "good-children",
+				Name: "project_task.create.good_children",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Recovered from the invalid parent follow-on attempt and created bounded child tasks instead."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		switch call.Name {
+		case "project_task.create.bad_child":
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output:     map[string]any{"error": bootstrapChildTaskBoundednessError},
+			}, nil
+		case "project_task.create.good_children":
+			child1Desc := "Draft blog post concepts 1-10 with titles and short summaries."
+			child2Desc := "Draft blog post concepts 11-20 with titles and short summaries."
+			child1, err := taskRepo.Create(ctx, repo.ProjectTask{
+				OrganizationID:  fixture.org.ID,
+				ProjectID:       project.ID,
+				Title:           "WS4.1: Draft blog post concepts 1-10",
+				Description:     &child1Desc,
+				WorkStatus:      "draft",
+				FlowTemplateID:  &template.ID,
+				AssignedAgentID: &workerAgent.ID,
+				Metadata:        taskdecomp.ApplyChildMetadata(nil, parentTask.ID, 2),
+				CreatedByType:   "agent",
+				CreatedByID:     &lori.ID,
+			})
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			child2, err := taskRepo.Create(ctx, repo.ProjectTask{
+				OrganizationID:  fixture.org.ID,
+				ProjectID:       project.ID,
+				Title:           "WS4.2: Draft blog post concepts 11-20",
+				Description:     &child2Desc,
+				WorkStatus:      "draft",
+				FlowTemplateID:  &template.ID,
+				AssignedAgentID: &workerAgent.ID,
+				Metadata:        taskdecomp.ApplyChildMetadata(nil, parentTask.ID, 3),
+				CreatedByType:   "agent",
+				CreatedByID:     &lori.ID,
+			})
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			parentTask.Metadata = taskdecomp.ApplyMetadata(
+				parentTask.Metadata,
+				taskdecomp.Analyze(parentTask.Title, parentTask.Description),
+				strings.TrimSpace(parentDescription),
+				[]uuid.UUID{child1.ID, child2.ID},
+			)
+			if _, err := taskRepo.Update(ctx, parentTask); err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"parent_task_id": parentTask.ID.String(),
+					"child_task_ids": []string{child1.ID.String(), child2.ID.String()},
+				},
+			}, nil
+		default:
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage bootstrap recovery turn: %v", err)
+	}
+
+	if modelCalls < 3 {
+		t.Fatalf("model calls = %d, want at least 3 so bootstrap can recover within the same turn", modelCalls)
+	}
+
+	completedTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": completedTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent bootstrap recovery turn: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status == projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want bootstrap to remain recoverable after same-turn correction", bootstrapState.Status)
+	}
+	if bootstrapState.PlannedTaskCount != 3 {
+		t.Fatalf("bootstrap planned_task_count = %d, want 3 after parent + 2 child tasks", bootstrapState.PlannedTaskCount)
+	}
+	if bootstrapState.FirstWaveTaskCount != 2 {
+		t.Fatalf("bootstrap first_wave_task_count = %d, want 2 bounded child tasks", bootstrapState.FirstWaveTaskCount)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if storedProject.Status == "archived" {
+		t.Fatalf("project status = %q, want project to remain active after same-turn bootstrap recovery", storedProject.Status)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapNarrativeCannotOverrideMissingFirstWaveExecution(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

@@ -3988,24 +3988,13 @@ func (e *TurnEngine) handleProjectBootstrapChildTaskFailure(ctx context.Context,
 		return false, nil
 	}
 
-	progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
-	if err != nil {
-		return false, err
-	}
-	if progress.BootstrapTaskID == uuid.Nil || progress.Materialized() {
-		return false, nil
-	}
-	if !progress.ValidationFailed() {
-		progress.ValidationStatus = projectBootstrapValidationFailed
-		progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
-		progress.ValidationFailureReason = "kickoff validation failed: bootstrap persisted orchestration parent tasks, then child task creation stopped because parent integration follow-on tasks must already be bounded before they are created"
-	}
-
-	now := e.now().UTC()
-	if err := e.failProjectBootstrapValidation(ctx, rt, progress, now); err != nil {
-		return false, err
-	}
-	return true, nil
+	// Do not fail-close the entire bootstrap turn immediately here.
+	// This tool result often means the planner tried a broad child creation
+	// first, but can still recover within the same turn by emitting bounded
+	// children on a follow-up tool call. The hard gate remains the normal
+	// end-of-turn bootstrap validation, which will archive only if the
+	// persisted task tree is still structurally invalid after the turn ends.
+	return false, nil
 }
 
 func projectBootstrapToolResultsContainChildBoundednessFailure(results []ToolResult) bool {
