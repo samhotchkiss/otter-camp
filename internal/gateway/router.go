@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -113,7 +114,7 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 			continue
 		}
 
-		state := persistedHealthState(connection.HealthStatus)
+		state := persistedHealthState(connection)
 		if r.health != nil {
 			if inMemory, known := r.health.GetStateKnown(connection.ID); known {
 				state = inMemory
@@ -137,19 +138,29 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 	return &selected, nil
 }
 
-func persistedHealthState(value string) HealthState {
-	switch HealthState(strings.TrimSpace(value)) {
+func persistedHealthState(connection repo.ProviderConnection) HealthState {
+	switch HealthState(strings.TrimSpace(connection.HealthStatus)) {
 	case HealthStateHealthy:
 		return HealthStateHealthy
 	case HealthStateDegraded:
 		return HealthStateDegraded
 	case HealthStateRateLimited:
+		if rateLimitBackoffExpired(connection.UpdatedAt) {
+			return HealthStateDegraded
+		}
 		return HealthStateRateLimited
 	case HealthStateUnavailable:
 		return HealthStateUnavailable
 	default:
 		return HealthStateHealthy
 	}
+}
+
+func rateLimitBackoffExpired(updatedAt time.Time) bool {
+	if updatedAt.IsZero() {
+		return false
+	}
+	return time.Since(updatedAt.UTC()) >= healthProbeBackoffMax
 }
 
 func healthRank(state HealthState) int {

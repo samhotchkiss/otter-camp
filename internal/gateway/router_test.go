@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -136,6 +137,55 @@ func TestRouterSelectConnectionPrefersPersistedHealthyOverRateLimitedOnColdStart
 	}
 	if selected.ID != healthyID {
 		t.Fatalf("selected connection = %s, want %s", selected.ID, healthyID)
+	}
+}
+
+func TestRouterSelectConnectionTreatsExpiredPersistedRateLimitAsDegraded(t *testing.T) {
+	orgID := uuid.New()
+	providerID := uuid.New()
+	expiredRateLimitedID := uuid.New()
+	freshRateLimitedID := uuid.New()
+
+	router := NewRouter(
+		&stubProfileLookup{
+			profiles: map[string]repo.ModelProfile{
+				"standard": {
+					LogicalProfileID: "standard",
+					ProviderID:       providerID,
+				},
+			},
+		},
+		&stubConnectionLookup{
+			items: map[uuid.UUID][]repo.ProviderConnection{
+				providerID: {
+					{
+						ID:               freshRateLimitedID,
+						ProviderID:       providerID,
+						IsEnabled:        true,
+						FailoverPriority: 1,
+						HealthStatus:     string(HealthStateRateLimited),
+						UpdatedAt:        time.Now().UTC(),
+					},
+					{
+						ID:               expiredRateLimitedID,
+						ProviderID:       providerID,
+						IsEnabled:        true,
+						FailoverPriority: 2,
+						HealthStatus:     string(HealthStateRateLimited),
+						UpdatedAt:        time.Now().UTC().Add(-2 * healthProbeBackoffMax),
+					},
+				},
+			},
+		},
+		NewHealthChecker(),
+	)
+
+	selected, err := router.SelectConnection(context.Background(), orgID, "standard", "agent_turn", PrioritySyncInteractive)
+	if err != nil {
+		t.Fatalf("SelectConnection: %v", err)
+	}
+	if selected.ID != expiredRateLimitedID {
+		t.Fatalf("selected connection = %s, want expired persisted rate-limited connection %s", selected.ID, expiredRateLimitedID)
 	}
 }
 
