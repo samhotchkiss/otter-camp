@@ -10926,6 +10926,139 @@ func TestTurnEngineIntegrationProjectBootstrapWatchdogFailsHungInFlightTurnAndRe
 	)
 }
 
+func TestTurnEngineIntegrationProjectBootstrapWatchdogAllowsLongStreamingProgress(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and setup for this new project.")
+
+	fixture.engine.projectBootstrapTurnTimeout = 40 * time.Millisecond
+
+	modelCalls := 0
+	followOnStarted := make(chan struct{}, 1)
+	fixture.model.streamFn = func(ctx context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			select {
+			case followOnStarted <- struct{}{}:
+			default:
+			}
+			for _, token := range []string{"working ", "through ", "bootstrap ", "staffing "} {
+				if err := onChunk(token); err != nil {
+					return ModelResponse{}, err
+				}
+				time.Sleep(15 * time.Millisecond)
+			}
+			return ModelResponse{Content: "working through bootstrap staffing"}, nil
+		default:
+			return ModelResponse{Content: "unexpected bootstrap watchdog call"}, nil
+		}
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT id
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND payload->>'session_id' = $1
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1
+	`, projectSession.ID.String()).Scan(&jobID); err != nil {
+		t.Fatalf("load pending bootstrap job: %v", err)
+	}
+
+	worker := jobqueue.New(fixture.pool, slog.New(slog.NewTextHandler(io.Discard, nil)), jobqueue.Config{
+		WorkerID:             "bootstrap-streaming-watchdog-worker",
+		PollInterval:         5 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+	worker.Register(AgentTurnJobType, fixture.engine.HandleTurnJob)
+	workerCtx, cancelWorker := context.WithCancel(ctx)
+	defer cancelWorker()
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		_ = worker.Start(workerCtx)
+	}()
+	defer func() {
+		cancelWorker()
+		_ = worker.Stop()
+		<-workerDone
+	}()
+
+	select {
+	case <-followOnStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for streaming bootstrap turn to start")
+	}
+
+	waitForJobStatus(t, fixture.pool, jobID, "done", 3*time.Second)
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	completedTurn := turns[len(turns)-1]
+	if completedTurn.Status != "completed" {
+		t.Fatalf("streaming bootstrap turn status = %q, want completed", completedTurn.Status)
+	}
+
+	invocations, err := repo.NewModelInvocationRepo(fixture.pool).ListBySession(ctx, fixture.org.ID, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession invocations: %v", err)
+	}
+	var completedInvocation *repo.ModelInvocation
+	for i := range invocations {
+		item := invocations[i]
+		if item.TurnID != nil && *item.TurnID == completedTurn.ID {
+			completedInvocation = &item
+			break
+		}
+	}
+	if completedInvocation == nil {
+		t.Fatal("expected model invocation row for streaming bootstrap turn")
+	}
+	if completedInvocation.Status != "completed" {
+		t.Fatalf("streaming bootstrap invocation status = %q, want completed", completedInvocation.Status)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if storedProject.Status != "active" {
+		t.Fatalf("project status = %q, want active after streamed bootstrap progress", storedProject.Status)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "system") && strings.Contains(message.Content, "watchdog timed out") {
+			t.Fatalf("unexpected watchdog failure system message: %q", message.Content)
+		}
+	}
+}
+
 func TestTurnEngineIntegrationAsyncOrgTurnFailsHungModelStreamAtDurationLimit(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

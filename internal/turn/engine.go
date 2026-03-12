@@ -1645,6 +1645,14 @@ type projectBootstrapWatchdog struct {
 	Remaining time.Duration
 }
 
+type projectBootstrapWatchdogStream struct {
+	ctx    context.Context
+	reset  func()
+	stop   func()
+	cause  func() error
+	active bool
+}
+
 func normalizeProjectBootstrapStateCounts(state projectBootstrapState) projectBootstrapState {
 	switch {
 	case state.FirstWaveJobCount == 0 && state.FirstWaveKickoffCount > 0:
@@ -6623,6 +6631,59 @@ func (e *TurnEngine) projectBootstrapStreamWatchdog(ctx context.Context, rt *tur
 	}, true, nil
 }
 
+func startProjectBootstrapWatchdogStream(parent context.Context, watchdog projectBootstrapWatchdog) projectBootstrapWatchdogStream {
+	if parent == nil || watchdog.Timeout <= 0 || watchdog.Remaining <= 0 {
+		return projectBootstrapWatchdogStream{ctx: parent}
+	}
+	ctx, cancel := context.WithCancelCause(parent)
+	resetCh := make(chan struct{}, 1)
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	timer := time.NewTimer(watchdog.Remaining)
+	go func() {
+		defer close(doneCh)
+		defer timer.Stop()
+		for {
+			select {
+			case <-stopCh:
+				cancel(nil)
+				return
+			case <-parent.Done():
+				cancel(context.Cause(parent))
+				return
+			case <-resetCh:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(watchdog.Timeout)
+			case <-timer.C:
+				cancel(errProjectBootstrapWatchdog)
+				return
+			}
+		}
+	}()
+	return projectBootstrapWatchdogStream{
+		ctx: ctx,
+		reset: func() {
+			select {
+			case resetCh <- struct{}{}:
+			default:
+			}
+		},
+		stop: func() {
+			close(stopCh)
+			<-doneCh
+		},
+		cause: func() error {
+			return context.Cause(ctx)
+		},
+		active: true,
+	}
+}
+
 func (e *TurnEngine) asyncTurnStreamWatchdog(rt *turnRuntime) (time.Duration, bool) {
 	if e == nil || rt == nil || rt.session == nil || e.asyncMaxDuration <= 0 {
 		return 0, false
@@ -6953,13 +7014,16 @@ func (e *TurnEngine) callMainModel(
 		lastSteerPollChunks := 0
 		streamCtx := ctx
 		asyncWatchdogTimeout := time.Duration(0)
+		watchdogStream := projectBootstrapWatchdogStream{ctx: ctx}
 		watchdog, watchdogActive, err := e.projectBootstrapStreamWatchdog(ctx, rt)
 		if err != nil {
 			return ModelResponse{}, err
 		}
 		cancelWatchdog := func() {}
 		if watchdogActive {
-			streamCtx, cancelWatchdog = context.WithTimeoutCause(ctx, watchdog.Remaining, errProjectBootstrapWatchdog)
+			watchdogStream = startProjectBootstrapWatchdogStream(ctx, watchdog)
+			streamCtx = watchdogStream.ctx
+			cancelWatchdog = watchdogStream.stop
 		} else if remaining, ok := e.asyncTurnStreamWatchdog(rt); ok {
 			asyncWatchdogTimeout = e.asyncMaxDuration
 			streamCtx, cancelWatchdog = context.WithTimeoutCause(ctx, remaining, errAsyncTurnWatchdog)
@@ -6983,6 +7047,9 @@ func (e *TurnEngine) callMainModel(
 					return err
 				}
 				streamingMarked = true
+			}
+			if watchdogActive && watchdogStream.reset != nil {
+				watchdogStream.reset()
 			}
 			tokensSeen++
 			builder.WriteString(token)
@@ -7010,7 +7077,7 @@ func (e *TurnEngine) callMainModel(
 		cancelWatchdog()
 
 		if callErr != nil {
-			if watchdogActive && errors.Is(callErr, context.DeadlineExceeded) && errors.Is(context.Cause(streamCtx), errProjectBootstrapWatchdog) {
+			if watchdogActive && errors.Is(context.Cause(streamCtx), errProjectBootstrapWatchdog) {
 				timeoutErr := &projectBootstrapTimeoutError{
 					InvocationID: invocation.ID,
 					Timeout:      watchdog.Timeout,
