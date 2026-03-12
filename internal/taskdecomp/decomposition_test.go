@@ -416,6 +416,26 @@ func TestPrepareQueueDecompositionRejectsOversizedGeneratedChild(t *testing.T) {
 	}
 }
 
+func TestValidateBoundedTaskSizeRejectsEnumeratedStrategyDefinitionTask(t *testing.T) {
+	title := "Define the 5 content pillars with detailed descriptions: (1) Ethics & the Internet, (2) Parenting in a Digital World, (3) AI/Orchestration & Technical Deep-Dives, (4) Thought Leadership / Industry Commentary, (5) Photography Archive"
+	description := title
+
+	err := validateBoundedTaskSize(title, &description)
+	if !errors.Is(err, ErrBoundedTaskTooLarge) {
+		t.Fatalf("validateBoundedTaskSize err = %v, want ErrBoundedTaskTooLarge", err)
+	}
+}
+
+func TestValidateBoundedTaskSizeRejectsBrandNarrativeStrategyTask(t *testing.T) {
+	title := "Define the overarching brand narrative that ties the content pillars together and positions Sam.blog for speaking invitations, consulting inquiries, and premium job offers"
+	description := title
+
+	err := validateBoundedTaskSize(title, &description)
+	if !errors.Is(err, ErrBoundedTaskTooLarge) {
+		t.Fatalf("validateBoundedTaskSize err = %v, want ErrBoundedTaskTooLarge", err)
+	}
+}
+
 func TestPrepareQueueDecompositionAutoAppliesForPhotographyArchiveWorkstream(t *testing.T) {
 	description := strings.Join([]string{
 		"ORCHESTRATION PARENT - do not execute directly.",

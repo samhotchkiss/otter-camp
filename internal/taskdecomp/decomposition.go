@@ -28,6 +28,7 @@ var (
 	leadingTaskActionPattern     = regexp.MustCompile(`(?i)^(?:use|visit|navigate|discover|identify|build|rebuild|create|design|define|draft|write|produce|compile|research|collect|implement|migrate|import|validate|review|compare|synthesize|map|prepare|develop|generate|outline|audit|document|wire|configure|run|test|scrape|store|rewrite|establish|include)\b`)
 	labelledTaskPattern          = regexp.MustCompile(`(?i)^(?:ws\d+(?:\.\d+[a-z]?)?|template\s+\d+|option\s+\d+|phase\s+\d+|wave\s+\d+|task\s+\d+)[:\-]`)
 	timingOnlyPattern            = regexp.MustCompile(`(?i)^~?\s*\d+\s*(?:-|to\s+)?\d*\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b(?:[[:punct:]\s].*)?$`)
+	enumMarkerPattern            = regexp.MustCompile(`\(\d+\)`)
 	toolHeavySignals             = []string{
 		"api",
 		"cli",
@@ -61,6 +62,7 @@ var (
 		"pillar",
 		"pillars",
 		"positioning",
+		"narrative",
 		"strategy",
 	}
 )
@@ -819,6 +821,15 @@ func estimateTaskMinutes(title string, description *string) (int, int) {
 	}
 	if strings.Count(text, " and ") >= 2 || strings.Count(text, " plus ") >= 2 {
 		estimatedMinutes += 10
+	}
+	if strings.Contains(text, "detailed descriptions") {
+		estimatedMinutes += 10
+	}
+	if strings.Contains(text, "brand narrative") {
+		estimatedMinutes += 10
+	}
+	if matches := len(enumMarkerPattern.FindAllString(text, -1)); matches >= 3 {
+		estimatedMinutes += matches * 5
 	}
 	if containsAny(text, broadScopeSignals) && !isBoundedSectionDraft {
 		estimatedMinutes += 15
