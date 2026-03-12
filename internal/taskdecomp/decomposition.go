@@ -511,10 +511,13 @@ func extractDeliverables(description string) []string {
 	candidates := make([]string, 0)
 
 	// Prefer explicit list-like authoring first.
-	for _, line := range strings.Split(description, "\n") {
-		item := cleanSegment(line)
-		if item != "" {
-			candidates = append(candidates, item)
+	lines := strings.Split(description, "\n")
+	if len(lines) > 1 {
+		for _, line := range lines {
+			item := cleanSegment(line)
+			if item != "" {
+				candidates = append(candidates, item)
+			}
 		}
 	}
 	if len(candidates) < 2 {
@@ -669,6 +672,16 @@ func cleanSegment(raw string) string {
 		item = strings.TrimPrefix(item, ".")
 		item = strings.TrimPrefix(item, ")")
 		item = strings.TrimSpace(item)
+	}
+	lower := strings.ToLower(item)
+	for _, prefix := range []string{"assigned to ", "blocked on ", "agent:", "wave:"} {
+		if strings.HasPrefix(lower, prefix) {
+			return ""
+		}
+	}
+	if strings.HasPrefix(lower, "parent workstream:") {
+		item = strings.TrimSpace(item[len("parent workstream:"):])
+		lower = strings.ToLower(item)
 	}
 	if len(item) < 10 {
 		return ""

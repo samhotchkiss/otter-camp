@@ -156,6 +156,21 @@ func TestExtractDeliverablesSupportsSemicolonsSentenceSplitAndMixedFormats(t *te
 	}
 }
 
+func TestExtractDeliverablesIgnoresPlanningOnlySentences(t *testing.T) {
+	description := "Parent workstream: Scrape ALL existing blog posts from technonymous.org, preserving post body text, publish dates, categories, tags, and all metadata. Store in the Sam.blog git repo as Markdown with YAML frontmatter for clean migration into the new site. Assigned to Riku (Content Migration Specialist). Blocked on WS3 for pillar alignment."
+
+	items := extractDeliverables(description)
+	if len(items) != 2 {
+		t.Fatalf("extractDeliverables len = %d, want 2 executable deliverables", len(items))
+	}
+	if items[0] != "Scrape ALL existing blog posts from technonymous.org, preserving post body text, publish dates, categories, tags, and all metadata" {
+		t.Fatalf("items[0] = %q, want parent workstream prefix stripped", items[0])
+	}
+	if items[1] != "Store in the Sam.blog git repo as Markdown with YAML frontmatter for clean migration into the new site" {
+		t.Fatalf("items[1] = %q, want executable storage deliverable", items[1])
+	}
+}
+
 func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
