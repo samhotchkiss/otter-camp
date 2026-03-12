@@ -2359,9 +2359,16 @@ func TestReactionFeedbackNoLinkedMemories(t *testing.T) {
 
 func TestContinuationTurnOnContextCompressed(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
+	var secondAssembleHistoryStart *uuid.UUID
 	fixture.assembler.results = []assembleResult{
 		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
 		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call == 2 && input.HistoryStartID != nil {
+			copied := *input.HistoryStartID
+			secondAssembleHistoryStart = &copied
+		}
 	}
 	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
 		if req.Purpose == "continuation_summary" {
@@ -2392,6 +2399,9 @@ func TestContinuationTurnOnContextCompressed(t *testing.T) {
 	}
 	if *first.CycleID != *second.CycleID {
 		t.Fatalf("continuation cycle id mismatch: %s != %s", *first.CycleID, *second.CycleID)
+	}
+	if secondAssembleHistoryStart == nil || *secondAssembleHistoryStart == uuid.Nil {
+		t.Fatal("second assemble HistoryStartID is nil, want continuation summary to become history root")
 	}
 }
 

@@ -3526,8 +3526,12 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	if summary == "" {
 		summary = "Continuation summary unavailable."
 	}
-	_, err = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Continuation summary] "+summary)
-	return err
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Continuation summary] "+summary)
+	if err != nil {
+		return err
+	}
+	rt.historyStartID = &message.ID
+	return nil
 }
 
 func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *turnRuntime) (bool, error) {
