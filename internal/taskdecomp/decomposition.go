@@ -25,6 +25,7 @@ var (
 	enumeratedBatchTitlePattern = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build)\s+\d+\b`)
 	enumeratedActionCountPattern = regexp.MustCompile(`(?i)^(generate|create|draft|write|produce|compile|research|collect|design|build)\s+(\d+)\s+(.+)$`)
 	actionVerbPattern          = regexp.MustCompile(`^(?:generate|create|draft|write|produce|compile|research|collect|design|build)\b`)
+	timingOnlyPattern          = regexp.MustCompile(`(?i)^~?\s*\d+\s*(?:-|to\s+)?\d*\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b(?:[[:punct:]\s].*)?$`)
 	toolHeavySignals = []string{
 		"api",
 		"cli",
@@ -706,6 +707,9 @@ cleanedPrefixes:
 	if strings.HasPrefix(lower, "parent workstream:") {
 		item = strings.TrimSpace(item[len("parent workstream:"):])
 		lower = strings.ToLower(item)
+	}
+	if timingOnlyPattern.MatchString(lower) {
+		return ""
 	}
 	if len(item) < 10 {
 		return ""

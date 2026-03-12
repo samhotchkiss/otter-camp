@@ -183,6 +183,26 @@ func TestExtractDeliverablesIgnoresTaskMetadataLines(t *testing.T) {
 	}
 }
 
+func TestExtractDeliverablesIgnoresBareTimingNotes(t *testing.T) {
+	description := strings.Join([]string{
+		"Use the browser to visit technonymous.org",
+		"Navigate the site's archive pages, category pages, and any pagination to build a complete index of every blog post URL",
+		"Validate completeness by checking multiple navigation paths (archives by date, by category, sitemap if available)",
+		"~30 min, browser-heavy.",
+		"~60 min, browser-heavy.",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	if len(items) != 3 {
+		t.Fatalf("extractDeliverables len = %d, want 3 executable deliverables", len(items))
+	}
+	for _, item := range items {
+		if strings.Contains(item, "~30 min") || strings.Contains(item, "~60 min") {
+			t.Fatalf("timing note leaked into deliverables: %q", item)
+		}
+	}
+}
+
 func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
