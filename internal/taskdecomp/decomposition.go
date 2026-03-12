@@ -509,6 +509,7 @@ func ApplyQueueDecompositionMode(existing json.RawMessage, mode string) json.Raw
 }
 
 func extractDeliverables(description string) []string {
+	description = strings.ReplaceAll(description, "\\n", "\n")
 	candidates := make([]string, 0)
 
 	// Prefer explicit list-like authoring first.
@@ -568,6 +569,9 @@ func expandCompoundDeliverable(item string) []string {
 	if trimmed == "" {
 		return nil
 	}
+	if expanded := expandMarkdownEnumeratedBlock(trimmed); len(expanded) > 0 {
+		return expanded
+	}
 	if expanded := expandDefineList(trimmed); len(expanded) > 0 {
 		return expanded
 	}
@@ -578,6 +582,25 @@ func expandCompoundDeliverable(item string) []string {
 		return expanded
 	}
 	return []string{trimmed}
+}
+
+func expandMarkdownEnumeratedBlock(item string) []string {
+	if !strings.Contains(item, "\n") {
+		return nil
+	}
+	lines := strings.Split(item, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		cleaned := cleanSegment(line)
+		if cleaned == "" {
+			continue
+		}
+		out = append(out, cleaned)
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
 }
 
 func expandDefineList(item string) []string {
@@ -824,6 +847,8 @@ cleanedPrefixes:
 		item = strings.TrimPrefix(item, ")")
 		item = strings.TrimSpace(item)
 	}
+	item = strings.ReplaceAll(item, "**", "")
+	item = strings.ReplaceAll(item, "`", "")
 	lower := strings.ToLower(item)
 	for _, prefix := range []string{
 		"assigned to ",
@@ -839,6 +864,7 @@ cleanedPrefixes:
 		"estimated time:**",
 		"depends on:",
 		"dependency:",
+		"save to ",
 	} {
 		if strings.HasPrefix(lower, prefix) {
 			return ""
@@ -854,6 +880,9 @@ cleanedPrefixes:
 		lower = strings.ToLower(item)
 	}
 	if timingOnlyPattern.MatchString(lower) {
+		return ""
+	}
+	if strings.HasSuffix(item, ":") {
 		return ""
 	}
 	if len(item) < 10 {

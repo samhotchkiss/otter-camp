@@ -369,6 +369,21 @@ func TestExtractDeliverablesIgnoresInstructionOnlyRequirementLines(t *testing.T)
 	}
 }
 
+func TestExtractDeliverablesSplitsMarkdownEnumeratedDesignDirections(t *testing.T) {
+	description := "Four distinctly different design directions:\\n\\n7. **Card-Based Dashboard** — Content organized as cards/tiles, modern SaaS-inspired, scannable\\n8. **Storytelling Scroll** — Single long-scroll narrative page, parallax-like, immersive\\n9. **News/Commentary** — Op-ed publication style, NYT/Atlantic-inspired, authority-first\\n10. **Hybrid Creative** — Blends photography portfolio with essay archive, creative agency feel\\n\\nSave to `templates/` directory"
+
+	got := extractDeliverables(description)
+	want := []string{
+		"Card-Based Dashboard — Content organized as cards/tiles, modern SaaS-inspired, scannable",
+		"Storytelling Scroll — Single long-scroll narrative page, parallax-like, immersive",
+		"News/Commentary — Op-ed publication style, NYT/Atlantic-inspired, authority-first",
+		"Hybrid Creative — Blends photography portfolio with essay archive, creative agency feel",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", got, want)
+	}
+}
+
 func TestParseDecompositionReferences(t *testing.T) {
 	parentID := uuid.New()
 	childID := uuid.New()
