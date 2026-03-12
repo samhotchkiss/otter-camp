@@ -589,6 +589,26 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 	if err != nil {
 		return err
 	}
+	now := e.now().UTC()
+	bootstrapState := projectBootstrapStateFromMetadata(restartSession.Metadata)
+	bootstrapState.Status = projectBootstrapStatusActive
+	bootstrapState.CurrentPhase = "kickoff_handoff"
+	bootstrapState.InitialMessageID = projectBootstrapWorkflowMessageID(restartMessage).String()
+	bootstrapState.LastTurnID = ""
+	bootstrapState.AutoTurnCount = 0
+	bootstrapState.StartedAt = &now
+	bootstrapState.UpdatedAt = &now
+	bootstrapState.CompletedAt = nil
+	bootstrapState.FailedAt = nil
+	bootstrapState.FailureCategory = ""
+	bootstrapState.FailureClass = ""
+	bootstrapState.FailurePhase = ""
+	bootstrapState.FailureReason = ""
+	bootstrapState.ProviderFailureClass = ""
+	bootstrapState.ProviderFailureReason = ""
+	if err := e.updateProjectBootstrapState(ctx, restartSession, bootstrapState); err != nil {
+		return err
+	}
 	var targetAgentID *uuid.UUID
 	if loriID, loriErr := e.resolveLoriStarterID(ctx, created.OrganizationID); loriErr == nil && loriID != uuid.Nil {
 		targetAgentID = &loriID

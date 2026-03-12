@@ -8831,6 +8831,10 @@ func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t 
 	if restartedSession.ID == projectSession.ID {
 		t.Fatal("expected clean bootstrap restart to use a fresh project session")
 	}
+	restartedBootstrapState := projectBootstrapStateFromMetadata(restartedSession.Metadata)
+	if restartedBootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("restarted session bootstrap status = %q, want %q", restartedBootstrapState.Status, projectBootstrapStatusActive)
+	}
 	restartedMessages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, restartedSession.ID)
 	if err != nil {
 		t.Fatalf("ListBySession restarted session messages: %v", err)
@@ -8844,6 +8848,9 @@ func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t 
 	}
 	if restartPrompt == "" {
 		t.Fatal("expected canonical restart prompt message on the fresh bootstrap session")
+	}
+	if restartedBootstrapState.InitialMessageID != restartedMessages[0].ID.String() {
+		t.Fatalf("restarted session bootstrap initial_message_id = %q, want %q", restartedBootstrapState.InitialMessageID, restartedMessages[0].ID.String())
 	}
 
 	restartJobID, restartPayload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, restartedSession.ID)
