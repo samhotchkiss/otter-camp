@@ -273,6 +273,24 @@ func TestExtractDeliverablesIgnoresBareEstPrefixTimingNotes(t *testing.T) {
 	}
 }
 
+func TestExtractDeliverablesIgnoresExplanatoryCompanionSentences(t *testing.T) {
+	description := strings.Join([]string{
+		"Use the browser to navigate technonymous.org",
+		"This is the foundation for all subsequent scraping tasks.",
+		"Build HTML templates 1-3 for Sam.blog",
+		"Each is a self-contained HTML file with embedded CSS.",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Use the browser to navigate technonymous.org",
+		"Build HTML templates 1-3 for Sam.blog",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
 func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",

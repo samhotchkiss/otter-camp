@@ -556,6 +556,17 @@ func extractDeliverables(description string) []string {
 }
 
 func isInstructionOnlyDeliverable(normalized string) bool {
+	for _, prefix := range []string{
+		"this is ",
+		"this task ",
+		"these are ",
+		"each is ",
+		"each should ",
+	} {
+		if strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
 	if !(strings.HasPrefix(normalized, "each ") || strings.HasPrefix(normalized, "every ")) {
 		return false
 	}
