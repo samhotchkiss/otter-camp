@@ -3333,6 +3333,26 @@ func (e *TurnEngine) ensureProjectKickoffHandoff(ctx context.Context, rt *turnRu
 	if err != nil {
 		return err
 	}
+	now := e.now().UTC()
+	state := projectBootstrapStateFromMetadata(projectSession.Metadata)
+	state.Status = projectBootstrapStatusActive
+	state.CurrentPhase = "kickoff_handoff"
+	state.InitialMessageID = projectBootstrapWorkflowMessageID(handoff).String()
+	state.LastTurnID = ""
+	state.AutoTurnCount = 0
+	state.StartedAt = &now
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = nil
+	state.FailureCategory = ""
+	state.FailureClass = ""
+	state.FailurePhase = ""
+	state.FailureReason = ""
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
+	if err := e.updateProjectBootstrapState(ctx, projectSession, state); err != nil {
+		return err
+	}
 	if loriID == uuid.Nil {
 		return nil
 	}

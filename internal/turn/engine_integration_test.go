@@ -11379,6 +11379,17 @@ func TestTurnEngineIntegrationBackfillsMissingProjectKickoffHandoffAfterProjectC
 		!strings.Contains(strings.ToLower(handoff.Content), "content strategy") {
 		t.Fatalf("synthetic handoff missing originating request context: %q", handoff.Content)
 	}
+	storedProjectSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedProjectSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusActive)
+	}
+	if bootstrapState.InitialMessageID != handoff.ID.String() {
+		t.Fatalf("bootstrap initial_message_id = %q, want %q", bootstrapState.InitialMessageID, handoff.ID.String())
+	}
 
 	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
 		t.Fatalf("runnable project kickoff jobs = %d, want 1", jobs)
