@@ -11954,6 +11954,119 @@ func TestTurnEngineIntegrationKickoffSummaryCarriesOriginatingWorkstreams(t *tes
 	}
 }
 
+func TestTurnEngineIntegrationKickoffBlocksFollowOnToolsAfterProjectCreate(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	request := "Create Sam.blog with workstreams for imported legacy posts, design options, content strategy, and photography archive migration."
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateContent(ctx, fixture.userMessage.ID, request); err != nil {
+		t.Fatalf("UpdateContent originating user request: %v", err)
+	}
+	fixture.engine.assembler = &sessionHistoryAssembler{messages: repo.NewChatMessageRepo(fixture.pool)}
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "project.create", Tier: "tier1"},
+		{Name: "browser.open", Tier: "tier1"},
+	}}
+
+	projectSlug := "sam-blog-kickoff-guard"
+	dispatched := make([]string, 0, 2)
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = append(dispatched, call.ID)
+		if call.ID != "create-1" {
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Error:      "unexpected_tool_call",
+			}, nil
+		}
+		project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+		project.Slug = projectSlug
+		project.DisplayName = "Sam.blog"
+		updatedProject, err := repo.NewProjectRepo(fixture.pool).Update(ctx, project)
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"project": map[string]any{
+					"id":   updatedProject.ID,
+					"slug": projectSlug,
+					"name": "Sam.blog",
+				},
+			},
+		}, nil
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "create-1", Name: "project.create", Tier: "tier1", Arguments: map[string]any{
+					"name": "Sam.blog",
+					"slug": projectSlug,
+				}},
+			}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "browser-1", Name: "browser.open", Tier: "tier1", Arguments: map[string]any{
+					"url": "https://technonymous.org",
+				}},
+			}}, nil
+		default:
+			promptText := strings.Builder{}
+			for _, message := range req.Prompt.Messages {
+				promptText.WriteString(strings.ToLower(strings.TrimSpace(message.Content)))
+				promptText.WriteString("\n")
+			}
+			promptBlob := promptText.String()
+			if !strings.Contains(promptBlob, "kickoff handoff requirement") {
+				t.Fatalf("prompt missing kickoff handoff requirement: %q", promptBlob)
+			}
+			if !strings.Contains(promptBlob, "handoff-only") {
+				t.Fatalf("prompt missing handoff-only guard feedback: %q", promptBlob)
+			}
+			return ModelResponse{Content: "Handoff to Lori: imported legacy posts, design options, content strategy, and photography archive migration."}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if strings.Join(dispatched, ",") != "create-1" {
+		t.Fatalf("dispatched tool calls = %v, want only project.create", dispatched)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	hasBlockedFollowOn := false
+	finalAssistant := ""
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") &&
+			message.ToolCallID != nil &&
+			*message.ToolCallID == "browser-1" &&
+			strings.Contains(strings.ToLower(message.Content), "handoff-only") {
+			hasBlockedFollowOn = true
+		}
+		if strings.EqualFold(strings.TrimSpace(message.Role), "assistant") &&
+			strings.EqualFold(strings.TrimSpace(message.Status), "final") {
+			finalAssistant = strings.TrimSpace(message.Content)
+		}
+	}
+	if !hasBlockedFollowOn {
+		t.Fatal("missing blocked follow-on kickoff tool_result")
+	}
+	if !strings.Contains(strings.ToLower(finalAssistant), "handoff to lori") {
+		t.Fatalf("final assistant message = %q, want Lori handoff summary", finalAssistant)
+	}
+}
+
 func TestTurnEngineIntegrationBackfillsMissingProjectKickoffHandoffAfterProjectCreate(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
