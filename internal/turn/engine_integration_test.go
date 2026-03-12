@@ -1088,6 +1088,129 @@ func TestTurnEngineIntegrationAsyncExecutionSessionRetryAttemptIsDistinctFromDup
 	}
 }
 
+func TestTurnEngineIntegrationRecoveredClaimedAgentTurnDoesNotSilentlyAcceptLeakedInProgressTurn(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	assignedAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, assignedAgent.ID)
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "recover this stale turn",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	turnRecord, _, err := fixture.engine.turns.CreateForMessageAttempt(ctx, taskSession.ID, assignedAgent.ID, userMessage.ID, 1)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt retry: %v", err)
+	}
+	startedTurn, started, err := fixture.engine.startInboundMessageTurn(ctx, turnRecord)
+	if err != nil {
+		t.Fatalf("startInboundMessageTurn retry: %v", err)
+	}
+	if !started {
+		t.Fatal("expected retry turn to start")
+	}
+
+	worker := jobqueue.New(fixture.pool, nil, jobqueue.Config{})
+	jobID, err := worker.Enqueue(ctx, nil, AgentTurnJobType, defaultAgentTurnJobPriority, AgentTurnPayload{
+		SessionID:  taskSession.ID,
+		MessageID:  userMessage.ID,
+		RetryCount: 1,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueue recovered claimed job: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'integration-worker',
+		    claimed_at = now() - interval '10 minutes',
+		    attempts = 2,
+		    updated_at = now()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("mark job claimed/recovered: %v", err)
+	}
+
+	var payload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&payload); err != nil {
+		t.Fatalf("load claimed job payload: %v", err)
+	}
+
+	claimedJob := jobqueue.Job{
+		ID:      jobID,
+		JobType: AgentTurnJobType,
+		Payload: payload,
+		Status:  "claimed",
+	}
+
+	if err := fixture.engine.HandleTurnJob(ctx, claimedJob); err != nil {
+		t.Fatalf("HandleTurnJob recovered stale turn: %v", err)
+	}
+
+	storedTurn, err := repo.NewChatTurnRepo(fixture.pool).GetByID(ctx, startedTurn.ID)
+	if err != nil {
+		t.Fatalf("GetByID stale turn: %v", err)
+	}
+	if storedTurn.Status != "failed" {
+		t.Fatalf("stale turn status = %s, want failed", storedTurn.Status)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID session: %v", err)
+	}
+	if storedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil after stale-turn recovery", *storedSession.CurrentTurnID)
+	}
+
+	var retryCount int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = $1
+		  AND status = 'pending'
+		  AND payload->>'session_id' = $2
+		  AND payload->>'message_id' = $3
+		  AND payload->>'retry_count' = '2'
+	`, AgentTurnJobType, taskSession.ID.String(), userMessage.ID.String()).Scan(&retryCount); err != nil {
+		t.Fatalf("count queued recovery retry: %v", err)
+	}
+	if retryCount != 1 {
+		t.Fatalf("pending retry_count=2 jobs = %d, want 1", retryCount)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	if !containsSystemMessage(messages, "[Recovered stale in-progress turn after claimed job recovery - retrying in a fresh turn.]") {
+		t.Fatal("missing recovered stale-turn system message")
+	}
+}
+
 func TestTurnEngineIntegrationRepeatedMalformedFileWritePayloadBlocksTask(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

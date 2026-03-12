@@ -2901,6 +2901,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return err
 	}
 	if !shouldRun {
+		if recovered, recoverErr := e.recoverRetriedAgentTurnLeak(ctx, session, messageID, agentID, retryCount, currentJobID, turn); recoverErr != nil {
+			return recoverErr
+		} else if recovered {
+			return nil
+		}
 		return nil
 	}
 	if retryCount > 0 {
@@ -2982,6 +2987,70 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return pauseErr
 	}
 	return err
+}
+
+func (e *TurnEngine) recoverRetriedAgentTurnLeak(
+	ctx context.Context,
+	session *chat.ChatSession,
+	messageID, agentID uuid.UUID,
+	retryCount int,
+	currentJobID *uuid.UUID,
+	turn *chat.ChatTurn,
+) (bool, error) {
+	if e == nil || e.pool == nil || e.chat == nil || e.enqueuer == nil || session == nil || turn == nil {
+		return false, nil
+	}
+	if currentJobID == nil || *currentJobID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(turn.Status), "in_progress") {
+		return false, nil
+	}
+
+	attempts, err := e.agentTurnJobAttempts(ctx, *currentJobID)
+	if err != nil {
+		return false, err
+	}
+	if attempts <= 1 {
+		return false, nil
+	}
+
+	failureReason := "recovered claimed agent_turn found prior turn still in_progress; marking stale turn failed and scheduling a fresh retry"
+	_ = e.chat.FailTurn(ctx, turn.ID, failureReason)
+	_, _ = e.appendSystemMessage(ctx, turn.ID, session.ID, "[Recovered stale in-progress turn after claimed job recovery - retrying in a fresh turn.]")
+
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  messageID,
+		RetryCount: retryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextAgentID := agentID
+		nextPayload.AgentID = &nextAgentID
+	}
+	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, nil); err != nil {
+		return false, fmt.Errorf("enqueue recovered stale-turn retry: %w", err)
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) agentTurnJobAttempts(ctx context.Context, jobID uuid.UUID) (int, error) {
+	if e == nil || e.pool == nil || jobID == uuid.Nil {
+		return 0, nil
+	}
+	var attempts int
+	if err := e.pool.QueryRow(ctx, `
+		SELECT attempts
+		FROM job_queue
+		WHERE id = $1
+		  AND job_type = $2
+	`, jobID, AgentTurnJobType).Scan(&attempts); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return attempts, nil
 }
 
 func (e *TurnEngine) ensureTurnRunExitInvariant(ctx context.Context, rt *turnRuntime) error {
@@ -7314,7 +7383,7 @@ func (e *TurnEngine) callMainModel(
 			streamCtx, cancelWatchdog = context.WithTimeoutCause(ctx, remaining, errAsyncTurnWatchdog)
 		}
 
-			response, callErr := e.models.StreamComplete(streamCtx, ModelRequest{
+		response, callErr := e.models.StreamComplete(streamCtx, ModelRequest{
 			OrganizationID: rt.session.OrganizationID,
 			SessionID:      rt.session.ID,
 			TurnID:         rt.turn.ID,
@@ -7326,39 +7395,39 @@ func (e *TurnEngine) callMainModel(
 			Purpose:        "agent_turn",
 			Profile:        profile,
 			Prompt:         assembled,
-			}, func(token string) error {
-				if !streamingMarked {
-					if err := e.chat.UpdateMessageStatus(streamCtx, assistant.ID, "streaming", ""); err != nil {
-						return err
-					}
-					streamingMarked = true
+		}, func(token string) error {
+			if !streamingMarked {
+				if err := e.chat.UpdateMessageStatus(streamCtx, assistant.ID, "streaming", ""); err != nil {
+					return err
 				}
+				streamingMarked = true
+			}
 			if watchdogActive && watchdogStream.reset != nil {
 				watchdogStream.reset()
 			}
-				tokensSeen++
-				builder.WriteString(token)
-				if _, err := e.messages.UpdateContent(streamCtx, assistant.ID, builder.String()); err != nil {
-					return err
-				}
-				*chunkSeq++
-				if err := e.publishEvent(streamCtx, rt.session.OrganizationID, "chat.message.chunk", "agent", &rt.agent.ID, map[string]any{
-					"session_id": rt.session.ID,
-					"turn_id":    rt.turn.ID,
-					"message_id": assistant.ID,
+			tokensSeen++
+			builder.WriteString(token)
+			if _, err := e.messages.UpdateContent(streamCtx, assistant.ID, builder.String()); err != nil {
+				return err
+			}
+			*chunkSeq++
+			if err := e.publishEvent(streamCtx, rt.session.OrganizationID, "chat.message.chunk", "agent", &rt.agent.ID, map[string]any{
+				"session_id": rt.session.ID,
+				"turn_id":    rt.turn.ID,
+				"message_id": assistant.ID,
 				"delta":      token,
 				"sequence":   *chunkSeq,
 			}); err != nil {
 				return err
 			}
 
-				lastSteerPollChunks++
-				if lastSteerPollChunks >= chunkPollSteerEveryNChunks {
-					lastSteerPollChunks = 0
-					_, _ = e.findSteerMessages(streamCtx, rt.session.ID, rt.startedAt)
-				}
-				return nil
-			})
+			lastSteerPollChunks++
+			if lastSteerPollChunks >= chunkPollSteerEveryNChunks {
+				lastSteerPollChunks = 0
+				_, _ = e.findSteerMessages(streamCtx, rt.session.ID, rt.startedAt)
+			}
+			return nil
+		})
 		cancelWatchdog()
 
 		if callErr != nil {
