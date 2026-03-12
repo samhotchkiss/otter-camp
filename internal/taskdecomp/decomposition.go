@@ -698,7 +698,7 @@ func expandSynthesisList(item string) []string {
 }
 
 func splitLooseList(raw string) []string {
-	parts := strings.Split(raw, ",")
+	parts := splitTopLevelCommaList(raw)
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		trimmed := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(part), "."))
@@ -708,6 +708,32 @@ func splitLooseList(raw string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func splitTopLevelCommaList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := make([]string, 0, 4)
+	depth := 0
+	start := 0
+	for i, r := range raw {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, raw[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, raw[start:])
+	return parts
 }
 
 func validateBoundedTaskSize(title string, description *string) error {
@@ -857,6 +883,7 @@ cleanedPrefixes:
 		"assigned to:",
 		"blocked on ",
 		"agent:",
+		"est:",
 		"est. time:",
 		"est. time:**",
 		"target:",

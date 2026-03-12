@@ -237,6 +237,42 @@ func TestExtractDeliverablesIgnoresMarkdownDecoratedMetadataLines(t *testing.T) 
 	}
 }
 
+func TestExtractDeliverablesDoesNotSplitDefineListsInsideParentheses(t *testing.T) {
+	description := strings.Join([]string{
+		"Define color palette options (3-4 schemes that feel \"personal brand, not corporate\")",
+		"Define typography scale (heading sizes, body text, captions)",
+		"Define spacing scale",
+		"Define breakpoints",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Define color palette options (3-4 schemes that feel \"personal brand, not corporate\")",
+		"Define typography scale (heading sizes, body text, captions)",
+		"Define spacing scale",
+		"Define breakpoints",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
+func TestExtractDeliverablesIgnoresBareEstPrefixTimingNotes(t *testing.T) {
+	description := strings.Join([]string{
+		"Generate blog post concepts 1-10 (of 20). Each concept includes: title, pillar alignment, target audience, key angle/thesis, outline (3-5 sections), estimated word count, SEO keywords.",
+		"Est: ~25 min",
+		"Est: ~30 min",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	if len(items) != 1 {
+		t.Fatalf("extractDeliverables len = %d, want 1 executable deliverable", len(items))
+	}
+	if strings.Contains(strings.ToLower(items[0]), "est:") {
+		t.Fatalf("timing note leaked into deliverables: %q", items[0])
+	}
+}
+
 func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
