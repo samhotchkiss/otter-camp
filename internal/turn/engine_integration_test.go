@@ -9972,7 +9972,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationForNonRunnableFirst
 	}
 }
 
-func TestTurnEngineIntegrationProjectBootstrapMaxToolCallsDoesNotContinueAfterValidationFailure(t *testing.T) {
+func TestTurnEngineIntegrationProjectBootstrapMaxToolCallsContinuesAfterRecoverableValidationFailure(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
@@ -10048,8 +10048,8 @@ func TestTurnEngineIntegrationProjectBootstrapMaxToolCallsDoesNotContinueAfterVa
 	if err != nil {
 		t.Fatalf("shouldContinueMaxToolCalls: %v", err)
 	}
-	if shouldContinue {
-		t.Fatal("shouldContinueMaxToolCalls = true, want false after bootstrap validation failure")
+	if !shouldContinue {
+		t.Fatal("shouldContinueMaxToolCalls = false, want true for recoverable bootstrap validation failure")
 	}
 }
 

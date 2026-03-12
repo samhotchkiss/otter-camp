@@ -3811,7 +3811,14 @@ func (e *TurnEngine) shouldContinueMaxToolCalls(ctx context.Context, rt *turnRun
 				return false, err
 			}
 			if progress.ValidationFailed() {
-				return false, nil
+				switch strings.TrimSpace(progress.ValidationFailureClass) {
+				case projectBootstrapFailureCompoundParent, projectBootstrapFailureFirstWaveSize:
+					if !projectBootstrapSetupPersisted(progress) {
+						return false, nil
+					}
+				default:
+					return false, nil
+				}
 			}
 		}
 	}
