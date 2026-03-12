@@ -23,6 +23,7 @@ var ErrBoundedTaskTooLarge = errors.New("task exceeds bounded size policy and mu
 
 var (
 	enumeratedBatchTitlePattern = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build)\s+\d+\b`)
+	enumeratedActionCountPattern = regexp.MustCompile(`(?i)^(generate|create|draft|write|produce|compile|research|collect|design|build)\s+(\d+)\s+(.+)$`)
 	actionVerbPattern          = regexp.MustCompile(`^(?:generate|create|draft|write|produce|compile|research|collect|design|build)\b`)
 	toolHeavySignals = []string{
 		"api",
@@ -183,10 +184,55 @@ func inferTitleDeliverables(title string) []string {
 	if trimmed == "" {
 		return nil
 	}
+	if deliverables := inferEnumeratedBatchDeliverables(trimmed); len(deliverables) >= 2 {
+		return deliverables
+	}
 	if deliverables, ok := splitCompoundActionTitle(trimmed); ok {
 		return deliverables
 	}
 	return []string{trimmed, trimmed}
+}
+
+func inferEnumeratedBatchDeliverables(title string) []string {
+	matches := enumeratedActionCountPattern.FindStringSubmatch(strings.TrimSpace(title))
+	if len(matches) != 4 {
+		return nil
+	}
+	totalCount := atoiSafe(matches[2])
+	if totalCount < 2 {
+		return nil
+	}
+	verb := strings.Title(strings.TrimSpace(matches[1]))
+	object := trimEnumeratedScope(matches[3])
+	if object == "" {
+		object = strings.TrimSpace(matches[3])
+	}
+	if object == "" {
+		return nil
+	}
+	firstEnd := totalCount / 2
+	if firstEnd < 1 {
+		firstEnd = 1
+	}
+	if firstEnd >= totalCount {
+		firstEnd = totalCount - 1
+	}
+	secondStart := firstEnd + 1
+	return []string{
+		fmt.Sprintf("%s %s %d-%d", verb, object, 1, firstEnd),
+		fmt.Sprintf("%s %s %d-%d", verb, object, secondStart, totalCount),
+	}
+}
+
+func trimEnumeratedScope(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	lower := strings.ToLower(trimmed)
+	for _, marker := range []string{" across ", " for ", " covering "} {
+		if idx := strings.Index(lower, marker); idx >= 0 {
+			return strings.TrimSpace(trimmed[:idx])
+		}
+	}
+	return trimmed
 }
 
 func splitCompoundActionTitle(title string) ([]string, bool) {
@@ -225,11 +271,13 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 	sourceDescription := strings.TrimSpace(deref(input.Description))
 	childDrafts := make([]ChildDraft, 0, len(plan.ChildDeliverables))
 	for idx, deliverable := range plan.ChildDeliverables {
-		childTitle := strings.TrimSpace(input.Title)
+		childTitle := strings.TrimSpace(deliverable)
+		if childTitle == "" {
+			childTitle = strings.TrimSpace(input.Title)
+		}
 		if childTitle == "" {
 			childTitle = input.ParentTaskID.String()
 		}
-		childTitle = fmt.Sprintf("%s (Workstream %d)", childTitle, idx+2)
 
 		childMetadataRaw, err := json.Marshal(map[string]any{
 			"decomposition_parent_task_id": input.ParentTaskID.String(),
@@ -243,6 +291,11 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 			Description: strPtr(strings.TrimSpace(deliverable)),
 			Metadata:    normalizeJSON(childMetadataRaw),
 		})
+	}
+	for _, childDraft := range childDrafts {
+		if sizingErr := validateBoundedTaskSize(childDraft.Title, childDraft.Description); sizingErr != nil {
+			return QueueDecomposition{}, sizingErr
+		}
 	}
 
 	return QueueDecomposition{
@@ -621,6 +674,17 @@ func cleanSegment(raw string) string {
 		return ""
 	}
 	return strings.TrimSpace(item)
+}
+
+func atoiSafe(raw string) int {
+	value := 0
+	for _, ch := range strings.TrimSpace(raw) {
+		if ch < '0' || ch > '9' {
+			return 0
+		}
+		value = value*10 + int(ch-'0')
+	}
+	return value
 }
 
 func deref(value *string) string {

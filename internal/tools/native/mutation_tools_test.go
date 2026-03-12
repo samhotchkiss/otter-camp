@@ -976,7 +976,7 @@ func TestTaskUpdateQueuedBroadEnumeratedTitleAutoDecomposesCompoundWork(t *testi
 	if _, ok := out["decomposition"]; !ok {
 		t.Fatalf("decomposition output missing for broad enumerated title: %v", out)
 	}
-	if tasks.task.Description == nil || !strings.Contains(*tasks.task.Description, "Generate 20 new blog post ideas across all pillars") {
+	if tasks.task.Description == nil || !strings.Contains(*tasks.task.Description, "Generate new blog post ideas 1-10") {
 		t.Fatalf("updated description = %v, want focused primary deliverable copied from title", tasks.task.Description)
 	}
 }

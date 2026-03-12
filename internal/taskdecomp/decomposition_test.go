@@ -47,6 +47,12 @@ func TestAnalyzeFlagsEnumeratedCompoundTitlesWithoutStructuredDescriptions(t *te
 	if plan.PrimaryDeliverable == "" {
 		t.Fatal("PrimaryDeliverable is empty, want non-empty")
 	}
+	if plan.PrimaryDeliverable != "Generate new blog post ideas 1-10" {
+		t.Fatalf("PrimaryDeliverable = %q, want numbered batch split", plan.PrimaryDeliverable)
+	}
+	if len(plan.ChildDeliverables) < 1 || plan.ChildDeliverables[0] != "Generate new blog post ideas 11-20" {
+		t.Fatalf("ChildDeliverables = %v, want first child to be second numbered batch", plan.ChildDeliverables)
+	}
 }
 
 func TestAnalyzeFlagsEnumeratedCompoundActionTitles(t *testing.T) {
@@ -196,6 +202,9 @@ func TestPrepareQueueDecompositionAutoAppliesForCompoundWorkWithoutExplicitMode(
 	if len(result.ChildDrafts) < 1 {
 		t.Fatalf("ChildDrafts len = %d, want >= 1", len(result.ChildDrafts))
 	}
+	if got := result.ChildDrafts[0].Title; got != "Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage." {
+		t.Fatalf("ChildDrafts[0].Title = %q, want deliverable-derived child title", got)
+	}
 }
 
 func TestPrepareQueueDecompositionRejectsOversizedUnsplittableWork(t *testing.T) {
@@ -209,6 +218,23 @@ func TestPrepareQueueDecompositionRejectsOversizedUnsplittableWork(t *testing.T)
 	})
 	if !errors.Is(err, ErrBoundedTaskTooLarge) {
 		t.Fatalf("PrepareQueueDecomposition err = %v, want ErrBoundedTaskTooLarge", err)
+	}
+}
+
+func TestPrepareQueueDecompositionRejectsOversizedGeneratedChild(t *testing.T) {
+	description := strings.Join([]string{
+		"- Establish voice guidelines consistent with Sam's existing Technonymous writing.",
+		"- Define cross-promotion and distribution strategy across all channels.",
+	}, "\n")
+
+	_, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "WS3: Develop Comprehensive Content Strategy",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if !errors.Is(err, ErrBoundedTaskTooLarge) {
+		t.Fatalf("PrepareQueueDecomposition err = %v, want ErrBoundedTaskTooLarge when generated child remains oversized", err)
 	}
 }
 
