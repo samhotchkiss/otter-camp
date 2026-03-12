@@ -2932,7 +2932,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 
 	err = e.runTurn(cancelCtx, runtime)
 	if err == nil || errors.Is(err, errTurnDeferred) || errors.Is(err, errTurnCancelled) || errors.Is(err, errTurnPaused) {
-		return nil
+		return e.ensureTurnRunExitInvariant(ctx, runtime)
 	}
 	var bootstrapTimeoutErr *projectBootstrapTimeoutError
 	if errors.As(err, &bootstrapTimeoutErr) {
@@ -2976,6 +2976,25 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return pauseErr
 	}
 	return err
+}
+
+func (e *TurnEngine) ensureTurnRunExitInvariant(ctx context.Context, rt *turnRuntime) error {
+	if e == nil || e.chat == nil || rt == nil || rt.turn == nil {
+		return nil
+	}
+	currentTurn, err := e.chat.GetTurn(ctx, rt.turn.ID)
+	if err != nil {
+		return err
+	}
+	rt.turn = currentTurn
+	if !strings.EqualFold(strings.TrimSpace(currentTurn.Status), "in_progress") {
+		return nil
+	}
+	stopReason := ""
+	if currentTurn.StopReason != nil {
+		stopReason = strings.TrimSpace(*currentTurn.StopReason)
+	}
+	return fmt.Errorf("turn leaked in_progress after run exit (session_id=%s turn_id=%s stop_reason=%s)", rt.session.ID, currentTurn.ID, stopReason)
 }
 
 func (e *TurnEngine) handleAsyncTurnWatchdogTimeout(ctx context.Context, rt *turnRuntime, timeoutErr *asyncTurnTimeoutError) (bool, error) {
@@ -3811,12 +3830,10 @@ func (e *TurnEngine) shouldContinueMaxToolCalls(ctx context.Context, rt *turnRun
 				return false, err
 			}
 			if progress.ValidationFailed() {
-				switch strings.TrimSpace(progress.ValidationFailureClass) {
-				case projectBootstrapFailureCompoundParent, projectBootstrapFailureFirstWaveSize:
-					if !projectBootstrapSetupPersisted(progress) {
-						return false, nil
-					}
-				default:
+				if !projectBootstrapRecoverableMaxToolCallFailure(progress) {
+					return false, nil
+				}
+				if !projectBootstrapSetupPersisted(progress) {
 					return false, nil
 				}
 			}
@@ -3827,6 +3844,17 @@ func (e *TurnEngine) shouldContinueMaxToolCalls(ctx context.Context, rt *turnRun
 		return false, err
 	}
 	return continuations < maxContinuationTurnDepth, nil
+}
+
+func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProgress) bool {
+	switch strings.TrimSpace(progress.ValidationFailureClass) {
+	case projectBootstrapFailureCompoundParent, projectBootstrapFailureFirstWaveSize:
+		return true
+	case projectBootstrapFailureFirstWaveExecution:
+		return strings.Contains(strings.ToLower(strings.TrimSpace(progress.ValidationFailureReason)), "bounded size policy")
+	default:
+		return false
+	}
 }
 
 func (e *TurnEngine) cycleContinuationCount(ctx context.Context, rt *turnRuntime) (int, error) {

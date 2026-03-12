@@ -2049,6 +2049,55 @@ func TestMaxToolCallsAsyncContinuation(t *testing.T) {
 	}
 }
 
+func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
+	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
+		ValidationFailureClass: projectBootstrapFailureCompoundParent,
+	}) {
+		t.Fatal("compound parent failure should be recoverable")
+	}
+	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
+		ValidationFailureClass: projectBootstrapFailureFirstWaveSize,
+	}) {
+		t.Fatal("first-wave size failure should be recoverable")
+	}
+	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "task exceeds bounded size policy (estimated 35 minutes > 30 minute limit): split the work",
+	}) {
+		t.Fatal("bounded-size first-wave execution failure should be recoverable")
+	}
+	if projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave",
+	}) {
+		t.Fatal("non-bounded first-wave execution failure should not be recoverable")
+	}
+}
+
+func TestEnsureTurnRunExitInvariantRejectsLeakedInProgressTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	turn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	rt := &turnRuntime{session: fixture.session, turn: turn}
+	if err := fixture.engine.ensureTurnRunExitInvariant(context.Background(), rt); err == nil {
+		t.Fatal("expected leaked in-progress turn invariant error")
+	}
+
+	if err := fixture.chat.CompleteTurn(context.Background(), turn.ID); err != nil {
+		t.Fatalf("CompleteTurn: %v", err)
+	}
+	if err := fixture.engine.ensureTurnRunExitInvariant(context.Background(), rt); err != nil {
+		t.Fatalf("ensureTurnRunExitInvariant completed turn: %v", err)
+	}
+}
+
 func TestMaxToolCallsContinuationDepthLimit(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.engine.maxToolCalls = 1
