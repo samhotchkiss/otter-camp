@@ -312,6 +312,28 @@ func TestExtractDeliverablesIgnoresCompanionInstructionAndSizingLines(t *testing
 	}
 }
 
+func TestExtractDeliverablesIgnoresDesignGuidanceAndProcessCompanionLines(t *testing.T) {
+	description := strings.Join([]string{
+		"Create a complete self-contained HTML template at templates/option-04-photo-forward/index.html",
+		"Visual-first aesthetic where photography drives the layout",
+		"Large image areas, gallery-style sections",
+		"Embedded CSS, responsive",
+		"Must include all standard sections with photography given prominence.",
+		"Save each as markdown with YAML frontmatter at content/migrated-posts/YYYY-MM-DD-slug.md",
+		"Commit in batches of 5-10 posts",
+		"Build migration manifest and validate completeness",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Create a complete self-contained HTML template at templates/option-04-photo-forward/index.html",
+		"Build migration manifest and validate completeness",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
 func TestPrepareQueueDecompositionSkipsWhenAlreadyDecomposed(t *testing.T) {
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",

@@ -563,13 +563,21 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		"each is ",
 		"each should ",
 		"commit to repo",
+		"commit in ",
+		"must include ",
 		"save as ",
+		"save each as ",
+		"embedded css",
+		"visual-first ",
 	} {
 		if strings.HasPrefix(normalized, prefix) {
 			return true
 		}
 	}
 	if strings.Contains(normalized, "up to 60 min") || strings.Contains(normalized, "up to 30 min") {
+		return true
+	}
+	if strings.Contains(normalized, "gallery-style") || strings.Contains(normalized, "given prominence") {
 		return true
 	}
 	if !(strings.HasPrefix(normalized, "each ") || strings.HasPrefix(normalized, "every ")) {
