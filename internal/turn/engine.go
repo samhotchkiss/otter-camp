@@ -3500,6 +3500,11 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	} else if resumed {
 		return nil
 	}
+	if resumed, err := e.appendProjectBootstrapResumeState(ctx, rt); err != nil {
+		return err
+	} else if resumed {
+		return nil
+	}
 
 	profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "continuation_summary", 0, false)
 	if err != nil {
@@ -3553,6 +3558,49 @@ func compactContinuationSummary(summary string) string {
 		return "Continuation summary unavailable."
 	}
 	return cut + "\n[Summary truncated]"
+}
+
+func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
+		return false, nil
+	}
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if !projectBootstrapStateActive(state) {
+		return false, nil
+	}
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapResumeStateMessage(state))
+	if err != nil {
+		return false, err
+	}
+	rt.historyStartID = &message.ID
+	return true, nil
+}
+
+func buildProjectBootstrapResumeStateMessage(state projectBootstrapState) string {
+	lines := []string{
+		"[Project bootstrap resume]",
+		"Resume the active project bootstrap workflow from the persisted state below.",
+	}
+	if phase := strings.TrimSpace(state.CurrentPhase); phase != "" {
+		lines = append(lines, "Current phase: "+phase)
+	}
+	lines = append(lines, fmt.Sprintf(
+		"Persisted counts: assignments=%d planned_tasks=%d flow_templates=%d first_wave_tasks=%d first_wave_promoted=%d first_wave_jobs=%d",
+		state.AssignmentCount,
+		state.PlannedTaskCount,
+		state.PlannedFlowTemplateCount,
+		state.FirstWaveTaskCount,
+		state.FirstWavePromotedCount,
+		state.FirstWaveJobCount,
+	))
+	if checkpoint := strings.TrimSpace(state.LastSuccessfulCheckpoint); checkpoint != "" {
+		lines = append(lines, "Last successful checkpoint: "+checkpoint)
+	}
+	lines = append(lines, "Continue bootstrap only. Finish staffing, bounded task decomposition, flow attachment, and first-wave selection/promotion. Do not restart the project or ask the user to restate the request.")
+	return strings.Join(lines, "\n")
 }
 
 func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *turnRuntime) (bool, error) {
