@@ -463,6 +463,19 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 			return nil
 		}
 	}
+	if existingRestart, ok, err := e.findAnyActiveBootstrapRestartProject(ctx, updatedProject.OrganizationID, updatedProject.ID); err != nil {
+		return err
+	} else if ok {
+		bundle.RestartProjectID = existingRestart.ID.String()
+		updatedProject.Settings, err = applyProjectBootstrapRestartBundle(updatedProject.Settings, bundle)
+		if err != nil {
+			return err
+		}
+		if _, err := projectRepo.Update(ctx, updatedProject); err != nil {
+			return err
+		}
+		return nil
+	}
 	plannedRetryAttempt := bundle.RetryAttemptCount + 1
 	if existingRestart, ok, err := e.findExistingBootstrapRestartProject(ctx, updatedProject.OrganizationID, updatedProject.ID, plannedRetryAttempt); err != nil {
 		return err
@@ -619,6 +632,27 @@ func (e *TurnEngine) findExistingBootstrapRestartProject(ctx context.Context, or
 			continue
 		}
 		if !strings.EqualFold(strings.TrimSpace(item.Status), "active") {
+			continue
+		}
+		return item, true, nil
+	}
+	return repo.Project{}, false, nil
+}
+
+func (e *TurnEngine) findAnyActiveBootstrapRestartProject(ctx context.Context, organizationID, sourceProjectID uuid.UUID) (repo.Project, bool, error) {
+	if e == nil || e.pool == nil || organizationID == uuid.Nil || sourceProjectID == uuid.Nil {
+		return repo.Project{}, false, nil
+	}
+	projects, err := repo.NewProjectRepo(e.pool).ListAll(ctx, organizationID)
+	if err != nil {
+		return repo.Project{}, false, err
+	}
+	for _, item := range projects {
+		if !strings.EqualFold(strings.TrimSpace(item.Status), "active") {
+			continue
+		}
+		bundle := projectBootstrapRestartBundleFromSettings(item.Settings)
+		if !strings.EqualFold(strings.TrimSpace(bundle.SourceProjectID), sourceProjectID.String()) {
 			continue
 		}
 		return item, true, nil
