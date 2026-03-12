@@ -22,13 +22,13 @@ const (
 var ErrBoundedTaskTooLarge = errors.New("task exceeds bounded size policy and must be split before queueing")
 
 var (
-	enumeratedBatchTitlePattern = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build)\s+\d+\b`)
+	enumeratedBatchTitlePattern  = regexp.MustCompile(`\b(?:generate|create|draft|write|produce|compile|research|collect|design|build)\s+\d+\b`)
 	enumeratedActionCountPattern = regexp.MustCompile(`(?i)^(generate|create|draft|write|produce|compile|research|collect|design|build)\s+(\d+)\s+(.+)$`)
-	actionVerbPattern          = regexp.MustCompile(`^(?:generate|create|draft|write|produce|compile|research|collect|design|build)\b`)
-	leadingTaskActionPattern   = regexp.MustCompile(`(?i)^(?:use|visit|navigate|discover|identify|build|rebuild|create|design|define|draft|write|produce|compile|research|collect|implement|migrate|import|validate|review|compare|synthesize|map|prepare|develop|generate|outline|audit|document|wire|configure|run|test|scrape|store|rewrite|establish|include)\b`)
-	labelledTaskPattern        = regexp.MustCompile(`(?i)^(?:ws\d+(?:\.\d+[a-z]?)?|template\s+\d+|option\s+\d+|phase\s+\d+|wave\s+\d+|task\s+\d+)[:\-]`)
-	timingOnlyPattern          = regexp.MustCompile(`(?i)^~?\s*\d+\s*(?:-|to\s+)?\d*\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b(?:[[:punct:]\s].*)?$`)
-	toolHeavySignals = []string{
+	actionVerbPattern            = regexp.MustCompile(`^(?:generate|create|draft|write|produce|compile|research|collect|design|build)\b`)
+	leadingTaskActionPattern     = regexp.MustCompile(`(?i)^(?:use|visit|navigate|discover|identify|build|rebuild|create|design|define|draft|write|produce|compile|research|collect|implement|migrate|import|validate|review|compare|synthesize|map|prepare|develop|generate|outline|audit|document|wire|configure|run|test|scrape|store|rewrite|establish|include)\b`)
+	labelledTaskPattern          = regexp.MustCompile(`(?i)^(?:ws\d+(?:\.\d+[a-z]?)?|template\s+\d+|option\s+\d+|phase\s+\d+|wave\s+\d+|task\s+\d+)[:\-]`)
+	timingOnlyPattern            = regexp.MustCompile(`(?i)^~?\s*\d+\s*(?:-|to\s+)?\d*\s*(?:min|mins|minute|minutes|hr|hrs|hour|hours)\b(?:[[:punct:]\s].*)?$`)
+	toolHeavySignals             = []string{
 		"api",
 		"cli",
 		"command",
@@ -272,8 +272,8 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 	}
 
 	sourceDescription := strings.TrimSpace(deref(input.Description))
-	childDrafts := make([]ChildDraft, 0, len(plan.ChildDeliverables))
-	for idx, deliverable := range plan.ChildDeliverables {
+	childDrafts := make([]ChildDraft, 0, len(plan.Deliverables))
+	for idx, deliverable := range plan.Deliverables {
 		childTitle := strings.TrimSpace(deliverable)
 		if childTitle == "" {
 			childTitle = strings.TrimSpace(input.Title)

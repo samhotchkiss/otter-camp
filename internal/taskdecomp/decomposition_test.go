@@ -380,8 +380,8 @@ func TestPrepareQueueDecompositionAutoAppliesForCompoundWorkWithoutExplicitMode(
 	if len(result.ChildDrafts) < 1 {
 		t.Fatalf("ChildDrafts len = %d, want >= 1", len(result.ChildDrafts))
 	}
-	if got := result.ChildDrafts[0].Title; got != "Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage." {
-		t.Fatalf("ChildDrafts[0].Title = %q, want deliverable-derived child title", got)
+	if got := result.ChildDrafts[0].Title; got != "Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping." {
+		t.Fatalf("ChildDrafts[0].Title = %q, want first validated persisted child title", got)
 	}
 }
 

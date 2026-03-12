@@ -4628,6 +4628,63 @@ func TestIntegrationParentTaskRepeatedDecompositionRequestReusesExistingChildren
 	}
 }
 
+func TestIntegrationParentTaskDecompositionDoesNotPersistOversizedPrimaryDeliverable(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Content Strategy",
+		Description:    stringPtr("Break content strategy work into bounded deliverables."),
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	title := "Create a 3-month editorial calendar for Sam.blog with posting cadence, topic assignments across pillars, seasonal/topical hooks, and a distribution plan (SEO, social amplification, newsletter)"
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          title,
+		"description":    title,
+	})
+	if err != nil {
+		t.Fatalf("task.create decomposed editorial calendar: %v", err)
+	}
+	if errText, ok := out["error"].(string); ok && strings.TrimSpace(errText) == "" {
+		t.Fatalf("task.create error = %q, want non-empty bounded-size explanation when decomposition cannot persist safely", errText)
+	}
+
+	projectTasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	childCount := 0
+	for _, projectTask := range projectTasks {
+		if taskdecomp.ParseParentTaskID(projectTask.Metadata) != parentTask.ID {
+			continue
+		}
+		childCount++
+		if projectTask.Title == title {
+			t.Fatalf("persisted oversized child title = %q, want decomposition to split before persistence", projectTask.Title)
+		}
+	}
+	if childCount != 0 {
+		t.Fatalf("project child count = %d, want 0 because oversized primary deliverable must not persist unchanged", childCount)
+	}
+}
+
 func TestIntegrationProjectSessionCreateAutoAddsAssignedProjectAgentsButNotStarterTrio(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

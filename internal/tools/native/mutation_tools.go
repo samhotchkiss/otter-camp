@@ -1339,21 +1339,21 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 }
 
 func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context, parentTask repo.ProjectTask, prepared taskdecomp.QueueDecomposition, actor executionActor) (map[string]any, error) {
-	childDrafts := make([]taskdecomp.ChildDraft, 0, len(prepared.Plan.Deliverables))
-	for idx, deliverable := range prepared.Plan.Deliverables {
-		trimmed := strings.TrimSpace(deliverable)
-		if trimmed == "" {
-			continue
-		}
-		description := trimmed
-		childDrafts = append(childDrafts, taskdecomp.ChildDraft{
-			Title:       trimmed,
-			Description: &description,
-			Metadata:    taskdecomp.ApplyChildMetadata(nil, parentTask.ID, idx+2),
-		})
-	}
+	childDrafts := append([]taskdecomp.ChildDraft(nil), prepared.ChildDrafts...)
 	if len(childDrafts) == 0 {
-		childDrafts = prepared.ChildDrafts
+		childDrafts = make([]taskdecomp.ChildDraft, 0, len(prepared.Plan.Deliverables))
+		for idx, deliverable := range prepared.Plan.Deliverables {
+			trimmed := strings.TrimSpace(deliverable)
+			if trimmed == "" {
+				continue
+			}
+			description := trimmed
+			childDrafts = append(childDrafts, taskdecomp.ChildDraft{
+				Title:       trimmed,
+				Description: &description,
+				Metadata:    taskdecomp.ApplyChildMetadata(nil, parentTask.ID, idx+2),
+			})
+		}
 	}
 
 	existingChildren := map[int]repo.ProjectTask{}
