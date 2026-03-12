@@ -36,6 +36,7 @@ import (
 )
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
+var bootstrapWorkstreamTitlePattern = regexp.MustCompile(`(?i)^(ws\d+|workstream\s+\d+)\s*:`)
 
 var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
 
@@ -104,6 +105,10 @@ func normalizeSlug(value string) string {
 		return "item-" + strings.ToLower(uuid.NewString()[:8])
 	}
 	return trimmed
+}
+
+func isBootstrapWorkstreamTitle(title string) bool {
+	return bootstrapWorkstreamTitlePattern.MatchString(strings.TrimSpace(title))
 }
 
 func readStringSlice(input map[string]any, key string) []string {
@@ -1184,6 +1189,12 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	if err != nil {
 		return nil, err
 	}
+	if parentTask == nil && resolvedFlowTemplateID == nil {
+		resolvedFlowTemplateID, err = e.resolveBootstrapWorkstreamFlowTemplate(ctx, scope, projectID, title)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if parentTask != nil && resolvedFlowTemplateID == nil && parentTask.FlowTemplateID != nil && *parentTask.FlowTemplateID != uuid.Nil {
 		inheritedFlowTemplateID := *parentTask.FlowTemplateID
 		resolvedFlowTemplateID = &inheritedFlowTemplateID
@@ -1336,6 +1347,57 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		response["planning"] = reviewPlanningResponse(planning)
 	}
 	return response, nil
+}
+
+func (e *NativeToolExecutor) resolveBootstrapWorkstreamFlowTemplate(ctx context.Context, scope workspaceScope, projectID uuid.UUID, title string) (*uuid.UUID, error) {
+	if e.tasks == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil {
+		return nil, nil
+	}
+	if scope.projectID == nil || *scope.projectID != projectID {
+		return nil, nil
+	}
+	if !isBootstrapWorkstreamTitle(title) {
+		return nil, nil
+	}
+
+	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	bootstrapActive := false
+	for _, taskRecord := range projectTasks {
+		metadata := metadataObject(taskRecord.Metadata)
+		setupTask, _ := metadata["bootstrap_setup_task"].(bool)
+		if !setupTask {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
+			bootstrapActive = true
+			break
+		}
+	}
+	if !bootstrapActive {
+		return nil, nil
+	}
+
+	var template repo.FlowTemplate
+	for _, slug := range []string{taskplan.InternalReviewTemplate, taskplan.ReviewRefinementTemplate} {
+		template, err = e.resolveSystemFlowTemplate(ctx, scope.organizationID, projectID, slug)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, repo.ErrNotFound) {
+			return nil, err
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := e.validateExecutableFlowTemplate(ctx, template.ID); err != nil {
+		return nil, err
+	}
+	templateID := template.ID
+	return &templateID, nil
 }
 
 func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context, parentTask repo.ProjectTask, prepared taskdecomp.QueueDecomposition, actor executionActor) (map[string]any, error) {
