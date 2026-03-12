@@ -4076,7 +4076,14 @@ func (e *TurnEngine) handleProjectBootstrapChildTaskFailure(ctx context.Context,
 	// children on a follow-up tool call. The hard gate remains the normal
 	// end-of-turn bootstrap validation, which will archive only if the
 	// persisted task tree is still structurally invalid after the turn ends.
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapBoundedChildRetryMessage()); err != nil {
+		return false, err
+	}
 	return false, nil
+}
+
+func buildProjectBootstrapBoundedChildRetryMessage() string {
+	return "[Bootstrap recovery: a parent follow-on task creation attempt was rejected because the child work was still too broad. Recover within this same turn by creating bounded executable child tasks directly under the parent. Do not queue or execute the broad parent task. Do not pivot to standalone tasks or workaround subtasks. Split the requested work into smaller reviewable child tasks with narrow titles and create those children under the parent.]"
 }
 
 func projectBootstrapToolResultsContainChildBoundednessFailure(results []ToolResult) bool {
