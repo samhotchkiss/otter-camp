@@ -10627,6 +10627,124 @@ func TestTurnEngineIntegrationProjectBootstrapWatchdogFailsHungInFlightTurnAndRe
 	)
 }
 
+func TestTurnEngineIntegrationAsyncOrgTurnFailsHungModelStreamAtDurationLimit(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	asyncSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "organization",
+		ScopeID:        fixture.org.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession async org: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, asyncSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant async org: %v", err)
+	}
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  asyncSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "Create a new Sam.blog project from scratch.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage async org: %v", err)
+	}
+
+	fixture.engine.asyncMaxDuration = 40 * time.Millisecond
+	streamStarted := make(chan struct{}, 1)
+	fixture.model.streamFn = func(ctx context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		select {
+		case streamStarted <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return ModelResponse{}, ctx.Err()
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- fixture.engine.handleUserMessage(ctx, asyncSession.ID, userMessage.ID, &fixture.agent.ID, 0, nil)
+	}()
+
+	select {
+	case <-streamStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for async org stream to start")
+	}
+
+	var runErr error
+	select {
+	case runErr = <-errCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for async org turn watchdog failure")
+	}
+	if runErr == nil || !strings.Contains(runErr.Error(), "turn duration limit reached") {
+		t.Fatalf("handleUserMessage err = %v, want turn duration limit reached", runErr)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, asyncSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID async org session: %v", err)
+	}
+	if storedSession.CurrentTurnID != nil {
+		t.Fatalf("async org current_turn_id = %v, want nil after timeout failure", storedSession.CurrentTurnID)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, asyncSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession async org turns: %v", err)
+	}
+	failedTurn := turns[len(turns)-1]
+	if failedTurn.Status != "failed" {
+		t.Fatalf("async org turn status = %q, want failed", failedTurn.Status)
+	}
+	if failedTurn.StopReason == nil || *failedTurn.StopReason != stopReasonMaxDuration {
+		t.Fatalf("async org turn stop_reason = %v, want %q", failedTurn.StopReason, stopReasonMaxDuration)
+	}
+	if failedTurn.ErrorMessage == nil || !strings.Contains(*failedTurn.ErrorMessage, "turn duration limit reached") {
+		t.Fatalf("async org turn error_message = %v, want timeout detail", failedTurn.ErrorMessage)
+	}
+
+	invocations, err := repo.NewModelInvocationRepo(fixture.pool).ListBySession(ctx, fixture.org.ID, asyncSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession async org invocations: %v", err)
+	}
+	if len(invocations) == 0 {
+		t.Fatal("expected model invocation for async org timeout")
+	}
+	if invocations[0].Status != "failed" {
+		t.Fatalf("async org invocation status = %q, want failed", invocations[0].Status)
+	}
+	if invocations[0].ErrorCode == nil || *invocations[0].ErrorCode != "turn_timeout" {
+		t.Fatalf("async org invocation error_code = %v, want turn_timeout", invocations[0].ErrorCode)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, asyncSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession async org messages: %v", err)
+	}
+	var failedAssistant, timeoutSystem bool
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "assistant") && strings.EqualFold(strings.TrimSpace(message.Status), "failed") {
+			failedAssistant = true
+		}
+		if strings.EqualFold(strings.TrimSpace(message.Role), "system") && strings.Contains(message.Content, "Turn failed: turn duration limit reached") {
+			timeoutSystem = true
+		}
+	}
+	if !failedAssistant {
+		t.Fatal("expected failed assistant placeholder after async org timeout")
+	}
+	if !timeoutSystem {
+		t.Fatal("expected timeout system message after async org timeout")
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapWatchdogFailsHungTurnAfterPartialSetup(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

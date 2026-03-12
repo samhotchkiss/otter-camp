@@ -130,6 +130,7 @@ var (
 	errTurnCancelled            = errors.New("turn cancelled")
 	errTurnPaused               = errors.New("turn paused")
 	errProjectBootstrapWatchdog = errors.New("project bootstrap watchdog timeout")
+	errAsyncTurnWatchdog        = errors.New("async turn watchdog timeout")
 )
 
 type AgentTurnPayload struct {
@@ -1674,6 +1675,22 @@ func (e *projectBootstrapTimeoutError) Is(target error) bool {
 	return target == errProjectBootstrapWatchdog
 }
 
+type asyncTurnTimeoutError struct {
+	InvocationID uuid.UUID
+	Timeout      time.Duration
+}
+
+func (e *asyncTurnTimeoutError) Error() string {
+	if e == nil || e.Timeout <= 0 {
+		return "turn duration limit reached while waiting for model response"
+	}
+	return fmt.Sprintf("turn duration limit reached after %s while waiting for model response", e.Timeout.String())
+}
+
+func (e *asyncTurnTimeoutError) Is(target error) bool {
+	return target == errAsyncTurnWatchdog
+}
+
 func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID uuid.UUID) (projectBootstrapProgress, error) {
 	progress := projectBootstrapProgress{ValidationStatus: projectBootstrapValidationPending}
 	if e == nil || e.pool == nil || projectID == uuid.Nil {
@@ -2868,6 +2885,16 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 			return nil
 		}
 	}
+	var asyncTimeoutErr *asyncTurnTimeoutError
+	if errors.As(err, &asyncTimeoutErr) {
+		handled, handleErr := e.handleAsyncTurnWatchdogTimeout(ctx, runtime, asyncTimeoutErr)
+		if handleErr != nil {
+			return handleErr
+		}
+		if handled {
+			return err
+		}
+	}
 	if errors.Is(err, ErrRateLimited) {
 		handled, handleErr := e.handleRateLimitedTurnFailure(ctx, runtime, messageID, routedAgentID, retryCount, err)
 		if handleErr != nil {
@@ -2890,6 +2917,26 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return pauseErr
 	}
 	return err
+}
+
+func (e *TurnEngine) handleAsyncTurnWatchdogTimeout(ctx context.Context, rt *turnRuntime, timeoutErr *asyncTurnTimeoutError) (bool, error) {
+	if rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	rt.stopReason = stopReasonMaxDuration
+	if err := e.recordStopReason(ctx, rt); err != nil {
+		return true, err
+	}
+	if failErr := e.chat.FailTurn(ctx, rt.turn.ID, timeoutErr.Error()); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
+		return true, failErr
+	}
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, fmt.Sprintf("[Turn failed: %s]", timeoutErr.Error())); err != nil {
+		return true, err
+	}
+	if err := e.pauseProjectAfterExecutionFailure(ctx, rt, timeoutErr); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) handleProjectBootstrapPreflight(ctx context.Context, rt *turnRuntime) (bool, error) {
@@ -6446,6 +6493,21 @@ func (e *TurnEngine) projectBootstrapStreamWatchdog(ctx context.Context, rt *tur
 	}, true, nil
 }
 
+func (e *TurnEngine) asyncTurnStreamWatchdog(rt *turnRuntime) (time.Duration, bool) {
+	if e == nil || rt == nil || rt.session == nil || e.asyncMaxDuration <= 0 {
+		return 0, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return 0, false
+	}
+	elapsed := e.now().UTC().Sub(rt.startedAt)
+	remaining := e.asyncMaxDuration - elapsed
+	if remaining <= 0 {
+		remaining = time.Millisecond
+	}
+	return remaining, true
+}
+
 func buildRecoveryContinuationDepthReason(detail string) string {
 	trimmed := strings.TrimSpace(detail)
 	if trimmed == "" {
@@ -6760,6 +6822,7 @@ func (e *TurnEngine) callMainModel(
 		builder := strings.Builder{}
 		lastSteerPollChunks := 0
 		streamCtx := ctx
+		asyncWatchdogTimeout := time.Duration(0)
 		watchdog, watchdogActive, err := e.projectBootstrapStreamWatchdog(ctx, rt)
 		if err != nil {
 			return ModelResponse{}, err
@@ -6767,6 +6830,9 @@ func (e *TurnEngine) callMainModel(
 		cancelWatchdog := func() {}
 		if watchdogActive {
 			streamCtx, cancelWatchdog = context.WithTimeoutCause(ctx, watchdog.Remaining, errProjectBootstrapWatchdog)
+		} else if remaining, ok := e.asyncTurnStreamWatchdog(rt); ok {
+			asyncWatchdogTimeout = e.asyncMaxDuration
+			streamCtx, cancelWatchdog = context.WithTimeoutCause(ctx, remaining, errAsyncTurnWatchdog)
 		}
 
 		response, callErr := e.models.StreamComplete(streamCtx, ModelRequest{
@@ -6823,6 +6889,18 @@ func (e *TurnEngine) callMainModel(
 					timeoutErr.Progress = progress
 				}
 				errorCode := stringPtr("bootstrap_watchdog_timeout")
+				errorText := stringPtr(timeoutErr.Error())
+				_, _ = e.invocations.UpdateStatus(ctx, invocation.ID, "failed", errorCode, errorText)
+				_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", timeoutErr.Error())
+				return ModelResponse{}, timeoutErr
+			}
+			if asyncWatchdogTimeout > 0 && errors.Is(callErr, context.DeadlineExceeded) && errors.Is(context.Cause(streamCtx), errAsyncTurnWatchdog) {
+				timeoutErr := &asyncTurnTimeoutError{
+					InvocationID: invocation.ID,
+					Timeout:      asyncWatchdogTimeout,
+				}
+				rt.stopReason = stopReasonMaxDuration
+				errorCode := stringPtr("turn_timeout")
 				errorText := stringPtr(timeoutErr.Error())
 				_, _ = e.invocations.UpdateStatus(ctx, invocation.ID, "failed", errorCode, errorText)
 				_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", timeoutErr.Error())
