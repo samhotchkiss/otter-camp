@@ -18,6 +18,9 @@ type QueueOptions struct {
 	Router        ConnectionSelector
 	Executor      GatewayExecutor
 	Health        *HealthChecker
+	HealthStore   interface {
+		SetHealthStatus(ctx context.Context, id uuid.UUID, healthStatus string) (repo.ProviderConnection, error)
+	}
 	RetryRecorder InvocationRetryRecorder
 
 	Timeouts     map[PriorityTier]time.Duration
@@ -31,6 +34,9 @@ type PriorityQueue struct {
 	router        ConnectionSelector
 	executor      GatewayExecutor
 	health        *HealthChecker
+	healthStore   interface {
+		SetHealthStatus(ctx context.Context, id uuid.UUID, healthStatus string) (repo.ProviderConnection, error)
+	}
 	retryRecorder InvocationRetryRecorder
 	timeouts      map[PriorityTier]time.Duration
 	pollInterval  time.Duration
@@ -104,6 +110,7 @@ func NewPriorityQueue(opts QueueOptions) (*PriorityQueue, error) {
 		router:        opts.Router,
 		executor:      opts.Executor,
 		health:        opts.Health,
+		healthStore:   opts.HealthStore,
 		retryRecorder: opts.RetryRecorder,
 		timeouts:      timeouts,
 		pollInterval:  opts.PollInterval,
@@ -223,6 +230,7 @@ func (q *PriorityQueue) executeWithRetry(ctx context.Context, req GatewayRequest
 		response, err := q.executor.Execute(ctx, req, connection)
 		if err == nil {
 			q.health.RecordSuccess(connection.ID)
+			q.persistConnectionHealth(ctx, connection.ID, string(HealthStateHealthy))
 			response.ConnectionID = connection.ID
 			response.ProviderID = connection.ProviderID
 			response.AttemptNumber = attempt
@@ -230,6 +238,7 @@ func (q *PriorityQueue) executeWithRetry(ctx context.Context, req GatewayRequest
 		}
 
 		q.health.RecordFailure(connection.ID, err)
+		q.persistConnectionHealth(ctx, connection.ID, string(q.health.GetState(connection.ID)))
 		if !isRetryableGatewayError(err) || attempt >= 3 {
 			return GatewayResponse{}, err
 		}
@@ -258,6 +267,13 @@ func (q *PriorityQueue) withJitter(base time.Duration) time.Duration {
 
 	scale := 0.8 + rand.Float64()*0.4
 	return time.Duration(float64(base) * scale)
+}
+
+func (q *PriorityQueue) persistConnectionHealth(ctx context.Context, connectionID uuid.UUID, healthStatus string) {
+	if q == nil || q.healthStore == nil || connectionID == uuid.Nil || healthStatus == "" {
+		return
+	}
+	_, _ = q.healthStore.SetHealthStatus(ctx, connectionID, healthStatus)
 }
 
 func (q *PriorityQueue) nextDispatchable() (*queueEntry, func(), context.Context, context.CancelFunc) {

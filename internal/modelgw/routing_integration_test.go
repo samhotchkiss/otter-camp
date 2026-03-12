@@ -154,6 +154,7 @@ func TestRouting_HealthAwareSelection(t *testing.T) {
 		Router:       router,
 		Executor:     providerHTTPExecutor{client: &http.Client{Timeout: 2 * time.Second}},
 		Health:       health,
+		HealthStore:  connectionRepo,
 		PollInterval: 2 * time.Millisecond,
 		Sleep:        func(context.Context, time.Duration) error { return nil },
 	})
@@ -467,6 +468,72 @@ func TestRouting_HealthState_DegradedTransition(t *testing.T) {
 	}
 	if response.ConnectionID != fixture.Connection.ID {
 		t.Fatalf("selected connection after recovery = %s, want %s", response.ConnectionID, fixture.Connection.ID)
+	}
+}
+
+func TestPriorityQueue_PersistsHealthyStatusAfterSuccessfulRecovery(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	org := mustCreateOrg(t, pool, "queue-persists-recovery")
+	connRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+
+	serverURL := testutil.MockProviderServer(t, testutil.MockProviderFixture{
+		Handlers: []testutil.MockHandler{{StatusCode: http.StatusOK, Body: `{"ok":true}`}},
+	})
+	provider := testutil.MakeProvider(t, pool, testutil.MakeProviderOptions{
+		OrganizationID:      org.ID,
+		ProviderAPIBaseURL:  serverURL,
+		ConnectionName:      "recovery-connection",
+		FailoverPriority:    1,
+		MaxConcurrent:       1,
+		ProviderSlug:        "queue-recovery-" + uuid.NewString()[:8],
+		ProviderDisplayName: "Queue Recovery",
+	})
+	if _, err := connRepo.SetHealthStatus(ctx, provider.Connection.ID, string(gateway.HealthStateUnavailable)); err != nil {
+		t.Fatalf("SetHealthStatus unavailable: %v", err)
+	}
+
+	profile := testutil.MakeModelProfile(t, pool, org.ID, provider.Provider.ID)
+	health := gateway.NewHealthChecker()
+	health.MarkDegraded(provider.Connection.ID)
+
+	queue, err := gateway.NewPriorityQueue(gateway.QueueOptions{
+		Concurrency: gateway.NewConcurrencyManager(1, map[uuid.UUID]int{
+			provider.Connection.ID: 1,
+		}),
+		Router:       gateway.NewRouter(profileRepo, connRepo, health),
+		Executor:     providerHTTPExecutor{client: &http.Client{Timeout: 2 * time.Second}},
+		Health:       health,
+		HealthStore:  connRepo,
+		PollInterval: 2 * time.Millisecond,
+		Sleep:        func(context.Context, time.Duration) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("NewPriorityQueue: %v", err)
+	}
+	defer queue.Close()
+
+	response, err := queue.Enqueue(ctx, gateway.GatewayRequest{
+		OrganizationID:    org.ID,
+		ProfileID:         profile.LogicalProfileID,
+		InvocationPurpose: "agent_turn",
+		Priority:          gateway.PrioritySyncInteractive,
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if response.ConnectionID != provider.Connection.ID {
+		t.Fatalf("response connection = %s, want %s", response.ConnectionID, provider.Connection.ID)
+	}
+
+	stored, err := connRepo.GetByID(ctx, provider.Connection.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.HealthStatus != string(gateway.HealthStateHealthy) {
+		t.Fatalf("health_status = %q, want %q", stored.HealthStatus, gateway.HealthStateHealthy)
 	}
 }
 
