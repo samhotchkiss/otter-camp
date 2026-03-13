@@ -4124,6 +4124,11 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			return err
 		}
 	}
+	if rt != nil && rt.historyStartID == nil && e.projectBootstrapAutoContinueMessage(ctx, rt.initialMessageID) {
+		if _, err := e.appendProjectBootstrapResumeState(ctx, rt); err != nil {
+			return err
+		}
+	}
 
 	continuations := 0
 	listeningChecked := false

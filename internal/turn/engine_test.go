@@ -3282,6 +3282,96 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	}
 }
 
+func TestBootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+
+	pmID := uuid.New()
+	workerID := uuid.New()
+	metadata, err := json.Marshal(map[string]any{
+		projectBootstrapMetadataKey: map[string]any{
+			"status":                      projectBootstrapStatusActive,
+			"current_phase":               projectBootstrapCheckpointFirstWaveExecutions,
+			"last_successful_checkpoint":  projectBootstrapCheckpointFirstWaveSelected,
+			"assignment_count":            2,
+			"planned_task_count":          9,
+			"planned_flow_template_count": 1,
+			"first_wave_task_count":       4,
+			"validation_status":           projectBootstrapValidationPassed,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal metadata: %v", err)
+	}
+	fixture.session.Metadata = metadata
+	fixture.chat.session.Metadata = metadata
+
+	messageMetadata, err := json.Marshal(map[string]any{
+		"source":                       projectBootstrapSource,
+		"auto_continue":                true,
+		"bootstrap_initial_message_id": fixture.userMessageID.String(),
+	})
+	if err != nil {
+		t.Fatalf("Marshal message metadata: %v", err)
+	}
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, messageMetadata); err != nil {
+		t.Fatalf("UpdateMetadata user message: %v", err)
+	}
+
+	baseAgents := fixture.engine.agents.(*fakeAgentRepo)
+	fixture.engine.agents = &fakeAgentRepo{
+		agent:   baseAgents.agent,
+		starter: append([]repo.Agent(nil), baseAgents.starter...),
+		items: map[uuid.UUID]repo.Agent{
+			pmID:     {ID: pmID, DisplayName: "Sam.blog PM", AgentClass: "staff", AgentType: "pm"},
+			workerID: {ID: workerID, DisplayName: "Maya Ortiz", AgentClass: "staff", AgentType: "worker"},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: fixture.session.ScopeID, AgentID: pmID, Role: "project_manager", IsActive: true},
+			{ProjectID: fixture.session.ScopeID, AgentID: workerID, Role: "worker", IsActive: true},
+		},
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawResume bool
+	var sawAction bool
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
+			sawResume = true
+			if !strings.Contains(msg.Content, "Active project id: "+fixture.session.ScopeID.String()) {
+				t.Fatalf("resume message = %q, want project id line", msg.Content)
+			}
+		}
+		if strings.Contains(msg.Content, "Continue the active project bootstrap from the persisted state above.") {
+			sawAction = true
+		}
+	}
+	if !sawResume {
+		t.Fatal("project bootstrap resume message missing for bootstrap auto-continue turn")
+	}
+	if !sawAction {
+		t.Fatal("bootstrap resume action prompt missing for bootstrap auto-continue turn")
+	}
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+}
+
 func TestBuildProjectBootstrapResumeStateMessageUsesCompactRosterForLateFirstWaveState(t *testing.T) {
 	state := projectBootstrapState{
 		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
@@ -3594,6 +3684,7 @@ func TestContinuationTurnAppendsCompactBootstrapActionPromptAfterCompression(t *
 	}
 	var secondHistoryStart *uuid.UUID
 	var actionMessageID uuid.UUID
+	var resumeMessageID uuid.UUID
 	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
 		if call == 2 && input.HistoryStartID != nil {
 			copied := *input.HistoryStartID
@@ -3624,9 +3715,7 @@ func TestContinuationTurnAppendsCompactBootstrapActionPromptAfterCompression(t *
 	}
 	for _, msg := range messages {
 		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
-			if *secondHistoryStart != msg.ID {
-				t.Fatalf("second assemble HistoryStartID = %s, want bootstrap resume message %s", *secondHistoryStart, msg.ID)
-			}
+			resumeMessageID = msg.ID
 			if !strings.Contains(msg.Content, "Active project id: "+fixture.session.ScopeID.String()) {
 				t.Fatalf("resume message = %q, want project id line", msg.Content)
 			}
@@ -3650,6 +3739,12 @@ func TestContinuationTurnAppendsCompactBootstrapActionPromptAfterCompression(t *
 	}
 	if actionMessageID == uuid.Nil {
 		t.Fatal("compact bootstrap action prompt missing after compressed auto-continuation")
+	}
+	if resumeMessageID == uuid.Nil {
+		t.Fatal("bootstrap resume message missing after compressed auto-continuation")
+	}
+	if *secondHistoryStart != resumeMessageID && *secondHistoryStart != actionMessageID {
+		t.Fatalf("second assemble HistoryStartID = %s, want bootstrap resume %s or action prompt %s", *secondHistoryStart, resumeMessageID, actionMessageID)
 	}
 }
 
