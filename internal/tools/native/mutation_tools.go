@@ -1500,6 +1500,7 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 			Title:               childDraft.Title,
 			Description:         childDraft.Description,
 			WorkStatus:          "draft",
+			AssignedAgentID:     parentTask.AssignedAgentID,
 			FlowTemplateID:      parentTask.FlowTemplateID,
 			RequiresHumanReview: parentTask.RequiresHumanReview,
 			Priority:            parentTask.Priority,
@@ -1525,6 +1526,7 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 				ProjectID:           parentTask.ProjectID,
 				Title:               childDraft.Title,
 				Description:         childDraft.Description,
+				AssignedAgentID:     parentTask.AssignedAgentID,
 				FlowTemplateID:      parentTask.FlowTemplateID,
 				Priority:            parentTask.Priority,
 				CreatedByType:       actor.createdByType,
@@ -1546,6 +1548,7 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 				Title:               childDraft.Title,
 				Description:         childDraft.Description,
 				WorkStatus:          "draft",
+				AssignedAgentID:     parentTask.AssignedAgentID,
 				FlowTemplateID:      parentTask.FlowTemplateID,
 				RequiresHumanReview: parentTask.RequiresHumanReview,
 				Priority:            parentTask.Priority,
@@ -2891,7 +2894,7 @@ func (e *NativeToolExecutor) repairTaskIfNeeded(ctx context.Context, existing re
 		changed = true
 	}
 
-	if strings.EqualFold(strings.TrimSpace(updated.WorkStatus), "draft") {
+		if strings.EqualFold(strings.TrimSpace(updated.WorkStatus), "draft") {
 		if desiredTitle := strings.TrimSpace(desired.Title); desiredTitle != "" &&
 			normalizeComparableText(updated.Title) != normalizeComparableText(desiredTitle) {
 			updated.Title = desiredTitle
@@ -2917,6 +2920,11 @@ func (e *NativeToolExecutor) repairTaskIfNeeded(ctx context.Context, existing re
 		}
 		if !hasMeaningfulJSON(updated.Metadata) && hasMeaningfulJSON(desired.Metadata) {
 			updated.Metadata = append(json.RawMessage(nil), desired.Metadata...)
+			changed = true
+		}
+		if updated.AssignedAgentID == nil && desired.AssignedAgentID != nil && *desired.AssignedAgentID != uuid.Nil {
+			assignedAgentID := *desired.AssignedAgentID
+			updated.AssignedAgentID = &assignedAgentID
 			changed = true
 		}
 	}
@@ -2986,6 +2994,7 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 			Title:               childDraft.Title,
 			Description:         childDraft.Description,
 			WorkStatus:          "draft",
+			AssignedAgentID:     taskRecord.AssignedAgentID,
 			FlowTemplateID:      taskRecord.FlowTemplateID,
 			RequiresHumanReview: taskRecord.RequiresHumanReview,
 			Priority:            taskRecord.Priority,
@@ -3014,6 +3023,7 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 				ProjectID:           taskRecord.ProjectID,
 				Title:               childDraft.Title,
 				Description:         childDraft.Description,
+				AssignedAgentID:     taskRecord.AssignedAgentID,
 				FlowTemplateID:      taskRecord.FlowTemplateID,
 				Priority:            taskRecord.Priority,
 				CreatedByType:       actor.createdByType,
@@ -3037,6 +3047,7 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 				Title:               childDraft.Title,
 				Description:         childDraft.Description,
 				WorkStatus:          "draft",
+				AssignedAgentID:     taskRecord.AssignedAgentID,
 				FlowTemplateID:      taskRecord.FlowTemplateID,
 				RequiresHumanReview: taskRecord.RequiresHumanReview,
 				Priority:            taskRecord.Priority,

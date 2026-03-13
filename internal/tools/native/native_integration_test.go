@@ -4893,7 +4893,17 @@ func TestIntegrationParentTaskRepeatedDecompositionReusesCanonicalChildren(t *te
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
 	agent := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
 	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        assignee.ID,
+		ProjectID:      project.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &agent.ID,
+	}); err != nil {
+		t.Fatalf("assign project worker: %v", err)
+	}
 
 	taskRepo := repo.NewProjectTaskRepo(pool)
 	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
@@ -4902,6 +4912,7 @@ func TestIntegrationParentTaskRepeatedDecompositionReusesCanonicalChildren(t *te
 		Title:          "Generate 20 new blog post ideas",
 		Description:    stringPtr("Break the ideas into bounded child tasks that can be reviewed independently."),
 		WorkStatus:     "review",
+		AssignedAgentID: &assignee.ID,
 		FlowTemplateID: &template.ID,
 		CreatedByType:  "agent",
 		CreatedByID:    &agent.ID,
@@ -4973,6 +4984,9 @@ func TestIntegrationParentTaskRepeatedDecompositionReusesCanonicalChildren(t *te
 			continue
 		}
 		childCount++
+		if projectTask.AssignedAgentID == nil || *projectTask.AssignedAgentID != assignee.ID {
+			t.Fatalf("child task %s assigned_agent_id = %v, want %s", projectTask.ID, projectTask.AssignedAgentID, assignee.ID)
+		}
 	}
 	if childCount != len(firstIDsAny) {
 		t.Fatalf("project child count after repeated decomposition = %d, want %d", childCount, len(firstIDsAny))

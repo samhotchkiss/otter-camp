@@ -1147,6 +1147,7 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 	taskID := uuid.New()
 	projectID := uuid.New()
 	flowTemplateID := uuid.New()
+	assignedAgentID := uuid.New()
 	description := strings.Join([]string{
 		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
 		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
@@ -1165,6 +1166,7 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 			Title:          "Blog migration epic",
 			Description:    &description,
 			WorkStatus:     "draft",
+			AssignedAgentID: &assignedAgentID,
 			FlowTemplateID: &flowTemplateID,
 			Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 		},
@@ -1176,6 +1178,7 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 				Title:          "Blog migration epic",
 				Description:    &description,
 				WorkStatus:     "draft",
+				AssignedAgentID: &assignedAgentID,
 				FlowTemplateID: &flowTemplateID,
 				Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 			},
@@ -1237,14 +1240,23 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 	if got := tasks.listByProjectTasks[1].Title; got != "Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping." {
 		t.Fatalf("first reused child title = %q, want repaired first deliverable", got)
 	}
+	if tasks.listByProjectTasks[1].AssignedAgentID == nil || *tasks.listByProjectTasks[1].AssignedAgentID != assignedAgentID {
+		t.Fatalf("first reused child assigned_agent_id = %v, want %s", tasks.listByProjectTasks[1].AssignedAgentID, assignedAgentID)
+	}
 	if got := tasks.listByProjectTasks[2].Title; got != "Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage." {
 		t.Fatalf("second reused child title = %q, want repaired second deliverable", got)
+	}
+	if tasks.listByProjectTasks[2].AssignedAgentID == nil || *tasks.listByProjectTasks[2].AssignedAgentID != assignedAgentID {
+		t.Fatalf("second reused child assigned_agent_id = %v, want %s", tasks.listByProjectTasks[2].AssignedAgentID, assignedAgentID)
 	}
 	if len(tasks.createdTasks) != 1 {
 		t.Fatalf("createdTasks len = %d, want 1", len(tasks.createdTasks))
 	}
 	if got := tasks.createdTasks[0].Title; got != "Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots." {
 		t.Fatalf("created child title = %q, want repaired third deliverable", got)
+	}
+	if tasks.createdTasks[0].AssignedAgentID == nil || *tasks.createdTasks[0].AssignedAgentID != assignedAgentID {
+		t.Fatalf("created child assigned_agent_id = %v, want %s", tasks.createdTasks[0].AssignedAgentID, assignedAgentID)
 	}
 
 	decomp, ok := out["decomposition"].(map[string]any)
