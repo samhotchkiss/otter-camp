@@ -7090,6 +7090,9 @@ func TestTurnEngineIntegrationProjectBootstrapBlocksFirstWaveUntilBootstrapGateC
 	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
 		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
 	}
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2 without a post-persist closing stream once bootstrap completes", modelCalls)
+	}
 
 	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
 	enableTurnEngineUserMessageEnqueue(t, fixture)

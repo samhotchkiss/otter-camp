@@ -5511,6 +5511,13 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if blocked {
 			return true, nil
 		}
+		stopAfterBootstrapPersist, err := e.shouldStopAfterBootstrapPersist(ctx, rt, results)
+		if err != nil {
+			return false, err
+		}
+		if stopAfterBootstrapPersist {
+			return true, nil
+		}
 		if rt.toolCallsUsed >= toolBudget {
 			rt.stopReason = stopReasonMaxToolCalls
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
@@ -5596,6 +5603,13 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if blocked {
 			return true, nil
 		}
+		stopAfterBootstrapPersist, err := e.shouldStopAfterBootstrapPersist(ctx, rt, []ToolResult{result})
+		if err != nil {
+			return false, err
+		}
+		if stopAfterBootstrapPersist {
+			return true, nil
+		}
 		if rt.toolCallsUsed >= toolBudget {
 			rt.stopReason = stopReasonMaxToolCalls
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
@@ -5604,6 +5618,44 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	}
 
 	return false, nil
+}
+
+func (e *TurnEngine) shouldStopAfterBootstrapPersist(ctx context.Context, rt *turnRuntime, results []ToolResult) (bool, error) {
+	if e == nil || e.projects == nil || rt == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	if !projectBootstrapStateActive(projectBootstrapStateFromMetadata(rt.session.Metadata)) {
+		return false, nil
+	}
+	if !toolResultsContainNamedTool(results, "bootstrap.setup.persist") {
+		return false, nil
+	}
+
+	projectRecord, err := e.projects.GetByID(ctx, rt.session.ScopeID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	state := projectBootstrapProjectStateFromSettings(projectRecord.Settings)
+	return strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusCompleted), nil
+}
+
+func toolResultsContainNamedTool(results []ToolResult, toolName string) bool {
+	normalized := strings.TrimSpace(toolName)
+	if normalized == "" {
+		return false
+	}
+	for _, result := range results {
+		if strings.EqualFold(strings.TrimSpace(result.Name), normalized) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *TurnEngine) handleProjectBootstrapChildTaskFailure(ctx context.Context, rt *turnRuntime, results []ToolResult) (bool, error) {
