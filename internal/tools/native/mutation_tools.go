@@ -2043,7 +2043,7 @@ func normalizeBootstrapStepSlug(value string) string {
 		return "decompose-workstreams"
 	case "validate-sizing", "validate-task-sizing", "validate_tasks", "validate_task_shape", "dependency-wiring", "dependency_wiring":
 		return "validate-task-shape"
-	case "attach-flows", "attach_flows", "attach-flow-templates", "attach-validate-flows", "attach-flow-template", "attach-and-validate-flow-templates", "flow-templates", "flow_templates":
+	case "attach-flows", "attach_flows", "attach-flow-templates", "attach-validate-flows", "attach-flow-template", "attach-and-validate-flow-templates", "flow-templates", "flow_templates", "flow_attachments":
 		return "attach-validate-flow-templates"
 	case "first-wave-selection", "select_first_wave", "first_wave_selection", "first_wave_promotion", "first-wave-promotion":
 		return "select-first-wave"

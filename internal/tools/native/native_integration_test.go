@@ -4178,7 +4178,7 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 			"task_assignments",
 			"decompose_tasks",
 			"validate_tasks",
-			"attach_flows",
+			"flow_attachments",
 			"first_wave_promotion",
 			"frank_sign_off",
 		},
