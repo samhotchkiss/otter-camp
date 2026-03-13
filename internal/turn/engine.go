@@ -2239,6 +2239,10 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		}
 		repoBindingPresent = projectsvc.HasProjectRepoBinding(environments)
 	}
+	blockedTaskIDs, err := e.loadProjectBootstrapBlockedTaskIDs(ctx, projectID)
+	if err != nil {
+		return projectBootstrapProgress{}, err
+	}
 
 	firstWaveTasks := make([]repo.ProjectTask, 0, len(plannedTasks))
 	firstWaveTemplateIDs := make(map[uuid.UUID]struct{})
@@ -2280,6 +2284,9 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 			structuralFailureReason = buildProjectBootstrapParentExecutionFailureReason(task, childCount)
 		}
 		if childCount > 0 {
+			continue
+		}
+		if _, blocked := blockedTaskIDs[task.ID]; blocked {
 			continue
 		}
 		firstWaveTasks = append(firstWaveTasks, task)
@@ -2361,6 +2368,40 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	}
 	progress.ValidationStatus = projectBootstrapValidationPassed
 	return progress, nil
+}
+
+func (e *TurnEngine) loadProjectBootstrapBlockedTaskIDs(ctx context.Context, projectID uuid.UUID) (map[uuid.UUID]struct{}, error) {
+	blocked := make(map[uuid.UUID]struct{})
+	if e == nil || e.pool == nil || projectID == uuid.Nil {
+		return blocked, nil
+	}
+	rows, err := e.pool.Query(ctx, `
+		SELECT DISTINCT d.source_id
+		FROM project_task_dependency d
+		JOIN project_task source_task ON source_task.id = d.source_id
+		JOIN project_task depends_on_task ON depends_on_task.id = d.depends_on_id
+		WHERE source_task.project_id = $1
+		  AND d.source_type = 'project_task'
+		  AND d.depends_on_type = 'project_task'
+		  AND lower(trim(depends_on_task.work_status)) NOT IN ('done', 'cancelled')
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var taskID uuid.UUID
+		if scanErr := rows.Scan(&taskID); scanErr != nil {
+			return nil, scanErr
+		}
+		if taskID != uuid.Nil {
+			blocked[taskID] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return blocked, nil
 }
 
 func projectBootstrapTaskStatusTerminal(status string) bool {

@@ -8065,6 +8065,76 @@ func TestTurnEngineIntegrationProjectBootstrapFailsClosedWhenFirstWaveQueueHitsB
 	}
 }
 
+func TestTurnEngineIntegrationBootstrapIgnoresDependencyBlockedLaterWaveForFirstWaveValidation(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, pmAgent.ID, fixture.user.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	waveOneDescription := "Deliver a bounded first-wave architecture slice."
+	waveOneTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Wave 1 architecture slice",
+		Description:     &waveOneDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create wave 1 task: %v", err)
+	}
+
+	waveTwoDescription := "Deliver four flagship posts across the content pillars with full drafts and CTA refinement."
+	waveTwoTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "[Wave 2] First flagship blog posts (1 per vertical)",
+		Description:     &waveTwoDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create wave 2 task: %v", err)
+	}
+
+	if _, err := repo.NewProjectTaskDependencyRepo(fixture.pool).Add(ctx, repo.ProjectTaskDependency{
+		SourceType:    "project_task",
+		SourceID:      waveTwoTask.ID,
+		DependsOnType: "project_task",
+		DependsOnID:   waveOneTask.ID,
+		CreatedByType: "human_user",
+		CreatedByID:   &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("Add wave dependency: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if progress.ValidationStatus != projectBootstrapValidationPassed {
+		t.Fatalf("validation_status = %q, want passed", progress.ValidationStatus)
+	}
+	if progress.ValidationFailureClass != "" || progress.ValidationFailureReason != "" {
+		t.Fatalf("validation failure = (%q, %q), want empty", progress.ValidationFailureClass, progress.ValidationFailureReason)
+	}
+	if progress.FirstWaveTaskCount != 1 {
+		t.Fatalf("first_wave_task_count = %d, want 1", progress.FirstWaveTaskCount)
+	}
+	if len(progress.FirstWaveTasks) != 1 || progress.FirstWaveTasks[0].ID != waveOneTask.ID {
+		t.Fatalf("first_wave_tasks = %+v, want only wave 1 task %s", progress.FirstWaveTasks, waveOneTask.ID)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapQueuesRecoveryAfterRecoverableFirstWaveValidationFailure(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
