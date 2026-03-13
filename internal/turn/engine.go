@@ -3513,9 +3513,10 @@ func (e *TurnEngine) handleRecoverableBootstrapTurnJobFailure(
 		return false, err
 	}
 	normalizeProjectBootstrapValidationFailure(&progress, false)
+	recoverableValidation := progress.ValidationFailed() && projectBootstrapRecoverableMaxToolCallFailure(progress)
+	recoverableBoundedSize := strings.Contains(strings.ToLower(strings.TrimSpace(summarizeFailure(cause))), "bounded size policy")
 	if !e.projectBootstrapRuntimeManaged(ctx, session, payload.MessageID) ||
-		!progress.ValidationFailed() ||
-		!projectBootstrapRecoverableMaxToolCallFailure(progress) ||
+		(!recoverableValidation && !recoverableBoundedSize) ||
 		!projectBootstrapSetupPersisted(progress) ||
 		session.CurrentTurnID == nil ||
 		*session.CurrentTurnID == uuid.Nil {
