@@ -4520,6 +4520,13 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		RespondingType: "agent",
 		RespondingID:   rt.agent.ID,
 		Status:         "pending",
+		TriggerMessageID: func() *uuid.UUID {
+			if rt.initialMessageID == uuid.Nil {
+				return nil
+			}
+			id := rt.initialMessageID
+			return &id
+		}(),
 	})
 	if err != nil {
 		return err
@@ -4641,6 +4648,11 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapResumeStateMessage(state, snapshot))
 	if err != nil {
 		return false, err
+	}
+	if rt.initialMessageID != uuid.Nil {
+		initial := rt.initialMessageID
+		rt.historyStartID = &initial
+		return true, nil
 	}
 	rt.historyStartID = &message.ID
 	return true, nil

@@ -3013,6 +3013,13 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
 		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
 	}
+	var secondHistoryStart *uuid.UUID
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call == 2 && input.HistoryStartID != nil {
+			copied := *input.HistoryStartID
+			secondHistoryStart = &copied
+		}
+	}
 	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
 		if req.Purpose == "listening_eval" {
 			return ModelResponse{Content: "respond"}, nil
@@ -3069,6 +3076,22 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	}
 	if !strings.Contains(resumeContent, "The bootstrap governance gate task is system-managed") {
 		t.Fatalf("resume message = %q, want governance gate guidance", resumeContent)
+	}
+	if secondHistoryStart == nil {
+		t.Fatal("second assemble HistoryStartID is nil, want bootstrap continuation to preserve triggering message")
+	}
+	if *secondHistoryStart != fixture.userMessageID {
+		t.Fatalf("second assemble HistoryStartID = %s, want %s", *secondHistoryStart, fixture.userMessageID)
+	}
+	if len(fixture.chat.turnOrder) < 2 {
+		t.Fatalf("turn count = %d, want at least 2 after continuation", len(fixture.chat.turnOrder))
+	}
+	continuedTurn := fixture.chat.turnByID(fixture.chat.turnOrder[len(fixture.chat.turnOrder)-1])
+	if continuedTurn == nil {
+		t.Fatal("continued turn missing")
+	}
+	if continuedTurn.TriggerMessageID == nil || *continuedTurn.TriggerMessageID != fixture.userMessageID {
+		t.Fatalf("continued turn trigger_message_id = %v, want %s", continuedTurn.TriggerMessageID, fixture.userMessageID)
 	}
 }
 
