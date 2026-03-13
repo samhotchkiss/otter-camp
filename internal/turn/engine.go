@@ -1464,7 +1464,16 @@ func (e *TurnEngine) handleProjectBootstrapCancelledTurn(ctx context.Context, se
 	if latestUser := latestUserMessage(messages); latestUser != nil && latestUser.SequenceNumber > latestMessageSequenceForTurn(messages, turnID) {
 		metadata := messageMetadataMap(latestUser.Metadata)
 		if strings.EqualFold(strings.TrimSpace(fmt.Sprintf("%v", metadata["source"])), projectBootstrapSource) {
-			return nil
+			if e.pool == nil {
+				return nil
+			}
+			queued, err := e.hasQueuedAgentTurnForSession(ctx, session.ID, nil)
+			if err != nil {
+				return err
+			}
+			if queued {
+				return nil
+			}
 		}
 	}
 

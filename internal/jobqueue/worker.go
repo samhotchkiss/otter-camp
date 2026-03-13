@@ -172,6 +172,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	w.stateMu.Unlock()
 
 	defer func() {
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer releaseCancel()
+		if released, err := w.releaseClaimsForWorker(releaseCtx); err != nil {
+			w.logger.Warn("job queue: release claims on worker stop failed", "worker_id", w.workerID, "error", err)
+		} else if released > 0 {
+			w.logger.Info("job queue: released claimed jobs on worker stop", "worker_id", w.workerID, "count", released)
+		}
 		w.stateMu.Lock()
 		w.running = false
 		w.cancel = nil
@@ -639,6 +646,30 @@ func (w *Worker) markDone(ctx context.Context, id uuid.UUID) error {
 		return fmt.Errorf("mark job done: %w", err)
 	}
 	return nil
+}
+
+func (w *Worker) releaseClaimsForWorker(ctx context.Context) (int64, error) {
+	if w == nil || w.pool == nil || strings.TrimSpace(w.workerID) == "" {
+		return 0, nil
+	}
+	tag, err := w.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'dead_letter' END,
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    run_after = CASE WHEN attempts < max_attempts THEN now() ELSE run_after END,
+		    last_error = CASE
+		        WHEN attempts < max_attempts THEN COALESCE(NULLIF(last_error, ''), 'released on worker shutdown')
+		        ELSE COALESCE(NULLIF(last_error, ''), 'worker shutdown released final claimed attempt')
+		    END,
+		    updated_at = now()
+		WHERE status = 'claimed'
+		  AND claimed_by = $1
+	`, w.workerID)
+	if err != nil {
+		return 0, fmt.Errorf("release worker claims: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (w *Worker) markFailure(ctx context.Context, job Job, jobErr error) error {

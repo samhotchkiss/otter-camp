@@ -496,6 +496,59 @@ func TestJobWorkerHeartbeatPreventsStaleClaimRecoveryForRunningJob(t *testing.T)
 	}
 }
 
+func TestJobWorkerReleaseClaimsForWorkerRequeuesGracefulShutdownClaims(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "graceful-stop-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	jobID := testdb.EnqueueJob(t, pool, "test.release", 100, map[string]any{"n": 1})
+	jobs, err := worker.claimPending(context.Background())
+	if err != nil {
+		t.Fatalf("claimPending failed: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("claimed jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].ID != jobID {
+		t.Fatalf("claimed job id = %s, want %s", jobs[0].ID, jobID)
+	}
+
+	released, err := worker.releaseClaimsForWorker(context.Background())
+	if err != nil {
+		t.Fatalf("releaseClaimsForWorker failed: %v", err)
+	}
+	if released != 1 {
+		t.Fatalf("released claims = %d, want 1", released)
+	}
+
+	var (
+		status    string
+		claimedBy *string
+		claimedAt *time.Time
+		lastError *string
+	)
+	if err := pool.QueryRow(context.Background(), `
+		SELECT status, claimed_by, claimed_at, last_error
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &claimedBy, &claimedAt, &lastError); err != nil {
+		t.Fatalf("query released job failed: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("released job status = %q, want pending", status)
+	}
+	if claimedBy != nil || claimedAt != nil {
+		t.Fatalf("released claim fields should be cleared, got claimed_by=%v claimed_at=%v", claimedBy, claimedAt)
+	}
+	if lastError == nil || *lastError != "released on worker shutdown" {
+		t.Fatalf("released job last_error = %v, want release marker", lastError)
+	}
+}
+
 func TestJobWorkerPurgeStaleAgentTurnJobsClearsClaimedClosedSessions(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
