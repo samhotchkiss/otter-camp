@@ -622,6 +622,117 @@ func TestJobWorkerPurgeStaleAgentTurnJobsClearsClaimedClosedSessions(t *testing.
 	}
 }
 
+func TestJobWorkerPurgeStaleAgentTurnJobsCollapsesSupersededBootstrapContinuations(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-bootstrap-duplicates",
+		DisplayName: "Purge Bootstrap Duplicates",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "bootstrap-project",
+		DisplayName:    "Bootstrap Project",
+		Description:    "Project for bootstrap continuation cleanup",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	messageRepo := repo.NewChatMessageRepo(pool)
+	messageIDs := make([]uuid.UUID, 0, 3)
+	for i := 0; i < 3; i++ {
+		msg, err := messageRepo.Create(ctx, repo.ChatMessage{
+			SessionID: session.ID,
+			Role:      "user",
+			Content:   fmt.Sprintf("Bootstrap continuation %d", i+1),
+			Status:    "pending",
+			Metadata:  json.RawMessage(`{"source":"project_bootstrap"}`),
+		})
+		if err != nil {
+			t.Fatalf("create bootstrap continuation message %d: %v", i+1, err)
+		}
+		messageIDs = append(messageIDs, msg.ID)
+	}
+
+	jobIDs := make([]uuid.UUID, 0, len(messageIDs))
+	base := time.Now().UTC().Add(-time.Minute)
+	for i, messageID := range messageIDs {
+		var jobID uuid.UUID
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO job_queue (job_type, status, payload, run_after, priority)
+			VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70)
+			RETURNING id
+		`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s"}`, session.ID, messageID), base.Add(time.Duration(i)*time.Second)).Scan(&jobID); err != nil {
+			t.Fatalf("insert bootstrap continuation job %d: %v", i+1, err)
+		}
+		jobIDs = append(jobIDs, jobID)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 2 {
+		t.Fatalf("purged jobs = %d, want 2 superseded bootstrap continuations", purged)
+	}
+
+	for i := 0; i < len(jobIDs)-1; i++ {
+		var status string
+		var lastError *string
+		if err := pool.QueryRow(ctx, `
+			SELECT status, last_error
+			FROM job_queue
+			WHERE id = $1
+		`, jobIDs[i]).Scan(&status, &lastError); err != nil {
+			t.Fatalf("query purged bootstrap continuation %d: %v", i+1, err)
+		}
+		if status != "dead_letter" {
+			t.Fatalf("bootstrap continuation %d status = %q, want dead_letter", i+1, status)
+		}
+		if lastError == nil || *lastError != "purged at worker startup: superseded bootstrap continuation" {
+			t.Fatalf("bootstrap continuation %d last_error = %v, want superseded-bootstrap marker", i+1, lastError)
+		}
+	}
+
+	var newestStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM job_queue
+		WHERE id = $1
+	`, jobIDs[len(jobIDs)-1]).Scan(&newestStatus); err != nil {
+		t.Fatalf("query newest bootstrap continuation: %v", err)
+	}
+	if newestStatus != "pending" {
+		t.Fatalf("newest bootstrap continuation status = %q, want pending", newestStatus)
+	}
+}
+
 func TestJobWorkerCancelsClaimedAgentTurnWhenSessionClosesMidExecution(t *testing.T) {
 	pool := testdb.New(t)
 	org := createOrgForJobQueue(t, pool, "agent-turn-close-mid-execution")

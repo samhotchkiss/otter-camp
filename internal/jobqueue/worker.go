@@ -390,7 +390,40 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (supervisor messages): %w", err)
 	}
 
-	total := ct1.RowsAffected() + ct2.RowsAffected()
+	// Condition 3: active async project bootstrap sessions with no live turn
+	// should have at most one pending bootstrap continuation. Older queued
+	// follow-ons are superseded once a newer continuation message exists.
+	ct3, err := w.pool.Exec(ctx, `
+		WITH ranked AS (
+			SELECT jq.id,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY jq.payload->>'session_id'
+			           ORDER BY jq.run_after DESC, jq.created_at DESC, jq.id DESC
+			       ) AS rn
+			FROM job_queue jq
+			JOIN chat_session cs ON cs.id = (jq.payload->>'session_id')::uuid
+			JOIN chat_message cm ON cm.id = (jq.payload->>'message_id')::uuid
+			WHERE jq.status = 'pending'
+			  AND jq.job_type = 'agent_turn'
+			  AND cs.scope_type = 'project'
+			  AND cs.mode = 'async'
+			  AND cs.status = 'active'
+			  AND cs.current_turn_id IS NULL
+			  AND COALESCE(cm.metadata->>'source', '') = 'project_bootstrap'
+		)
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    last_error = 'purged at worker startup: superseded bootstrap continuation',
+		    updated_at = now()
+		FROM ranked
+		WHERE jq.id = ranked.id
+		  AND ranked.rn > 1
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("purge stale agent_turn jobs (superseded bootstrap continuations): %w", err)
+	}
+
+	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected()
 	return total, nil
 }
 
