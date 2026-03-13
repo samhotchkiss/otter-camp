@@ -1596,6 +1596,10 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	if e.tasks == nil {
 		return map[string]any{"error": "task_repository_unavailable"}, nil
 	}
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	taskID, ok := readUUID(input, "task_id")
 	if !ok || taskID == uuid.Nil {
 		return map[string]any{"error": "task_id_required"}, nil
@@ -1814,6 +1818,13 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		}
 		transitioned, transitionErr := e.taskService.TransitionStatusWithPayload(ctx, updated.ID, desiredStatus, transitionActor, extraStatusPayload)
 		if transitionErr != nil {
+			var invalidTransition tasksvc.ErrInvalidStatusTransition
+			if errors.As(transitionErr, &invalidTransition) &&
+				strings.EqualFold(strings.TrimSpace(previousStatus), "draft") &&
+				bootstrapDraftExecutionPromotion(desiredStatus) &&
+				e.activeProjectBootstrapSession(ctx, scope, current.ProjectID) {
+				return nil, fmt.Errorf("task is still in draft during active project bootstrap. Keep first-wave execution tasks in draft until setup is persisted through bootstrap.setup.persist")
+			}
 			return nil, transitionErr
 		}
 		updated = repo.ProjectTask(*transitioned)
@@ -1887,10 +1898,44 @@ func normalizeTaskWorkStatusAlias(status string) string {
 	}
 }
 
+func bootstrapDraftExecutionPromotion(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "open", "in_progress":
+		return true
+	default:
+		return false
+	}
+}
+
 func bootstrapGateTask(task repo.ProjectTask) bool {
 	metadata := metadataObject(task.Metadata)
 	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
 	return bootstrapGate
+}
+
+func (e *NativeToolExecutor) activeProjectBootstrapSession(ctx context.Context, scope workspaceScope, projectID uuid.UUID) bool {
+	if projectID == uuid.Nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil || e.chatSessions == nil {
+		return false
+	}
+	session, err := e.chatSessions.GetByID(ctx, *scope.sessionID)
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") || session.ScopeID != projectID {
+		return false
+	}
+	var metadata struct {
+		ProjectBootstrap struct {
+			Status string `json:"status"`
+		} `json:"project_bootstrap"`
+	}
+	if len(session.Metadata) == 0 || !json.Valid(session.Metadata) {
+		return false
+	}
+	if err := json.Unmarshal(session.Metadata, &metadata); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(metadata.ProjectBootstrap.Status), "active")
 }
 
 func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, input map[string]any) (map[string]any, error) {

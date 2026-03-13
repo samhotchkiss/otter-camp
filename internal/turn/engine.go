@@ -5641,6 +5641,9 @@ func (e *TurnEngine) shouldStopAfterBootstrapPersist(ctx context.Context, rt *tu
 	if !toolResultsContainNamedTool(results, "bootstrap.setup.persist") {
 		return false, nil
 	}
+	if bootstrapPersistChecklistComplete(results) {
+		return true, nil
+	}
 
 	projectRecord, err := e.projects.GetByID(ctx, rt.session.ScopeID)
 	if errors.Is(err, repo.ErrNotFound) {
@@ -5651,6 +5654,26 @@ func (e *TurnEngine) shouldStopAfterBootstrapPersist(ctx context.Context, rt *tu
 	}
 	state := projectBootstrapProjectStateFromSettings(projectRecord.Settings)
 	return strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusCompleted), nil
+}
+
+func bootstrapPersistChecklistComplete(results []ToolResult) bool {
+	for _, result := range results {
+		if !strings.EqualFold(strings.TrimSpace(result.Name), "bootstrap.setup.persist") {
+			continue
+		}
+		if len(result.Output) == 0 {
+			continue
+		}
+		raw, ok := result.Output["setup_checklist_complete"]
+		if !ok {
+			continue
+		}
+		complete, ok := raw.(bool)
+		if ok && complete {
+			return true
+		}
+	}
+	return false
 }
 
 func toolResultsContainNamedTool(results []ToolResult, toolName string) bool {

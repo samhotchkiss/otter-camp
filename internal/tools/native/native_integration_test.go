@@ -4514,6 +4514,70 @@ func TestIntegrationTaskUpdateBootstrapGateBlockSuggestsSetupPersist(t *testing.
 	}
 }
 
+func TestIntegrationProjectSessionTaskUpdateRejectsDraftOpenPromotionWithBootstrapPersistGuidance(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "agent",
+		CreatedByID:    actor.ID,
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active","current_phase":"first_wave_executions_created"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create bootstrap session: %v", err)
+	}
+
+	childTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "First-wave execution task",
+		WorkStatus:     "draft",
+		BlocksScope:    "none",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create child task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, session.ID)
+	out, err := executor.Execute(projectCtx, "task.update", map[string]any{
+		"task_id":     childTask.ID.String(),
+		"work_status": "open",
+	})
+	if err == nil {
+		t.Fatal("task.update error = nil, want bootstrap persist guidance")
+	}
+	if out != nil {
+		t.Fatalf("task.update output = %v, want nil on rejected bootstrap promotion", out)
+	}
+	if got := err.Error(); !strings.Contains(got, "bootstrap.setup.persist") {
+		t.Fatalf("task.update error = %q, want setup persist guidance", got)
+	}
+	if got := err.Error(); !strings.Contains(got, "first-wave execution tasks in draft") {
+		t.Fatalf("task.update error = %q, want draft retention guidance", got)
+	}
+
+	stored, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, childTask.ID)
+	if err != nil {
+		t.Fatalf("load child task: %v", err)
+	}
+	if stored.WorkStatus != "draft" {
+		t.Fatalf("work_status = %q, want draft after rejected bootstrap promotion", stored.WorkStatus)
+	}
+}
+
 func TestIntegrationProjectSessionTaskUpdateRejectsInProgressPromotionWithoutCanonicalExecution(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

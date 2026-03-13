@@ -3394,6 +3394,45 @@ func TestBuildProjectBootstrapResumeActionPromptForSetupPersist(t *testing.T) {
 	}
 }
 
+func TestShouldStopAfterBootstrapPersistWhenToolResultCompletesChecklist(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	metadata, err := json.Marshal(map[string]any{
+		projectBootstrapMetadataKey: map[string]any{
+			"status": projectBootstrapStatusActive,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal session metadata: %v", err)
+	}
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Metadata = metadata
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:       projectID,
+				Settings: json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+			},
+		},
+	}
+
+	stop, err := fixture.engine.shouldStopAfterBootstrapPersist(context.Background(), &turnRuntime{
+		session: fixture.session,
+	}, []ToolResult{{
+		Name: "bootstrap.setup.persist",
+		Output: map[string]any{
+			"setup_checklist_complete": true,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("shouldStopAfterBootstrapPersist err = %v, want nil", err)
+	}
+	if !stop {
+		t.Fatal("shouldStopAfterBootstrapPersist stop = false, want true")
+	}
+}
+
 func TestContinuationTurnReloadsSessionBeforeBootstrapResumeState(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.session.ScopeType = "project"
