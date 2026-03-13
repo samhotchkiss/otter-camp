@@ -467,7 +467,7 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 func (w *Worker) processAvailableJobs(ctx context.Context) error {
 	for {
 		w.logger.Debug("job queue: claiming pending jobs")
-		jobs, err := w.claimPendingLimit(ctx, 1)
+		jobs, err := w.claimPendingLimit(ctx, w.batchSize)
 		if err != nil {
 			if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 				w.logger.Error("job queue: claim failed", "error", err)
@@ -484,14 +484,21 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 		}
 		w.logger.Info("job queue: claimed", "count", len(jobs), "types", strings.Join(types, ","))
 
+		var wg sync.WaitGroup
 		for _, job := range jobs {
-			w.logger.Info("job queue: executing", "job_id", job.ID, "job_type", job.JobType, "attempts", job.Attempts)
-			if err := w.executeClaimedJob(ctx, job); err != nil {
-				if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-					w.logger.Error("failed to execute claimed job", "job_id", job.ID, "job_type", job.JobType, "error", err)
+			job := job
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				w.logger.Info("job queue: executing", "job_id", job.ID, "job_type", job.JobType, "attempts", job.Attempts)
+				if err := w.executeClaimedJob(ctx, job); err != nil {
+					if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+						w.logger.Error("failed to execute claimed job", "job_id", job.ID, "job_type", job.JobType, "error", err)
+					}
 				}
-			}
+			}()
 		}
+		wg.Wait()
 	}
 }
 

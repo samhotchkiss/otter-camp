@@ -66,6 +66,56 @@ func TestJobWorkerProcessesEnqueuedJobs(t *testing.T) {
 	}
 }
 
+func TestJobWorkerProcessesBatchConcurrently(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		BatchSize:            3,
+		PollInterval:         100 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	release := make(chan struct{})
+	var started atomic.Int32
+	worker.Register("test.concurrent", func(context.Context, Job) error {
+		started.Add(1)
+		<-release
+		return nil
+	})
+
+	for i := 0; i < 3; i++ {
+		if _, err := worker.Enqueue(context.Background(), nil, "test.concurrent", 100, map[string]any{"n": i}, nil); err != nil {
+			t.Fatalf("enqueue concurrent job %d failed: %v", i+1, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startWorker(worker, ctx)
+	released := false
+	defer func() {
+		cancel()
+		if !released {
+			close(release)
+		}
+		_ = worker.Stop()
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if started.Load() == 3 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if started.Load() != 3 {
+		t.Fatalf("started concurrent jobs = %d, want 3 claimed/executing together", started.Load())
+	}
+
+	close(release)
+	released = true
+	waitForDoneJobs(t, pool, 3, 5*time.Second)
+}
+
 func TestJobWorkerClaimPendingLimitClaimsSingleJobEvenWhenBatchSizeIsLarger(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
