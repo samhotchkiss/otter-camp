@@ -160,6 +160,17 @@ func runTUICommand(args []string) int {
 				var resp struct{}
 				return apiClient.request(ctx, "POST", "/v1/projects/"+url.PathEscape(projectID)+"/remotes", body, &resp)
 			}
+			runtimeHints.RelaunchProject = func(ctx context.Context, projectID string) (string, error) {
+				var resp struct {
+					Data struct {
+						ID string `json:"id"`
+					} `json:"data"`
+				}
+				if err := apiClient.request(ctx, "POST", "/v1/projects/"+url.PathEscape(projectID)+"/relaunch", map[string]any{}, &resp); err != nil {
+					return "", err
+				}
+				return strings.TrimSpace(resp.Data.ID), nil
+			}
 			runtimeHints.LoadRecentChats = func(ctx context.Context) ([]tuiapp.SidebarChatItem, error) {
 				return loadTUIRecentChats(ctx, apiClient)
 			}

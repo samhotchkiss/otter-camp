@@ -2679,7 +2679,7 @@ func (m Model) renderSettingsView(width, maxLines int) []string {
 // helpViewLineCount is the total number of content lines in renderHelpView before
 // scroll clamping. Must stay in sync with the lines slice built inside that function.
 // Verified by TestHelpViewLineCountMatchesEX255; update when adding/removing entries.
-const helpViewLineCount = 69
+const helpViewLineCount = 70
 
 func (m Model) renderHelpView(width, maxLines int) []string {
 	header := func(s string) string {
@@ -2762,6 +2762,7 @@ func (m Model) renderHelpView(width, maxLines int) []string {
 		key(":inbox <action>", "inbox: approve|reject|defer|open"),
 		key(":tour dismiss", "dismiss the tour overlay"),
 		key(":connect-repo <url>", "link active project to a GitHub repository"),
+		key(":relaunch", "restart the selected archived bootstrap project"),
 		key(":reconnect", "manually trigger SSE reconnect and sidebar refresh"),
 		key(":status / :debug", "show conn/scope/session/turn diagnostic in status bar"),
 		key(":help", "open keybinding reference (same as ?)"),
@@ -3658,6 +3659,7 @@ func (m Model) commandPaletteSuggestions(limit int) []string {
 		"cmd: clear", "cmd: sort", "cmd: ls",
 		// :connect-repo/:repo for linking a GitHub repository.
 		"cmd: connect-repo", "cmd: repo",
+		"cmd: relaunch",
 		// EX-406: :reconnect/:connect for manual SSE reconnect when degraded.
 		"cmd: reconnect", "cmd: connect",
 		// EX-407: :status/:info/:debug for diagnostic connection/session summary.

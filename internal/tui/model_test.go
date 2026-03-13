@@ -1225,11 +1225,11 @@ func TestTaskDetailDefaultRightPaneSourceEX249(t *testing.T) {
 		{
 			name: "active execution defaults to journal",
 			detail: TaskDetailItem{
-				ID:                  "task-249-active",
-				Title:               "Watch active execution",
-				SessionID:           "00000000-0000-0000-0000-000000002491",
-				ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002491",
-				DiscussionSessionID: "00000000-0000-0000-0000-000000002492",
+				ID:                       "task-249-active",
+				Title:                    "Watch active execution",
+				SessionID:                "00000000-0000-0000-0000-000000002491",
+				ActiveExecutionSessionID: "00000000-0000-0000-0000-000000002491",
+				DiscussionSessionID:      "00000000-0000-0000-0000-000000002492",
 			},
 			wantTab:     taskPaneTabJournal,
 			wantSession: "00000000-0000-0000-0000-000000002491",
@@ -1237,11 +1237,11 @@ func TestTaskDetailDefaultRightPaneSourceEX249(t *testing.T) {
 		{
 			name: "recent execution falls back to journal",
 			detail: TaskDetailItem{
-				ID:                  "task-249-recent",
-				Title:               "Watch recent execution",
-				SessionID:           "00000000-0000-0000-0000-000000002493",
-				RecentExecutionSessionID:   "00000000-0000-0000-0000-000000002493",
-				DiscussionSessionID: "00000000-0000-0000-0000-000000002494",
+				ID:                       "task-249-recent",
+				Title:                    "Watch recent execution",
+				SessionID:                "00000000-0000-0000-0000-000000002493",
+				RecentExecutionSessionID: "00000000-0000-0000-0000-000000002493",
+				DiscussionSessionID:      "00000000-0000-0000-0000-000000002494",
 			},
 			wantTab:     taskPaneTabJournal,
 			wantSession: "00000000-0000-0000-0000-000000002493",
@@ -1299,11 +1299,11 @@ func TestTaskDetailLoadPreservesSelectedDiscussionSessionEX254(t *testing.T) {
 	model.activeSession = "00000000-0000-0000-0000-000000002541"
 
 	updated, cmd := model.Update(taskDetailLoadedMsg{Detail: TaskDetailItem{
-		ID:                  "task-254-selected-discussion",
-		Title:               "Selected discussion",
-		SessionID:           "00000000-0000-0000-0000-000000002542",
-		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002542",
-		DiscussionSessionID: "00000000-0000-0000-0000-000000002541",
+		ID:                       "task-254-selected-discussion",
+		Title:                    "Selected discussion",
+		SessionID:                "00000000-0000-0000-0000-000000002542",
+		ActiveExecutionSessionID: "00000000-0000-0000-0000-000000002542",
+		DiscussionSessionID:      "00000000-0000-0000-0000-000000002541",
 	}})
 	got := updated.(Model)
 
@@ -1339,10 +1339,10 @@ func TestTaskDetailLoadUsesSidebarDiscussionFallbackEX285(t *testing.T) {
 	model.activeSession = discussionSession
 
 	updated, cmd := model.Update(taskDetailLoadedMsg{Detail: TaskDetailItem{
-		ID:                taskID,
-		ProjectID:         "project-285",
-		Title:             "Sidebar discussion fallback",
-		SessionID:         executionSession,
+		ID:                       taskID,
+		ProjectID:                "project-285",
+		Title:                    "Sidebar discussion fallback",
+		SessionID:                executionSession,
 		ActiveExecutionSessionID: executionSession,
 	}})
 	got := updated.(Model)
@@ -1575,12 +1575,12 @@ func TestTaskPaneNavigationStateMachineEX249(t *testing.T) {
 	model.workspace.setMainView(ViewTask)
 	model.workspace.selectedTaskID = "task-249-nav"
 	model.workspace.tasks["task-249-nav"] = &taskRecord{
-		ID:                  "task-249-nav",
-		Title:               "Navigate task pane",
-		Status:              "in_progress",
-		SessionID:           "00000000-0000-0000-0000-000000002504",
-		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002504",
-		DiscussionSessionID: "00000000-0000-0000-0000-000000002505",
+		ID:                       "task-249-nav",
+		Title:                    "Navigate task pane",
+		Status:                   "in_progress",
+		SessionID:                "00000000-0000-0000-0000-000000002504",
+		ActiveExecutionSessionID: "00000000-0000-0000-0000-000000002504",
+		DiscussionSessionID:      "00000000-0000-0000-0000-000000002505",
 	}
 	model.activeScope = ScopeTask
 	model.activeSession = "00000000-0000-0000-0000-000000002504"
@@ -1635,10 +1635,10 @@ func TestTaskPaneSessionIDUsesTaskProjectContextEX259(t *testing.T) {
 
 	model := NewModel(DefaultState())
 	task := &taskRecord{
-		ID:                  "task-259-session",
-		ProjectID:           "project-real",
-		DiscussionSessionID: "task-discussion-session",
-		ActiveExecutionSessionID:   "task-execution-session",
+		ID:                       "task-259-session",
+		ProjectID:                "project-real",
+		DiscussionSessionID:      "task-discussion-session",
+		ActiveExecutionSessionID: "task-execution-session",
 	}
 	model.workspace.tasks[task.ID] = task
 	model.workspace.selectedTaskID = task.ID
@@ -1689,12 +1689,12 @@ func TestTaskDetailLoadResetsRightPaneToTaskScopeEX259(t *testing.T) {
 	model.activeSession = "00000000-0000-0000-0000-000000002590"
 
 	updated, _ := model.Update(taskDetailLoadedMsg{Detail: TaskDetailItem{
-		ID:                  "task-259-open",
-		ProjectID:           "project-real",
-		Title:               "Open task",
-		SessionID:           "00000000-0000-0000-0000-000000002591",
-		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002591",
-		DiscussionSessionID: "00000000-0000-0000-0000-000000002592",
+		ID:                       "task-259-open",
+		ProjectID:                "project-real",
+		Title:                    "Open task",
+		SessionID:                "00000000-0000-0000-0000-000000002591",
+		ActiveExecutionSessionID: "00000000-0000-0000-0000-000000002591",
+		DiscussionSessionID:      "00000000-0000-0000-0000-000000002592",
 	}})
 	model = updated.(Model)
 
@@ -1717,10 +1717,10 @@ func TestTaskPaneScopeSwitchCoercesDiscussionAndShowsMissingSessionEX259(t *test
 
 	model := NewModel(DefaultState())
 	task := &taskRecord{
-		ID:                  "task-259-switch",
-		ProjectID:           "project-real",
-		DiscussionSessionID: "task-discussion",
-		ActiveExecutionSessionID:   "task-execution",
+		ID:                       "task-259-switch",
+		ProjectID:                "project-real",
+		DiscussionSessionID:      "task-discussion",
+		ActiveExecutionSessionID: "task-execution",
 	}
 	model.workspace.setMainView(ViewTask)
 	model.workspace.selectedTaskID = task.ID
@@ -1803,12 +1803,12 @@ func TestTaskPaneEscNavigatesAndCancelIsExplicitEX249(t *testing.T) {
 	model.workspace.setMainView(ViewTask)
 	model.workspace.selectedTaskID = "task-249-keys"
 	model.workspace.tasks["task-249-keys"] = &taskRecord{
-		ID:                  "task-249-keys",
-		Title:               "Active work",
-		Status:              "in_progress",
-		SessionID:           "00000000-0000-0000-0000-000000002496",
-		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002496",
-		DiscussionSessionID: "00000000-0000-0000-0000-000000002497",
+		ID:                       "task-249-keys",
+		Title:                    "Active work",
+		Status:                   "in_progress",
+		SessionID:                "00000000-0000-0000-0000-000000002496",
+		ActiveExecutionSessionID: "00000000-0000-0000-0000-000000002496",
+		DiscussionSessionID:      "00000000-0000-0000-0000-000000002497",
 	}
 	model.focus = ChatPanel
 	model.activeScope = ScopeTask
@@ -1935,12 +1935,12 @@ func TestTaskPaneMouseFocusIntoChatResetsComposeEX252(t *testing.T) {
 	model.workspace.setMainView(ViewTask)
 	model.workspace.selectedTaskID = "task-252-focus"
 	model.workspace.tasks["task-252-focus"] = &taskRecord{
-		ID:                  "task-252-focus",
-		Title:               "Pointer focus",
-		Status:              "in_progress",
-		SessionID:           "00000000-0000-0000-0000-000000002520",
-		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002520",
-		DiscussionSessionID: "00000000-0000-0000-0000-000000002521",
+		ID:                       "task-252-focus",
+		Title:                    "Pointer focus",
+		Status:                   "in_progress",
+		SessionID:                "00000000-0000-0000-0000-000000002520",
+		ActiveExecutionSessionID: "00000000-0000-0000-0000-000000002520",
+		DiscussionSessionID:      "00000000-0000-0000-0000-000000002521",
 	}
 	model.focus = MainPanel
 	model.activeScope = ScopeTask
@@ -1973,12 +1973,12 @@ func TestTaskPanePointerRefocusPreservesDraftEX252(t *testing.T) {
 	model.workspace.setMainView(ViewTask)
 	model.workspace.selectedTaskID = "task-252-draft"
 	model.workspace.tasks["task-252-draft"] = &taskRecord{
-		ID:                  "task-252-draft",
-		Title:               "Preserve draft",
-		Status:              "in_progress",
-		SessionID:           "00000000-0000-0000-0000-000000002522",
-		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002522",
-		DiscussionSessionID: "00000000-0000-0000-0000-000000002523",
+		ID:                       "task-252-draft",
+		Title:                    "Preserve draft",
+		Status:                   "in_progress",
+		SessionID:                "00000000-0000-0000-0000-000000002522",
+		ActiveExecutionSessionID: "00000000-0000-0000-0000-000000002522",
+		DiscussionSessionID:      "00000000-0000-0000-0000-000000002523",
 	}
 	model.focus = ChatPanel
 	model.activeScope = ScopeTask
@@ -2012,12 +2012,12 @@ func TestTaskPaneMouseClickTabsEX252(t *testing.T) {
 	model.workspace.setMainView(ViewTask)
 	model.workspace.selectedTaskID = "task-252-tabs"
 	model.workspace.tasks["task-252-tabs"] = &taskRecord{
-		ID:                  "task-252-tabs",
-		Title:               "Clickable tabs",
-		Status:              "in_progress",
-		SessionID:           "00000000-0000-0000-0000-000000002524",
-		ActiveExecutionSessionID:   "00000000-0000-0000-0000-000000002524",
-		DiscussionSessionID: "00000000-0000-0000-0000-000000002525",
+		ID:                       "task-252-tabs",
+		Title:                    "Clickable tabs",
+		Status:                   "in_progress",
+		SessionID:                "00000000-0000-0000-0000-000000002524",
+		ActiveExecutionSessionID: "00000000-0000-0000-0000-000000002524",
+		DiscussionSessionID:      "00000000-0000-0000-0000-000000002525",
 	}
 	model.focus = ChatPanel
 	model.activeScope = ScopeTask
@@ -2356,6 +2356,98 @@ func pressMsg(model Model, msg tea.Msg) Model {
 		panic("unexpected model type")
 	}
 	return next
+}
+
+func TestExecuteCommandRelaunchUsesSelectedProject(t *testing.T) {
+	relaunchedCalls := 0
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		RelaunchProject: func(_ context.Context, projectID string) (string, error) {
+			relaunchedCalls++
+			if projectID != "proj-archived" {
+				t.Fatalf("RelaunchProject projectID = %q, want %q", projectID, "proj-archived")
+			}
+			return "proj-restarted", nil
+		},
+	})
+	model.workspace.selectedProjectID = "proj-archived"
+
+	cmd := model.executeCommand(":relaunch")
+	if cmd == nil {
+		t.Fatal("executeCommand(:relaunch) returned nil cmd")
+	}
+
+	msg := cmd()
+	completed, ok := msg.(projectRelaunchCompletedMsg)
+	if !ok {
+		t.Fatalf("cmd() returned %T, want projectRelaunchCompletedMsg", msg)
+	}
+	if completed.ProjectID != "proj-restarted" {
+		t.Fatalf("completed.ProjectID = %q, want %q", completed.ProjectID, "proj-restarted")
+	}
+	if relaunchedCalls != 1 {
+		t.Fatalf("RelaunchProject calls = %d, want 1", relaunchedCalls)
+	}
+}
+
+func TestProjectRelaunchCompletedSelectsRestartProject(t *testing.T) {
+	model := NewModel(DefaultState())
+	model.workspace.selectedProjectID = "proj-archived"
+	model.workspace.selectedProject = &ProjectDetail{ID: "proj-archived", DisplayName: "Archived Bootstrap Source"}
+
+	updated, cmd := model.Update(projectRelaunchCompletedMsg{
+		SourceProjectID: "proj-archived",
+		ProjectID:       "proj-restarted",
+	})
+	model = updated.(Model)
+
+	if model.workspace.selectedProjectID != "proj-restarted" {
+		t.Fatalf("selectedProjectID = %q, want %q", model.workspace.selectedProjectID, "proj-restarted")
+	}
+	if model.workspace.mainView != ViewProject {
+		t.Fatalf("mainView = %q, want %q", model.workspace.mainView, ViewProject)
+	}
+	if model.statusMessage != "Project relaunched." {
+		t.Fatalf("statusMessage = %q, want %q", model.statusMessage, "Project relaunched.")
+	}
+	if cmd == nil {
+		t.Fatal("project relaunch completion should trigger follow-up loads")
+	}
+}
+
+func TestShiftRInProjectViewRequestsProjectRelaunch(t *testing.T) {
+	relaunchedCalls := 0
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		RelaunchProject: func(_ context.Context, projectID string) (string, error) {
+			relaunchedCalls++
+			if projectID != "proj-archived" {
+				t.Fatalf("RelaunchProject projectID = %q, want %q", projectID, "proj-archived")
+			}
+			return "proj-restarted", nil
+		},
+	})
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewProject)
+	model.workspace.selectedProjectID = "proj-archived"
+
+	updated, cmd := model.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("Shift-R should return relaunch cmd")
+	}
+	if model.statusMessage != "Relaunching project…" {
+		t.Fatalf("statusMessage = %q, want %q", model.statusMessage, "Relaunching project…")
+	}
+	msg := cmd()
+	completed, ok := msg.(projectRelaunchCompletedMsg)
+	if !ok {
+		t.Fatalf("cmd() returned %T, want projectRelaunchCompletedMsg", msg)
+	}
+	if completed.ProjectID != "proj-restarted" {
+		t.Fatalf("completed.ProjectID = %q, want %q", completed.ProjectID, "proj-restarted")
+	}
+	if relaunchedCalls != 1 {
+		t.Fatalf("RelaunchProject calls = %d, want 1", relaunchedCalls)
+	}
 }
 
 func chatPanelBodyClickPosition(model Model) (int, int) {
@@ -14144,8 +14236,9 @@ func TestCtrlBFDKInSearchAndCommandEX379(t *testing.T) {
 }
 
 // TestCapitalLetterHintsEX380 verifies that uppercase variants of common
-// keybindings (N/I/D/R/P/T) show "use lowercase" hints in non-chat panels
-// instead of silent no-ops (EX-380).
+// keybindings show clear guidance in non-chat panels instead of silent no-ops
+// (EX-380). Capital R is now reserved for project relaunch in Project view, so
+// the general non-chat hint points there instead of treating it as unbound.
 func TestCapitalLetterHintsEX380(t *testing.T) {
 	tests := []struct {
 		r    rune
@@ -14154,7 +14247,7 @@ func TestCapitalLetterHintsEX380(t *testing.T) {
 		{'N', "N is not bound. Press n (lowercase) to jump to next unread session."},
 		{'I', "I is not bound. Press i (lowercase) to open the inbox."},
 		{'D', "D is not bound. Press d (lowercase) for dashboard or to show/hide done tasks."},
-		{'R', "R is not bound. Press r (lowercase) to refresh."},
+		{'R', "R is for relaunch in Project view. Press r (lowercase) to refresh."},
 		{'P', "P is not bound. Press p (lowercase) to open the project view."},
 		{'T', "T is not bound. Press t (lowercase) to open task detail."},
 	}

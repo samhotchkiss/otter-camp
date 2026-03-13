@@ -105,6 +105,12 @@ type connectRemoteCompletedMsg struct {
 	Err       error
 }
 
+type projectRelaunchCompletedMsg struct {
+	SourceProjectID string
+	ProjectID       string
+	Err             error
+}
+
 type loginCompletedMsg struct {
 	Err error
 }
@@ -1377,6 +1383,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case projectRelaunchCompletedMsg:
+		if typed.Err != nil {
+			m.statusMessage = "Project relaunch failed: " + strings.TrimSpace(typed.Err.Error())
+			return m, nil
+		}
+		projectID := strings.TrimSpace(typed.ProjectID)
+		if projectID == "" {
+			m.statusMessage = "Project relaunch failed: empty restart project id"
+			return m, nil
+		}
+		m.workspace.selectedProjectID = projectID
+		m.workspace.selectedProject = nil
+		m.workspace.setMainView(ViewProject)
+		m.setFocus(MainPanel)
+		m.activeScope = ScopeProject
+		m.statusMessage = "Project relaunched."
+		m.workspace.activity = appendActivity(m.workspace.activity, "project relaunched: "+projectID)
+		return m, tea.Batch(
+			loadSidebarDataCmd(m.runtimeHints),
+			loadProjectDetailCmd(projectID, m.runtimeHints),
+			loadProjectTasksCmd(projectID, m.runtimeHints, false),
+		)
 	case statusClearMsg:
 		// EX-105: only clear if the generation matches (no newer status was set).
 		if typed.Generation == m.statusGeneration && m.statusMessage != "" {
@@ -4672,9 +4700,24 @@ func (m *Model) handleWorkspaceRune(r rune) (bool, tea.Cmd) {
 			return true, nil
 		}
 	case 'R':
-		// EX-380: capital 'R' — not bound. Users may mean lowercase 'r' (refresh).
+		if m.focus == MainPanel && m.workspace.mainView == ViewProject {
+			if m.workspace.selectedProjectID == "" {
+				m.statusMessage = "No project selected. Navigate to an archived bootstrap project first."
+				return true, nil
+			}
+			if m.runtimeHints.RelaunchProject == nil {
+				m.statusMessage = "Relaunch not available (no API client)."
+				return true, nil
+			}
+			projectID := m.workspace.selectedProjectID
+			m.statusMessage = "Relaunching project…"
+			return true, func() tea.Msg {
+				restartedID, err := m.runtimeHints.RelaunchProject(context.Background(), projectID)
+				return projectRelaunchCompletedMsg{SourceProjectID: projectID, ProjectID: restartedID, Err: err}
+			}
+		}
 		if m.focus != ChatPanel {
-			m.statusMessage = "R is not bound. Press r (lowercase) to refresh."
+			m.statusMessage = "R is for relaunch in Project view. Press r (lowercase) to refresh."
 			return true, nil
 		}
 	case 'P':
@@ -6125,6 +6168,21 @@ func (m *Model) executeCommand(raw string) tea.Cmd {
 		return func() tea.Msg {
 			err := m.runtimeHints.ConnectProjectRemote(context.Background(), projectID, repoURL)
 			return connectRemoteCompletedMsg{ProjectID: projectID, RepoURL: repoURL, Err: err}
+		}
+	case "relaunch":
+		if m.workspace.selectedProjectID == "" {
+			m.statusMessage = "No project selected. Navigate to an archived bootstrap project first."
+			return nil
+		}
+		if m.runtimeHints.RelaunchProject == nil {
+			m.statusMessage = "relaunch not available (no API client)."
+			return nil
+		}
+		projectID := m.workspace.selectedProjectID
+		m.statusMessage = "Relaunching project…"
+		return func() tea.Msg {
+			restartedID, err := m.runtimeHints.RelaunchProject(context.Background(), projectID)
+			return projectRelaunchCompletedMsg{SourceProjectID: projectID, ProjectID: restartedID, Err: err}
 		}
 	case "reconnect", "connect":
 		// EX-406: :reconnect/:connect — manually trigger a sidebar data refresh,
