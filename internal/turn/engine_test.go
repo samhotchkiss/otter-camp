@@ -1524,6 +1524,32 @@ func TestHandleUserMessageProjectScopeKickoffStartsWithFrank(t *testing.T) {
 	}
 }
 
+func TestShouldBlockFreshKickoffPreCreateTool(t *testing.T) {
+	rt := &turnRuntime{
+		freshKickoff: true,
+		session: &repo.ChatSession{
+			ScopeType: "organization",
+		},
+		agent: repo.Agent{
+			ID:          uuid.New(),
+			DisplayName: "Frank",
+		},
+	}
+	if !shouldBlockFreshKickoffPreCreateTool(rt, "project.list") {
+		t.Fatal("fresh kickoff should block pre-create project browsing")
+	}
+	if !shouldBlockFreshKickoffPreCreateTool(rt, "memory.search") {
+		t.Fatal("fresh kickoff should block pre-create memory browsing")
+	}
+	if shouldBlockFreshKickoffPreCreateTool(rt, "project.create") {
+		t.Fatal("fresh kickoff should allow project.create")
+	}
+	rt.projectIdentity = &projectIdentity{id: uuid.New(), slug: "sam-blog-fresh"}
+	if shouldBlockFreshKickoffPreCreateTool(rt, "project.list") {
+		t.Fatal("fresh kickoff pre-create block should clear after project identity is established")
+	}
+}
+
 func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	content := "Start a brand-new Sam.blog project from scratch. Do not reuse archived chains."

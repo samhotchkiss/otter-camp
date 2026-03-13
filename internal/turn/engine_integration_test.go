@@ -5327,6 +5327,97 @@ func TestTurnEngineIntegrationFreshKickoffRetryKeepsSingleProjectAndSession(t *t
 	}
 }
 
+func TestTurnEngineIntegrationFreshKickoffBlocksPreCreateBrowsing(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	freshKickoff := "Start Sam.blog from scratch as a fresh kickoff. Do not reuse archived work."
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateContent(ctx, fixture.userMessage.ID, freshKickoff); err != nil {
+		t.Fatalf("UpdateContent fresh kickoff request: %v", err)
+	}
+	fixture.userMessage.Content = freshKickoff
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "project.list", Tier: "tier1"},
+		{Name: "project.create", Tier: "tier1"},
+	}}
+
+	dispatched := make([]string, 0, 2)
+	projectRepo := repo.NewProjectRepo(fixture.pool)
+	projectSlug := "sam-blog-fresh-guarded"
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = append(dispatched, call.ID)
+		switch strings.TrimSpace(call.Name) {
+		case "project.create":
+			created, err := projectRepo.Create(ctx, repo.Project{
+				OrganizationID: fixture.org.ID,
+				Slug:           projectSlug,
+				DisplayName:    "Sam.blog",
+				DeliveryMode:   "gated",
+				CreatedByType:  "system",
+				CreatedByID:    uuid.Nil,
+				Settings:       json.RawMessage(`{}`),
+			})
+			if err != nil {
+				return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+			}
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Output: map[string]any{
+					"project": map[string]any{
+						"id":   created.ID,
+						"slug": created.Slug,
+						"name": created.DisplayName,
+					},
+				},
+			}, nil
+		default:
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"ok": true}}, nil
+		}
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "list-1", Name: "project.list", Tier: "tier1", Arguments: map[string]any{}},
+			}}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "create-1", Name: "project.create", Tier: "tier1", Arguments: map[string]any{"name": "Sam.blog", "slug": projectSlug}},
+			}}, nil
+		default:
+			return ModelResponse{Content: "Handoff to Lori: fresh project created."}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if strings.Join(dispatched, ",") != "create-1" {
+		t.Fatalf("dispatched tool calls = %v, want only project.create", dispatched)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	foundBlockedList := false
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || message.ToolCallID == nil || *message.ToolCallID != "list-1" {
+			continue
+		}
+		if strings.Contains(message.Content, "fresh kickoff requires creating the new project first") {
+			foundBlockedList = true
+			break
+		}
+	}
+	if !foundBlockedList {
+		t.Fatal("missing blocked pre-create project.list tool result")
+	}
+}
+
 func TestTurnEngineIntegrationFreshKickoffPromptExcludesArchivedPriorRunContext(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

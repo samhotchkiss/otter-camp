@@ -5392,6 +5392,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if shouldBlockFreshKickoffPreCreateTool(rt, name) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildFreshKickoffPreCreateToolGuardError(),
+			})
+			continue
+		}
 		if shouldBlockProjectKickoffFollowOnTool(rt, name) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -8484,11 +8492,31 @@ func shouldBlockProjectKickoffFollowOnTool(rt *turnRuntime, toolName string) boo
 	return strings.TrimSpace(toolName) != ""
 }
 
+func shouldBlockFreshKickoffPreCreateTool(rt *turnRuntime, toolName string) bool {
+	if rt == nil || !rt.freshKickoff || rt.projectIdentity != nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "organization") {
+		return false
+	}
+	if rt.agent.ID == uuid.Nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.agent.DisplayName), "frank") && !strings.EqualFold(strings.TrimSpace(rt.agent.AgentType), "general") {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(toolName), "project.create")
+}
+
 func buildProjectKickoffFollowOnToolGuardError(identity *projectIdentity) string {
 	if identity == nil {
 		return "project kickoff is now handoff-only: provide Lori the handoff summary and end the turn"
 	}
 	return fmt.Sprintf("project kickoff is now handoff-only: project already created as slug=%s project_id=%s. Provide Lori the handoff summary and end the turn without additional tool use", strings.TrimSpace(identity.slug), identity.id)
+}
+
+func buildFreshKickoffPreCreateToolGuardError() string {
+	return "fresh kickoff requires creating the new project first: skip project/memory/template browsing and call project.create before any other tool use"
 }
 
 func buildFreshKickoffBlockerMessage(identity *projectIdentity, reason string) string {
