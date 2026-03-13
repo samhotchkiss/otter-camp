@@ -1053,11 +1053,8 @@ func TestAppendProjectBootstrapContinuationMessageWithoutAuthorUsesSystem(t *tes
 	if err != nil {
 		t.Fatalf("GetByID continuation message: %v", err)
 	}
-	if stored.AuthorType == nil {
-		t.Fatal("author_type = nil, want system")
-	}
-	if got := strings.TrimSpace(*stored.AuthorType); got != "system" {
-		t.Fatalf("author_type = %q, want system", got)
+	if stored.AuthorType != nil {
+		t.Fatalf("author_type = %v, want nil for system-authored continuation message", *stored.AuthorType)
 	}
 	if stored.AuthorID != nil {
 		t.Fatalf("author_id = %v, want nil", stored.AuthorID)

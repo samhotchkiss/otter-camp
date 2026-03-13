@@ -2938,7 +2938,6 @@ func (e *TurnEngine) appendProjectBootstrapContinuationMessageWithContent(ctx co
 	if e == nil || sessionID == uuid.Nil {
 		return nil, repo.ErrNotFound
 	}
-	authorType := "system"
 	metadata, err := json.Marshal(map[string]any{
 		"source":                       projectBootstrapSource,
 		"auto_continue":                true,
@@ -2948,14 +2947,16 @@ func (e *TurnEngine) appendProjectBootstrapContinuationMessageWithContent(ctx co
 	if err != nil {
 		return nil, err
 	}
+	var authorType *string
 	var authorID *uuid.UUID
 	if authorAgentID != uuid.Nil {
-		authorType = "agent"
+		agentType := "agent"
+		authorType = &agentType
 		authorID = &authorAgentID
 	}
 	return e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 		SessionID:  sessionID,
-		AuthorType: &authorType,
+		AuthorType: authorType,
 		AuthorID:   authorID,
 		Role:       "user",
 		Content:    content,
