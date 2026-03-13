@@ -629,6 +629,122 @@ func TestTurnEngineIntegrationProjectSessionKickoffHandsOffToLoriAfterCompletedF
 	}
 }
 
+func TestTurnEngineIntegrationUserMessageConsumerAdvancesPastClosedSessionEvent(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	subscription := fixture.bus.Subscribe(defaultTurnConsumerName, nil, fixture.engine.HandleUserMessageEvent)
+	t.Cleanup(func() {
+		fixture.bus.Unsubscribe(subscription)
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	assignedAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, assignedAgent.ID)
+	closedTaskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession closed task scope: %v", err)
+	}
+	if err := fixture.chatService.CloseSession(ctx, closedTaskSession.ID); err != nil {
+		t.Fatalf("CloseSession closed task scope: %v", err)
+	}
+
+	actorID := fixture.user.ID
+	closedMessageID := uuid.New()
+	if err := fixture.bus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.message.user_sent",
+		ActorType:      "human",
+		ActorID:        &actorID,
+		Payload: mustJSON(t, map[string]any{
+			"session_id": closedTaskSession.ID.String(),
+			"message_id": closedMessageID.String(),
+		}),
+	}); err != nil {
+		t.Fatalf("Publish closed session event: %v", err)
+	}
+
+	authorType := "human_user"
+	orgSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "organization",
+		ScopeID:        fixture.org.ID,
+		Mode:           "async",
+		Title:          stringPtr("fresh org validation"),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession org scope: %v", err)
+	}
+	orgMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  orgSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "start a brand-new Sam.blog project from scratch",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage org session: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		payload, ok := latestAgentTurnPayloadForSession(ctx, fixture.pool, orgSession.ID)
+		if ok && payload.SessionID == orgSession.ID && payload.MessageID == orgMessage.ID {
+			var lastSeq int64
+			if err := fixture.pool.QueryRow(ctx, `
+				SELECT last_seq
+				FROM consumer_cursor
+				WHERE consumer_name = $1
+				  AND organization_id IS NULL
+			`, defaultTurnConsumerName).Scan(&lastSeq); err != nil {
+				t.Fatalf("load consumer cursor: %v", err)
+			}
+			if lastSeq < 1 {
+				t.Fatalf("consumer last_seq = %d, want > 0", lastSeq)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var lastSeq int64
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT last_seq
+		FROM consumer_cursor
+		WHERE consumer_name = $1
+		  AND organization_id IS NULL
+	`, defaultTurnConsumerName).Scan(&lastSeq); err != nil {
+		t.Fatalf("load consumer cursor: %v", err)
+	}
+	t.Fatalf("expected org agent_turn job after closed session event; consumer last_seq=%d closed_message=%s org_message=%s", lastSeq, closedMessageID, orgMessage.ID)
+}
+
+func latestAgentTurnPayloadForSession(ctx context.Context, pool *pgxpool.Pool, sessionID uuid.UUID) (AgentTurnPayload, bool) {
+	var rawPayload []byte
+	if err := pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE job_type = $1
+		  AND payload->>'session_id' = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, AgentTurnJobType, sessionID.String()).Scan(&rawPayload); err != nil {
+		return AgentTurnPayload{}, false
+	}
+
+	var payload AgentTurnPayload
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		return AgentTurnPayload{}, false
+	}
+	return payload, true
+}
+
 func TestTurnEngineIntegrationAsyncExecutionSessionSingleMessageCreatesSingleTurn(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -14830,6 +14946,94 @@ func TestTurnEngineIntegrationCancelDuringTier2RequestsRunCancel(t *testing.T) {
 	}
 	if fixture.runCanceler.calls[0] != runID {
 		t.Fatalf("cancel run id = %s, want %s", fixture.runCanceler.calls[0], runID)
+	}
+}
+
+func TestTurnEngineIntegrationProjectArchivedCancelsTaskTurn(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	assignedAgent := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, assignedAgent.ID)
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "start work now",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return ModelResponse{}, ctx.Err()
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for model stream start")
+	}
+
+	if err := fixture.bus.Publish(ctx, nil, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "project.archived",
+		ActorType:      "system",
+		Payload:        mustJSON(t, map[string]any{"project_id": project.ID.String()}),
+	}); err != nil {
+		t.Fatalf("publish project.archived: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("HandleUserMessage returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for HandleUserMessage")
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turn count = %d, want 1", len(turns))
+	}
+	if turns[0].Status != "cancelled" {
+		t.Fatalf("turn status = %s, want cancelled", turns[0].Status)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	if !containsMessageContent(messages, "[Turn cancelled because the session or project was closed.]") {
+		t.Fatal("missing archive cancellation system message")
 	}
 }
 

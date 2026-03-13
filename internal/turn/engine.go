@@ -134,6 +134,7 @@ var (
 	errTurnDeferred             = errors.New("turn deferred")
 	errTurnCancelled            = errors.New("turn cancelled")
 	errTurnPaused               = errors.New("turn paused")
+	errTurnSessionClosed        = errors.New("turn cancelled because session or project closed")
 	errProjectBootstrapWatchdog = errors.New("project bootstrap watchdog timeout")
 	errAsyncTurnWatchdog        = errors.New("async turn watchdog timeout")
 )
@@ -8847,50 +8848,78 @@ func (e *TurnEngine) updateRunTokenRollup(ctx context.Context, invocation repo.M
 }
 
 func (e *TurnEngine) handleCancellation(ctx context.Context, rt *turnRuntime) error {
+	cleanupCtx := context.Background()
 	if runID := rt.getActiveTier2Run(); runID != nil && e.runCanceler != nil {
-		_ = e.runCanceler.RequestCancel(context.Background(), *runID, controlplane.CancelRequestActor{Type: "system"})
+		_ = e.runCanceler.RequestCancel(cleanupCtx, *runID, controlplane.CancelRequestActor{Type: "system"})
 	}
 
-	messages, _ := e.messages.ListBySession(ctx, rt.session.ID)
+	messages, _ := e.messages.ListBySession(cleanupCtx, rt.session.ID)
 	for i := len(messages) - 1; i >= 0; i-- {
 		m := messages[i]
 		if m.TurnID == nil || *m.TurnID != rt.turn.ID {
 			continue
 		}
 		if strings.EqualFold(m.Role, "assistant") && strings.EqualFold(m.Status, "streaming") {
-			_, _ = e.messages.UpdateStatus(ctx, m.ID, "failed", "cancelled")
+			_, _ = e.messages.UpdateStatus(cleanupCtx, m.ID, "failed", "cancelled")
 			break
 		}
 	}
-	_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Turn cancelled by user.]")
-	_ = e.chat.CancelTurn(context.Background(), rt.turn.ID, "user_cancelled")
+	systemMessage := "[Turn cancelled by user.]"
+	cancelReason := "user_cancelled"
+	if errors.Is(context.Cause(ctx), errTurnSessionClosed) {
+		systemMessage = "[Turn cancelled because the session or project was closed.]"
+		cancelReason = "session_closed"
+	}
+	_, _ = e.appendSystemMessage(cleanupCtx, rt.turn.ID, rt.session.ID, systemMessage)
+	_ = e.chat.CancelTurn(cleanupCtx, rt.turn.ID, cancelReason)
 	return errTurnCancelled
 }
 
 func (e *TurnEngine) watchTurnCancellation(ctx context.Context, rt *turnRuntime) (context.Context, func()) {
-	cancelCtx, cancel := context.WithCancel(ctx)
+	cancelCtx, cancel := context.WithCancelCause(ctx)
 	consumer := e.cancelConsumerName
+	projectID := resolveProjectID(ctx, rt.session, e.tasks)
 	sub := e.events.Subscribe(consumer, &rt.session.OrganizationID, func(_ context.Context, event eventbus.DomainEvent) error {
-		if event.EventType != "chat.turn.cancelled" {
-			return nil
-		}
 		payload := map[string]any{}
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		if len(event.Payload) > 0 {
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				return nil
+			}
+		}
+
+		switch event.EventType {
+		case "chat.turn.cancelled":
+			turnID, ok := payloadUUID(payload, "turn_id")
+			if !ok || turnID != rt.turn.ID {
+				return nil
+			}
+		case "chat.session.closed":
+			sessionID, ok := payloadUUID(payload, "session_id")
+			if !ok || sessionID != rt.session.ID {
+				return nil
+			}
+		case "project.archived":
+			eventProjectID, ok := payloadUUID(payload, "project_id")
+			if !ok || projectID == nil || *projectID == uuid.Nil || eventProjectID != *projectID {
+				return nil
+			}
+		default:
 			return nil
 		}
-		turnID, ok := payloadUUID(payload, "turn_id")
-		if !ok || turnID != rt.turn.ID {
-			return nil
-		}
+
 		if runID := rt.getActiveTier2Run(); runID != nil && e.runCanceler != nil {
 			_ = e.runCanceler.RequestCancel(context.Background(), *runID, controlplane.CancelRequestActor{Type: "system"})
 		}
-		cancel()
+		if event.EventType == "chat.turn.cancelled" {
+			cancel(context.Canceled)
+			return nil
+		}
+		cancel(errTurnSessionClosed)
 		return nil
 	})
 
 	cleanup := func() {
-		cancel()
+		cancel(context.Canceled)
 		e.events.Unsubscribe(sub)
 	}
 	return cancelCtx, cleanup
