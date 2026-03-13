@@ -36,7 +36,6 @@ import (
 )
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
-var bootstrapWorkstreamTitlePattern = regexp.MustCompile(`(?i)^(ws\d+|workstream\s+\d+)\s*:`)
 var parentChildOrdinalTitlePattern = regexp.MustCompile(`^([a-z]+)\s+(\d+)\s*:`)
 
 var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
@@ -106,10 +105,6 @@ func normalizeSlug(value string) string {
 		return "item-" + strings.ToLower(uuid.NewString()[:8])
 	}
 	return trimmed
-}
-
-func isBootstrapWorkstreamTitle(title string) bool {
-	return bootstrapWorkstreamTitlePattern.MatchString(strings.TrimSpace(title))
 }
 
 func readStringSlice(input map[string]any, key string) []string {
@@ -1191,7 +1186,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		return nil, err
 	}
 	if parentTask == nil && resolvedFlowTemplateID == nil {
-		resolvedFlowTemplateID, err = e.resolveBootstrapWorkstreamFlowTemplate(ctx, scope, projectID, title)
+		resolvedFlowTemplateID, err = e.resolveBootstrapWorkstreamFlowTemplate(ctx, scope, projectID)
 		if err != nil {
 			return nil, err
 		}
@@ -1377,14 +1372,11 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	return response, nil
 }
 
-func (e *NativeToolExecutor) resolveBootstrapWorkstreamFlowTemplate(ctx context.Context, scope workspaceScope, projectID uuid.UUID, title string) (*uuid.UUID, error) {
+func (e *NativeToolExecutor) resolveBootstrapWorkstreamFlowTemplate(ctx context.Context, scope workspaceScope, projectID uuid.UUID) (*uuid.UUID, error) {
 	if e.tasks == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil {
 		return nil, nil
 	}
 	if scope.projectID == nil || *scope.projectID != projectID {
-		return nil, nil
-	}
-	if !isBootstrapWorkstreamTitle(title) {
 		return nil, nil
 	}
 

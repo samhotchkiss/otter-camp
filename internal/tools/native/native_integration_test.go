@@ -4010,10 +4010,10 @@ func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreams
 	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
 
 	titles := []string{
-		"WS1: Content Migration from technonymous.org",
-		"WS3: Content Strategy",
-		"WS2: HTML Layout Templates",
-		"WS4: Blog Post Ideation (20 Concepts)",
+		"Content Strategy",
+		"Site Architecture & Design",
+		"Site Build",
+		"Content Creation",
 	}
 	for _, title := range titles {
 		out, err := executor.Execute(projectCtx, "task.create", map[string]any{
@@ -4052,10 +4052,10 @@ func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreams
 	}
 	for _, task := range tasks {
 		switch strings.TrimSpace(task.Title) {
-		case "WS1: Content Migration from technonymous.org",
-			"WS3: Content Strategy",
-			"WS2: HTML Layout Templates",
-			"WS4: Blog Post Ideation (20 Concepts)":
+		case "Content Strategy",
+			"Site Architecture & Design",
+			"Site Build",
+			"Content Creation":
 			if task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {
 				t.Fatalf("bootstrap parent task %q flow_template_id = %v, want resolved template", task.Title, task.FlowTemplateID)
 			}
