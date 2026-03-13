@@ -245,6 +245,12 @@ type OperatorDashboardTaskRef struct {
 	Label      string
 }
 
+type OperatorDashboardRestartState struct {
+	Status            string
+	RetryAttemptCount int
+	RetryBudget       int
+}
+
 type OperatorDashboardLinks struct {
 	Project        string
 	RestartProject string
@@ -260,6 +266,7 @@ type OperatorDashboardItem struct {
 	Status          string
 	Project         *OperatorDashboardRef
 	RestartProject  *OperatorDashboardRef
+	RestartState    *OperatorDashboardRestartState
 	Task            *OperatorDashboardTaskRef
 	Run             *OperatorDashboardRef
 	UpdatedAt       time.Time

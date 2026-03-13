@@ -1377,6 +1377,12 @@ func TestOperatorDashboardShowsProjectAutomaticFailuresWithRestartLink(t *testin
 	if failureItem.RestartProject == nil || failureItem.RestartProject.ID != restartProject.ID {
 		t.Fatalf("restart project ref=%+v want=%s body=%s", failureItem.RestartProject, restartProject.ID, string(resp.Body))
 	}
+	if failureItem.RestartState == nil || failureItem.RestartState.Status != "restart_available" {
+		t.Fatalf("restart state=%+v want restart_available body=%s", failureItem.RestartState, string(resp.Body))
+	}
+	if failureItem.RestartState.RetryAttemptCount != 0 || failureItem.RestartState.RetryBudget != 0 {
+		t.Fatalf("restart state counts=%+v want zero/zero body=%s", failureItem.RestartState, string(resp.Body))
+	}
 	if failureItem.Links.Project != "/v1/projects/"+failedProject.ID.String() {
 		t.Fatalf("project link=%q want=%q body=%s", failureItem.Links.Project, "/v1/projects/"+failedProject.ID.String(), string(resp.Body))
 	}

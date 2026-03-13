@@ -81,6 +81,7 @@ type operatorDashboardItemResponse struct {
 	Status          string                              `json:"status"`
 	Project         *operatorDashboardRefResponse       `json:"project,omitempty"`
 	RestartProject  *operatorDashboardRefResponse       `json:"restart_project,omitempty"`
+	RestartState    *operatorDashboardRestartState      `json:"restart_state,omitempty"`
 	Task            *operatorDashboardTaskRef           `json:"task,omitempty"`
 	Run             *operatorDashboardRefResponse       `json:"run,omitempty"`
 	BlockingTasks   []projectOperationalBlockerResponse `json:"blocking_tasks,omitempty"`
@@ -99,6 +100,12 @@ type operatorDashboardTaskRef struct {
 	ID         uuid.UUID `json:"id"`
 	TaskNumber int       `json:"task_number"`
 	Label      string    `json:"label"`
+}
+
+type operatorDashboardRestartState struct {
+	Status            string `json:"status"`
+	RetryAttemptCount int    `json:"retry_attempt_count,omitempty"`
+	RetryBudget       int    `json:"retry_budget,omitempty"`
 }
 
 type operatorDashboardLinks struct {
@@ -1649,6 +1656,9 @@ func (l operatorDashboardLoader) loadRecentProjectFailureItems(ctx context.Conte
 			}
 			item.Links.RestartProject = "/v1/projects/" + restartProjectID.String()
 		}
+		if restartState := projectAutomaticFailureRestartStateValue(retryAttemptCount, retryBudget, restartProjectStatus); restartState != nil {
+			item.RestartState = restartState
+		}
 		items = append(items, item)
 	}
 	if rows.Err() != nil {
@@ -1748,19 +1758,48 @@ func projectAutomaticFailureSummary(failureClass, failureReason *string, retryAt
 }
 
 func projectAutomaticFailureRestartState(retryAttemptCount, retryBudget int, restartProjectStatus *string) string {
+	state := projectAutomaticFailureRestartStateValue(retryAttemptCount, retryBudget, restartProjectStatus)
+	if state == nil {
+		return ""
+	}
+	switch state.Status {
+	case "restart_available":
+		if state.RetryBudget > 0 {
+			return fmt.Sprintf("restart available %d/%d", state.RetryAttemptCount, state.RetryBudget)
+		}
+		return "restart available"
+	case "retry_budget_exhausted":
+		return fmt.Sprintf("retry budget exhausted %d/%d", state.RetryAttemptCount, state.RetryBudget)
+	case "restart_target_inactive":
+		return fmt.Sprintf("restart target inactive %d/%d", state.RetryAttemptCount, state.RetryBudget)
+	default:
+		return ""
+	}
+}
+
+func projectAutomaticFailureRestartStateValue(retryAttemptCount, retryBudget int, restartProjectStatus *string) *operatorDashboardRestartState {
 	status := strings.TrimSpace(operatorDashboardStringValue(restartProjectStatus))
 	switch {
 	case strings.EqualFold(status, "active"):
-		if retryBudget > 0 {
-			return fmt.Sprintf("restart available %d/%d", retryAttemptCount, retryBudget)
+		return &operatorDashboardRestartState{
+			Status:            "restart_available",
+			RetryAttemptCount: retryAttemptCount,
+			RetryBudget:       retryBudget,
 		}
-		return "restart available"
 	case retryBudget > 0 && retryAttemptCount >= retryBudget:
-		return fmt.Sprintf("retry budget exhausted %d/%d", retryAttemptCount, retryBudget)
+		return &operatorDashboardRestartState{
+			Status:            "retry_budget_exhausted",
+			RetryAttemptCount: retryAttemptCount,
+			RetryBudget:       retryBudget,
+		}
 	case retryAttemptCount > 0 && retryBudget > 0:
-		return fmt.Sprintf("restart target inactive %d/%d", retryAttemptCount, retryBudget)
+		return &operatorDashboardRestartState{
+			Status:            "restart_target_inactive",
+			RetryAttemptCount: retryAttemptCount,
+			RetryBudget:       retryBudget,
+		}
 	default:
-		return ""
+		return nil
 	}
 }
 
