@@ -49,6 +49,18 @@ func TestRunProjectCreateRequiresName(t *testing.T) {
 	}
 }
 
+func TestRunProjectRelaunchRequiresProjectSelector(t *testing.T) {
+	code, _, stderr := captureCommandOutput(t, func() int {
+		return runProjectRelaunch([]string{})
+	})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "project relaunch requires --project-id or --project") {
+		t.Fatalf("stderr = %q, want project selector validation", stderr)
+	}
+}
+
 func TestRunTaskListRequiresProjectSelector(t *testing.T) {
 	code, _, stderr := captureCommandOutput(t, func() int {
 		return runTaskList([]string{})
@@ -167,5 +179,30 @@ func TestRunTaskResumeCallsResumeEndpoint(t *testing.T) {
 	}
 	if got := strings.TrimSpace(stdout); got != taskID {
 		t.Fatalf("stdout = %q, want %q", got, taskID)
+	}
+}
+
+func TestRunProjectRelaunchCallsRelaunchEndpoint(t *testing.T) {
+	projectID := "11111111-1111-1111-1111-111111111111"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/projects/"+projectID+"/relaunch" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1/projects/"+projectID+"/relaunch")
+		}
+		if got := strings.TrimSpace(r.Header.Get("X-API-Key")); got != "relaunch-key" {
+			t.Fatalf("X-API-Key = %q, want %q", got, "relaunch-key")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"` + projectID + `","slug":"sam-blog-restart","display_name":"Sam.blog Restart","delivery_mode":"gated","status":"active"}}`))
+	}))
+	defer server.Close()
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runProjectRelaunch([]string{"--server-url", server.URL, "--api-key", "relaunch-key", "--output", "quiet", "--project-id", projectID})
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 stderr=%q", code, stderr)
+	}
+	if got := strings.TrimSpace(stdout); got != projectID {
+		t.Fatalf("stdout = %q, want %q", got, projectID)
 	}
 }
