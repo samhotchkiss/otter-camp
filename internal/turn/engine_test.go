@@ -2310,6 +2310,9 @@ func TestBuildProjectBootstrapValidationRecoveryPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Every task.create or subtask.create call must include a concrete non-empty title") {
 		t.Fatalf("prompt = %q, want title guidance", prompt)
 	}
+	if !strings.Contains(prompt, "The bootstrap governance gate task is system-managed") {
+		t.Fatalf("prompt = %q, want governance gate guidance", prompt)
+	}
 }
 
 func TestEnsureTurnRunExitInvariantRejectsLeakedInProgressTurn(t *testing.T) {
@@ -3018,6 +3021,9 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	}
 	if !strings.Contains(resumeContent, "The persisted task tree already has runnable flow templates.") {
 		t.Fatalf("resume message = %q, want first-wave promotion guidance", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "The bootstrap governance gate task is system-managed") {
+		t.Fatalf("resume message = %q, want governance gate guidance", resumeContent)
 	}
 }
 
