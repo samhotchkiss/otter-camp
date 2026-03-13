@@ -813,7 +813,16 @@ func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error 
 			return nil
 		}
 	}
-	return e.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &job.ID)
+	err := e.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &job.ID)
+	if err == nil {
+		return nil
+	}
+	if handled, recoverErr := e.handleRecoverableBootstrapTurnJobFailure(ctx, payload, &job.ID, err); recoverErr != nil {
+		return recoverErr
+	} else if handled {
+		return nil
+	}
+	return err
 }
 
 func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.DomainEvent) error {
@@ -3477,6 +3486,84 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return pauseErr
 	}
 	return err
+}
+
+func (e *TurnEngine) handleRecoverableBootstrapTurnJobFailure(
+	ctx context.Context,
+	payload AgentTurnPayload,
+	currentJobID *uuid.UUID,
+	cause error,
+) (bool, error) {
+	if e == nil || e.chat == nil || cause == nil || payload.SessionID == uuid.Nil || payload.MessageID == uuid.Nil {
+		return false, nil
+	}
+
+	session, err := e.chat.GetSession(ctx, payload.SessionID)
+	if err != nil {
+		return false, err
+	}
+	if session.ScopeID == uuid.Nil ||
+		!strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return false, nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	normalizeProjectBootstrapValidationFailure(&progress, false)
+	if !e.projectBootstrapRuntimeManaged(ctx, session, payload.MessageID) ||
+		!progress.ValidationFailed() ||
+		!projectBootstrapRecoverableMaxToolCallFailure(progress) ||
+		!projectBootstrapSetupPersisted(progress) ||
+		session.CurrentTurnID == nil ||
+		*session.CurrentTurnID == uuid.Nil {
+		return false, nil
+	}
+
+	turn, err := e.chat.GetTurn(ctx, *session.CurrentTurnID)
+	if err != nil {
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(turn.Status), "in_progress") {
+		return false, nil
+	}
+
+	rt := &turnRuntime{
+		session:          session,
+		turn:             turn,
+		initialMessageID: payload.MessageID,
+		currentJobID:     cloneUUIDPointer(currentJobID),
+		startedAt:        e.turnStartTime(turn),
+	}
+	if payload.AgentID != nil && *payload.AgentID != uuid.Nil {
+		rt.agent.ID = *payload.AgentID
+	} else if turn.RespondingID != uuid.Nil {
+		rt.agent.ID = turn.RespondingID
+	}
+
+	handled, recoverErr := e.continueRecoverableProjectBootstrapValidation(
+		ctx,
+		rt,
+		projectBootstrapStateFromMetadata(session.Metadata),
+		progress,
+		e.now().UTC(),
+		true,
+	)
+	if recoverErr != nil {
+		return true, recoverErr
+	}
+	if handled {
+		_, _ = e.appendSystemMessage(
+			ctx,
+			turn.ID,
+			session.ID,
+			fmt.Sprintf("[Recovered bootstrap validation job failure into a fresh continuation: %s]", summarizeFailure(cause)),
+		)
+		return true, nil
+	}
+	return false, nil
 }
 
 func (e *TurnEngine) recoverRetriedAgentTurnLeak(

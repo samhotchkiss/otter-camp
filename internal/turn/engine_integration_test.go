@@ -10398,6 +10398,103 @@ func TestTurnEngineIntegrationProjectBootstrapFailsImmediatelyWhenChildCreationD
 	)
 }
 
+func TestTurnEngineIntegrationRecoverableBootstrapJobFailureQueuesFreshContinuation(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: recover the bootstrap task tree into bounded first-wave tasks.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "pm",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("Assign PM: %v", err)
+	}
+
+	parentDescription := strings.Join([]string{
+		"- Redesign the landing page narrative and responsive layout for launch.",
+		"- Wire billing handoff, launch analytics, and support readiness across the release.",
+	}, "\n")
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Landing page orchestration gate",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	}); err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+		UpdatedAt:        &now,
+	}); err != nil {
+		t.Fatalf("updateProjectBootstrapState: %v", err)
+	}
+
+	turnRecord, _, err := fixture.engine.turns.CreateForMessageAttempt(ctx, projectSession.ID, lori.ID, handoff.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+	activeTurn, shouldRun, err := fixture.engine.startInboundMessageTurn(ctx, turnRecord)
+	if err != nil {
+		t.Fatalf("startInboundMessageTurn: %v", err)
+	}
+	if !shouldRun {
+		t.Fatal("expected newly created bootstrap turn to start")
+	}
+
+	handled, err := fixture.engine.handleRecoverableBootstrapTurnJobFailure(ctx, AgentTurnPayload{
+		SessionID: projectSession.ID,
+		MessageID: handoff.ID,
+		AgentID:   &lori.ID,
+	}, nil, errors.New(bootstrapChildTaskBoundednessError))
+	if err != nil {
+		t.Fatalf("handleRecoverableBootstrapTurnJobFailure: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected recoverable bootstrap validation failure to be handled")
+	}
+
+	storedTurn, err := fixture.chatService.GetTurn(ctx, activeTurn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn active turn: %v", err)
+	}
+	if storedTurn.Status != "failed" {
+		t.Fatalf("active turn status = %q, want failed after recovery continuation handoff", storedTurn.Status)
+	}
+
+	storedSession, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session after recovery: %v", err)
+	}
+	if storedSession.CurrentTurnID != nil {
+		t.Fatalf("project session current_turn_id = %v, want nil after failed recovery turn", storedSession.CurrentTurnID)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 fresh continuation", jobs)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsValidationWhenParentExecutesAheadOfChildren(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
