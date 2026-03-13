@@ -223,6 +223,24 @@ func TestFileEditDirectoryReturnsPayloadError(t *testing.T) {
 	}
 }
 
+func TestNormalizeTaskWorkStatusAlias(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "ready", want: "queued"},
+		{input: "complete", want: "done"},
+		{input: "completed", want: "done"},
+		{input: "done", want: "done"},
+	}
+
+	for _, tc := range tests {
+		if got := normalizeTaskWorkStatusAlias(tc.input); got != tc.want {
+			t.Fatalf("normalizeTaskWorkStatusAlias(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestGitCommitMainBranchReturnsPayloadError(t *testing.T) {
 	executor := NewExecutor(ExecutorOptions{
 		WorkspaceRoot: t.TempDir(),

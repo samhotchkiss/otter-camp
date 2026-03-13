@@ -1910,6 +1910,8 @@ func normalizeTaskWorkStatusAlias(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "ready":
 		return "queued"
+	case "complete", "completed":
+		return "done"
 	default:
 		return strings.TrimSpace(status)
 	}
