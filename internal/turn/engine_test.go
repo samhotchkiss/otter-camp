@@ -3490,6 +3490,42 @@ func TestBuildProjectBootstrapResumeActionPromptForSetupPersist(t *testing.T) {
 	}
 }
 
+func TestBuildProjectBootstrapResumeActionPromptForValidationFailure(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		CurrentPhase:            projectBootstrapCheckpointFlowTemplatesPersisted,
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveSize,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 35 (List blog personality traits) violates the bounded task-size policy: split it into smaller reviewable tasks before queueing",
+	})
+	if !strings.Contains(prompt, "Bootstrap is currently blocked on this validation failure: kickoff validation failed: first-wave task 35") {
+		t.Fatalf("prompt = %q, want concrete validation failure", prompt)
+	}
+	if !strings.Contains(prompt, "Do not start with bootstrap.setup.persist on this turn") {
+		t.Fatalf("prompt = %q, want no-persist-first guidance", prompt)
+	}
+	if !strings.Contains(prompt, "split that exact persisted task into narrower executable child tasks") {
+		t.Fatalf("prompt = %q, want exact-task split guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Only after the named blocker is repaired should you call bootstrap.setup.persist") {
+		t.Fatalf("prompt = %q, want repair-before-persist guidance", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapResumeStateMessageIncludesValidationFailure(t *testing.T) {
+	message := buildProjectBootstrapResumeStateMessage(projectBootstrapState{
+		CurrentPhase:            projectBootstrapCheckpointFlowTemplatesPersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointTaskTreePersisted,
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 35 (List blog personality traits) violates the bounded task-size policy",
+	}, projectBootstrapResumeSnapshot{
+		ProjectID:   uuid.NewString(),
+		ProjectSlug: "sam-blog-test",
+	})
+	if !strings.Contains(message, "Current validation failure: kickoff validation failed: first-wave task 35") {
+		t.Fatalf("message = %q, want validation failure line", message)
+	}
+}
+
 func TestBuildProjectBootstrapResumeActionPromptStartsWithPersistAfterTaskTree(t *testing.T) {
 	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
 		BootstrapTaskID:          uuid.NewString(),

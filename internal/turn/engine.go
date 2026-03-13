@@ -4906,6 +4906,11 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	if checkpoint := strings.TrimSpace(state.LastSuccessfulCheckpoint); checkpoint != "" {
 		lines = append(lines, "Last successful checkpoint: "+checkpoint)
 	}
+	if strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
+		if reason := strings.TrimSpace(state.ValidationFailureReason); reason != "" {
+			lines = append(lines, "Current validation failure: "+reason)
+		}
+	}
 	if pm := strings.TrimSpace(snapshot.ExistingPM); pm != "" {
 		lines = append(lines, "Existing PM: "+pm)
 	}
@@ -4966,6 +4971,9 @@ func projectBootstrapResumeShouldRootAtResumeMessage(state projectBootstrapState
 }
 
 func projectBootstrapResumePhaseGuidance(state projectBootstrapState) string {
+	if strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
+		return "Bootstrap is currently blocked on a concrete validation failure. Do not re-run bootstrap.setup.persist as the first step unless the named blocker is already repaired. Fix the specific persisted task, assignment, flow attachment, or bounded-size problem named above first, then resume bootstrap from that corrected persisted state. Do not restart the project or ask the user to restate the request."
+	}
 	if projectBootstrapResumeUsesCompactRoster(state) {
 		guidance := "Continue bootstrap only from the persisted first-wave state. Do not create more agents, parent tasks, or broad child-task batches unless a concrete persisted task is still invalid or unassigned. Reuse the existing staffed task tree, keep the bootstrap governance gate task untouched, keep first-wave execution tasks in draft until the gate auto-completes after validation passes, and finish any remaining task assignment, flow attachment, or first-wave selection using the persisted tasks already on the project. Reuse the existing active project assignees, including temp agents, whenever they already cover the needed role; only create a new agent if a required role is truly missing from the persisted assignment roster. Unless the persisted snapshot is clearly inconsistent, do not spend tools re-reading scaffold planning artifacts or re-listing the full task tree and template catalog before acting. Prefer direct task assignment, first-wave selection, and bootstrap.setup.persist using the persisted counts and roster above."
 		if projectBootstrapResumeShouldStartWithPersist(state) {
@@ -5025,6 +5033,18 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string
 		"Continue the active project bootstrap from the persisted state above.",
 		"Do not restate the project state or re-read scaffold artifacts, template catalogs, or the full task tree unless the persisted counts are clearly inconsistent with tool results.",
 		"Do not call task.list, flow.list_templates, or file.read on scaffold planning artifacts unless a specific persisted task, template, or count is actually unclear.",
+	}
+	if strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
+		reason := strings.TrimSpace(state.ValidationFailureReason)
+		if reason == "" {
+			reason = "repair the concrete bootstrap validation blocker named above"
+		}
+		lines = append(lines, "Bootstrap is currently blocked on this validation failure: "+reason)
+		lines = append(lines, "Do not start with bootstrap.setup.persist on this turn unless you have already repaired the named blocker. First fix the specific persisted task, assignment, flow attachment, or bounded-size issue named above.")
+		lines = append(lines, "If the failure names an oversized first-wave or parent task, split that exact persisted task into narrower executable child tasks and keep each child bounded. If the failure names an unassigned or flowless first-wave task, fix that exact task directly.")
+		lines = append(lines, "Only after the named blocker is repaired should you call bootstrap.setup.persist to record the corrected setup state.")
+		lines = append(lines, "Do not ask the user what they want. Continue the bootstrap workflow now.")
+		return strings.Join(lines, " ")
 	}
 	if projectBootstrapResumeShouldStartWithPersist(state) {
 		lines = append(lines, "Your first tool call in this resume turn should be bootstrap.setup.persist using the persisted setup progress above. Record any already-complete checklist steps before reading more tasks, templates, or scaffold artifacts.")
