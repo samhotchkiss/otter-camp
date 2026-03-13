@@ -136,6 +136,32 @@ func readStringSlice(input map[string]any, key string) []string {
 	}
 }
 
+func boundedTaskTooLargeResponse(title string, description *string, err error) map[string]any {
+	response := map[string]any{"error": err.Error()}
+	plan := taskdecomp.Analyze(title, description)
+	if !plan.RequiresDecomposition || len(plan.Deliverables) == 0 {
+		return response
+	}
+	suggested := map[string]any{
+		"mode": "parallel_children",
+	}
+	if primary := strings.TrimSpace(plan.PrimaryDeliverable); primary != "" {
+		suggested["primary_deliverable"] = primary
+	}
+	childTitles := make([]string, 0, len(plan.Deliverables))
+	for _, deliverable := range plan.Deliverables {
+		trimmed := strings.TrimSpace(deliverable)
+		if trimmed != "" {
+			childTitles = append(childTitles, trimmed)
+		}
+	}
+	if len(childTitles) > 0 {
+		suggested["child_titles"] = childTitles
+	}
+	response["suggested_decomposition"] = suggested
+	return response
+}
+
 func applyReviewPolicyInput(existing json.RawMessage, input map[string]any) (json.RawMessage, error) {
 	if input == nil {
 		return existing, nil
@@ -1214,7 +1240,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		})
 		if decompErr != nil {
 			if errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) {
-				return map[string]any{"error": decompErr.Error()}, nil
+				return boundedTaskTooLargeResponse(title, description, decompErr), nil
 			}
 			return nil, decompErr
 		}
@@ -1689,7 +1715,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			decompResult, decompErr := e.applyQueueDecomposition(ctx, &current)
 			if decompErr != nil {
 				if errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) {
-					return map[string]any{"error": decompErr.Error()}, nil
+					return boundedTaskTooLargeResponse(current.Title, current.Description, decompErr), nil
 				}
 				return nil, decompErr
 			}

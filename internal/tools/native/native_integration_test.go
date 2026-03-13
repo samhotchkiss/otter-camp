@@ -4754,6 +4754,55 @@ func TestIntegrationParentTaskCanDecomposeBroadFollowOnChildRequest(t *testing.T
 	}
 }
 
+func TestIntegrationParentTaskOversizedChildReturnsSuggestedDecomposition(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Content Strategy",
+		Description:    stringPtr("Create the content strategy workstream."),
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Define audience personas: speakers & consultants",
+		"description":    "Create 2 audience personas: (1) Event organizers seeking speakers on AI/ethics, (2) Companies seeking AI/ethics consultants. For each: demographics, goals, pain points, content habits, discovery path, desired action, and buying objections. Output: personas-speakers-consultants.md in repo.",
+	})
+	if err != nil {
+		t.Fatalf("task.create oversized child: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", out["error"])); !strings.Contains(got, "task exceeds bounded size policy") {
+		t.Fatalf("error = %q, want bounded size policy failure", got)
+	}
+	suggested, ok := out["suggested_decomposition"].(map[string]any)
+	if !ok {
+		t.Fatalf("suggested_decomposition = %T, want map", out["suggested_decomposition"])
+	}
+	if mode := strings.TrimSpace(fmt.Sprintf("%v", suggested["mode"])); mode != "parallel_children" {
+		t.Fatalf("suggested_decomposition.mode = %q, want parallel_children", mode)
+	}
+	childTitles, ok := suggested["child_titles"].([]any)
+	if !ok || len(childTitles) < 2 {
+		t.Fatalf("suggested_decomposition.child_titles = %#v, want at least 2 entries", suggested["child_titles"])
+	}
+}
+
 func TestIntegrationParentTaskRepeatedDecompositionReusesCanonicalChildren(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
