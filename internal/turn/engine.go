@@ -1373,6 +1373,11 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
 		return err
 	}
+	if queued, err := e.hasQueuedAgentTurnForSession(ctx, session.ID, nil); err != nil {
+		return err
+	} else if queued {
+		return nil
+	}
 
 	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, session, latestCompleted.RespondingID)
 	continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount)
