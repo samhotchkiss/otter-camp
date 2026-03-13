@@ -6584,7 +6584,7 @@ func TestTurnEngineIntegrationProjectBootstrapQueuesFollowOnAfterLoriAcknowledge
 	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
 	project := mustCreateBootstrapProject(t, ctx, fixture)
 	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
-	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and setup for this new project.")
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and setup for this new project from scratch as a fresh kickoff.")
 
 	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
 	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
@@ -13334,6 +13334,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsExplicitlyOnGuardrailLoop(t *
 	var continuationMessages int
 	var failureMessages int
 	var genericFailureMessages int
+	var freshKickoffBlockers int
 	for _, message := range messages {
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
 			continue
@@ -13347,12 +13348,18 @@ func TestTurnEngineIntegrationProjectBootstrapFailsExplicitlyOnGuardrailLoop(t *
 		if strings.Contains(message.Content, "[Turn failed:") {
 			genericFailureMessages++
 		}
+		if strings.Contains(message.Content, "Fresh kickoff blocked:") {
+			freshKickoffBlockers++
+		}
 	}
 	if continuationMessages != 3 {
 		t.Fatalf("continuation notice count = %d, want 3", continuationMessages)
 	}
 	if failureMessages != 1 {
 		t.Fatalf("bootstrap failure system messages = %d, want 1", failureMessages)
+	}
+	if freshKickoffBlockers != 0 {
+		t.Fatalf("fresh kickoff blocker messages = %d, want 0 once bootstrap setup is already persisted", freshKickoffBlockers)
 	}
 	if genericFailureMessages != 0 {
 		t.Fatalf("generic turn failure system messages = %d, want 0", genericFailureMessages)

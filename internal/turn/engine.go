@@ -7688,6 +7688,18 @@ func (e *TurnEngine) handleFreshKickoffBlocker(ctx context.Context, rt *turnRunt
 	if rt == nil || !rt.freshKickoff {
 		return false, nil
 	}
+	if rt.session != nil &&
+		rt.session.ScopeID != uuid.Nil &&
+		strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") &&
+		strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
+		if err != nil {
+			return true, err
+		}
+		if projectBootstrapSetupPersisted(progress) || progress.PlannedTaskCount > 0 || progress.AssignmentCount > 0 {
+			return false, nil
+		}
+	}
 	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildFreshKickoffBlockerMessage(rt.projectIdentity, reason)); err != nil {
 		return true, err
 	}
