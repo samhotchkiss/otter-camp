@@ -1022,6 +1022,39 @@ func TestHandleTurnCompletedEventSkipsWhenProjectPaused(t *testing.T) {
 	}
 }
 
+func TestAppendProjectBootstrapContinuationMessageWithoutAuthorUsesSystem(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	message, err := fixture.engine.appendProjectBootstrapContinuationMessageWithContent(
+		context.Background(),
+		fixture.session.ID,
+		uuid.Nil,
+		fixture.userMessageID.String(),
+		1,
+		"Continue bootstrap.",
+	)
+	if err != nil {
+		t.Fatalf("appendProjectBootstrapContinuationMessageWithContent: %v", err)
+	}
+
+	stored, err := fixture.messages.GetByID(context.Background(), message.ID)
+	if err != nil {
+		t.Fatalf("GetByID continuation message: %v", err)
+	}
+	if stored.AuthorType == nil {
+		t.Fatal("author_type = nil, want system")
+	}
+	if got := strings.TrimSpace(*stored.AuthorType); got != "system" {
+		t.Fatalf("author_type = %q, want system", got)
+	}
+	if stored.AuthorID != nil {
+		t.Fatalf("author_id = %v, want nil", stored.AuthorID)
+	}
+	if got := strings.TrimSpace(stored.Role); got != "user" {
+		t.Fatalf("role = %q, want user", got)
+	}
+}
+
 func TestContinueTurnStopsWhenProjectPaused(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 
