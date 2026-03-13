@@ -1600,6 +1600,9 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	if !strings.Contains(handoff, "Frank, Lori, and Ellie are starter-trio governance agents") {
 		t.Fatalf("handoff = %q, want starter-trio staffing guidance", handoff)
 	}
+	if !strings.Contains(handoff, "Keep staffing discovery bounded.") {
+		t.Fatalf("handoff = %q, want bounded staffing discovery guidance", handoff)
+	}
 	if !strings.Contains(handoff, content) {
 		t.Fatalf("handoff = %q, want originating request content", handoff)
 	}
