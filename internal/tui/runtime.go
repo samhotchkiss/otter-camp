@@ -183,8 +183,8 @@ type TaskDetailItem struct {
 	Priority                 int
 	SessionID                string // preferred execution session (active when present, otherwise recent)
 	DiscussionSessionID      string
-	ActiveExecutionSessionID        string
-	RecentExecutionSessionID        string
+	ActiveExecutionSessionID string
+	RecentExecutionSessionID string
 	AgentName                string // display_name of the assigned agent, if any
 	FlowNodeName             string // current flow node display_name, if any
 	FlowCurrentNodeID        string
@@ -246,9 +246,10 @@ type OperatorDashboardTaskRef struct {
 }
 
 type OperatorDashboardLinks struct {
-	Project string
-	Task    string
-	Run     string
+	Project        string
+	RestartProject string
+	Task           string
+	Run            string
 }
 
 type OperatorDashboardItem struct {
@@ -258,6 +259,7 @@ type OperatorDashboardItem struct {
 	Summary         string
 	Status          string
 	Project         *OperatorDashboardRef
+	RestartProject  *OperatorDashboardRef
 	Task            *OperatorDashboardTaskRef
 	Run             *OperatorDashboardRef
 	UpdatedAt       time.Time

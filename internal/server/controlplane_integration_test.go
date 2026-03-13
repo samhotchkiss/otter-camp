@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1309,6 +1310,81 @@ func TestOperatorDashboardRecentActivityIncludesFailuresRetriesAndNavigationTarg
 	failureItem := findOperatorDashboardItem(payload.RecentFailures.Items, "run_failed", runRecord.ID)
 	if failureItem == nil {
 		t.Fatalf("recent failures missing run_failed body=%s", string(resp.Body))
+	}
+}
+
+func TestOperatorDashboardShowsProjectAutomaticFailuresWithRestartLink(t *testing.T) {
+	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
+
+	testServer, orgA, adminA, _, _ := newControlPlaneTestServer(t)
+	defer testServer.Close()
+	token := loginToken(t, testServer.URL, adminA.Email, "admin-password")
+
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+
+	recordedAt := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
+	restartProject, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "bootstrap-restart-target",
+		DisplayName:    "Bootstrap Restart Target",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create restart project: %v", err)
+	}
+	settings := json.RawMessage(fmt.Sprintf(`{
+		"automatic_failure":{
+			"action":"archive",
+			"failure_class":"bootstrap_runtime",
+			"failure_reason":"max tool call handoff leaked in_progress turn",
+			"recorded_at":"%s"
+		},
+		"bootstrap_restart_bundle":{
+			"restart_project_id":"%s"
+		}
+	}`, recordedAt.Format(time.RFC3339), restartProject.ID))
+	failedProject, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgA.ID,
+		Slug:           "bootstrap-archived-source",
+		DisplayName:    "Bootstrap Archived Source",
+		DeliveryMode:   "gated",
+		Settings:       settings,
+		CreatedByType:  "human_user",
+		CreatedByID:    adminA.ID,
+	})
+	if err != nil {
+		t.Fatalf("create failed project: %v", err)
+	}
+
+	resp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/control/dashboard?limit=6", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+
+	payload := decodeOperatorDashboardResponse(t, resp.Body)
+	failureItem := findOperatorDashboardItem(payload.RecentFailures.Items, "project_automatic_failure", failedProject.ID)
+	if failureItem == nil {
+		t.Fatalf("recent failures missing project automatic failure body=%s", string(resp.Body))
+	}
+	if failureItem.Project == nil || failureItem.Project.ID != failedProject.ID {
+		t.Fatalf("project ref=%+v want=%s body=%s", failureItem.Project, failedProject.ID, string(resp.Body))
+	}
+	if failureItem.RestartProject == nil || failureItem.RestartProject.ID != restartProject.ID {
+		t.Fatalf("restart project ref=%+v want=%s body=%s", failureItem.RestartProject, restartProject.ID, string(resp.Body))
+	}
+	if failureItem.Links.Project != "/v1/projects/"+failedProject.ID.String() {
+		t.Fatalf("project link=%q want=%q body=%s", failureItem.Links.Project, "/v1/projects/"+failedProject.ID.String(), string(resp.Body))
+	}
+	if failureItem.Links.RestartProject != "/v1/projects/"+restartProject.ID.String() {
+		t.Fatalf("restart project link=%q want=%q body=%s", failureItem.Links.RestartProject, "/v1/projects/"+restartProject.ID.String(), string(resp.Body))
+	}
+	if !strings.Contains(failureItem.Summary, "bootstrap_runtime") {
+		t.Fatalf("summary=%q want bootstrap_runtime body=%s", failureItem.Summary, string(resp.Body))
 	}
 }
 

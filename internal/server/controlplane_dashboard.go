@@ -80,6 +80,7 @@ type operatorDashboardItemResponse struct {
 	Summary         string                              `json:"summary,omitempty"`
 	Status          string                              `json:"status"`
 	Project         *operatorDashboardRefResponse       `json:"project,omitempty"`
+	RestartProject  *operatorDashboardRefResponse       `json:"restart_project,omitempty"`
 	Task            *operatorDashboardTaskRef           `json:"task,omitempty"`
 	Run             *operatorDashboardRefResponse       `json:"run,omitempty"`
 	BlockingTasks   []projectOperationalBlockerResponse `json:"blocking_tasks,omitempty"`
@@ -101,9 +102,10 @@ type operatorDashboardTaskRef struct {
 }
 
 type operatorDashboardLinks struct {
-	Project string `json:"project,omitempty"`
-	Task    string `json:"task,omitempty"`
-	Run     string `json:"run,omitempty"`
+	Project        string `json:"project,omitempty"`
+	RestartProject string `json:"restart_project,omitempty"`
+	Task           string `json:"task,omitempty"`
+	Run            string `json:"run,omitempty"`
 }
 
 type operatorDashboardLoader struct {
@@ -499,7 +501,11 @@ func (l operatorDashboardLoader) countRecentFailures(ctx context.Context, organi
 	if err != nil {
 		return 0, err
 	}
-	return eventCount + invocationCount, nil
+	projectFailureCount, err := l.countRecentProjectFailures(ctx, organizationID)
+	if err != nil {
+		return 0, err
+	}
+	return eventCount + invocationCount + projectFailureCount, nil
 }
 
 func (l operatorDashboardLoader) countRecentActivity(ctx context.Context, organizationID uuid.UUID) (int, error) {
@@ -551,6 +557,18 @@ func (l operatorDashboardLoader) countRecentInvocationFailures(ctx context.Conte
 		WHERE organization_id = $1
 		  AND created_at >= $2
 		  AND failure_class IS NOT NULL
+	`, organizationID, l.now.Add(-operatorDashboardRecentWindow)).Scan(&count)
+	return count, err
+}
+
+func (l operatorDashboardLoader) countRecentProjectFailures(ctx context.Context, organizationID uuid.UUID) (int, error) {
+	var count int
+	err := l.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project p
+		WHERE p.organization_id = $1
+		  AND COALESCE(NULLIF(p.settings->'automatic_failure'->>'recorded_at', ''), '') <> ''
+		  AND (p.settings->'automatic_failure'->>'recorded_at')::timestamptz >= $2
 	`, organizationID, l.now.Add(-operatorDashboardRecentWindow)).Scan(&count)
 	return count, err
 }
@@ -1347,7 +1365,12 @@ func (l operatorDashboardLoader) loadRecentFailureItems(ctx context.Context, org
 	if err != nil {
 		return nil, err
 	}
+	projectItems, err := l.loadRecentProjectFailureItems(ctx, organizationID, limit)
+	if err != nil {
+		return nil, err
+	}
 	combined := append(runItems, invocationItems...)
+	combined = append(combined, projectItems...)
 	sort.Slice(combined, func(i, j int) bool {
 		if combined[i].UpdatedAt.Equal(combined[j].UpdatedAt) {
 			return combined[i].Title < combined[j].Title
@@ -1549,6 +1572,82 @@ func (l operatorDashboardLoader) loadRecentInvocationFailureItems(ctx context.Co
 	return items, nil
 }
 
+func (l operatorDashboardLoader) loadRecentProjectFailureItems(ctx context.Context, organizationID uuid.UUID, limit int) ([]operatorDashboardItemResponse, error) {
+	rows, err := l.pool.Query(ctx, `
+		SELECT
+			p.id,
+			p.display_name,
+			p.settings->'automatic_failure'->>'failure_class',
+			p.settings->'automatic_failure'->>'failure_reason',
+			(p.settings->'automatic_failure'->>'recorded_at')::timestamptz,
+			rp.id,
+			rp.display_name
+		FROM project p
+		LEFT JOIN project rp
+		  ON rp.organization_id = p.organization_id
+		 AND rp.id::text = NULLIF(p.settings->'bootstrap_restart_bundle'->>'restart_project_id', '')
+		WHERE p.organization_id = $1
+		  AND COALESCE(NULLIF(p.settings->'automatic_failure'->>'recorded_at', ''), '') <> ''
+		  AND (p.settings->'automatic_failure'->>'recorded_at')::timestamptz >= $2
+		ORDER BY (p.settings->'automatic_failure'->>'recorded_at')::timestamptz DESC, p.id DESC
+		LIMIT $3
+	`, organizationID, l.now.Add(-operatorDashboardRecentWindow), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]operatorDashboardItemResponse, 0, limit)
+	for rows.Next() {
+		var (
+			projectID           uuid.UUID
+			projectLabel        string
+			failureClass        *string
+			failureReason       *string
+			recordedAt          time.Time
+			restartProjectID    *uuid.UUID
+			restartProjectLabel *string
+		)
+		if scanErr := rows.Scan(
+			&projectID,
+			&projectLabel,
+			&failureClass,
+			&failureReason,
+			&recordedAt,
+			&restartProjectID,
+			&restartProjectLabel,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		item := l.newDashboardItem(
+			"project_automatic_failure",
+			strings.TrimSpace(projectLabel),
+			projectAutomaticFailureSummary(failureClass, failureReason),
+			operatorDashboardStringValue(failureClass),
+			recordedAt,
+			0,
+			&projectID,
+			&projectLabel,
+			nil,
+			nil,
+			nil,
+			nil,
+		)
+		if restartProjectID != nil && *restartProjectID != uuid.Nil {
+			item.RestartProject = &operatorDashboardRefResponse{
+				ID:    *restartProjectID,
+				Label: operatorDashboardStringValue(restartProjectLabel),
+			}
+			item.Links.RestartProject = "/v1/projects/" + restartProjectID.String()
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return items, nil
+}
+
 func (l operatorDashboardLoader) newDashboardItem(
 	kind string,
 	title string,
@@ -1615,6 +1714,21 @@ func operatorDashboardLinksFor(projectID, taskID, runID *uuid.UUID) operatorDash
 		links.Run = "/v1/control/runs/" + runID.String()
 	}
 	return links
+}
+
+func projectAutomaticFailureSummary(failureClass, failureReason *string) string {
+	class := strings.TrimSpace(operatorDashboardStringValue(failureClass))
+	reason := strings.TrimSpace(operatorDashboardStringValue(failureReason))
+	switch {
+	case class != "" && reason != "":
+		return "project automatic failure: " + class + " (" + reason + ")"
+	case class != "":
+		return "project automatic failure: " + class
+	case reason != "":
+		return "project automatic failure: " + reason
+	default:
+		return "project automatic failure"
+	}
 }
 
 func taskOrProjectTitle(taskID *uuid.UUID, taskNumber *int, taskTitle *string, projectLabel *string, runID uuid.UUID) string {
