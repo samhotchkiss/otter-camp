@@ -495,6 +495,79 @@ func TestJobWorkerHeartbeatPreventsStaleClaimRecoveryForRunningJob(t *testing.T)
 	}
 }
 
+func TestJobWorkerPurgeStaleAgentTurnJobsClearsClaimedClosedSessions(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-closed-session",
+		DisplayName: "Purge Closed Session",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "organization",
+		ScopeID:        org.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).Close(ctx, session.ID); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, claimed_by, claimed_at, payload, run_after)
+		VALUES ('agent_turn', 'claimed', 'dead-worker', now(), $1::jsonb, now())
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s"}`, session.ID, uuid.New())).Scan(&jobID); err != nil {
+		t.Fatalf("insert claimed closed-session job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged jobs = %d, want 1", purged)
+	}
+
+	var (
+		status    string
+		claimedBy *string
+		claimedAt *time.Time
+		lastError *string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, claimed_by, claimed_at, last_error
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &claimedBy, &claimedAt, &lastError); err != nil {
+		t.Fatalf("query purged job: %v", err)
+	}
+	if status != "dead_letter" {
+		t.Fatalf("status after purge = %q, want dead_letter", status)
+	}
+	if claimedBy != nil || claimedAt != nil {
+		t.Fatalf("claimed fields after purge = claimed_by:%v claimed_at:%v, want nil", claimedBy, claimedAt)
+	}
+	if lastError == nil || *lastError != "purged at worker startup: session closed" {
+		t.Fatalf("last_error = %v, want session closed purge message", lastError)
+	}
+}
+
 func TestIdempotencyCleanupJob(t *testing.T) {
 	pool := testdb.New(t)
 	org := createOrgForJobQueue(t, pool, "cleanup-org")

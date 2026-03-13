@@ -338,17 +338,20 @@ func (w *Worker) CancelGroup(ctx context.Context, tx pgx.Tx, groupKey, reason st
 	return tag.RowsAffected(), nil
 }
 
-// PurgeStaleAgentTurnJobs dead-letters pending agent_turn jobs whose sessions
-// are closed or archived. This prevents wasting LLM calls on stale turns after
-// a worker restart.
+// PurgeStaleAgentTurnJobs dead-letters agent_turn jobs whose sessions are
+// closed or archived. This prevents wasting LLM calls on stale turns after
+// a worker restart and immediately clears closed-session claimed jobs left
+// behind by a dead worker.
 func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 	// Condition 1: session is closed/archived
 	ct1, err := w.pool.Exec(ctx, `
 		UPDATE job_queue jq
 		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
 		    last_error = 'purged at worker startup: session closed',
 		    updated_at = now()
-		WHERE jq.status = 'pending'
+		WHERE jq.status IN ('pending', 'claimed')
 		  AND jq.job_type = 'agent_turn'
 		  AND EXISTS (
 		    SELECT 1 FROM chat_session cs
