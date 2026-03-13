@@ -3144,6 +3144,9 @@ func TestBuildProjectBootstrapResumeStateMessageUsesCompactRosterForLateFirstWav
 	if !strings.Contains(resumeContent, "not raw task.update status changes") {
 		t.Fatalf("resume message = %q, want raw task.update warning", resumeContent)
 	}
+	if !strings.Contains(resumeContent, "do not manually queue or start first-wave execution tasks") {
+		t.Fatalf("resume message = %q, want no manual first-wave promotion guidance", resumeContent)
+	}
 	if !strings.Contains(resumeContent, "completed_step_slugs for bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off") {
 		t.Fatalf("resume message = %q, want canonical bootstrap step slugs", resumeContent)
 	}
@@ -3166,6 +3169,27 @@ func TestProjectBootstrapResumeNeedsSetupPersist(t *testing.T) {
 	state.FirstWavePromotedCount = 1
 	if projectBootstrapResumeNeedsSetupPersist(state) {
 		t.Fatal("resume state should not require setup persist guidance after first-wave promotion has started")
+	}
+}
+
+func TestBuildProjectBootstrapResumeActionPromptForSetupPersist(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		BootstrapTaskID:          uuid.NewString(),
+		BootstrapTaskOutstanding: true,
+		FirstWaveTaskCount:       3,
+		ValidationStatus:         projectBootstrapValidationPassed,
+	})
+	if !strings.Contains(prompt, "Do not call task.list, flow.list_templates, or file.read on scaffold planning artifacts") {
+		t.Fatalf("prompt = %q, want tool-specific anti-reread guidance", prompt)
+	}
+	if !strings.Contains(prompt, "finish first-wave selection, and then call bootstrap.setup.persist") {
+		t.Fatalf("prompt = %q, want setup persist sequencing", prompt)
+	}
+	if !strings.Contains(prompt, "do not use raw task.update to queue or start first-wave execution tasks") {
+		t.Fatalf("prompt = %q, want no manual first-wave queue guidance", prompt)
+	}
+	if !strings.Contains(prompt, "do not edit, assign, queue, or complete the gate task manually") {
+		t.Fatalf("prompt = %q, want governance gate protection", prompt)
 	}
 }
 
@@ -3352,6 +3376,9 @@ func TestContinuationTurnAppendsCompactBootstrapActionPromptAfterCompression(t *
 			actionMessageID = msg.ID
 			if !strings.Contains(msg.Content, "Do not restate the project state or re-read scaffold artifacts") {
 				t.Fatalf("action prompt = %q, want anti-reread guidance", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "Do not call task.list, flow.list_templates, or file.read on scaffold planning artifacts") {
+				t.Fatalf("action prompt = %q, want tool-specific anti-reread guidance", msg.Content)
 			}
 			if !strings.Contains(msg.Content, "Do not ask the user what they want. Continue the bootstrap workflow now.") {
 				t.Fatalf("action prompt = %q, want direct bootstrap action guidance", msg.Content)
