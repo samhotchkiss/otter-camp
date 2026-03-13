@@ -571,16 +571,20 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 		_ = e.ensureAgentParticipant(ctx, restartSession.ID, loriID)
 	}
 
-	authorType := "agent"
+	var authorType *string
 	var authorID *uuid.UUID
 	if frankID, frankErr := e.resolveFrankStarterID(ctx, created.OrganizationID); frankErr == nil && frankID != uuid.Nil {
+		value := "agent"
+		authorType = &value
 		authorID = &frankID
 	} else if loriID, loriErr := e.resolveLoriStarterID(ctx, created.OrganizationID); loriErr == nil && loriID != uuid.Nil {
+		value := "agent"
+		authorType = &value
 		authorID = &loriID
 	}
 	restartMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 		SessionID:  restartSession.ID,
-		AuthorType: &authorType,
+		AuthorType: authorType,
 		AuthorID:   authorID,
 		Role:       "user",
 		Content:    buildProjectBootstrapRestartPrompt(bundle, updatedProject, *created),

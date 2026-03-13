@@ -11,16 +11,20 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
+	"github.com/samhotchkiss/otter-camp/internal/turn"
 )
 
 func TestProjectHTTPCRUDAndRBAC(t *testing.T) {
@@ -294,6 +298,89 @@ func TestProjectHTTPPauseResumeExposesPausedState(t *testing.T) {
 	}
 	if jsonPathBoolValue(t, resumed.Body, "data", "is_paused") {
 		t.Fatalf("resume response is_paused = true, want false body=%s", string(resumed.Body))
+	}
+}
+
+func TestProjectHTTPRelaunchArchivedBootstrapProject(t *testing.T) {
+	testServer, org, adminUser, _ := newProjectTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	ctx := context.Background()
+	projectRepo := repo.NewProjectRepo(testServer.Pool)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	bus := eventbus.New(testServer.Pool, logger, eventbus.Config{})
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   testServer.Pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("new chat service: %v", err)
+	}
+	relauncher, err := turn.NewBootstrapRelauncher(turn.BootstrapRelauncherOptions{
+		Pool:     testServer.Pool,
+		Chat:     chatService,
+		Events:   bus,
+		Enqueuer: jobqueue.New(testServer.Pool, logger, jobqueue.Config{}),
+		Logger:   logger,
+	})
+	if err != nil {
+		t.Fatalf("new bootstrap relauncher: %v", err)
+	}
+	recordedAt := time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339)
+
+	projectRecord, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "archived-bootstrap-source",
+		DisplayName:    "Archived Bootstrap Source",
+		DeliveryMode:   "gated",
+		Settings: json.RawMessage(`{
+			"automatic_failure":{
+				"action":"archive",
+				"source":"project_bootstrap",
+				"failure_class":"bootstrap_runtime",
+				"failure_reason":"manual relaunch test",
+				"recorded_at":"` + recordedAt + `"
+			},
+			"bootstrap_restart_bundle":{
+				"operator_brief":"Restart from the canonical bootstrap bundle.",
+				"source_project_id":"PENDING"
+			}
+		}`),
+		CreatedByType: "human_user",
+		CreatedByID:   adminUser.ID,
+	})
+	if err != nil {
+		t.Fatalf("create archived bootstrap source: %v", err)
+	}
+	projectRecord.Settings = json.RawMessage(strings.ReplaceAll(string(projectRecord.Settings), `"PENDING"`, `"`+projectRecord.ID.String()+`"`))
+	if updated, updateErr := projectRepo.Update(ctx, projectRecord); updateErr != nil {
+		t.Fatalf("update archived bootstrap source settings: %v", updateErr)
+	} else {
+		projectRecord = updated
+	}
+	if err := projectRepo.Archive(ctx, projectRecord.ID); err != nil {
+		t.Fatalf("archive bootstrap source: %v", err)
+	}
+	preflightRestart, err := relauncher.RelaunchArchivedBootstrapProject(ctx, projectRecord.ID)
+	if err != nil {
+		t.Fatalf("direct relaunch preflight: %v", err)
+	}
+	if preflightRestart == nil || preflightRestart.ID == projectRecord.ID {
+		t.Fatalf("direct relaunch preflight returned %+v", preflightRestart)
+	}
+
+	resp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+projectRecord.ID.String()+"/relaunch", map[string]any{}, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("relaunch status=%d want=%d body=%s", resp.StatusCode, http.StatusOK, string(resp.Body))
+	}
+	if got := jsonPathString(t, resp.Body, "data", "status"); got != "active" {
+		t.Fatalf("relaunch status field=%q want=%q body=%s", got, "active", string(resp.Body))
+	}
+	if got := jsonPathString(t, resp.Body, "data", "id"); got == projectRecord.ID.String() {
+		t.Fatalf("relaunch returned archived project id=%q body=%s", got, string(resp.Body))
 	}
 }
 
@@ -882,6 +969,23 @@ func newProjectTestServer(t *testing.T) (*authIntegrationServer, repo.Organizati
 	if err != nil {
 		t.Fatalf("new project service: %v", err)
 	}
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("new chat service: %v", err)
+	}
+	relauncher, err := turn.NewBootstrapRelauncher(turn.BootstrapRelauncherOptions{
+		Pool:     pool,
+		Chat:     chatService,
+		Events:   bus,
+		Enqueuer: jobqueue.New(pool, logger, jobqueue.Config{}),
+		Logger:   logger,
+	})
+	if err != nil {
+		t.Fatalf("new bootstrap relauncher: %v", err)
+	}
 
 	handler := NewHandlerWithOptions(HandlerOptions{
 		Version:     "test-version",
@@ -889,7 +993,7 @@ func newProjectTestServer(t *testing.T) (*authIntegrationServer, repo.Organizati
 		AuthService: authService,
 		Pool:        pool,
 		RouteRegistrars: []RouteRegistrar{
-			NewProjectRouteRegistrar(projectService, nil, nil),
+			NewProjectRouteRegistrar(projectService, nil, relauncher),
 		},
 	})
 
