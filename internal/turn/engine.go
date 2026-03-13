@@ -3516,6 +3516,11 @@ func (e *TurnEngine) handleRecoverableBootstrapTurnJobFailure(
 	normalizeProjectBootstrapValidationFailure(&progress, false)
 	recoverableValidation := progress.ValidationFailed() && projectBootstrapRecoverableMaxToolCallFailure(progress)
 	recoverableBoundedSize := strings.Contains(strings.ToLower(strings.TrimSpace(summarizeFailure(cause))), "bounded size policy")
+	if recoverableBoundedSize && !recoverableValidation {
+		progress.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
+		progress.ValidationFailureReason = summarizeFailure(cause)
+		recoverableValidation = projectBootstrapRecoverableMaxToolCallFailure(progress)
+	}
 	if !e.projectBootstrapRuntimeManaged(ctx, session, payload.MessageID) ||
 		(!recoverableValidation && !recoverableBoundedSize) ||
 		!projectBootstrapSetupPersisted(progress) ||

@@ -10606,6 +10606,112 @@ func TestTurnEngineIntegrationRecoveredLeakedBootstrapRetryUsesValidationContinu
 	}
 }
 
+func TestTurnEngineIntegrationHandleRecoverableBootstrapTurnJobFailureHandlesBoundedSizeError(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: recover bounded bootstrap tasks into a fresh continuation.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "pm",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("Assign PM: %v", err)
+	}
+
+	parentDescription := strings.Join([]string{
+		"- Design launch positioning and homepage layout.",
+		"- Coordinate analytics, migration sequencing, and launch readiness.",
+	}, "\n")
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Launch orchestration parent",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	}); err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+		UpdatedAt:        &now,
+	}); err != nil {
+		t.Fatalf("updateProjectBootstrapState: %v", err)
+	}
+
+	jobID := testdb.EnqueueJob(t, fixture.pool, AgentTurnJobType, 100, map[string]any{
+		"session_id": projectSession.ID,
+		"message_id": handoff.ID,
+	})
+
+	turnRecord, _, err := fixture.engine.turns.CreateForMessageAttempt(ctx, projectSession.ID, lori.ID, handoff.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+	activeTurn, shouldRun, err := fixture.engine.startInboundMessageTurn(ctx, turnRecord)
+	if err != nil {
+		t.Fatalf("startInboundMessageTurn: %v", err)
+	}
+	if !shouldRun {
+		t.Fatal("expected newly created bootstrap turn to start")
+	}
+
+	handled, err := fixture.engine.handleRecoverableBootstrapTurnJobFailure(ctx, AgentTurnPayload{
+		SessionID: projectSession.ID,
+		MessageID: handoff.ID,
+		AgentID:   &lori.ID,
+	}, &jobID, errors.New("task exceeds bounded size policy (estimated 55 minutes > 30 minute limit): split the work into smaller reviewable tasks before queueing"))
+	if err != nil {
+		t.Fatalf("handleRecoverableBootstrapTurnJobFailure: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected bounded size bootstrap failure to recover into fresh continuation")
+	}
+
+	storedTurn, err := fixture.chatService.GetTurn(ctx, activeTurn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn active turn: %v", err)
+	}
+	if storedTurn.Status != "failed" {
+		t.Fatalf("active turn status = %q, want failed after bounded size recovery", storedTurn.Status)
+	}
+
+	var queuedMessageID uuid.UUID
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT (payload->>'message_id')::uuid
+		FROM job_queue
+		WHERE payload->>'session_id' = $1
+		  AND job_type = $2
+		  AND status = 'pending'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, projectSession.ID.String(), AgentTurnJobType).Scan(&queuedMessageID); err != nil {
+		t.Fatalf("load queued continuation job: %v", err)
+	}
+	if queuedMessageID == handoff.ID {
+		t.Fatal("expected bounded size recovery to enqueue a new continuation message")
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapFailsValidationWhenParentExecutesAheadOfChildren(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
