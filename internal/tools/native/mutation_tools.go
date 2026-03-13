@@ -2014,7 +2014,7 @@ func normalizeBootstrapStepSlug(value string) string {
 		return "bootstrap-governance-gate"
 	case "bind-repo", "bind_repo", "bind-repo-and-environment":
 		return "bind-repo-environment"
-	case "staff-the-project", "staffing", "staff_project", "task_assignments", "task-assignments", "assign_tasks", "task_assignment":
+	case "staff-the-project", "staffing", "staff_project", "task_assignments", "task-assignments", "assign_tasks", "task_assignment", "staffing_assignments", "staffing-assignments":
 		return "staff-project"
 	case "task-decomposition", "task_decomposition", "decompose_tasks", "decompose_task_tree":
 		return "decompose-workstreams"
@@ -2022,7 +2022,7 @@ func normalizeBootstrapStepSlug(value string) string {
 		return "validate-task-shape"
 	case "attach-flows", "attach_flows", "attach-flow-templates", "attach-validate-flows", "attach-flow-template", "attach-and-validate-flow-templates", "flow-templates", "flow_templates":
 		return "attach-validate-flow-templates"
-	case "first-wave-selection", "select_first_wave", "first_wave_selection":
+	case "first-wave-selection", "select_first_wave", "first_wave_selection", "first_wave_promotion", "first-wave-promotion":
 		return "select-first-wave"
 	case "frank-sign-off", "frank_sign_off", "record-sign-off":
 		return "record-frank-sign-off"

@@ -4162,7 +4162,7 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 			"decompose_tasks",
 			"validate_tasks",
 			"attach_flows",
-			"select_first_wave",
+			"first_wave_promotion",
 			"frank_sign_off",
 		},
 		"sign_off_summary": "Frank approved the bootstrap setup.",
