@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -394,6 +395,30 @@ func TestPromptAssemblerReturnsErrContextCompressedWhenOnlySummariesOverflow(t *
 func TestEstimateTokens(t *testing.T) {
 	if got := estimateTokens("hello world"); got != 2 {
 		t.Fatalf("estimateTokens(hello world) = %d, want 2", got)
+	}
+}
+
+func TestPromptAssemblerEnqueueSummarizationUsesBackgroundPriority(t *testing.T) {
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session: repo.ChatSession{ID: uuid.New(), ScopeID: uuid.New()},
+		agent:   repo.Agent{ID: uuid.New()},
+	})
+	enqueuer, ok := assembler.enqueuer.(*fakeEnqueuer)
+	if !ok {
+		t.Fatalf("enqueuer = %T, want *fakeEnqueuer", assembler.enqueuer)
+	}
+
+	if err := assembler.enqueueSummarization(context.Background(), assembler.sessions.(*fakeSessionRepo).session.ID, 130000); err != nil {
+		t.Fatalf("enqueueSummarization: %v", err)
+	}
+	if enqueuer.jobType != chat.ChatSummarizeJobType {
+		t.Fatalf("job type = %q, want %q", enqueuer.jobType, chat.ChatSummarizeJobType)
+	}
+	if enqueuer.priority != defaultSummarizationJobPrio {
+		t.Fatalf("priority = %d, want %d", enqueuer.priority, defaultSummarizationJobPrio)
+	}
+	if enqueuer.priority >= 70 {
+		t.Fatalf("priority = %d, want below agent_turn priority", enqueuer.priority)
 	}
 }
 
@@ -816,9 +841,14 @@ func (f *fakeSummarizationChecker) ShouldSummarize(context.Context, uuid.UUID, i
 	return false, nil
 }
 
-type fakeEnqueuer struct{}
+type fakeEnqueuer struct {
+	jobType  string
+	priority int
+}
 
-func (f *fakeEnqueuer) Enqueue(context.Context, pgx.Tx, string, int, any, *time.Time) (uuid.UUID, error) {
+func (f *fakeEnqueuer) Enqueue(_ context.Context, _ pgx.Tx, jobType string, priority int, _ any, _ *time.Time) (uuid.UUID, error) {
+	f.jobType = jobType
+	f.priority = priority
 	return uuid.New(), nil
 }
 

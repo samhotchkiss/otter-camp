@@ -40,7 +40,7 @@ const (
 	defaultLayer4BudgetTokens    = 2000
 	defaultLayer3BudgetTokens    = 500
 	defaultContextWindowTokens   = 16384
-	defaultSummarizationJobPrio  = 80
+	defaultSummarizationJobPrio  = 60
 	defaultPromptMessageOverhead = 4
 	mcpPromptWordSample          = 30
 	mcpPromptOverlapThreshold    = 3
