@@ -3244,6 +3244,107 @@ func TestContinuationTurnReloadsSessionBeforeBootstrapResumeState(t *testing.T) 
 	t.Fatal("project bootstrap resume message missing after session reload")
 }
 
+func TestContinuationTurnPreservesAutoBootstrapContinuationMessageAfterCompression(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+
+	pmID := uuid.New()
+	workerID := uuid.New()
+	metadata, err := json.Marshal(map[string]any{
+		projectBootstrapMetadataKey: map[string]any{
+			"status":                      projectBootstrapStatusActive,
+			"current_phase":               "first_wave_executions_created",
+			"last_successful_checkpoint":  projectBootstrapCheckpointFirstWaveSelected,
+			"assignment_count":            2,
+			"planned_task_count":          9,
+			"planned_flow_template_count": 1,
+			"first_wave_task_count":       4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal metadata: %v", err)
+	}
+
+	baseAgents := fixture.engine.agents.(*fakeAgentRepo)
+	fixture.engine.agents = &fakeAgentRepo{
+		agent:   baseAgents.agent,
+		starter: append([]repo.Agent(nil), baseAgents.starter...),
+		items: map[uuid.UUID]repo.Agent{
+			pmID:     {ID: pmID, DisplayName: "Sam.blog PM", AgentClass: "staff", AgentType: "pm"},
+			workerID: {ID: workerID, DisplayName: "Maya Ortiz", AgentClass: "temp", AgentType: "general"},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: fixture.session.ScopeID, AgentID: pmID, Role: "project_manager", IsActive: true},
+			{ProjectID: fixture.session.ScopeID, AgentID: workerID, Role: "worker", IsActive: true},
+		},
+	}
+	messageMetadata, err := json.Marshal(map[string]any{
+		"source":                       projectBootstrapSource,
+		"auto_continue":                true,
+		"bootstrap_initial_message_id": fixture.userMessageID.String(),
+	})
+	if err != nil {
+		t.Fatalf("Marshal message metadata: %v", err)
+	}
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, messageMetadata); err != nil {
+		t.Fatalf("UpdateMetadata user message: %v", err)
+	}
+	fixture.chat.session.Metadata = metadata
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+	var secondHistoryStart *uuid.UUID
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call == 2 && input.HistoryStartID != nil {
+			copied := *input.HistoryStartID
+			secondHistoryStart = &copied
+		}
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "should not be used"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if secondHistoryStart == nil {
+		t.Fatal("second assemble HistoryStartID is nil, want preserved bootstrap continuation message")
+	}
+	if *secondHistoryStart != fixture.userMessageID {
+		t.Fatalf("second assemble HistoryStartID = %s, want initial bootstrap continuation message %s", *secondHistoryStart, fixture.userMessageID)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
+			if !strings.Contains(msg.Content, "Active project id: "+fixture.session.ScopeID.String()) {
+				t.Fatalf("resume message = %q, want project id line", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "Existing PM: Sam.blog PM") {
+				t.Fatalf("resume message = %q, want PM line", msg.Content)
+			}
+			return
+		}
+	}
+	t.Fatal("project bootstrap resume message missing after compressed auto-continuation")
+}
+
 func TestContinuationTurnSynthesizesBootstrapResumeStateWhenMetadataIsStale(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.session.ScopeType = "project"

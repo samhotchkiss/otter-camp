@@ -4679,6 +4679,13 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	if err != nil {
 		return false, err
 	}
+	if preserve, err := e.projectBootstrapResumeShouldPreserveInitialMessage(ctx, rt); err != nil {
+		return false, err
+	} else if preserve && rt.initialMessageID != uuid.Nil {
+		initial := rt.initialMessageID
+		rt.historyStartID = &initial
+		return true, nil
+	}
 	if projectBootstrapResumeShouldRootAtResumeMessage(state) {
 		rt.historyStartID = &message.ID
 		return true, nil
@@ -4690,6 +4697,28 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	}
 	rt.historyStartID = &message.ID
 	return true, nil
+}
+
+func (e *TurnEngine) projectBootstrapResumeShouldPreserveInitialMessage(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || e.messages == nil || rt == nil || rt.initialMessageID == uuid.Nil {
+		return false, nil
+	}
+	message, err := e.messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return false, nil
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectBootstrapSource) {
+		return false, nil
+	}
+	raw, ok := metadata["auto_continue"].(bool)
+	return ok && raw, nil
 }
 
 type projectBootstrapResumeSnapshot struct {
