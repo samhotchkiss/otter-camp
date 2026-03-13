@@ -108,3 +108,16 @@ func TestDashboardRendersRuntimeHealthSection(t *testing.T) {
 		t.Fatalf("render missing total-count overflow hint:\n%s", rendered)
 	}
 }
+
+func TestDashboardRendersRestartProjectTargetForAutomaticFailures(t *testing.T) {
+	line := operatorDashboardItemLine(OperatorDashboardItem{
+		Shortcut:       4,
+		Title:          "Bootstrap Archived Source",
+		Summary:        "project automatic failure: bootstrap_runtime",
+		Project:        &OperatorDashboardRef{ID: "proj-archived", Label: "Bootstrap Archived Source"},
+		RestartProject: &OperatorDashboardRef{ID: "proj-restart", Label: "Bootstrap Restart Target"},
+	})
+	if !strings.Contains(line, "restart→Bootstrap Restart Target") {
+		t.Fatalf("line missing restart target summary: %q", line)
+	}
+}

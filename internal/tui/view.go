@@ -1365,6 +1365,11 @@ func operatorDashboardItemLine(item OperatorDashboardItem) string {
 	if trimmed := strings.TrimSpace(item.Summary); trimmed != "" {
 		parts = append(parts, trimmed)
 	}
+	if item.RestartProject != nil {
+		if label := strings.TrimSpace(item.RestartProject.Label); label != "" {
+			parts = append(parts, "restart→"+label)
+		}
+	}
 	if item.StaleForSeconds > 0 {
 		parts = append(parts, "over stale threshold")
 	}
