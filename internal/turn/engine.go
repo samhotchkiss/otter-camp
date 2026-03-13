@@ -722,6 +722,76 @@ func (e *TurnEngine) SubscribeTaskStatusBootstrap(orgID *uuid.UUID) eventbus.Sub
 	})
 }
 
+func (e *TurnEngine) RecoverCancelledBootstrapSessions(ctx context.Context) (int, error) {
+	if e == nil || e.pool == nil || e.chat == nil {
+		return 0, nil
+	}
+
+	rows, err := e.pool.Query(ctx, `
+		WITH latest_turn AS (
+			SELECT DISTINCT ON (session_id)
+				session_id,
+				id,
+				status
+			FROM chat_turn
+			ORDER BY session_id, turn_number DESC, created_at DESC, id DESC
+		)
+		SELECT s.id, lt.id
+		FROM chat_session s
+		JOIN latest_turn lt ON lt.session_id = s.id
+		WHERE s.scope_type = 'project'
+		  AND s.mode = 'async'
+		  AND s.status = 'active'
+		  AND s.current_turn_id IS NULL
+		  AND COALESCE(NULLIF(s.metadata->'project_bootstrap'->>'status', ''), '') = 'active'
+		  AND lt.status = 'cancelled'
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM job_queue jq
+			WHERE jq.job_type = $1
+			  AND jq.status IN ('pending', 'claimed')
+			  AND jq.payload->>'session_id' = s.id::text
+		  )
+	`, AgentTurnJobType)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	recovered := 0
+	for rows.Next() {
+		var sessionID, turnID uuid.UUID
+		if err := rows.Scan(&sessionID, &turnID); err != nil {
+			return recovered, err
+		}
+		session, err := e.chat.GetSession(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				continue
+			}
+			return recovered, err
+		}
+		before, err := e.countActiveAgentTurnJobsForSession(ctx, sessionID)
+		if err != nil {
+			return recovered, err
+		}
+		if err := e.handleProjectBootstrapCancelledTurn(ctx, session, turnID); err != nil {
+			return recovered, err
+		}
+		after, err := e.countActiveAgentTurnJobsForSession(ctx, sessionID)
+		if err != nil {
+			return recovered, err
+		}
+		if after > before {
+			recovered++
+		}
+	}
+	if rows.Err() != nil {
+		return recovered, rows.Err()
+	}
+	return recovered, nil
+}
+
 func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error {
 	if strings.TrimSpace(job.JobType) != AgentTurnJobType {
 		return nil
@@ -8336,6 +8406,24 @@ func parseAgentTurnPayload(raw json.RawMessage) (AgentTurnPayload, error) {
 		payload.RetryCount = 0
 	}
 	return payload, nil
+}
+
+func (e *TurnEngine) countActiveAgentTurnJobsForSession(ctx context.Context, sessionID uuid.UUID) (int, error) {
+	if e == nil || e.pool == nil || sessionID == uuid.Nil {
+		return 0, nil
+	}
+	var count int
+	err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = $1
+		  AND status IN ('pending', 'claimed')
+		  AND payload->>'session_id' = $2
+	`, AgentTurnJobType, sessionID.String()).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func latestCompletedTurn(turns []repo.ChatTurn) *repo.ChatTurn {

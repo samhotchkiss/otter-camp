@@ -470,6 +470,11 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(turnBootstrapCancelledSub)
 	turnTaskStatusSub := turnEngine.SubscribeTaskStatusBootstrap(nil)
 	defer bus.Unsubscribe(turnTaskStatusSub)
+	if recovered, recoverErr := turnEngine.RecoverCancelledBootstrapSessions(context.Background()); recoverErr != nil {
+		logger.Warn("failed to recover cancelled bootstrap sessions", "error", recoverErr)
+	} else if recovered > 0 {
+		logger.Info("recovered cancelled bootstrap sessions", "count", recovered)
+	}
 
 	memoryConsumer, err := memory.NewEventConsumer(memory.EventConsumerOptions{
 		Pool:     pool.Raw(),

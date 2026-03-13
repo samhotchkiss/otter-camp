@@ -13273,6 +13273,78 @@ func TestTurnEngineIntegrationCancelDuringTier2RequestsRunCancel(t *testing.T) {
 	}
 }
 
+func TestTurnEngineIntegrationRecoverCancelledBootstrapSessionsEnqueuesContinuation(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: resume the active bootstrap workflow from persisted state.")
+
+	turn, err := fixture.chatService.CreateTurn(ctx, projectSession.ID, lori.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn cancelled bootstrap: %v", err)
+	}
+
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE chat_session
+		SET current_turn_id = NULL,
+		    metadata = $2::jsonb
+		WHERE id = $1
+	`, projectSession.ID, metadata); err != nil {
+		t.Fatalf("seed bootstrap session metadata: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET status = 'cancelled',
+		    completed_at = now()
+		WHERE id = $1
+	`, turn.ID); err != nil {
+		t.Fatalf("seed cancelled turn: %v", err)
+	}
+
+	recovered, err := fixture.engine.RecoverCancelledBootstrapSessions(ctx)
+	if err != nil {
+		t.Fatalf("RecoverCancelledBootstrapSessions: %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("recovered cancelled bootstrap sessions = %d, want 1", recovered)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1", jobs)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	state := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if strings.TrimSpace(state.LastTurnID) != turn.ID.String() {
+		t.Fatalf("bootstrap state last_turn_id = %q, want %s", state.LastTurnID, turn.ID)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	if !containsMessageContent(messages, "[Recovered cancelled bootstrap turn - retrying in a fresh turn.]") {
+		t.Fatal("missing bootstrap cancellation recovery system message")
+	}
+	if !containsMessageSubstring(messages, "Continue the bounded project bootstrap setup workflow now.") {
+		t.Fatal("missing bootstrap continuation message")
+	}
+}
+
 func TestTurnEngineIntegrationReactionFeedbackAdjustsMemoryConfidence(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
@@ -14846,6 +14918,26 @@ func mustCreateBootstrapProject(t *testing.T, ctx context.Context, fixture *inte
 		t.Fatalf("project.Create bootstrap: %v", err)
 	}
 	return repo.Project(*created)
+}
+
+func containsMessageContent(messages []repo.ChatMessage, want string) bool {
+	needle := strings.TrimSpace(want)
+	for _, message := range messages {
+		if strings.TrimSpace(message.Content) == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func containsMessageSubstring(messages []repo.ChatMessage, want string) bool {
+	needle := strings.TrimSpace(want)
+	for _, message := range messages {
+		if strings.Contains(strings.TrimSpace(message.Content), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func mustInsertProjectRepoBinding(t *testing.T, ctx context.Context, pool *pgxpool.Pool, project repo.Project) {
