@@ -662,6 +662,20 @@ func TestProjectServiceArchiveClosesProjectAndTaskScopedChatSessions(t *testing.
 	projectSessionID := seedScopedChatSession(t, ctx, pool, orgID, "project", projectID)
 	taskSessionID := seedScopedChatSession(t, ctx, pool, orgID, "project_task", taskID)
 	orgSessionID := seedScopedChatSession(t, ctx, pool, orgID, "organization", orgID)
+	projectJobID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO job_queue (id, job_type, status, payload, run_after)
+		VALUES ($1, 'agent_turn', 'pending', jsonb_build_object('session_id', $2::text), now())
+	`, projectJobID, projectSessionID); err != nil {
+		t.Fatalf("insert project agent_turn job: %v", err)
+	}
+	taskJobID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO job_queue (id, job_type, status, payload, run_after)
+		VALUES ($1, 'agent_turn', 'pending', jsonb_build_object('session_id', $2::text), now())
+	`, taskJobID, taskSessionID); err != nil {
+		t.Fatalf("insert task agent_turn job: %v", err)
+	}
 
 	seedScopedChatMessage(t, ctx, pool, projectSessionID, "project transcript")
 	seedScopedChatMessage(t, ctx, pool, taskSessionID, "task transcript")
@@ -740,6 +754,26 @@ func TestProjectServiceArchiveClosesProjectAndTaskScopedChatSessions(t *testing.
 	}
 	if activeScopedCount != 0 {
 		t.Fatalf("active scoped sessions = %d, want 0", activeScopedCount)
+	}
+
+	var projectJobStatus, taskJobStatus, projectJobError, taskJobError string
+	if err := pool.QueryRow(ctx, `SELECT status, COALESCE(last_error, '') FROM job_queue WHERE id = $1`, projectJobID).Scan(&projectJobStatus, &projectJobError); err != nil {
+		t.Fatalf("query project job: %v", err)
+	}
+	if projectJobStatus != "dead_letter" {
+		t.Fatalf("project job status = %q, want dead_letter", projectJobStatus)
+	}
+	if !strings.Contains(projectJobError, "project archived") {
+		t.Fatalf("project job last_error = %q, want archive cleanup marker", projectJobError)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status, COALESCE(last_error, '') FROM job_queue WHERE id = $1`, taskJobID).Scan(&taskJobStatus, &taskJobError); err != nil {
+		t.Fatalf("query task job: %v", err)
+	}
+	if taskJobStatus != "dead_letter" {
+		t.Fatalf("task job status = %q, want dead_letter", taskJobStatus)
+	}
+	if !strings.Contains(taskJobError, "project archived") {
+		t.Fatalf("task job last_error = %q, want archive cleanup marker", taskJobError)
 	}
 }
 

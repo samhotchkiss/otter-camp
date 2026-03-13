@@ -1042,6 +1042,9 @@ func (s *service) Archive(ctx context.Context, orgID, projectID uuid.UUID) (*Pro
 			return nil, err
 		}
 	}
+	if err := s.deadLetterClosedProjectAgentTurnJobs(ctx, project.ID); err != nil {
+		return nil, err
+	}
 
 	if err := s.projects.Archive(ctx, project.ID); err != nil {
 		return nil, err
@@ -1055,6 +1058,42 @@ func (s *service) Archive(ctx context.Context, orgID, projectID uuid.UUID) (*Pro
 	})
 
 	return project, nil
+}
+
+func (s *service) deadLetterClosedProjectAgentTurnJobs(ctx context.Context, projectID uuid.UUID) error {
+	if s.pool == nil || projectID == uuid.Nil {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    last_error = 'project archived: session closed',
+		    updated_at = now()
+		WHERE jq.status IN ('pending', 'claimed')
+		  AND jq.job_type = 'agent_turn'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.scope_type IN ('project', 'project_task')
+		      AND cs.status IN ('closed', 'archived')
+		      AND (
+		        (cs.scope_type = 'project' AND cs.scope_id = $1)
+		        OR EXISTS (
+		          SELECT 1
+		          FROM project_task pt
+		          WHERE pt.id = cs.scope_id
+		            AND pt.project_id = $1
+		        )
+		      )
+		  )
+	`, projectID)
+	if err != nil {
+		return fmt.Errorf("dead-letter closed project agent_turn jobs: %w", err)
+	}
+	return nil
 }
 
 func (s *service) CreateFlowTemplate(ctx context.Context, req CreateFlowTemplateRequest) (*FlowTemplate, error) {
