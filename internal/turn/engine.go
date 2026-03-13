@@ -2879,7 +2879,7 @@ func (e *TurnEngine) appendProjectBootstrapContinuationMessageWithContent(ctx co
 
 func buildProjectBootstrapContinuationPrompt(autoTurnCount int) string {
 	return fmt.Sprintf(
-		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Do not stop at acknowledgement. Persist project assignments, scoped tasks, and flow templates if the handoff already contains enough information. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
+		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Do not stop at acknowledgement. Persist project assignments, scoped tasks, and flow templates if the handoff already contains enough information. Assign every executable non-bootstrap task to an existing active project assignee before first-wave selection or promotion. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
 		autoTurnCount,
 	)
 }
@@ -2890,7 +2890,7 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 		reason = "bootstrap validation found recoverable bounded work that still needs correction"
 	}
 	return fmt.Sprintf(
-		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Recovery target: %s. Do not repeat the same oversized task definitions or re-run the same rejected task.create calls. Correct the persisted task tree by splitting the offending broad parent or first-wave task into narrower executable child tasks, then continue first-wave selection from those bounded children. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
+		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Recovery target: %s. Do not repeat the same oversized task definitions or re-run the same rejected task.create calls. Correct the persisted task tree by splitting the offending broad parent or first-wave task into narrower executable child tasks, assign every executable child to an existing active project assignee, then continue first-wave selection from those bounded children. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
 		autoTurnCount,
 		reason,
 	)
@@ -4473,7 +4473,7 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	if assignments := strings.TrimSpace(snapshot.AssignmentLine); assignments != "" {
 		lines = append(lines, "Existing active assignments: "+assignments)
 	}
-	lines = append(lines, "Continue bootstrap only. Reuse the existing persisted PM and assigned agents unless a required role is still missing. Do not create duplicate agents or another PM. Finish staffing, bounded task decomposition, flow attachment, and first-wave selection/promotion. Do not restart the project or ask the user to restate the request.")
+	lines = append(lines, "Continue bootstrap only. Reuse the existing persisted PM and assigned agents unless a required role is still missing. Do not create duplicate agents or another PM. Finish staffing, bounded task decomposition, task assignment, flow attachment, and first-wave selection/promotion. Every executable non-bootstrap task must have an assigned active project agent before you promote or queue it. Do not restart the project or ask the user to restate the request.")
 	return strings.Join(lines, "\n")
 }
 
