@@ -81,8 +81,8 @@ type taskRecord struct {
 	Subtasks                 []string
 	SessionID                string // preferred execution session (active when present, otherwise recent)
 	DiscussionSessionID      string
-	ActiveExecutionSessionID        string
-	RecentExecutionSessionID        string
+	ActiveExecutionSessionID string
+	RecentExecutionSessionID string
 	Status                   string
 	Priority                 int
 	Flow                     int
@@ -196,11 +196,12 @@ type workspaceState struct {
 }
 
 type operatorDashboardTarget struct {
-	Shortcut  int
-	Title     string
-	ProjectID string
-	TaskID    string
-	RunID     string
+	Shortcut         int
+	Title            string
+	ProjectID        string
+	RestartProjectID string
+	TaskID           string
+	RunID            string
 }
 
 func newWorkspaceState() workspaceState {
@@ -288,13 +289,16 @@ func operatorDashboardSectionWithShortcuts(section OperatorDashboardSection, tar
 			if clonedItem.Project != nil {
 				target.ProjectID = strings.TrimSpace(clonedItem.Project.ID)
 			}
+			if clonedItem.RestartProject != nil {
+				target.RestartProjectID = strings.TrimSpace(clonedItem.RestartProject.ID)
+			}
 			if clonedItem.Task != nil {
 				target.TaskID = strings.TrimSpace(clonedItem.Task.ID)
 			}
 			if clonedItem.Run != nil {
 				target.RunID = strings.TrimSpace(clonedItem.Run.ID)
 			}
-			if target.ProjectID != "" || target.TaskID != "" || target.RunID != "" {
+			if target.ProjectID != "" || target.RestartProjectID != "" || target.TaskID != "" || target.RunID != "" {
 				clonedItem.Shortcut = nextShortcut
 				(*targets)[nextShortcut] = target
 				nextShortcut++

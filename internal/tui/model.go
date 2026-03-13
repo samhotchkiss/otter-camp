@@ -7662,8 +7662,12 @@ func (m *Model) navigateToOperatorDashboardTarget(target operatorDashboardTarget
 		return tea.Batch(cmds...)
 	}
 
-	if strings.TrimSpace(target.ProjectID) != "" {
-		m.workspace.selectedProjectID = strings.TrimSpace(target.ProjectID)
+	projectID := strings.TrimSpace(target.ProjectID)
+	if restartProjectID := strings.TrimSpace(target.RestartProjectID); restartProjectID != "" {
+		projectID = restartProjectID
+	}
+	if projectID != "" {
+		m.workspace.selectedProjectID = projectID
 		m.workspace.selectedProject = nil
 		m.workspace.setMainView(ViewProject)
 		m.setFocus(MainPanel)

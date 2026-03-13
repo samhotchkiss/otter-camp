@@ -62,6 +62,41 @@ func TestDashboardRuntimeShortcutShowsPanelHintOutsideDashboard(t *testing.T) {
 	}
 }
 
+func TestDashboardRuntimeShortcutOpensRestartProjectTarget(t *testing.T) {
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectDetail: func(_ context.Context, id string) (*ProjectDetail, error) {
+			return &ProjectDetail{ID: id, DisplayName: "Bootstrap Restart Target"}, nil
+		},
+		LoadProjectTasks: func(_ context.Context, id string) ([]SidebarTaskItem, error) {
+			return nil, nil
+		},
+	})
+	model.focus = MainPanel
+	model.workspace.setMainView(ViewDashboard)
+	model.workspace.setOperatorDashboard(&OperatorDashboardData{
+		Summary: OperatorDashboardSummary{Health: "attention_required"},
+		RecentFailures: OperatorDashboardSection{
+			Items: []OperatorDashboardItem{
+				{
+					Title:          "Bootstrap Archived Source",
+					Summary:        "project automatic failure: bootstrap_runtime",
+					Project:        &OperatorDashboardRef{ID: "proj-archived", Label: "Bootstrap Archived Source"},
+					RestartProject: &OperatorDashboardRef{ID: "proj-restart", Label: "Bootstrap Restart Target"},
+				},
+			},
+		},
+	})
+
+	model = pressKey(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+
+	if got := model.workspace.selectedProjectID; got != "proj-restart" {
+		t.Fatalf("selectedProjectID = %q, want %q", got, "proj-restart")
+	}
+	if got := model.workspace.mainView; got != ViewProject {
+		t.Fatalf("mainView = %q, want %q", got, ViewProject)
+	}
+}
+
 func TestDashboardRendersRuntimeHealthSection(t *testing.T) {
 	model := NewModel(DefaultState())
 	model.focus = MainPanel
