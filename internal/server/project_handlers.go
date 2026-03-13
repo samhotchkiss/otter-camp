@@ -20,6 +20,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/scheduling"
+	"github.com/samhotchkiss/otter-camp/internal/turn"
 )
 
 type skillOrgRepo interface {
@@ -27,12 +28,16 @@ type skillOrgRepo interface {
 	ListByProject(ctx context.Context, projectID uuid.UUID, includeInactive bool) ([]repo.Skill, error)
 }
 
+type projectBootstrapRelauncher interface {
+	RelaunchArchivedBootstrapProject(ctx context.Context, projectID uuid.UUID) (*repo.Project, error)
+}
+
 type ProjectRouteRegistrar struct {
 	handlers projectHandlers
 }
 
-func NewProjectRouteRegistrar(service projectsvc.ProjectService, skills skillOrgRepo) *ProjectRouteRegistrar {
-	return &ProjectRouteRegistrar{handlers: projectHandlers{service: service, skills: skills}}
+func NewProjectRouteRegistrar(service projectsvc.ProjectService, skills skillOrgRepo, relauncher projectBootstrapRelauncher) *ProjectRouteRegistrar {
+	return &ProjectRouteRegistrar{handlers: projectHandlers{service: service, skills: skills, relauncher: relauncher}}
 }
 
 func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
@@ -54,6 +59,10 @@ func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
 		middleware.RequireRole("admin"),
 		middleware.RequireAnyScope(requireWriteScope("projects")...),
 	).Post("/projects/{id}/archive", r.handlers.archiveProject)
+	router.With(
+		middleware.RequireRole("member"),
+		middleware.RequireAnyScope(requireWriteScope("projects")...),
+	).Post("/projects/{id}/relaunch", r.handlers.relaunchProject)
 	router.With(
 		middleware.RequireRole("member"),
 		middleware.RequireAnyScope(requireWriteScope("projects")...),
@@ -117,8 +126,9 @@ func (r *ProjectRouteRegistrar) RegisterRoutes(router chi.Router) {
 }
 
 type projectHandlers struct {
-	service projectsvc.ProjectService
-	skills  skillOrgRepo
+	service    projectsvc.ProjectService
+	skills     skillOrgRepo
+	relauncher projectBootstrapRelauncher
 }
 
 var scheduleCronParser = scheduling.NewCronParser()
@@ -498,6 +508,35 @@ func (h projectHandlers) archiveProject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	responder.JSON(w, http.StatusOK, toProjectResponse(archived))
+}
+
+func (h projectHandlers) relaunchProject(w http.ResponseWriter, r *http.Request) {
+	responder := api.NewResponder(r.Context())
+	principal, ok := h.requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	if h.relauncher == nil {
+		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "project relaunch unavailable")
+		return
+	}
+
+	projectID, err := parseUUIDParam(r, "id")
+	if err != nil {
+		responder.Error(w, http.StatusBadRequest, api.ErrCodeBadRequest, "invalid project id")
+		return
+	}
+	if _, err := h.service.Get(r.Context(), principal.OrganizationID, projectID); err != nil {
+		h.respondProjectError(responder, w, err)
+		return
+	}
+
+	relaunched, relaunchErr := h.relauncher.RelaunchArchivedBootstrapProject(r.Context(), projectID)
+	if relaunchErr != nil {
+		h.respondProjectError(responder, w, relaunchErr)
+		return
+	}
+	responder.JSON(w, http.StatusOK, toProjectResponse(relaunched))
 }
 
 func (h projectHandlers) pauseProject(w http.ResponseWriter, r *http.Request) {
@@ -1291,6 +1330,10 @@ func mapProjectError(err error) mappedProjectError {
 			Code:    "template_in_use",
 			Message: "A new template version was not created because no modifications were requested",
 		}
+	case errors.Is(err, turn.ErrProjectBootstrapRelaunchIneligible):
+		return mappedProjectError{Status: http.StatusConflict, Code: "project_relaunch_ineligible", Message: err.Error()}
+	case errors.Is(err, turn.ErrProjectBootstrapRelaunchUnavailable):
+		return mappedProjectError{Status: http.StatusServiceUnavailable, Code: api.ErrCodeServiceUnavailable, Message: err.Error()}
 	case errors.Is(err, projectsvc.ErrInvalidCronExpression):
 		return mappedProjectError{
 			Status:  http.StatusUnprocessableEntity,

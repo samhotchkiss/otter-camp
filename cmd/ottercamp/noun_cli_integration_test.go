@@ -108,7 +108,7 @@ func newNounCLIIntegrationFixture(t *testing.T) *nounCLIIntegrationFixture {
 				repo.NewAgentSkillAttachmentRepo(pool),
 				repo.NewToolDefinitionRepo(pool),
 			),
-			server.NewProjectRouteRegistrar(projectService, repo.NewSkillRepo(pool)),
+			server.NewProjectRouteRegistrar(projectService, repo.NewSkillRepo(pool), nil),
 		},
 	})
 

@@ -19,7 +19,7 @@ import (
 )
 
 func TestProjectRoutesRegistered(t *testing.T) {
-	registrar := NewProjectRouteRegistrar(nil, nil)
+	registrar := NewProjectRouteRegistrar(nil, nil, nil)
 	router := chi.NewRouter()
 	registrar.RegisterRoutes(router)
 
@@ -37,6 +37,7 @@ func TestProjectRoutesRegistered(t *testing.T) {
 		"GET /projects/{id}",
 		"PATCH /projects/{id}",
 		"DELETE /projects/{id}",
+		"POST /projects/{id}/relaunch",
 		"POST /projects/{id}/pause",
 		"POST /projects/{id}/resume",
 		"GET /projects/{id}/flow-templates",
@@ -136,6 +137,43 @@ func TestAddFlowNodeParsesLabelAndOrdinalRequestFields(t *testing.T) {
 	}
 	if displayName, _ := data["display_name"].(string); displayName != "Code" {
 		t.Fatalf("response display_name = %q, want %q", displayName, "Code")
+	}
+}
+
+func TestRelaunchProjectReturnsServiceUnavailableWhenNotConfigured(t *testing.T) {
+	projectID := uuid.New()
+	svc := &fakeProjectService{getProject: &projectsvc.Project{ID: projectID, Slug: "archived", DisplayName: "Archived"}}
+	handlers := projectHandlers{service: svc}
+
+	req := newProjectRequest(t, http.MethodPost, "/v1/projects/"+projectID.String()+"/relaunch", map[string]any{})
+	req = withRouteParams(req, map[string]string{"id": projectID.String()})
+	rr := httptest.NewRecorder()
+
+	handlers.relaunchProject(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusServiceUnavailable, rr.Body.String())
+	}
+}
+
+func TestRelaunchProjectReturnsRestartedProject(t *testing.T) {
+	projectID := uuid.New()
+	restartedID := uuid.New()
+	svc := &fakeProjectService{getProject: &projectsvc.Project{ID: projectID, Slug: "archived", DisplayName: "Archived"}}
+	relauncher := &fakeProjectBootstrapRelauncher{project: &repo.Project{ID: restartedID, Slug: "archived-restart", DisplayName: "Archived Restart"}}
+	handlers := projectHandlers{service: svc, relauncher: relauncher}
+
+	req := newProjectRequest(t, http.MethodPost, "/v1/projects/"+projectID.String()+"/relaunch", map[string]any{})
+	req = withRouteParams(req, map[string]string{"id": projectID.String()})
+	rr := httptest.NewRecorder()
+
+	handlers.relaunchProject(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if relauncher.calls != 1 {
+		t.Fatalf("relaunch calls = %d, want 1", relauncher.calls)
 	}
 }
 
@@ -239,6 +277,7 @@ type fakeProjectService struct {
 	lastAddFlowNodeReq projectsvc.AddFlowNodeRequest
 	addFlowNodeErr     error
 	addFlowNodeResult  *projectsvc.FlowNode
+	getProject         *projectsvc.Project
 }
 
 func (f *fakeProjectService) Create(_ context.Context, req projectsvc.CreateProjectRequest) (*projectsvc.Project, error) {
@@ -251,6 +290,9 @@ func (f *fakeProjectService) Create(_ context.Context, req projectsvc.CreateProj
 }
 
 func (f *fakeProjectService) Get(context.Context, uuid.UUID, uuid.UUID) (*projectsvc.Project, error) {
+	if f.getProject != nil {
+		return f.getProject, nil
+	}
 	return nil, repo.ErrNotFound
 }
 
@@ -357,4 +399,18 @@ func (f *fakeProjectService) DeleteSchedule(context.Context, uuid.UUID) error {
 
 func (f *fakeProjectService) Archive(_ context.Context, _, _ uuid.UUID) (*projectsvc.Project, error) {
 	return nil, repo.ErrNotFound
+}
+
+type fakeProjectBootstrapRelauncher struct {
+	calls   int
+	project *repo.Project
+	err     error
+}
+
+func (f *fakeProjectBootstrapRelauncher) RelaunchArchivedBootstrapProject(_ context.Context, _ uuid.UUID) (*repo.Project, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.project, nil
 }

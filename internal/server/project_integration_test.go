@@ -889,7 +889,7 @@ func newProjectTestServer(t *testing.T) (*authIntegrationServer, repo.Organizati
 		AuthService: authService,
 		Pool:        pool,
 		RouteRegistrars: []RouteRegistrar{
-			NewProjectRouteRegistrar(projectService, nil),
+			NewProjectRouteRegistrar(projectService, nil, nil),
 		},
 	})
 
