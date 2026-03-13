@@ -4101,6 +4101,79 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 	}
 }
 
+func TestIntegrationBootstrapSetupPersistUnknownStepReturnsValidCanonicalSlugs(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Persist Unknown Step",
+		"slug":        "bootstrap-persist-unknown-step-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap.setup.persist returns canonical valid slugs for unknown steps.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap persist unknown step",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{"flow_attachment", "first_wave_selection"},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist unknown step: %v", err)
+	}
+	if out["error"] != "unknown_bootstrap_step" {
+		t.Fatalf("error = %v, want unknown_bootstrap_step", out["error"])
+	}
+	if out["message"] != "Use the canonical bootstrap setup step slugs returned in valid_step_slugs." {
+		t.Fatalf("message = %v, want canonical slug guidance", out["message"])
+	}
+
+	valid, ok := out["valid_step_slugs"].([]string)
+	if !ok {
+		raw, ok := out["valid_step_slugs"].([]any)
+		if !ok {
+			t.Fatalf("valid_step_slugs type = %T, want slice", out["valid_step_slugs"])
+		}
+		valid = make([]string, 0, len(raw))
+		for _, item := range raw {
+			typed, ok := item.(string)
+			if !ok {
+				t.Fatalf("valid_step_slugs item type = %T, want string", item)
+			}
+			valid = append(valid, typed)
+		}
+	}
+
+	want := []string{
+		"bootstrap-governance-gate",
+		"bind-repo-environment",
+		"staff-project",
+		"decompose-workstreams",
+		"validate-task-shape",
+		"attach-validate-flow-templates",
+		"select-first-wave",
+		"record-frank-sign-off",
+	}
+	if !reflect.DeepEqual(valid, want) {
+		t.Fatalf("valid_step_slugs = %v, want %v", valid, want)
+	}
+}
+
 func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

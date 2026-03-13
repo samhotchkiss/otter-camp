@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
@@ -336,6 +337,7 @@ type flowAdvancer interface {
 
 type assignmentRepository interface {
 	GetPM(ctx context.Context, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error)
 }
 
 type projectRepository interface {
@@ -4207,7 +4209,11 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	if !projectBootstrapStateActive(state) {
 		return false, nil
 	}
-	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapResumeStateMessage(state))
+	snapshot, err := e.loadProjectBootstrapResumeSnapshot(ctx, rt.session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildProjectBootstrapResumeStateMessage(state, snapshot))
 	if err != nil {
 		return false, err
 	}
@@ -4215,7 +4221,77 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	return true, nil
 }
 
-func buildProjectBootstrapResumeStateMessage(state projectBootstrapState) string {
+type projectBootstrapResumeSnapshot struct {
+	ExistingPM     string
+	AssignmentLine string
+}
+
+func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, projectID uuid.UUID) (projectBootstrapResumeSnapshot, error) {
+	if e == nil || e.assignments == nil || e.agents == nil || projectID == uuid.Nil {
+		return projectBootstrapResumeSnapshot{}, nil
+	}
+	assignments, err := e.assignments.ListByProject(ctx, projectID)
+	if err != nil {
+		return projectBootstrapResumeSnapshot{}, err
+	}
+	if len(assignments) == 0 {
+		return projectBootstrapResumeSnapshot{}, nil
+	}
+
+	grouped := map[string][]string{}
+	for _, assignment := range assignments {
+		agentRecord, agentErr := e.agents.GetByID(ctx, assignment.AgentID)
+		if agentErr != nil {
+			continue
+		}
+		name := strings.TrimSpace(agentRecord.DisplayName)
+		if name == "" {
+			continue
+		}
+		role := assignmentrole.Normalize(assignment.Role)
+		if role == "" {
+			role = strings.ToLower(strings.TrimSpace(assignment.Role))
+		}
+		if role == "" {
+			role = "worker"
+		}
+		grouped[role] = append(grouped[role], name)
+	}
+
+	for role := range grouped {
+		sort.Strings(grouped[role])
+	}
+
+	snapshot := projectBootstrapResumeSnapshot{}
+	if names := grouped["project_manager"]; len(names) > 0 {
+		snapshot.ExistingPM = names[0]
+		delete(grouped, "project_manager")
+	}
+
+	roleOrder := []string{"worker", "reviewer", "observer"}
+	parts := make([]string, 0, len(grouped))
+	for _, role := range roleOrder {
+		names := grouped[role]
+		if len(names) == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%ss=%s", role, strings.Join(names, ", ")))
+		delete(grouped, role)
+	}
+	for role, names := range grouped {
+		if len(names) == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", role, strings.Join(names, ", ")))
+	}
+	sort.Strings(parts)
+	if len(parts) > 0 {
+		snapshot.AssignmentLine = strings.Join(parts, "; ")
+	}
+	return snapshot, nil
+}
+
+func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapshot projectBootstrapResumeSnapshot) string {
 	lines := []string{
 		"[Project bootstrap resume]",
 		"Resume the active project bootstrap workflow from the persisted state below.",
@@ -4235,7 +4311,13 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState) string
 	if checkpoint := strings.TrimSpace(state.LastSuccessfulCheckpoint); checkpoint != "" {
 		lines = append(lines, "Last successful checkpoint: "+checkpoint)
 	}
-	lines = append(lines, "Continue bootstrap only. Finish staffing, bounded task decomposition, flow attachment, and first-wave selection/promotion. Do not restart the project or ask the user to restate the request.")
+	if pm := strings.TrimSpace(snapshot.ExistingPM); pm != "" {
+		lines = append(lines, "Existing PM: "+pm)
+	}
+	if assignments := strings.TrimSpace(snapshot.AssignmentLine); assignments != "" {
+		lines = append(lines, "Existing active assignments: "+assignments)
+	}
+	lines = append(lines, "Continue bootstrap only. Reuse the existing persisted PM and assigned agents unless a required role is still missing. Do not create duplicate agents or another PM. Finish staffing, bounded task decomposition, flow attachment, and first-wave selection/promotion. Do not restart the project or ask the user to restate the request.")
 	return strings.Join(lines, "\n")
 }
 

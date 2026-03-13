@@ -2798,6 +2798,10 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.session.ScopeType = "project"
 	fixture.session.ScopeID = uuid.New()
+	pmID := uuid.New()
+	workerAID := uuid.New()
+	workerBID := uuid.New()
+	reviewerID := uuid.New()
 	metadata, err := json.Marshal(map[string]any{
 		projectBootstrapMetadataKey: map[string]any{
 			"status":                      projectBootstrapStatusActive,
@@ -2811,6 +2815,25 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 		t.Fatalf("Marshal metadata: %v", err)
 	}
 	fixture.session.Metadata = metadata
+	baseAgents := fixture.engine.agents.(*fakeAgentRepo)
+	fixture.engine.agents = &fakeAgentRepo{
+		agent:   baseAgents.agent,
+		starter: append([]repo.Agent(nil), baseAgents.starter...),
+		items: map[uuid.UUID]repo.Agent{
+			pmID:       {ID: pmID, DisplayName: "Sam.blog PM"},
+			workerAID:  {ID: workerAID, DisplayName: "André Kowalski"},
+			workerBID:  {ID: workerBID, DisplayName: "Ananya Webb"},
+			reviewerID: {ID: reviewerID, DisplayName: "Vivian Cho"},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: fixture.session.ScopeID, AgentID: pmID, Role: "project_manager", IsActive: true},
+			{ProjectID: fixture.session.ScopeID, AgentID: workerAID, Role: "worker", IsActive: true},
+			{ProjectID: fixture.session.ScopeID, AgentID: workerBID, Role: "worker", IsActive: true},
+			{ProjectID: fixture.session.ScopeID, AgentID: reviewerID, Role: "reviewer", IsActive: true},
+		},
+	}
 	fixture.assembler.results = []assembleResult{
 		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
 		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
@@ -2837,14 +2860,25 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 		t.Fatalf("ListBySession: %v", err)
 	}
 	var sawResume bool
+	var resumeContent string
 	for _, msg := range messages {
 		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
 			sawResume = true
+			resumeContent = msg.Content
 			break
 		}
 	}
 	if !sawResume {
 		t.Fatal("project bootstrap resume message missing")
+	}
+	if !strings.Contains(resumeContent, "Existing PM: Sam.blog PM") {
+		t.Fatalf("resume message = %q, want existing PM line", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "Existing active assignments: reviewers=Vivian Cho; workers=Ananya Webb, André Kowalski") {
+		t.Fatalf("resume message = %q, want assignment roster", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "Do not create duplicate agents or another PM.") {
+		t.Fatalf("resume message = %q, want duplicate-agent guardrail", resumeContent)
 	}
 }
 
@@ -4410,6 +4444,7 @@ func (f *fakeFlowAdvancer) AdvanceFlow(_ context.Context, taskID uuid.UUID, acto
 
 type fakeAssignmentRepo struct {
 	items map[uuid.UUID]repo.AgentProjectAssignment
+	list  []repo.AgentProjectAssignment
 	err   error
 }
 
@@ -4421,6 +4456,28 @@ func (f *fakeAssignmentRepo) GetPM(_ context.Context, projectID uuid.UUID) (repo
 		return item, nil
 	}
 	return repo.AgentProjectAssignment{}, repo.ErrNotFound
+}
+
+func (f *fakeAssignmentRepo) ListByProject(_ context.Context, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.list) > 0 {
+		items := make([]repo.AgentProjectAssignment, 0, len(f.list))
+		for _, item := range f.list {
+			if item.ProjectID == projectID {
+				items = append(items, item)
+			}
+		}
+		return items, nil
+	}
+	items := make([]repo.AgentProjectAssignment, 0, len(f.items))
+	for _, item := range f.items {
+		if item.ProjectID == projectID {
+			items = append(items, item)
+		}
+	}
+	return items, nil
 }
 
 type fakeProjectRepo struct {

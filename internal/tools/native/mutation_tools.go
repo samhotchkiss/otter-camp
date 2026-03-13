@@ -1940,6 +1940,8 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		return map[string]any{
 			"error":              "unknown_bootstrap_step",
 			"missing_step_slugs": missing,
+			"valid_step_slugs":   validBootstrapSetupStepSlugs(),
+			"message":            "Use the canonical bootstrap setup step slugs returned in valid_step_slugs.",
 		}, nil
 	}
 	sort.Slice(completed, func(i, j int) bool {
@@ -1950,6 +1952,19 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		"status":          "persisted",
 		"completed_steps": completed,
 	}, nil
+}
+
+func validBootstrapSetupStepSlugs() []string {
+	return []string{
+		"bootstrap-governance-gate",
+		"bind-repo-environment",
+		"staff-project",
+		"decompose-workstreams",
+		"validate-task-shape",
+		"attach-validate-flow-templates",
+		"select-first-wave",
+		"record-frank-sign-off",
+	}
 }
 
 func normalizeBootstrapStepSlug(value string) string {
