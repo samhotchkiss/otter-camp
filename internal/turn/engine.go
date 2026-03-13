@@ -3599,6 +3599,12 @@ func (e *TurnEngine) recoverRetriedAgentTurnLeak(
 	}
 	_, _ = e.appendSystemMessage(ctx, turn.ID, session.ID, "[Recovered stale in-progress turn after claimed job recovery - retrying in a fresh turn.]")
 
+	if handled, recoverErr := e.enqueueRecoveredBootstrapValidationContinuation(ctx, session, turn, messageID, agentID, currentJobID); recoverErr != nil {
+		return false, recoverErr
+	} else if handled {
+		return true, nil
+	}
+
 	nextPayload := AgentTurnPayload{
 		SessionID:  session.ID,
 		MessageID:  messageID,
@@ -3611,6 +3617,91 @@ func (e *TurnEngine) recoverRetriedAgentTurnLeak(
 	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, nil); err != nil {
 		return false, fmt.Errorf("enqueue recovered stale-turn retry: %w", err)
 	}
+	return true, nil
+}
+
+func (e *TurnEngine) enqueueRecoveredBootstrapValidationContinuation(
+	ctx context.Context,
+	session *chat.ChatSession,
+	turn *chat.ChatTurn,
+	messageID, agentID uuid.UUID,
+	currentJobID *uuid.UUID,
+) (bool, error) {
+	if e == nil || session == nil || turn == nil || session.ScopeID == uuid.Nil || currentJobID == nil || *currentJobID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return false, nil
+	}
+
+	lastError, err := e.agentTurnJobLastError(ctx, *currentJobID)
+	if err != nil {
+		return false, err
+	}
+	if !strings.Contains(strings.ToLower(strings.TrimSpace(lastError)), "bounded size policy") {
+		return false, nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	if !projectBootstrapSetupPersisted(progress) || !e.projectBootstrapRuntimeManaged(ctx, session, messageID) {
+		return false, nil
+	}
+	normalizeProjectBootstrapValidationFailure(&progress, false)
+
+	state := projectBootstrapStateFromMetadata(session.Metadata)
+	now := e.now().UTC()
+	if state.StartedAt == nil {
+		state.StartedAt = &now
+	}
+	state.Status = projectBootstrapStatusActive
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	state.LastTurnID = turn.ID.String()
+	if agentID != uuid.Nil {
+		state.LastResponderID = agentID.String()
+	}
+	state.AutoTurnCount++
+	applyProjectBootstrapProgressState(&state, progress)
+	state.ValidationStatus = ""
+	state.ValidationFailureClass = ""
+	state.ValidationFailureReason = ""
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = nil
+	state.FailureCategory = ""
+	state.FailureClass = ""
+	state.FailurePhase = ""
+	state.FailureReason = ""
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
+	if state.AutoTurnCount >= maxProjectBootstrapAutoTurns {
+		return false, nil
+	}
+
+	if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
+		return false, err
+	}
+
+	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, session, agentID)
+	continuationMessage, err := e.appendProjectBootstrapRecoveryContinuationMessage(ctx, session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount, progress)
+	if err != nil {
+		return false, err
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID: session.ID,
+		MessageID: continuationMessage.ID,
+	}
+	if continuationAgentID != uuid.Nil {
+		nextPayload.AgentID = &continuationAgentID
+	}
+	runAfter := now.Add(defaultAutoContinueDelay)
+	if _, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter); err != nil {
+		return false, err
+	}
+	_, _ = e.appendSystemMessage(ctx, turn.ID, session.ID, "[Recovered bounded bootstrap retry into a validation continuation turn.]")
 	return true, nil
 }
 
@@ -3698,6 +3789,25 @@ func (e *TurnEngine) agentTurnJobAttempts(ctx context.Context, jobID uuid.UUID) 
 		return 0, err
 	}
 	return attempts, nil
+}
+
+func (e *TurnEngine) agentTurnJobLastError(ctx context.Context, jobID uuid.UUID) (string, error) {
+	if e == nil || e.pool == nil || jobID == uuid.Nil {
+		return "", nil
+	}
+	var lastError string
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COALESCE(last_error, '')
+		FROM job_queue
+		WHERE id = $1
+		  AND job_type = $2
+	`, jobID, AgentTurnJobType).Scan(&lastError); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(lastError), nil
 }
 
 func (e *TurnEngine) ensureTurnRunExitInvariant(ctx context.Context, rt *turnRuntime) error {
