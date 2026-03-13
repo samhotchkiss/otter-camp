@@ -3401,6 +3401,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		return err
 	}
 	if !shouldRun {
+		if recovered, recoverErr := e.recoverRetriedSessionCurrentTurnLeak(ctx, session, messageID, agentID, retryCount, currentJobID, turn); recoverErr != nil {
+			return recoverErr
+		} else if recovered {
+			return nil
+		}
 		if recovered, recoverErr := e.recoverRetriedAgentTurnLeak(ctx, session, messageID, agentID, retryCount, currentJobID, turn); recoverErr != nil {
 			return recoverErr
 		} else if recovered {
@@ -3622,6 +3627,64 @@ func (e *TurnEngine) recoverRetriedAgentTurnLeak(
 	}
 	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, nil); err != nil {
 		return false, fmt.Errorf("enqueue recovered stale-turn retry: %w", err)
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) recoverRetriedSessionCurrentTurnLeak(
+	ctx context.Context,
+	session *chat.ChatSession,
+	messageID, agentID uuid.UUID,
+	retryCount int,
+	currentJobID *uuid.UUID,
+	turn *chat.ChatTurn,
+) (bool, error) {
+	if e == nil || e.chat == nil || session == nil || turn == nil || currentJobID == nil || *currentJobID == uuid.Nil {
+		return false, nil
+	}
+	if session.CurrentTurnID == nil || *session.CurrentTurnID == uuid.Nil || *session.CurrentTurnID == turn.ID {
+		return false, nil
+	}
+
+	attempts, err := e.agentTurnJobAttempts(ctx, *currentJobID)
+	if err != nil {
+		return false, err
+	}
+	if attempts <= 1 {
+		return false, nil
+	}
+
+	currentTurn, err := e.chat.GetTurn(ctx, *session.CurrentTurnID)
+	if err != nil {
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(currentTurn.Status), "in_progress") {
+		return false, nil
+	}
+
+	failureReason := "recovered claimed agent_turn retry found later session continuation still in_progress; marking stale continuation failed and scheduling a fresh retry"
+	if err := e.failRetriedLeakedTurn(ctx, currentTurn.ID, failureReason); err != nil {
+		return false, err
+	}
+	_, _ = e.appendSystemMessage(ctx, currentTurn.ID, session.ID, "[Recovered stale in-progress continuation turn after claimed job recovery - retrying in a fresh turn.]")
+
+	if handled, recoverErr := e.enqueueRecoveredBootstrapValidationContinuation(ctx, session, currentTurn, messageID, agentID, currentJobID); recoverErr != nil {
+		return false, recoverErr
+	} else if handled {
+		return true, nil
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  messageID,
+		RetryCount: retryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextAgentID := agentID
+		nextPayload.AgentID = &nextAgentID
+	}
+	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, nil); err != nil {
+		return false, fmt.Errorf("enqueue recovered stale continuation retry: %w", err)
 	}
 	return true, nil
 }
