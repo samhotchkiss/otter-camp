@@ -4106,6 +4106,22 @@ func TestIntegrationBootstrapSetupPersistCompletesRequestedSetupSteps(t *testing
 	if out["status"] != "persisted" {
 		t.Fatalf("status = %v, want persisted", out["status"])
 	}
+	if complete, ok := out["setup_checklist_complete"].(bool); !ok || complete {
+		t.Fatalf("setup_checklist_complete = %v, want false", out["setup_checklist_complete"])
+	}
+	remaining := parseStringSlicePayload(t, out["remaining_step_slugs"])
+	wantRemaining := []string{
+		"decompose-workstreams",
+		"validate-task-shape",
+		"attach-validate-flow-templates",
+		"select-first-wave",
+	}
+	if !reflect.DeepEqual(remaining, wantRemaining) {
+		t.Fatalf("remaining_step_slugs = %v, want %v", remaining, wantRemaining)
+	}
+	if message := strings.TrimSpace(fmt.Sprintf("%v", out["message"])); !strings.Contains(message, "Bootstrap setup is not complete yet") {
+		t.Fatalf("message = %q, want incomplete checklist guidance", message)
+	}
 
 	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
 	if err != nil {
@@ -4198,6 +4214,16 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 	}
 	if !governanceAccepted {
 		t.Fatalf("completed_steps = %#v, want bootstrap-governance-gate accepted_noop marker", completedSteps)
+	}
+	if complete, ok := out["setup_checklist_complete"].(bool); !ok || !complete {
+		t.Fatalf("setup_checklist_complete = %v, want true", out["setup_checklist_complete"])
+	}
+	remaining := parseStringSlicePayload(t, out["remaining_step_slugs"])
+	if len(remaining) != 0 {
+		t.Fatalf("remaining_step_slugs = %v, want empty", remaining)
+	}
+	if message := strings.TrimSpace(fmt.Sprintf("%v", out["message"])); !strings.Contains(message, "checklist is fully persisted") {
+		t.Fatalf("message = %q, want complete checklist guidance", message)
 	}
 
 	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
@@ -4986,6 +5012,27 @@ func nestedUUIDPath(t *testing.T, raw map[string]any, path ...string) uuid.UUID 
 	default:
 		t.Fatalf("nestedUUIDPath path %v = %T", path, current)
 		return uuid.Nil
+	}
+}
+
+func parseStringSlicePayload(t *testing.T, raw any) []string {
+	t.Helper()
+	switch typed := raw.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for i, item := range typed {
+			value, ok := item.(string)
+			if !ok {
+				t.Fatalf("string slice payload[%d] = %T, want string", i, item)
+			}
+			out = append(out, value)
+		}
+		return out
+	default:
+		t.Fatalf("string slice payload = %T, want []string", raw)
+		return nil
 	}
 }
 

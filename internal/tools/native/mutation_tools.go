@@ -1967,6 +1967,7 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 				return nil, transitionErr
 			}
 			taskRecord = repo.ProjectTask(*updated)
+			tasksBySlug[slug] = taskRecord
 		}
 		completed = append(completed, map[string]any{
 			"task_id":     taskRecord.ID,
@@ -1985,14 +1986,32 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 			"message":            "Use the canonical bootstrap setup step slugs returned in valid_step_slugs.",
 		}, nil
 	}
+	remaining := make([]string, 0)
+	for _, slug := range validBootstrapSetupStepSlugs() {
+		if slug == "bootstrap-governance-gate" {
+			continue
+		}
+		taskRecord, exists := tasksBySlug[slug]
+		if !exists || !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
+			remaining = append(remaining, slug)
+		}
+	}
 	sort.Slice(completed, func(i, j int) bool {
 		return fmt.Sprintf("%v", completed[i]["step_slug"]) < fmt.Sprintf("%v", completed[j]["step_slug"])
 	})
-	return map[string]any{
+	response := map[string]any{
 		"project_id":      projectID,
 		"status":          "persisted",
 		"completed_steps": completed,
-	}, nil
+		"setup_checklist_complete": len(remaining) == 0,
+		"remaining_step_slugs":    remaining,
+	}
+	if len(remaining) > 0 {
+		response["message"] = fmt.Sprintf("Bootstrap setup is not complete yet. Persist the remaining canonical step slugs next: %s.", strings.Join(remaining, ", "))
+	} else {
+		response["message"] = "Bootstrap setup checklist is fully persisted. The governance gate will complete automatically once validation passes."
+	}
+	return response, nil
 }
 
 func validBootstrapSetupStepSlugs() []string {
@@ -3150,6 +3169,12 @@ func (e *NativeToolExecutor) handleSubtaskCreate(ctx context.Context, input map[
 	}
 	flowNodeExecutionID, ok := readUUID(input, "flow_node_execution_id")
 	if !ok || flowNodeExecutionID == uuid.Nil {
+		if taskID, hasTaskID := readUUID(input, "task_id"); hasTaskID && taskID != uuid.Nil {
+			return map[string]any{
+				"error":   "flow_node_execution_id_required",
+				"message": "subtask.create requires an active flow_node_execution_id, not task_id. During bootstrap planning, create bounded child tasks with task.create under parent_task_id instead.",
+			}, nil
+		}
 		return map[string]any{"error": "flow_node_execution_id_required"}, nil
 	}
 	title, ok := readString(input, "title")
@@ -3158,6 +3183,12 @@ func (e *NativeToolExecutor) handleSubtaskCreate(ctx context.Context, input map[
 	}
 	execution, err := e.flowExecs.GetByID(ctx, flowNodeExecutionID)
 	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return map[string]any{
+				"error":   "flow_node_execution_not_found",
+				"message": "subtask.create requires an active flow_node_execution_id from a running task execution. Do not pass task_id here. During bootstrap planning, use task.create with parent_task_id to split broad work into child tasks.",
+			}, nil
+		}
 		return nil, err
 	}
 	var description *string

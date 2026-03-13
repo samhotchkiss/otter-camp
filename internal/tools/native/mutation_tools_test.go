@@ -717,7 +717,8 @@ func (m *mockFlowTemplateRepo) Update(_ context.Context, template repo.FlowTempl
 }
 
 type mockFlowExecutionRepo struct {
-	byTask map[uuid.UUID][]repo.FlowNodeExecution
+	byTask     map[uuid.UUID][]repo.FlowNodeExecution
+	getByIDErr error
 }
 
 func (m *mockFlowExecutionRepo) Complete(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
@@ -729,6 +730,9 @@ func (m *mockFlowExecutionRepo) Create(context.Context, repo.FlowNodeExecution) 
 }
 
 func (m *mockFlowExecutionRepo) GetByID(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	if m.getByIDErr != nil {
+		return repo.FlowNodeExecution{}, m.getByIDErr
+	}
 	return repo.FlowNodeExecution{}, errors.New("not implemented")
 }
 
@@ -745,6 +749,24 @@ func (m *mockFlowExecutionRepo) RecordCommitSHA(context.Context, uuid.UUID, stri
 
 func (m *mockFlowExecutionRepo) Reject(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
 	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+type mockProjectSubtaskRepo struct{}
+
+func (m *mockProjectSubtaskRepo) Create(context.Context, repo.ProjectSubtask) (repo.ProjectSubtask, error) {
+	return repo.ProjectSubtask{}, errors.New("not implemented")
+}
+
+func (m *mockProjectSubtaskRepo) UpdateStatus(context.Context, uuid.UUID, string) (repo.ProjectSubtask, error) {
+	return repo.ProjectSubtask{}, errors.New("not implemented")
+}
+
+func (m *mockProjectSubtaskRepo) GetByID(context.Context, uuid.UUID) (repo.ProjectSubtask, error) {
+	return repo.ProjectSubtask{}, errors.New("not implemented")
+}
+
+func (m *mockProjectSubtaskRepo) ListByExecution(context.Context, uuid.UUID) ([]repo.ProjectSubtask, error) {
+	return nil, nil
 }
 
 func TestTaskUpdateRejectsDraftToQueuedWithoutFlowTemplate(t *testing.T) {
@@ -772,6 +794,49 @@ func TestTaskUpdateRejectsDraftToQueuedWithoutFlowTemplate(t *testing.T) {
 	}
 	if tasks.updateCalls != 0 {
 		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestSubtaskCreateRejectsTaskIDWithoutExecutionID(t *testing.T) {
+	taskID := uuid.New()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.subtasks = &mockProjectSubtaskRepo{}
+	executor.flowExecs = &mockFlowExecutionRepo{}
+
+	out, err := executor.Execute(testExecCtx(), "subtask.create", map[string]any{
+		"task_id": taskID.String(),
+		"title":   "Define primary audience persona",
+	})
+	if err != nil {
+		t.Fatalf("subtask.create: %v", err)
+	}
+	if out["error"] != "flow_node_execution_id_required" {
+		t.Fatalf("error = %v, want flow_node_execution_id_required", out["error"])
+	}
+	message := strings.TrimSpace(fmt.Sprintf("%v", out["message"]))
+	if !strings.Contains(message, "requires an active flow_node_execution_id, not task_id") {
+		t.Fatalf("message = %q, want task_id guidance", message)
+	}
+}
+
+func TestSubtaskCreateRejectsMissingExecutionWithBootstrapGuidance(t *testing.T) {
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.subtasks = &mockProjectSubtaskRepo{}
+	executor.flowExecs = &mockFlowExecutionRepo{getByIDErr: repo.ErrNotFound}
+
+	out, err := executor.Execute(testExecCtx(), "subtask.create", map[string]any{
+		"flow_node_execution_id": uuid.NewString(),
+		"title":                  "Define primary audience persona",
+	})
+	if err != nil {
+		t.Fatalf("subtask.create: %v", err)
+	}
+	if out["error"] != "flow_node_execution_not_found" {
+		t.Fatalf("error = %v, want flow_node_execution_not_found", out["error"])
+	}
+	message := strings.TrimSpace(fmt.Sprintf("%v", out["message"]))
+	if !strings.Contains(message, "During bootstrap planning, use task.create with parent_task_id") {
+		t.Fatalf("message = %q, want bootstrap guidance", message)
 	}
 }
 
