@@ -2274,11 +2274,18 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 			Description:  task.Description,
 			Metadata:     task.Metadata,
 		})
-		if decompErr != nil && errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) && childCount == 0 {
-			progress.ValidationStatus = projectBootstrapValidationFailed
-			progress.ValidationFailureClass = projectBootstrapFailureFirstWaveSize
-			progress.ValidationFailureReason = buildProjectBootstrapFirstWaveSizeFailureReason(task, decompErr.Error())
-			return progress, nil
+		if decompErr != nil && errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) {
+			if childCount == 0 {
+				progress.ValidationStatus = projectBootstrapValidationFailed
+				progress.ValidationFailureClass = projectBootstrapFailureFirstWaveSize
+				progress.ValidationFailureReason = buildProjectBootstrapFirstWaveSizeFailureReason(task, decompErr.Error())
+				return progress, nil
+			}
+			if projectBootstrapTaskEnteredExecution(task.WorkStatus) && structuralFailureClass == "" {
+				structuralFailureClass = projectBootstrapFailureCompoundParent
+				structuralFailureReason = buildProjectBootstrapParentExecutionFailureReason(task, childCount)
+			}
+			continue
 		}
 		if decompErr != nil {
 			return projectBootstrapProgress{}, decompErr

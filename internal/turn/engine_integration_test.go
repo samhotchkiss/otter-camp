@@ -12623,6 +12623,76 @@ func TestTurnEngineIntegrationBootstrapProgressCountsFlowTemplatesWithoutAssignm
 	}
 }
 
+func TestTurnEngineIntegrationBootstrapProgressIgnoresOversizedParentAfterChildrenCreated(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "pm",
+		AssignedByType: "human_user",
+		AssignedByID:   &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("Assign pm agent: %v", err)
+	}
+
+	parentDescription := strings.Join([]string{
+		"- Establish voice guidelines consistent with Sam's existing Technonymous writing.",
+		"- Define cross-promotion and distribution strategy across all channels.",
+	}, "\n")
+	parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "WS3: Develop Comprehensive Content Strategy",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create oversized parent task: %v", err)
+	}
+
+	childDescription := "Define the site voice guidelines as a bounded reviewable deliverable."
+	childTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Define site voice guidelines",
+		Description:     &childDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create bounded child task: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if progress.ValidationStatus != projectBootstrapValidationPassed {
+		t.Fatalf("validation_status = %q, want %q", progress.ValidationStatus, projectBootstrapValidationPassed)
+	}
+	if progress.ValidationFailureClass != "" || progress.ValidationFailureReason != "" {
+		t.Fatalf("validation failure = (%q, %q), want empty", progress.ValidationFailureClass, progress.ValidationFailureReason)
+	}
+	if progress.FirstWaveTaskCount != 1 {
+		t.Fatalf("first_wave_task_count = %d, want 1", progress.FirstWaveTaskCount)
+	}
+	if len(progress.FirstWaveTasks) != 1 || progress.FirstWaveTasks[0].ID != childTask.ID {
+		t.Fatalf("first_wave_tasks = %+v, want only child task %s", progress.FirstWaveTasks, childTask.ID)
+	}
+}
+
 func TestTurnEngineIntegrationBootstrapProgressCountsStaffingDraftsWithoutAssignments(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
