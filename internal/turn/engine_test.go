@@ -2882,6 +2882,84 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	}
 }
 
+func TestContinuationTurnReloadsSessionBeforeBootstrapResumeState(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+
+	pmID := uuid.New()
+	workerID := uuid.New()
+	metadata, err := json.Marshal(map[string]any{
+		projectBootstrapMetadataKey: map[string]any{
+			"status":                      projectBootstrapStatusActive,
+			"current_phase":               "task_tree_persisted",
+			"assignment_count":            2,
+			"planned_task_count":          9,
+			"planned_flow_template_count": 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal metadata: %v", err)
+	}
+
+	baseAgents := fixture.engine.agents.(*fakeAgentRepo)
+	fixture.engine.agents = &fakeAgentRepo{
+		agent:   baseAgents.agent,
+		starter: append([]repo.Agent(nil), baseAgents.starter...),
+		items: map[uuid.UUID]repo.Agent{
+			pmID:     {ID: pmID, DisplayName: "Sam.blog PM"},
+			workerID: {ID: workerID, DisplayName: "Maya Ortiz"},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: fixture.session.ScopeID, AgentID: pmID, Role: "project_manager", IsActive: true},
+			{ProjectID: fixture.session.ScopeID, AgentID: workerID, Role: "worker", IsActive: true},
+		},
+	}
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call == 1 {
+			fixture.chat.session.Metadata = metadata
+		}
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "should not be used"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0 after session reload", fixture.model.continuationSummaryCalls)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
+			if !strings.Contains(msg.Content, "Existing PM: Sam.blog PM") {
+				t.Fatalf("resume message = %q, want refreshed PM line", msg.Content)
+			}
+			return
+		}
+	}
+	t.Fatal("project bootstrap resume message missing after session reload")
+}
+
 func TestResolveModelProfileWorkerDefaultsToStandardWithoutOverrides(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.engine.resolver = nil

@@ -4129,6 +4129,11 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	if err != nil {
 		return err
 	}
+	refreshedSession, err := e.chat.GetSession(ctx, rt.session.ID)
+	if err != nil {
+		return err
+	}
+	rt.session = refreshedSession
 	rt.startedAt = e.turnStartTime(rt.turn)
 	rt.toolCallsUsed = 0
 	rt.modelRetryUsed = 0
