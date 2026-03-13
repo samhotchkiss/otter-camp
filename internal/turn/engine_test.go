@@ -3147,6 +3147,9 @@ func TestBuildProjectBootstrapResumeStateMessageUsesCompactRosterForLateFirstWav
 	if !strings.Contains(resumeContent, "do not manually queue or start first-wave execution tasks") {
 		t.Fatalf("resume message = %q, want no manual first-wave promotion guidance", resumeContent)
 	}
+	if !strings.Contains(resumeContent, "do not call task.list or flow.list_templates before trying bootstrap.setup.persist") {
+		t.Fatalf("resume message = %q, want setup-persist-first guidance", resumeContent)
+	}
 	if !strings.Contains(resumeContent, "completed_step_slugs for bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off") {
 		t.Fatalf("resume message = %q, want canonical bootstrap step slugs", resumeContent)
 	}
@@ -3184,6 +3187,9 @@ func TestBuildProjectBootstrapResumeActionPromptForSetupPersist(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "finish first-wave selection, and then call bootstrap.setup.persist") {
 		t.Fatalf("prompt = %q, want setup persist sequencing", prompt)
+	}
+	if !strings.Contains(prompt, "Before any task.list or flow.list_templates call, try bootstrap.setup.persist first") {
+		t.Fatalf("prompt = %q, want setup-persist-first guidance", prompt)
 	}
 	if !strings.Contains(prompt, "do not use raw task.update to queue or start first-wave execution tasks") {
 		t.Fatalf("prompt = %q, want no manual first-wave queue guidance", prompt)
