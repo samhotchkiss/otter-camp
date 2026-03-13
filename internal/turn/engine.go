@@ -3506,7 +3506,9 @@ func (e *TurnEngine) recoverRetriedAgentTurnLeak(
 	}
 
 	failureReason := "recovered claimed agent_turn found prior turn still in_progress; marking stale turn failed and scheduling a fresh retry"
-	_ = e.chat.FailTurn(ctx, turn.ID, failureReason)
+	if err := e.failRetriedLeakedTurn(ctx, turn.ID, failureReason); err != nil {
+		return false, err
+	}
 	_, _ = e.appendSystemMessage(ctx, turn.ID, session.ID, "[Recovered stale in-progress turn after claimed job recovery - retrying in a fresh turn.]")
 
 	nextPayload := AgentTurnPayload{
@@ -3522,6 +3524,73 @@ func (e *TurnEngine) recoverRetriedAgentTurnLeak(
 		return false, fmt.Errorf("enqueue recovered stale-turn retry: %w", err)
 	}
 	return true, nil
+}
+
+func (e *TurnEngine) failRetriedLeakedTurn(ctx context.Context, turnID uuid.UUID, failureReason string) error {
+	if e == nil || e.chat == nil || e.pool == nil || turnID == uuid.Nil {
+		return nil
+	}
+	failed, err := e.chat.GetTurn(ctx, turnID)
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(failed.Status), "in_progress") {
+		if err := e.chat.FailTurn(ctx, turnID, failureReason); err != nil && !errors.Is(err, chat.ErrInvalidStatusTransition) {
+			return err
+		}
+	}
+	if e.invocations != nil {
+		session, sessionErr := e.chat.GetSession(ctx, failed.SessionID)
+		if sessionErr != nil {
+			return sessionErr
+		}
+		invocations, listErr := repo.NewModelInvocationRepo(e.pool).ListBySession(ctx, session.OrganizationID, failed.SessionID)
+		if listErr != nil {
+			return listErr
+		}
+		errorCode := stringPtr("stale_turn_recovered")
+		errorText := stringPtr(failureReason)
+		for _, invocation := range invocations {
+			if invocation.TurnID == nil || *invocation.TurnID != turnID {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(invocation.Status), "in_flight") {
+				continue
+			}
+			if _, updateErr := e.invocations.UpdateStatus(ctx, invocation.ID, "failed", errorCode, errorText); updateErr != nil {
+				return updateErr
+			}
+		}
+	}
+	if e.messages != nil {
+		messages, listErr := repo.NewChatMessageRepo(e.pool).ListBySession(ctx, failed.SessionID)
+		if listErr != nil {
+			return listErr
+		}
+		for _, message := range messages {
+			if message.TurnID == nil || *message.TurnID != turnID {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+				continue
+			}
+			status := strings.ToLower(strings.TrimSpace(message.Status))
+			if status != "pending" && status != "streaming" {
+				continue
+			}
+			if _, updateErr := e.messages.UpdateStatus(ctx, message.ID, "failed", failureReason); updateErr != nil {
+				return updateErr
+			}
+		}
+	}
+	updated, err := e.chat.GetTurn(ctx, turnID)
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(updated.Status), "in_progress") {
+		return fmt.Errorf("stale retry turn remained in_progress after recovery fail request (turn_id=%s)", turnID)
+	}
+	return nil
 }
 
 func (e *TurnEngine) agentTurnJobAttempts(ctx context.Context, jobID uuid.UUID) (int, error) {

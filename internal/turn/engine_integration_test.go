@@ -1141,6 +1141,42 @@ func TestTurnEngineIntegrationRecoveredClaimedAgentTurnDoesNotSilentlyAcceptLeak
 	if !started {
 		t.Fatal("expected retry turn to start")
 	}
+	assistantMessage, err := repo.NewChatMessageRepo(fixture.pool).Create(ctx, repo.ChatMessage{
+		SessionID: taskSession.ID,
+		TurnID:    &startedTurn.ID,
+		Role:      "assistant",
+		Content:   "",
+		Status:    "streaming",
+	})
+	if err != nil {
+		t.Fatalf("create streaming assistant placeholder: %v", err)
+	}
+	profiles, err := repo.NewModelProfileRepo(fixture.pool).ListCurrent(ctx, fixture.org.ID)
+	if err != nil {
+		t.Fatalf("ListCurrent model profiles: %v", err)
+	}
+	if len(profiles) == 0 {
+		t.Fatal("expected at least one current model profile")
+	}
+	profile := profiles[0]
+	invocationRepo := repo.NewModelInvocationRepo(fixture.pool)
+	invocation, err := invocationRepo.Create(ctx, repo.ModelInvocation{
+		OrganizationID:    fixture.org.ID,
+		ModelProviderID:   profile.ProviderID,
+		ModelProfileID:    stringPtr(profile.LogicalProfileID),
+		InvocationPurpose: "agent_turn",
+		Status:            "in_flight",
+		ModelName:         profile.ModelName,
+		IsStreaming:       true,
+		AttemptNumber:     1,
+		AgentID:           &assignedAgent.ID,
+		SessionID:         &taskSession.ID,
+		TurnID:            &startedTurn.ID,
+		Metadata:          mustJSON(t, map[string]any{"test": "stale_turn_recovery"}),
+	})
+	if err != nil {
+		t.Fatalf("create in-flight invocation: %v", err)
+	}
 
 	worker := jobqueue.New(fixture.pool, nil, jobqueue.Config{})
 	jobID, err := worker.Enqueue(ctx, nil, AgentTurnJobType, defaultAgentTurnJobPriority, AgentTurnPayload{
@@ -1221,6 +1257,25 @@ func TestTurnEngineIntegrationRecoveredClaimedAgentTurnDoesNotSilentlyAcceptLeak
 	}
 	if !containsSystemMessage(messages, "[Recovered stale in-progress turn after claimed job recovery - retrying in a fresh turn.]") {
 		t.Fatal("missing recovered stale-turn system message")
+	}
+
+	updatedInvocation, err := invocationRepo.GetByID(ctx, invocation.ID)
+	if err != nil {
+		t.Fatalf("GetByID recovered invocation: %v", err)
+	}
+	if updatedInvocation.Status != "failed" {
+		t.Fatalf("recovered invocation status = %q, want failed", updatedInvocation.Status)
+	}
+	if updatedInvocation.ErrorCode == nil || *updatedInvocation.ErrorCode != "stale_turn_recovered" {
+		t.Fatalf("recovered invocation error_code = %v, want stale_turn_recovered", updatedInvocation.ErrorCode)
+	}
+
+	updatedAssistant, err := repo.NewChatMessageRepo(fixture.pool).GetByID(ctx, assistantMessage.ID)
+	if err != nil {
+		t.Fatalf("GetByID recovered assistant message: %v", err)
+	}
+	if updatedAssistant.Status != "failed" {
+		t.Fatalf("recovered assistant message status = %q, want failed", updatedAssistant.Status)
 	}
 }
 
