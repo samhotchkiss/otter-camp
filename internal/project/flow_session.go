@@ -190,6 +190,21 @@ func (b *flowSessionBridge) ensureNodeSessionTx(ctx context.Context, execution r
 		return repo.ChatSession{}, err
 	}
 
+	if _, err := tx.Exec(ctx, `
+		UPDATE chat_session
+		SET status = 'closed',
+		    closed_at = now(),
+		    current_turn_id = NULL
+		WHERE organization_id = $1
+		  AND scope_type = 'project_task'
+		  AND scope_id = $2
+		  AND mode = 'async'
+		  AND status = 'active'
+		  AND COALESCE(metadata->>'flow_node_execution_id', '') <> $3
+	`, taskRecord.OrganizationID, execution.TaskID, execution.ID.String()); err != nil {
+		return repo.ChatSession{}, err
+	}
+
 	metadata, err := json.Marshal(map[string]any{
 		"flow_node_execution_id": execution.ID.String(),
 		"flow_node_id":           execution.FlowNodeID.String(),

@@ -592,6 +592,72 @@ func TestGetOrCreateNodeSessionPublishesCreatedEvent(t *testing.T) {
 	}
 }
 
+func TestGetOrCreateNodeSessionClosesSupersededTaskAsyncSessions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	agent := seedChatServiceAgent(t, ctx, pool, org.ID)
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	first := seedChatServiceFlowNodeExecution(t, ctx, pool, org.ID)
+
+	second, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      first.TaskID,
+		FlowNodeID:  first.FlowNodeID,
+		VisitNumber: first.VisitNumber + 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create second flow_node_execution: %v", err)
+	}
+
+	bus := newIntegrationEventBus(pool)
+	svc := newIntegrationService(t, pool, bus)
+	sessionRepo := repo.NewChatSessionRepo(pool)
+
+	firstSession, err := svc.GetOrCreateNodeSession(ctx, first.ID, agent.ID)
+	if err != nil {
+		t.Fatalf("GetOrCreateNodeSession first: %v", err)
+	}
+	secondSession, err := svc.GetOrCreateNodeSession(ctx, second.ID, agent.ID)
+	if err != nil {
+		t.Fatalf("GetOrCreateNodeSession second: %v", err)
+	}
+	if secondSession.ID == firstSession.ID {
+		t.Fatalf("second session id = %s, want distinct from %s", secondSession.ID, firstSession.ID)
+	}
+
+	firstStored, err := sessionRepo.GetByID(ctx, firstSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID first session: %v", err)
+	}
+	if firstStored.Status != "closed" || firstStored.ClosedAt == nil {
+		t.Fatalf("first superseded session = %+v, want closed with closed_at", firstStored)
+	}
+
+	secondStored, err := sessionRepo.GetByID(ctx, secondSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID second session: %v", err)
+	}
+	if secondStored.Status != "active" {
+		t.Fatalf("second session status = %q, want active", secondStored.Status)
+	}
+
+	var activeCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE scope_type = 'project_task'
+		  AND scope_id = $1
+		  AND mode = 'async'
+		  AND status = 'active'
+	`, first.TaskID).Scan(&activeCount); err != nil {
+		t.Fatalf("count active task sessions: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("active task sessions = %d, want 1", activeCount)
+	}
+}
+
 func newIntegrationService(t *testing.T, pool *pgxpool.Pool, bus eventPublisher) ChatService {
 	t.Helper()
 	if bus == nil {

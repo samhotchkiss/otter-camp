@@ -168,4 +168,36 @@ func TestFlowSessionBridgeEnsureNodeSessionCreatesDistinctSessionsPerExecution(t
 	if updatedSecond.SessionID == nil || *updatedSecond.SessionID != secondSession.ID {
 		t.Fatalf("second execution session_id = %v, want %s", updatedSecond.SessionID, secondSession.ID)
 	}
+
+	chatRepo := repo.NewChatSessionRepo(fx.pool)
+	firstStored, err := chatRepo.GetByID(ctx, firstSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID first session: %v", err)
+	}
+	if firstStored.Status != "closed" || firstStored.ClosedAt == nil {
+		t.Fatalf("first session after supersession = %+v, want closed with closed_at", firstStored)
+	}
+
+	secondStored, err := chatRepo.GetByID(ctx, secondSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID second session: %v", err)
+	}
+	if secondStored.Status != "active" {
+		t.Fatalf("second session status = %q, want active", secondStored.Status)
+	}
+
+	var activeCount int
+	if err := fx.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE scope_type = 'project_task'
+		  AND scope_id = $1
+		  AND mode = 'async'
+		  AND status = 'active'
+	`, taskRecord.ID).Scan(&activeCount); err != nil {
+		t.Fatalf("count active task sessions: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("active task sessions = %d, want 1", activeCount)
+	}
 }

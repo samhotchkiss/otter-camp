@@ -799,6 +799,21 @@ func (s *service) GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionI
 		return nil, mapDBError(err)
 	}
 
+	if _, err := tx.Exec(ctx, `
+		UPDATE chat_session
+		SET status = 'closed',
+		    closed_at = now(),
+		    current_turn_id = NULL
+		WHERE organization_id = $1
+		  AND scope_type = 'project_task'
+		  AND scope_id = $2
+		  AND mode = 'async'
+		  AND status = 'active'
+		  AND COALESCE(metadata->>'flow_node_execution_id', '') <> $3
+	`, agentRecord.OrganizationID, taskID, flowNodeExecutionID.String()); err != nil {
+		return nil, mapDBError(err)
+	}
+
 	metadata := normalizeJSON(mustJSON(map[string]any{"flow_node_execution_id": flowNodeExecutionID.String()}), json.RawMessage(`{}`))
 	var createdID uuid.UUID
 	if err := tx.QueryRow(ctx, `
