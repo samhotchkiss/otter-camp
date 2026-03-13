@@ -4679,6 +4679,10 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	if err != nil {
 		return false, err
 	}
+	if projectBootstrapResumeShouldRootAtResumeMessage(state) {
+		rt.historyStartID = &message.ID
+		return true, nil
+	}
 	if rt.initialMessageID != uuid.Nil {
 		initial := rt.initialMessageID
 		rt.historyStartID = &initial
@@ -4820,8 +4824,11 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	if pm := strings.TrimSpace(snapshot.ExistingPM); pm != "" {
 		lines = append(lines, "Existing PM: "+pm)
 	}
-	if assignments := strings.TrimSpace(snapshot.AssignmentLine); assignments != "" {
+	compactRoster := projectBootstrapResumeUsesCompactRoster(state)
+	if assignments := strings.TrimSpace(snapshot.AssignmentLine); assignments != "" && !compactRoster {
 		lines = append(lines, "Existing active assignments: "+assignments)
+	} else if compactRoster && state.AssignmentCount > 0 {
+		lines = append(lines, fmt.Sprintf("Existing staffing is already persisted for %d active project assignments. Reuse that roster; do not create duplicate agents or replace the PM unless a required role is still missing.", state.AssignmentCount))
 	}
 	flowTemplatesReady := state.PlannedFlowTemplateCount > 0 ||
 		strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointFlowTemplatesPersisted ||
@@ -4829,8 +4836,52 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	if flowTemplatesReady && state.FirstWaveTaskCount == 0 && state.FirstWavePromotedCount == 0 && state.FirstWaveJobCount == 0 {
 		lines = append(lines, "The persisted task tree already has runnable flow templates. Do not create more agents, parent tasks, or child tasks unless a concrete task is still unassigned or fails a boundedness/validation rule. Reuse the existing staffed task tree and move a small first executable wave into execution now.")
 	}
-	lines = append(lines, "Continue bootstrap only. Reuse the existing persisted PM and assigned agents unless a required role is still missing. Do not create duplicate agents or another PM. The bootstrap governance gate task is system-managed: do not edit it, do not try to assign it, and do not try to queue or complete it manually. Keep first-wave execution tasks in draft until the gate auto-completes after validation passes. The project manager must be a staff PM agent, not a temp agent. Finish staffing, bounded task decomposition, task assignment, flow attachment, and first-wave selection/promotion. Every executable non-bootstrap task must have an assigned active project agent before you promote or queue it. Do not restart the project or ask the user to restate the request.")
+	lines = append(lines, projectBootstrapResumePhaseGuidance(state))
 	return strings.Join(lines, "\n")
+}
+
+func projectBootstrapResumeUsesCompactRoster(state projectBootstrapState) bool {
+	if state.FirstWaveTaskCount > 0 || state.FirstWavePromotedCount > 0 || state.FirstWaveJobCount > 0 {
+		return true
+	}
+	switch strings.TrimSpace(state.CurrentPhase) {
+	case projectBootstrapCheckpointFirstWaveSelected,
+		projectBootstrapCheckpointFirstWaveExecutions,
+		projectBootstrapCheckpointFirstWaveJobsClaimed:
+		return true
+	}
+	switch strings.TrimSpace(state.LastSuccessfulCheckpoint) {
+	case projectBootstrapCheckpointFirstWaveSelected,
+		projectBootstrapCheckpointFirstWaveExecutions,
+		projectBootstrapCheckpointFirstWaveJobsClaimed:
+		return true
+	}
+	return false
+}
+
+func projectBootstrapResumeShouldRootAtResumeMessage(state projectBootstrapState) bool {
+	if state.AssignmentCount > 0 ||
+		state.PlannedTaskCount > 0 ||
+		state.PlannedFlowTemplateCount > 0 ||
+		state.FirstWaveTaskCount > 0 ||
+		state.FirstWavePromotedCount > 0 ||
+		state.FirstWaveJobCount > 0 {
+		return true
+	}
+	if checkpoint := strings.TrimSpace(state.LastSuccessfulCheckpoint); checkpoint != "" && checkpoint != projectBootstrapCheckpointProjectCreated {
+		return true
+	}
+	if phase := strings.TrimSpace(state.CurrentPhase); phase != "" && phase != projectBootstrapCheckpointProjectCreated {
+		return true
+	}
+	return false
+}
+
+func projectBootstrapResumePhaseGuidance(state projectBootstrapState) string {
+	if projectBootstrapResumeUsesCompactRoster(state) {
+		return "Continue bootstrap only from the persisted first-wave state. Do not create more agents, parent tasks, or broad child-task batches unless a concrete persisted task is still invalid or unassigned. Reuse the existing staffed task tree, keep the bootstrap governance gate task untouched, keep first-wave execution tasks in draft until the gate auto-completes after validation passes, and finish any remaining task assignment, flow attachment, or first-wave promotion using the persisted tasks already on the project. Do not restart the project or ask the user to restate the request."
+	}
+	return "Continue bootstrap only. Reuse the existing persisted PM and assigned agents unless a required role is still missing. Do not create duplicate agents or another PM. The bootstrap governance gate task is system-managed: do not edit it, do not try to assign it, and do not try to queue or complete it manually. Keep first-wave execution tasks in draft until the gate auto-completes after validation passes. The project manager must be a staff PM agent, not a temp agent. Finish staffing, bounded task decomposition, task assignment, flow attachment, and first-wave selection/promotion. Every executable non-bootstrap task must have an assigned active project agent before you promote or queue it. Do not restart the project or ask the user to restate the request."
 }
 
 func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *turnRuntime) (bool, error) {

@@ -3043,10 +3043,12 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	}
 	var sawResume bool
 	var resumeContent string
+	var resumeMessageID uuid.UUID
 	for _, msg := range messages {
 		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
 			sawResume = true
 			resumeContent = msg.Content
+			resumeMessageID = msg.ID
 			break
 		}
 	}
@@ -3078,13 +3080,49 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 		t.Fatalf("resume message = %q, want governance gate guidance", resumeContent)
 	}
 	if secondHistoryStart == nil {
-		t.Fatal("second assemble HistoryStartID is nil, want bootstrap continuation to preserve triggering message")
+		t.Fatal("second assemble HistoryStartID is nil, want bootstrap continuation to root at resume message")
 	}
-	if *secondHistoryStart != fixture.userMessageID {
-		t.Fatalf("second assemble HistoryStartID = %s, want %s", *secondHistoryStart, fixture.userMessageID)
+	if resumeMessageID == uuid.Nil {
+		t.Fatal("resume message id missing")
+	}
+	if *secondHistoryStart != resumeMessageID {
+		t.Fatalf("second assemble HistoryStartID = %s, want resume message %s", *secondHistoryStart, resumeMessageID)
 	}
 	if len(fixture.chat.turnOrder) < 2 {
 		t.Fatalf("turn count = %d, want at least 2 after continuation", len(fixture.chat.turnOrder))
+	}
+}
+
+func TestBuildProjectBootstrapResumeStateMessageUsesCompactRosterForLateFirstWaveState(t *testing.T) {
+	state := projectBootstrapState{
+		CurrentPhase:              projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint:  projectBootstrapCheckpointFirstWaveSelected,
+		AssignmentCount:           6,
+		PlannedTaskCount:          18,
+		PlannedFlowTemplateCount:  1,
+		FirstWaveTaskCount:        8,
+		FirstWavePromotedCount:    0,
+		FirstWaveJobCount:         0,
+	}
+	snapshot := projectBootstrapResumeSnapshot{
+		ProjectID:      uuid.NewString(),
+		ProjectSlug:    "sam-blog-compact",
+		ExistingPM:     "Sam.blog PM (id=" + uuid.NewString() + ", class=staff, type=pm)",
+		AssignmentLine: "workers=Ananya Webb (id=" + uuid.NewString() + "), André Kowalski (id=" + uuid.NewString() + ")",
+	}
+
+	resumeContent := buildProjectBootstrapResumeStateMessage(state, snapshot)
+	if strings.Contains(resumeContent, "Existing active assignments:") {
+		t.Fatalf("resume message = %q, want compact staffing summary without full roster", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "Existing staffing is already persisted for 6 active project assignments.") {
+		t.Fatalf("resume message = %q, want compact staffing summary", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "Do not create more agents, parent tasks, or broad child-task batches") {
+		t.Fatalf("resume message = %q, want late first-wave guidance", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "keep the bootstrap governance gate task untouched") {
+		t.Fatalf("resume message = %q, want compact governance guidance", resumeContent)
 	}
 }
 
