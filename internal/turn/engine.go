@@ -4452,7 +4452,7 @@ func (e *TurnEngine) buildSyntheticProjectKickoffHandoff(ctx context.Context, rt
 	}
 	lines = append(lines, "Treat this as a fresh project bootstrap. Do not assume architecture, CMS choice, or workflow from archived/restart chains or org memory unless the originating user request explicitly asks for reuse. Prefer the current project description and live tool results over prior-project memory.")
 	lines = append(lines, "Frank, Lori, and Ellie are starter-trio governance agents for setup/review only, not project staff. Do not assign them to project roles; create or assign dedicated project staff instead.")
-	lines = append(lines, "Keep staffing discovery bounded. Once you can name one staff PM, the concrete workers, and the needed reviewers, stop browsing profiles and persist staffing. Do not spend multiple rounds re-browsing similar profiles when the current candidates are already sufficient to act.")
+	lines = append(lines, "Keep staffing discovery bounded. Use at most one staffing.browse_profiles pass per needed category and at most one staffing.get_profile call per candidate you actually intend to staff. Once you can name one staff PM, the concrete workers, and the needed reviewers, stop browsing profiles and persist staffing. Do not spend multiple rounds re-browsing similar profiles when the current candidates are already sufficient to act.")
 	lines = append(lines, "Use the canonical bootstrap workflow: staff the project, create bounded tasks/subtasks, attach runnable flows, and move the first executable wave into execution.")
 	return strings.Join(lines, "\n\n")
 }

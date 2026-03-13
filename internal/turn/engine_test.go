@@ -1603,6 +1603,9 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	if !strings.Contains(handoff, "Keep staffing discovery bounded.") {
 		t.Fatalf("handoff = %q, want bounded staffing discovery guidance", handoff)
 	}
+	if !strings.Contains(handoff, "Use at most one staffing.browse_profiles pass per needed category") {
+		t.Fatalf("handoff = %q, want explicit staffing discovery budget", handoff)
+	}
 	if !strings.Contains(handoff, content) {
 		t.Fatalf("handoff = %q, want originating request content", handoff)
 	}
