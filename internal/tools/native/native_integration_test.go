@@ -4158,7 +4158,7 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 		"completed_step_slugs": []string{
 			"bootstrap-governance",
 			"bind_repo",
-			"staff_project",
+			"task_assignments",
 			"decompose_tasks",
 			"validate_tasks",
 			"attach_flows",

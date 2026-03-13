@@ -2014,7 +2014,7 @@ func normalizeBootstrapStepSlug(value string) string {
 		return "bootstrap-governance-gate"
 	case "bind-repo", "bind_repo", "bind-repo-and-environment":
 		return "bind-repo-environment"
-	case "staff-the-project", "staffing", "staff_project":
+	case "staff-the-project", "staffing", "staff_project", "task_assignments", "task-assignments", "assign_tasks", "task_assignment":
 		return "staff-project"
 	case "task-decomposition", "task_decomposition", "decompose_tasks", "decompose_task_tree":
 		return "decompose-workstreams"
