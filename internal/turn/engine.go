@@ -1384,16 +1384,22 @@ func (e *TurnEngine) handleProjectBootstrapCancelledTurn(ctx context.Context, se
 		return nil
 	}
 
+	state := projectBootstrapStateFromMetadata(session.Metadata)
+	if !strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusActive) {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusFailed) {
+		return nil
+	}
+
 	progress, err := e.loadProjectBootstrapProgress(ctx, session.ScopeID)
 	if err != nil {
 		return err
 	}
 	if progress.Materialized() || progress.ValidationFailed() || progress.WaitingForBootstrapGate() {
-		return nil
-	}
-
-	state := projectBootstrapStateFromMetadata(session.Metadata)
-	if !strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusActive) {
 		return nil
 	}
 

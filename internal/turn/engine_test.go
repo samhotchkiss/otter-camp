@@ -2596,6 +2596,62 @@ func TestHandleTurnCancelledEventEnqueuesBootstrapRecovery(t *testing.T) {
 	}
 }
 
+func TestHandleTurnCancelledEventSkipsBootstrapRecoveryWhenValidationAlreadyFailed(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	fixture.session.CurrentTurnID = nil
+
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                  projectBootstrapStatusActive,
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveSize,
+		ValidationFailureReason: "kickoff validation failed: first-wave task stayed oversized",
+		InitialMessageID:        fixture.userMessageID.String(),
+		StartedAt:               &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	fixture.session.Metadata = metadata
+	fixture.chat.session.Metadata = metadata
+
+	cancelledTurnID := uuid.New()
+	fixture.chat.turns[cancelledTurnID] = &chat.ChatTurn{
+		ID:           cancelledTurnID,
+		SessionID:    fixture.session.ID,
+		TurnNumber:   2,
+		RespondingID: uuid.New(),
+		Status:       "cancelled",
+	}
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, cancelledTurnID)
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": fixture.session.ID.String(),
+		"turn_id":    cancelledTurnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal cancel payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.cancelled",
+		ActorType:      "system",
+		Payload:        payload,
+	}
+
+	if err := fixture.engine.HandleTurnCancelledEvent(context.Background(), event); err != nil {
+		t.Fatalf("HandleTurnCancelledEvent: %v", err)
+	}
+	if got := len(fixture.enqueuer.agentTurnJobs()); got != 0 {
+		t.Fatalf("bootstrap recovery jobs = %d, want 0 when validation already failed", got)
+	}
+	if fixture.messages.containsContent("[Recovered cancelled bootstrap turn - retrying in a fresh turn.]") {
+		t.Fatal("unexpected bootstrap cancellation recovery message")
+	}
+}
+
 func TestCancellationDuringTier2DispatchRequestsRunCancel(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	runStarted := make(chan uuid.UUID, 1)
