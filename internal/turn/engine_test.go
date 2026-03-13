@@ -3129,6 +3129,12 @@ func TestBuildProjectBootstrapResumeStateMessageUsesCompactRosterForLateFirstWav
 	if !strings.Contains(resumeContent, "Reuse the existing active project assignees, including temp agents") {
 		t.Fatalf("resume message = %q, want persisted-assignee reuse guidance", resumeContent)
 	}
+	if !strings.Contains(resumeContent, "do not spend tools re-reading scaffold planning artifacts or re-listing the full task tree and template catalog before acting") {
+		t.Fatalf("resume message = %q, want anti-reread guidance", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "Prefer direct task assignment, first-wave selection, and bootstrap.setup.persist") {
+		t.Fatalf("resume message = %q, want direct action guidance", resumeContent)
+	}
 	if !strings.Contains(resumeContent, "keep the bootstrap governance gate task untouched") {
 		t.Fatalf("resume message = %q, want compact governance guidance", resumeContent)
 	}
