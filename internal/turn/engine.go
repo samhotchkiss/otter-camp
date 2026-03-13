@@ -4679,11 +4679,13 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	if err != nil {
 		return false, err
 	}
-	if preserve, err := e.projectBootstrapResumeShouldPreserveInitialMessage(ctx, rt); err != nil {
+	if compactAction, ok, err := e.appendProjectBootstrapResumeActionPrompt(ctx, rt, state); err != nil {
 		return false, err
-	} else if preserve && rt.initialMessageID != uuid.Nil {
-		initial := rt.initialMessageID
-		rt.historyStartID = &initial
+	} else if ok {
+		rt.historyStartID = &message.ID
+		if compactAction != nil && compactAction.ID != uuid.Nil {
+			rt.initialMessageID = compactAction.ID
+		}
 		return true, nil
 	}
 	if projectBootstrapResumeShouldRootAtResumeMessage(state) {
@@ -4699,26 +4701,44 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	return true, nil
 }
 
-func (e *TurnEngine) projectBootstrapResumeShouldPreserveInitialMessage(ctx context.Context, rt *turnRuntime) (bool, error) {
+func (e *TurnEngine) appendProjectBootstrapResumeActionPrompt(ctx context.Context, rt *turnRuntime, state projectBootstrapState) (*chat.ChatMessage, bool, error) {
 	if e == nil || e.messages == nil || rt == nil || rt.initialMessageID == uuid.Nil {
-		return false, nil
+		return nil, false, nil
 	}
 	message, err := e.messages.GetByID(ctx, rt.initialMessageID)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
-			return false, nil
+			return nil, false, nil
 		}
-		return false, err
+		return nil, false, err
 	}
 	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
-		return false, nil
+		return nil, false, nil
 	}
 	metadata := messageMetadataMap(message.Metadata)
 	if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectBootstrapSource) {
-		return false, nil
+		return nil, false, nil
 	}
 	raw, ok := metadata["auto_continue"].(bool)
-	return ok && raw, nil
+	if !ok || !raw || !projectBootstrapResumeShouldRootAtResumeMessage(state) {
+		return nil, false, nil
+	}
+	initialMessageID := stringValue(metadata["bootstrap_initial_message_id"])
+	if strings.TrimSpace(initialMessageID) == "" {
+		initialMessageID = projectBootstrapWorkflowMessageID(&repo.ChatMessage{ID: message.ID, Metadata: message.Metadata}).String()
+	}
+	compacted, err := e.appendProjectBootstrapContinuationMessageWithContent(
+		ctx,
+		rt.session.ID,
+		rt.agent.ID,
+		initialMessageID,
+		state.AutoTurnCount,
+		buildProjectBootstrapResumeActionPrompt(state),
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	return compacted, true, nil
 }
 
 type projectBootstrapResumeSnapshot struct {
@@ -4926,6 +4946,20 @@ func projectBootstrapResumeNeedsSetupPersist(state projectBootstrapState) bool {
 		strings.TrimSpace(state.BootstrapTaskID) != "" &&
 		state.FirstWaveTaskCount > 0 &&
 		state.FirstWavePromotedCount == 0
+}
+
+func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string {
+	lines := []string{
+		"Continue the active project bootstrap from the persisted state above.",
+		"Do not restate the project state or re-read scaffold artifacts, template catalogs, or the full task tree unless the persisted counts are clearly inconsistent with tool results.",
+	}
+	if projectBootstrapResumeNeedsSetupPersist(state) {
+		lines = append(lines, "Act directly on the remaining setup work: assign any unassigned executable tasks, finish first-wave selection or promotion, and call bootstrap.setup.persist with canonical step slugs once the persisted setup checklist is complete.")
+	} else {
+		lines = append(lines, "Act directly on the remaining bootstrap work: assign any unassigned executable tasks, finish first-wave selection or promotion, and only inspect a specific persisted task if its current state is unclear.")
+	}
+	lines = append(lines, "Do not ask the user what they want. Continue the bootstrap workflow now.")
+	return strings.Join(lines, " ")
 }
 
 func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *turnRuntime) (bool, error) {

@@ -3250,7 +3250,7 @@ func TestContinuationTurnReloadsSessionBeforeBootstrapResumeState(t *testing.T) 
 	t.Fatal("project bootstrap resume message missing after session reload")
 }
 
-func TestContinuationTurnPreservesAutoBootstrapContinuationMessageAfterCompression(t *testing.T) {
+func TestContinuationTurnAppendsCompactBootstrapActionPromptAfterCompression(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.session.ScopeType = "project"
 	fixture.session.ScopeID = uuid.New()
@@ -3306,6 +3306,7 @@ func TestContinuationTurnPreservesAutoBootstrapContinuationMessageAfterCompressi
 		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
 	}
 	var secondHistoryStart *uuid.UUID
+	var actionMessageID uuid.UUID
 	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
 		if call == 2 && input.HistoryStartID != nil {
 			copied := *input.HistoryStartID
@@ -3327,10 +3328,7 @@ func TestContinuationTurnPreservesAutoBootstrapContinuationMessageAfterCompressi
 	}
 
 	if secondHistoryStart == nil {
-		t.Fatal("second assemble HistoryStartID is nil, want preserved bootstrap continuation message")
-	}
-	if *secondHistoryStart != fixture.userMessageID {
-		t.Fatalf("second assemble HistoryStartID = %s, want initial bootstrap continuation message %s", *secondHistoryStart, fixture.userMessageID)
+		t.Fatal("second assemble HistoryStartID is nil, want resume-rooted bootstrap continuation")
 	}
 
 	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
@@ -3339,16 +3337,30 @@ func TestContinuationTurnPreservesAutoBootstrapContinuationMessageAfterCompressi
 	}
 	for _, msg := range messages {
 		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
+			if *secondHistoryStart != msg.ID {
+				t.Fatalf("second assemble HistoryStartID = %s, want bootstrap resume message %s", *secondHistoryStart, msg.ID)
+			}
 			if !strings.Contains(msg.Content, "Active project id: "+fixture.session.ScopeID.String()) {
 				t.Fatalf("resume message = %q, want project id line", msg.Content)
 			}
 			if !strings.Contains(msg.Content, "Existing PM: Sam.blog PM") {
 				t.Fatalf("resume message = %q, want PM line", msg.Content)
 			}
-			return
+			continue
+		}
+		if strings.Contains(msg.Content, "Continue the active project bootstrap from the persisted state above.") {
+			actionMessageID = msg.ID
+			if !strings.Contains(msg.Content, "Do not restate the project state or re-read scaffold artifacts") {
+				t.Fatalf("action prompt = %q, want anti-reread guidance", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "Do not ask the user what they want. Continue the bootstrap workflow now.") {
+				t.Fatalf("action prompt = %q, want direct bootstrap action guidance", msg.Content)
+			}
 		}
 	}
-	t.Fatal("project bootstrap resume message missing after compressed auto-continuation")
+	if actionMessageID == uuid.Nil {
+		t.Fatal("compact bootstrap action prompt missing after compressed auto-continuation")
+	}
 }
 
 func TestContinuationTurnSynthesizesBootstrapResumeStateWhenMetadataIsStale(t *testing.T) {
