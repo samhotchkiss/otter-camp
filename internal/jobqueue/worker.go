@@ -507,11 +507,79 @@ func (w *Worker) executeClaimedJob(ctx context.Context, job Job) error {
 		return w.markFailure(ctx, job, fmt.Errorf("no handler registered for %q", job.JobType))
 	}
 
+	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		w.maintainClaim(heartbeatCtx, job)
+	}()
+
 	err := callJobHandler(ctx, handler, job)
+	stopHeartbeat()
+	<-heartbeatDone
 	if err == nil {
 		return w.markDone(ctx, job.ID)
 	}
 	return w.markFailure(ctx, job, err)
+}
+
+func (w *Worker) maintainClaim(ctx context.Context, job Job) {
+	interval := w.claimHeartbeatInterval(job)
+	if interval <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			ok, err := w.touchClaim(ctx, job.ID)
+			if err != nil {
+				if ctx.Err() == nil {
+					w.logger.Warn("job queue: claim heartbeat failed", "job_id", job.ID, "job_type", job.JobType, "error", err)
+				}
+				return
+			}
+			if !ok {
+				return
+			}
+		}
+	}
+}
+
+func (w *Worker) claimHeartbeatInterval(job Job) time.Duration {
+	threshold := w.staleClaimThreshold
+	if strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) && projectBootstrapStaleThreshold < threshold {
+		threshold = projectBootstrapStaleThreshold
+	}
+	if threshold <= 0 {
+		return 0
+	}
+
+	interval := threshold / 3
+	if interval < 10*time.Millisecond {
+		return 10 * time.Millisecond
+	}
+	return interval
+}
+
+func (w *Worker) touchClaim(ctx context.Context, jobID uuid.UUID) (bool, error) {
+	tag, err := w.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET claimed_at = now(),
+		    updated_at = now()
+		WHERE id = $1
+		  AND status = 'claimed'
+		  AND claimed_by = $2
+	`, jobID, w.workerID)
+	if err != nil {
+		return false, fmt.Errorf("touch claim: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 func (w *Worker) markDone(ctx context.Context, id uuid.UUID) error {

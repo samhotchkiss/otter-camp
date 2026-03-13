@@ -406,6 +406,95 @@ func TestJobFailureTransitionsAndStaleRecovery(t *testing.T) {
 	}
 }
 
+func TestJobWorkerHeartbeatPreventsStaleClaimRecoveryForRunningJob(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "heartbeat-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		StaleClaimThreshold:  45 * time.Millisecond,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var handled atomic.Int32
+	worker.Register("test.heartbeat", func(context.Context, Job) error {
+		handled.Add(1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		return nil
+	})
+
+	jobID := testdb.EnqueueJob(t, pool, "test.heartbeat", 100, map[string]any{"n": 1})
+	jobs, err := worker.claimPending(context.Background())
+	if err != nil {
+		t.Fatalf("claimPending failed: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("claimed jobs = %d, want 1", len(jobs))
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.executeClaimedJob(context.Background(), jobs[0])
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for long-running handler to start")
+	}
+
+	time.Sleep(120 * time.Millisecond)
+
+	recovered, err := worker.RecoverStaleClaims(context.Background())
+	if err != nil {
+		t.Fatalf("RecoverStaleClaims failed: %v", err)
+	}
+	if recovered != 0 {
+		t.Fatalf("recovered rows = %d, want 0 for heartbeat-refreshed claim", recovered)
+	}
+
+	var status string
+	var claimedBy *string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT status, claimed_by
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &claimedBy); err != nil {
+		t.Fatalf("query running heartbeat job failed: %v", err)
+	}
+	if status != "claimed" {
+		t.Fatalf("running job status = %q, want claimed", status)
+	}
+	if claimedBy == nil || *claimedBy != "heartbeat-worker" {
+		t.Fatalf("running job claimed_by = %v, want heartbeat-worker", claimedBy)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("executeClaimedJob returned error: %v", err)
+	}
+
+	if err := pool.QueryRow(context.Background(), `
+		SELECT status
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status); err != nil {
+		t.Fatalf("query completed heartbeat job failed: %v", err)
+	}
+	if status != "done" {
+		t.Fatalf("completed heartbeat job status = %q, want done", status)
+	}
+	if handled.Load() != 1 {
+		t.Fatalf("handled count = %d, want 1", handled.Load())
+	}
+}
+
 func TestIdempotencyCleanupJob(t *testing.T) {
 	pool := testdb.New(t)
 	org := createOrgForJobQueue(t, pool, "cleanup-org")

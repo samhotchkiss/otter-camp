@@ -100,6 +100,42 @@ func TestRetryAttemptLimit(t *testing.T) {
 	}
 }
 
+func TestClaimHeartbeatInterval(t *testing.T) {
+	tests := []struct {
+		name   string
+		worker Worker
+		job    Job
+		want   time.Duration
+	}{
+		{
+			name:   "generic jobs use configured stale threshold",
+			worker: Worker{staleClaimThreshold: 90 * time.Second},
+			job:    Job{JobType: "test.job"},
+			want:   30 * time.Second,
+		},
+		{
+			name:   "agent turns protect bootstrap threshold",
+			worker: Worker{staleClaimThreshold: 10 * time.Minute},
+			job:    Job{JobType: agentTurnJobType},
+			want:   projectBootstrapStaleThreshold / 3,
+		},
+		{
+			name:   "tiny thresholds clamp to minimum tick",
+			worker: Worker{staleClaimThreshold: 9 * time.Millisecond},
+			job:    Job{JobType: "test.job"},
+			want:   10 * time.Millisecond,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.worker.claimHeartbeatInterval(tc.job); got != tc.want {
+				t.Fatalf("claimHeartbeatInterval(%+v) = %s, want %s", tc.job, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRateLimitRetryAfter(t *testing.T) {
 	tests := []struct {
 		name        string
