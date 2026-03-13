@@ -1545,7 +1545,7 @@ func (e *TurnEngine) continueRecoverableProjectBootstrapValidation(
 	state.FailureReason = ""
 	state.ProviderFailureClass = ""
 	state.ProviderFailureReason = ""
-	if state.AutoTurnCount >= maxProjectBootstrapAutoTurns {
+	if state.AutoTurnCount > maxProjectBootstrapAutoTurns {
 		return false, nil
 	}
 
@@ -1627,7 +1627,7 @@ func (e *TurnEngine) continueRecoverableProjectBootstrapValidationForSession(
 	state.FailureReason = ""
 	state.ProviderFailureClass = ""
 	state.ProviderFailureReason = ""
-	if state.AutoTurnCount >= maxProjectBootstrapAutoTurns {
+	if state.AutoTurnCount > maxProjectBootstrapAutoTurns {
 		return false, nil
 	}
 
