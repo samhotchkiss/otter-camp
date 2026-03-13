@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -4228,7 +4229,6 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 
 func TestIntegrationBootstrapSetupPersistUnknownStepReturnsValidCanonicalSlugs(t *testing.T) {
 	pool := testdb.New(t)
-	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	actor := testutil.MakeAgent(t, pool, orgID)
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
@@ -5248,6 +5248,139 @@ func TestIntegrationProjectSessionCreateAutoAddsAssignedProjectAgentsButNotStart
 	if seenAgents[starterFrank.ID] {
 		t.Fatalf("starter trio agent %s should not be auto-added to project session participants", starterFrank.ID)
 	}
+}
+
+func TestIntegrationAgentListHidesStarterTrioDuringActiveProjectBootstrap(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	worker := testutil.MakeAgent(t, pool, orgID)
+
+	starter, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "Ellie",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "prompt",
+		OperatorInstructions: "",
+		AgentType:            "general",
+		IsStarterTrio:        true,
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create starter trio agent: %v", err)
+	}
+
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "agent",
+		CreatedByID:    actor.ID,
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active","current_phase":"staffing_persisted"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create bootstrap session: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	projectExecCtx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &actor.ID,
+		SessionID:      &session.ID,
+		ProjectID:      &project.ID,
+	})
+
+	out, err := executor.Execute(projectExecCtx, "agent.list", map[string]any{
+		"status": "active",
+	})
+	if err != nil {
+		t.Fatalf("agent.list: %v", err)
+	}
+	agents, ok := out["agents"].([]map[string]any)
+	if !ok {
+		t.Fatalf("agents payload type = %T, want []map[string]any", out["agents"])
+	}
+
+	seenStarter := false
+	seenWorker := false
+	for _, agent := range agents {
+		if agent["id"] == starter.ID.String() {
+			seenStarter = true
+		}
+		if agent["id"] == worker.ID.String() {
+			seenWorker = true
+		}
+	}
+	if seenStarter {
+		t.Fatalf("starter trio agent %s should be hidden during active bootstrap agent.list", starter.ID)
+	}
+	if !seenWorker {
+		t.Fatalf("worker agent %s missing from bootstrap agent.list", worker.ID)
+	}
+}
+
+func TestIntegrationAgentListKeepsStarterTrioOutsideBootstrap(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+
+	starter, err := repo.NewAgentRepo(pool).Create(context.Background(), repo.Agent{
+		OrganizationID:       orgID,
+		DisplayName:          "Ellie",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "prompt",
+		OperatorInstructions: "",
+		AgentType:            "general",
+		IsStarterTrio:        true,
+		PrivateMemory:        false,
+		MemoryReadScopes:     []string{"org"},
+		ToolAllowList:        []string{},
+		ToolDenyList:         []string{},
+		CreatedByType:        "system",
+		CreatedByID:          uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create starter trio agent: %v", err)
+	}
+
+	session := testutil.MakeSession(t, pool, orgID, "project", project.ID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	projectExecCtx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &actor.ID,
+		SessionID:      &session.ID,
+		ProjectID:      &project.ID,
+	})
+
+	out, err := executor.Execute(projectExecCtx, "agent.list", map[string]any{
+		"status": "active",
+	})
+	if err != nil {
+		t.Fatalf("agent.list: %v", err)
+	}
+	agents, ok := out["agents"].([]map[string]any)
+	if !ok {
+		t.Fatalf("agents payload type = %T, want []map[string]any", out["agents"])
+	}
+
+	for _, agent := range agents {
+		if agent["id"] == starter.ID.String() {
+			return
+		}
+	}
+	t.Fatalf("starter trio agent %s should remain visible outside active bootstrap", starter.ID)
 }
 
 func TestIntegrationTaskSyncSessionCreateAutoAddsProjectPMAndWorkerButNotStarterTrio(t *testing.T) {

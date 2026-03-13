@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -504,7 +505,11 @@ func (e *NativeToolExecutor) handleAgentList(ctx context.Context, input map[stri
 	cursor := decodeCursor(readCursor(input))
 
 	filtered := make([]repo.Agent, 0, len(rows))
+	hideStarterTrio := e.shouldHideStarterTrioFromAgentList(ctx, scope)
 	for _, row := range rows {
+		if hideStarterTrio && row.IsStarterTrio {
+			continue
+		}
 		if classFilter != "" && !strings.EqualFold(row.AgentClass, classFilter) {
 			continue
 		}
@@ -532,6 +537,34 @@ func (e *NativeToolExecutor) handleAgentList(ctx context.Context, input map[stri
 		nextCursor = encodeCursor(filtered[end-1].ID.String())
 	}
 	return map[string]any{"agents": items, "meta": map[string]any{"cursor": nextCursor}}, nil
+}
+
+func (e *NativeToolExecutor) shouldHideStarterTrioFromAgentList(ctx context.Context, scope workspaceScope) bool {
+	if scope.projectID == nil || *scope.projectID == uuid.Nil {
+		return false
+	}
+	if scope.sessionID == nil || *scope.sessionID == uuid.Nil || e.chatSessions == nil {
+		return false
+	}
+	session, err := e.chatSessions.GetByID(ctx, *scope.sessionID)
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") || session.ScopeID != *scope.projectID {
+		return false
+	}
+	var metadata struct {
+		ProjectBootstrap struct {
+			Status string `json:"status"`
+		} `json:"project_bootstrap"`
+	}
+	if len(session.Metadata) == 0 || !json.Valid(session.Metadata) {
+		return false
+	}
+	if err := json.Unmarshal(session.Metadata, &metadata); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(metadata.ProjectBootstrap.Status), "active")
 }
 
 func (e *NativeToolExecutor) handleAgentGet(ctx context.Context, input map[string]any) (map[string]any, error) {
