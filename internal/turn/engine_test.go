@@ -3116,13 +3116,18 @@ func TestBuildProjectBootstrapResumeStateMessageUsesCompactRosterForLateFirstWav
 
 	resumeContent := buildProjectBootstrapResumeStateMessage(state, snapshot)
 	if strings.Contains(resumeContent, "Existing active assignments:") {
-		t.Fatalf("resume message = %q, want compact staffing summary without full roster", resumeContent)
+		if !strings.Contains(resumeContent, "Existing active assignments: workers=Ananya Webb") {
+			t.Fatalf("resume message = %q, want compact assignment roster summary", resumeContent)
+		}
 	}
 	if !strings.Contains(resumeContent, "Existing staffing is already persisted for 6 active project assignments.") {
 		t.Fatalf("resume message = %q, want compact staffing summary", resumeContent)
 	}
 	if !strings.Contains(resumeContent, "Do not create more agents, parent tasks, or broad child-task batches") {
 		t.Fatalf("resume message = %q, want late first-wave guidance", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "Reuse the existing active project assignees, including temp agents") {
+		t.Fatalf("resume message = %q, want persisted-assignee reuse guidance", resumeContent)
 	}
 	if !strings.Contains(resumeContent, "keep the bootstrap governance gate task untouched") {
 		t.Fatalf("resume message = %q, want compact governance guidance", resumeContent)

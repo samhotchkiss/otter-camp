@@ -4829,6 +4829,9 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 		lines = append(lines, "Existing active assignments: "+assignments)
 	} else if compactRoster && state.AssignmentCount > 0 {
 		lines = append(lines, fmt.Sprintf("Existing staffing is already persisted for %d active project assignments. Reuse that roster; do not create duplicate agents or replace the PM unless a required role is still missing.", state.AssignmentCount))
+		if assignments != "" {
+			lines = append(lines, "Existing active assignments: "+assignments)
+		}
 	}
 	flowTemplatesReady := state.PlannedFlowTemplateCount > 0 ||
 		strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointFlowTemplatesPersisted ||
@@ -4879,7 +4882,7 @@ func projectBootstrapResumeShouldRootAtResumeMessage(state projectBootstrapState
 
 func projectBootstrapResumePhaseGuidance(state projectBootstrapState) string {
 	if projectBootstrapResumeUsesCompactRoster(state) {
-		guidance := "Continue bootstrap only from the persisted first-wave state. Do not create more agents, parent tasks, or broad child-task batches unless a concrete persisted task is still invalid or unassigned. Reuse the existing staffed task tree, keep the bootstrap governance gate task untouched, keep first-wave execution tasks in draft until the gate auto-completes after validation passes, and finish any remaining task assignment, flow attachment, or first-wave promotion using the persisted tasks already on the project."
+		guidance := "Continue bootstrap only from the persisted first-wave state. Do not create more agents, parent tasks, or broad child-task batches unless a concrete persisted task is still invalid or unassigned. Reuse the existing staffed task tree, keep the bootstrap governance gate task untouched, keep first-wave execution tasks in draft until the gate auto-completes after validation passes, and finish any remaining task assignment, flow attachment, or first-wave promotion using the persisted tasks already on the project. Reuse the existing active project assignees, including temp agents, whenever they already cover the needed role; only create a new agent if a required role is truly missing from the persisted assignment roster."
 		if projectBootstrapResumeNeedsSetupPersist(state) {
 			guidance += " Bootstrap checklist steps are persisted through the bootstrap.setup.persist tool, not raw task.update status changes. If the persisted setup work is already complete, call bootstrap.setup.persist with completed_step_slugs for bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off; include sign_off_summary when recording Frank approval."
 		}
