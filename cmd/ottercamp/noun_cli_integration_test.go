@@ -10,16 +10,20 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	authsvc "github.com/samhotchkiss/otter-camp/internal/auth"
+	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/server"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
+	"github.com/samhotchkiss/otter-camp/internal/turn"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -90,6 +94,23 @@ func newNounCLIIntegrationFixture(t *testing.T) *nounCLIIntegrationFixture {
 	if err != nil {
 		t.Fatalf("NewService project: %v", err)
 	}
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService chat: %v", err)
+	}
+	relauncher, err := turn.NewBootstrapRelauncher(turn.BootstrapRelauncherOptions{
+		Pool:     pool,
+		Chat:     chatService,
+		Events:   bus,
+		Enqueuer: jobqueue.New(pool, logger, jobqueue.Config{}),
+		Logger:   logger,
+	})
+	if err != nil {
+		t.Fatalf("NewBootstrapRelauncher: %v", err)
+	}
 
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
 		Version:     "test-version",
@@ -108,7 +129,7 @@ func newNounCLIIntegrationFixture(t *testing.T) *nounCLIIntegrationFixture {
 				repo.NewAgentSkillAttachmentRepo(pool),
 				repo.NewToolDefinitionRepo(pool),
 			),
-			server.NewProjectRouteRegistrar(projectService, repo.NewSkillRepo(pool), nil),
+			server.NewProjectRouteRegistrar(projectService, repo.NewSkillRepo(pool), relauncher),
 		},
 	})
 
@@ -201,5 +222,82 @@ func TestProjectCreateIntegrationCreatesProjectAndPrintsID(t *testing.T) {
 	}
 	if projectRecord.DisplayName != "CLI Integration Project" {
 		t.Fatalf("display_name = %q, want %q", projectRecord.DisplayName, "CLI Integration Project")
+	}
+}
+
+func TestProjectRelaunchIntegrationCreatesRestartProjectAndPrintsID(t *testing.T) {
+	fixture := newNounCLIIntegrationFixture(t)
+	defer fixture.Close()
+
+	restore := setChatCLIEnvForTest(t, fixture.ServerURL, fixture.APIKey, "quiet")
+	defer restore()
+
+	projectRepo := repo.NewProjectRepo(fixture.Pool)
+	recordedAt := time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339)
+	projectRecord, err := projectRepo.Create(context.Background(), repo.Project{
+		OrganizationID: fixture.Org.ID,
+		Slug:           "cli-archived-bootstrap-source",
+		DisplayName:    "CLI Archived Bootstrap Source",
+		DeliveryMode:   "gated",
+		Settings: json.RawMessage(`{
+			"automatic_failure":{
+				"action":"archive",
+				"source":"project_bootstrap",
+				"failure_class":"bootstrap_runtime",
+				"failure_reason":"cli relaunch integration test",
+				"recorded_at":"` + recordedAt + `"
+			},
+			"bootstrap_restart_bundle":{
+				"operator_brief":"Restart from the CLI integration bootstrap bundle.",
+				"source_project_id":"PENDING"
+			}
+		}`),
+		CreatedByType: "human_user",
+		CreatedByID:   fixture.User.ID,
+	})
+	if err != nil {
+		t.Fatalf("seed archived bootstrap source: %v", err)
+	}
+	projectRecord.Settings = json.RawMessage(strings.ReplaceAll(string(projectRecord.Settings), `"PENDING"`, `"`+projectRecord.ID.String()+`"`))
+	if updated, updateErr := projectRepo.Update(context.Background(), projectRecord); updateErr != nil {
+		t.Fatalf("update archived bootstrap source settings: %v", updateErr)
+	} else {
+		projectRecord = updated
+	}
+	if err := projectRepo.Archive(context.Background(), projectRecord.ID); err != nil {
+		t.Fatalf("archive bootstrap source: %v", err)
+	}
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runProjectRelaunch([]string{"--project-id", projectRecord.ID.String(), "--output", "quiet"})
+	})
+	if code != 0 {
+		t.Fatalf("project relaunch exit=%d stderr=%q", code, stderr)
+	}
+
+	restartedID, err := uuid.Parse(strings.TrimSpace(stdout))
+	if err != nil {
+		t.Fatalf("project relaunch output %q is not uuid: %v", stdout, err)
+	}
+	if restartedID == projectRecord.ID {
+		t.Fatalf("project relaunch returned archived project id %s", restartedID)
+	}
+
+	restarted, err := projectRepo.GetByID(context.Background(), restartedID)
+	if err != nil {
+		t.Fatalf("GetByID restarted project %s: %v", restartedID, err)
+	}
+	if restarted.OrganizationID != fixture.Org.ID {
+		t.Fatalf("organization_id = %s, want %s", restarted.OrganizationID, fixture.Org.ID)
+	}
+	if restarted.Status != "active" {
+		t.Fatalf("status = %q, want %q", restarted.Status, "active")
+	}
+	archived, err := projectRepo.GetByID(context.Background(), projectRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID archived project %s: %v", projectRecord.ID, err)
+	}
+	if !strings.Contains(string(archived.Settings), restartedID.String()) {
+		t.Fatalf("archived settings = %s, want restart project id %s", string(archived.Settings), restartedID)
 	}
 }
