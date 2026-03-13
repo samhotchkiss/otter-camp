@@ -8879,6 +8879,10 @@ func (e *TurnEngine) watchTurnCancellation(ctx context.Context, rt *turnRuntime)
 	cancelCtx, cancel := context.WithCancelCause(ctx)
 	consumer := e.cancelConsumerName
 	projectID := resolveProjectID(ctx, rt.session, e.tasks)
+	var (
+		mu               sync.Mutex
+		cancelledByEvent bool
+	)
 	sub := e.events.Subscribe(consumer, &rt.session.OrganizationID, func(_ context.Context, event eventbus.DomainEvent) error {
 		payload := map[string]any{}
 		if len(event.Payload) > 0 {
@@ -8910,6 +8914,9 @@ func (e *TurnEngine) watchTurnCancellation(ctx context.Context, rt *turnRuntime)
 		if runID := rt.getActiveTier2Run(); runID != nil && e.runCanceler != nil {
 			_ = e.runCanceler.RequestCancel(context.Background(), *runID, controlplane.CancelRequestActor{Type: "system"})
 		}
+		mu.Lock()
+		cancelledByEvent = true
+		mu.Unlock()
 		if event.EventType == "chat.turn.cancelled" {
 			cancel(context.Canceled)
 			return nil
@@ -8920,6 +8927,15 @@ func (e *TurnEngine) watchTurnCancellation(ctx context.Context, rt *turnRuntime)
 
 	cleanup := func() {
 		cancel(context.Canceled)
+		mu.Lock()
+		shouldDelay := cancelledByEvent
+		mu.Unlock()
+		if shouldDelay {
+			time.AfterFunc(50*time.Millisecond, func() {
+				e.events.Unsubscribe(sub)
+			})
+			return
+		}
 		e.events.Unsubscribe(sub)
 	}
 	return cancelCtx, cleanup
