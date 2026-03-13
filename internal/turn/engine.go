@@ -4671,6 +4671,12 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	if assignments := strings.TrimSpace(snapshot.AssignmentLine); assignments != "" {
 		lines = append(lines, "Existing active assignments: "+assignments)
 	}
+	flowTemplatesReady := state.PlannedFlowTemplateCount > 0 ||
+		strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointFlowTemplatesPersisted ||
+		strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointFlowTemplatesPersisted
+	if flowTemplatesReady && state.FirstWaveTaskCount == 0 && state.FirstWavePromotedCount == 0 && state.FirstWaveJobCount == 0 {
+		lines = append(lines, "The persisted task tree already has runnable flow templates. Do not create more agents, parent tasks, or child tasks unless a concrete task is still unassigned or fails a boundedness/validation rule. Reuse the existing staffed task tree and move a small first executable wave into execution now.")
+	}
 	lines = append(lines, "Continue bootstrap only. Reuse the existing persisted PM and assigned agents unless a required role is still missing. Do not create duplicate agents or another PM. The project manager must be a staff PM agent, not a temp agent. Finish staffing, bounded task decomposition, task assignment, flow attachment, and first-wave selection/promotion. Every executable non-bootstrap task must have an assigned active project agent before you promote or queue it. Do not restart the project or ask the user to restate the request.")
 	return strings.Join(lines, "\n")
 }

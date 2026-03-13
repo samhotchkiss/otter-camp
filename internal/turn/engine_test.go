@@ -2871,6 +2871,7 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 		t.Fatalf("Marshal metadata: %v", err)
 	}
 	fixture.session.Metadata = metadata
+	fixture.chat.session.Metadata = metadata
 	baseAgents := fixture.engine.agents.(*fakeAgentRepo)
 	fixture.engine.agents = &fakeAgentRepo{
 		agent:   baseAgents.agent,
@@ -2938,6 +2939,9 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	}
 	if !strings.Contains(resumeContent, "Do not create duplicate agents or another PM.") {
 		t.Fatalf("resume message = %q, want duplicate-agent guardrail", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "The persisted task tree already has runnable flow templates.") {
+		t.Fatalf("resume message = %q, want first-wave promotion guidance", resumeContent)
 	}
 }
 
