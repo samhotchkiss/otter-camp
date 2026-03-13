@@ -1539,7 +1539,7 @@ func (e *TurnEngine) continueRecoverableProjectBootstrapValidation(
 	}
 
 	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, rt.session, rt.agent.ID)
-	continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, rt.session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount)
+	continuationMessage, err := e.appendProjectBootstrapRecoveryContinuationMessage(ctx, rt.session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount, progress)
 	if err != nil {
 		return true, err
 	}
@@ -1631,7 +1631,7 @@ func (e *TurnEngine) continueRecoverableProjectBootstrapValidationForSession(
 	if continuationAgentID == uuid.Nil {
 		return false, nil
 	}
-	continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, session.ID, continuationAgentID, initialMessageID, state.AutoTurnCount)
+	continuationMessage, err := e.appendProjectBootstrapRecoveryContinuationMessage(ctx, session.ID, continuationAgentID, initialMessageID, state.AutoTurnCount, progress)
 	if err != nil {
 		return true, err
 	}
@@ -2780,6 +2780,14 @@ func projectBootstrapWorkflowMessageID(message *repo.ChatMessage) uuid.UUID {
 }
 
 func (e *TurnEngine) appendProjectBootstrapContinuationMessage(ctx context.Context, sessionID, authorAgentID uuid.UUID, initialMessageID string, autoTurnCount int) (*chat.ChatMessage, error) {
+	return e.appendProjectBootstrapContinuationMessageWithContent(ctx, sessionID, authorAgentID, initialMessageID, autoTurnCount, buildProjectBootstrapContinuationPrompt(autoTurnCount))
+}
+
+func (e *TurnEngine) appendProjectBootstrapRecoveryContinuationMessage(ctx context.Context, sessionID, authorAgentID uuid.UUID, initialMessageID string, autoTurnCount int, progress projectBootstrapProgress) (*chat.ChatMessage, error) {
+	return e.appendProjectBootstrapContinuationMessageWithContent(ctx, sessionID, authorAgentID, initialMessageID, autoTurnCount, buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount, progress))
+}
+
+func (e *TurnEngine) appendProjectBootstrapContinuationMessageWithContent(ctx context.Context, sessionID, authorAgentID uuid.UUID, initialMessageID string, autoTurnCount int, content string) (*chat.ChatMessage, error) {
 	if e == nil || sessionID == uuid.Nil {
 		return nil, repo.ErrNotFound
 	}
@@ -2802,7 +2810,7 @@ func (e *TurnEngine) appendProjectBootstrapContinuationMessage(ctx context.Conte
 		AuthorType: &authorType,
 		AuthorID:   authorID,
 		Role:       "user",
-		Content:    buildProjectBootstrapContinuationPrompt(autoTurnCount),
+		Content:    content,
 		Metadata:   metadata,
 	})
 }
@@ -2811,6 +2819,18 @@ func buildProjectBootstrapContinuationPrompt(autoTurnCount int) string {
 	return fmt.Sprintf(
 		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Do not stop at acknowledgement. Persist project assignments, scoped tasks, and flow templates if the handoff already contains enough information. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
 		autoTurnCount,
+	)
+}
+
+func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress projectBootstrapProgress) string {
+	reason := strings.TrimSpace(progress.ValidationFailureReason)
+	if reason == "" {
+		reason = "bootstrap validation found recoverable bounded work that still needs correction"
+	}
+	return fmt.Sprintf(
+		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Recovery target: %s. Do not repeat the same oversized task definitions or re-run the same rejected task.create calls. Correct the persisted task tree by splitting the offending broad parent or first-wave task into narrower executable child tasks, then continue first-wave selection from those bounded children. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
+		autoTurnCount,
+		reason,
 	)
 }
 

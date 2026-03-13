@@ -2220,6 +2220,25 @@ func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
 	}
 }
 
+func TestBuildProjectBootstrapValidationRecoveryPrompt(t *testing.T) {
+	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveSize,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 12 (WS4: Blog Post Ideation) violates the bounded task-size policy",
+	})
+	if !strings.Contains(prompt, "automatic follow-on bootstrap turn 2") {
+		t.Fatalf("prompt = %q, want turn count", prompt)
+	}
+	if !strings.Contains(prompt, "WS4: Blog Post Ideation") {
+		t.Fatalf("prompt = %q, want validation reason detail", prompt)
+	}
+	if !strings.Contains(prompt, "Do not repeat the same oversized task definitions") {
+		t.Fatalf("prompt = %q, want anti-repeat guidance", prompt)
+	}
+	if !strings.Contains(prompt, "splitting the offending broad parent or first-wave task into narrower executable child tasks") {
+		t.Fatalf("prompt = %q, want bounded child-splitting guidance", prompt)
+	}
+}
+
 func TestEnsureTurnRunExitInvariantRejectsLeakedInProgressTurn(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 
