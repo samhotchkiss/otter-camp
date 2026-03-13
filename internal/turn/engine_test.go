@@ -3284,17 +3284,17 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 
 func TestBuildProjectBootstrapResumeStateMessageUsesCompactRosterForLateFirstWaveState(t *testing.T) {
 	state := projectBootstrapState{
-		CurrentPhase:              projectBootstrapCheckpointFirstWaveExecutions,
-		LastSuccessfulCheckpoint:  projectBootstrapCheckpointFirstWaveSelected,
-		BootstrapTaskID:           uuid.NewString(),
-		BootstrapTaskOutstanding:  true,
-		AssignmentCount:           6,
-		PlannedTaskCount:          18,
-		PlannedFlowTemplateCount:  1,
-		FirstWaveTaskCount:        8,
-		FirstWavePromotedCount:    0,
-		FirstWaveJobCount:         0,
-		ValidationStatus:          projectBootstrapValidationPassed,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		BootstrapTaskID:          uuid.NewString(),
+		BootstrapTaskOutstanding: true,
+		AssignmentCount:          6,
+		PlannedTaskCount:         18,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:       8,
+		FirstWavePromotedCount:   0,
+		FirstWaveJobCount:        0,
+		ValidationStatus:         projectBootstrapValidationPassed,
 	}
 	snapshot := projectBootstrapResumeSnapshot{
 		ProjectID:      uuid.NewString(),
@@ -3377,6 +3377,12 @@ func TestBuildProjectBootstrapResumeActionPromptForSetupPersist(t *testing.T) {
 	if !strings.Contains(prompt, "Do not call task.list, flow.list_templates, or file.read on scaffold planning artifacts") {
 		t.Fatalf("prompt = %q, want tool-specific anti-reread guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Your first tool call in this resume turn should be bootstrap.setup.persist") {
+		t.Fatalf("prompt = %q, want persist-first guidance", prompt)
+	}
+	if !strings.Contains(prompt, "call bootstrap.setup.persist immediately with completed_step_slugs for staff-project, decompose-workstreams, and validate-task-shape") {
+		t.Fatalf("prompt = %q, want early completed-step guidance", prompt)
+	}
 	if !strings.Contains(prompt, "finish first-wave selection, and then call bootstrap.setup.persist") {
 		t.Fatalf("prompt = %q, want setup persist sequencing", prompt)
 	}
@@ -3391,6 +3397,23 @@ func TestBuildProjectBootstrapResumeActionPromptForSetupPersist(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "do not edit, assign, queue, or complete the gate task manually") {
 		t.Fatalf("prompt = %q, want governance gate protection", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapResumeActionPromptStartsWithPersistAfterTaskTree(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		BootstrapTaskID:          uuid.NewString(),
+		BootstrapTaskOutstanding: true,
+		AssignmentCount:          4,
+		PlannedTaskCount:         18,
+		CurrentPhase:             projectBootstrapCheckpointTaskTreePersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointTaskTreePersisted,
+	})
+	if !strings.Contains(prompt, "Your first tool call in this resume turn should be bootstrap.setup.persist") {
+		t.Fatalf("prompt = %q, want persist-first guidance after task tree", prompt)
+	}
+	if !strings.Contains(prompt, "Record any already-complete checklist steps before reading more tasks, templates, or scaffold artifacts") {
+		t.Fatalf("prompt = %q, want no-reread-first guidance after task tree", prompt)
 	}
 }
 
