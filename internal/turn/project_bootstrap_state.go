@@ -338,7 +338,10 @@ func projectBootstrapValidationFindings(state projectBootstrapState) []projectBo
 		finding.Code = "first_wave_flow_invalid"
 	case projectBootstrapFailureFirstWaveExecution:
 		finding.Category = projectBootstrapFindingCategoryExecutionShape
-		if state.FirstWaveTaskCount > 0 && state.FirstWaveExecutionCount >= state.FirstWaveTaskCount {
+		summary := strings.ToLower(finding.Summary)
+		if strings.Contains(summary, "has no assigned agent") {
+			finding.Code = "first_wave_assignments_missing"
+		} else if state.FirstWaveTaskCount > 0 && state.FirstWaveExecutionCount >= state.FirstWaveTaskCount {
 			finding.Code = "first_wave_jobs_not_claimed"
 		} else {
 			finding.Code = "first_wave_executions_missing"

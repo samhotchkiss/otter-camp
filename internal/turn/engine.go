@@ -2498,6 +2498,9 @@ func (e *TurnEngine) validateProjectBootstrapFirstWaveTasks(ctx context.Context,
 	nodeCache := make(map[uuid.UUID][]repo.FlowNode)
 
 	for _, task := range tasks {
+		if task.AssignedAgentID == nil || *task.AssignedAgentID == uuid.Nil {
+			return projectBootstrapFailureFirstWaveExecution, buildProjectBootstrapFirstWaveAssignmentFailureReason(task), nil
+		}
 		if task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {
 			return projectBootstrapFailureFirstWaveFlow, buildProjectBootstrapFirstWaveFlowFailureReason(task, "no flow template is attached"), nil
 		}
@@ -2651,6 +2654,10 @@ func buildProjectBootstrapFirstWaveFlowFailureReason(task repo.ProjectTask, deta
 		trimmed = "the attached flow template cannot run"
 	}
 	return fmt.Sprintf("kickoff validation failed: first-wave %s cannot run because %s", projectBootstrapTaskLabel(task), trimmed)
+}
+
+func buildProjectBootstrapFirstWaveAssignmentFailureReason(task repo.ProjectTask) string {
+	return fmt.Sprintf("kickoff validation failed: first-wave %s has no assigned agent, so bootstrap cannot queue runnable execution", projectBootstrapTaskLabel(task))
 }
 
 func buildProjectBootstrapFirstWaveExecutionFailureReason(progress projectBootstrapProgress) string {
