@@ -8042,35 +8042,168 @@ func TestTurnEngineIntegrationProjectBootstrapFailsClosedWhenFirstWaveQueueHitsB
 	if err != nil {
 		t.Fatalf("GetByID project session: %v", err)
 	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 recoverable continuation after bounded-size queue failure", jobs)
+	}
 	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
-	if bootstrapState.Status != projectBootstrapStatusFailed {
-		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusActive)
 	}
-	if bootstrapState.ValidationStatus != projectBootstrapValidationFailed {
-		t.Fatalf("bootstrap validation_status = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationFailed)
+	if bootstrapState.ValidationStatus != "" {
+		t.Fatalf("bootstrap validation_status = %q, want cleared while recoverable continuation is active", bootstrapState.ValidationStatus)
 	}
-	if bootstrapState.ValidationFailureClass != projectBootstrapFailureFirstWaveExecution {
-		t.Fatalf("bootstrap validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureFirstWaveExecution)
+	if bootstrapState.ValidationFailureClass != "" || bootstrapState.ValidationFailureReason != "" {
+		t.Fatalf("bootstrap validation failure detail = (%q, %q), want cleared while recoverable continuation is active", bootstrapState.ValidationFailureClass, bootstrapState.ValidationFailureReason)
 	}
-	if !strings.Contains(bootstrapState.ValidationFailureReason, "bounded size policy") {
-		t.Fatalf("bootstrap validation_failure_reason = %q, want bounded size detail", bootstrapState.ValidationFailureReason)
-	}
-	if bootstrapState.CurrentPhase != projectBootstrapCheckpointFirstWaveExecutions {
-		t.Fatalf("bootstrap current_phase = %q, want %q", bootstrapState.CurrentPhase, projectBootstrapCheckpointFirstWaveExecutions)
+	if bootstrapState.AutoTurnCount != 1 {
+		t.Fatalf("bootstrap auto_turn_count = %d, want 1 after recoverable continuation", bootstrapState.AutoTurnCount)
 	}
 
 	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
-	if storedProject.Status != "archived" {
-		t.Fatalf("project status = %q, want archived", storedProject.Status)
+	if storedProject.Status != "active" {
+		t.Fatalf("project status = %q, want active while recoverable bootstrap validation is retried", storedProject.Status)
 	}
-	assertAutomaticFailureState(
-		t,
-		storedProject,
-		projectFailureActionArchive,
-		projectFailureCategoryBootstrap,
-		projectBootstrapFailureFirstWaveExecution,
-		projectBootstrapCheckpointFirstWaveExecutions,
-	)
+}
+
+func TestTurnEngineIntegrationProjectBootstrapQueuesRecoveryAfterRecoverableFirstWaveValidationFailure(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: create the initial staffed work plan for this project.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "bootstrap-setup-recoverable-first-wave",
+				Name: "bootstrap.setup.persist",
+				Tier: "tier1",
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Bootstrap setup is now persisted in project records."}, nil
+		}
+	}
+
+	fixture.dispatcher.tier1Fn = func(ctx context.Context, call ToolCall) (ToolResult, error) {
+		if call.Name != "bootstrap.setup.persist" {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_tool"}, nil
+		}
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        pmAgent.ID,
+			ProjectID:      project.ID,
+			Role:           "pm",
+			AssignedByType: "agent",
+			AssignedByID:   &lori.ID,
+		}); err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+		description := strings.Join([]string{
+			"- Redesign the landing page narrative, responsive layout, and launch messaging for the new product release.",
+			"- Wire the billing workflow, plan changes, and support operations into the product and internal tooling.",
+			"- Stand up analytics instrumentation, dashboards, alerts, and reporting QA for the first launch wave.",
+		}, "\n")
+		taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			Title:          "Launch platform epic",
+			Description:    &description,
+			WorkStatus:     "draft",
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		})
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"pm_agent_id":      pmAgent.ID.String(),
+				"task_id":          taskRecord.ID.String(),
+				"flow_template_id": template.ID.String(),
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage follow-on bootstrap turn: %v", err)
+	}
+
+	secondTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	enableTurnEngineUserMessageEnqueue(t, fixture)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": secondTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	var continuationMessages int
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") && strings.Contains(message.Content, "Continue the bounded project bootstrap setup workflow now.") {
+			continuationMessages++
+		}
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 recoverable continuation (status=%q current_turn_id=%v auto_turn_count=%d validation_class=%q continuation_messages=%d)", jobs, storedSession.Status, storedSession.CurrentTurnID, projectBootstrapStateFromMetadata(storedSession.Metadata).AutoTurnCount, projectBootstrapStateFromMetadata(storedSession.Metadata).ValidationFailureClass, continuationMessages)
+	}
+	if storedSession.CurrentTurnID != nil {
+		t.Fatalf("project session current_turn_id = %v, want nil while recovery turn is queued", storedSession.CurrentTurnID)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q (failure_class=%q failure_reason=%q validation_class=%q continuation_messages=%d)", bootstrapState.Status, projectBootstrapStatusActive, bootstrapState.FailureClass, bootstrapState.FailureReason, bootstrapState.ValidationFailureClass, continuationMessages)
+	}
+	if bootstrapState.ValidationFailureClass != "" || bootstrapState.ValidationFailureReason != "" {
+		t.Fatalf("bootstrap validation failure detail = (%q, %q), want cleared while recoverable continuation is active", bootstrapState.ValidationFailureClass, bootstrapState.ValidationFailureReason)
+	}
+	if bootstrapState.AutoTurnCount != 1 {
+		t.Fatalf("bootstrap auto_turn_count = %d, want 1 after recoverable validation continuation", bootstrapState.AutoTurnCount)
+	}
+
+	if continuationMessages != 2 {
+		t.Fatalf("bootstrap continuation messages = %d, want 2 (initial follow-on plus recoverable validation retry)", continuationMessages)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if storedProject.Status != "active" {
+		t.Fatalf("project status = %q, want active while recoverable bootstrap validation is retried", storedProject.Status)
+	}
 }
 
 func TestTurnEngineIntegrationProjectBootstrapIgnoresOrphanChildSessionsWhenCountingFirstWaveJobs(t *testing.T) {
@@ -9874,8 +10007,8 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationForBroadParentOnlyS
 		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
 	}
 
-	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
-		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after parent-only validation failure", jobs)
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 recoverable continuation after parent-only validation failure", jobs)
 	}
 
 	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
@@ -9883,31 +10016,23 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationForBroadParentOnlyS
 		t.Fatalf("GetByID project session: %v", err)
 	}
 	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
-	if bootstrapState.Status != projectBootstrapStatusFailed {
-		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusActive)
 	}
-	if bootstrapState.ValidationStatus != projectBootstrapValidationFailed {
-		t.Fatalf("bootstrap validation_status = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationFailed)
+	if bootstrapState.ValidationStatus != "" {
+		t.Fatalf("bootstrap validation_status = %q, want cleared while recoverable continuation is active", bootstrapState.ValidationStatus)
 	}
-	if bootstrapState.FailureClass != projectBootstrapFailureCompoundParent {
-		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureCompoundParent)
+	if bootstrapState.FailureClass != "" || bootstrapState.FailureReason != "" {
+		t.Fatalf("bootstrap failure detail = (%q, %q), want cleared while recoverable continuation is active", bootstrapState.FailureClass, bootstrapState.FailureReason)
 	}
-	if !strings.Contains(bootstrapState.ValidationFailureReason, "broad parent workstream") {
-		t.Fatalf("bootstrap validation_failure_reason = %q, want broad parent detail", bootstrapState.ValidationFailureReason)
+	if bootstrapState.AutoTurnCount != 1 {
+		t.Fatalf("bootstrap auto_turn_count = %d, want 1 after recoverable continuation", bootstrapState.AutoTurnCount)
 	}
 
 	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
-	if storedProject.Status != "archived" {
-		t.Fatalf("project status = %q, want archived", storedProject.Status)
+	if storedProject.Status != "active" {
+		t.Fatalf("project status = %q, want active while recoverable bootstrap validation is retried", storedProject.Status)
 	}
-	assertAutomaticFailureState(
-		t,
-		storedProject,
-		projectFailureActionArchive,
-		projectFailureCategoryBootstrap,
-		projectBootstrapFailureCompoundParent,
-		projectBootstrapCheckpointTaskTree,
-	)
 }
 
 func TestTurnEngineIntegrationProjectBootstrapFailsImmediatelyWhenChildCreationDeadEnds(t *testing.T) {

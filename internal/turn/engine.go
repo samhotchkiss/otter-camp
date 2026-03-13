@@ -1302,6 +1302,11 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		if latestCompleted.RespondingID != uuid.Nil {
 			rt.agent.ID = latestCompleted.RespondingID
 		}
+		if handled, recoverErr := e.continueRecoverableProjectBootstrapValidation(ctx, rt, state, progress, now, false); recoverErr != nil {
+			return recoverErr
+		} else if handled {
+			return nil
+		}
 		return e.failProjectBootstrapValidation(ctx, rt, progress, now)
 	}
 
@@ -1468,6 +1473,182 @@ func (e *TurnEngine) handleProjectBootstrapCancelledTurn(ctx context.Context, se
 	runAfter := now.Add(defaultAutoContinueDelay)
 	_, err = e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
 	return err
+}
+
+func (e *TurnEngine) continueRecoverableProjectBootstrapValidation(
+	ctx context.Context,
+	rt *turnRuntime,
+	state projectBootstrapState,
+	progress projectBootstrapProgress,
+	now time.Time,
+	failCurrentTurn bool,
+) (bool, error) {
+	if e == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return false, nil
+	}
+	normalizeProjectBootstrapValidationFailure(&progress, false)
+	if !projectBootstrapRecoverableMaxToolCallFailure(progress) {
+		return false, nil
+	}
+
+	if state.StartedAt == nil {
+		state.StartedAt = &now
+	}
+	state.Status = projectBootstrapStatusActive
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	state.LastTurnID = rt.turn.ID.String()
+	if rt.agent.ID != uuid.Nil {
+		state.LastResponderID = rt.agent.ID.String()
+	}
+	state.AutoTurnCount++
+	applyProjectBootstrapProgressState(&state, progress)
+	state.ValidationStatus = ""
+	state.ValidationFailureClass = ""
+	state.ValidationFailureReason = ""
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = nil
+	state.FailureCategory = ""
+	state.FailureClass = ""
+	state.FailurePhase = ""
+	state.FailureReason = ""
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
+	if state.AutoTurnCount >= maxProjectBootstrapAutoTurns {
+		return false, nil
+	}
+
+	if err := e.updateProjectBootstrapState(ctx, rt.session, state); err != nil {
+		return true, err
+	}
+	if failCurrentTurn {
+		if failErr := e.chat.FailTurn(ctx, rt.turn.ID, progress.ValidationFailureReason); failErr != nil && !errors.Is(failErr, chat.ErrInvalidStatusTransition) {
+			return true, failErr
+		}
+	}
+
+	if failCurrentTurn {
+		queued, err := e.hasQueuedAgentTurnForSession(ctx, rt.session.ID, rt.currentJobID)
+		if err != nil {
+			return true, err
+		}
+		if queued {
+			return true, nil
+		}
+	}
+
+	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, rt.session, rt.agent.ID)
+	continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, rt.session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount)
+	if err != nil {
+		return true, err
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID: rt.session.ID,
+		MessageID: continuationMessage.ID,
+	}
+	if continuationAgentID != uuid.Nil {
+		nextAgentID := continuationAgentID
+		nextPayload.AgentID = &nextAgentID
+	}
+	runAfter := now.Add(defaultAutoContinueDelay)
+	if _, err := e.enqueueAgentTurnIfActive(ctx, rt.session, nextPayload, &runAfter); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) continueRecoverableProjectBootstrapValidationForSession(
+	ctx context.Context,
+	session *chat.ChatSession,
+	state projectBootstrapState,
+	progress projectBootstrapProgress,
+	now time.Time,
+) (bool, error) {
+	if e == nil || session == nil {
+		return false, nil
+	}
+	normalizeProjectBootstrapValidationFailure(&progress, false)
+	if !projectBootstrapRecoverableMaxToolCallFailure(progress) {
+		return false, nil
+	}
+	if session.CurrentTurnID != nil {
+		return false, nil
+	}
+
+	if state.StartedAt == nil {
+		state.StartedAt = &now
+	}
+	state.Status = projectBootstrapStatusActive
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	state.AutoTurnCount++
+	applyProjectBootstrapProgressState(&state, progress)
+	state.ValidationStatus = ""
+	state.ValidationFailureClass = ""
+	state.ValidationFailureReason = ""
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = nil
+	state.FailureCategory = ""
+	state.FailureClass = ""
+	state.FailurePhase = ""
+	state.FailureReason = ""
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
+	if state.AutoTurnCount >= maxProjectBootstrapAutoTurns {
+		return false, nil
+	}
+
+	if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
+		return true, err
+	}
+	queued, err := e.hasQueuedAgentTurnForSession(ctx, session.ID, nil)
+	if err != nil {
+		return true, err
+	}
+	if queued {
+		return true, nil
+	}
+
+	initialMessageID := strings.TrimSpace(state.InitialMessageID)
+	if initialMessageID == "" && e.messages != nil {
+		messages, err := e.messages.ListBySession(ctx, session.ID)
+		if err != nil {
+			return true, err
+		}
+		if latestUser := latestUserMessage(messages); latestUser != nil {
+			initialMessageID = projectBootstrapWorkflowMessageID(latestUser).String()
+		}
+	}
+	if initialMessageID == "" {
+		return false, nil
+	}
+
+	latestResponderID, _ := uuid.Parse(strings.TrimSpace(state.LastResponderID))
+	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, session, latestResponderID)
+	if continuationAgentID == uuid.Nil {
+		return false, nil
+	}
+	continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, session.ID, continuationAgentID, initialMessageID, state.AutoTurnCount)
+	if err != nil {
+		return true, err
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID: session.ID,
+		MessageID: continuationMessage.ID,
+	}
+	if continuationAgentID != uuid.Nil {
+		nextAgentID := continuationAgentID
+		nextPayload.AgentID = &nextAgentID
+	}
+	runAfter := now.Add(defaultAutoContinueDelay)
+	if _, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) failProjectBootstrapValidation(ctx context.Context, rt *turnRuntime, progress projectBootstrapProgress, now time.Time) error {
@@ -1696,6 +1877,11 @@ func (e *TurnEngine) refreshProjectBootstrapSessionState(ctx context.Context, se
 		return e.updateProjectBootstrapState(ctx, session, state)
 	}
 	if progress.ValidationFailed() {
+		if handled, err := e.continueRecoverableProjectBootstrapValidationForSession(ctx, session, state, progress, now); err != nil {
+			return err
+		} else if handled {
+			return nil
+		}
 		record := buildProjectBootstrapAutomaticFailureRecord(
 			progress,
 			projectFailureCategoryBootstrap,
@@ -3368,6 +3554,11 @@ func (e *TurnEngine) handleProjectBootstrapPreflight(ctx context.Context, rt *tu
 	}
 	if deferFailure {
 		return false, nil
+	}
+	if handled, recoverErr := e.continueRecoverableProjectBootstrapValidation(ctx, rt, projectBootstrapStateFromMetadata(rt.session.Metadata), progress, e.now().UTC(), true); recoverErr != nil {
+		return true, recoverErr
+	} else if handled {
+		return true, nil
 	}
 	if err := e.failProjectBootstrapValidation(ctx, rt, progress, e.now().UTC()); err != nil {
 		return true, err
