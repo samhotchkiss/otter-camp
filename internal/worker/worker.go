@@ -59,8 +59,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer pool.Close()
 
 	bootstrapper := bootstrap.NewBootstrapper(bootstrap.Options{
-		Pool:    pool.Raw(),
-		Logger:  logger,
+		Pool:   pool.Raw(),
+		Logger: logger,
 	})
 	bootstrap.RegisterStarterTrioStep(bootstrapper, repo.NewAgentRepo(pool.Raw()))
 	bootstrap.RegisterCapabilityPolicyStep(bootstrapper, repo.NewCapabilityPolicyRepo(pool.Raw()))
@@ -466,6 +466,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(turnReactionSub)
 	turnAutoContinueSub := turnEngine.SubscribeTurnCompletedAutoContinuation(nil)
 	defer bus.Unsubscribe(turnAutoContinueSub)
+	turnBootstrapCancelledSub := turnEngine.SubscribeTurnCancelledBootstrapRecovery(nil)
+	defer bus.Unsubscribe(turnBootstrapCancelledSub)
 	turnTaskStatusSub := turnEngine.SubscribeTaskStatusBootstrap(nil)
 	defer bus.Unsubscribe(turnTaskStatusSub)
 

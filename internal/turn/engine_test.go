@@ -2507,6 +2507,76 @@ func TestCancellationDuringStreaming(t *testing.T) {
 	}
 }
 
+func TestHandleTurnCancelledEventEnqueuesBootstrapRecovery(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	fixture.session.CurrentTurnID = nil
+
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: fixture.userMessageID.String(),
+		StartedAt:        &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	fixture.session.Metadata = metadata
+
+	cancelledTurnID := uuid.New()
+	fixture.chat.turns[cancelledTurnID] = &chat.ChatTurn{
+		ID:           cancelledTurnID,
+		SessionID:    fixture.session.ID,
+		TurnNumber:   2,
+		RespondingID: uuid.New(),
+		Status:       "cancelled",
+	}
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, cancelledTurnID)
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": fixture.session.ID.String(),
+		"turn_id":    cancelledTurnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal cancel payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.cancelled",
+		ActorType:      "system",
+		Payload:        payload,
+	}
+
+	if err := fixture.engine.HandleTurnCancelledEvent(context.Background(), event); err != nil {
+		t.Fatalf("HandleTurnCancelledEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("bootstrap recovery jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.SessionID != fixture.session.ID {
+		t.Fatalf("recovery payload = %+v, want session %s", jobs[0].payload, fixture.session.ID)
+	}
+	if jobs[0].payload.MessageID == fixture.userMessageID {
+		t.Fatal("expected recovery to target a fresh bootstrap continuation message")
+	}
+	if !fixture.messages.containsContent("[Recovered cancelled bootstrap turn - retrying in a fresh turn.]") {
+		t.Fatal("missing bootstrap cancellation recovery system message")
+	}
+	if !fixture.messages.containsContentSubstring("Continue the bounded project bootstrap setup workflow now.") {
+		t.Fatal("missing bootstrap continuation message")
+	}
+
+	if err := fixture.engine.HandleTurnCancelledEvent(context.Background(), event); err != nil {
+		t.Fatalf("second HandleTurnCancelledEvent: %v", err)
+	}
+	if got := len(fixture.enqueuer.agentTurnJobs()); got != 1 {
+		t.Fatalf("bootstrap recovery jobs after duplicate event = %d, want 1", got)
+	}
+}
+
 func TestCancellationDuringTier2DispatchRequestsRunCancel(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	runStarted := make(chan uuid.UUID, 1)

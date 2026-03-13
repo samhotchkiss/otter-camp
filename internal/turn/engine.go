@@ -63,6 +63,7 @@ const (
 	defaultTurnConsumerName                   = "turn-engine.user-message"
 	defaultReactionConsumerName               = "turn-engine.reactions"
 	defaultTurnCompletedName                  = "turn-engine.turn-completed"
+	defaultTurnCancelledName                  = "turn-engine.turn-cancelled"
 	defaultTaskStatusName                     = "turn-engine.task-status"
 	defaultCancelConsumerPrefix               = "turn-engine.cancel"
 	stopReasonMaxToolCalls                    = "max_tool_calls"
@@ -709,6 +710,12 @@ func (e *TurnEngine) SubscribeTurnCompletedAutoContinuation(orgID *uuid.UUID) ev
 	})
 }
 
+func (e *TurnEngine) SubscribeTurnCancelledBootstrapRecovery(orgID *uuid.UUID) eventbus.Subscription {
+	return e.events.Subscribe(defaultTurnCancelledName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return e.HandleTurnCancelledEvent(ctx, event)
+	})
+}
+
 func (e *TurnEngine) SubscribeTaskStatusBootstrap(orgID *uuid.UUID) eventbus.Subscription {
 	return e.events.Subscribe(defaultTaskStatusName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
 		return e.HandleTaskStatusChangedEvent(ctx, event)
@@ -990,6 +997,38 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	return nil
 }
 
+func (e *TurnEngine) HandleTurnCancelledEvent(ctx context.Context, event eventbus.DomainEvent) error {
+	if event.EventType != "chat.turn.cancelled" {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(event.ActorType), "human") {
+		return nil
+	}
+
+	var payload struct {
+		SessionID uuid.UUID `json:"session_id"`
+		TurnID    uuid.UUID `json:"turn_id"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil
+	}
+	if payload.SessionID == uuid.Nil || payload.TurnID == uuid.Nil {
+		return nil
+	}
+
+	session, err := e.chat.GetSession(ctx, payload.SessionID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
+		return e.handleProjectBootstrapCancelledTurn(ctx, session, payload.TurnID)
+	}
+	return nil
+}
+
 func (e *TurnEngine) HandleTaskStatusChangedEvent(ctx context.Context, event eventbus.DomainEvent) error {
 	if event.EventType != "task.status_changed" || e == nil || e.pool == nil {
 		return nil
@@ -1231,6 +1270,119 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 
 	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, session, latestCompleted.RespondingID)
 	continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount)
+	if err != nil {
+		return err
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID: session.ID,
+		MessageID: continuationMessage.ID,
+	}
+	if continuationAgentID != uuid.Nil {
+		nextAgentID := continuationAgentID
+		nextPayload.AgentID = &nextAgentID
+	}
+	runAfter := now.Add(defaultAutoContinueDelay)
+	_, err = e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	return err
+}
+
+func (e *TurnEngine) handleProjectBootstrapCancelledTurn(ctx context.Context, session *chat.ChatSession, turnID uuid.UUID) error {
+	if e == nil || session == nil || turnID == uuid.Nil {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+		return nil
+	}
+	if session.ScopeID == uuid.Nil || !strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return nil
+	}
+	if session.CurrentTurnID != nil {
+		return nil
+	}
+	if paused, reason, pauseErr := e.projectPausedForSession(ctx, session); pauseErr != nil {
+		return pauseErr
+	} else if paused {
+		e.logPausedTurnSkip("skipping bootstrap cancellation recovery for paused project", session, reason, turnID)
+		return nil
+	}
+
+	progress, err := e.loadProjectBootstrapProgress(ctx, session.ScopeID)
+	if err != nil {
+		return err
+	}
+	if progress.Materialized() || progress.ValidationFailed() || progress.WaitingForBootstrapGate() {
+		return nil
+	}
+
+	state := projectBootstrapStateFromMetadata(session.Metadata)
+	if !strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusActive) {
+		return nil
+	}
+
+	turns, err := e.turns.ListBySession(ctx, session.ID)
+	if err != nil {
+		return err
+	}
+	var cancelled *repo.ChatTurn
+	for i := range turns {
+		turn := turns[i]
+		if turn.ID != turnID {
+			continue
+		}
+		copyTurn := turn
+		cancelled = &copyTurn
+		break
+	}
+	if cancelled == nil || !strings.EqualFold(strings.TrimSpace(cancelled.Status), "cancelled") {
+		return nil
+	}
+	for i := range turns {
+		turn := turns[i]
+		if turn.TurnNumber <= cancelled.TurnNumber {
+			continue
+		}
+		return nil
+	}
+
+	messages, err := e.messages.ListBySession(ctx, session.ID)
+	if err != nil {
+		return err
+	}
+	if latestUser := latestUserMessage(messages); latestUser != nil && latestUser.SequenceNumber > latestMessageSequenceForTurn(messages, turnID) {
+		metadata := messageMetadataMap(latestUser.Metadata)
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprintf("%v", metadata["source"])), projectBootstrapSource) {
+			return nil
+		}
+	}
+
+	initialMessageID := strings.TrimSpace(state.InitialMessageID)
+	if initialMessageID == "" {
+		if latestUser := latestUserMessage(messages); latestUser != nil {
+			initialMessageID = projectBootstrapWorkflowMessageID(latestUser).String()
+		}
+	}
+	if initialMessageID == "" {
+		return nil
+	}
+
+	now := e.now().UTC()
+	state.Status = projectBootstrapStatusActive
+	state.LastTurnID = turnID.String()
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	applyProjectBootstrapProgressState(&state, progress)
+	state.UpdatedAt = &now
+	if cancelled.RespondingID != uuid.Nil {
+		state.LastResponderID = cancelled.RespondingID.String()
+	}
+	if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
+		return err
+	}
+
+	_, _ = e.appendSystemMessage(ctx, turnID, session.ID, "[Recovered cancelled bootstrap turn - retrying in a fresh turn.]")
+	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, session, cancelled.RespondingID)
+	continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, session.ID, continuationAgentID, initialMessageID, state.AutoTurnCount)
 	if err != nil {
 		return err
 	}
@@ -8196,6 +8348,20 @@ func latestCompletedTurn(turns []repo.ChatTurn) *repo.ChatTurn {
 		if latest == nil || turn.TurnNumber > latest.TurnNumber {
 			copyTurn := turn
 			latest = &copyTurn
+		}
+	}
+	return latest
+}
+
+func latestMessageSequenceForTurn(messages []repo.ChatMessage, turnID uuid.UUID) int64 {
+	var latest int64
+	for i := range messages {
+		message := messages[i]
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if message.SequenceNumber > latest {
+			latest = message.SequenceNumber
 		}
 	}
 	return latest
