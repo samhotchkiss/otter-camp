@@ -145,6 +145,42 @@ func TestListeningEvalWaitReenqueuesAndSkipsPhase2(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageSummarizeEnqueueUsesBackgroundPriority(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.summarization = &fakeSummarizationChecker{shouldSummarize: true}
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	agentJobs := fixture.enqueuer.agentTurnJobs()
+	if len(agentJobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(agentJobs))
+	}
+	summarizeJobs := fixture.enqueuer.jobsByType(chat.ChatSummarizeJobType)
+	if len(summarizeJobs) != 1 {
+		t.Fatalf("chat_summarize jobs = %d, want 1", len(summarizeJobs))
+	}
+	if summarizeJobs[0].priority != backgroundSummarizeJobPriority {
+		t.Fatalf("chat_summarize priority = %d, want %d", summarizeJobs[0].priority, backgroundSummarizeJobPriority)
+	}
+	if summarizeJobs[0].priority >= fixture.engine.jobPriority {
+		t.Fatalf("chat_summarize priority = %d, want below agent_turn priority %d", summarizeJobs[0].priority, fixture.engine.jobPriority)
+	}
+}
+
 func TestHandleUserMessageAsyncExecutionSessionIdempotentForStableMessageKey(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -4187,10 +4223,12 @@ func (f *fakeAssembler) Assemble(ctx context.Context, input prompt.AssemblyInput
 	return result.prompt, result.err
 }
 
-type fakeSummarizationChecker struct{}
+type fakeSummarizationChecker struct {
+	shouldSummarize bool
+}
 
-func (*fakeSummarizationChecker) ShouldSummarize(context.Context, uuid.UUID, int) (bool, error) {
-	return false, nil
+func (f *fakeSummarizationChecker) ShouldSummarize(context.Context, uuid.UUID, int) (bool, error) {
+	return f.shouldSummarize, nil
 }
 
 type fakeModelGateway struct {
@@ -4317,12 +4355,13 @@ type fakeEnqueuer struct {
 
 type enqueuedJob struct {
 	jobType  string
+	priority int
 	payload  *AgentTurnPayload
 	runAfter *time.Time
 }
 
 func (f *fakeEnqueuer) Enqueue(ctx context.Context, tx pgx.Tx, jobType string, priority int, payload any, runAfter *time.Time) (uuid.UUID, error) {
-	entry := enqueuedJob{jobType: strings.TrimSpace(jobType)}
+	entry := enqueuedJob{jobType: strings.TrimSpace(jobType), priority: priority}
 	if runAfter != nil {
 		at := *runAfter
 		entry.runAfter = &at
@@ -4342,11 +4381,15 @@ func (f *fakeEnqueuer) Enqueue(ctx context.Context, tx pgx.Tx, jobType string, p
 }
 
 func (f *fakeEnqueuer) agentTurnJobs() []enqueuedJob {
+	return f.jobsByType(AgentTurnJobType)
+}
+
+func (f *fakeEnqueuer) jobsByType(jobType string) []enqueuedJob {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]enqueuedJob, 0)
 	for _, job := range f.jobs {
-		if job.jobType != AgentTurnJobType {
+		if job.jobType != jobType {
 			continue
 		}
 		copyJob := job

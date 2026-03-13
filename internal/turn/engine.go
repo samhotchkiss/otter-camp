@@ -43,6 +43,7 @@ import (
 const (
 	AgentTurnJobType                          = "agent_turn"
 	defaultAgentTurnJobPriority               = 70
+	backgroundSummarizeJobPriority            = 60
 	defaultMaxToolCalls                       = 75
 	defaultSyncMaxDuration                    = 5 * time.Minute
 	defaultAsyncMaxDuration                   = 30 * time.Minute
@@ -4068,7 +4069,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 
 		if e.summarization != nil {
 			if summarize, summarizeErr := e.summarization.ShouldSummarize(ctx, rt.session.ID, defaultSummarizeLayerBudget); summarizeErr == nil && summarize {
-				_, _ = e.enqueuer.Enqueue(ctx, nil, chat.ChatSummarizeJobType, e.jobPriority, chat.ChatSummarizePayload{SessionID: rt.session.ID, LayerBudgetTokens: defaultSummarizeLayerBudget}, nil)
+				_, _ = e.enqueuer.Enqueue(ctx, nil, chat.ChatSummarizeJobType, backgroundSummarizeJobPriority, chat.ChatSummarizePayload{SessionID: rt.session.ID, LayerBudgetTokens: defaultSummarizeLayerBudget}, nil)
 			}
 		}
 
