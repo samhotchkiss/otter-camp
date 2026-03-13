@@ -3013,6 +3013,43 @@ func TestIntegrationTaskUpdatePublishesStatusChangedDomainEvent(t *testing.T) {
 	}
 }
 
+func TestIntegrationTaskUpdateAcceptsReadyAliasForQueued(t *testing.T) {
+	pool := testdb.New(t)
+	backgroundCtx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, backgroundCtx, pool, project.ID)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "draft",
+	})
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+	out, err := executor.Execute(ctx, "task.update", map[string]any{
+		"task_id":     task.ID.String(),
+		"work_status": "ready",
+	})
+	if err != nil {
+		t.Fatalf("task.update ready alias: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update ready alias error = %v, want nil", out["error"])
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", out["work_status"])); got != "queued" {
+		t.Fatalf("work_status = %q, want queued", got)
+	}
+
+	stored, err := repo.NewProjectTaskRepo(pool).GetByID(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetByID queued task: %v", err)
+	}
+	if stored.WorkStatus != "queued" {
+		t.Fatalf("stored work_status = %q, want queued", stored.WorkStatus)
+	}
+}
+
 func TestIntegrationSessionCreateProjectScopeReusesExistingSession(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

@@ -1651,7 +1651,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	var extraStatusPayload map[string]any
 	var desiredStatus string
 	if status, ok := readString(input, "work_status"); ok && status != "" {
-		desiredStatus = strings.TrimSpace(status)
+		desiredStatus = normalizeTaskWorkStatusAlias(strings.TrimSpace(status))
 		if current.FlowTemplateID == nil &&
 			strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") &&
 			strings.EqualFold(desiredStatus, "queued") {
@@ -1847,6 +1847,15 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		response["planning"] = reviewPlanningResponse(planning)
 	}
 	return response, nil
+}
+
+func normalizeTaskWorkStatusAlias(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "ready":
+		return "queued"
+	default:
+		return strings.TrimSpace(status)
+	}
 }
 
 func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, input map[string]any) (map[string]any, error) {
