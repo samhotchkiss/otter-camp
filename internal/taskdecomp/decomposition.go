@@ -215,6 +215,11 @@ func inferEnumeratedBatchDeliverables(title string) []string {
 	if object == "" {
 		return nil
 	}
+	if totalCount <= maxGeneratedChildWorkUnits {
+		if labelled := inferLabelledEnumeratedDeliverables(verb, strings.TrimSpace(matches[3]), totalCount); len(labelled) == totalCount {
+			return labelled
+		}
+	}
 	firstEnd := totalCount / 2
 	if firstEnd < 1 {
 		firstEnd = 1
@@ -227,6 +232,86 @@ func inferEnumeratedBatchDeliverables(title string) []string {
 		fmt.Sprintf("%s %s %d-%d", verb, object, 1, firstEnd),
 		fmt.Sprintf("%s %s %d-%d", verb, object, secondStart, totalCount),
 	}
+}
+
+func inferLabelledEnumeratedDeliverables(verb string, raw string, totalCount int) []string {
+	before, after, ok := strings.Cut(strings.TrimSpace(raw), ":")
+	if !ok {
+		return nil
+	}
+	labels := splitEnumeratedLabels(after)
+	if len(labels) != totalCount {
+		return nil
+	}
+
+	scope := strings.TrimSpace(before)
+	if scope == "" {
+		return nil
+	}
+	scope = singularizeFinalWord(scope)
+	out := make([]string, 0, len(labels))
+	for _, label := range labels {
+		if label == "" {
+			return nil
+		}
+		out = append(out, fmt.Sprintf("%s %s: %s", verb, scope, label))
+	}
+	return out
+}
+
+func splitEnumeratedLabels(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(trimmed, func(r rune) bool {
+		return r == ',' || r == ';'
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		label := strings.TrimSpace(part)
+		if label == "" {
+			continue
+		}
+		subparts := strings.Split(label, " & ")
+		for _, subpart := range subparts {
+			candidate := strings.TrimSpace(subpart)
+			if candidate != "" {
+				out = append(out, candidate)
+			}
+		}
+	}
+	return out
+}
+
+func singularizeFinalWord(scope string) string {
+	trimmed := strings.TrimSpace(scope)
+	if trimmed == "" {
+		return ""
+	}
+	lower := strings.ToLower(trimmed)
+	if idx := strings.Index(lower, " for "); idx >= 0 {
+		base := singularizeFinalWord(trimmed[:idx])
+		suffix := strings.TrimSpace(trimmed[idx:])
+		if base == "" {
+			return trimmed
+		}
+		return strings.TrimSpace(base + " " + suffix)
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return ""
+	}
+	last := fields[len(fields)-1]
+	switch {
+	case strings.HasSuffix(strings.ToLower(last), "ies") && len(last) > 3:
+		fields[len(fields)-1] = last[:len(last)-3] + "y"
+	case strings.HasSuffix(strings.ToLower(last), "ses") && len(last) > 3:
+		fields[len(fields)-1] = last[:len(last)-2]
+	case strings.HasSuffix(strings.ToLower(last), "s") && len(last) > 1:
+		fields[len(fields)-1] = last[:len(last)-1]
+	}
+	return strings.Join(fields, " ")
 }
 
 func trimEnumeratedScope(raw string) string {

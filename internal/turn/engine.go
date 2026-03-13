@@ -4626,12 +4626,19 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 		return false, nil
 	}
 	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
-	if !projectBootstrapStateActive(state) {
-		return false, nil
-	}
 	if progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID); err != nil {
 		return false, err
 	} else {
+		if !projectBootstrapStateActive(state) {
+			if strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusFailed) || progress.Materialized() || !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) {
+				return false, nil
+			}
+			state.Status = projectBootstrapStatusActive
+			state.InitialMessageID = strings.TrimSpace(state.InitialMessageID)
+			if state.InitialMessageID == "" && rt.initialMessageID != uuid.Nil {
+				state.InitialMessageID = rt.initialMessageID.String()
+			}
+		}
 		applyProjectBootstrapProgressState(&state, progress)
 	}
 	snapshot, err := e.loadProjectBootstrapResumeSnapshot(ctx, rt.session.ScopeID)

@@ -56,6 +56,39 @@ func TestAnalyzeFlagsEnumeratedCompoundTitlesWithoutStructuredDescriptions(t *te
 	}
 }
 
+func TestAnalyzePrefersLabelledEnumeratedDeliverables(t *testing.T) {
+	description := "Create one persona per target reader segment."
+
+	plan := Analyze("Write 3 audience personas for Sam.blog: AI/tech peers, parenting readers, curious generalists", &description)
+	if !plan.RequiresDecomposition {
+		t.Fatal("RequiresDecomposition = false, want true")
+	}
+	want := []string{
+		"Write audience persona for Sam.blog: AI/tech peers",
+		"Write audience persona for Sam.blog: parenting readers",
+		"Write audience persona for Sam.blog: curious generalists",
+	}
+	if !reflect.DeepEqual(plan.Deliverables, want) {
+		t.Fatalf("Deliverables = %v, want %v", plan.Deliverables, want)
+	}
+}
+
+func TestAnalyzeSplitsAmpersandLabelledEnumeratedDeliverables(t *testing.T) {
+	description := "Create two targeted personas."
+
+	plan := Analyze("Create 2 audience personas: speakers & consultants", &description)
+	if !plan.RequiresDecomposition {
+		t.Fatal("RequiresDecomposition = false, want true")
+	}
+	want := []string{
+		"Create audience persona: speakers",
+		"Create audience persona: consultants",
+	}
+	if !reflect.DeepEqual(plan.Deliverables, want) {
+		t.Fatalf("Deliverables = %v, want %v", plan.Deliverables, want)
+	}
+}
+
 func TestAnalyzeFlagsEnumeratedCompoundActionTitles(t *testing.T) {
 	description := "Develop the second half of the idea backlog."
 
