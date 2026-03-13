@@ -1935,6 +1935,16 @@ func (e *TurnEngine) refreshProjectBootstrapSessionState(ctx context.Context, se
 		if session.CurrentTurnID != nil && *session.CurrentTurnID != uuid.Nil {
 			return e.updateProjectBootstrapState(ctx, session, state)
 		}
+		if e != nil && e.pool != nil {
+			if queued, err := e.hasQueuedAgentTurnForSession(ctx, session.ID, nil); err != nil {
+				return err
+			} else if queued && projectBootstrapRecoverableMaxToolCallFailure(progress) {
+				state.ValidationStatus = ""
+				state.ValidationFailureClass = ""
+				state.ValidationFailureReason = ""
+				return e.updateProjectBootstrapState(ctx, session, state)
+			}
+		}
 		if handled, err := e.continueRecoverableProjectBootstrapValidationForSession(ctx, session, state, progress, now); err != nil {
 			return err
 		} else if handled {

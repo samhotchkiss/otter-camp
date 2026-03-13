@@ -12008,6 +12008,30 @@ func TestTurnEngineIntegrationProjectBootstrapRecoversUnassignedFirstWaveTask(t 
 	if storedProject.Status == "archived" {
 		t.Fatalf("project status = %q, want project to remain active for recovery", storedProject.Status)
 	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress after queued recovery: %v", err)
+	}
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session snapshot: %v", err)
+	}
+	if err := fixture.engine.refreshProjectBootstrapSessionState(ctx, sessionSnapshot, progress); err != nil {
+		t.Fatalf("refreshProjectBootstrapSessionState after queued recovery: %v", err)
+	}
+
+	storedSession, err = repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session after refresh: %v", err)
+	}
+	if storedSession.Status != "active" {
+		t.Fatalf("project session status after refresh = %q, want active", storedSession.Status)
+	}
+	bootstrapState = projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status after refresh = %q, want %q", bootstrapState.Status, projectBootstrapStatusActive)
+	}
 }
 
 func TestTurnEngineIntegrationProjectBootstrapMaxToolCallsContinuesAfterRecoverableValidationFailure(t *testing.T) {
