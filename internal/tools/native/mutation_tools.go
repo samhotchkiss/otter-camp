@@ -145,6 +145,7 @@ func boundedTaskTooLargeResponse(title string, description *string, err error) m
 	}
 	suggested := map[string]any{
 		"mode": "parallel_children",
+		"next_action": "Do not retry the rejected task title or minor wording variants. Replace it with the suggested child tasks below or create equivalent narrower children under the same parent.",
 	}
 	if primary := strings.TrimSpace(plan.PrimaryDeliverable); primary != "" {
 		suggested["primary_deliverable"] = primary

@@ -4797,6 +4797,9 @@ func TestIntegrationParentTaskOversizedChildReturnsSuggestedDecomposition(t *tes
 	if mode := strings.TrimSpace(fmt.Sprintf("%v", suggested["mode"])); mode != "parallel_children" {
 		t.Fatalf("suggested_decomposition.mode = %q, want parallel_children", mode)
 	}
+	if nextAction := strings.TrimSpace(fmt.Sprintf("%v", suggested["next_action"])); !strings.Contains(nextAction, "Do not retry the rejected task title") {
+		t.Fatalf("suggested_decomposition.next_action = %q, want anti-retry guidance", nextAction)
+	}
 	childTitles, ok := suggested["child_titles"].([]any)
 	if !ok || len(childTitles) < 2 {
 		t.Fatalf("suggested_decomposition.child_titles = %#v, want at least 2 entries", suggested["child_titles"])
