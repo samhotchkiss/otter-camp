@@ -1777,6 +1777,10 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 			continue
 		}
 		if _, err := e.taskTransitions.TransitionStatus(ctx, task.ID, "queued", tasksvc.Actor{Type: "system", AllowGateBypass: true}); err != nil {
+			if isAlreadyQueuedTaskTransition(err) {
+				queuedAny = true
+				continue
+			}
 			if errors.Is(err, taskdecomp.ErrBoundedTaskTooLarge) {
 				progress.ValidationStatus = projectBootstrapValidationFailed
 				progress.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
@@ -1830,6 +1834,15 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 			return progress, err
 		}
 	}
+}
+
+func isAlreadyQueuedTaskTransition(err error) bool {
+	var transitionErr tasksvc.ErrInvalidStatusTransition
+	if !errors.As(err, &transitionErr) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(transitionErr.From), "queued") &&
+		strings.EqualFold(strings.TrimSpace(transitionErr.To), "queued")
 }
 
 func (e *TurnEngine) completeProjectBootstrapGateTask(ctx context.Context, taskID uuid.UUID) error {

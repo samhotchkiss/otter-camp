@@ -1022,6 +1022,18 @@ func TestHandleTurnCompletedEventSkipsWhenProjectPaused(t *testing.T) {
 	}
 }
 
+func TestIsAlreadyQueuedTaskTransition(t *testing.T) {
+	if !isAlreadyQueuedTaskTransition(tasksvc.ErrInvalidStatusTransition{From: "queued", To: "queued"}) {
+		t.Fatal("queued -> queued transition should be treated as already queued")
+	}
+	if isAlreadyQueuedTaskTransition(tasksvc.ErrInvalidStatusTransition{From: "draft", To: "queued"}) {
+		t.Fatal("draft -> queued transition should not be treated as already queued")
+	}
+	if isAlreadyQueuedTaskTransition(errors.New("other error")) {
+		t.Fatal("non-transition errors should not be treated as already queued")
+	}
+}
+
 func TestAppendProjectBootstrapContinuationMessageWithoutAuthorUsesSystem(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 
