@@ -2877,7 +2877,7 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 		agent:   baseAgents.agent,
 		starter: append([]repo.Agent(nil), baseAgents.starter...),
 		items: map[uuid.UUID]repo.Agent{
-			pmID:       {ID: pmID, DisplayName: "Sam.blog PM"},
+			pmID:       {ID: pmID, DisplayName: "Sam.blog PM", AgentClass: "staff", AgentType: "pm"},
 			workerAID:  {ID: workerAID, DisplayName: "André Kowalski"},
 			workerBID:  {ID: workerBID, DisplayName: "Ananya Webb"},
 			reviewerID: {ID: reviewerID, DisplayName: "Vivian Cho"},
@@ -2930,6 +2930,9 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	}
 	if !strings.Contains(resumeContent, "Existing PM: Sam.blog PM") {
 		t.Fatalf("resume message = %q, want existing PM line", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "id="+pmID.String()) || !strings.Contains(resumeContent, "class=staff") || !strings.Contains(resumeContent, "type=pm") {
+		t.Fatalf("resume message = %q, want PM identity details", resumeContent)
 	}
 	if !strings.Contains(resumeContent, "Active project id: "+fixture.session.ScopeID.String()) {
 		t.Fatalf("resume message = %q, want active project id line", resumeContent)

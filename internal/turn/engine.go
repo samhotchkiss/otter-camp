@@ -4594,7 +4594,23 @@ func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, pro
 		if role == "" {
 			role = "worker"
 		}
-		grouped[role] = append(grouped[role], name)
+		label := name
+		if role == "project_manager" {
+			parts := []string{}
+			if agentID := agentRecord.ID.String(); strings.TrimSpace(agentID) != "" {
+				parts = append(parts, "id="+agentID)
+			}
+			if class := strings.TrimSpace(agentRecord.AgentClass); class != "" {
+				parts = append(parts, "class="+class)
+			}
+			if agentType := strings.TrimSpace(agentRecord.AgentType); agentType != "" {
+				parts = append(parts, "type="+agentType)
+			}
+			if len(parts) > 0 {
+				label = fmt.Sprintf("%s (%s)", name, strings.Join(parts, ", "))
+			}
+		}
+		grouped[role] = append(grouped[role], label)
 	}
 
 	for role := range grouped {
