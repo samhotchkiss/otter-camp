@@ -3069,7 +3069,32 @@ func (e *TurnEngine) ensureTurnRunExitInvariant(ctx context.Context, rt *turnRun
 	if currentTurn.StopReason != nil {
 		stopReason = strings.TrimSpace(*currentTurn.StopReason)
 	}
+	if recovered, recoverErr := e.recoverLeakedAsyncContinuationTurn(ctx, rt, currentTurn, stopReason); recoverErr != nil {
+		return recoverErr
+	} else if recovered {
+		return nil
+	}
 	return fmt.Errorf("turn leaked in_progress after run exit (session_id=%s turn_id=%s stop_reason=%s)", rt.session.ID, currentTurn.ID, stopReason)
+}
+
+func (e *TurnEngine) recoverLeakedAsyncContinuationTurn(ctx context.Context, rt *turnRuntime, currentTurn *chat.ChatTurn, stopReason string) (bool, error) {
+	if e == nil || e.chat == nil || rt == nil || rt.session == nil || currentTurn == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(stopReason), stopReasonMaxToolCalls) {
+		return false, nil
+	}
+	failureReason := "recovered leaked in-progress turn after max-tool-calls continuation handoff"
+	if err := e.chat.FailTurn(ctx, currentTurn.ID, failureReason); err != nil && !errors.Is(err, chat.ErrInvalidStatusTransition) {
+		return false, err
+	}
+	if _, err := e.appendSystemMessage(ctx, currentTurn.ID, rt.session.ID, "[Recovered leaked in-progress turn after max-tool-calls handoff - allowing queued continuation to proceed.]"); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) handleAsyncTurnWatchdogTimeout(ctx context.Context, rt *turnRuntime, timeoutErr *asyncTurnTimeoutError) (bool, error) {
@@ -3609,6 +3634,17 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	currentTurn, err := e.chat.GetTurn(ctx, rt.turn.ID)
 	if err != nil {
 		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(currentTurn.Status), "in_progress") {
+		if recovered, recoverErr := e.recoverLeakedAsyncContinuationTurn(ctx, rt, currentTurn, rt.stopReason); recoverErr != nil {
+			return recoverErr
+		} else if !recovered {
+			return fmt.Errorf("continueTurn left prior turn in_progress after completion handoff (session_id=%s turn_id=%s stop_reason=%s)", rt.session.ID, currentTurn.ID, strings.TrimSpace(rt.stopReason))
+		}
+		currentTurn, err = e.chat.GetTurn(ctx, rt.turn.ID)
+		if err != nil {
+			return err
+		}
 	}
 	cycleID := currentTurn.CycleID
 	if cycleID == nil {

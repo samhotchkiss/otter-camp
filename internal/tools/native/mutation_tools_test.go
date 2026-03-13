@@ -1132,8 +1132,23 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 	if err != nil {
 		t.Fatalf("task.update: %v", err)
 	}
-	if tasks.createCalls != 0 {
-		t.Fatalf("create calls = %d, want 0", tasks.createCalls)
+	if tasks.createCalls != 1 {
+		t.Fatalf("create calls = %d, want 1 for the missing third workstream", tasks.createCalls)
+	}
+	if tasks.updateCalls < 3 {
+		t.Fatalf("update calls = %d, want at least 3 for parent plus repaired reused children", tasks.updateCalls)
+	}
+	if got := tasks.listByProjectTasks[1].Title; got != "Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping." {
+		t.Fatalf("first reused child title = %q, want repaired first deliverable", got)
+	}
+	if got := tasks.listByProjectTasks[2].Title; got != "Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage." {
+		t.Fatalf("second reused child title = %q, want repaired second deliverable", got)
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("createdTasks len = %d, want 1", len(tasks.createdTasks))
+	}
+	if got := tasks.createdTasks[0].Title; got != "Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots." {
+		t.Fatalf("created child title = %q, want repaired third deliverable", got)
 	}
 
 	decomp, ok := out["decomposition"].(map[string]any)
@@ -1144,14 +1159,17 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 	if !ok {
 		t.Fatalf("decomposition.child_task_ids = %T, want []string", decomp["child_task_ids"])
 	}
-	if len(childIDs) != 2 {
-		t.Fatalf("decomposition.child_task_ids len = %d, want 2", len(childIDs))
+	if len(childIDs) != 3 {
+		t.Fatalf("decomposition.child_task_ids len = %d, want 3", len(childIDs))
 	}
 	if mustUUIDFromAny(t, childIDs[0]) != childOneID {
 		t.Fatalf("first child task id = %v, want %s", childIDs[0], childOneID)
 	}
 	if mustUUIDFromAny(t, childIDs[1]) != childTwoID {
 		t.Fatalf("second child task id = %v, want %s", childIDs[1], childTwoID)
+	}
+	if mustUUIDFromAny(t, childIDs[2]) != tasks.createdTasks[0].ID {
+		t.Fatalf("third child task id = %v, want %s", childIDs[2], tasks.createdTasks[0].ID)
 	}
 	taskOut, ok := out["task"].(map[string]any)
 	if !ok {
@@ -1172,10 +1190,22 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 		}
 	}
 
+	createdEvents := 0
 	for _, event := range publisher.events {
-		if event.EventType == "task.created" {
-			t.Fatalf("unexpected task.created event for reused decomposition child: %+v", event)
+		if event.EventType != "task.created" {
+			continue
 		}
+		createdEvents++
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal task.created payload: %v", err)
+		}
+		if payload["task_id"] != tasks.createdTasks[0].ID.String() {
+			t.Fatalf("task.created task_id = %v, want %s", payload["task_id"], tasks.createdTasks[0].ID)
+		}
+	}
+	if createdEvents != 1 {
+		t.Fatalf("task.created events = %d, want 1 for the missing child task", createdEvents)
 	}
 }
 

@@ -103,8 +103,8 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		if plan.StartNodeID != nil {
 			t.Fatalf("StartNodeID = %v, want nil", plan.StartNodeID)
 		}
-		if len(plan.Seeds) != 2 {
-			t.Fatalf("seed count = %d, want 2", len(plan.Seeds))
+		if len(plan.Seeds) != 3 {
+			t.Fatalf("seed count = %d, want 3", len(plan.Seeds))
 		}
 		if plan.Seeds[0].NodeType != "work" {
 			t.Fatalf("seed node_type = %q, want %q", plan.Seeds[0].NodeType, "work")
@@ -118,6 +118,9 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		if plan.Seeds[1].NodeType != "review" {
 			t.Fatalf("second node_type = %q, want %q", plan.Seeds[1].NodeType, "review")
 		}
+		if plan.Seeds[2].NodeType != "merge" {
+			t.Fatalf("third node_type = %q, want %q", plan.Seeds[2].NodeType, "merge")
+		}
 	})
 
 	t.Run("review template seeds work then internal review with edge", func(t *testing.T) {
@@ -129,8 +132,8 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		if err != nil {
 			t.Fatalf("buildSystemTemplateNodeSeedPlan: %v", err)
 		}
-		if len(plan.Seeds) != 2 {
-			t.Fatalf("seed count = %d, want 2", len(plan.Seeds))
+		if len(plan.Seeds) != 3 {
+			t.Fatalf("seed count = %d, want 3", len(plan.Seeds))
 		}
 		if plan.Seeds[0].NodeType != "work" {
 			t.Fatalf("first node_type = %q, want %q", plan.Seeds[0].NodeType, "work")
@@ -147,6 +150,9 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		if plan.Seeds[1].RequiresHumanReview {
 			t.Fatal("second node RequiresHumanReview = true, want false")
 		}
+		if plan.Seeds[2].NodeType != "merge" {
+			t.Fatalf("third node_type = %q, want %q", plan.Seeds[2].NodeType, "merge")
+		}
 	})
 
 	t.Run("review refinement template seeds generation internal review then human review", func(t *testing.T) {
@@ -158,8 +164,8 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		if err != nil {
 			t.Fatalf("buildSystemTemplateNodeSeedPlan: %v", err)
 		}
-		if len(plan.Seeds) != 3 {
-			t.Fatalf("seed count = %d, want 3", len(plan.Seeds))
+		if len(plan.Seeds) != 4 {
+			t.Fatalf("seed count = %d, want 4", len(plan.Seeds))
 		}
 		if plan.Seeds[0].DisplayName != "Generation" {
 			t.Fatalf("first display_name = %q, want Generation", plan.Seeds[0].DisplayName)
@@ -173,9 +179,12 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		if !plan.Seeds[2].RequiresHumanReview {
 			t.Fatal("third node RequiresHumanReview = false, want true")
 		}
+		if plan.Seeds[3].NodeType != "merge" {
+			t.Fatalf("fourth node_type = %q, want %q", plan.Seeds[3].NodeType, "merge")
+		}
 	})
 
-	t.Run("existing nodes skip creation and backfill start node", func(t *testing.T) {
+	t.Run("mismatched existing nodes trigger reconcile instead of silent backfill", func(t *testing.T) {
 		plan, err := buildSystemTemplateNodeSeedPlan(repo.FlowTemplate{
 			ID:          templateID,
 			Slug:        "default-single-agent",
@@ -187,15 +196,18 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		if err != nil {
 			t.Fatalf("buildSystemTemplateNodeSeedPlan: %v", err)
 		}
-		if len(plan.Seeds) != 0 {
-			t.Fatalf("seed count = %d, want 0", len(plan.Seeds))
+		if len(plan.Seeds) != 3 {
+			t.Fatalf("seed count = %d, want 3 for reconcile", len(plan.Seeds))
 		}
-		if plan.StartNodeID == nil || *plan.StartNodeID != existingNodeID {
-			t.Fatalf("StartNodeID = %v, want %s", plan.StartNodeID, existingNodeID)
+		if !plan.Reconcile {
+			t.Fatal("Reconcile = false, want true for mismatched existing nodes")
+		}
+		if plan.StartNodeID != nil {
+			t.Fatalf("StartNodeID = %v, want nil during reconcile", plan.StartNodeID)
 		}
 	})
 
-	t.Run("existing nodes with start node remain unchanged", func(t *testing.T) {
+	t.Run("mismatched existing nodes with start node still reconcile", func(t *testing.T) {
 		plan, err := buildSystemTemplateNodeSeedPlan(repo.FlowTemplate{
 			ID:          templateID,
 			Slug:        "default-single-agent",
@@ -207,11 +219,14 @@ func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 		if err != nil {
 			t.Fatalf("buildSystemTemplateNodeSeedPlan: %v", err)
 		}
-		if len(plan.Seeds) != 0 {
-			t.Fatalf("seed count = %d, want 0", len(plan.Seeds))
+		if len(plan.Seeds) != 3 {
+			t.Fatalf("seed count = %d, want 3 for reconcile", len(plan.Seeds))
 		}
 		if plan.StartNodeID != nil {
 			t.Fatalf("StartNodeID = %v, want nil", plan.StartNodeID)
+		}
+		if !plan.Reconcile {
+			t.Fatal("Reconcile = false, want true for mismatched existing nodes")
 		}
 	})
 }

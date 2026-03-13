@@ -2817,6 +2817,14 @@ func (e *NativeToolExecutor) repairTaskIfNeeded(ctx context.Context, existing re
 	}
 
 	if strings.EqualFold(strings.TrimSpace(updated.WorkStatus), "draft") {
+		if desiredTitle := strings.TrimSpace(desired.Title); desiredTitle != "" &&
+			normalizeComparableText(updated.Title) != normalizeComparableText(desiredTitle) {
+			updated.Title = desiredTitle
+			changed = true
+			if desiredDescription := strings.TrimSpace(derefString(desired.Description)); desiredDescription != "" {
+				updated.Description = &desiredDescription
+			}
+		}
 		if updated.FlowTemplateID == nil && desired.FlowTemplateID != nil && *desired.FlowTemplateID != uuid.Nil {
 			flowTemplateID := *desired.FlowTemplateID
 			updated.FlowTemplateID = &flowTemplateID

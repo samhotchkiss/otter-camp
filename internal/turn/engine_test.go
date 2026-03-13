@@ -2140,6 +2140,61 @@ func TestMaxToolCallsAsyncContinuation(t *testing.T) {
 	}
 }
 
+func TestMaxToolCallsAsyncContinuationRecoversLeakedInProgressTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.maxToolCalls = 3
+	fixture.chat.completeNoop = true
+
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{ToolCalls: []ModelToolCall{
+			{ID: "a", Name: "file.read", Tier: "tier1"},
+			{ID: "b", Name: "memory.query", Tier: "tier1"},
+			{ID: "c", Name: "chat.search", Tier: "tier1"},
+			{ID: "d", Name: "task.list", Tier: "tier1"},
+		}}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(fixture.chat.turnOrder) == 0 {
+		t.Fatal("expected at least one turn")
+	}
+	firstTurn := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	if firstTurn == nil {
+		t.Fatal("missing first turn")
+	}
+	if firstTurn.Status != "failed" {
+		t.Fatalf("first turn status = %q, want failed after leak recovery", firstTurn.Status)
+	}
+	if firstTurn.StopReason == nil || *firstTurn.StopReason != stopReasonMaxToolCalls {
+		t.Fatalf("first turn stop_reason = %v, want %q", firstTurn.StopReason, stopReasonMaxToolCalls)
+	}
+	if fixture.chat.failCalls < 1 {
+		t.Fatalf("fail calls = %d, want >= 1", fixture.chat.failCalls)
+	}
+	if !fixture.messages.containsContent("[Recovered leaked in-progress turn after max-tool-calls handoff - allowing queued continuation to proceed.]") {
+		t.Fatal("missing leaked turn recovery system message")
+	}
+	for _, turnID := range fixture.chat.turnOrder {
+		turn := fixture.chat.turnByID(turnID)
+		if turn == nil {
+			continue
+		}
+		if turn.Status == "in_progress" {
+			t.Fatalf("turn %s still in_progress after leak recovery", turn.ID)
+		}
+	}
+	for _, job := range fixture.enqueuer.agentTurnJobs() {
+		if job.payload == nil {
+			t.Fatal("expected agent_turn payload")
+		}
+		if job.payload.MessageID == fixture.userMessageID {
+			t.Fatal("expected continuation payload to target a follow-on message, not the original user message")
+		}
+	}
+}
+
 func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
 	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
 		ValidationFailureClass: projectBootstrapFailureCompoundParent,
@@ -3321,6 +3376,7 @@ type fakeChatService struct {
 	turnCh        chan uuid.UUID
 	startedAt     time.Time
 	enforceStatus bool
+	completeNoop  bool
 	cancelCalls   int
 	completeCalls int
 	failCalls     int
@@ -3442,6 +3498,9 @@ func (f *fakeChatService) CompleteTurn(ctx context.Context, turnID uuid.UUID) er
 		return chat.ErrInvalidStatusTransition
 	}
 	f.completeCalls++
+	if f.completeNoop {
+		return nil
+	}
 	turn.Status = "completed"
 	now := time.Now().UTC()
 	turn.CompletedAt = &now
