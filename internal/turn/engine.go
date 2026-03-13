@@ -4267,6 +4267,11 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	if !projectBootstrapStateActive(state) {
 		return false, nil
 	}
+	if progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID); err != nil {
+		return false, err
+	} else {
+		applyProjectBootstrapProgressState(&state, progress)
+	}
 	snapshot, err := e.loadProjectBootstrapResumeSnapshot(ctx, rt.session.ScopeID)
 	if err != nil {
 		return false, err
