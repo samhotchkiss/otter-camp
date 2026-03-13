@@ -2494,6 +2494,41 @@ func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
 	}
 }
 
+func TestProjectBootstrapProgressAdvancedBeyondState(t *testing.T) {
+	state := projectBootstrapState{
+		AssignmentCount:         4,
+		PlannedTaskCount:        20,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:      18,
+		FirstWavePromotedCount:  17,
+		FirstWaveExecutionCount: 17,
+		FirstWaveJobCount:       16,
+	}
+	progress := projectBootstrapProgress{
+		AssignmentCount:         4,
+		PlannedTaskCount:        20,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:      18,
+		FirstWavePromotedCount:  18,
+		FirstWaveExecutionCount: 18,
+		FirstWaveJobCount:       17,
+	}
+	if !projectBootstrapProgressAdvancedBeyondState(state, progress) {
+		t.Fatal("later first-wave counts should reset recoverable continuation budget")
+	}
+	if projectBootstrapProgressAdvancedBeyondState(state, projectBootstrapProgress{
+		AssignmentCount:         4,
+		PlannedTaskCount:        20,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:      18,
+		FirstWavePromotedCount:  17,
+		FirstWaveExecutionCount: 17,
+		FirstWaveJobCount:       16,
+	}) {
+		t.Fatal("unchanged progress should not reset recoverable continuation budget")
+	}
+}
+
 func TestBuildProjectBootstrapValidationRecoveryPrompt(t *testing.T) {
 	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveSize,

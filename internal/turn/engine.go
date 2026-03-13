@@ -1540,6 +1540,9 @@ func (e *TurnEngine) continueRecoverableProjectBootstrapValidation(
 	if state.StartedAt == nil {
 		state.StartedAt = &now
 	}
+	if projectBootstrapProgressAdvancedBeyondState(state, progress) {
+		state.AutoTurnCount = 0
+	}
 	state.Status = projectBootstrapStatusActive
 	state.BootstrapTaskID = progress.BootstrapTaskID.String()
 	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
@@ -1625,6 +1628,9 @@ func (e *TurnEngine) continueRecoverableProjectBootstrapValidationForSession(
 
 	if state.StartedAt == nil {
 		state.StartedAt = &now
+	}
+	if projectBootstrapProgressAdvancedBeyondState(state, progress) {
+		state.AutoTurnCount = 0
 	}
 	state.Status = projectBootstrapStatusActive
 	state.BootstrapTaskID = progress.BootstrapTaskID.String()
@@ -2013,6 +2019,17 @@ func (p projectBootstrapProgress) WaitingForBootstrapGate() bool {
 		p.BootstrapTaskID != uuid.Nil &&
 		p.BootstrapTaskOutstanding &&
 		!p.BootstrapGateReady()
+}
+
+func projectBootstrapProgressAdvancedBeyondState(state projectBootstrapState, progress projectBootstrapProgress) bool {
+	return progress.AssignmentCount > state.AssignmentCount ||
+		progress.StaffingDraftCount > state.StaffingDraftCount ||
+		progress.PlannedTaskCount > state.PlannedTaskCount ||
+		progress.PlannedFlowTemplateCount > state.PlannedFlowTemplateCount ||
+		progress.FirstWaveTaskCount > state.FirstWaveTaskCount ||
+		progress.FirstWavePromotedCount > state.FirstWavePromotedCount ||
+		progress.FirstWaveExecutionCount > state.FirstWaveExecutionCount ||
+		progress.FirstWaveJobCount > state.FirstWaveJobCount
 }
 
 func projectBootstrapRestartScaffoldOnly(progress projectBootstrapProgress) bool {
