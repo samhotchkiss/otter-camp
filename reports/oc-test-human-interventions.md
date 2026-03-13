@@ -1,0 +1,11 @@
+- 2026-03-12 16:04 MST
+  - Blocker: `sam-blog-51` was stuck with a leaked `in_progress` turn after a max-tool-calls boundary.
+  - Intervention: rebuilt/restarted `oc-svc` on `f8acf0c7`, reset `Frank / General` in `oc-test`, and re-sent a fresh Sam.blog kickoff through the TUI.
+  - Should this have been automated: yes.
+  - Proposed product improvement: detect leaked in-progress turns, fail/retry automatically, and expose a one-click clean project relaunch path from the operator UI.
+  - Follow-up landed on `main`:
+    - `63c83bdf` recovers leaked async max-tool-calls continuation turns instead of silently carrying stale `in_progress` turns forward.
+    - `539553cd` adds DB-backed integration coverage for the same handoff leak path.
+    - `dc3f4b43`, `679e70a4`, and `8ac33de1` surface the fresh restart project in the operator dashboard/TUI and make dashboard shortcuts open the restart target by default.
+  - Remaining gap:
+    - there is still no dedicated one-click relaunch API/action; the operator can now see and jump to the clean restart project, but relaunch itself is still implicit in automatic bootstrap restart logic rather than an explicit operator command.
