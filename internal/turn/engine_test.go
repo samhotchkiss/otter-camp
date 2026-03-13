@@ -1595,6 +1595,33 @@ func TestShouldBlockFreshKickoffMemoryTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockFreshKickoffAgentBrowseTool(t *testing.T) {
+	rt := &turnRuntime{
+		freshKickoff: true,
+		session: &repo.ChatSession{
+			ScopeType: "project",
+		},
+	}
+	if !shouldBlockFreshKickoffAgentBrowseTool(rt, "agent.list") {
+		t.Fatal("fresh kickoff should block project-scope agent.list")
+	}
+	if !shouldBlockFreshKickoffAgentBrowseTool(rt, "agent.get") {
+		t.Fatal("fresh kickoff should block project-scope agent.get")
+	}
+	if shouldBlockFreshKickoffAgentBrowseTool(rt, "agent.create_draft") {
+		t.Fatal("fresh kickoff should not block creating fresh staff")
+	}
+	rt.session.ScopeType = "organization"
+	if shouldBlockFreshKickoffAgentBrowseTool(rt, "agent.list") {
+		t.Fatal("organization-scope fresh kickoff should already be covered by pre-create tool guard, not agent browse guard")
+	}
+	rt.freshKickoff = false
+	rt.session.ScopeType = "project"
+	if shouldBlockFreshKickoffAgentBrowseTool(rt, "agent.list") {
+		t.Fatal("non-fresh kickoff should not block agent browsing")
+	}
+}
+
 func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	content := "Start a brand-new Sam.blog project from scratch. Do not reuse archived chains."

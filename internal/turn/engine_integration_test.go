@@ -5565,6 +5565,72 @@ func TestTurnEngineIntegrationFreshProjectHandoffBlocksMemoryTools(t *testing.T)
 	}
 }
 
+func TestTurnEngineIntegrationFreshProjectHandoffBlocksAgentBrowsing(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	project.Slug = "sam-blog-fresh-agent-guard"
+	project.DisplayName = "Sam.blog"
+	updatedProject, err := repo.NewProjectRepo(fixture.pool).Update(ctx, project)
+	if err != nil {
+		t.Fatalf("Update project: %v", err)
+	}
+
+	projectSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project",
+		ScopeID:        updatedProject.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession project: %v", err)
+	}
+	handoff := "Frank handoff: create the initial staffed work plan for this project.\n\nCreated project: slug=" + updatedProject.Slug + " project_id=" + updatedProject.ID.String() + ".\n\nOriginating user request: Start Sam.blog from scratch as a fresh kickoff. Do not reuse archived work."
+	assistantType := "agent"
+	handoffMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  projectSession.ID,
+		AuthorType: &assistantType,
+		AuthorID:   &fixture.agent.ID,
+		Role:       "user",
+		Content:    handoff,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage handoff: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "agent.list", Tier: "tier1"},
+	}}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{ToolCalls: []ModelToolCall{
+			{ID: "agent-list-1", Name: "agent.list", Tier: "tier1", Arguments: map[string]any{}},
+		}}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, projectSession.ID, handoffMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	foundBlockedAgentList := false
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || message.ToolCallID == nil || *message.ToolCallID != "agent-list-1" {
+			continue
+		}
+		if strings.Contains(message.Content, "fresh kickoff bootstrap should create dedicated project staff directly") {
+			foundBlockedAgentList = true
+			break
+		}
+	}
+	if !foundBlockedAgentList {
+		t.Fatal("missing blocked fresh-kickoff agent.list tool result")
+	}
+}
+
 func TestTurnEngineIntegrationFreshKickoffCompressionLimitSurfacesSingleBlocker(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
