@@ -177,6 +177,12 @@ type ErrQueueBlockedByProjectGate struct {
 }
 
 func (e ErrQueueBlockedByProjectGate) Error() string {
+	if strings.EqualFold(strings.TrimSpace(e.GateTaskTitle), "Bootstrap governance gate") {
+		if e.GateTaskNumber > 0 {
+			return fmt.Sprintf("task is blocked by outstanding project gate task %d (%s) and cannot be queued yet. During project bootstrap, keep first-wave tasks in draft until setup is persisted through bootstrap.setup.persist.", e.GateTaskNumber, strings.TrimSpace(e.GateTaskTitle))
+		}
+		return "task is blocked by the outstanding Bootstrap governance gate and cannot be queued yet. During project bootstrap, keep first-wave tasks in draft until setup is persisted through bootstrap.setup.persist."
+	}
 	switch {
 	case e.GateTaskNumber > 0 && strings.TrimSpace(e.GateTaskTitle) != "":
 		return fmt.Sprintf("task is blocked by outstanding project gate task %d (%s) and cannot be queued yet", e.GateTaskNumber, strings.TrimSpace(e.GateTaskTitle))

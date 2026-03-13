@@ -585,6 +585,9 @@ func TestTransitionStatusDraftToQueuedBlockedByOutstandingProjectGateEX256(t *te
 	if got := err.Error(); !strings.Contains(got, "Bootstrap governance gate") {
 		t.Fatalf("error = %q, want gate title context", got)
 	}
+	if got := err.Error(); !strings.Contains(got, "bootstrap.setup.persist") {
+		t.Fatalf("error = %q, want bootstrap setup persist guidance", got)
+	}
 
 	stored, getErr := taskRepo.GetByID(context.Background(), regularTaskID)
 	if getErr != nil {

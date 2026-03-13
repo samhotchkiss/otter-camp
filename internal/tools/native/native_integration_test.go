@@ -4459,6 +4459,61 @@ func TestIntegrationTaskUpdateRejectsQueuedPromotionForOrchestrationParentWithou
 	}
 }
 
+func TestIntegrationTaskUpdateBootstrapGateBlockSuggestsSetupPersist(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	gateTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Bootstrap governance gate",
+		WorkStatus:     "draft",
+		BlocksScope:    "all",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{"bootstrap_gate":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create gate task: %v", err)
+	}
+
+	childTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "First-wave child task",
+		WorkStatus:     "draft",
+		BlocksScope:    "none",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create child task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
+		"task_id":     childTask.ID.String(),
+		"work_status": "queued",
+	})
+	if err == nil {
+		t.Fatal("task.update error = nil, want bootstrap gate block")
+	}
+	if out != nil {
+		t.Fatalf("task.update output = %v, want nil on rejected gate-blocked queue", out)
+	}
+	if got := err.Error(); !strings.Contains(got, gateTask.Title) {
+		t.Fatalf("task.update error = %q, want gate title context", got)
+	}
+	if got := err.Error(); !strings.Contains(got, "bootstrap.setup.persist") {
+		t.Fatalf("task.update error = %q, want setup persist guidance", got)
+	}
+}
+
 func TestIntegrationProjectSessionTaskUpdateRejectsInProgressPromotionWithoutCanonicalExecution(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
