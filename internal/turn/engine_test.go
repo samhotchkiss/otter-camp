@@ -1550,6 +1550,28 @@ func TestShouldBlockFreshKickoffPreCreateTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockFreshKickoffMemoryTool(t *testing.T) {
+	rt := &turnRuntime{
+		freshKickoff: true,
+		session: &repo.ChatSession{
+			ScopeType: "project",
+		},
+	}
+	if !shouldBlockFreshKickoffMemoryTool(rt, "memory.search") {
+		t.Fatal("fresh kickoff should block project-scope memory search")
+	}
+	if !shouldBlockFreshKickoffMemoryTool(rt, "memory.list") {
+		t.Fatal("fresh kickoff should block project-scope memory list")
+	}
+	if shouldBlockFreshKickoffMemoryTool(rt, "project.get") {
+		t.Fatal("fresh kickoff should not block non-memory tools here")
+	}
+	rt.freshKickoff = false
+	if shouldBlockFreshKickoffMemoryTool(rt, "memory.search") {
+		t.Fatal("non-fresh kickoff should not block memory tools")
+	}
+}
+
 func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	content := "Start a brand-new Sam.blog project from scratch. Do not reuse archived chains."

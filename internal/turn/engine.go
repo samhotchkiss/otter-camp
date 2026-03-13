@@ -5400,6 +5400,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if shouldBlockFreshKickoffMemoryTool(rt, name) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildFreshKickoffMemoryToolGuardError(),
+			})
+			continue
+		}
 		if shouldBlockProjectKickoffFollowOnTool(rt, name) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -8508,6 +8516,21 @@ func shouldBlockFreshKickoffPreCreateTool(rt *turnRuntime, toolName string) bool
 	return !strings.EqualFold(strings.TrimSpace(toolName), "project.create")
 }
 
+func shouldBlockFreshKickoffMemoryTool(rt *turnRuntime, toolName string) bool {
+	if rt == nil || !rt.freshKickoff {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	if !strings.HasPrefix(name, "memory.") {
+		return false
+	}
+	if rt.session == nil {
+		return true
+	}
+	scopeType := strings.ToLower(strings.TrimSpace(rt.session.ScopeType))
+	return scopeType == "organization" || scopeType == "project"
+}
+
 func buildProjectKickoffFollowOnToolGuardError(identity *projectIdentity) string {
 	if identity == nil {
 		return "project kickoff is now handoff-only: provide Lori the handoff summary and end the turn"
@@ -8517,6 +8540,10 @@ func buildProjectKickoffFollowOnToolGuardError(identity *projectIdentity) string
 
 func buildFreshKickoffPreCreateToolGuardError() string {
 	return "fresh kickoff requires creating the new project first: skip project/memory/template browsing and call project.create before any other tool use"
+}
+
+func buildFreshKickoffMemoryToolGuardError() string {
+	return "fresh kickoff should rely on the current request, current project description, and live tool results instead of archived memory; skip memory tools unless the user explicitly asks to reuse prior work"
 }
 
 func buildFreshKickoffBlockerMessage(identity *projectIdentity, reason string) string {
