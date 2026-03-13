@@ -3903,6 +3903,9 @@ func (e *TurnEngine) handleProjectBootstrapPreflight(ctx context.Context, rt *tu
 	if !progress.ValidationFailed() {
 		return false, nil
 	}
+	if e.projectBootstrapAutoContinueMessage(ctx, rt.initialMessageID) && projectBootstrapRecoverableMaxToolCallFailure(progress) {
+		return false, nil
+	}
 	deferFailure, err := e.shouldDeferRecoverableProjectBootstrapValidation(ctx, rt.session, rt.turn, progress)
 	if err != nil {
 		return false, err
@@ -3919,6 +3922,22 @@ func (e *TurnEngine) handleProjectBootstrapPreflight(ctx context.Context, rt *tu
 		return true, err
 	}
 	return true, nil
+}
+
+func (e *TurnEngine) projectBootstrapAutoContinueMessage(ctx context.Context, messageID uuid.UUID) bool {
+	if e == nil || e.messages == nil || messageID == uuid.Nil {
+		return false
+	}
+	message, err := e.messages.GetByID(ctx, messageID)
+	if err != nil {
+		return false
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectBootstrapSource) {
+		return false
+	}
+	raw, ok := metadata["auto_continue"].(bool)
+	return ok && raw
 }
 
 func (e *TurnEngine) handleRateLimitedTurnFailure(
@@ -4571,6 +4590,27 @@ type projectBootstrapResumeSnapshot struct {
 	AssignmentLine string
 }
 
+func formatBootstrapResumeAgentLabel(agentRecord repo.Agent) string {
+	name := strings.TrimSpace(agentRecord.DisplayName)
+	if name == "" {
+		return ""
+	}
+	parts := []string{}
+	if agentID := strings.TrimSpace(agentRecord.ID.String()); agentID != "" {
+		parts = append(parts, "id="+agentID)
+	}
+	if class := strings.TrimSpace(agentRecord.AgentClass); class != "" {
+		parts = append(parts, "class="+class)
+	}
+	if agentType := strings.TrimSpace(agentRecord.AgentType); agentType != "" {
+		parts = append(parts, "type="+agentType)
+	}
+	if len(parts) == 0 {
+		return name
+	}
+	return fmt.Sprintf("%s (%s)", name, strings.Join(parts, ", "))
+}
+
 func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, projectID uuid.UUID) (projectBootstrapResumeSnapshot, error) {
 	if e == nil || e.assignments == nil || e.agents == nil || projectID == uuid.Nil {
 		return projectBootstrapResumeSnapshot{}, nil
@@ -4600,22 +4640,7 @@ func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, pro
 		if role == "" {
 			role = "worker"
 		}
-		label := name
-		if role == "project_manager" {
-			parts := []string{}
-			if agentID := agentRecord.ID.String(); strings.TrimSpace(agentID) != "" {
-				parts = append(parts, "id="+agentID)
-			}
-			if class := strings.TrimSpace(agentRecord.AgentClass); class != "" {
-				parts = append(parts, "class="+class)
-			}
-			if agentType := strings.TrimSpace(agentRecord.AgentType); agentType != "" {
-				parts = append(parts, "type="+agentType)
-			}
-			if len(parts) > 0 {
-				label = fmt.Sprintf("%s (%s)", name, strings.Join(parts, ", "))
-			}
-		}
+		label := formatBootstrapResumeAgentLabel(agentRecord)
 		grouped[role] = append(grouped[role], label)
 	}
 
@@ -4866,7 +4891,9 @@ func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProg
 	case projectBootstrapFailureCompoundParent, projectBootstrapFailureFirstWaveSize:
 		return true
 	case projectBootstrapFailureFirstWaveExecution:
-		return strings.Contains(strings.ToLower(strings.TrimSpace(progress.ValidationFailureReason)), "bounded size policy")
+		reason := strings.ToLower(strings.TrimSpace(progress.ValidationFailureReason))
+		return strings.Contains(reason, "bounded size policy") ||
+			strings.Contains(reason, "has no assigned agent")
 	default:
 		return false
 	}

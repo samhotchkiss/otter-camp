@@ -2282,6 +2282,12 @@ func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
 	}) {
 		t.Fatal("bounded-size first-wave execution failure should be recoverable")
 	}
+	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 39 (Write photography + brand post titles) has no assigned agent, so bootstrap cannot queue runnable execution",
+	}) {
+		t.Fatal("unassigned first-wave execution failure should be recoverable")
+	}
 	if projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
 		ValidationFailureReason: "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave",
@@ -2728,6 +2734,42 @@ func TestHandleTurnCancelledEventSkipsBootstrapRecoveryWhenValidationAlreadyFail
 	}
 }
 
+func TestProjectBootstrapAutoContinueMessage(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	autoMetadata, err := json.Marshal(map[string]any{
+		"source":        projectBootstrapSource,
+		"auto_continue": true,
+	})
+	if err != nil {
+		t.Fatalf("marshal auto metadata: %v", err)
+	}
+	autoMsg, err := fixture.chat.AppendMessage(context.Background(), chat.AppendMessageInput{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Content:   "Continue the bounded project bootstrap setup workflow now.",
+		Metadata:  autoMetadata,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage auto: %v", err)
+	}
+	if !fixture.engine.projectBootstrapAutoContinueMessage(context.Background(), autoMsg.ID) {
+		t.Fatal("projectBootstrapAutoContinueMessage = false, want true")
+	}
+
+	plainMsg, err := fixture.chat.AppendMessage(context.Background(), chat.AppendMessageInput{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Content:   "continue bootstrap",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage plain: %v", err)
+	}
+	if fixture.engine.projectBootstrapAutoContinueMessage(context.Background(), plainMsg.ID) {
+		t.Fatal("projectBootstrapAutoContinueMessage = true, want false for plain user message")
+	}
+}
+
 func TestCancellationDuringTier2DispatchRequestsRunCancel(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	runStarted := make(chan uuid.UUID, 1)
@@ -3013,7 +3055,10 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	if !strings.Contains(resumeContent, "Active project id: "+fixture.session.ScopeID.String()) {
 		t.Fatalf("resume message = %q, want active project id line", resumeContent)
 	}
-	if !strings.Contains(resumeContent, "Existing active assignments: reviewers=Vivian Cho; workers=Ananya Webb, André Kowalski") {
+	if !strings.Contains(resumeContent, "Existing active assignments:") ||
+		!strings.Contains(resumeContent, "Vivian Cho (id=") ||
+		!strings.Contains(resumeContent, "Ananya Webb (id=") ||
+		!strings.Contains(resumeContent, "André Kowalski (id=") {
 		t.Fatalf("resume message = %q, want assignment roster", resumeContent)
 	}
 	if !strings.Contains(resumeContent, "Do not create duplicate agents or another PM.") {
