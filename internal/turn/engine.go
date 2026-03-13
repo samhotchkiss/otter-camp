@@ -4104,7 +4104,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			if handled, handleErr := e.handleTaskScopedProviderAuthFailure(ctx, rt, err); handled {
 				return handleErr
 			}
-			if errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 				return e.handleCancellation(ctx, rt)
 			}
 			return err
@@ -4151,7 +4151,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 
 		stop, dispatchErr := e.dispatchTools(ctx, rt, response.ToolCalls)
 		if dispatchErr != nil {
-			if errors.Is(dispatchErr, context.Canceled) {
+			if errors.Is(dispatchErr, context.Canceled) && ctx.Err() != nil {
 				return e.handleCancellation(ctx, rt)
 			}
 			return fmt.Errorf("dispatchTools: %w", dispatchErr)

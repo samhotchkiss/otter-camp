@@ -181,6 +181,40 @@ func TestHandleUserMessageSummarizeEnqueueUsesBackgroundPriority(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessagePartialStreamContextCanceledFailsTurnWithoutCancelling(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("partial"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{}, context.Canceled
+	}
+
+	err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("HandleUserMessage err = %v, want context.Canceled", err)
+	}
+	if fixture.chat.cancelCalls != 0 {
+		t.Fatalf("cancel calls = %d, want 0", fixture.chat.cancelCalls)
+	}
+	if fixture.chat.failCalls != 1 {
+		t.Fatalf("fail calls = %d, want 1", fixture.chat.failCalls)
+	}
+	turn := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.Status != "failed" {
+		t.Fatalf("turn status = %q, want failed", turn.Status)
+	}
+}
+
 func TestHandleUserMessageAsyncExecutionSessionIdempotentForStableMessageKey(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
