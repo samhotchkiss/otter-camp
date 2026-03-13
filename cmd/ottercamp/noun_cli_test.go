@@ -61,6 +61,18 @@ func TestRunProjectRelaunchRequiresProjectSelector(t *testing.T) {
 	}
 }
 
+func TestRunProjectArchiveRequiresProjectSelector(t *testing.T) {
+	code, _, stderr := captureCommandOutput(t, func() int {
+		return runProjectArchive([]string{})
+	})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "project archive requires --project-id or --project") {
+		t.Fatalf("stderr = %q, want project selector validation", stderr)
+	}
+}
+
 func TestRunTaskListRequiresProjectSelector(t *testing.T) {
 	code, _, stderr := captureCommandOutput(t, func() int {
 		return runTaskList([]string{})
@@ -198,6 +210,31 @@ func TestRunProjectRelaunchCallsRelaunchEndpoint(t *testing.T) {
 
 	code, stdout, stderr := captureCommandOutput(t, func() int {
 		return runProjectRelaunch([]string{"--server-url", server.URL, "--api-key", "relaunch-key", "--output", "quiet", "--project-id", projectID})
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 stderr=%q", code, stderr)
+	}
+	if got := strings.TrimSpace(stdout); got != projectID {
+		t.Fatalf("stdout = %q, want %q", got, projectID)
+	}
+}
+
+func TestRunProjectArchiveCallsArchiveEndpoint(t *testing.T) {
+	projectID := "11111111-1111-1111-1111-111111111111"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/projects/"+projectID+"/archive" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1/projects/"+projectID+"/archive")
+		}
+		if got := strings.TrimSpace(r.Header.Get("X-API-Key")); got != "archive-key" {
+			t.Fatalf("X-API-Key = %q, want %q", got, "archive-key")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"` + projectID + `","slug":"sam-blog","display_name":"Sam.blog","delivery_mode":"gated","status":"archived"}}`))
+	}))
+	defer server.Close()
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runProjectArchive([]string{"--server-url", server.URL, "--api-key", "archive-key", "--output", "quiet", "--project-id", projectID})
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0 stderr=%q", code, stderr)

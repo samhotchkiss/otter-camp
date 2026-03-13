@@ -99,6 +99,8 @@ func runProjectCommand(args []string) int {
 		return runProjectList(args[1:])
 	case "create":
 		return runProjectCreate(args[1:])
+	case "archive":
+		return runProjectArchive(args[1:])
 	case "relaunch":
 		return runProjectRelaunch(args[1:])
 	default:
@@ -426,6 +428,64 @@ func runProjectRelaunch(args []string) int {
 		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(tw, "ID\tSLUG\tNAME\tMODE\tSTATUS")
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", relaunched.ID, relaunched.Slug, relaunched.DisplayName, relaunched.DeliveryMode, relaunched.Status)
+		_ = tw.Flush()
+		return 0
+	}
+}
+
+func runProjectArchive(args []string) int {
+	flags := flag.NewFlagSet("project archive", flag.ContinueOnError)
+	projectIDFlag := flags.String("project-id", "", "project id")
+	projectSlug := flags.String("project", "", "project slug")
+	outputModeFlag := flags.String("output", defaultOutputMode, "output mode: table|json|quiet")
+	serverURL := flags.String("server-url", "", "server URL override")
+	apiKey := flags.String("api-key", "", "API key override")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "project archive argument error: %v\n", err)
+		return 1
+	}
+
+	projectIDRaw := strings.TrimSpace(*projectIDFlag)
+	projectSlugRaw := strings.TrimSpace(*projectSlug)
+	if projectIDRaw == "" && projectSlugRaw == "" {
+		fmt.Fprintln(os.Stderr, "project archive requires --project-id or --project")
+		return 1
+	}
+
+	outputMode, err := normalizeOutputMode(*outputModeFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "project archive output error: %v\n", err)
+		return 1
+	}
+
+	client, err := newCLIAPIClient(*serverURL, *apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "project archive setup error: %v\n", err)
+		return 1
+	}
+
+	projectID, err := resolveProjectIDForTaskCommands(context.Background(), client, projectIDRaw, projectSlugRaw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "project archive project error: %v\n", err)
+		return 1
+	}
+
+	archived, err := client.archiveProject(context.Background(), projectID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "project archive failed: %v\n", err)
+		return 1
+	}
+
+	switch outputMode {
+	case clitools.OutputModeJSON:
+		return writeJSONEnvelope(map[string]any{"data": archived}, "project archive")
+	case clitools.OutputModeQuiet:
+		fmt.Fprintln(os.Stdout, archived.ID.String())
+		return 0
+	default:
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "ID\tSLUG\tNAME\tMODE\tSTATUS")
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", archived.ID, archived.Slug, archived.DisplayName, archived.DeliveryMode, archived.Status)
 		_ = tw.Flush()
 		return 0
 	}
@@ -805,6 +865,17 @@ func (c *cliAPIClient) relaunchProject(ctx context.Context, projectID string) (*
 	return &resp.Data, nil
 }
 
+func (c *cliAPIClient) archiveProject(ctx context.Context, projectID string) (*cliProject, error) {
+	path := fmt.Sprintf("/v1/projects/%s/archive", url.PathEscape(strings.TrimSpace(projectID)))
+	var resp struct {
+		Data cliProject `json:"data"`
+	}
+	if err := c.request(ctx, http.MethodPost, path, map[string]any{}, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.Data, nil
+}
+
 func (c *cliAPIClient) listTasks(ctx context.Context, projectID string, filter cliTaskListFilter) ([]cliTask, error) {
 	query := url.Values{}
 	if strings.TrimSpace(filter.Status) != "" {
@@ -863,7 +934,7 @@ func printAgentUsage(w *os.File) {
 }
 
 func printProjectUsage(w *os.File) {
-	fmt.Fprintln(w, "usage: ottercamp project <list|create|relaunch> [flags]")
+	fmt.Fprintln(w, "usage: ottercamp project <list|create|archive|relaunch> [flags]")
 }
 
 func printTaskUsage(w *os.File) {

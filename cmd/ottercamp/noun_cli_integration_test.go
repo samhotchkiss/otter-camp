@@ -225,6 +225,49 @@ func TestProjectCreateIntegrationCreatesProjectAndPrintsID(t *testing.T) {
 	}
 }
 
+func TestProjectArchiveIntegrationArchivesProjectAndPrintsID(t *testing.T) {
+	fixture := newNounCLIIntegrationFixture(t)
+	defer fixture.Close()
+
+	restore := setChatCLIEnvForTest(t, fixture.ServerURL, fixture.APIKey, "quiet")
+	defer restore()
+
+	projectRecord, err := repo.NewProjectRepo(fixture.Pool).Create(context.Background(), repo.Project{
+		OrganizationID: fixture.Org.ID,
+		Slug:           "cli-archive-target",
+		DisplayName:    "CLI Archive Target",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    fixture.User.ID,
+	})
+	if err != nil {
+		t.Fatalf("seed project archive target: %v", err)
+	}
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runProjectArchive([]string{"--project-id", projectRecord.ID.String(), "--output", "quiet"})
+	})
+	if code != 0 {
+		t.Fatalf("project archive exit=%d stderr=%q", code, stderr)
+	}
+
+	archivedID, err := uuid.Parse(strings.TrimSpace(stdout))
+	if err != nil {
+		t.Fatalf("project archive output %q is not uuid: %v", stdout, err)
+	}
+	if archivedID != projectRecord.ID {
+		t.Fatalf("archived id = %s, want %s", archivedID, projectRecord.ID)
+	}
+
+	archived, err := repo.NewProjectRepo(fixture.Pool).GetByID(context.Background(), archivedID)
+	if err != nil {
+		t.Fatalf("GetByID archived project %s: %v", archivedID, err)
+	}
+	if archived.Status != "archived" {
+		t.Fatalf("status = %q, want %q", archived.Status, "archived")
+	}
+}
+
 func TestProjectRelaunchIntegrationCreatesRestartProjectAndPrintsID(t *testing.T) {
 	fixture := newNounCLIIntegrationFixture(t)
 	defer fixture.Close()
