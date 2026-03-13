@@ -2934,10 +2934,19 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 	if reason == "" {
 		reason = "bootstrap validation found recoverable bounded work that still needs correction"
 	}
+	recoveryHint := "Correct the persisted task tree by splitting the offending broad parent or first-wave task into narrower executable child tasks, assign every executable child to an existing active project assignee, then continue first-wave selection from those bounded children."
+	lowerReason := strings.ToLower(reason)
+	if strings.Contains(lowerReason, "only ") &&
+		(strings.Contains(lowerReason, "selected first-wave child tasks created flow_node_execution rows") ||
+			strings.Contains(lowerReason, "selected first-wave child tasks produced runnable agent_turn jobs") ||
+			strings.Contains(lowerReason, "selected first-wave child tasks left draft or entered queued execution")) {
+		recoveryHint = "Shrink the selected first wave to a smaller bounded subset of the already-created child tasks so every selected task can leave draft and fully materialize execution. Leave later-wave tasks in draft, keep the staffed task tree intact, and persist the corrected first-wave selection instead of broadening the task tree further."
+	}
 	return fmt.Sprintf(
-		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Recovery target: %s. Do not repeat the same oversized task definitions or re-run the same rejected task.create calls. Every task.create or subtask.create call must include a concrete non-empty title. The bootstrap governance gate task is system-managed: do not edit it, do not try to assign it, and do not try to queue or complete it manually. Keep first-wave execution tasks in draft until the gate auto-completes after validation passes. Frank, Lori, and Ellie are starter-trio governance agents, not project staff, so do not assign them to project roles. The project manager must be a staff PM agent, not a temp agent. Correct the persisted task tree by splitting the offending broad parent or first-wave task into narrower executable child tasks, assign every executable child to an existing active project assignee, then continue first-wave selection from those bounded children. Treat bind-repo-environment as confirming the canonical repo/workspace binding and environment records already present for the project; do not use git.commit or ad hoc cli.execute commands just to satisfy the bootstrap checklist. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
+		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Recovery target: %s. Do not repeat the same oversized task definitions or re-run the same rejected task.create calls. Every task.create or subtask.create call must include a concrete non-empty title. The bootstrap governance gate task is system-managed: do not edit it, do not try to assign it, and do not try to queue or complete it manually. Keep first-wave execution tasks in draft until the gate auto-completes after validation passes. Frank, Lori, and Ellie are starter-trio governance agents, not project staff, so do not assign them to project roles. The project manager must be a staff PM agent, not a temp agent. %s Treat bind-repo-environment as confirming the canonical repo/workspace binding and environment records already present for the project; do not use git.commit or ad hoc cli.execute commands just to satisfy the bootstrap checklist. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
 		autoTurnCount,
 		reason,
+		recoveryHint,
 	)
 }
 
@@ -5040,9 +5049,16 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string
 		if reason == "" {
 			reason = "repair the concrete bootstrap validation blocker named above"
 		}
+		lowerReason := strings.ToLower(reason)
 		lines = append(lines, "Bootstrap is currently blocked on this validation failure: "+reason)
 		lines = append(lines, "Do not start with bootstrap.setup.persist on this turn unless you have already repaired the named blocker. First fix the specific persisted task, assignment, flow attachment, or bounded-size issue named above.")
 		lines = append(lines, "If the failure names an oversized first-wave or parent task, split that exact persisted task into narrower executable child tasks and keep each child bounded. If the failure names an unassigned or flowless first-wave task, fix that exact task directly.")
+		if strings.Contains(lowerReason, "only ") &&
+			(strings.Contains(lowerReason, "selected first-wave child tasks created flow_node_execution rows") ||
+				strings.Contains(lowerReason, "selected first-wave child tasks produced runnable agent_turn jobs") ||
+				strings.Contains(lowerReason, "selected first-wave child tasks left draft or entered queued execution")) {
+			lines = append(lines, "This validation failure means the selected first wave is too large or too broad to materialize cleanly in one pass. Reduce the first wave to a smaller bounded subset of the already-created child tasks, leave later-wave tasks in draft, and then persist the corrected first-wave selection.")
+		}
 		lines = append(lines, "When the named blocker is fixed, resume with bootstrap.setup.persist using only canonical bootstrap setup step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off. Current phase names like first_wave_executions_created are not valid completed_step_slugs.")
 		lines = append(lines, "If first-wave selection is already persisted, do not use raw task.update to force draft first-wave tasks into queued or in_progress. Leave those tasks in draft and let bootstrap.setup.persist plus the bootstrap governance gate handle promotion after validation passes.")
 		lines = append(lines, "Only after the named blocker is repaired should you call bootstrap.setup.persist to record the corrected setup state.")
@@ -5230,7 +5246,11 @@ func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProg
 	case projectBootstrapFailureFirstWaveExecution:
 		reason := strings.ToLower(strings.TrimSpace(progress.ValidationFailureReason))
 		return strings.Contains(reason, "bounded size policy") ||
-			strings.Contains(reason, "has no assigned agent")
+			strings.Contains(reason, "has no assigned agent") ||
+			(strings.Contains(reason, "only ") &&
+				(strings.Contains(reason, "selected first-wave child tasks created flow_node_execution rows") ||
+					strings.Contains(reason, "selected first-wave child tasks produced runnable agent_turn jobs") ||
+					strings.Contains(reason, "selected first-wave child tasks left draft or entered queued execution")))
 	default:
 		return false
 	}

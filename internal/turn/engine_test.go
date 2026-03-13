@@ -2480,6 +2480,12 @@ func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
 	}) {
 		t.Fatal("unassigned first-wave execution failure should be recoverable")
 	}
+	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: only 12 of 20 selected first-wave child tasks created flow_node_execution rows, so bootstrap never materialized the full runnable child wave",
+	}) {
+		t.Fatal("partial first-wave execution materialization should be recoverable")
+	}
 	if projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
 		ValidationFailureReason: "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave",
@@ -3517,6 +3523,21 @@ func TestBuildProjectBootstrapResumeActionPromptForValidationFailure(t *testing.
 	}
 	if !strings.Contains(prompt, "do not use raw task.update to force draft first-wave tasks into queued or in_progress") {
 		t.Fatalf("prompt = %q, want no-manual-promotion guidance", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapResumeActionPromptForPartialFirstWaveMaterialization(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		CurrentPhase:            projectBootstrapCheckpointFirstWaveExecutions,
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: only 12 of 20 selected first-wave child tasks created flow_node_execution rows, so bootstrap never materialized the full runnable child wave",
+	})
+	if !strings.Contains(prompt, "selected first wave is too large or too broad to materialize cleanly in one pass") {
+		t.Fatalf("prompt = %q, want first-wave narrowing guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Reduce the first wave to a smaller bounded subset of the already-created child tasks") {
+		t.Fatalf("prompt = %q, want smaller first-wave guidance", prompt)
 	}
 }
 
