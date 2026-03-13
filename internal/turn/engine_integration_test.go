@@ -43,6 +43,19 @@ type failSpecificQueueTransitionService struct {
 	failTaskID uuid.UUID
 }
 
+type noopCompleteChatService struct {
+	chat.ChatService
+	remaining int
+}
+
+func (n *noopCompleteChatService) CompleteTurn(ctx context.Context, turnID uuid.UUID) error {
+	if n != nil && n.remaining > 0 {
+		n.remaining--
+		return nil
+	}
+	return n.ChatService.CompleteTurn(ctx, turnID)
+}
+
 func (f *failSpecificQueueTransitionService) TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
 	if f.base == nil {
 		return nil, errors.New("missing base transition service")
@@ -12530,6 +12543,72 @@ func TestTurnEngineIntegrationMaxToolCallsSetsStopReason(t *testing.T) {
 	last := turns[len(turns)-1]
 	if last.StopReason == nil || *last.StopReason != stopReasonMaxToolCalls {
 		t.Fatalf("turn stop_reason = %v, want %q", last.StopReason, stopReasonMaxToolCalls)
+	}
+}
+
+func TestTurnEngineIntegrationMaxToolCallsRecoversLeakedCompletionHandoff(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	fixture.engine.maxToolCalls = 1
+	fixture.engine.chat = &noopCompleteChatService{ChatService: fixture.chatService, remaining: 1}
+
+	call := 0
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: "summary"}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		call++
+		if call == 1 {
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "tool-1", Name: "memory.query", Tier: "tier1"},
+				{ID: "tool-2", Name: "memory.query", Tier: "tier1"},
+			}}, nil
+		}
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) < 2 {
+		t.Fatalf("turn count = %d, want >= 2 after continuation", len(turns))
+	}
+	var recovered bool
+	for _, turn := range turns {
+		if turn.Status == "in_progress" {
+			t.Fatalf("turn %s leaked in_progress after continuation recovery", turn.ID)
+		}
+		if turn.StopReason != nil && *turn.StopReason == stopReasonMaxToolCalls && turn.Status == "failed" {
+			recovered = true
+		}
+	}
+	if !recovered {
+		t.Fatal("expected a failed max_tool_calls turn recovered from leaked completion handoff")
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	foundRecoveryMessage := false
+	for _, message := range messages {
+		if message.Role == "system" && strings.Contains(message.Content, "Recovered leaked in-progress turn after max-tool-calls handoff") {
+			foundRecoveryMessage = true
+			break
+		}
+	}
+	if !foundRecoveryMessage {
+		t.Fatal("expected leaked max-tool-calls recovery system message")
 	}
 }
 
