@@ -268,6 +268,62 @@ func TestProjectArchiveIntegrationArchivesProjectAndPrintsID(t *testing.T) {
 	}
 }
 
+func TestProjectArchiveSlugPrefixIntegrationArchivesMatchingProjects(t *testing.T) {
+	fixture := newNounCLIIntegrationFixture(t)
+	defer fixture.Close()
+
+	restore := setChatCLIEnvForTest(t, fixture.ServerURL, fixture.APIKey, "quiet")
+	defer restore()
+
+	projectRepo := repo.NewProjectRepo(fixture.Pool)
+	seed := func(slug string) repo.Project {
+		projectRecord, err := projectRepo.Create(context.Background(), repo.Project{
+			OrganizationID: fixture.Org.ID,
+			Slug:           slug,
+			DisplayName:    "Sam.blog",
+			DeliveryMode:   "gated",
+			CreatedByType:  "human_user",
+			CreatedByID:    fixture.User.ID,
+		})
+		if err != nil {
+			t.Fatalf("seed project %s: %v", slug, err)
+		}
+		return projectRecord
+	}
+	first := seed("sam-blog-batch-1")
+	second := seed("sam-blog-batch-2")
+	other := seed("other-project")
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runProjectArchive([]string{"--slug-prefix", "sam-blog-batch", "--yes", "--output", "quiet"})
+	})
+	if code != 0 {
+		t.Fatalf("project archive batch exit=%d stderr=%q", code, stderr)
+	}
+	lines := strings.Fields(strings.TrimSpace(stdout))
+	if len(lines) != 2 {
+		t.Fatalf("stdout lines = %q, want 2 archived ids", stdout)
+	}
+
+	for _, id := range []uuid.UUID{first.ID, second.ID} {
+		archived, err := projectRepo.GetByID(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetByID archived project %s: %v", id, err)
+		}
+		if archived.Status != "archived" {
+			t.Fatalf("status for %s = %q, want %q", id, archived.Status, "archived")
+		}
+	}
+
+	untouched, err := projectRepo.GetByID(context.Background(), other.ID)
+	if err != nil {
+		t.Fatalf("GetByID untouched project %s: %v", other.ID, err)
+	}
+	if untouched.Status != "active" {
+		t.Fatalf("status for %s = %q, want %q", other.ID, untouched.Status, "active")
+	}
+}
+
 func TestProjectRelaunchIntegrationCreatesRestartProjectAndPrintsID(t *testing.T) {
 	fixture := newNounCLIIntegrationFixture(t)
 	defer fixture.Close()

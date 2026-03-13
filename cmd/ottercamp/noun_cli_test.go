@@ -68,8 +68,20 @@ func TestRunProjectArchiveRequiresProjectSelector(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(stderr, "project archive requires --project-id or --project") {
+	if !strings.Contains(stderr, "project archive requires --project-id, --project, or --slug-prefix") {
 		t.Fatalf("stderr = %q, want project selector validation", stderr)
+	}
+}
+
+func TestRunProjectArchiveSlugPrefixRequiresYes(t *testing.T) {
+	code, _, stderr := captureCommandOutput(t, func() int {
+		return runProjectArchive([]string{"--slug-prefix", "sam-blog"})
+	})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "project archive with --slug-prefix requires --yes") {
+		t.Fatalf("stderr = %q, want confirmation validation", stderr)
 	}
 }
 
@@ -241,5 +253,48 @@ func TestRunProjectArchiveCallsArchiveEndpoint(t *testing.T) {
 	}
 	if got := strings.TrimSpace(stdout); got != projectID {
 		t.Fatalf("stdout = %q, want %q", got, projectID)
+	}
+}
+
+func TestRunProjectArchiveSlugPrefixCallsListAndArchiveEndpoints(t *testing.T) {
+	projectIDs := []string{
+		"11111111-1111-1111-1111-111111111111",
+		"22222222-2222-2222-2222-222222222222",
+	}
+	archiveCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/projects":
+			if got := r.URL.Query().Get("slug_prefix"); got != "sam-blog" {
+				t.Fatalf("slug_prefix = %q, want %q", got, "sam-blog")
+			}
+			if got := r.URL.Query().Get("status"); got != "active" {
+				t.Fatalf("status = %q, want %q", got, "active")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"` + projectIDs[0] + `","slug":"sam-blog-1","display_name":"Sam.blog","delivery_mode":"gated","status":"active"},{"id":"` + projectIDs[1] + `","slug":"sam-blog-2","display_name":"Sam.blog","delivery_mode":"gated","status":"active"}]}`))
+		case "/v1/projects/" + projectIDs[0] + "/archive", "/v1/projects/" + projectIDs[1] + "/archive":
+			archiveCalls++
+			w.Header().Set("Content-Type", "application/json")
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/projects/"), "/archive")
+			_, _ = w.Write([]byte(`{"data":{"id":"` + id + `","slug":"sam-blog","display_name":"Sam.blog","delivery_mode":"gated","status":"archived"}}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runProjectArchive([]string{"--server-url", server.URL, "--api-key", "archive-key", "--output", "quiet", "--slug-prefix", "sam-blog", "--yes"})
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 stderr=%q", code, stderr)
+	}
+	lines := strings.Fields(strings.TrimSpace(stdout))
+	if len(lines) != 2 {
+		t.Fatalf("stdout lines = %q, want 2 ids", stdout)
+	}
+	if archiveCalls != 2 {
+		t.Fatalf("archiveCalls = %d, want 2", archiveCalls)
 	}
 }

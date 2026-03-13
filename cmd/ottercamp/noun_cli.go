@@ -62,6 +62,7 @@ type cliAgentListFilter struct {
 
 type cliProjectListFilter struct {
 	SlugPrefix string
+	Status     string
 	Limit      int
 }
 
@@ -437,6 +438,9 @@ func runProjectArchive(args []string) int {
 	flags := flag.NewFlagSet("project archive", flag.ContinueOnError)
 	projectIDFlag := flags.String("project-id", "", "project id")
 	projectSlug := flags.String("project", "", "project slug")
+	slugPrefix := flags.String("slug-prefix", "", "archive all matching projects by slug prefix")
+	statusFilter := flags.String("status", "active", "status filter for --slug-prefix: active|archived|all")
+	confirm := flags.Bool("yes", false, "confirm batch archive when using --slug-prefix")
 	outputModeFlag := flags.String("output", defaultOutputMode, "output mode: table|json|quiet")
 	serverURL := flags.String("server-url", "", "server URL override")
 	apiKey := flags.String("api-key", "", "API key override")
@@ -447,8 +451,25 @@ func runProjectArchive(args []string) int {
 
 	projectIDRaw := strings.TrimSpace(*projectIDFlag)
 	projectSlugRaw := strings.TrimSpace(*projectSlug)
-	if projectIDRaw == "" && projectSlugRaw == "" {
-		fmt.Fprintln(os.Stderr, "project archive requires --project-id or --project")
+	slugPrefixRaw := strings.TrimSpace(*slugPrefix)
+	if projectIDRaw == "" && projectSlugRaw == "" && slugPrefixRaw == "" {
+		fmt.Fprintln(os.Stderr, "project archive requires --project-id, --project, or --slug-prefix")
+		return 1
+	}
+	if slugPrefixRaw != "" && (projectIDRaw != "" || projectSlugRaw != "") {
+		fmt.Fprintln(os.Stderr, "project archive accepts either a single project selector or --slug-prefix, not both")
+		return 1
+	}
+	normalizedStatus := strings.ToLower(strings.TrimSpace(*statusFilter))
+	if normalizedStatus == "" {
+		normalizedStatus = "active"
+	}
+	if normalizedStatus != "active" && normalizedStatus != "archived" && normalizedStatus != "all" {
+		fmt.Fprintln(os.Stderr, "project archive --status must be active, archived, or all")
+		return 1
+	}
+	if slugPrefixRaw != "" && !*confirm {
+		fmt.Fprintln(os.Stderr, "project archive with --slug-prefix requires --yes")
 		return 1
 	}
 
@@ -464,28 +485,60 @@ func runProjectArchive(args []string) int {
 		return 1
 	}
 
-	projectID, err := resolveProjectIDForTaskCommands(context.Background(), client, projectIDRaw, projectSlugRaw)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "project archive project error: %v\n", err)
-		return 1
-	}
-
-	archived, err := client.archiveProject(context.Background(), projectID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "project archive failed: %v\n", err)
-		return 1
+	archivedProjects := make([]cliProject, 0, 1)
+	if slugPrefixRaw != "" {
+		items, listErr := client.listProjects(context.Background(), cliProjectListFilter{
+			SlugPrefix: slugPrefixRaw,
+			Status:     normalizedStatus,
+			Limit:      500,
+		})
+		if listErr != nil {
+			fmt.Fprintf(os.Stderr, "project archive list failed: %v\n", listErr)
+			return 1
+		}
+		if len(items) == 0 {
+			fmt.Fprintf(os.Stderr, "project archive found no projects for slug prefix %q\n", slugPrefixRaw)
+			return 1
+		}
+		for _, item := range items {
+			archived, archiveErr := client.archiveProject(context.Background(), item.ID.String())
+			if archiveErr != nil {
+				fmt.Fprintf(os.Stderr, "project archive failed for %s: %v\n", item.ID, archiveErr)
+				return 1
+			}
+			archivedProjects = append(archivedProjects, *archived)
+		}
+	} else {
+		projectID, resolveErr := resolveProjectIDForTaskCommands(context.Background(), client, projectIDRaw, projectSlugRaw)
+		if resolveErr != nil {
+			fmt.Fprintf(os.Stderr, "project archive project error: %v\n", resolveErr)
+			return 1
+		}
+		archived, archiveErr := client.archiveProject(context.Background(), projectID)
+		if archiveErr != nil {
+			fmt.Fprintf(os.Stderr, "project archive failed: %v\n", archiveErr)
+			return 1
+		}
+		archivedProjects = append(archivedProjects, *archived)
 	}
 
 	switch outputMode {
 	case clitools.OutputModeJSON:
-		return writeJSONEnvelope(map[string]any{"data": archived}, "project archive")
+		if len(archivedProjects) == 1 {
+			return writeJSONEnvelope(map[string]any{"data": archivedProjects[0]}, "project archive")
+		}
+		return writeJSONEnvelope(map[string]any{"data": archivedProjects}, "project archive")
 	case clitools.OutputModeQuiet:
-		fmt.Fprintln(os.Stdout, archived.ID.String())
+		for _, item := range archivedProjects {
+			fmt.Fprintln(os.Stdout, item.ID.String())
+		}
 		return 0
 	default:
 		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(tw, "ID\tSLUG\tNAME\tMODE\tSTATUS")
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", archived.ID, archived.Slug, archived.DisplayName, archived.DeliveryMode, archived.Status)
+		for _, item := range archivedProjects {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", item.ID, item.Slug, item.DisplayName, item.DeliveryMode, item.Status)
+		}
 		_ = tw.Flush()
 		return 0
 	}
@@ -826,6 +879,9 @@ func (c *cliAPIClient) listProjects(ctx context.Context, filter cliProjectListFi
 	query := url.Values{}
 	if strings.TrimSpace(filter.SlugPrefix) != "" {
 		query.Set("slug_prefix", strings.TrimSpace(filter.SlugPrefix))
+	}
+	if strings.TrimSpace(filter.Status) != "" {
+		query.Set("status", strings.TrimSpace(filter.Status))
 	}
 	if filter.Limit > 0 {
 		query.Set("limit", strconv.Itoa(filter.Limit))
