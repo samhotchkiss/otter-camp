@@ -1243,11 +1243,19 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	if err != nil {
 		return err
 	}
-	normalizeProjectBootstrapValidationFailure(&progress, projectBootstrapNarrativeClaimsCompletion(assistant))
-	if projectBootstrapNarrativeClaimsCompletion(assistant) && !progress.Materialized() {
+	narrativeClaimedCompletion := projectBootstrapNarrativeClaimsCompletion(assistant)
+	normalizeProjectBootstrapValidationFailure(&progress, narrativeClaimedCompletion)
+	if narrativeClaimedCompletion && !progress.Materialized() {
 		rt := &turnRuntime{session: session, turn: &chat.ChatTurn{ID: turnID}}
 		if latestCompleted.RespondingID != uuid.Nil {
 			rt.agent.ID = latestCompleted.RespondingID
+		}
+		if progress.ValidationFailed() {
+			if handled, recoverErr := e.continueRecoverableProjectBootstrapValidation(ctx, rt, state, progress, now, false); recoverErr != nil {
+				return recoverErr
+			} else if handled {
+				return nil
+			}
 		}
 		return e.failProjectBootstrapValidation(ctx, rt, progress, now)
 	}

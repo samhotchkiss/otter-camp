@@ -11384,7 +11384,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationForNonRunnableFirst
 	}
 }
 
-func TestTurnEngineIntegrationProjectBootstrapFailsValidationForUnassignedFirstWaveTask(t *testing.T) {
+func TestTurnEngineIntegrationProjectBootstrapRecoversUnassignedFirstWaveTask(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
@@ -11409,7 +11409,7 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationForUnassignedFirstW
 				Tier: "tier1",
 			}}}, nil
 		default:
-			return ModelResponse{Content: "Bootstrap setup is persisted."}, nil
+			return ModelResponse{Content: "Bootstrap Complete\n- staffing persisted\n- task tree documented\n- first wave ready"}, nil
 		}
 	}
 
@@ -11476,35 +11476,39 @@ func TestTurnEngineIntegrationProjectBootstrapFailsValidationForUnassignedFirstW
 		t.Fatalf("HandleTurnCompletedEvent follow-on bootstrap turn: %v", err)
 	}
 
-	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 0 {
-		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 0 after unassigned-first-wave validation failure", jobs)
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 recovery continuation after unassigned-first-wave validation failure", jobs)
 	}
 
 	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
 	if err != nil {
 		t.Fatalf("GetByID project session: %v", err)
 	}
+	if storedSession.Status != "active" {
+		t.Fatalf("project session status = %q, want active", storedSession.Status)
+	}
 	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
-	if bootstrapState.Status != projectBootstrapStatusFailed {
-		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusActive)
 	}
-	if bootstrapState.ValidationStatus != projectBootstrapValidationFailed {
-		t.Fatalf("bootstrap validation_status = %q, want %q", bootstrapState.ValidationStatus, projectBootstrapValidationFailed)
+	if bootstrapState.ValidationStatus != "" {
+		t.Fatalf("bootstrap validation_status = %q, want cleared recoverable state", bootstrapState.ValidationStatus)
 	}
-	if bootstrapState.FailureClass != projectBootstrapFailureFirstWaveExecution {
-		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureFirstWaveExecution)
+	if bootstrapState.FailureClass != "" {
+		t.Fatalf("bootstrap failure_class = %q, want cleared recoverable failure class", bootstrapState.FailureClass)
 	}
-	if !strings.Contains(bootstrapState.ValidationFailureReason, "has no assigned agent") {
-		t.Fatalf("bootstrap validation_failure_reason = %q, want missing-assignee detail", bootstrapState.ValidationFailureReason)
+	if bootstrapState.ValidationFailureReason != "" {
+		t.Fatalf("bootstrap validation_failure_reason = %q, want cleared recoverable failure reason", bootstrapState.ValidationFailureReason)
 	}
-	if len(bootstrapState.ValidationFindings) != 1 {
-		t.Fatalf("bootstrap validation_findings = %d, want 1", len(bootstrapState.ValidationFindings))
+	if bootstrapState.FirstWaveTaskCount != 1 {
+		t.Fatalf("bootstrap first_wave_task_count = %d, want 1", bootstrapState.FirstWaveTaskCount)
 	}
-	if bootstrapState.ValidationFindings[0].Category != projectBootstrapFindingCategoryExecutionShape {
-		t.Fatalf("bootstrap validation finding category = %q, want %q", bootstrapState.ValidationFindings[0].Category, projectBootstrapFindingCategoryExecutionShape)
+	if bootstrapState.AutoTurnCount == 0 {
+		t.Fatalf("bootstrap auto_turn_count = %d, want recovery continuation attempt recorded", bootstrapState.AutoTurnCount)
 	}
-	if bootstrapState.ValidationFindings[0].Code != "first_wave_assignments_missing" {
-		t.Fatalf("bootstrap validation finding code = %q, want %q", bootstrapState.ValidationFindings[0].Code, "first_wave_assignments_missing")
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if storedProject.Status == "archived" {
+		t.Fatalf("project status = %q, want project to remain active for recovery", storedProject.Status)
 	}
 }
 
@@ -12176,7 +12180,6 @@ func TestTurnEngineIntegrationProjectBootstrapNarrativeCannotOverrideMissingFirs
 	if bootstrapState.FirstWaveExecutionCount != 0 || bootstrapState.FirstWaveJobCount != 0 {
 		t.Fatalf("bootstrap first-wave counts = %+v, want zero execution/job counts", bootstrapState)
 	}
-
 	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
 	if storedProject.Status != "archived" {
 		t.Fatalf("project status = %q, want archived", storedProject.Status)
