@@ -4879,9 +4879,21 @@ func projectBootstrapResumeShouldRootAtResumeMessage(state projectBootstrapState
 
 func projectBootstrapResumePhaseGuidance(state projectBootstrapState) string {
 	if projectBootstrapResumeUsesCompactRoster(state) {
-		return "Continue bootstrap only from the persisted first-wave state. Do not create more agents, parent tasks, or broad child-task batches unless a concrete persisted task is still invalid or unassigned. Reuse the existing staffed task tree, keep the bootstrap governance gate task untouched, keep first-wave execution tasks in draft until the gate auto-completes after validation passes, and finish any remaining task assignment, flow attachment, or first-wave promotion using the persisted tasks already on the project. Do not restart the project or ask the user to restate the request."
+		guidance := "Continue bootstrap only from the persisted first-wave state. Do not create more agents, parent tasks, or broad child-task batches unless a concrete persisted task is still invalid or unassigned. Reuse the existing staffed task tree, keep the bootstrap governance gate task untouched, keep first-wave execution tasks in draft until the gate auto-completes after validation passes, and finish any remaining task assignment, flow attachment, or first-wave promotion using the persisted tasks already on the project."
+		if projectBootstrapResumeNeedsSetupPersist(state) {
+			guidance += " Bootstrap checklist steps are persisted through the bootstrap.setup.persist tool, not raw task.update status changes. If the persisted setup work is already complete, call bootstrap.setup.persist with completed_step_slugs for bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off; include sign_off_summary when recording Frank approval."
+		}
+		return guidance + " Do not restart the project or ask the user to restate the request."
 	}
 	return "Continue bootstrap only. Reuse the existing persisted PM and assigned agents unless a required role is still missing. Do not create duplicate agents or another PM. The bootstrap governance gate task is system-managed: do not edit it, do not try to assign it, and do not try to queue or complete it manually. Keep first-wave execution tasks in draft until the gate auto-completes after validation passes. The project manager must be a staff PM agent, not a temp agent. Finish staffing, bounded task decomposition, task assignment, flow attachment, and first-wave selection/promotion. Every executable non-bootstrap task must have an assigned active project agent before you promote or queue it. Do not restart the project or ask the user to restate the request."
+}
+
+func projectBootstrapResumeNeedsSetupPersist(state projectBootstrapState) bool {
+	return state.ValidationStatus == projectBootstrapValidationPassed &&
+		state.BootstrapTaskOutstanding &&
+		strings.TrimSpace(state.BootstrapTaskID) != "" &&
+		state.FirstWaveTaskCount > 0 &&
+		state.FirstWavePromotedCount == 0
 }
 
 func (e *TurnEngine) appendContentMigrationCheckpoint(ctx context.Context, rt *turnRuntime) (bool, error) {

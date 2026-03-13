@@ -3097,12 +3097,15 @@ func TestBuildProjectBootstrapResumeStateMessageUsesCompactRosterForLateFirstWav
 	state := projectBootstrapState{
 		CurrentPhase:              projectBootstrapCheckpointFirstWaveExecutions,
 		LastSuccessfulCheckpoint:  projectBootstrapCheckpointFirstWaveSelected,
+		BootstrapTaskID:           uuid.NewString(),
+		BootstrapTaskOutstanding:  true,
 		AssignmentCount:           6,
 		PlannedTaskCount:          18,
 		PlannedFlowTemplateCount:  1,
 		FirstWaveTaskCount:        8,
 		FirstWavePromotedCount:    0,
 		FirstWaveJobCount:         0,
+		ValidationStatus:          projectBootstrapValidationPassed,
 	}
 	snapshot := projectBootstrapResumeSnapshot{
 		ProjectID:      uuid.NewString(),
@@ -3123,6 +3126,35 @@ func TestBuildProjectBootstrapResumeStateMessageUsesCompactRosterForLateFirstWav
 	}
 	if !strings.Contains(resumeContent, "keep the bootstrap governance gate task untouched") {
 		t.Fatalf("resume message = %q, want compact governance guidance", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "bootstrap.setup.persist tool") {
+		t.Fatalf("resume message = %q, want setup persist tool guidance", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "not raw task.update status changes") {
+		t.Fatalf("resume message = %q, want raw task.update warning", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "completed_step_slugs for bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off") {
+		t.Fatalf("resume message = %q, want canonical bootstrap step slugs", resumeContent)
+	}
+	if !strings.Contains(resumeContent, "include sign_off_summary when recording Frank approval") {
+		t.Fatalf("resume message = %q, want Frank sign-off guidance", resumeContent)
+	}
+}
+
+func TestProjectBootstrapResumeNeedsSetupPersist(t *testing.T) {
+	state := projectBootstrapState{
+		BootstrapTaskID:          uuid.NewString(),
+		BootstrapTaskOutstanding: true,
+		FirstWaveTaskCount:       4,
+		ValidationStatus:         projectBootstrapValidationPassed,
+	}
+	if !projectBootstrapResumeNeedsSetupPersist(state) {
+		t.Fatal("resume state should require setup persist guidance when validation passed but bootstrap gate is still outstanding")
+	}
+
+	state.FirstWavePromotedCount = 1
+	if projectBootstrapResumeNeedsSetupPersist(state) {
+		t.Fatal("resume state should not require setup persist guidance after first-wave promotion has started")
 	}
 }
 
