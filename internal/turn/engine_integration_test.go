@@ -15332,6 +15332,211 @@ func TestTurnEngineIntegrationRecoverCancelledBootstrapSessionsRequeuesWhenConti
 	}
 }
 
+func TestTurnEngineIntegrationRecoverCancelledBootstrapSessionsRequeuesWhileBootstrapGateOutstanding(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, pmAgent.ID, fixture.user.ID)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID, pmAgent.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: resume the active bootstrap workflow from persisted state.")
+
+	repoPath, err := workspace.ProjectRoot("", project.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE project_environment
+		SET repo_path = $2,
+		    is_active = true
+		WHERE project_id = $1
+		  AND name = 'workspace'
+	`, project.ID, repoPath); err != nil {
+		t.Fatalf("seed repo binding environment: %v", err)
+	}
+
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	parentDescription := "Coordinate the first execution wave without doing the implementation work in the parent."
+	parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "First-wave orchestration parent",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	childDescription := "Implement the first bounded child slice."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Define the first execution slice",
+		Description:     &childDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+	}); err != nil {
+		t.Fatalf("Create child task: %v", err)
+	}
+
+	turn, err := fixture.chatService.CreateTurn(ctx, projectSession.ID, lori.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn cancelled bootstrap: %v", err)
+	}
+
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE chat_session
+		SET current_turn_id = NULL,
+		    metadata = $2::jsonb
+		WHERE id = $1
+	`, projectSession.ID, metadata); err != nil {
+		t.Fatalf("seed bootstrap session metadata: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET status = 'cancelled',
+		    completed_at = now()
+		WHERE id = $1
+	`, turn.ID); err != nil {
+		t.Fatalf("seed cancelled turn: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if !progress.WaitingForBootstrapGate() {
+		t.Fatal("expected bootstrap progress to be waiting for the governance gate")
+	}
+	if progress.ValidationFailed() {
+		t.Fatalf("bootstrap progress unexpectedly failed validation: %s", progress.ValidationFailureReason)
+	}
+
+	recovered, err := fixture.engine.RecoverCancelledBootstrapSessions(ctx)
+	if err != nil {
+		t.Fatalf("RecoverCancelledBootstrapSessions: %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("recovered cancelled bootstrap sessions = %d, want 1", recovered)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1", jobs)
+	}
+}
+
+func TestTurnEngineIntegrationRecoverCancelledBootstrapSessionsRequeuesActiveValidationRepair(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, pmAgent.ID, fixture.user.ID)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID, pmAgent.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: resume the active bootstrap workflow from persisted state.")
+
+	repoPath, err := workspace.ProjectRoot("", project.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE project_environment
+		SET repo_path = $2,
+		    is_active = true
+		WHERE project_id = $1
+		  AND name = 'workspace'
+	`, project.ID, repoPath); err != nil {
+		t.Fatalf("seed repo binding environment: %v", err)
+	}
+
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	description := "Implement the first bounded child slice."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Define the first execution slice",
+		Description:    &description,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	}); err != nil {
+		t.Fatalf("Create unassigned child task: %v", err)
+	}
+
+	turn, err := fixture.chatService.CreateTurn(ctx, projectSession.ID, lori.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn cancelled bootstrap: %v", err)
+	}
+
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE chat_session
+		SET current_turn_id = NULL,
+		    metadata = $2::jsonb
+		WHERE id = $1
+	`, projectSession.ID, metadata); err != nil {
+		t.Fatalf("seed bootstrap session metadata: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET status = 'cancelled',
+		    completed_at = now()
+		WHERE id = $1
+	`, turn.ID); err != nil {
+		t.Fatalf("seed cancelled turn: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if !progress.ValidationFailed() {
+		t.Fatal("expected bootstrap progress to fail validation for the unassigned first-wave task")
+	}
+	if progress.ValidationFailureClass != projectBootstrapFailureFirstWaveExecution {
+		t.Fatalf("validation failure class = %q, want %q", progress.ValidationFailureClass, projectBootstrapFailureFirstWaveExecution)
+	}
+
+	recovered, err := fixture.engine.RecoverCancelledBootstrapSessions(ctx)
+	if err != nil {
+		t.Fatalf("RecoverCancelledBootstrapSessions: %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("recovered cancelled bootstrap sessions = %d, want 1", recovered)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1", jobs)
+	}
+}
+
 func TestTurnEngineIntegrationReactionFeedbackAdjustsMemoryConfidence(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {

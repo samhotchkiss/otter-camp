@@ -1428,7 +1428,7 @@ func (e *TurnEngine) handleProjectBootstrapCancelledTurn(ctx context.Context, se
 	if err != nil {
 		return err
 	}
-	if progress.Materialized() || progress.ValidationFailed() || progress.WaitingForBootstrapGate() {
+	if progress.Materialized() {
 		return nil
 	}
 
