@@ -440,7 +440,7 @@ func applyProjectBootstrapRetryFailureState(settings json.RawMessage, bundle pro
 	return projectfailure.Apply(settings, state)
 }
 
-func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, archivedProject repo.Project, record projectAutomaticFailureRecord) error {
+func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, archivedProject repo.Project, record projectAutomaticFailureRecord, allowBudgetBypass bool) error {
 	if e == nil || e.pool == nil || e.events == nil {
 		return nil
 	}
@@ -508,7 +508,7 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 	if _, err := projectRepo.Update(ctx, updatedProject); err != nil {
 		return err
 	}
-	if bundle.RetryAttemptCount >= bundle.RetryBudget {
+	if bundle.RetryAttemptCount >= bundle.RetryBudget && !allowBudgetBypass {
 		return nil
 	}
 
@@ -687,7 +687,7 @@ func (e *TurnEngine) RelaunchArchivedBootstrapProject(ctx context.Context, proje
 		SetupPersisted:           failureState.SetupPersisted,
 		RecordedAt:               recordedAt,
 	}
-	if err := e.maybeRestartArchivedBootstrapProject(ctx, archivedProject, record); err != nil {
+	if err := e.maybeRestartArchivedBootstrapProject(ctx, archivedProject, record, true); err != nil {
 		return nil, err
 	}
 

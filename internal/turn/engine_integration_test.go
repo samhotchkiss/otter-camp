@@ -9499,7 +9499,7 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 		FailureReason:            initialFailureState.FailureReason,
 		SetupPersisted:           initialFailureState.SetupPersisted,
 		RecordedAt:               time.Now().UTC(),
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("maybeRestartArchivedBootstrapProject stale retry replay: %v", err)
 	}
 	projectsAfterReplay, err := repo.NewProjectRepo(fixture.pool).ListAll(ctx, fixture.org.ID)
@@ -9727,6 +9727,97 @@ func TestTurnEngineIntegrationRelaunchArchivedBootstrapProjectReturnsActiveResta
 	bundle := mustProjectBootstrapRestartBundle(t, archived)
 	if strings.TrimSpace(bundle.RestartProjectID) != restarted.ID.String() {
 		t.Fatalf("restart_project_id = %q, want %q", bundle.RestartProjectID, restarted.ID.String())
+	}
+}
+
+func TestTurnEngineIntegrationRelaunchArchivedBootstrapProjectBypassesExhaustedRetryBudget(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: restart this project from the canonical bundle and move directly into runnable bootstrap work.")
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "bootstrap.setup.persist", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will restart bootstrap setup."}, nil
+		case 2:
+			return ModelResponse{Content: "The canonical bootstrap scaffold is already present. I will keep coordinating from here."}, nil
+		default:
+			return ModelResponse{Content: "unexpected restart follow-on turn"}, nil
+		}
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial stalled bootstrap turn: %v", err)
+	}
+	runBootstrapFollowOnCycleToFailure(t, ctx, fixture, projectSession.ID)
+
+	initialArchived := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	initialBundle := mustProjectBootstrapRestartBundle(t, initialArchived)
+	restartProjectID, err := uuid.Parse(initialBundle.RestartProjectID)
+	if err != nil {
+		t.Fatalf("Parse restart project id: %v", err)
+	}
+
+	restartProject := mustGetProjectByID(t, ctx, fixture.pool, restartProjectID)
+	restartBundle := mustProjectBootstrapRestartBundle(t, restartProject)
+	restartBundle.RetryBudget = 1
+	restartProject.Settings, err = applyProjectBootstrapRestartBundle(restartProject.Settings, restartBundle)
+	if err != nil {
+		t.Fatalf("apply restart retry budget: %v", err)
+	}
+	if _, err := repo.NewProjectRepo(fixture.pool).Update(ctx, restartProject); err != nil {
+		t.Fatalf("Update restart retry budget: %v", err)
+	}
+
+	restartSession := mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restartProject.ID)
+	restartJobID, restartPayload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, restartSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, restartPayload.SessionID, restartPayload.MessageID, restartPayload.AgentID, restartPayload.RetryCount, &restartJobID); err != nil {
+		t.Fatalf("handleUserMessage restart scaffold-only turn: %v", err)
+	}
+
+	restartTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, restartSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": restartSession.ID.String(), "turn_id": restartTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent restart scaffold-only turn: %v", err)
+	}
+
+	restartArchived := mustGetProjectByID(t, ctx, fixture.pool, restartProject.ID)
+	if restartArchived.Status != "archived" {
+		t.Fatalf("restart project status = %q, want archived", restartArchived.Status)
+	}
+
+	relaunched, err := fixture.engine.RelaunchArchivedBootstrapProject(ctx, restartArchived.ID)
+	if err != nil {
+		t.Fatalf("RelaunchArchivedBootstrapProject exhausted budget: %v", err)
+	}
+	if relaunched == nil {
+		t.Fatal("RelaunchArchivedBootstrapProject exhausted budget returned nil project")
+	}
+	if relaunched.ID == restartArchived.ID {
+		t.Fatal("RelaunchArchivedBootstrapProject exhausted budget returned archived project")
+	}
+	if relaunched.Status != "active" {
+		t.Fatalf("relaunched project status = %q, want active", relaunched.Status)
+	}
+
+	updatedArchived := mustGetProjectByID(t, ctx, fixture.pool, restartArchived.ID)
+	updatedBundle := mustProjectBootstrapRestartBundle(t, updatedArchived)
+	if strings.TrimSpace(updatedBundle.RestartProjectID) != relaunched.ID.String() {
+		t.Fatalf("restart_project_id = %q, want %q", updatedBundle.RestartProjectID, relaunched.ID.String())
+	}
+	if updatedBundle.RetryAttemptCount != 2 {
+		t.Fatalf("retry_attempt_count = %d, want 2 after manual over-budget relaunch", updatedBundle.RetryAttemptCount)
 	}
 }
 

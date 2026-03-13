@@ -3220,7 +3220,7 @@ func (e *TurnEngine) applyProjectAutomaticFailure(ctx context.Context, projectID
 		if archived != nil {
 			updated = *archived
 		}
-		return e.maybeRestartArchivedBootstrapProject(ctx, updated, record)
+		return e.maybeRestartArchivedBootstrapProject(ctx, updated, record, false)
 	case projectFailureActionPause:
 		if strings.EqualFold(strings.TrimSpace(projectRecord.Status), "archived") {
 			return nil
