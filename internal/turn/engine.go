@@ -5429,6 +5429,9 @@ func isChatTurnStopReasonConstraintError(err error) bool {
 }
 
 func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, assembled *prompt.AssembledPrompt) (bool, error) {
+	if rt != nil && rt.session != nil && strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false, nil
+	}
 	pending, err := e.pendingHumanMessages(ctx, rt.session.ID)
 	if err != nil {
 		return false, err
@@ -9156,6 +9159,11 @@ func (e *TurnEngine) sessionClosedOrArchived(ctx context.Context, sessionID uuid
 
 func (e *TurnEngine) watchTurnCancellation(ctx context.Context, rt *turnRuntime) (context.Context, func()) {
 	cancelCtx, cancel := context.WithCancelCause(ctx)
+	if rt != nil && rt.session != nil &&
+		strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") &&
+		strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return cancelCtx, func() { cancel(nil) }
+	}
 	consumer := e.cancelConsumerName
 	projectID := resolveProjectID(ctx, rt.session, e.tasks)
 	var (

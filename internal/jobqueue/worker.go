@@ -186,6 +186,14 @@ func (w *Worker) Start(ctx context.Context) error {
 		w.stateMu.Unlock()
 	}()
 
+	if recovered, err := w.RecoverStaleClaims(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup stale claim recovery failed", "error", err)
+		}
+	} else if recovered > 0 {
+		w.logger.Info("job queue: recovered stale claims on startup", "count", recovered)
+	}
+
 	wake := make(chan struct{}, 1)
 	var bg sync.WaitGroup
 	bg.Add(3)
