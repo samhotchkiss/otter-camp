@@ -1326,7 +1326,14 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		if latestCompleted.RespondingID != uuid.Nil {
 			rt.agent.ID = latestCompleted.RespondingID
 		}
-		if handled, recoverErr := e.continueRecoverableProjectBootstrapValidation(ctx, rt, state, progress, now, false); recoverErr != nil {
+		recoveryState := state
+		if !madeProgress && recoveryState.AutoTurnCount > 0 {
+			// Consecutive recoverable validation retries should consume one
+			// continuation budget increment, not both the generic no-progress
+			// increment and the recovery-continuation increment.
+			recoveryState.AutoTurnCount--
+		}
+		if handled, recoverErr := e.continueRecoverableProjectBootstrapValidation(ctx, rt, recoveryState, progress, now, false); recoverErr != nil {
 			return recoverErr
 		} else if handled {
 			return nil
