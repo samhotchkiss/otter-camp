@@ -4,6 +4,7 @@ package jobqueue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -566,6 +567,97 @@ func TestJobWorkerPurgeStaleAgentTurnJobsClearsClaimedClosedSessions(t *testing.
 	if lastError == nil || *lastError != "purged at worker startup: session closed" {
 		t.Fatalf("last_error = %v, want session closed purge message", lastError)
 	}
+}
+
+func TestJobWorkerCancelsClaimedAgentTurnWhenSessionClosesMidExecution(t *testing.T) {
+	pool := testdb.New(t)
+	org := createOrgForJobQueue(t, pool, "agent-turn-close-mid-execution")
+	session, err := repo.NewChatSessionRepo(pool).Create(context.Background(), repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "organization",
+		ScopeID:        org.ID,
+		Mode:           "sync",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+
+	worker := New(pool, nil, Config{
+		WorkerID:             "close-mid-execution",
+		PollInterval:         10 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		StaleClaimThreshold:  30 * time.Millisecond,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	released := make(chan struct{})
+	worker.Register(agentTurnJobType, func(ctx context.Context, job Job) error {
+		select {
+		case <-ctx.Done():
+			close(released)
+			return nil
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("timed out waiting for session-close cancellation")
+		}
+	})
+
+	payload := map[string]any{
+		"session_id": session.ID,
+		"message_id": uuid.New(),
+	}
+	jobID, err := worker.Enqueue(context.Background(), nil, agentTurnJobType, 100, payload, nil)
+	if err != nil {
+		t.Fatalf("enqueue claimed-close agent_turn: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startWorker(worker, ctx)
+	defer func() {
+		cancel()
+		_ = worker.Stop()
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var status string
+		if err := pool.QueryRow(context.Background(), `SELECT status FROM job_queue WHERE id = $1`, jobID).Scan(&status); err != nil {
+			t.Fatalf("load claimed job status: %v", err)
+		}
+		if status == "claimed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if _, err := repo.NewChatSessionRepo(pool).Close(context.Background(), session.ID); err != nil {
+		t.Fatalf("close claimed session: %v", err)
+	}
+
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for handler cancellation after session close")
+	}
+
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var status string
+		if err := pool.QueryRow(context.Background(), `SELECT status FROM job_queue WHERE id = $1`, jobID).Scan(&status); err != nil {
+			t.Fatalf("load finished job status: %v", err)
+		}
+		if status == "done" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var status string
+	_ = pool.QueryRow(context.Background(), `SELECT status FROM job_queue WHERE id = $1`, jobID).Scan(&status)
+	t.Fatalf("job status after session close = %q, want done", status)
 }
 
 func TestIdempotencyCleanupJob(t *testing.T) {

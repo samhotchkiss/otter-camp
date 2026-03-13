@@ -3469,6 +3469,14 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	if err == nil || errors.Is(err, errTurnDeferred) || errors.Is(err, errTurnCancelled) || errors.Is(err, errTurnPaused) {
 		return e.ensureTurnRunExitInvariant(ctx, runtime)
 	}
+	if errors.Is(err, context.Canceled) {
+		if ctx.Err() != nil {
+			return e.handleCancellation(ctx, runtime)
+		}
+		if closed, closeErr := e.sessionClosedOrArchived(context.Background(), sessionID); closeErr == nil && closed {
+			return e.handleCancellation(ctx, runtime)
+		}
+	}
 	var bootstrapTimeoutErr *projectBootstrapTimeoutError
 	if errors.As(err, &bootstrapTimeoutErr) {
 		handled, handleErr := e.handleProjectBootstrapWatchdogTimeout(ctx, runtime, bootstrapTimeoutErr)
@@ -8941,13 +8949,34 @@ func (e *TurnEngine) handleCancellation(ctx context.Context, rt *turnRuntime) er
 	}
 	systemMessage := "[Turn cancelled by user.]"
 	cancelReason := "user_cancelled"
-	if errors.Is(context.Cause(ctx), errTurnSessionClosed) {
+	sessionClosed := errors.Is(context.Cause(ctx), errTurnSessionClosed)
+	if !sessionClosed {
+		if closed, err := e.sessionClosedOrArchived(cleanupCtx, rt.session.ID); err == nil && closed {
+			sessionClosed = true
+		}
+	}
+	if sessionClosed {
 		systemMessage = "[Turn cancelled because the session or project was closed.]"
 		cancelReason = "session_closed"
 	}
 	_, _ = e.appendSystemMessage(cleanupCtx, rt.turn.ID, rt.session.ID, systemMessage)
 	_ = e.chat.CancelTurn(cleanupCtx, rt.turn.ID, cancelReason)
 	return errTurnCancelled
+}
+
+func (e *TurnEngine) sessionClosedOrArchived(ctx context.Context, sessionID uuid.UUID) (bool, error) {
+	if e == nil || e.chat == nil || sessionID == uuid.Nil {
+		return false, nil
+	}
+	session, err := e.chat.GetSession(ctx, sessionID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	status := strings.TrimSpace(strings.ToLower(session.Status))
+	return status == "closed" || status == "archived", nil
 }
 
 func (e *TurnEngine) watchTurnCancellation(ctx context.Context, rt *turnRuntime) (context.Context, func()) {

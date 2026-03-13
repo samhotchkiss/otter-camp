@@ -510,15 +510,15 @@ func (w *Worker) executeClaimedJob(ctx context.Context, job Job) error {
 		return w.markFailure(ctx, job, fmt.Errorf("no handler registered for %q", job.JobType))
 	}
 
-	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
+	jobCtx, cancelJob := context.WithCancel(ctx)
 	heartbeatDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatDone)
-		w.maintainClaim(heartbeatCtx, job)
+		w.maintainClaim(jobCtx, job, cancelJob)
 	}()
 
-	err := callJobHandler(ctx, handler, job)
-	stopHeartbeat()
+	err := callJobHandler(jobCtx, handler, job)
+	cancelJob()
 	<-heartbeatDone
 	if err == nil {
 		return w.markDone(ctx, job.ID)
@@ -526,20 +526,38 @@ func (w *Worker) executeClaimedJob(ctx context.Context, job Job) error {
 	return w.markFailure(ctx, job, err)
 }
 
-func (w *Worker) maintainClaim(ctx context.Context, job Job) {
-	interval := w.claimHeartbeatInterval(job)
-	if interval <= 0 {
+func (w *Worker) maintainClaim(ctx context.Context, job Job, cancelExecution context.CancelFunc) {
+	heartbeatInterval := w.claimHeartbeatInterval(job)
+	if heartbeatInterval <= 0 {
 		return
+	}
+	interval := heartbeatInterval
+	if strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) && interval > 5*time.Second {
+		interval = 5 * time.Second
 	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	lastHeartbeat := time.Time{}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if closed, err := w.agentTurnSessionClosed(ctx, job); err != nil {
+				if ctx.Err() == nil {
+					w.logger.Warn("job queue: closed-session monitor failed", "job_id", job.ID, "job_type", job.JobType, "error", err)
+				}
+				return
+			} else if closed {
+				w.logger.Info("job queue: cancelling claimed agent_turn for closed session", "job_id", job.ID, "job_type", job.JobType)
+				cancelExecution()
+				return
+			}
+			if !lastHeartbeat.IsZero() && time.Since(lastHeartbeat) < heartbeatInterval {
+				continue
+			}
 			ok, err := w.touchClaim(ctx, job.ID)
 			if err != nil {
 				if ctx.Err() == nil {
@@ -550,6 +568,7 @@ func (w *Worker) maintainClaim(ctx context.Context, job Job) {
 			if !ok {
 				return
 			}
+			lastHeartbeat = time.Now()
 		}
 	}
 }
@@ -568,6 +587,28 @@ func (w *Worker) claimHeartbeatInterval(job Job) time.Duration {
 		return 10 * time.Millisecond
 	}
 	return interval
+}
+
+func (w *Worker) agentTurnSessionClosed(ctx context.Context, job Job) (bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) {
+		return false, nil
+	}
+	var payload agentTurnKeyPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return false, fmt.Errorf("decode %s payload for session monitor: %w", agentTurnJobType, err)
+	}
+	if payload.SessionID == uuid.Nil {
+		return false, nil
+	}
+	var status string
+	if err := w.pool.QueryRow(ctx, `SELECT status FROM chat_session WHERE id = $1`, payload.SessionID).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return true, nil
+		}
+		return false, fmt.Errorf("load chat session for claimed agent_turn: %w", err)
+	}
+	status = strings.TrimSpace(strings.ToLower(status))
+	return status == "closed" || status == "archived", nil
 }
 
 func (w *Worker) touchClaim(ctx context.Context, jobID uuid.UUID) (bool, error) {
