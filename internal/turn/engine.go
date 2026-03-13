@@ -4520,13 +4520,6 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		RespondingType: "agent",
 		RespondingID:   rt.agent.ID,
 		Status:         "pending",
-		TriggerMessageID: func() *uuid.UUID {
-			if rt.initialMessageID == uuid.Nil {
-				return nil
-			}
-			id := rt.initialMessageID
-			return &id
-		}(),
 	})
 	if err != nil {
 		return err

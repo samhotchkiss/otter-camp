@@ -3086,13 +3086,6 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	if len(fixture.chat.turnOrder) < 2 {
 		t.Fatalf("turn count = %d, want at least 2 after continuation", len(fixture.chat.turnOrder))
 	}
-	continuedTurn := fixture.chat.turnByID(fixture.chat.turnOrder[len(fixture.chat.turnOrder)-1])
-	if continuedTurn == nil {
-		t.Fatal("continued turn missing")
-	}
-	if continuedTurn.TriggerMessageID == nil || *continuedTurn.TriggerMessageID != fixture.userMessageID {
-		t.Fatalf("continued turn trigger_message_id = %v, want %s", continuedTurn.TriggerMessageID, fixture.userMessageID)
-	}
 }
 
 func TestContinuationTurnReloadsSessionBeforeBootstrapResumeState(t *testing.T) {
