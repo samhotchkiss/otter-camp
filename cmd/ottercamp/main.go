@@ -44,6 +44,7 @@ import (
 	deliverysvc "github.com/samhotchkiss/otter-camp/internal/delivery"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	oclog "github.com/samhotchkiss/otter-camp/internal/log"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
@@ -58,6 +59,7 @@ import (
 	skillsvc "github.com/samhotchkiss/otter-camp/internal/skill"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/turn"
 	versionpkg "github.com/samhotchkiss/otter-camp/internal/version"
 	"github.com/samhotchkiss/otter-camp/internal/worker"
 	"golang.org/x/term"
@@ -436,6 +438,19 @@ func runServe() int {
 		return 1
 	}
 	resetter := bootstrap.NewResetter(pool.Raw(), bootstrapper)
+	relaunchQueue := jobqueue.New(pool.Raw(), logger, jobqueue.Config{})
+	bootstrapRelauncher, err := turn.NewBootstrapRelauncher(turn.BootstrapRelauncherOptions{
+		Pool:     pool.Raw(),
+		DataDir:  strings.TrimSpace(os.Getenv("OTTERCAMP_DATA_DIR")),
+		Chat:     chatService,
+		Events:   bus,
+		Enqueuer: relaunchQueue,
+		Logger:   logger,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap relauncher setup error: %v\n", err)
+		return 1
+	}
 
 	handler := server.NewHandlerWithOptions(server.HandlerOptions{
 		Version:     version,
@@ -466,7 +481,7 @@ func runServe() int {
 			server.NewMCPRouteRegistrar(mcpService, repo.NewMCPToolCatalogRepo(pool.Raw())),
 			server.NewModelRouteRegistrar(pool.Raw()),
 			server.NewOrgAuditRouteRegistrar(pool.Raw()),
-			server.NewProjectRouteRegistrar(projectService, repo.NewSkillRepo(pool.Raw()), nil),
+			server.NewProjectRouteRegistrar(projectService, repo.NewSkillRepo(pool.Raw()), bootstrapRelauncher),
 			server.NewTaskRouteRegistrar(taskService, flowService, deliveryService, pool.Raw()),
 			server.NewChatRouteRegistrar(chatService, pool.Raw()),
 			server.NewMemoryRouteRegistrar(server.MemoryRouteOptions{
