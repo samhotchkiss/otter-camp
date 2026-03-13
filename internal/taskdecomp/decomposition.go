@@ -665,6 +665,10 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 			return true
 		}
 	}
+	if (strings.HasPrefix(normalized, "include ") || strings.HasPrefix(normalized, "include:")) &&
+		(strings.Contains(normalized, ",") || strings.Contains(normalized, ":") || strings.Contains(normalized, " and ")) {
+		return true
+	}
 	if strings.Contains(normalized, "up to 60 min") || strings.Contains(normalized, "up to 30 min") {
 		return true
 	}
@@ -705,9 +709,6 @@ func expandCompoundDeliverable(item string) []string {
 		return expanded
 	}
 	if expanded := expandDefineList(trimmed); len(expanded) > 0 {
-		return expanded
-	}
-	if expanded := expandIncludeList(trimmed); len(expanded) > 0 {
 		return expanded
 	}
 	if expanded := expandSynthesisList(trimmed); len(expanded) > 0 {
@@ -759,35 +760,6 @@ func expandDefineList(item string) []string {
 		out = append(out, "Define "+part)
 	}
 	if len(out) < 3 {
-		return nil
-	}
-	return out
-}
-
-func expandIncludeList(item string) []string {
-	lower := strings.ToLower(strings.TrimSpace(item))
-	if !strings.HasPrefix(lower, "include ") {
-		return nil
-	}
-	if strings.ContainsAny(item, "?:") {
-		return nil
-	}
-	item = strings.TrimSpace(strings.TrimPrefix(item, "Include "))
-	item = strings.TrimSpace(strings.TrimSuffix(item, "."))
-	normalized := strings.ReplaceAll(item, " and ", ", ")
-	parts := splitLooseList(normalized)
-	if len(parts) < 2 {
-		return nil
-	}
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		out = append(out, "Include "+part)
-	}
-	if len(out) < 2 {
 		return nil
 	}
 	return out

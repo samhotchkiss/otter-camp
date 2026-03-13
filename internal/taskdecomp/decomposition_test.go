@@ -345,6 +345,37 @@ func TestExtractDeliverablesIgnoresCompanionInstructionAndSizingLines(t *testing
 	}
 }
 
+func TestExtractDeliverablesIgnoresIncludeFieldLists(t *testing.T) {
+	description := strings.Join([]string{
+		"Write blog post archive migration records in Markdown.",
+		"Include title, date, full content or excerpt, post URL.",
+		"Save as content/import-manifest.md",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Write blog post archive migration records in Markdown.",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
+func TestExtractDeliverablesIgnoresIncludeColonGuidance(t *testing.T) {
+	description := strings.Join([]string{
+		"Write the About page copy for Sam.",
+		"Include: who Sam is, what the blog covers, why readers should care.",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Write the About page copy for Sam.",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
 func TestExtractDeliverablesIgnoresDesignGuidanceAndProcessCompanionLines(t *testing.T) {
 	description := strings.Join([]string{
 		"Create a complete self-contained HTML template at templates/option-04-photo-forward/index.html",
