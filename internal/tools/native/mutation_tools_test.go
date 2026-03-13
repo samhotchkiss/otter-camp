@@ -775,6 +775,37 @@ func TestTaskUpdateRejectsDraftToQueuedWithoutFlowTemplate(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateRejectsBootstrapGovernanceGateMutation(t *testing.T) {
+	taskID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			Title:          "Bootstrap governance gate",
+			WorkStatus:     "draft",
+			BlocksScope:    "all",
+			Metadata:       json.RawMessage(`{"bootstrap_gate":true,"bootstrap_tree_root":true}`),
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":      taskID.String(),
+		"blocks_scope": "none",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != bootstrapGateManagedMessage {
+		t.Fatalf("error = %v, want bootstrap gate managed message", out["error"])
+	}
+	if tasks.updateCalls != 0 {
+		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
 func TestTaskUpdateAllowsDraftToQueuedWithFlowTemplate(t *testing.T) {
 	taskID := uuid.New()
 	flowTemplateID := uuid.New()

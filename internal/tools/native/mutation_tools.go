@@ -44,6 +44,7 @@ const (
 	taskDoneTerminalNodeMessage   = "task can only be marked done when its flow reaches a terminal node"
 	taskOrchestrationOnlyMessage  = "task must remain orchestration-only while executable child tasks exist"
 	taskNeedsChildTasksMessage    = "task must remain orchestration-only until bounded child tasks are created"
+	bootstrapGateManagedMessage   = "bootstrap governance gate is system-managed; do not edit, assign, queue, or complete it manually"
 	flowTemplateValidationMessage = "flow template must define a work -> review -> completion path"
 	memoryRecordEmbeddingDims     = 1536
 	memoryRecordDefaultConfidence = 0.85
@@ -1602,6 +1603,12 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		}
 		return nil, err
 	}
+	if bootstrapGateTask(current) {
+		return map[string]any{
+			"error":   bootstrapGateManagedMessage,
+			"message": "Leave the bootstrap governance gate unchanged. Keep executable first-wave tasks in draft and continue bootstrap setup until the system auto-completes the gate after validation passes.",
+		}, nil
+	}
 	if title, ok := readString(input, "title"); ok && title != "" {
 		current.Title = title
 	}
@@ -1874,6 +1881,12 @@ func normalizeTaskWorkStatusAlias(status string) string {
 	default:
 		return strings.TrimSpace(status)
 	}
+}
+
+func bootstrapGateTask(task repo.ProjectTask) bool {
+	metadata := metadataObject(task.Metadata)
+	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
+	return bootstrapGate
 }
 
 func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, input map[string]any) (map[string]any, error) {
