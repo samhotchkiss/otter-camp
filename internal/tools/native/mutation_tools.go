@@ -656,16 +656,30 @@ func (e *NativeToolExecutor) handleFileEdit(ctx context.Context, input map[strin
 		}
 		return nil, err
 	}
+	pathInput, okPath := readString(input, "path")
+	if !okPath || pathInput == "" {
+		return map[string]any{
+			"error":   "path_required",
+			"message": "file.edit requires a non-empty path. Provide a workspace-relative file path in `path`.",
+		}, nil
+	}
 	oldString, okOld := readString(input, "old_string")
 	newString, _ := readString(input, "new_string")
 	if !okOld || oldString == "" {
 		return map[string]any{"error": "old_string_required"}, nil
 	}
-	content, err := os.ReadFile(resolved)
+	info, err := os.Stat(resolved)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return map[string]any{"error": "not_found"}, nil
 		}
+		return nil, err
+	}
+	if info.IsDir() {
+		return map[string]any{"error": "is_directory"}, nil
+	}
+	content, err := os.ReadFile(resolved)
+	if err != nil {
 		return nil, err
 	}
 

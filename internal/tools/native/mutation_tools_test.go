@@ -187,6 +187,42 @@ func TestFileEditOldStringNotFound(t *testing.T) {
 	}
 }
 
+func TestFileEditMissingPathReturnsActionableError(t *testing.T) {
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+
+	out, err := executor.Execute(testExecCtx(), "file.edit", map[string]any{
+		"old_string": "alpha",
+		"new_string": "beta",
+	})
+	if err != nil {
+		t.Fatalf("file.edit: %v", err)
+	}
+	if out["error"] != "path_required" {
+		t.Fatalf("error = %v, want path_required", out["error"])
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "non-empty path") {
+		t.Fatalf("message = %q, want actionable path guidance", message)
+	}
+}
+
+func TestFileEditDirectoryReturnsPayloadError(t *testing.T) {
+	root := t.TempDir()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+
+	out, err := executor.Execute(testExecCtx(), "file.edit", map[string]any{
+		"path":       ".",
+		"old_string": "alpha",
+		"new_string": "beta",
+	})
+	if err != nil {
+		t.Fatalf("file.edit: %v", err)
+	}
+	if out["error"] != "is_directory" {
+		t.Fatalf("error = %v, want is_directory", out["error"])
+	}
+}
+
 func TestGitCommitMainBranchReturnsPayloadError(t *testing.T) {
 	executor := NewExecutor(ExecutorOptions{
 		WorkspaceRoot: t.TempDir(),
