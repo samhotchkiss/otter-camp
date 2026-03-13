@@ -136,6 +136,11 @@ func (b *flowSessionBridge) EnsureNodeSession(ctx context.Context, execution rep
 }
 
 func (b *flowSessionBridge) ensureNodeSessionTx(ctx context.Context, execution repo.FlowNodeExecution) (repo.ChatSession, error) {
+	taskRecord, err := b.tasks.GetByID(ctx, execution.TaskID)
+	if err != nil {
+		return repo.ChatSession{}, err
+	}
+
 	tx, err := b.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return repo.ChatSession{}, err
@@ -182,11 +187,6 @@ func (b *flowSessionBridge) ensureNodeSessionTx(ctx context.Context, execution r
 	case errors.Is(err, pgx.ErrNoRows):
 		// continue
 	default:
-		return repo.ChatSession{}, err
-	}
-
-	taskRecord, err := b.tasks.GetByID(ctx, execution.TaskID)
-	if err != nil {
 		return repo.ChatSession{}, err
 	}
 

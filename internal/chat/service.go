@@ -734,6 +734,24 @@ func (s *service) GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionI
 		return nil, repo.ErrNotFound
 	}
 
+	var taskID uuid.UUID
+	var projectID uuid.UUID
+	if err := s.pool.QueryRow(ctx, `
+		SELECT fne.task_id, pt.project_id
+		FROM flow_node_execution fne
+		JOIN project_task pt ON pt.id = fne.task_id
+		WHERE fne.id = $1
+		  AND pt.organization_id = $2
+	`, flowNodeExecutionID, agentRecord.OrganizationID).Scan(&taskID, &projectID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, repo.ErrNotFound
+		}
+		return nil, mapDBError(err)
+	}
+	if err := s.ensureProjectNotPausedByID(ctx, projectID, agentRecord.OrganizationID); err != nil {
+		return nil, err
+	}
+
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
@@ -779,27 +797,6 @@ func (s *service) GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionI
 		// continue
 	default:
 		return nil, mapDBError(err)
-	}
-
-	var taskID uuid.UUID
-	if err := tx.QueryRow(ctx, `
-		SELECT fne.task_id
-		FROM flow_node_execution fne
-		JOIN project_task pt ON pt.id = fne.task_id
-		WHERE fne.id = $1
-		  AND pt.organization_id = $2
-	`, flowNodeExecutionID, agentRecord.OrganizationID).Scan(&taskID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, repo.ErrNotFound
-		}
-		return nil, mapDBError(err)
-	}
-	taskRecord, err := s.tasks.GetByID(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.ensureProjectNotPausedByID(ctx, taskRecord.ProjectID, agentRecord.OrganizationID); err != nil {
-		return nil, err
 	}
 
 	metadata := normalizeJSON(mustJSON(map[string]any{"flow_node_execution_id": flowNodeExecutionID.String()}), json.RawMessage(`{}`))
