@@ -48,6 +48,30 @@ func TestFileWriteAtomicLeavesNoTempFile(t *testing.T) {
 	}
 }
 
+func TestFileWriteCreatesMissingParentDirsForAtomicWrite(t *testing.T) {
+	root := t.TempDir()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+
+	out, err := executor.Execute(testExecCtx(), "file.write", map[string]any{
+		"path":    "sam-blog/src/types/post.ts",
+		"content": "export interface Post {}",
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["created"] != true {
+		t.Fatalf("created = %v, want true", out["created"])
+	}
+
+	body, err := os.ReadFile(filepath.Join(root, "sam-blog", "src", "types", "post.ts"))
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	if string(body) != "export interface Post {}" {
+		t.Fatalf("content = %q, want exact write payload", string(body))
+	}
+}
+
 func TestFileWriteMalformedRawMissingPathReturnsActionableError(t *testing.T) {
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
 

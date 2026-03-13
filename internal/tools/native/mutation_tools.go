@@ -530,6 +530,9 @@ func decodePathStrings(ctx context.Context, wd SessionWorkDir, baseDir string, r
 
 func writeFileAtomically(target string, payload []byte) error {
 	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(dir, ".ottercamp-tmp-*")
 	if err != nil {
 		return err

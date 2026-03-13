@@ -168,6 +168,30 @@ func TestIntegrationFileWriteReadDeleteRoundTrip(t *testing.T) {
 	}
 }
 
+func TestIntegrationFileWriteCreatesNestedParentsWithoutFlag(t *testing.T) {
+	root := t.TempDir()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+
+	written, err := executor.Execute(integrationExecCtx(), "file.write", map[string]any{
+		"path":    "sam-blog/src/types/post.ts",
+		"content": "export interface PostMeta {}",
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if written["byte_size"] != len("export interface PostMeta {}") {
+		t.Fatalf("byte_size = %v, want %d", written["byte_size"], len("export interface PostMeta {}"))
+	}
+
+	read, err := executor.Execute(integrationExecCtx(), "file.read", map[string]any{"path": "sam-blog/src/types/post.ts"})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if read["content"] != "export interface PostMeta {}" {
+		t.Fatalf("content = %v, want exact nested write payload", read["content"])
+	}
+}
+
 func TestIntegrationFileWriteUsesSlugWorkspacePath(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
