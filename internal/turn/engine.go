@@ -3767,8 +3767,12 @@ func (e *TurnEngine) enqueueRecoveredBootstrapValidationContinuation(
 		nextPayload.AgentID = &continuationAgentID
 	}
 	runAfter := now.Add(defaultAutoContinueDelay)
-	if _, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter); err != nil {
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
 		return false, err
+	}
+	if !enqueued {
+		return false, nil
 	}
 	_, _ = e.appendSystemMessage(ctx, turn.ID, session.ID, "[Recovered bounded bootstrap retry into a validation continuation turn.]")
 	return true, nil
