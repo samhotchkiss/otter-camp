@@ -28,7 +28,10 @@ const (
 	defaultPollInterval      = 5 * time.Second
 	defaultStaleScanInterval = 60 * time.Second
 	defaultStaleThreshold    = 5 * time.Minute
-	defaultCleanupInterval   = 24 * time.Hour
+	// Bootstrap turns have their own watchdog budget; stale job recovery should
+	// not wait for the generic five-minute claim threshold before retrying them.
+	projectBootstrapStaleThreshold = 2 * time.Minute
+	defaultCleanupInterval         = 24 * time.Hour
 
 	agentTurnRateLimitMinBackoff = 30 * time.Second
 	agentTurnRateLimitBackoffCap = 30 * time.Minute
@@ -383,6 +386,7 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 
 func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 	staleBefore := w.clock.Now().UTC().Add(-w.staleClaimThreshold)
+	bootstrapStaleBefore := w.clock.Now().UTC().Add(-projectBootstrapStaleThreshold)
 	ct, err := w.pool.Exec(ctx, `
 		UPDATE job_queue
 		SET status = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'dead_letter' END,
@@ -395,8 +399,22 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 		    END,
 		    updated_at = now()
 		WHERE status = 'claimed'
-		  AND claimed_at < $1
-	`, staleBefore)
+		  AND (
+			claimed_at < $1
+			OR (
+				job_type = $2
+				AND claimed_at < $3
+				AND EXISTS (
+					SELECT 1
+					FROM chat_session cs
+					WHERE cs.id = (job_queue.payload->>'session_id')::uuid
+					  AND cs.scope_type = 'project'
+					  AND cs.status = 'active'
+					  AND COALESCE(NULLIF(cs.metadata->'project_bootstrap'->>'status', ''), '') = 'active'
+				)
+			)
+		  )
+	`, staleBefore, agentTurnJobType, bootstrapStaleBefore)
 	if err != nil {
 		return 0, fmt.Errorf("recover stale claims: %w", err)
 	}

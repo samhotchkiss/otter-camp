@@ -281,6 +281,138 @@ func TestJobQueue_StaleClaim_Recovery(t *testing.T) {
 	}
 }
 
+func TestJobQueue_BootstrapStaleClaim_RecoveryUsesBootstrapThreshold(t *testing.T) {
+	pool := testdb.New(t)
+	fakeClock := clock.NewFake(time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC))
+	worker := New(pool, nil, Config{
+		WorkerID:             "bootstrap-stale-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		StaleClaimThreshold:  5 * time.Minute,
+		CleanupEnqueuePeriod: time.Hour,
+		Clock:                fakeClock,
+	})
+
+	org := createJobQueueOrg079(t, pool, "bootstrap-stale")
+	sessionID := uuid.New()
+	projectID := uuid.New()
+	messageID := uuid.New()
+	creatorID := uuid.New()
+
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO chat_session (
+			id, organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata
+		)
+		VALUES ($1, $2, 'project', $3, 'async', 'active', 'system', $4, $5::jsonb)
+	`, sessionID, org.ID, projectID, creatorID, `{"project_bootstrap":{"status":"active"}}`); err != nil {
+		t.Fatalf("insert bootstrap session: %v", err)
+	}
+
+	jobID := testdb.EnqueueJob(t, pool, agentTurnJobType, 5, map[string]any{
+		"session_id":  sessionID,
+		"message_id":  messageID,
+		"retry_count": 0,
+	})
+	if _, err := pool.Exec(context.Background(), `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'crashed-worker',
+		    claimed_at = $2,
+		    attempts = 1
+		WHERE id = $1
+	`, jobID, fakeClock.Now().UTC()); err != nil {
+		t.Fatalf("set bootstrap stale claim state: %v", err)
+	}
+
+	fakeClock.Advance(projectBootstrapStaleThreshold + 30*time.Second)
+	recovered, err := worker.RecoverStaleClaims(context.Background())
+	if err != nil {
+		t.Fatalf("RecoverStaleClaims: %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("recovered rows = %d, want 1", recovered)
+	}
+
+	var status string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT status
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status); err != nil {
+		t.Fatalf("query recovered bootstrap job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("bootstrap recovered job status = %s, want pending", status)
+	}
+}
+
+func TestJobQueue_BootstrapStaleClaim_RecoverySkipsNonBootstrapSessions(t *testing.T) {
+	pool := testdb.New(t)
+	fakeClock := clock.NewFake(time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC))
+	worker := New(pool, nil, Config{
+		WorkerID:             "bootstrap-skip-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		StaleClaimThreshold:  5 * time.Minute,
+		CleanupEnqueuePeriod: time.Hour,
+		Clock:                fakeClock,
+	})
+
+	org := createJobQueueOrg079(t, pool, "bootstrap-skip")
+	sessionID := uuid.New()
+	projectID := uuid.New()
+	messageID := uuid.New()
+	creatorID := uuid.New()
+
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO chat_session (
+			id, organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata
+		)
+		VALUES ($1, $2, 'project', $3, 'async', 'active', 'system', $4, '{}'::jsonb)
+	`, sessionID, org.ID, projectID, creatorID); err != nil {
+		t.Fatalf("insert non-bootstrap session: %v", err)
+	}
+
+	jobID := testdb.EnqueueJob(t, pool, agentTurnJobType, 5, map[string]any{
+		"session_id":  sessionID,
+		"message_id":  messageID,
+		"retry_count": 0,
+	})
+	if _, err := pool.Exec(context.Background(), `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'crashed-worker',
+		    claimed_at = $2,
+		    attempts = 1
+		WHERE id = $1
+	`, jobID, fakeClock.Now().UTC()); err != nil {
+		t.Fatalf("set non-bootstrap stale claim state: %v", err)
+	}
+
+	fakeClock.Advance(projectBootstrapStaleThreshold + 30*time.Second)
+	recovered, err := worker.RecoverStaleClaims(context.Background())
+	if err != nil {
+		t.Fatalf("RecoverStaleClaims: %v", err)
+	}
+	if recovered != 0 {
+		t.Fatalf("recovered rows = %d, want 0 before generic threshold", recovered)
+	}
+
+	var status string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT status
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status); err != nil {
+		t.Fatalf("query non-bootstrap job: %v", err)
+	}
+	if status != "claimed" {
+		t.Fatalf("non-bootstrap job status = %s, want claimed", status)
+	}
+}
+
 func TestJobQueue_ListenNotify_Wakeup(t *testing.T) {
 	pool := testdb.New(t)
 	const wakeupTimeout = 8 * time.Second
