@@ -837,6 +837,9 @@ func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.
 		return nil
 	}
 	if session, getErr := e.chat.GetSession(ctx, payload.SessionID); getErr == nil {
+		if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+			return nil
+		}
 		if paused, reason, pauseErr := e.projectPausedForSession(ctx, session); pauseErr != nil {
 			return pauseErr
 		} else if paused {

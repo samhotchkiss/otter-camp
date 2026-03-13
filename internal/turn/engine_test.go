@@ -1081,6 +1081,29 @@ func TestContinueTurnStopsWhenProjectPaused(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageEventSkipsClosedSession(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.Status = "closed"
+
+	event := eventbus.DomainEvent{
+		EventType: "chat.message.user_sent",
+	}
+	payload, err := json.Marshal(map[string]any{
+		"session_id": fixture.session.ID.String(),
+		"message_id": fixture.userMessageID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event.Payload = payload
+	if err := fixture.engine.HandleUserMessageEvent(context.Background(), event); err != nil {
+		t.Fatalf("HandleUserMessageEvent: %v", err)
+	}
+	if got := len(fixture.enqueuer.agentTurnJobs()); got != 0 {
+		t.Fatalf("agent turn jobs = %d, want 0 for closed session", got)
+	}
+}
+
 func TestHandleUserMessageProjectBootstrapWatchdogCancelsBlockedChunkPersistence(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 
