@@ -1579,9 +1579,12 @@ func (l operatorDashboardLoader) loadRecentProjectFailureItems(ctx context.Conte
 			p.display_name,
 			p.settings->'automatic_failure'->>'failure_class',
 			p.settings->'automatic_failure'->>'failure_reason',
+			COALESCE((p.settings->'automatic_failure'->>'retry_attempt_count')::int, 0),
+			COALESCE((p.settings->'automatic_failure'->>'retry_budget')::int, 0),
 			(p.settings->'automatic_failure'->>'recorded_at')::timestamptz,
 			rp.id,
-			rp.display_name
+			rp.display_name,
+			rp.status
 		FROM project p
 		LEFT JOIN project rp
 		  ON rp.organization_id = p.organization_id
@@ -1600,29 +1603,35 @@ func (l operatorDashboardLoader) loadRecentProjectFailureItems(ctx context.Conte
 	items := make([]operatorDashboardItemResponse, 0, limit)
 	for rows.Next() {
 		var (
-			projectID           uuid.UUID
-			projectLabel        string
-			failureClass        *string
-			failureReason       *string
-			recordedAt          time.Time
-			restartProjectID    *uuid.UUID
-			restartProjectLabel *string
+			projectID            uuid.UUID
+			projectLabel         string
+			failureClass         *string
+			failureReason        *string
+			retryAttemptCount    int
+			retryBudget          int
+			recordedAt           time.Time
+			restartProjectID     *uuid.UUID
+			restartProjectLabel  *string
+			restartProjectStatus *string
 		)
 		if scanErr := rows.Scan(
 			&projectID,
 			&projectLabel,
 			&failureClass,
 			&failureReason,
+			&retryAttemptCount,
+			&retryBudget,
 			&recordedAt,
 			&restartProjectID,
 			&restartProjectLabel,
+			&restartProjectStatus,
 		); scanErr != nil {
 			return nil, scanErr
 		}
 		item := l.newDashboardItem(
 			"project_automatic_failure",
 			strings.TrimSpace(projectLabel),
-			projectAutomaticFailureSummary(failureClass, failureReason),
+			projectAutomaticFailureSummary(failureClass, failureReason, retryAttemptCount, retryBudget, restartProjectStatus),
 			operatorDashboardStringValue(failureClass),
 			recordedAt,
 			0,
@@ -1716,10 +1725,17 @@ func operatorDashboardLinksFor(projectID, taskID, runID *uuid.UUID) operatorDash
 	return links
 }
 
-func projectAutomaticFailureSummary(failureClass, failureReason *string) string {
+func projectAutomaticFailureSummary(failureClass, failureReason *string, retryAttemptCount, retryBudget int, restartProjectStatus *string) string {
 	class := strings.TrimSpace(operatorDashboardStringValue(failureClass))
 	reason := strings.TrimSpace(operatorDashboardStringValue(failureReason))
+	restartState := projectAutomaticFailureRestartState(retryAttemptCount, retryBudget, restartProjectStatus)
 	switch {
+	case class != "" && reason != "" && restartState != "":
+		return "project automatic failure: " + class + " (" + reason + "; " + restartState + ")"
+	case class != "" && restartState != "":
+		return "project automatic failure: " + class + " (" + restartState + ")"
+	case reason != "" && restartState != "":
+		return "project automatic failure: " + reason + " (" + restartState + ")"
 	case class != "" && reason != "":
 		return "project automatic failure: " + class + " (" + reason + ")"
 	case class != "":
@@ -1728,6 +1744,23 @@ func projectAutomaticFailureSummary(failureClass, failureReason *string) string 
 		return "project automatic failure: " + reason
 	default:
 		return "project automatic failure"
+	}
+}
+
+func projectAutomaticFailureRestartState(retryAttemptCount, retryBudget int, restartProjectStatus *string) string {
+	status := strings.TrimSpace(operatorDashboardStringValue(restartProjectStatus))
+	switch {
+	case strings.EqualFold(status, "active"):
+		if retryBudget > 0 {
+			return fmt.Sprintf("restart available %d/%d", retryAttemptCount, retryBudget)
+		}
+		return "restart available"
+	case retryBudget > 0 && retryAttemptCount >= retryBudget:
+		return fmt.Sprintf("retry budget exhausted %d/%d", retryAttemptCount, retryBudget)
+	case retryAttemptCount > 0 && retryBudget > 0:
+		return fmt.Sprintf("restart target inactive %d/%d", retryAttemptCount, retryBudget)
+	default:
+		return ""
 	}
 }
 

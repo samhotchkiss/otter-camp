@@ -1386,6 +1386,9 @@ func TestOperatorDashboardShowsProjectAutomaticFailuresWithRestartLink(t *testin
 	if !strings.Contains(failureItem.Summary, "bootstrap_runtime") {
 		t.Fatalf("summary=%q want bootstrap_runtime body=%s", failureItem.Summary, string(resp.Body))
 	}
+	if !strings.Contains(failureItem.Summary, "restart available") {
+		t.Fatalf("summary=%q want restart available body=%s", failureItem.Summary, string(resp.Body))
+	}
 }
 
 func TestOperatorDashboardShowsProviderHealthAndInvocationFailures(t *testing.T) {
