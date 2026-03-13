@@ -3033,6 +3033,15 @@ func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input 
 	}
 	sourceType, _ := readString(input, "source_type")
 	dependsOnType, _ := readString(input, "depends_on_type")
+	sourceType = normalizeTaskDependencyScopeType(sourceType)
+	dependsOnType = normalizeTaskDependencyScopeType(dependsOnType)
+	if sourceType == "" || dependsOnType == "" {
+		return map[string]any{
+			"error":       "invalid_dependency_type",
+			"valid_types": []string{"project_task", "project_subtask"},
+			"message":     "Use source_type and depends_on_type of project_task or project_subtask.",
+		}, nil
+	}
 	sourceID, okSource := readUUID(input, "source_id")
 	dependsOnID, okDepends := readUUID(input, "depends_on_id")
 	if !okSource || !okDepends || sourceID == uuid.Nil || dependsOnID == uuid.Nil {
@@ -3064,6 +3073,17 @@ func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input 
 		return nil, err
 	}
 	return map[string]any{"dependency_id": created.ID}, nil
+}
+
+func normalizeTaskDependencyScopeType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "task", "project_task":
+		return "project_task"
+	case "subtask", "project_subtask":
+		return "project_subtask"
+	default:
+		return ""
+	}
 }
 
 func (e *NativeToolExecutor) handleTaskRemoveDependency(ctx context.Context, input map[string]any) (map[string]any, error) {

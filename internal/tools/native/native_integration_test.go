@@ -575,6 +575,92 @@ func TestIntegrationTaskDependencyCreateRemoveAndCycleDetection(t *testing.T) {
 	}
 }
 
+func TestIntegrationTaskAddDependencyAcceptsTaskAliasTypes(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	taskAResp, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id": project.ID.String(),
+		"title":      "Task A",
+	})
+	if err != nil {
+		t.Fatalf("task.create A: %v", err)
+	}
+	taskBResp, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id": project.ID.String(),
+		"title":      "Task B",
+	})
+	if err != nil {
+		t.Fatalf("task.create B: %v", err)
+	}
+	taskAID := nestedUUID(t, taskAResp, "task", "id")
+	taskBID := nestedUUID(t, taskBResp, "task", "id")
+
+	addResp, err := executor.Execute(ctx, "task.add_dependency", map[string]any{
+		"source_type":     "task",
+		"source_id":       taskAID.String(),
+		"depends_on_type": "task",
+		"depends_on_id":   taskBID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.add_dependency alias types: %v", err)
+	}
+	if addResp["error"] != nil {
+		t.Fatalf("task.add_dependency alias error = %v, want nil", addResp["error"])
+	}
+	if _, ok := addResp["dependency_id"]; !ok {
+		t.Fatalf("dependency_id missing from response: %v", addResp)
+	}
+}
+
+func TestIntegrationTaskAddDependencyRejectsUnknownTypesActionably(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	taskAResp, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id": project.ID.String(),
+		"title":      "Task A",
+	})
+	if err != nil {
+		t.Fatalf("task.create A: %v", err)
+	}
+	taskBResp, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id": project.ID.String(),
+		"title":      "Task B",
+	})
+	if err != nil {
+		t.Fatalf("task.create B: %v", err)
+	}
+	taskAID := nestedUUID(t, taskAResp, "task", "id")
+	taskBID := nestedUUID(t, taskBResp, "task", "id")
+
+	addResp, err := executor.Execute(ctx, "task.add_dependency", map[string]any{
+		"source_type":     "wave_task",
+		"source_id":       taskAID.String(),
+		"depends_on_type": "wave_task",
+		"depends_on_id":   taskBID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.add_dependency invalid types: %v", err)
+	}
+	if addResp["error"] != "invalid_dependency_type" {
+		t.Fatalf("error = %v, want invalid_dependency_type", addResp["error"])
+	}
+	if addResp["message"] != "Use source_type and depends_on_type of project_task or project_subtask." {
+		t.Fatalf("message = %v, want actionable guidance", addResp["message"])
+	}
+}
+
 func TestIntegrationTaskCreateSubjectiveMultiOptionUsesReviewRefinementPlanning(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

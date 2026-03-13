@@ -11599,6 +11599,56 @@ func TestTurnEngineIntegrationBootstrapProgressCountsStaffingDraftsWithoutAssign
 	}
 }
 
+func TestTurnEngineIntegrationRefreshBootstrapStateDoesNotArchiveDuringActiveTurn(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID)
+	session, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	turn, err := fixture.chatService.CreateTurn(ctx, session.ID, fixture.agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	session.CurrentTurnID = &turn.ID
+
+	progress := projectBootstrapProgress{
+		BootstrapTaskID:          uuid.New(),
+		BootstrapTaskOutstanding: true,
+		PlannedTaskCount:         3,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureRuntime,
+		ValidationFailureReason:  "simulated bootstrap validation failure",
+	}
+
+	if err := fixture.engine.refreshProjectBootstrapSessionState(ctx, session, progress); err != nil {
+		t.Fatalf("refreshProjectBootstrapSessionState: %v", err)
+	}
+
+	storedSession, err := fixture.chatService.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetSession stored: %v", err)
+	}
+	if storedSession.Status != "active" {
+		t.Fatalf("session status = %q, want active", storedSession.Status)
+	}
+	state := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if state.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap state status = %q, want active", state.Status)
+	}
+	if state.ValidationFailureClass != projectBootstrapFailureRuntime {
+		t.Fatalf("bootstrap validation_failure_class = %q, want %q", state.ValidationFailureClass, projectBootstrapFailureRuntime)
+	}
+
+	projectRecord := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if projectRecord.Status != "active" {
+		t.Fatalf("project status = %q, want active", projectRecord.Status)
+	}
+}
+
 func TestTurnEngineIntegrationAsyncOrgTurnFailsHungModelStreamAtDurationLimit(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

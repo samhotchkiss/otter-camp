@@ -1879,6 +1879,12 @@ func (e *TurnEngine) refreshProjectBootstrapSessionState(ctx context.Context, se
 		return e.updateProjectBootstrapState(ctx, session, state)
 	}
 	if progress.ValidationFailed() {
+		// Task-status events can fire while the current bootstrap turn is still
+		// dispatching tool calls. Do not fail-close the project/session from this
+		// async observer path until the active turn has unwound.
+		if session.CurrentTurnID != nil && *session.CurrentTurnID != uuid.Nil {
+			return e.updateProjectBootstrapState(ctx, session, state)
+		}
 		if handled, err := e.continueRecoverableProjectBootstrapValidationForSession(ctx, session, state, progress, now); err != nil {
 			return err
 		} else if handled {
