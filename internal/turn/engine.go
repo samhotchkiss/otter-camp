@@ -2889,7 +2889,7 @@ func (e *TurnEngine) appendProjectBootstrapContinuationMessageWithContent(ctx co
 
 func buildProjectBootstrapContinuationPrompt(autoTurnCount int) string {
 	return fmt.Sprintf(
-		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Do not stop at acknowledgement. Persist project assignments, scoped tasks, and flow templates if the handoff already contains enough information. The project manager must be a staff PM agent, not a temp agent. Assign every executable non-bootstrap task to an existing active project assignee before first-wave selection or promotion. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
+		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Do not stop at acknowledgement. Persist project assignments, scoped tasks, and flow templates if the handoff already contains enough information. Every task.create or subtask.create call must include a concrete non-empty title. The project manager must be a staff PM agent, not a temp agent. Assign every executable non-bootstrap task to an existing active project assignee before first-wave selection or promotion. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
 		autoTurnCount,
 	)
 }
@@ -2900,7 +2900,7 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 		reason = "bootstrap validation found recoverable bounded work that still needs correction"
 	}
 	return fmt.Sprintf(
-		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Recovery target: %s. Do not repeat the same oversized task definitions or re-run the same rejected task.create calls. The project manager must be a staff PM agent, not a temp agent. Correct the persisted task tree by splitting the offending broad parent or first-wave task into narrower executable child tasks, assign every executable child to an existing active project assignee, then continue first-wave selection from those bounded children. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
+		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Recovery target: %s. Do not repeat the same oversized task definitions or re-run the same rejected task.create calls. Every task.create or subtask.create call must include a concrete non-empty title. The project manager must be a staff PM agent, not a temp agent. Correct the persisted task tree by splitting the offending broad parent or first-wave task into narrower executable child tasks, assign every executable child to an existing active project assignee, then continue first-wave selection from those bounded children. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
 		autoTurnCount,
 		reason,
 	)

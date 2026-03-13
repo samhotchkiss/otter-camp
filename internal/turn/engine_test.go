@@ -2307,6 +2307,9 @@ func TestBuildProjectBootstrapValidationRecoveryPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "splitting the offending broad parent or first-wave task into narrower executable child tasks") {
 		t.Fatalf("prompt = %q, want bounded child-splitting guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Every task.create or subtask.create call must include a concrete non-empty title") {
+		t.Fatalf("prompt = %q, want title guidance", prompt)
+	}
 }
 
 func TestEnsureTurnRunExitInvariantRejectsLeakedInProgressTurn(t *testing.T) {
