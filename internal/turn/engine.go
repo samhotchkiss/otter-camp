@@ -3791,47 +3791,51 @@ func (e *TurnEngine) failRetriedLeakedTurn(ctx context.Context, turnID uuid.UUID
 			return err
 		}
 	}
+	var cleanupErr error
 	if e.invocations != nil {
 		session, sessionErr := e.chat.GetSession(ctx, failed.SessionID)
 		if sessionErr != nil {
-			return sessionErr
-		}
-		invocations, listErr := repo.NewModelInvocationRepo(e.pool).ListBySession(ctx, session.OrganizationID, failed.SessionID)
-		if listErr != nil {
-			return listErr
-		}
-		errorCode := stringPtr("stale_turn_recovered")
-		errorText := stringPtr(failureReason)
-		for _, invocation := range invocations {
-			if invocation.TurnID == nil || *invocation.TurnID != turnID {
-				continue
-			}
-			if !strings.EqualFold(strings.TrimSpace(invocation.Status), "in_flight") {
-				continue
-			}
-			if _, updateErr := e.invocations.UpdateStatus(ctx, invocation.ID, "failed", errorCode, errorText); updateErr != nil {
-				return updateErr
+			cleanupErr = errors.Join(cleanupErr, sessionErr)
+		} else {
+			invocations, listErr := repo.NewModelInvocationRepo(e.pool).ListBySession(ctx, session.OrganizationID, failed.SessionID)
+			if listErr != nil {
+				cleanupErr = errors.Join(cleanupErr, listErr)
+			} else {
+				errorCode := stringPtr("stale_turn_recovered")
+				errorText := stringPtr(failureReason)
+				for _, invocation := range invocations {
+					if invocation.TurnID == nil || *invocation.TurnID != turnID {
+						continue
+					}
+					if !strings.EqualFold(strings.TrimSpace(invocation.Status), "in_flight") {
+						continue
+					}
+					if _, updateErr := e.invocations.UpdateStatus(ctx, invocation.ID, "failed", errorCode, errorText); updateErr != nil {
+						cleanupErr = errors.Join(cleanupErr, updateErr)
+					}
+				}
 			}
 		}
 	}
 	if e.messages != nil {
 		messages, listErr := repo.NewChatMessageRepo(e.pool).ListBySession(ctx, failed.SessionID)
 		if listErr != nil {
-			return listErr
-		}
-		for _, message := range messages {
-			if message.TurnID == nil || *message.TurnID != turnID {
-				continue
-			}
-			if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
-				continue
-			}
-			status := strings.ToLower(strings.TrimSpace(message.Status))
-			if status != "pending" && status != "streaming" {
-				continue
-			}
-			if _, updateErr := e.messages.UpdateStatus(ctx, message.ID, "failed", failureReason); updateErr != nil {
-				return updateErr
+			cleanupErr = errors.Join(cleanupErr, listErr)
+		} else {
+			for _, message := range messages {
+				if message.TurnID == nil || *message.TurnID != turnID {
+					continue
+				}
+				if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+					continue
+				}
+				status := strings.ToLower(strings.TrimSpace(message.Status))
+				if status != "pending" && status != "streaming" {
+					continue
+				}
+				if _, updateErr := e.messages.UpdateStatus(ctx, message.ID, "failed", failureReason); updateErr != nil {
+					cleanupErr = errors.Join(cleanupErr, updateErr)
+				}
 			}
 		}
 	}
@@ -3841,6 +3845,13 @@ func (e *TurnEngine) failRetriedLeakedTurn(ctx context.Context, turnID uuid.UUID
 	}
 	if strings.EqualFold(strings.TrimSpace(updated.Status), "in_progress") {
 		return fmt.Errorf("stale retry turn remained in_progress after recovery fail request (turn_id=%s)", turnID)
+	}
+	if cleanupErr != nil && e.logger != nil {
+		e.logger.Warn("stale turn recovery cleanup was only partially successful",
+			"turn_id", turnID,
+			"session_id", failed.SessionID,
+			"error", cleanupErr,
+		)
 	}
 	return nil
 }
