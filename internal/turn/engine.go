@@ -8682,51 +8682,74 @@ func (e *TurnEngine) callMainModel(
 			streamCtx, cancelWatchdog = context.WithTimeoutCause(ctx, remaining, errAsyncTurnWatchdog)
 		}
 
-		response, callErr := e.models.StreamComplete(streamCtx, ModelRequest{
-			OrganizationID: rt.session.OrganizationID,
-			SessionID:      rt.session.ID,
-			TurnID:         rt.turn.ID,
-			AgentID:        rt.agent.ID,
-			RunID:          cloneUUIDPointer(rt.runID),
-			RunStepID:      cloneUUIDPointer(rt.runStepID),
-			RunAttemptID:   cloneUUIDPointer(rt.runAttemptID),
-			InvocationID:   cloneUUIDPointer(&invocation.ID),
-			Purpose:        "agent_turn",
-			Profile:        profile,
-			Prompt:         assembled,
-		}, func(token string) error {
-			if !streamingMarked {
-				if err := e.chat.UpdateMessageStatus(streamCtx, assistant.ID, "streaming", ""); err != nil {
+		type streamCallResult struct {
+			response ModelResponse
+			err      error
+		}
+		streamResultCh := make(chan streamCallResult, 1)
+		go func() {
+			response, callErr := e.models.StreamComplete(streamCtx, ModelRequest{
+				OrganizationID: rt.session.OrganizationID,
+				SessionID:      rt.session.ID,
+				TurnID:         rt.turn.ID,
+				AgentID:        rt.agent.ID,
+				RunID:          cloneUUIDPointer(rt.runID),
+				RunStepID:      cloneUUIDPointer(rt.runStepID),
+				RunAttemptID:   cloneUUIDPointer(rt.runAttemptID),
+				InvocationID:   cloneUUIDPointer(&invocation.ID),
+				Purpose:        "agent_turn",
+				Profile:        profile,
+				Prompt:         assembled,
+			}, func(token string) error {
+				if !streamingMarked {
+					if err := e.chat.UpdateMessageStatus(streamCtx, assistant.ID, "streaming", ""); err != nil {
+						return err
+					}
+					streamingMarked = true
+				}
+				if watchdogActive && watchdogStream.reset != nil {
+					watchdogStream.reset()
+				}
+				tokensSeen++
+				builder.WriteString(token)
+				if _, err := e.messages.UpdateContent(streamCtx, assistant.ID, builder.String()); err != nil {
 					return err
 				}
-				streamingMarked = true
-			}
-			if watchdogActive && watchdogStream.reset != nil {
-				watchdogStream.reset()
-			}
-			tokensSeen++
-			builder.WriteString(token)
-			if _, err := e.messages.UpdateContent(streamCtx, assistant.ID, builder.String()); err != nil {
-				return err
-			}
-			*chunkSeq++
-			if err := e.publishEvent(streamCtx, rt.session.OrganizationID, "chat.message.chunk", "agent", &rt.agent.ID, map[string]any{
-				"session_id": rt.session.ID,
-				"turn_id":    rt.turn.ID,
-				"message_id": assistant.ID,
-				"delta":      token,
-				"sequence":   *chunkSeq,
-			}); err != nil {
-				return err
-			}
+				*chunkSeq++
+				if err := e.publishEvent(streamCtx, rt.session.OrganizationID, "chat.message.chunk", "agent", &rt.agent.ID, map[string]any{
+					"session_id": rt.session.ID,
+					"turn_id":    rt.turn.ID,
+					"message_id": assistant.ID,
+					"delta":      token,
+					"sequence":   *chunkSeq,
+				}); err != nil {
+					return err
+				}
 
-			lastSteerPollChunks++
-			if lastSteerPollChunks >= chunkPollSteerEveryNChunks {
-				lastSteerPollChunks = 0
-				_, _ = e.findSteerMessages(streamCtx, rt.session.ID, rt.startedAt)
+				lastSteerPollChunks++
+				if lastSteerPollChunks >= chunkPollSteerEveryNChunks {
+					lastSteerPollChunks = 0
+					_, _ = e.findSteerMessages(streamCtx, rt.session.ID, rt.startedAt)
+				}
+				return nil
+			})
+			select {
+			case streamResultCh <- streamCallResult{response: response, err: callErr}:
+			default:
 			}
-			return nil
-		})
+		}()
+
+		var (
+			response ModelResponse
+			callErr  error
+		)
+		select {
+		case result := <-streamResultCh:
+			response = result.response
+			callErr = result.err
+		case <-streamCtx.Done():
+			callErr = streamCtx.Err()
+		}
 		cancelWatchdog()
 
 		if callErr != nil {

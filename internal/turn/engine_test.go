@@ -1170,6 +1170,58 @@ func TestHandleUserMessageProjectBootstrapWatchdogCancelsBlockedChunkPersistence
 	}
 }
 
+func TestHandleUserMessageProjectBootstrapWatchdogReturnsWhenModelIgnoresCancellation(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Metadata = json.RawMessage(`{"project_bootstrap":{"status":"active"}}`)
+	fixture.engine.projectBootstrapTurnTimeout = 40 * time.Millisecond
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Status:         "active",
+			},
+		},
+	}
+
+	release := make(chan struct{})
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		<-release
+		return ModelResponse{}, ctx.Err()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	started := time.Now()
+	err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessageID)
+	elapsed := time.Since(started)
+	close(release)
+	if err != nil {
+		t.Fatalf("HandleUserMessage err = %v, want nil with watchdog failure handled in-turn", err)
+	}
+	if fixture.model.streamCalls == 0 {
+		t.Fatal("expected model stream call")
+	}
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("HandleUserMessage elapsed = %s, want watchdog cancellation before outer context timeout", elapsed)
+	}
+	latestTurn := fixture.chat.turns[fixture.chat.turnOrder[len(fixture.chat.turnOrder)-1]]
+	if latestTurn.Status != "failed" {
+		t.Fatalf("turn status = %q, want failed after bootstrap watchdog timeout", latestTurn.Status)
+	}
+	if latestTurn.StopReason == nil || *latestTurn.StopReason != stopReasonMaxDuration {
+		t.Fatalf("turn stop_reason = %v, want %q", latestTurn.StopReason, stopReasonMaxDuration)
+	}
+	if !fixture.messages.containsContentSubstring("watchdog timed out") {
+		t.Fatal("missing watchdog timeout message")
+	}
+}
+
 func TestHandleUserMessageTaskScopeRoutesToAssignedAgent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
