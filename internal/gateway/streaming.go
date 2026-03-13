@@ -16,7 +16,7 @@ import (
 
 const (
 	rollupUpdateJobType    = "rollup_update"
-	defaultRollupPriority  = 100
+	defaultRollupPriority  = 50
 	defaultRollupQueueDate = "2006-01-02"
 )
 
