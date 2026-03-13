@@ -4450,6 +4450,7 @@ func (e *TurnEngine) buildSyntheticProjectKickoffHandoff(ctx context.Context, rt
 	if originatingRequest != "" {
 		lines = append(lines, fmt.Sprintf("Originating user request: %s", originatingRequest))
 	}
+	lines = append(lines, "Treat this as a fresh project bootstrap. Do not assume architecture, CMS choice, or workflow from archived/restart chains or org memory unless the originating user request explicitly asks for reuse. Prefer the current project description and live tool results over prior-project memory.")
 	lines = append(lines, "Use the canonical bootstrap workflow: staff the project, create bounded tasks/subtasks, attach runnable flows, and move the first executable wave into execution.")
 	return strings.Join(lines, "\n\n")
 }

@@ -1524,6 +1524,36 @@ func TestHandleUserMessageProjectScopeKickoffStartsWithFrank(t *testing.T) {
 	}
 }
 
+func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	content := "Start a brand-new Sam.blog project from scratch. Do not reuse archived chains."
+	if _, err := fixture.messages.UpdateContent(context.Background(), fixture.userMessageID, content); err != nil {
+		t.Fatalf("UpdateContent user message: %v", err)
+	}
+
+	rt := &turnRuntime{
+		initialMessageID: fixture.userMessageID,
+		projectIdentity: &projectIdentity{
+			slug: "sam-blog-fresh-test",
+			id:   uuid.New(),
+		},
+	}
+
+	handoff := fixture.engine.buildSyntheticProjectKickoffHandoff(context.Background(), rt)
+	if !strings.Contains(handoff, "Treat this as a fresh project bootstrap.") {
+		t.Fatalf("handoff = %q, want fresh bootstrap guidance", handoff)
+	}
+	if !strings.Contains(handoff, "Do not assume architecture, CMS choice, or workflow from archived/restart chains or org memory") {
+		t.Fatalf("handoff = %q, want anti-reuse guidance", handoff)
+	}
+	if !strings.Contains(handoff, "Prefer the current project description and live tool results over prior-project memory.") {
+		t.Fatalf("handoff = %q, want current-project preference", handoff)
+	}
+	if !strings.Contains(handoff, content) {
+		t.Fatalf("handoff = %q, want originating request content", handoff)
+	}
+}
+
 func TestHandleUserMessageProjectScopeKickoffHandoffRoutesToLoriAfterFrank(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
