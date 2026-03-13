@@ -1699,6 +1699,9 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	if !strings.Contains(handoff, "Prefer the current project description and live tool results over prior-project memory.") {
 		t.Fatalf("handoff = %q, want current-project preference", handoff)
 	}
+	if !strings.Contains(handoff, "Do not call memory.query, memory.list, or other memory tools during this bootstrap handoff") {
+		t.Fatalf("handoff = %q, want explicit no-memory guidance", handoff)
+	}
 	if !strings.Contains(handoff, "Frank, Lori, and Ellie are starter-trio governance agents") {
 		t.Fatalf("handoff = %q, want starter-trio staffing guidance", handoff)
 	}
