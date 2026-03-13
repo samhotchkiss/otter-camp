@@ -4932,7 +4932,7 @@ func TestIntegrationParentTaskOversizedChildReturnsSuggestedDecomposition(t *tes
 	if err != nil {
 		t.Fatalf("task.create oversized child: %v", err)
 	}
-	if got := strings.TrimSpace(fmt.Sprintf("%v", out["error"])); !strings.Contains(got, "task exceeds bounded size policy") {
+	if got, _ := out["error"].(string); !strings.Contains(strings.TrimSpace(got), "task exceeds bounded size policy") {
 		t.Fatalf("error = %q, want bounded size policy failure", got)
 	}
 	suggested, ok := out["suggested_decomposition"].(map[string]any)
@@ -4945,9 +4945,62 @@ func TestIntegrationParentTaskOversizedChildReturnsSuggestedDecomposition(t *tes
 	if nextAction := strings.TrimSpace(fmt.Sprintf("%v", suggested["next_action"])); !strings.Contains(nextAction, "Do not retry the rejected task title") {
 		t.Fatalf("suggested_decomposition.next_action = %q, want anti-retry guidance", nextAction)
 	}
-	childTitles, ok := suggested["child_titles"].([]any)
-	if !ok || len(childTitles) < 2 {
+	var childTitlesLen int
+	switch typed := suggested["child_titles"].(type) {
+	case []any:
+		childTitlesLen = len(typed)
+	case []string:
+		childTitlesLen = len(typed)
+	}
+	if childTitlesLen < 2 {
 		t.Fatalf("suggested_decomposition.child_titles = %#v, want at least 2 entries", suggested["child_titles"])
+	}
+}
+
+func TestIntegrationParentTaskAllowsBoundedSinglePillarChild(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Content Strategy",
+		Description:    stringPtr("Break content strategy work into bounded deliverables."),
+		WorkStatus:     "review",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Draft content pillar summary",
+		"description":    "Write the one-page summary for the Ethics & the Internet pillar only.",
+	})
+	if err != nil {
+		t.Fatalf("task.create bounded pillar child: %v", err)
+	}
+	if got, ok := out["error"]; ok {
+		t.Fatalf("error = %#v, want bounded parent-scoped child to succeed", got)
+	}
+
+	childID := nestedUUIDPath(t, out, "task", "id")
+	createdChild, err := taskRepo.GetByID(ctx, childID)
+	if err != nil {
+		t.Fatalf("GetByID created child: %v", err)
+	}
+	if taskdecomp.ParseParentTaskID(createdChild.Metadata) != parentTask.ID {
+		t.Fatalf("created child parent_task_id = %s, want %s", taskdecomp.ParseParentTaskID(createdChild.Metadata), parentTask.ID)
 	}
 }
 

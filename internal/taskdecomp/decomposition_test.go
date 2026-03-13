@@ -89,6 +89,22 @@ func TestAnalyzeSplitsAmpersandLabelledEnumeratedDeliverables(t *testing.T) {
 	}
 }
 
+func TestAnalyzeSplitsUncountedAmpersandLabelledDeliverables(t *testing.T) {
+	description := "Create targeted personas."
+
+	plan := Analyze("Define audience personas: speakers & consultants", &description)
+	if !plan.RequiresDecomposition {
+		t.Fatal("RequiresDecomposition = false, want true")
+	}
+	want := []string{
+		"Define audience persona: speakers",
+		"Define audience persona: consultants",
+	}
+	if !reflect.DeepEqual(plan.Deliverables, want) {
+		t.Fatalf("Deliverables = %v, want %v", plan.Deliverables, want)
+	}
+}
+
 func TestAnalyzeFlagsEnumeratedCompoundActionTitles(t *testing.T) {
 	description := "Develop the second half of the idea backlog."
 
@@ -484,7 +500,7 @@ func TestValidateBoundedTaskSizeRejectsEnumeratedStrategyDefinitionTask(t *testi
 	title := "Define the 5 content pillars with detailed descriptions: (1) Ethics & the Internet, (2) Parenting in a Digital World, (3) AI/Orchestration & Technical Deep-Dives, (4) Thought Leadership / Industry Commentary, (5) Photography Archive"
 	description := title
 
-	err := validateBoundedTaskSize(title, &description)
+	err := validateBoundedTaskSize(title, &description, false)
 	if !errors.Is(err, ErrBoundedTaskTooLarge) {
 		t.Fatalf("validateBoundedTaskSize err = %v, want ErrBoundedTaskTooLarge", err)
 	}
@@ -494,9 +510,18 @@ func TestValidateBoundedTaskSizeRejectsBrandNarrativeStrategyTask(t *testing.T) 
 	title := "Define the overarching brand narrative that ties the content pillars together and positions Sam.blog for speaking invitations, consulting inquiries, and premium job offers"
 	description := title
 
-	err := validateBoundedTaskSize(title, &description)
+	err := validateBoundedTaskSize(title, &description, false)
 	if !errors.Is(err, ErrBoundedTaskTooLarge) {
 		t.Fatalf("validateBoundedTaskSize err = %v, want ErrBoundedTaskTooLarge", err)
+	}
+}
+
+func TestValidateBoundedTaskSizeAllowsParentScopedSinglePillarSlice(t *testing.T) {
+	title := "Draft content pillar summary"
+	description := "Write the one-page summary for the Ethics & the Internet pillar only."
+
+	if err := validateBoundedTaskSize(title, &description, true); err != nil {
+		t.Fatalf("validateBoundedTaskSize err = %v, want nil for bounded parent-scoped slice", err)
 	}
 }
 

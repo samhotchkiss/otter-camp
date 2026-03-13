@@ -183,6 +183,9 @@ func titleSuggestsCompoundBoundedWork(title string) bool {
 
 func inferTitleDeliverables(title string) []string {
 	if !titleSuggestsCompoundBoundedWork(title) {
+		if deliverables := inferLabelledColonDeliverables(title); len(deliverables) >= 2 {
+			return deliverables
+		}
 		return nil
 	}
 	trimmed := strings.TrimSpace(title)
@@ -196,6 +199,39 @@ func inferTitleDeliverables(title string) []string {
 		return deliverables
 	}
 	return []string{trimmed, trimmed}
+}
+
+func inferLabelledColonDeliverables(title string) []string {
+	before, after, ok := strings.Cut(strings.TrimSpace(title), ":")
+	if !ok {
+		return nil
+	}
+	fields := strings.Fields(strings.TrimSpace(before))
+	if len(fields) < 2 {
+		return nil
+	}
+	verb := strings.TrimSpace(fields[0])
+	if !leadingTaskActionPattern.MatchString(strings.ToLower(verb)) {
+		return nil
+	}
+	scope := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(before), verb))
+	if scope == "" {
+		return nil
+	}
+	labels := splitEnumeratedLabels(after)
+	if len(labels) < 2 {
+		return nil
+	}
+	scope = singularizeFinalWord(scope)
+	out := make([]string, 0, len(labels))
+	for _, label := range labels {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			return nil
+		}
+		out = append(out, fmt.Sprintf("%s %s: %s", strings.Title(strings.ToLower(verb)), scope, label))
+	}
+	return out
 }
 
 func inferEnumeratedBatchDeliverables(title string) []string {
@@ -352,7 +388,7 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 	}
 	plan := Analyze(input.Title, input.Description)
 	if !plan.RequiresDecomposition {
-		if sizingErr := validateBoundedTaskSize(input.Title, input.Description); sizingErr != nil {
+		if sizingErr := validateBoundedTaskSize(input.Title, input.Description, input.ParentTaskID != uuid.Nil); sizingErr != nil {
 			return QueueDecomposition{}, sizingErr
 		}
 		return QueueDecomposition{}, nil
@@ -383,7 +419,7 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 		})
 	}
 	for _, childDraft := range childDrafts {
-		if sizingErr := validateBoundedTaskSize(childDraft.Title, childDraft.Description); sizingErr != nil {
+		if sizingErr := validateBoundedTaskSize(childDraft.Title, childDraft.Description, true); sizingErr != nil {
 			return QueueDecomposition{}, sizingErr
 		}
 	}
@@ -839,8 +875,8 @@ func splitTopLevelCommaList(raw string) []string {
 	return parts
 }
 
-func validateBoundedTaskSize(title string, description *string) error {
-	estimatedMinutes, maxMinutes := estimateTaskMinutes(title, description)
+func validateBoundedTaskSize(title string, description *string, parentScoped bool) error {
+	estimatedMinutes, maxMinutes := estimateTaskMinutes(title, description, parentScoped)
 	if estimatedMinutes <= maxMinutes {
 		return nil
 	}
@@ -851,7 +887,7 @@ func validateBoundedTaskSize(title string, description *string) error {
 	}
 }
 
-func estimateTaskMinutes(title string, description *string) (int, int) {
+func estimateTaskMinutes(title string, description *string, parentScoped bool) (int, int) {
 	rawDescription := strings.TrimSpace(deref(description))
 	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{title, rawDescription}, " ")))
 	isBoundedSectionDraft := strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), "draft ") &&
@@ -888,11 +924,37 @@ func estimateTaskMinutes(title string, description *string) (int, int) {
 	if matches := len(enumMarkerPattern.FindAllString(text, -1)); matches >= 3 {
 		estimatedMinutes += matches * 5
 	}
-	if containsAny(text, broadScopeSignals) && !isBoundedSectionDraft {
+	if containsAny(text, broadScopeSignals) && !isBoundedSectionDraft && !shouldBypassBroadScopePenaltyForParentScopedChild(title, rawDescription, deliverables, parentScoped) {
 		estimatedMinutes += 15
 	}
 
 	return estimatedMinutes, maxMinutes
+}
+
+func shouldBypassBroadScopePenaltyForParentScopedChild(title, rawDescription string, deliverables []string, parentScoped bool) bool {
+	if !parentScoped {
+		return false
+	}
+	normalizedTitle := strings.ToLower(strings.TrimSpace(title))
+	if normalizedTitle == "" {
+		return false
+	}
+	if titleSuggestsCompoundBoundedWork(title) {
+		return false
+	}
+	if len(deliverables) > 1 {
+		return false
+	}
+	if len(rawDescription) >= 220 {
+		return false
+	}
+	if strings.Contains(title, ":") {
+		return false
+	}
+	if len(enumMarkerPattern.FindAllString(strings.ToLower(rawDescription), -1)) > 0 {
+		return false
+	}
+	return leadingTaskActionPattern.MatchString(normalizedTitle)
 }
 
 func containsAny(text string, signals []string) bool {
