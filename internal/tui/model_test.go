@@ -6284,6 +6284,77 @@ func TestEscapeFromTaskLoadsProjectDataWhenMissing(t *testing.T) {
 	}
 }
 
+func TestSidebarDataLoadedPreloadsOnlySelectedProjectTasks(t *testing.T) {
+	t.Parallel()
+
+	loads := []string{}
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectTasks: func(_ context.Context, id string) ([]SidebarTaskItem, error) {
+			loads = append(loads, id)
+			return nil, nil
+		},
+		LoadAgents: func(_ context.Context) ([]string, error) {
+			return nil, nil
+		},
+	})
+	model.workspace.selectedProjectID = "proj-2"
+
+	updated, cmd := model.Update(sidebarDataLoadedMsg{
+		Projects: []SidebarProjectItem{
+			{ID: "proj-1", DisplayName: "One"},
+			{ID: "proj-2", DisplayName: "Two"},
+			{ID: "proj-3", DisplayName: "Three"},
+		},
+	})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("sidebarDataLoadedMsg should return preload commands")
+	}
+	runNonTimerCmds(cmd)
+
+	if len(loads) != 1 {
+		t.Fatalf("LoadProjectTasks calls = %v, want [proj-2]", loads)
+	}
+	if loads[0] != "proj-2" {
+		t.Fatalf("LoadProjectTasks projectID = %q, want %q", loads[0], "proj-2")
+	}
+	if model.workspace.selectedProjectID != "proj-2" {
+		t.Fatalf("selectedProjectID = %q, want %q", model.workspace.selectedProjectID, "proj-2")
+	}
+}
+
+func TestSidebarDataLoadedPreloadsSingleProjectTasks(t *testing.T) {
+	t.Parallel()
+
+	loads := []string{}
+	model := NewModelWithRuntime(DefaultState(), RuntimeHints{
+		LoadProjectTasks: func(_ context.Context, id string) ([]SidebarTaskItem, error) {
+			loads = append(loads, id)
+			return nil, nil
+		},
+		LoadAgents: func(_ context.Context) ([]string, error) {
+			return nil, nil
+		},
+	})
+
+	_, cmd := model.Update(sidebarDataLoadedMsg{
+		Projects: []SidebarProjectItem{
+			{ID: "proj-solo", DisplayName: "Solo"},
+		},
+	})
+	if cmd == nil {
+		t.Fatal("sidebarDataLoadedMsg should return preload commands")
+	}
+	runNonTimerCmds(cmd)
+
+	if len(loads) != 1 {
+		t.Fatalf("LoadProjectTasks calls = %v, want [proj-solo]", loads)
+	}
+	if loads[0] != "proj-solo" {
+		t.Fatalf("LoadProjectTasks projectID = %q, want %q", loads[0], "proj-solo")
+	}
+}
+
 // EX-181: switchScope should clear stale chat messages before loading new session history
 // so the chat panel shows the loading indicator rather than the previous session's content.
 func TestSwitchScopeClearsChatMessages(t *testing.T) {

@@ -959,14 +959,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(activityParts) > 0 {
 			m.workspace.activity = appendActivity(m.workspace.activity, "sidebar loaded: "+strings.Join(activityParts, ", "))
 		}
-		// Pre-load tasks for all projects so the dashboard task board is populated on startup.
-		// Also load agents for the AGENTS view.
-		// If a project is the persisted selected project, expand its sidebar node so the user
-		// sees their active project's task list on startup without needing to click.
-		for _, proj := range projects {
-			expand := m.workspace.selectedProjectID == proj.ID
-			cmds = append(cmds, loadProjectTasksCmd(proj.ID, m.runtimeHints, expand))
+		// Avoid a startup burst of one task-list request per project. Preload the
+		// selected project when present, or the lone project in single-project orgs.
+		for _, projectID := range projectTaskPreloadIDs(projects, m.workspace.selectedProjectID) {
+			expand := m.workspace.selectedProjectID == projectID
+			cmds = append(cmds, loadProjectTasksCmd(projectID, m.runtimeHints, expand))
 		}
+		// Also load agents for the AGENTS view.
 		if cmd := loadAgentsCmd(m.runtimeHints); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -8775,6 +8774,21 @@ func loadProjectTasksCmd(projectID string, hints RuntimeHints, expand bool) tea.
 		tasks, _ := hints.LoadProjectTasks(ctx, projectID)
 		return projectTasksLoadedMsg{ProjectID: projectID, Tasks: tasks, ExpandNode: expand}
 	}
+}
+
+func projectTaskPreloadIDs(projects []SidebarProjectItem, selectedProjectID string) []string {
+	selectedProjectID = strings.TrimSpace(selectedProjectID)
+	if selectedProjectID != "" {
+		for _, project := range projects {
+			if strings.TrimSpace(project.ID) == selectedProjectID {
+				return []string{selectedProjectID}
+			}
+		}
+	}
+	if len(projects) == 1 && strings.TrimSpace(projects[0].ID) != "" {
+		return []string{strings.TrimSpace(projects[0].ID)}
+	}
+	return nil
 }
 
 func loadProjectDetailCmd(projectID string, hints RuntimeHints) tea.Cmd {
