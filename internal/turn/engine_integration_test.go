@@ -10606,6 +10606,262 @@ func TestTurnEngineIntegrationRecoveredLeakedBootstrapRetryUsesValidationContinu
 	}
 }
 
+func TestTurnEngineIntegrationHandleTurnJobRecoveredBootstrapRetryEnqueuesFollowOn(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: recover bounded bootstrap tasks after a claimed retry leak.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "pm",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("Assign PM: %v", err)
+	}
+
+	parentDescription := strings.Join([]string{
+		"- Design launch positioning and homepage layout.",
+		"- Coordinate analytics, migration sequencing, and launch readiness.",
+	}, "\n")
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Launch orchestration parent",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	}); err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+		UpdatedAt:        &now,
+	}); err != nil {
+		t.Fatalf("updateProjectBootstrapState: %v", err)
+	}
+
+	jobID := testdb.EnqueueJob(t, fixture.pool, AgentTurnJobType, 100, map[string]any{
+		"session_id": projectSession.ID,
+		"message_id": handoff.ID,
+	})
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'integration-worker',
+		    claimed_at = now(),
+		    attempts = 2,
+		    last_error = $2,
+		    updated_at = now()
+		WHERE id = $1
+	`, jobID, "task exceeds bounded size policy (estimated 35 minutes > 30 minute limit): split the work into smaller reviewable tasks before queueing"); err != nil {
+		t.Fatalf("Update claimed retry job: %v", err)
+	}
+
+	turnRecord, _, err := fixture.engine.turns.CreateForMessageAttempt(ctx, projectSession.ID, lori.ID, handoff.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+	startedTurn, shouldRun, err := fixture.engine.startInboundMessageTurn(ctx, turnRecord)
+	if err != nil {
+		t.Fatalf("startInboundMessageTurn: %v", err)
+	}
+	if !shouldRun {
+		t.Fatal("expected bootstrap turn to start")
+	}
+
+	var payload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&payload); err != nil {
+		t.Fatalf("load claimed job payload: %v", err)
+	}
+	claimedJob := jobqueue.Job{
+		ID:      jobID,
+		JobType: AgentTurnJobType,
+		Payload: payload,
+		Status:  "claimed",
+	}
+
+	if err := fixture.engine.HandleTurnJob(ctx, claimedJob); err != nil {
+		t.Fatalf("HandleTurnJob recovered bootstrap retry: %v", err)
+	}
+
+	storedTurn, err := fixture.chatService.GetTurn(ctx, startedTurn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn active turn: %v", err)
+	}
+	if storedTurn.Status != "failed" {
+		t.Fatalf("active turn status = %q, want failed after recovered retry handoff", storedTurn.Status)
+	}
+
+	var pendingFollowOnJobs int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND payload->>'session_id' = $1
+	`, projectSession.ID.String()).Scan(&pendingFollowOnJobs); err != nil {
+		t.Fatalf("count pending follow-on bootstrap jobs: %v", err)
+	}
+	if pendingFollowOnJobs != 1 {
+		t.Fatalf("pending follow-on bootstrap agent_turn jobs = %d, want 1 after claimed retry recovery", pendingFollowOnJobs)
+	}
+}
+
+func TestTurnEngineIntegrationWorkerRecoveredBootstrapRetryEnqueuesFollowOn(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: recover bounded bootstrap tasks into a fresh continuation after stale claimed retry recovery.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "pm",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("Assign PM: %v", err)
+	}
+
+	parentDescription := strings.Join([]string{
+		"- Redesign the landing page narrative and responsive layout for launch.",
+		"- Coordinate analytics, migration sequencing, and launch readiness.",
+	}, "\n")
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Launch orchestration parent",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	}); err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: handoff.ID.String(),
+		StartedAt:        &now,
+		UpdatedAt:        &now,
+	}); err != nil {
+		t.Fatalf("updateProjectBootstrapState: %v", err)
+	}
+
+	worker := jobqueue.New(fixture.pool, slog.New(slog.NewTextHandler(io.Discard, nil)), jobqueue.Config{
+		WorkerID:             "recovered-bootstrap-retry-worker",
+		PollInterval:         5 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+	worker.Register(AgentTurnJobType, fixture.engine.HandleTurnJob)
+
+	jobID, err := worker.Enqueue(ctx, nil, AgentTurnJobType, defaultAgentTurnJobPriority, AgentTurnPayload{
+		SessionID: projectSession.ID,
+		MessageID: handoff.ID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueue bootstrap retry job: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET attempts = 1,
+		    last_error = $2,
+		    updated_at = now()
+		WHERE id = $1
+	`, jobID, "task exceeds bounded size policy (estimated 35 minutes > 30 minute limit): split the work into smaller reviewable tasks before queueing"); err != nil {
+		t.Fatalf("prime bootstrap retry job state: %v", err)
+	}
+
+	turnRecord, _, err := fixture.engine.turns.CreateForMessageAttempt(ctx, projectSession.ID, lori.ID, handoff.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+	startedTurn, shouldRun, err := fixture.engine.startInboundMessageTurn(ctx, turnRecord)
+	if err != nil {
+		t.Fatalf("startInboundMessageTurn: %v", err)
+	}
+	if !shouldRun {
+		t.Fatal("expected bootstrap turn to start")
+	}
+
+	workerCtx, cancelWorker := context.WithCancel(ctx)
+	defer cancelWorker()
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		_ = worker.Start(workerCtx)
+	}()
+	defer func() {
+		cancelWorker()
+		_ = worker.Stop()
+		<-workerDone
+	}()
+
+	waitForJobStatus(t, fixture.pool, jobID, "done", 3*time.Second)
+
+	storedTurn, err := fixture.chatService.GetTurn(ctx, startedTurn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn active turn: %v", err)
+	}
+	if storedTurn.Status != "failed" {
+		t.Fatalf("active turn status = %q, want failed after worker recovered retry handoff", storedTurn.Status)
+	}
+
+	storedSession, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession stored session: %v", err)
+	}
+	if storedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil after worker recovered retry handoff", storedSession.CurrentTurnID)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 follow-on after worker recovered retry handoff", jobs)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	if !containsSystemMessage(messages, "[Recovered stale in-progress turn after claimed job recovery - retrying in a fresh turn.]") {
+		t.Fatal("missing recovered stale-turn system message")
+	}
+}
+
 func TestTurnEngineIntegrationRecoveredClaimedBootstrapRetryRecoversLeakedContinuationTurn(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -10701,7 +10957,7 @@ func TestTurnEngineIntegrationRecoveredClaimedBootstrapRetryRecoversLeakedContin
 	if err != nil {
 		t.Fatalf("Create leaked continuation turn: %v", err)
 	}
-	if _, err := fixture.chatService.UpdateCurrentTurn(ctx, projectSession.ID, &continuationTurn.ID); err != nil {
+	if _, err := repo.NewChatSessionRepo(fixture.pool).UpdateCurrentTurn(ctx, projectSession.ID, &continuationTurn.ID); err != nil {
 		t.Fatalf("UpdateCurrentTurn continuation: %v", err)
 	}
 	if err := fixture.chatService.StartTurn(ctx, continuationTurn.ID); err != nil {
@@ -10714,7 +10970,6 @@ func TestTurnEngineIntegrationRecoveredClaimedBootstrapRetryRecoversLeakedContin
 		AuthorID:   &lori.ID,
 		Role:       "assistant",
 		Content:    "",
-		Status:     "pending",
 	}); err != nil {
 		t.Fatalf("Append pending assistant placeholder: %v", err)
 	}
