@@ -1972,19 +1972,19 @@ func normalizeBootstrapStepSlug(value string) string {
 	switch slug {
 	case "bootstrap-governance":
 		return "bootstrap-governance-gate"
-	case "bind-repo", "bind-repo-and-environment":
+	case "bind-repo", "bind_repo", "bind-repo-and-environment":
 		return "bind-repo-environment"
-	case "staff-the-project", "staffing":
+	case "staff-the-project", "staffing", "staff_project":
 		return "staff-project"
-	case "task-decomposition", "task_decomposition":
+	case "task-decomposition", "task_decomposition", "decompose_tasks", "decompose_task_tree":
 		return "decompose-workstreams"
-	case "validate-sizing", "validate-task-sizing", "dependency-wiring", "dependency_wiring":
+	case "validate-sizing", "validate-task-sizing", "validate_tasks", "validate_task_shape", "dependency-wiring", "dependency_wiring":
 		return "validate-task-shape"
-	case "attach-flows", "attach-flow-templates", "attach-validate-flows", "attach-flow-template", "attach-and-validate-flow-templates", "flow-templates", "flow_templates":
+	case "attach-flows", "attach_flows", "attach-flow-templates", "attach-validate-flows", "attach-flow-template", "attach-and-validate-flow-templates", "flow-templates", "flow_templates":
 		return "attach-validate-flow-templates"
-	case "first-wave-selection":
+	case "first-wave-selection", "select_first_wave", "first_wave_selection":
 		return "select-first-wave"
-	case "frank-sign-off", "record-sign-off":
+	case "frank-sign-off", "frank_sign_off", "record-sign-off":
 		return "record-frank-sign-off"
 	default:
 		return slug

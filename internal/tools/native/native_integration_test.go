@@ -4120,12 +4120,13 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
 		"completed_step_slugs": []string{
 			"bootstrap-governance",
-			"bind-repo",
-			"staffing",
-			"task_decomposition",
-			"dependency_wiring",
-			"flow_templates",
-			"frank-sign-off",
+			"bind_repo",
+			"staff_project",
+			"decompose_tasks",
+			"validate_tasks",
+			"attach_flows",
+			"select_first_wave",
+			"frank_sign_off",
 		},
 		"sign_off_summary": "Frank approved the bootstrap setup.",
 	})
@@ -4179,6 +4180,7 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 		"decompose-workstreams",
 		"validate-task-shape",
 		"attach-validate-flow-templates",
+		"select-first-wave",
 		"record-frank-sign-off",
 	} {
 		if got := statuses[slug]; got != "done" {
