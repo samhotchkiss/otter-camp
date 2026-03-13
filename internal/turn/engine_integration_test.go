@@ -9485,6 +9485,48 @@ func TestTurnEngineIntegrationBootstrapTransientProviderFailureRestartsBeforeSet
 	}
 }
 
+func TestTurnEngineIntegrationRelaunchArchivedBootstrapProjectReturnsActiveRestart(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: start staffing and bootstrap setup for this project.")
+
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{}, ErrModelTransient
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage transient bootstrap failure: %v", err)
+	}
+
+	archived := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if archived.Status != "archived" {
+		t.Fatalf("project status = %q, want archived", archived.Status)
+	}
+
+	restarted, err := fixture.engine.RelaunchArchivedBootstrapProject(ctx, archived.ID)
+	if err != nil {
+		t.Fatalf("RelaunchArchivedBootstrapProject: %v", err)
+	}
+	if restarted == nil {
+		t.Fatal("RelaunchArchivedBootstrapProject returned nil project")
+	}
+	if restarted.ID == archived.ID {
+		t.Fatal("relaunch returned archived project, want fresh restart project")
+	}
+	if restarted.Status != "active" {
+		t.Fatalf("restarted project status = %q, want active", restarted.Status)
+	}
+
+	bundle := mustProjectBootstrapRestartBundle(t, archived)
+	if strings.TrimSpace(bundle.RestartProjectID) != restarted.ID.String() {
+		t.Fatalf("restart_project_id = %q, want %q", bundle.RestartProjectID, restarted.ID.String())
+	}
+}
+
 func TestTurnEngineIntegrationBootstrapTransientProviderFailureAfterSetupPersistsKeepsSessionActive(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

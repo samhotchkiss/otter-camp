@@ -3,6 +3,7 @@ package turn
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,6 +17,11 @@ import (
 )
 
 const projectBootstrapRestartBundleSettingsKey = "bootstrap_restart_bundle"
+
+var (
+	ErrProjectBootstrapRelaunchUnavailable = errors.New("project bootstrap relaunch unavailable")
+	ErrProjectBootstrapRelaunchIneligible  = errors.New("project is not an archived bootstrap relaunch candidate")
+)
 
 type projectBootstrapRestartBundle struct {
 	OperatorBrief       string                               `json:"operator_brief,omitempty"`
@@ -633,6 +639,71 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 		return err
 	}
 	return repo.NewChatSessionRepo(e.pool).CloseProjectScoped(ctx, updatedProject.ID)
+}
+
+// RelaunchArchivedBootstrapProject returns the active restart project for an
+// archived bootstrap failure, creating it through the canonical restart path
+// when necessary.
+func (e *TurnEngine) RelaunchArchivedBootstrapProject(ctx context.Context, projectID uuid.UUID) (*repo.Project, error) {
+	if e == nil || e.pool == nil || e.events == nil {
+		return nil, ErrProjectBootstrapRelaunchUnavailable
+	}
+	if projectID == uuid.Nil {
+		return nil, ErrProjectBootstrapRelaunchIneligible
+	}
+
+	projectRepo := repo.NewProjectRepo(e.pool)
+	archivedProject, err := projectRepo.GetByID(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(archivedProject.Status), "archived") {
+		return nil, ErrProjectBootstrapRelaunchIneligible
+	}
+
+	failureState := projectfailure.Parse(archivedProject.Settings)
+	if !strings.EqualFold(strings.TrimSpace(failureState.Action), projectFailureActionArchive) ||
+		!strings.EqualFold(strings.TrimSpace(failureState.Source), projectBootstrapSource) {
+		return nil, ErrProjectBootstrapRelaunchIneligible
+	}
+
+	recordedAt := e.now().UTC()
+	if failureState.RecordedAt != nil && !failureState.RecordedAt.IsZero() {
+		recordedAt = failureState.RecordedAt.UTC()
+	}
+	record := projectAutomaticFailureRecord{
+		Action:                   strings.TrimSpace(failureState.Action),
+		Source:                   strings.TrimSpace(failureState.Source),
+		FailureCategory:          strings.TrimSpace(failureState.FailureCategory),
+		FailureClass:             strings.TrimSpace(failureState.FailureClass),
+		FailurePhase:             strings.TrimSpace(failureState.FailurePhase),
+		LastCheckpoint:           strings.TrimSpace(failureState.LastCheckpoint),
+		LastSuccessfulCheckpoint: strings.TrimSpace(failureState.LastSuccessfulCheckpoint),
+		FailureReason:            strings.TrimSpace(failureState.FailureReason),
+		SetupPersisted:           failureState.SetupPersisted,
+		RecordedAt:               recordedAt,
+	}
+	if err := e.maybeRestartArchivedBootstrapProject(ctx, archivedProject, record); err != nil {
+		return nil, err
+	}
+
+	refreshedArchived, err := projectRepo.GetByID(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	bundle := projectBootstrapRestartBundleFromSettings(refreshedArchived.Settings)
+	if restartID, ok := parseUUIDAny(bundle.RestartProjectID); ok && restartID != uuid.Nil {
+		restarted, getErr := projectRepo.GetByID(ctx, restartID)
+		if getErr == nil && strings.EqualFold(strings.TrimSpace(restarted.Status), "active") {
+			return &restarted, nil
+		}
+	}
+	if restarted, ok, err := e.findAnyActiveBootstrapRestartProject(ctx, refreshedArchived.OrganizationID, refreshedArchived.ID); err != nil {
+		return nil, err
+	} else if ok {
+		return &restarted, nil
+	}
+	return nil, ErrProjectBootstrapRelaunchUnavailable
 }
 
 func (e *TurnEngine) findExistingBootstrapRestartProject(ctx context.Context, organizationID, sourceProjectID uuid.UUID, retryAttemptCount int) (repo.Project, bool, error) {
