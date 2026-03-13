@@ -5042,6 +5042,8 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string
 		lines = append(lines, "Bootstrap is currently blocked on this validation failure: "+reason)
 		lines = append(lines, "Do not start with bootstrap.setup.persist on this turn unless you have already repaired the named blocker. First fix the specific persisted task, assignment, flow attachment, or bounded-size issue named above.")
 		lines = append(lines, "If the failure names an oversized first-wave or parent task, split that exact persisted task into narrower executable child tasks and keep each child bounded. If the failure names an unassigned or flowless first-wave task, fix that exact task directly.")
+		lines = append(lines, "When the named blocker is fixed, resume with bootstrap.setup.persist using only canonical bootstrap setup step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off. Current phase names like first_wave_executions_created are not valid completed_step_slugs.")
+		lines = append(lines, "If first-wave selection is already persisted, do not use raw task.update to force draft first-wave tasks into queued or in_progress. Leave those tasks in draft and let bootstrap.setup.persist plus the bootstrap governance gate handle promotion after validation passes.")
 		lines = append(lines, "Only after the named blocker is repaired should you call bootstrap.setup.persist to record the corrected setup state.")
 		lines = append(lines, "Do not ask the user what they want. Continue the bootstrap workflow now.")
 		return strings.Join(lines, " ")

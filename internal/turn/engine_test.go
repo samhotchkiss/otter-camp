@@ -3509,6 +3509,12 @@ func TestBuildProjectBootstrapResumeActionPromptForValidationFailure(t *testing.
 	if !strings.Contains(prompt, "Only after the named blocker is repaired should you call bootstrap.setup.persist") {
 		t.Fatalf("prompt = %q, want repair-before-persist guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Current phase names like first_wave_executions_created are not valid completed_step_slugs") {
+		t.Fatalf("prompt = %q, want canonical step slug guidance", prompt)
+	}
+	if !strings.Contains(prompt, "do not use raw task.update to force draft first-wave tasks into queued or in_progress") {
+		t.Fatalf("prompt = %q, want no-manual-promotion guidance", prompt)
+	}
 }
 
 func TestBuildProjectBootstrapResumeStateMessageIncludesValidationFailure(t *testing.T) {
