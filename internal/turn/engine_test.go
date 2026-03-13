@@ -2930,6 +2930,9 @@ func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	if !strings.Contains(resumeContent, "Existing PM: Sam.blog PM") {
 		t.Fatalf("resume message = %q, want existing PM line", resumeContent)
 	}
+	if !strings.Contains(resumeContent, "Active project id: "+fixture.session.ScopeID.String()) {
+		t.Fatalf("resume message = %q, want active project id line", resumeContent)
+	}
 	if !strings.Contains(resumeContent, "Existing active assignments: reviewers=Vivian Cho; workers=Ananya Webb, André Kowalski") {
 		t.Fatalf("resume message = %q, want assignment roster", resumeContent)
 	}
@@ -3007,6 +3010,9 @@ func TestContinuationTurnReloadsSessionBeforeBootstrapResumeState(t *testing.T) 
 	}
 	for _, msg := range messages {
 		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
+			if !strings.Contains(msg.Content, "Active project id: "+fixture.session.ScopeID.String()) {
+				t.Fatalf("resume message = %q, want project id line", msg.Content)
+			}
 			if !strings.Contains(msg.Content, "Existing PM: Sam.blog PM") {
 				t.Fatalf("resume message = %q, want refreshed PM line", msg.Content)
 			}

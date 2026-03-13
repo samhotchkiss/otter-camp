@@ -4285,6 +4285,8 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 }
 
 type projectBootstrapResumeSnapshot struct {
+	ProjectID      string
+	ProjectSlug    string
 	ExistingPM     string
 	AssignmentLine string
 }
@@ -4326,6 +4328,14 @@ func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, pro
 	}
 
 	snapshot := projectBootstrapResumeSnapshot{}
+	if projectID != uuid.Nil {
+		snapshot.ProjectID = projectID.String()
+	}
+	if e.projects != nil {
+		if projectRecord, projectErr := e.projects.GetByID(ctx, projectID); projectErr == nil {
+			snapshot.ProjectSlug = strings.TrimSpace(projectRecord.Slug)
+		}
+	}
 	if names := grouped["project_manager"]; len(names) > 0 {
 		snapshot.ExistingPM = names[0]
 		delete(grouped, "project_manager")
@@ -4358,6 +4368,13 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	lines := []string{
 		"[Project bootstrap resume]",
 		"Resume the active project bootstrap workflow from the persisted state below.",
+	}
+	if projectID := strings.TrimSpace(snapshot.ProjectID); projectID != "" {
+		projectLine := "Active project id: " + projectID
+		if slug := strings.TrimSpace(snapshot.ProjectSlug); slug != "" {
+			projectLine += " (slug " + slug + ")"
+		}
+		lines = append(lines, projectLine)
 	}
 	if phase := strings.TrimSpace(state.CurrentPhase); phase != "" {
 		lines = append(lines, "Current phase: "+phase)
