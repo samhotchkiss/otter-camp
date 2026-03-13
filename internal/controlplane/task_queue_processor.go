@@ -1385,6 +1385,9 @@ func (p *TaskQueueProcessor) projectPaused(ctx context.Context, projectID uuid.U
 	if err != nil {
 		return false, err
 	}
+	if strings.EqualFold(strings.TrimSpace(projectRecord.Status), "archived") {
+		return true, nil
+	}
 	return projectpause.Parse(projectRecord.Settings).IsPaused, nil
 }
 

@@ -346,6 +346,34 @@ func TestProcessQueuedTaskSkipsPausedProject(t *testing.T) {
 	}
 }
 
+func TestProcessQueuedTaskSkipsArchivedProject(t *testing.T) {
+	ctx := context.Background()
+	projectID := uuid.New()
+	taskID := uuid.New()
+
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:         taskID,
+				ProjectID:  projectID,
+				WorkStatus: "queued",
+			},
+		},
+		projects: &fakeTaskQueueProjectRepository{
+			items: map[uuid.UUID]repo.Project{
+				projectID: {
+					ID:     projectID,
+					Status: "archived",
+				},
+			},
+		},
+	}
+
+	if err := processor.processQueuedTask(ctx, eventbus.DomainEvent{ID: uuid.New()}, taskID); err != nil {
+		t.Fatalf("processQueuedTask: %v", err)
+	}
+}
+
 func TestProcessQueuedTaskSuppressesStaleQueuedConflict(t *testing.T) {
 	ctx := context.Background()
 	projectID := uuid.New()
