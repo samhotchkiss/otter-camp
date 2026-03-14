@@ -932,6 +932,15 @@ func (w *Worker) CloseSupersededTaskAsyncSessions(ctx context.Context) (int64, e
 }
 
 func (w *Worker) processAvailableJobs(ctx context.Context) error {
+	if recovered, err := w.RecoverStaleClaims(ctx); err != nil {
+		if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+			w.logger.Error("job queue: inline stale claim recovery failed", "error", err)
+		}
+		return err
+	} else if recovered > 0 {
+		w.logger.Info("job queue: recovered stale claims before claim", "count", recovered)
+	}
+
 	for {
 		slots := w.availableExecutionSlots()
 		if slots > 0 {
@@ -1094,8 +1103,10 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 		limit = 1
 	}
 	whereFilter := ""
+	args := []any{limit, w.workerID}
 	if strings.TrimSpace(filter) != "" {
 		whereFilter = "AND " + filter
+		args = append(args, agentTurnJobType)
 	}
 	rows, err := w.pool.Query(ctx, fmt.Sprintf(`
 		WITH claimable AS (
@@ -1118,7 +1129,7 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 		WHERE jq.id = claimable.id
 		RETURNING jq.id, jq.job_type, jq.priority, jq.payload, jq.status, jq.claimed_by, jq.claimed_at,
 		          jq.attempts, jq.max_attempts, jq.last_error, jq.run_after, jq.created_at, jq.updated_at
-	`, whereFilter), limit, w.workerID, agentTurnJobType)
+	`, whereFilter), args...)
 	if err != nil {
 		return nil, fmt.Errorf("claim pending jobs: %w", err)
 	}

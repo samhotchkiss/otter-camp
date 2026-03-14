@@ -927,6 +927,62 @@ func TestJobWorkerReleaseClaimsForWorkerRequeuesGracefulShutdownClaims(t *testin
 	}
 }
 
+func TestJobWorkerProcessAvailableJobsRecoversStaleClaimsBeforeClaiming(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "recover-before-claim",
+		BatchSize:            2,
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	var staleID uuid.UUID
+	if err := pool.QueryRow(context.Background(), `
+		INSERT INTO job_queue (job_type, status, claimed_by, claimed_at, attempts, max_attempts, run_after, payload)
+		VALUES ('test.stale', 'claimed', 'dead-worker', now() - interval '10 minutes', 1, 3, now(), '{}'::jsonb)
+		RETURNING id
+	`).Scan(&staleID); err != nil {
+		t.Fatalf("insert stale claim failed: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	worker.Register("test.stale", func(context.Context, Job) error { return nil })
+	worker.Register("test.fresh", func(context.Context, Job) error {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+
+	if _, err := worker.Enqueue(context.Background(), nil, "test.fresh", 100, map[string]any{"n": 1}, nil); err != nil {
+		t.Fatalf("enqueue fresh job failed: %v", err)
+	}
+
+	if err := worker.processAvailableJobs(context.Background()); err != nil {
+		t.Fatalf("processAvailableJobs failed: %v", err)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fresh job did not start after stale claim recovery")
+	}
+
+	var status string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT status
+		FROM job_queue
+		WHERE id = $1
+	`, staleID).Scan(&status); err != nil {
+		t.Fatalf("query stale claim status failed: %v", err)
+	}
+	if status != "pending" && status != "done" {
+		t.Fatalf("stale claim status = %q, want pending or done", status)
+	}
+}
+
 func TestJobWorkerPurgeStaleAgentTurnJobsClearsClaimedClosedSessions(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
