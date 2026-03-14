@@ -9255,10 +9255,19 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 		}
 		return rt.toolCallsUsed > 0
 	case "flow.list_templates":
+		if namedFailureTask {
+			return true
+		}
 		return rt.toolCallsUsed > 0
 	case "file.search":
+		if namedFailureTask {
+			return true
+		}
 		return rt.toolCallsUsed > 0
 	case "file.read":
+		if namedFailureTask && projectBootstrapRecoveryReadsPlanningPath(arguments) {
+			return true
+		}
 		return rt.toolCallsUsed > 0 && projectBootstrapRecoveryReadsPlanningPath(arguments)
 	default:
 		return false

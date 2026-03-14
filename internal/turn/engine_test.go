@@ -2177,6 +2177,18 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksNamedTaskListImmedia
 	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get", nil) {
 		t.Fatal("task.get should remain available for targeted recovery inspection")
 	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "flow.list_templates", nil) {
+		t.Fatal("expected flow.list_templates to be blocked immediately when recovery already names the exact failing task")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.search", nil) {
+		t.Fatal("expected file.search to be blocked immediately when recovery already names the exact failing task")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.read", map[string]any{"path": "planning/prd-spec/oc-73.md"}) {
+		t.Fatal("expected planning file.read to be blocked immediately when recovery already names the exact failing task")
+	}
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.read", map[string]any{"path": "src/components/PostCard.tsx"}) {
+		t.Fatal("non-planning file.read should remain available for targeted implementation inspection")
+	}
 }
 
 func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksNamedTaskListFromRecoveryMessage(t *testing.T) {
