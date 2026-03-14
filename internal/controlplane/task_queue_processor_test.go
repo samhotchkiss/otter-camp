@@ -318,6 +318,50 @@ func TestSelectNextQueuedTaskUnderProjectGateBlocksQueuedChildrenBehindBootstrap
 	}
 }
 
+func TestSelectNextQueuedTaskUnderProjectGateIgnoresSupersededBootstrapGateCopies(t *testing.T) {
+	projectID := uuid.New()
+	doneGate := repo.ProjectTask{
+		ID:          uuid.New(),
+		ProjectID:   projectID,
+		TaskNumber:  1,
+		Title:       "Bootstrap governance gate",
+		WorkStatus:  "done",
+		BlocksScope: "all",
+		Metadata:    json.RawMessage(`{"bootstrap_gate":true}`),
+	}
+	doneSetup := repo.ProjectTask{
+		ID:          uuid.New(),
+		ProjectID:   projectID,
+		TaskNumber:  2,
+		Title:       "Bind repo and environment",
+		WorkStatus:  "done",
+		BlocksScope: "none",
+		Metadata:    json.RawMessage(`{"bootstrap_step_slug":"bind-repo-environment"}`),
+	}
+	duplicateDraftGate := repo.ProjectTask{
+		ID:          uuid.New(),
+		ProjectID:   projectID,
+		TaskNumber:  9,
+		Title:       "Bootstrap governance gate",
+		WorkStatus:  "draft",
+		BlocksScope: "all",
+		Metadata:    json.RawMessage(`{"bootstrap_gate":true}`),
+	}
+	child := repo.ProjectTask{
+		ID:          uuid.New(),
+		ProjectID:   projectID,
+		TaskNumber:  20,
+		Title:       "First-wave child",
+		WorkStatus:  "queued",
+		BlocksScope: "none",
+	}
+
+	selected := selectNextQueuedTaskUnderProjectGate([]repo.ProjectTask{doneGate, doneSetup, duplicateDraftGate, child})
+	if selected == nil || selected.ID != child.ID {
+		t.Fatalf("selected queued task = %v, want queued child %s after canonical bootstrap gate is already done", selected, child.ID)
+	}
+}
+
 func TestProcessQueuedTaskSkipsPausedProject(t *testing.T) {
 	ctx := context.Background()
 	projectID := uuid.New()
