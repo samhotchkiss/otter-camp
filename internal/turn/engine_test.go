@@ -4447,6 +4447,16 @@ func TestProjectBootstrapAckOnlyRecoveryReply(t *testing.T) {
 	}
 }
 
+func TestBuildProjectBootstrapAckOnlyRecoveryFailureReason(t *testing.T) {
+	got := buildProjectBootstrapAckOnlyRecoveryFailureReason("kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent")
+	if !strings.Contains(got, "acknowledgement only") {
+		t.Fatalf("expected acknowledgement-only wording, got %q", got)
+	}
+	if !strings.Contains(got, "first-wave task 11 (Site Build) has no assigned agent") {
+		t.Fatalf("expected target in failure reason, got %q", got)
+	}
+}
+
 func TestLoadProjectBootstrapResumeSnapshotIncludesBroadParentBlockedTaskLine(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

@@ -1274,10 +1274,10 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		}
 	}
 	if !progress.ValidationFailed() && projectBootstrapAckOnlyRecoveryReply(messages, assistant) {
-		if blockedReason, blockedClass := projectBootstrapBlockedRecoveryFailure(messages, state); strings.TrimSpace(blockedReason) != "" {
+		if blockedReason, _ := projectBootstrapBlockedRecoveryFailure(messages, state); strings.TrimSpace(blockedReason) != "" {
 			progress.ValidationStatus = projectBootstrapValidationFailed
-			progress.ValidationFailureReason = blockedReason
-			progress.ValidationFailureClass = blockedClass
+			progress.ValidationFailureReason = buildProjectBootstrapAckOnlyRecoveryFailureReason(blockedReason)
+			progress.ValidationFailureClass = projectBootstrapFailureStalled
 		}
 	}
 	if narrativeClaimedCompletion && !progress.Materialized() {
@@ -5069,6 +5069,17 @@ func projectBootstrapAckOnlyRecoveryReply(messages []repo.ChatMessage, assistant
 		return strings.TrimSpace(projectBootstrapRecoveryTargetFromMessage(message.Content)) != ""
 	}
 	return false
+}
+
+func buildProjectBootstrapAckOnlyRecoveryFailureReason(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "kickoff validation failed: automatic bootstrap recovery replied with an acknowledgement only and did not perform the required repair work"
+	}
+	return fmt.Sprintf(
+		"kickoff validation failed: automatic bootstrap recovery replied with an acknowledgement only instead of repairing the requested bootstrap target (%s)",
+		target,
+	)
 }
 
 func projectBootstrapRecoveryTargetFromMessage(content string) string {
