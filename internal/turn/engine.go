@@ -3086,6 +3086,10 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 			nextActionHint += " Do not call file.read on planning artifacts just to decide the child split. Use the persisted wave/workstream title and existing task tree to create the bounded children directly."
 		}
 	}
+	if strings.Contains(lowerReason, "bounded task-size policy") || strings.Contains(lowerReason, "bounded size policy") {
+		recoveryHint += " Your next assistant action should be a tool call, not a narrative reply. Do not call task.get on the named oversized task first when the blocked task id is already present in the bootstrap resume message; keep that task orchestration-only and go straight to task.update plus bounded child-task creation."
+		nextActionHint += " Do not start by rereading the oversized parent task; use the exact blocked task id from the bootstrap resume message and repair it directly."
+	}
 	if projectBootstrapRestartScaffoldFailureReason(reason) {
 		recoveryHint = "This restart already created staff drafts but did not materialize staffed executable project work. Do not begin with project.get, task.list, flow.list_templates, file.list, git.log, or other broad rereads. Reuse the dedicated project staff already created in this session, assign them to the project if that assignment step is still incomplete, then immediately create bounded executable workstream tasks and child tasks so bootstrap moves past scaffold-only state."
 		nextActionHint = "Do not spend this turn rediscovering repo state or profile catalogs. Your first repair step should be to persist staffed executable work using the existing project staff and then continue bootstrap from that materialized task tree. Do not answer with a standalone acknowledgement or status note. This turn should contain the concrete staffing/task mutation tool calls needed to move past scaffold-only state; if you cannot make those tool calls, explain the concrete blocker instead."
@@ -5313,8 +5317,9 @@ func buildProjectBootstrapBoundedSizeRepairTaskLine(blockedTask repo.ProjectTask
 		return ""
 	}
 	return fmt.Sprintf(
-		"Direct repair for the named oversized task: keep task %d orchestration-only, create 2-4 bounded executable child tasks directly beneath task id=%s, keep each child to a single concrete deliverable under 60 minutes, and assign each child to an existing active project assignee before resuming bootstrap.setup.persist.",
+		"Direct repair for the named oversized task: keep task %d orchestration-only, do not call task.get on task id=%s first, create 2-4 bounded executable child tasks directly beneath task id=%s, keep each child to a single concrete deliverable under 60 minutes, and assign each child to an existing active project assignee before resuming bootstrap.setup.persist.",
 		blockedTask.TaskNumber,
+		blockedTask.ID.String(),
 		blockedTask.ID.String(),
 	)
 }

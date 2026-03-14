@@ -2379,7 +2379,7 @@ func TestBuildProjectBootstrapResumeStateMessageRequiresDirectBoundedSplit(t *te
 		ProjectID:      "028a3f39-be56-45bc-b9f8-5978ab9cf28f",
 		ProjectSlug:    "sam-blog-110-restart-9",
 		FailedTaskLine: `Named blocked task: task 105 id=1234 title="SEO, Performance, and Analytics Integration" work_status=draft assigned_agent_id=06ff.`,
-		RepairTaskLine: "Direct repair for the named oversized task: keep task 105 orchestration-only, create 2-4 bounded executable child tasks directly beneath task id=1234, keep each child to a single concrete deliverable under 60 minutes, and assign each child to an existing active project assignee before resuming bootstrap.setup.persist.",
+		RepairTaskLine: "Direct repair for the named oversized task: keep task 105 orchestration-only, do not call task.get on task id=1234 first, create 2-4 bounded executable child tasks directly beneath task id=1234, keep each child to a single concrete deliverable under 60 minutes, and assign each child to an existing active project assignee before resuming bootstrap.setup.persist.",
 	}
 
 	msg := buildProjectBootstrapResumeStateMessage(state, snapshot)
@@ -2388,6 +2388,9 @@ func TestBuildProjectBootstrapResumeStateMessageRequiresDirectBoundedSplit(t *te
 	}
 	if !strings.Contains(msg, "Direct repair for the named oversized task") {
 		t.Fatalf("resume state message = %q, want explicit oversized-task repair line", msg)
+	}
+	if !strings.Contains(msg, "do not call task.get on task id=1234 first") {
+		t.Fatalf("resume state message = %q, want direct no-task.get oversized-task guidance", msg)
 	}
 }
 
@@ -3403,6 +3406,12 @@ func TestBuildProjectBootstrapValidationRecoveryPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "splitting the offending broad parent or first-wave task into narrower executable child tasks") {
 		t.Fatalf("prompt = %q, want bounded child-splitting guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Your next assistant action should be a tool call, not a narrative reply") {
+		t.Fatalf("prompt = %q, want no-narrative bounded repair guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call task.get on the named oversized task first") {
+		t.Fatalf("prompt = %q, want direct no-task.get bounded repair guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Do not return to bootstrap.setup.persist until that structural repair is complete") {
 		t.Fatalf("prompt = %q, want setup persist deferral guidance", prompt)
