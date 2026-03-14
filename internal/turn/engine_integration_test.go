@@ -10557,11 +10557,14 @@ func TestTurnEngineIntegrationSeededBootstrapRestartStartsFromSeededScaffoldProm
 	if !strings.Contains(firstUserMessage, "The restart project has already been seeded with the archived project's persisted assignments and draft task scaffold") {
 		t.Fatalf("restart project=%s session=%s messages=%v initial prompt = %q, want seeded scaffold guidance", restartProjectID, restartedSession.ID, messageSummaries, firstUserMessage)
 	}
-	if !strings.Contains(firstUserMessage, restartedTaskID.String()) && strings.Contains(firstUserMessage, "Recovery target:") {
-		t.Fatalf("restart initial prompt = %q, want blocked task id %s when a recovery target is present", firstUserMessage, restartedTaskID)
+	if !strings.Contains(firstUserMessage, "Recovery target:") {
+		t.Fatalf("restart initial prompt = %q, want direct recovery target guidance", firstUserMessage)
 	}
-	if !strings.Contains(firstUserMessage, worker.ID.String()) && strings.Contains(firstUserMessage, "Recovery target:") {
-		t.Fatalf("restart initial prompt = %q, want active assignee roster with worker id %s when a recovery target is present", firstUserMessage, worker.ID)
+	if !strings.Contains(firstUserMessage, restartedTaskID.String()) {
+		t.Fatalf("restart initial prompt = %q, want blocked task id %s in direct recovery guidance", firstUserMessage, restartedTaskID)
+	}
+	if !strings.Contains(firstUserMessage, worker.ID.String()) {
+		t.Fatalf("restart initial prompt = %q, want active assignee roster with worker id %s in direct recovery guidance", firstUserMessage, worker.ID)
 	}
 
 	bootstrapState := projectBootstrapStateFromMetadata(restartedSession.Metadata)

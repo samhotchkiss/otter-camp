@@ -608,10 +608,8 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 			bootstrapState.CurrentPhase = checkpoint
 			bootstrapState.LastSuccessfulCheckpoint = checkpoint
 		}
-		if progress.ValidationFailed() && projectBootstrapRecoverableMaxToolCallFailure(progress) {
-			if snippet := e.buildProjectBootstrapRestartRecoveryPrompt(ctx, created.ID, bootstrapState, progress); snippet != "" {
-				restartPrompt = snippet
-			}
+		if snippet := e.buildProjectBootstrapRestartSeededPrompt(ctx, created.ID, bootstrapState, progress, record); snippet != "" {
+			restartPrompt = snippet
 		}
 	}
 
@@ -679,7 +677,13 @@ func (e *TurnEngine) buildProjectBootstrapRestartRecoveryPrompt(ctx context.Cont
 	if e == nil {
 		return content
 	}
-	snapshot, err := e.loadProjectBootstrapResumeSnapshot(ctx, projectID, state)
+	resumeState := state
+	if strings.TrimSpace(progress.ValidationFailureReason) != "" {
+		resumeState.ValidationStatus = projectBootstrapValidationFailed
+		resumeState.ValidationFailureReason = strings.TrimSpace(progress.ValidationFailureReason)
+		resumeState.ValidationFailureClass = projectBootstrapFailureClassForReason(progress.ValidationFailureClass, progress.ValidationFailureReason)
+	}
+	snapshot, err := e.loadProjectBootstrapResumeSnapshot(ctx, projectID, resumeState)
 	if err != nil {
 		return content
 	}
@@ -690,6 +694,25 @@ func (e *TurnEngine) buildProjectBootstrapRestartRecoveryPrompt(ctx context.Cont
 		content = strings.TrimSpace(content + " " + snippet)
 	}
 	return content
+}
+
+func (e *TurnEngine) buildProjectBootstrapRestartSeededPrompt(ctx context.Context, projectID uuid.UUID, state projectBootstrapState, progress projectBootstrapProgress, record projectAutomaticFailureRecord) string {
+	effective := progress
+	if !effective.ValidationFailed() {
+		effective.ValidationStatus = projectBootstrapValidationFailed
+		effective.ValidationFailureReason = strings.TrimSpace(record.FailureReason)
+		effective.ValidationFailureClass = projectBootstrapFailureClassForReason(record.FailureClass, record.FailureReason)
+		normalizeProjectBootstrapValidationFailure(&effective, false)
+	}
+	if !effective.ValidationFailed() || !projectBootstrapRecoverableMaxToolCallFailure(effective) {
+		return ""
+	}
+	content := e.buildProjectBootstrapRestartRecoveryPrompt(ctx, projectID, state, effective)
+	prefix := "The restart project has already been seeded with the archived project's persisted assignments and draft task scaffold. Do not recreate that scaffold from scratch; repair the seeded staff/task tree directly."
+	if strings.Contains(content, prefix) {
+		return content
+	}
+	return strings.TrimSpace(prefix + " " + content)
 }
 
 // RelaunchArchivedBootstrapProject returns the active restart project for an

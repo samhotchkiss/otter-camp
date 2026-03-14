@@ -5019,6 +5019,7 @@ type projectBootstrapResumeSnapshot struct {
 }
 
 var projectBootstrapFailureTaskNumberPattern = regexp.MustCompile(`(?:first-wave )?task ([0-9]+)`)
+var projectBootstrapFailureTaskTitlePattern = regexp.MustCompile(`(?:first-wave )?task [0-9]+ \(([^)]+)\)`)
 
 func formatBootstrapResumeAgentLabel(agentRecord repo.Agent) string {
 	name := strings.TrimSpace(agentRecord.DisplayName)
@@ -5051,6 +5052,14 @@ func projectBootstrapFailureTaskNumber(reason string) int {
 		return 0
 	}
 	return number
+}
+
+func projectBootstrapFailureTaskTitle(reason string) string {
+	matches := projectBootstrapFailureTaskTitlePattern.FindStringSubmatch(strings.TrimSpace(reason))
+	if len(matches) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(matches[1])
 }
 
 func projectBootstrapBlockedRecoveryFailure(messages []repo.ChatMessage, state projectBootstrapState) (string, string) {
@@ -5382,13 +5391,37 @@ func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, pro
 		snapshot.AssignmentLine = strings.Join(parts, "; ")
 	}
 	if taskNumber := projectBootstrapFailureTaskNumber(state.ValidationFailureReason); taskNumber > 0 && e.tasks != nil {
+		failureTitle := projectBootstrapFailureTaskTitle(state.ValidationFailureReason)
 		taskRecord, taskErr := e.tasks.GetByProjectAndNumber(ctx, projectID, taskNumber)
+		if taskErr == nil && failureTitle != "" && !strings.EqualFold(strings.TrimSpace(taskRecord.Title), failureTitle) {
+			taskErr = repo.ErrNotFound
+		}
+		var allTasks []repo.ProjectTask
+		if taskErr != nil || failureTitle != "" {
+			if listed, listErr := e.tasks.ListByProject(ctx, projectID); listErr == nil {
+				allTasks = listed
+				if failureTitle != "" {
+					for _, candidate := range allTasks {
+						if strings.EqualFold(strings.TrimSpace(candidate.Title), failureTitle) {
+							taskRecord = candidate
+							taskErr = nil
+							break
+						}
+					}
+				}
+			}
+		}
 		if taskErr == nil {
 			snapshot.FailedTaskLine = formatBootstrapResumeTaskLine(taskRecord)
 			switch strings.TrimSpace(projectBootstrapFailureClassForReason(state.ValidationFailureClass, state.ValidationFailureReason)) {
 			case projectBootstrapFailureCompoundParent:
-				if tasks, listErr := e.tasks.ListByProject(ctx, projectID); listErr == nil {
-					snapshot.RepairTaskLine = buildProjectBootstrapCompoundParentRepairTaskLine(tasks, taskRecord)
+				if len(allTasks) == 0 {
+					if tasks, listErr := e.tasks.ListByProject(ctx, projectID); listErr == nil {
+						allTasks = tasks
+					}
+				}
+				if len(allTasks) > 0 {
+					snapshot.RepairTaskLine = buildProjectBootstrapCompoundParentRepairTaskLine(allTasks, taskRecord)
 				}
 			case projectBootstrapFailureFirstWaveSize:
 				snapshot.RepairTaskLine = buildProjectBootstrapBoundedSizeRepairTaskLine(taskRecord)
