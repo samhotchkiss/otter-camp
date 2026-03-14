@@ -577,6 +577,42 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 		_ = e.ensureAgentParticipant(ctx, restartSession.ID, loriID)
 	}
 
+	now := e.now().UTC()
+	bootstrapState := projectBootstrapStateFromMetadata(restartSession.Metadata)
+	bootstrapState.Status = projectBootstrapStatusActive
+	bootstrapState.CurrentPhase = "kickoff_handoff"
+	bootstrapState.LastTurnID = ""
+	bootstrapState.AutoTurnCount = 0
+	bootstrapState.StartedAt = &now
+	bootstrapState.UpdatedAt = &now
+	bootstrapState.CompletedAt = nil
+	bootstrapState.FailedAt = nil
+	bootstrapState.FailureCategory = ""
+	bootstrapState.FailureClass = ""
+	bootstrapState.FailurePhase = ""
+	bootstrapState.FailureReason = ""
+	bootstrapState.ProviderFailureClass = ""
+	bootstrapState.ProviderFailureReason = ""
+	restartPrompt := buildProjectBootstrapRestartPrompt(bundle, updatedProject, *created, scaffoldSeeded)
+	if scaffoldSeeded {
+		progress, progressErr := e.loadProjectBootstrapProgress(ctx, created.ID)
+		if progressErr != nil {
+			return progressErr
+		}
+		applyProjectBootstrapProgressState(&bootstrapState, progress)
+		bootstrapState.BootstrapTaskID = progress.BootstrapTaskID.String()
+		bootstrapState.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+		if checkpoint := strings.TrimSpace(projectBootstrapLastCheckpoint(progress)); checkpoint != "" {
+			bootstrapState.CurrentPhase = checkpoint
+			bootstrapState.LastSuccessfulCheckpoint = checkpoint
+		}
+		if progress.ValidationFailed() && projectBootstrapRecoverableMaxToolCallFailure(progress) {
+			if snippet := e.buildProjectBootstrapRestartRecoveryPrompt(ctx, created.ID, bootstrapState, progress); snippet != "" {
+				restartPrompt = snippet
+			}
+		}
+	}
+
 	var authorType *string
 	var authorID *uuid.UUID
 	if frankID, frankErr := e.resolveFrankStarterID(ctx, created.OrganizationID); frankErr == nil && frankID != uuid.Nil {
@@ -593,7 +629,7 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 		AuthorType: authorType,
 		AuthorID:   authorID,
 		Role:       "user",
-		Content:    buildProjectBootstrapRestartPrompt(bundle, updatedProject, *created, scaffoldSeeded),
+		Content:    restartPrompt,
 		Metadata: mustJSONRaw(map[string]any{
 			"source":                      projectBootstrapSource,
 			"bootstrap_restart":           true,
@@ -606,23 +642,7 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 	if err != nil {
 		return err
 	}
-	now := e.now().UTC()
-	bootstrapState := projectBootstrapStateFromMetadata(restartSession.Metadata)
-	bootstrapState.Status = projectBootstrapStatusActive
-	bootstrapState.CurrentPhase = "kickoff_handoff"
 	bootstrapState.InitialMessageID = projectBootstrapWorkflowMessageID(restartMessage).String()
-	bootstrapState.LastTurnID = ""
-	bootstrapState.AutoTurnCount = 0
-	bootstrapState.StartedAt = &now
-	bootstrapState.UpdatedAt = &now
-	bootstrapState.CompletedAt = nil
-	bootstrapState.FailedAt = nil
-	bootstrapState.FailureCategory = ""
-	bootstrapState.FailureClass = ""
-	bootstrapState.FailurePhase = ""
-	bootstrapState.FailureReason = ""
-	bootstrapState.ProviderFailureClass = ""
-	bootstrapState.ProviderFailureReason = ""
 	if err := e.updateProjectBootstrapState(ctx, restartSession, bootstrapState); err != nil {
 		return err
 	}
@@ -650,6 +670,24 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 		return err
 	}
 	return repo.NewChatSessionRepo(e.pool).CloseProjectScoped(ctx, updatedProject.ID)
+}
+
+func (e *TurnEngine) buildProjectBootstrapRestartRecoveryPrompt(ctx context.Context, projectID uuid.UUID, state projectBootstrapState, progress projectBootstrapProgress) string {
+	content := buildProjectBootstrapValidationRecoveryPrompt(0, progress)
+	if e == nil {
+		return content
+	}
+	snapshot, err := e.loadProjectBootstrapResumeSnapshot(ctx, projectID, state)
+	if err != nil {
+		return content
+	}
+	if repairLine := buildProjectBootstrapAdditionalRepairTaskLine(progress); repairLine != "" {
+		snapshot.RepairTaskLine = repairLine
+	}
+	if snippet := buildProjectBootstrapRecoveryContinuationContext(snapshot); snippet != "" {
+		content = strings.TrimSpace(content + " " + snippet)
+	}
+	return content
 }
 
 // RelaunchArchivedBootstrapProject returns the active restart project for an

@@ -10450,6 +10450,135 @@ func TestTurnEngineIntegrationRelaunchArchivedBootstrapProjectBypassesExhaustedR
 	}
 }
 
+func TestTurnEngineIntegrationSeededBootstrapRestartStartsFromRecoverableRepairPrompt(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	_ = mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: restart this project from the canonical bundle and repair the persisted bootstrap scaffold directly.")
+
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	worker := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, pmAgent.ID, fixture.user.ID)
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        worker.ID,
+		ProjectID:      project.ID,
+		Role:           "worker",
+		AssignedByType: "human_user",
+		AssignedByID:   &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	description := "Use a topic from the editorial calendar to draft the first launch article."
+	firstWaveTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Use a topic from the editorial calendar",
+		Description:    &description,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create first-wave task: %v", err)
+	}
+
+	if err := repo.NewProjectRepo(fixture.pool).Archive(ctx, project.ID); err != nil {
+		t.Fatalf("Archive source project: %v", err)
+	}
+	archivedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+
+	recordedAt := time.Now().UTC()
+	record := projectAutomaticFailureRecord{
+		Action:                   projectFailureActionArchive,
+		Source:                   projectBootstrapSource,
+		FailureCategory:          projectFailureCategoryBootstrap,
+		FailureClass:             projectBootstrapFailureFirstWaveExecution,
+		FailurePhase:             projectBootstrapCheckpointFirstWaveSelected,
+		LastCheckpoint:           projectBootstrapCheckpointFirstWaveSelected,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		FailureReason:            buildProjectBootstrapFirstWaveAssignmentFailureReason(firstWaveTask),
+		SetupPersisted:           true,
+		RecordedAt:               recordedAt,
+	}
+	if err := fixture.engine.maybeRestartArchivedBootstrapProject(ctx, archivedProject, record, true); err != nil {
+		t.Fatalf("maybeRestartArchivedBootstrapProject seeded recoverable restart: %v", err)
+	}
+
+	updatedArchived := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	bundle := mustProjectBootstrapRestartBundle(t, updatedArchived)
+	restartProjectID, err := uuid.Parse(bundle.RestartProjectID)
+	if err != nil {
+		t.Fatalf("Parse restart project id: %v", err)
+	}
+
+	restartedSession := mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restartProjectID)
+	restartedTasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, restartProjectID)
+	if err != nil {
+		t.Fatalf("ListByProject restarted tasks: %v", err)
+	}
+	restartedTaskID := uuid.Nil
+	for _, taskRecord := range restartedTasks {
+		if strings.TrimSpace(taskRecord.Title) == "Use a topic from the editorial calendar" {
+			restartedTaskID = taskRecord.ID
+			break
+		}
+	}
+	if restartedTaskID == uuid.Nil {
+		t.Fatal("expected restarted project to contain the seeded first-wave task")
+	}
+
+	restartedMessages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, restartedSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession restarted session messages: %v", err)
+	}
+	if len(restartedMessages) == 0 {
+		t.Fatal("expected seeded restart session to contain an initial repair prompt")
+	}
+	messageSummaries := make([]string, 0, len(restartedMessages))
+	for _, message := range restartedMessages {
+		messageSummaries = append(messageSummaries, fmt.Sprintf("%s:%s", strings.TrimSpace(message.Role), strings.TrimSpace(message.Content)))
+	}
+	firstUserMessage := ""
+	for _, message := range restartedMessages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			firstUserMessage = strings.TrimSpace(message.Content)
+			break
+		}
+	}
+	if firstUserMessage == "" {
+		t.Fatalf("restart session messages = %v, want at least one user prompt", messageSummaries)
+	}
+	if !strings.Contains(firstUserMessage, "Recovery target:") {
+		t.Fatalf("restart project=%s session=%s messages=%v initial prompt = %q, want concrete recovery target", restartProjectID, restartedSession.ID, messageSummaries, firstUserMessage)
+	}
+	if strings.Contains(firstUserMessage, "Start a fresh bootstrap restart") {
+		t.Fatalf("restart initial prompt = %q, want direct repair prompt instead of generic restart handoff", firstUserMessage)
+	}
+	if !strings.Contains(firstUserMessage, restartedTaskID.String()) {
+		t.Fatalf("restart initial prompt = %q, want blocked task id %s", firstUserMessage, restartedTaskID)
+	}
+	if !strings.Contains(firstUserMessage, worker.ID.String()) {
+		t.Fatalf("restart initial prompt = %q, want active assignee roster with worker id %s", firstUserMessage, worker.ID)
+	}
+
+	bootstrapState := projectBootstrapStateFromMetadata(restartedSession.Metadata)
+	if bootstrapState.ValidationFailureClass != projectBootstrapFailureFirstWaveExecution {
+		t.Fatalf("restart validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureFirstWaveExecution)
+	}
+	if !strings.Contains(bootstrapState.ValidationFailureReason, "has no assigned agent") {
+		t.Fatalf("restart validation_failure_reason = %q, want unassigned first-wave detail", bootstrapState.ValidationFailureReason)
+	}
+	if bootstrapState.AssignmentCount != 2 || bootstrapState.PlannedTaskCount != 1 || bootstrapState.FirstWaveTaskCount != 1 {
+		t.Fatalf("restart bootstrap state = %+v, want persisted seeded progress reflected before first turn", bootstrapState)
+	}
+}
+
 func TestTurnEngineIntegrationBootstrapTransientProviderFailureAfterSetupPersistsKeepsSessionActive(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
