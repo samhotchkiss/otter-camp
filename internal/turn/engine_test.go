@@ -4387,6 +4387,92 @@ func TestContinuationTurnCapsSummaryBeforeReusingAsHistoryRoot(t *testing.T) {
 	}
 }
 
+func TestContinuationTurnAppendsDirectActionPromptForAsyncProjectTask(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+
+	var secondHistoryStart *uuid.UUID
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call == 2 && input.HistoryStartID != nil {
+			copied := *input.HistoryStartID
+			secondHistoryStart = &copied
+		}
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: "Task is mid-flight and should continue from the existing workspace state."}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.continuationSummaryCalls != 1 {
+		t.Fatalf("continuation summary calls = %d, want 1", fixture.model.continuationSummaryCalls)
+	}
+	if secondHistoryStart == nil || *secondHistoryStart == uuid.Nil {
+		t.Fatal("second assemble HistoryStartID is nil, want continuation summary to remain history root")
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessageID uuid.UUID
+	var actionPromptFound bool
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Continuation summary]") {
+			summaryMessageID = msg.ID
+		}
+		if strings.Contains(msg.Content, "Continue the active task now from the continuation summary above.") {
+			actionPromptFound = true
+			if !strings.Contains(msg.Content, "Your next response must take direct action on the task instead of generic chat.") {
+				t.Fatalf("action prompt = %q, want direct action guidance", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "Do not say that you are ready, ask what to do next, or ask the user what they need.") {
+				t.Fatalf("action prompt = %q, want anti-generic-chat guidance", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "Do not start with project.list, project.get, task.list, task.get, flow.list_templates, flow.get_execution, file.read, or agent.list unless a specific blocker names that exact record.") {
+				t.Fatalf("action prompt = %q, want anti-reread guidance", msg.Content)
+			}
+		}
+	}
+	if summaryMessageID == uuid.Nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !actionPromptFound {
+		t.Fatal("task continuation action prompt missing")
+	}
+	if *secondHistoryStart != summaryMessageID {
+		t.Fatalf("second assemble HistoryStartID = %s, want continuation summary %s", *secondHistoryStart, summaryMessageID)
+	}
+}
+
 func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.session.ScopeType = "project"

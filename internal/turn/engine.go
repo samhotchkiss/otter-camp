@@ -5084,6 +5084,16 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	if err != nil {
 		return err
 	}
+	if shouldAppendTaskContinuationActionPrompt(rt.session) {
+		if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+			SessionID: rt.session.ID,
+			TurnID:    &rt.turn.ID,
+			Role:      "user",
+			Content:   buildTaskContinuationActionPrompt(),
+		}); err != nil {
+			return err
+		}
+	}
 	rt.historyStartID = &message.ID
 	return nil
 }
@@ -7389,6 +7399,29 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 	}
 	lines = append(lines, "If a draft is already substantive enough, use it directly instead of re-reading workspace artifacts first.")
 	lines = append(lines, "If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.")
+	return strings.Join(lines, " ")
+}
+
+func shouldAppendTaskContinuationActionPrompt(session *chat.ChatSession) bool {
+	if session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(session.Mode), "async")
+}
+
+func buildTaskContinuationActionPrompt() string {
+	lines := []string{
+		"Continue the active task now from the continuation summary above.",
+		"Your next response must take direct action on the task instead of generic chat.",
+		"Do not say that you are ready, ask what to do next, or ask the user what they need.",
+		"Do not restate the task state or reread broad context before acting.",
+		"Do not start with project.list, project.get, task.list, task.get, flow.list_templates, flow.get_execution, file.read, or agent.list unless a specific blocker names that exact record.",
+		"Use the existing workspace, task state, and recent tool results to continue the task directly.",
+		"If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.",
+	}
 	return strings.Join(lines, " ")
 }
 
