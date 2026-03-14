@@ -669,11 +669,31 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 	rows, err := w.pool.Query(ctx, `
 		SELECT DISTINCT cs.id, ct.trigger_message_id
 		FROM chat_session cs
+		LEFT JOIN project_task pt
+		  ON cs.scope_type = 'project_task'
+		 AND pt.id = cs.scope_id
+		LEFT JOIN project p
+		  ON (
+		       cs.scope_type = 'project'
+		   AND p.id = cs.scope_id
+		  )
+		  OR (
+		       cs.scope_type = 'project_task'
+		   AND p.id = pt.project_id
+		  )
 		JOIN chat_turn ct ON ct.id = cs.current_turn_id
 		WHERE cs.mode = 'async'
 		  AND cs.status = 'active'
 		  AND ct.status = 'pending'
 		  AND ct.trigger_message_id IS NOT NULL
+		  AND (
+		    cs.scope_type NOT IN ('project', 'project_task')
+		    OR (
+		      p.id IS NOT NULL
+		      AND p.status = 'active'
+		      AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
+		    )
+		  )
 		  AND NOT EXISTS (
 		    SELECT 1
 		    FROM job_queue jq

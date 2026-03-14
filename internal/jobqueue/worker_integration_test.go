@@ -1213,10 +1213,33 @@ func TestJobWorkerPurgeStaleAgentTurnJobsKeepsLiveSupervisorRecoveryTurn(t *test
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-pending-turns-project",
+		DisplayName:    "Requeue Pending Turns Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Pending task turn",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
 	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
 		OrganizationID: org.ID,
 		ScopeType:      "project_task",
-		ScopeID:        uuid.New(),
+		ScopeID:        taskRecord.ID,
 		Mode:           "async",
 		Status:         "active",
 		CreatedByType:  "system",
@@ -1552,10 +1575,33 @@ func TestJobWorkerRequeueStrandedSupervisorRecoveryTurns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-pending-turns-project",
+		DisplayName:    "Requeue Pending Turns Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Pending task turn",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
 	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
 		OrganizationID: org.ID,
 		ScopeType:      "project_task",
-		ScopeID:        uuid.New(),
+		ScopeID:        taskRecord.ID,
 		Mode:           "async",
 		Status:         "active",
 		CreatedByType:  "system",
@@ -1759,10 +1805,33 @@ func TestJobWorkerRequeuePendingTurnsWithoutJobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-pending-turns-project",
+		DisplayName:    "Requeue Pending Turns Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Pending task turn",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
 	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
 		OrganizationID: org.ID,
 		ScopeType:      "project_task",
-		ScopeID:        uuid.New(),
+		ScopeID:        taskRecord.ID,
 		Mode:           "async",
 		Status:         "active",
 		CreatedByType:  "system",
@@ -1826,6 +1895,143 @@ func TestJobWorkerRequeuePendingTurnsWithoutJobs(t *testing.T) {
 	}
 	if requeuedMsgID != message.ID {
 		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	}
+}
+
+func TestJobWorkerRequeuePendingTurnsWithoutJobsSkipsPausedAndArchivedProjects(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-pending-turns-skip-paused",
+		DisplayName: "Requeue Pending Turns Skip Paused",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover pending work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	createPendingTaskSession := func(projectID uuid.UUID) uuid.UUID {
+		t.Helper()
+		taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+			OrganizationID: org.ID,
+			ProjectID:      projectID,
+			Title:          "Pending task turn",
+			WorkStatus:     "draft",
+			BlocksScope:    "task",
+			CreatedByType:  "system",
+			CreatedByID:    &agent.ID,
+		})
+		if err != nil {
+			t.Fatalf("create task: %v", err)
+		}
+		session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+			OrganizationID: org.ID,
+			ScopeType:      "project_task",
+			ScopeID:        taskRecord.ID,
+			Mode:           "async",
+			Status:         "active",
+			CreatedByType:  "system",
+			CreatedByID:    uuid.New(),
+		})
+		if err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+		message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+			SessionID: session.ID,
+			Role:      "user",
+			Content:   "Resume the pending task turn.",
+			Status:    "pending",
+		})
+		if err != nil {
+			t.Fatalf("create user message: %v", err)
+		}
+		turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+			SessionID:        session.ID,
+			TurnNumber:       1,
+			RespondingType:   "agent",
+			RespondingID:     agent.ID,
+			Status:           "pending",
+			TriggerMessageID: &message.ID,
+		})
+		if err != nil {
+			t.Fatalf("create pending turn: %v", err)
+		}
+		if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+			t.Fatalf("update current turn: %v", err)
+		}
+		return session.ID
+	}
+
+	pausedProject, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "paused-project",
+		DisplayName:    "Paused Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       []byte(`{"pause":{"is_paused":true,"reason":"operator pause"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create paused project: %v", err)
+	}
+	archivedProject, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "archived-project",
+		DisplayName:    "Archived Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create archived project: %v", err)
+	}
+	if err := repo.NewProjectRepo(pool).Archive(ctx, archivedProject.ID); err != nil {
+		t.Fatalf("archive project: %v", err)
+	}
+
+	pausedSessionID := createPendingTaskSession(pausedProject.ID)
+	archivedSessionID := createPendingTaskSession(archivedProject.ID)
+
+	requeued, err := worker.RequeuePendingTurnsWithoutJobs(ctx)
+	if err != nil {
+		t.Fatalf("RequeuePendingTurnsWithoutJobs: %v", err)
+	}
+	if requeued != 0 {
+		t.Fatalf("requeued turns = %d, want 0", requeued)
+	}
+
+	for _, sessionID := range []uuid.UUID{pausedSessionID, archivedSessionID} {
+		var count int
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM job_queue
+			WHERE job_type = 'agent_turn'
+			  AND (payload->>'session_id')::uuid = $1
+		`, sessionID).Scan(&count); err != nil {
+			t.Fatalf("count requeued jobs for session %s: %v", sessionID, err)
+		}
+		if count != 0 {
+			t.Fatalf("requeued jobs for session %s = %d, want 0", sessionID, count)
+		}
 	}
 }
 
