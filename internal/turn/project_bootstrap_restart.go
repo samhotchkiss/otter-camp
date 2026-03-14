@@ -827,6 +827,9 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 	}
 	assignmentRepo := repo.NewAgentProjectAssignmentRepo(e.pool)
 	taskRepo := repo.NewProjectTaskRepo(e.pool)
+	templateRepo := repo.NewFlowTemplateRepo(e.pool)
+	nodeRepo := repo.NewFlowNodeRepo(e.pool)
+	nodeSkillRepo := repo.NewFlowNodeSkillRepo(e.pool)
 
 	assignments, err := assignmentRepo.ListByProject(ctx, sourceProjectID)
 	if err != nil {
@@ -847,6 +850,99 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 		return false, nil
 	}
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].TaskNumber < tasks[j].TaskNumber })
+
+	templateIDMap := make(map[uuid.UUID]uuid.UUID)
+	for _, taskRecord := range tasks {
+		if taskRecord.FlowTemplateID == nil || *taskRecord.FlowTemplateID == uuid.Nil {
+			continue
+		}
+		templateID := *taskRecord.FlowTemplateID
+		if _, copied := templateIDMap[templateID]; copied {
+			continue
+		}
+		templateRecord, err := templateRepo.GetByID(ctx, templateID)
+		if err != nil {
+			return false, err
+		}
+		if templateRecord.ProjectID == nil || *templateRecord.ProjectID != sourceProjectID {
+			templateIDMap[templateID] = templateID
+			continue
+		}
+		restartedProjectIDCopy := restartedProjectID
+		copiedTemplate, err := templateRepo.Create(ctx, repo.FlowTemplate{
+			OrganizationID: templateRecord.OrganizationID,
+			ProjectID:      &restartedProjectIDCopy,
+			Slug:           templateRecord.Slug,
+			DisplayName:    templateRecord.DisplayName,
+			Description:    templateRecord.Description,
+			IsCurrent:      templateRecord.IsCurrent,
+			Version:        templateRecord.Version,
+			StartNodeID:    nil,
+			IsSystem:       templateRecord.IsSystem,
+			CreatedByType:  templateRecord.CreatedByType,
+			CreatedByID:    templateRecord.CreatedByID,
+		})
+		if err != nil {
+			return false, err
+		}
+		templateIDMap[templateID] = copiedTemplate.ID
+
+		nodes, err := nodeRepo.GetByTemplateOrdered(ctx, templateID)
+		if err != nil {
+			return false, err
+		}
+		nodeIDMap := make(map[uuid.UUID]uuid.UUID, len(nodes))
+		copiedNodes := make([]repo.FlowNode, 0, len(nodes))
+		for _, node := range nodes {
+			copiedNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+				FlowTemplateID:      copiedTemplate.ID,
+				DisplayName:         node.DisplayName,
+				NodeType:            node.NodeType,
+				Position:            node.Position,
+				ActorType:           node.ActorType,
+				ActorID:             node.ActorID,
+				NextNodeID:          nil,
+				RejectNodeID:        nil,
+				MCPTools:            node.MCPTools,
+				ToolDomains:         node.ToolDomains,
+				RequiresHumanReview: node.RequiresHumanReview,
+				MaxVisits:           node.MaxVisits,
+				Metadata:            node.Metadata,
+			})
+			if err != nil {
+				return false, err
+			}
+			nodeIDMap[node.ID] = copiedNode.ID
+			copiedNodes = append(copiedNodes, copiedNode)
+		}
+		for i, node := range nodes {
+			copiedNode := copiedNodes[i]
+			if nextID, ok := nodeIDMap[valueOrZero(node.NextNodeID)]; ok {
+				copiedNode.NextNodeID = &nextID
+			}
+			if rejectID, ok := nodeIDMap[valueOrZero(node.RejectNodeID)]; ok {
+				copiedNode.RejectNodeID = &rejectID
+			}
+			if _, err := nodeRepo.Update(ctx, copiedNode); err != nil {
+				return false, err
+			}
+			attachments, err := nodeSkillRepo.ListByNode(ctx, node.ID)
+			if err != nil {
+				return false, err
+			}
+			for _, attachment := range attachments {
+				if _, err := nodeSkillRepo.Attach(ctx, copiedNode.ID, attachment.SkillID, attachment.Position); err != nil {
+					return false, err
+				}
+			}
+		}
+		if startID, ok := nodeIDMap[valueOrZero(templateRecord.StartNodeID)]; ok {
+			copiedTemplate.StartNodeID = &startID
+			if _, err := templateRepo.Update(ctx, copiedTemplate); err != nil {
+				return false, err
+			}
+		}
+	}
 
 	for _, assignment := range activeAssignments {
 		if _, err := assignmentRepo.Assign(ctx, repo.AgentProjectAssignment{
@@ -871,7 +967,7 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 			WorkStatus:          "draft",
 			BlocksScope:         taskRecord.BlocksScope,
 			CurrentFlowNodeID:   nil,
-			FlowTemplateID:      nil,
+			FlowTemplateID:      remappedFlowTemplateID(taskRecord.FlowTemplateID, templateIDMap),
 			ScheduleID:          nil,
 			BranchName:          nil,
 			RequiresHumanReview: taskRecord.RequiresHumanReview,
@@ -940,6 +1036,25 @@ func remapBootstrapRestartTaskMetadataValue(value any, taskIDMap map[string]stri
 	default:
 		return value
 	}
+}
+
+func remappedFlowTemplateID(flowTemplateID *uuid.UUID, templateIDMap map[uuid.UUID]uuid.UUID) *uuid.UUID {
+	if flowTemplateID == nil || *flowTemplateID == uuid.Nil {
+		return nil
+	}
+	if remapped, ok := templateIDMap[*flowTemplateID]; ok && remapped != uuid.Nil {
+		value := remapped
+		return &value
+	}
+	value := *flowTemplateID
+	return &value
+}
+
+func valueOrZero(id *uuid.UUID) uuid.UUID {
+	if id == nil {
+		return uuid.Nil
+	}
+	return *id
 }
 
 func (e *TurnEngine) applyBootstrapRestartBindings(ctx context.Context, bundle projectBootstrapRestartBundle, projectID uuid.UUID) error {

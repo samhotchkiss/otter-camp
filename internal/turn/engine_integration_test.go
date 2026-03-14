@@ -9960,8 +9960,11 @@ func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t 
 	if carriedTask.WorkStatus != "draft" {
 		t.Fatalf("carried task work_status = %q, want draft", carriedTask.WorkStatus)
 	}
-	if carriedTask.FlowTemplateID != nil || carriedTask.CurrentFlowNodeID != nil || carriedTask.ScheduleID != nil {
-		t.Fatalf("carried task retained stale execution bindings: %+v", carriedTask)
+	if carriedTask.FlowTemplateID == nil || *carriedTask.FlowTemplateID == uuid.Nil {
+		t.Fatalf("carried task flow_template_id = %v, want remapped flow template", carriedTask.FlowTemplateID)
+	}
+	if carriedTask.CurrentFlowNodeID != nil || carriedTask.ScheduleID != nil {
+		t.Fatalf("carried task retained stale execution state: %+v", carriedTask)
 	}
 
 	restartedAssignments, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).ListByProject(ctx, restartedProject.ID)
