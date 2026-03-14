@@ -3265,6 +3265,9 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForRestartScaffoldFailure(
 	if !strings.Contains(prompt, "Reuse the dedicated project staff already created in this session") {
 		t.Fatalf("prompt = %q, want direct staffing reuse guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Do not answer with a standalone acknowledgement or status note") {
+		t.Fatalf("prompt = %q, want no-acknowledgement guidance", prompt)
+	}
 }
 
 func TestEnsureTurnRunExitInvariantRejectsLeakedInProgressTurn(t *testing.T) {

@@ -3059,7 +3059,7 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 	}
 	if projectBootstrapRestartScaffoldFailureReason(reason) {
 		recoveryHint = "This restart already created staff drafts but did not materialize staffed executable project work. Do not begin with project.get, task.list, flow.list_templates, file.list, git.log, or other broad rereads. Reuse the dedicated project staff already created in this session, assign them to the project if that assignment step is still incomplete, then immediately create bounded executable workstream tasks and child tasks so bootstrap moves past scaffold-only state."
-		nextActionHint = "Do not spend this turn rediscovering repo state or profile catalogs. Your first repair step should be to persist staffed executable work using the existing project staff and then continue bootstrap from that materialized task tree."
+		nextActionHint = "Do not spend this turn rediscovering repo state or profile catalogs. Your first repair step should be to persist staffed executable work using the existing project staff and then continue bootstrap from that materialized task tree. Do not answer with a standalone acknowledgement or status note. This turn should contain the concrete staffing/task mutation tool calls needed to move past scaffold-only state; if you cannot make those tool calls, explain the concrete blocker instead."
 	}
 	if strings.Contains(lowerReason, "only ") &&
 		(strings.Contains(lowerReason, "selected first-wave child tasks created flow_node_execution rows") ||
