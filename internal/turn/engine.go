@@ -7461,8 +7461,9 @@ func buildTaskContinuationActionPrompt() string {
 		"Continue the active task now from the continuation summary above.",
 		"Your next response must take direct action on the task instead of generic chat.",
 		"Do not say that you are ready, ask what to do next, or ask the user what they need.",
+		"Do not say that you lack context or ask the user to restate the task when this continuation turn already includes the task session history and continuation summary.",
 		"Do not restate the task state or reread broad context before acting.",
-		"Do not start with project.list, project.get, task.list, task.get, flow.list_templates, flow.get_execution, file.read, or agent.list unless a specific blocker names that exact record.",
+		"Do not start with project.list, project.get, task.list, task.get, task_get, flow.list_templates, flow.get_execution, file.read, file_list, or agent.list unless a specific blocker names that exact record.",
 		"Use the existing workspace, task state, and recent tool results to continue the task directly.",
 		"If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.",
 	}

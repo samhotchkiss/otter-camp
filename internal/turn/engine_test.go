@@ -4547,7 +4547,10 @@ func TestContinuationTurnAppendsDirectActionPromptForAsyncProjectTask(t *testing
 			if !strings.Contains(msg.Content, "Do not say that you are ready, ask what to do next, or ask the user what they need.") {
 				t.Fatalf("action prompt = %q, want anti-generic-chat guidance", msg.Content)
 			}
-			if !strings.Contains(msg.Content, "Do not start with project.list, project.get, task.list, task.get, flow.list_templates, flow.get_execution, file.read, or agent.list unless a specific blocker names that exact record.") {
+			if !strings.Contains(msg.Content, "Do not say that you lack context or ask the user to restate the task when this continuation turn already includes the task session history and continuation summary.") {
+				t.Fatalf("action prompt = %q, want anti-no-context guidance", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "Do not start with project.list, project.get, task.list, task.get, task_get, flow.list_templates, flow.get_execution, file.read, file_list, or agent.list unless a specific blocker names that exact record.") {
 				t.Fatalf("action prompt = %q, want anti-reread guidance", msg.Content)
 			}
 		}
