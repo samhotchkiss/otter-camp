@@ -4009,6 +4009,9 @@ func (e *TurnEngine) recoverRetriedAgentTurnLeak(
 	if e == nil || e.pool == nil || e.chat == nil || e.enqueuer == nil || session == nil || turn == nil {
 		return false, nil
 	}
+	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+		return false, nil
+	}
 	if currentJobID == nil || *currentJobID == uuid.Nil {
 		return false, nil
 	}
@@ -4060,6 +4063,9 @@ func (e *TurnEngine) recoverRetriedSessionCurrentTurnLeak(
 	turn *chat.ChatTurn,
 ) (bool, error) {
 	if e == nil || e.chat == nil || session == nil || turn == nil || currentJobID == nil || *currentJobID == uuid.Nil {
+		return false, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
 		return false, nil
 	}
 	if session.CurrentTurnID == nil || *session.CurrentTurnID == uuid.Nil || *session.CurrentTurnID == turn.ID {

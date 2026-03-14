@@ -10935,14 +10935,14 @@ func TestTurnEngineIntegrationSeededBootstrapRestartBlockedRereadWithNoProgressF
 	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
 	description := "Create the SEO, performance, and analytics integration package for launch."
 	taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
-		OrganizationID: fixture.org.ID,
-		ProjectID:      project.ID,
-		Title:          "SEO, Performance, and Analytics Integration",
-		Description:    &description,
-		WorkStatus:     "draft",
-		FlowTemplateID: &template.ID,
-		CreatedByType:  "human_user",
-		CreatedByID:    &fixture.user.ID,
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "SEO, Performance, and Analytics Integration",
+		Description:     &description,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
 		AssignedAgentID: &worker.ID,
 	})
 	if err != nil {
@@ -12185,6 +12185,151 @@ func TestTurnEngineIntegrationRecoveredClaimedBootstrapRetryRecoversLeakedContin
 	}
 	if !containsSystemMessage(messages, "[Recovered stale in-progress continuation turn after claimed job recovery - retrying in a fresh turn.]") {
 		t.Fatal("missing leaked continuation recovery system message")
+	}
+}
+
+func TestTurnEngineIntegrationRecoveredClaimedProjectTaskRetryKeepsLiveContinuation(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Keep the live task continuation running",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &fixture.agent.ID,
+		AssignedAgentID: &fixture.agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Create task: %v", err)
+	}
+
+	session, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession project_task: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, session.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant agent: %v", err)
+	}
+
+	message, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: stringPtr("agent"),
+		AuthorID:   &fixture.agent.ID,
+		Role:       "user",
+		Content:    "Continue work on the task.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage task handoff: %v", err)
+	}
+
+	jobID := testdb.EnqueueJob(t, fixture.pool, AgentTurnJobType, 100, map[string]any{
+		"session_id":  session.ID,
+		"message_id":  message.ID,
+		"retry_count": 0,
+	})
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'integration-worker',
+		    claimed_at = now(),
+		    attempts = 2,
+		    updated_at = now()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("Update claimed retry job: %v", err)
+	}
+
+	firstTurn, _, err := fixture.engine.turns.CreateForMessageAttempt(ctx, session.ID, fixture.agent.ID, message.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt first turn: %v", err)
+	}
+	startedFirstTurn, shouldRun, err := fixture.engine.startInboundMessageTurn(ctx, firstTurn)
+	if err != nil {
+		t.Fatalf("startInboundMessageTurn first: %v", err)
+	}
+	if !shouldRun {
+		t.Fatal("expected original task turn to start")
+	}
+	if err := fixture.chatService.CompleteTurn(ctx, startedFirstTurn.ID); err != nil {
+		t.Fatalf("CompleteTurn first turn: %v", err)
+	}
+
+	continuationTurn, err := fixture.engine.turns.Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     2,
+		RespondingType: "agent",
+		RespondingID:   fixture.agent.ID,
+		Status:         "pending",
+	})
+	if err != nil {
+		t.Fatalf("Create continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(fixture.pool).UpdateCurrentTurn(ctx, session.ID, &continuationTurn.ID); err != nil {
+		t.Fatalf("UpdateCurrentTurn continuation: %v", err)
+	}
+	if err := fixture.chatService.StartTurn(ctx, continuationTurn.ID); err != nil {
+		t.Fatalf("StartTurn continuation: %v", err)
+	}
+
+	var payload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&payload); err != nil {
+		t.Fatalf("load claimed job payload: %v", err)
+	}
+	claimedJob := jobqueue.Job{
+		ID:      jobID,
+		JobType: AgentTurnJobType,
+		Payload: payload,
+		Status:  "claimed",
+	}
+
+	if err := fixture.engine.HandleTurnJob(ctx, claimedJob); err != nil {
+		t.Fatalf("HandleTurnJob recovered task continuation: %v", err)
+	}
+
+	storedContinuation, err := fixture.chatService.GetTurn(ctx, continuationTurn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn continuation: %v", err)
+	}
+	if storedContinuation.Status != "in_progress" {
+		t.Fatalf("continuation status = %q, want in_progress", storedContinuation.Status)
+	}
+
+	storedSession, err := fixture.chatService.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetSession stored session: %v", err)
+	}
+	if storedSession.CurrentTurnID == nil || *storedSession.CurrentTurnID != continuationTurn.ID {
+		t.Fatalf("current_turn_id = %v, want live continuation %s", storedSession.CurrentTurnID, continuationTurn.ID)
+	}
+
+	var pendingJobs int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = $2
+		  AND status = 'pending'
+		  AND payload->>'session_id' = $1
+	`, session.ID.String(), AgentTurnJobType).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending task agent_turn jobs: %v", err)
+	}
+	if pendingJobs != 0 {
+		t.Fatalf("pending task agent_turn jobs = %d, want 0 when stale claimed retry is ignored", pendingJobs)
 	}
 }
 
