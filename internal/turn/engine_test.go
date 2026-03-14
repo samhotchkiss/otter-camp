@@ -5014,6 +5014,98 @@ func TestBuildProjectBootstrapCompoundParentRepairTaskLineListsTopLevelDrafts(t 
 	}
 }
 
+func TestCanonicalProjectBootstrapSetupTasksPrefersCompletedCanonicalSet(t *testing.T) {
+	projectID := uuid.New()
+	doneBindID := uuid.New()
+	draftBindID := uuid.New()
+	doneSignoffID := uuid.New()
+	draftSignoffID := uuid.New()
+
+	canonical, byID := canonicalProjectBootstrapSetupTasks([]repo.ProjectTask{
+		{
+			ID:         draftBindID,
+			ProjectID:  projectID,
+			TaskNumber: 10,
+			Title:      "Bind repo and environment",
+			WorkStatus: "draft",
+			Metadata:   json.RawMessage(`{"bootstrap_setup_task":true,"bootstrap_step_slug":"bind-repo-environment"}`),
+		},
+		{
+			ID:         doneBindID,
+			ProjectID:  projectID,
+			TaskNumber: 2,
+			Title:      "Bind repo and environment",
+			WorkStatus: "done",
+			Metadata:   json.RawMessage(`{"bootstrap_setup_task":true,"bootstrap_step_slug":"bind-repo-environment"}`),
+		},
+		{
+			ID:         draftSignoffID,
+			ProjectID:  projectID,
+			TaskNumber: 16,
+			Title:      "Request and record Frank sign-off",
+			WorkStatus: "draft",
+			Metadata:   json.RawMessage(`{"bootstrap_setup_task":true,"bootstrap_step_slug":"record-frank-sign-off"}`),
+		},
+		{
+			ID:         doneSignoffID,
+			ProjectID:  projectID,
+			TaskNumber: 8,
+			Title:      "Request and record Frank sign-off",
+			WorkStatus: "done",
+			Metadata:   json.RawMessage(`{"bootstrap_setup_task":true,"bootstrap_step_slug":"record-frank-sign-off"}`),
+		},
+	})
+
+	if len(canonical) != 2 {
+		t.Fatalf("canonical setup task count = %d, want 2", len(canonical))
+	}
+	if canonical[0].ID != doneBindID || canonical[1].ID != doneSignoffID {
+		t.Fatalf("canonical setup task ids = [%s %s], want [%s %s]", canonical[0].ID, canonical[1].ID, doneBindID, doneSignoffID)
+	}
+	if _, ok := byID[doneBindID]; !ok {
+		t.Fatal("done bind task missing from canonical byID map")
+	}
+	if _, ok := byID[draftBindID]; ok {
+		t.Fatal("draft duplicate bind task should not remain in canonical byID map")
+	}
+}
+
+func TestCanonicalProjectBootstrapGateTaskMatchesCompletedSetupBatch(t *testing.T) {
+	projectID := uuid.New()
+	earlyGateID := uuid.New()
+	lateGateID := uuid.New()
+
+	setupTasks := []repo.ProjectTask{
+		{
+			ID:         uuid.New(),
+			ProjectID:  projectID,
+			TaskNumber: 10,
+			Title:      "Bind repo and environment",
+			WorkStatus: "done",
+			Metadata:   json.RawMessage(`{"bootstrap_setup_task":true,"bootstrap_step_slug":"bind-repo-environment"}`),
+		},
+		{
+			ID:         uuid.New(),
+			ProjectID:  projectID,
+			TaskNumber: 16,
+			Title:      "Request and record Frank sign-off",
+			WorkStatus: "done",
+			Metadata:   json.RawMessage(`{"bootstrap_setup_task":true,"bootstrap_step_slug":"record-frank-sign-off"}`),
+		},
+	}
+
+	gate, ok := canonicalProjectBootstrapGateTask([]repo.ProjectTask{
+		{ID: earlyGateID, ProjectID: projectID, TaskNumber: 1, Title: "Bootstrap governance gate", WorkStatus: "draft", Metadata: json.RawMessage(`{"bootstrap_gate":true}`)},
+		{ID: lateGateID, ProjectID: projectID, TaskNumber: 9, Title: "Bootstrap governance gate", WorkStatus: "draft", Metadata: json.RawMessage(`{"bootstrap_gate":true}`)},
+	}, setupTasks)
+	if !ok {
+		t.Fatal("canonicalProjectBootstrapGateTask ok = false, want true")
+	}
+	if gate.ID != lateGateID {
+		t.Fatalf("canonical gate id = %s, want %s", gate.ID, lateGateID)
+	}
+}
+
 func TestLoadProjectBootstrapResumeSnapshotAddsCompoundParentRepairTargets(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

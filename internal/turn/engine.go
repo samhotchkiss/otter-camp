@@ -2108,6 +2108,105 @@ func (p projectBootstrapProgress) WaitingForBootstrapGate() bool {
 		!p.BootstrapGateReady()
 }
 
+func canonicalProjectBootstrapSetupTasks(tasks []repo.ProjectTask) ([]repo.ProjectTask, map[uuid.UUID]repo.ProjectTask) {
+	if len(tasks) == 0 {
+		return nil, map[uuid.UUID]repo.ProjectTask{}
+	}
+	bySlug := make(map[string]repo.ProjectTask)
+	anonymous := make([]repo.ProjectTask, 0)
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		slug := strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"]))
+		if slug == "" {
+			anonymous = append(anonymous, task)
+			continue
+		}
+		existing, ok := bySlug[slug]
+		if !ok || shouldPreferCanonicalBootstrapScaffoldTask(existing, task) {
+			bySlug[slug] = task
+		}
+	}
+	canonical := make([]repo.ProjectTask, 0, len(bySlug)+len(anonymous))
+	for _, task := range bySlug {
+		canonical = append(canonical, task)
+	}
+	canonical = append(canonical, anonymous...)
+	sort.Slice(canonical, func(i, j int) bool {
+		return bootstrapScaffoldTaskLess(canonical[i], canonical[j])
+	})
+	byID := make(map[uuid.UUID]repo.ProjectTask, len(canonical))
+	for _, task := range canonical {
+		if task.ID != uuid.Nil {
+			byID[task.ID] = task
+		}
+	}
+	return canonical, byID
+}
+
+func canonicalProjectBootstrapGateTask(gates, setupTasks []repo.ProjectTask) (repo.ProjectTask, bool) {
+	if len(gates) == 0 {
+		return repo.ProjectTask{}, false
+	}
+	earliestCompletedSetup := 0
+	for _, task := range setupTasks {
+		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") || task.TaskNumber <= 0 {
+			continue
+		}
+		if earliestCompletedSetup == 0 || task.TaskNumber < earliestCompletedSetup {
+			earliestCompletedSetup = task.TaskNumber
+		}
+	}
+	if earliestCompletedSetup > 0 {
+		var chosen repo.ProjectTask
+		found := false
+		for _, gate := range gates {
+			if gate.TaskNumber <= 0 || gate.TaskNumber >= earliestCompletedSetup {
+				continue
+			}
+			if !found || gate.TaskNumber > chosen.TaskNumber {
+				chosen = gate
+				found = true
+			}
+		}
+		if found {
+			return chosen, true
+		}
+	}
+	chosen := gates[0]
+	for _, gate := range gates[1:] {
+		if shouldPreferCanonicalBootstrapScaffoldTask(chosen, gate) {
+			chosen = gate
+		}
+	}
+	return chosen, true
+}
+
+func shouldPreferCanonicalBootstrapScaffoldTask(existing, candidate repo.ProjectTask) bool {
+	existingDone := strings.EqualFold(strings.TrimSpace(existing.WorkStatus), "done")
+	candidateDone := strings.EqualFold(strings.TrimSpace(candidate.WorkStatus), "done")
+	if existingDone != candidateDone {
+		return candidateDone
+	}
+	return bootstrapScaffoldTaskLess(candidate, existing)
+}
+
+func bootstrapScaffoldTaskLess(left, right repo.ProjectTask) bool {
+	switch {
+	case left.TaskNumber > 0 && right.TaskNumber > 0:
+		if left.TaskNumber != right.TaskNumber {
+			return left.TaskNumber < right.TaskNumber
+		}
+	case left.TaskNumber > 0:
+		return true
+	case right.TaskNumber > 0:
+		return false
+	}
+	if left.ID != uuid.Nil && right.ID != uuid.Nil {
+		return strings.Compare(left.ID.String(), right.ID.String()) < 0
+	}
+	return left.ID != uuid.Nil
+}
+
 func projectBootstrapProgressAdvancedBeyondState(state projectBootstrapState, progress projectBootstrapProgress) bool {
 	return progress.AssignmentCount > state.AssignmentCount ||
 		progress.StaffingDraftCount > state.StaffingDraftCount ||
@@ -2307,32 +2406,18 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	}
 
 	plannedTasks := make([]repo.ProjectTask, 0, len(tasks))
-	bootstrapSetupTasks := make([]repo.ProjectTask, 0)
+	setupTaskCandidates := make([]repo.ProjectTask, 0)
+	gateCandidates := make([]repo.ProjectTask, 0)
 	bootstrapSetupTaskByID := make(map[uuid.UUID]repo.ProjectTask)
 	childCounts := make(map[uuid.UUID]int)
-	bootstrapTaskNumber := 0
 	for _, task := range tasks {
 		metadata := messageMetadataMap(task.Metadata)
 		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
-			if progress.BootstrapTaskID == uuid.Nil || (task.TaskNumber > 0 && (bootstrapTaskNumber == 0 || task.TaskNumber < bootstrapTaskNumber)) {
-				progress.BootstrapTaskID = task.ID
-				progress.BootstrapTaskOutstanding = !projectBootstrapTaskStatusTerminal(task.WorkStatus)
-				bootstrapTaskNumber = task.TaskNumber
-			}
+			gateCandidates = append(gateCandidates, task)
 			continue
 		}
 		if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); bootstrapSetupTask {
-			progress.BootstrapSetupTaskCount++
-			bootstrapSetupTasks = append(bootstrapSetupTasks, task)
-			if task.ID != uuid.Nil {
-				bootstrapSetupTaskByID[task.ID] = task
-			}
-			if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") {
-				progress.BootstrapSetupDoneCount++
-				if strings.EqualFold(strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"])), bootstrapFrankSignOffStepSlug) {
-					progress.FrankSignOffRecorded = true
-				}
-			}
+			setupTaskCandidates = append(setupTaskCandidates, task)
 			continue
 		}
 		plannedTasks = append(plannedTasks, task)
@@ -2340,6 +2425,23 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 			childCounts[parentID]++
 		}
 	}
+	bootstrapSetupTasks, canonicalSetupTaskByID := canonicalProjectBootstrapSetupTasks(setupTaskCandidates)
+	bootstrapSetupTaskByID = canonicalSetupTaskByID
+	progress.BootstrapSetupTaskCount = len(bootstrapSetupTasks)
+	for _, task := range bootstrapSetupTasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") {
+			progress.BootstrapSetupDoneCount++
+			if strings.EqualFold(strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"])), bootstrapFrankSignOffStepSlug) {
+				progress.FrankSignOffRecorded = true
+			}
+		}
+	}
+	if bootstrapTask, ok := canonicalProjectBootstrapGateTask(gateCandidates, bootstrapSetupTasks); ok {
+		progress.BootstrapTaskID = bootstrapTask.ID
+		progress.BootstrapTaskOutstanding = !projectBootstrapTaskStatusTerminal(bootstrapTask.WorkStatus)
+	}
+
 	progress.PlannedTaskCount = len(plannedTasks)
 	if len(plannedTasks) == 0 {
 		progress.PlannedFlowTemplateCount, err = e.countProjectBootstrapCurrentFlowTemplates(ctx, projectID)
