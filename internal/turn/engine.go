@@ -2943,12 +2943,18 @@ func (e *TurnEngine) appendProjectBootstrapContinuationMessageWithContent(ctx co
 	if e == nil || sessionID == uuid.Nil {
 		return nil, repo.ErrNotFound
 	}
-	metadata, err := json.Marshal(map[string]any{
+	metadataMap := map[string]any{
 		"source":                       projectBootstrapSource,
 		"auto_continue":                true,
 		"bootstrap_initial_message_id": strings.TrimSpace(initialMessageID),
 		"bootstrap_auto_turn_count":    autoTurnCount,
-	})
+	}
+	if freshKickoff, err := e.bootstrapInitialMessageRequestsFreshKickoff(ctx, sessionID, initialMessageID); err != nil {
+		return nil, err
+	} else if freshKickoff {
+		metadataMap["fresh_kickoff"] = true
+	}
+	metadata, err := json.Marshal(metadataMap)
 	if err != nil {
 		return nil, err
 	}
@@ -3523,7 +3529,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		recoveryTurn:     isRecoveryResumeMessage(message),
 	}
 	runtime.projectIdentity = e.loadProjectIdentityForMessage(ctx, sessionID, messageID)
-	if isFreshKickoffRequest(session, message) {
+	if messageRequestsFreshKickoff(session, message) {
 		runtime.historyStartID = &message.ID
 		runtime.disableMemory = true
 		runtime.freshKickoff = true
@@ -8062,6 +8068,15 @@ func isFreshKickoffRequest(session *chat.ChatSession, message repo.ChatMessage) 
 	return strings.Contains(text, "restart") && (strings.Contains(text, "fresh") || strings.Contains(text, "from scratch") || strings.Contains(text, "clean slate") || strings.Contains(text, "start over") || strings.Contains(text, "new run"))
 }
 
+func messageRequestsFreshKickoff(session *chat.ChatSession, message repo.ChatMessage) bool {
+	if isFreshKickoffRequest(session, message) {
+		return true
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	fresh, _ := metadata["fresh_kickoff"].(bool)
+	return fresh
+}
+
 func isRecoveryResumeMessage(message repo.ChatMessage) bool {
 	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 		return false
@@ -8078,6 +8093,34 @@ func isRecoveryResumeMessage(message repo.ChatMessage) bool {
 	}
 	text := strings.ToLower(normalizeInstructionText(message.Content))
 	return strings.Contains(text, "resume") && strings.Contains(text, "task")
+}
+
+func (e *TurnEngine) bootstrapInitialMessageRequestsFreshKickoff(ctx context.Context, sessionID uuid.UUID, initialMessageID string) (bool, error) {
+	if e == nil || e.chat == nil || e.messages == nil {
+		return false, nil
+	}
+	initialID, err := uuid.Parse(strings.TrimSpace(initialMessageID))
+	if err != nil || initialID == uuid.Nil {
+		return false, nil
+	}
+	session, err := e.chat.GetSession(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	message, err := e.messages.GetByID(ctx, initialID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if message.SessionID != sessionID {
+		return false, nil
+	}
+	return messageRequestsFreshKickoff(session, message), nil
 }
 
 func messageMetadataMap(metadata json.RawMessage) map[string]any {

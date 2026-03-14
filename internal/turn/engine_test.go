@@ -1781,6 +1781,46 @@ func TestShouldBlockFreshKickoffMemoryTool(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageRecoveryMessageWithFreshKickoffMetadataDisablesMemory(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	metadata, err := json.Marshal(map[string]any{"fresh_kickoff": true, "source": projectBootstrapSource})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	fixture.messages.items[fixture.userMessageID] = repo.ChatMessage{
+		ID:            fixture.userMessageID,
+		SessionID:     fixture.session.ID,
+		SequenceNumber: 1,
+		Role:          "user",
+		Status:        "pending",
+		Content:       "Continue the bootstrap recovery now.",
+		Metadata:      metadata,
+	}
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if !input.DisableMemory {
+			t.Fatalf("assemble call %d DisableMemory = false, want true", call)
+		}
+	}
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+}
+
 func TestShouldBlockFreshKickoffAgentBrowseTool(t *testing.T) {
 	rt := &turnRuntime{
 		freshKickoff: true,
@@ -1805,6 +1845,28 @@ func TestShouldBlockFreshKickoffAgentBrowseTool(t *testing.T) {
 	rt.session.ScopeType = "project"
 	if shouldBlockFreshKickoffAgentBrowseTool(rt, "agent.list") {
 		t.Fatal("non-fresh kickoff should not block agent browsing")
+	}
+}
+
+func TestAppendProjectBootstrapContinuationMessagePreservesFreshKickoffMetadata(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	initialID := uuid.New()
+	initial := fixture.messages.create(repo.ChatMessage{
+		ID:        initialID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "Start Sam.blog from scratch as a fresh kickoff. Do not reuse archived work.",
+	})
+
+	msg, err := fixture.engine.appendProjectBootstrapContinuationMessage(context.Background(), fixture.session.ID, fixture.chat.participants[0].ParticipantID, initial.ID.String(), 2)
+	if err != nil {
+		t.Fatalf("appendProjectBootstrapContinuationMessage: %v", err)
+	}
+	metadata := messageMetadataMap(msg.Metadata)
+	if fresh, _ := metadata["fresh_kickoff"].(bool); !fresh {
+		t.Fatalf("fresh_kickoff metadata = %v, want true", metadata["fresh_kickoff"])
 	}
 }
 
