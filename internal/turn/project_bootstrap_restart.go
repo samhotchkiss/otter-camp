@@ -23,6 +23,8 @@ var (
 	ErrProjectBootstrapRelaunchIneligible  = errors.New("project is not an archived bootstrap relaunch candidate")
 )
 
+const maxProjectSlugLength = 64
+
 type projectBootstrapRestartBundle struct {
 	OperatorBrief       string                               `json:"operator_brief,omitempty"`
 	OperatorConstraints []string                             `json:"operator_constraints,omitempty"`
@@ -1177,18 +1179,91 @@ func (e *TurnEngine) nextBootstrapRestartSlug(ctx context.Context, organizationI
 	for _, item := range projects {
 		used[strings.ToLower(strings.TrimSpace(item.Slug))] = struct{}{}
 	}
-	trimmedBase := strings.TrimSpace(baseSlug)
-	if trimmedBase == "" {
-		trimmedBase = "project"
-	}
-	candidate := trimmedBase + "-restart"
+	trimmedBase := bootstrapRestartSlugBase(baseSlug)
+	candidate := bootstrapRestartSlugCandidate(trimmedBase, 1)
 	if _, ok := used[strings.ToLower(candidate)]; !ok {
 		return candidate, nil
 	}
 	for attempt := 2; ; attempt++ {
-		candidate = fmt.Sprintf("%s-restart-%d", trimmedBase, attempt)
+		candidate = bootstrapRestartSlugCandidate(trimmedBase, attempt)
 		if _, ok := used[strings.ToLower(candidate)]; !ok {
 			return candidate, nil
 		}
 	}
+}
+
+func bootstrapRestartSlugBase(baseSlug string) string {
+	base := strings.Trim(strings.TrimSpace(baseSlug), "-")
+	for {
+		switch {
+		case strings.HasSuffix(base, "-restart"):
+			base = strings.TrimSuffix(base, "-restart")
+			base = strings.TrimRight(base, "-")
+		default:
+			idx := strings.LastIndex(base, "-restart-")
+			if idx < 0 {
+				if base == "" {
+					return "project"
+				}
+				return base
+			}
+			tail := base[idx+len("-restart-"):]
+			if tail == "" || !allDigits(tail) {
+				if base == "" {
+					return "project"
+				}
+				return base
+			}
+			base = strings.TrimRight(base[:idx], "-")
+		}
+	}
+}
+
+func bootstrapRestartSlugCandidate(baseSlug string, attempt int) string {
+	base := bootstrapRestartSlugBase(baseSlug)
+	if attempt <= 1 {
+		return fitBootstrapRestartSlug(base, "-restart")
+	}
+	return fitBootstrapRestartSlug(base, fmt.Sprintf("-restart-%d", attempt))
+}
+
+func fitBootstrapRestartSlug(baseSlug, suffix string) string {
+	base := strings.Trim(strings.TrimSpace(baseSlug), "-")
+	if base == "" {
+		base = "project"
+	}
+	maxBaseLen := maxProjectSlugLength - len(suffix)
+	if maxBaseLen < 1 {
+		trimmedSuffix := strings.TrimPrefix(suffix, "-")
+		if len(trimmedSuffix) > maxProjectSlugLength {
+			return trimmedSuffix[:maxProjectSlugLength]
+		}
+		return trimmedSuffix
+	}
+	if len(base) > maxBaseLen {
+		base = strings.TrimRight(base[:maxBaseLen], "-")
+	}
+	if base == "" {
+		base = "project"
+		if len(base) > maxBaseLen {
+			base = base[:maxBaseLen]
+		}
+		base = strings.TrimRight(base, "-")
+		if base == "" {
+			return strings.TrimPrefix(suffix, "-")
+		}
+	}
+	return base + suffix
+}
+
+func allDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }

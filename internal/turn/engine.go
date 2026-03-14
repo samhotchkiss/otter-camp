@@ -1266,23 +1266,22 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	}
 	narrativeClaimedCompletion := projectBootstrapNarrativeClaimsCompletion(assistant)
 	normalizeProjectBootstrapValidationFailure(&progress, narrativeClaimedCompletion)
+	blockedReason, blockedClass := projectBootstrapBlockedRecoveryFailure(messages, state)
 	if !progress.ValidationFailed() && latestCompleted.StopReason != nil && strings.TrimSpace(*latestCompleted.StopReason) == stopReasonValidationBlocked {
-		if blockedReason, blockedClass := projectBootstrapBlockedRecoveryFailure(messages, state); strings.TrimSpace(blockedReason) != "" {
+		if strings.TrimSpace(blockedReason) != "" {
 			progress.ValidationStatus = projectBootstrapValidationFailed
 			progress.ValidationFailureReason = blockedReason
 			progress.ValidationFailureClass = blockedClass
 		}
 	}
-	if projectBootstrapAckOnlyRecoveryReply(messages, assistant) {
-		if blockedReason, _ := projectBootstrapBlockedRecoveryFailure(messages, state); strings.TrimSpace(blockedReason) != "" {
-			progress.ValidationStatus = projectBootstrapValidationFailed
-			progress.ValidationFailureReason = buildProjectBootstrapAckOnlyRecoveryFailureReason(blockedReason)
-			progress.ValidationFailureClass = projectBootstrapFailureStalled
-		}
-	}
-	if !progress.ValidationFailed() && projectBootstrapRestartSession(session) && projectBootstrapRestartScaffoldOnly(progress) && projectBootstrapAckOnlyReply(assistant) {
+	if strings.TrimSpace(blockedReason) != "" && projectBootstrapNarrativeOnlyReply(messages, assistant) {
 		progress.ValidationStatus = projectBootstrapValidationFailed
-		progress.ValidationFailureReason = buildProjectBootstrapAckOnlyRestartFailureReason()
+		progress.ValidationFailureReason = buildProjectBootstrapNarrativeOnlyRecoveryFailureReason(blockedReason, assistant)
+		progress.ValidationFailureClass = projectBootstrapFailureStalled
+	}
+	if !progress.ValidationFailed() && projectBootstrapRestartSession(session) && projectBootstrapRestartScaffoldOnly(progress) && projectBootstrapNarrativeOnlyReply(messages, assistant) {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureReason = buildProjectBootstrapNarrativeOnlyRestartFailureReason(assistant)
 		progress.ValidationFailureClass = projectBootstrapFailureStalled
 	}
 	if narrativeClaimedCompletion && !progress.Materialized() {
@@ -5072,12 +5071,60 @@ func projectBootstrapAckOnlyRecoveryReply(messages []repo.ChatMessage, assistant
 	if !projectBootstrapAckOnlyReply(assistant) {
 		return false
 	}
+	return projectBootstrapRecoveryTurn(messages)
+}
+
+func projectBootstrapNarrativeOnlyReply(messages []repo.ChatMessage, assistant *repo.ChatMessage) bool {
+	if assistant == nil {
+		return false
+	}
+	if projectBootstrapAckOnlyReply(assistant) {
+		return true
+	}
+	if projectBootstrapReplyUsedTools(messages) {
+		return false
+	}
+	content := strings.ToLower(strings.TrimSpace(assistant.Content))
+	if content == "" {
+		return true
+	}
+	for _, marker := range []string{"cannot", "can't", "unable", "blocker", "blocked", "failed", "failure", "error"} {
+		if strings.Contains(content, marker) {
+			return false
+		}
+	}
+	return strings.Contains(content, "from memory") ||
+		(strings.Contains(content, "i recall") && strings.Contains(content, "memory")) ||
+		(strings.Contains(content, "recall") && strings.Contains(content, "prior")) ||
+		(strings.Contains(content, "review") && strings.Contains(content, "memory"))
+}
+
+func projectBootstrapNarrativeOnlyRecoveryReply(messages []repo.ChatMessage, assistant *repo.ChatMessage) bool {
+	if !projectBootstrapRecoveryTurn(messages) {
+		return false
+	}
+	return projectBootstrapNarrativeOnlyReply(messages, assistant)
+}
+
+func projectBootstrapRecoveryTurn(messages []repo.ChatMessage) bool {
 	for i := len(messages) - 1; i >= 0; i-- {
 		message := messages[i]
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 			continue
 		}
 		return strings.TrimSpace(projectBootstrapRecoveryTargetFromMessage(message.Content)) != ""
+	}
+	return false
+}
+
+func projectBootstrapReplyUsedTools(messages []repo.ChatMessage) bool {
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "tool") {
+			return true
+		}
+		if message.ToolCallID != nil && strings.TrimSpace(*message.ToolCallID) != "" {
+			return true
+		}
 	}
 	return false
 }
@@ -5095,6 +5142,32 @@ func buildProjectBootstrapAckOnlyRecoveryFailureReason(target string) string {
 
 func buildProjectBootstrapAckOnlyRestartFailureReason() string {
 	return "kickoff validation failed: automatic bootstrap restart replied with an acknowledgement only and never persisted staffed executable work"
+}
+
+func buildProjectBootstrapNarrativeOnlyRecoveryFailureReason(target string, assistant *repo.ChatMessage) string {
+	if projectBootstrapAckOnlyReply(assistant) {
+		return buildProjectBootstrapAckOnlyRecoveryFailureReason(target)
+	}
+	target = strings.TrimSpace(target)
+	reply := ""
+	if assistant != nil {
+		reply = strings.TrimSpace(assistant.Content)
+	}
+	if target == "" {
+		return fmt.Sprintf("kickoff validation failed: automatic bootstrap recovery replied with narrative only instead of performing the required repair work (%s)", reply)
+	}
+	return fmt.Sprintf("kickoff validation failed: automatic bootstrap recovery replied with narrative only instead of repairing the requested bootstrap target (%s); reply=%q", target, reply)
+}
+
+func buildProjectBootstrapNarrativeOnlyRestartFailureReason(assistant *repo.ChatMessage) string {
+	if projectBootstrapAckOnlyReply(assistant) {
+		return buildProjectBootstrapAckOnlyRestartFailureReason()
+	}
+	reply := ""
+	if assistant != nil {
+		reply = strings.TrimSpace(assistant.Content)
+	}
+	return fmt.Sprintf("kickoff validation failed: automatic bootstrap restart replied with narrative only and never persisted staffed executable work; reply=%q", reply)
 }
 
 func projectBootstrapRecoveryTargetFromMessage(content string) string {

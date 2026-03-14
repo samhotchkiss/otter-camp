@@ -2045,6 +2045,24 @@ func TestBuildProjectBootstrapRestartPromptForSeededScaffold(t *testing.T) {
 	}
 }
 
+func TestBootstrapRestartSlugCandidateCollapsesRestartChains(t *testing.T) {
+	got := bootstrapRestartSlugCandidate("sam-blog-110-restart-restart-restart-13", 1)
+	if got != "sam-blog-110-restart" {
+		t.Fatalf("bootstrapRestartSlugCandidate collapse = %q, want %q", got, "sam-blog-110-restart")
+	}
+}
+
+func TestBootstrapRestartSlugCandidateStaysWithinProjectSlugLimit(t *testing.T) {
+	base := "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm-restart-12"
+	got := bootstrapRestartSlugCandidate(base, 123)
+	if len(got) > maxProjectSlugLength {
+		t.Fatalf("bootstrapRestartSlugCandidate len = %d, want <= %d (%q)", len(got), maxProjectSlugLength, got)
+	}
+	if !strings.HasSuffix(got, "-restart-123") {
+		t.Fatalf("bootstrapRestartSlugCandidate suffix = %q, want -restart-123", got)
+	}
+}
+
 func TestShouldBlockProjectBootstrapRestaffingToolAfterTaskTreePersisted(t *testing.T) {
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
 		Status:                   projectBootstrapStatusActive,
@@ -4478,6 +4496,21 @@ func TestProjectBootstrapAckOnlyRecoveryReply(t *testing.T) {
 	}
 }
 
+func TestProjectBootstrapNarrativeOnlyRecoveryReply(t *testing.T) {
+	messages := []repo.ChatMessage{
+		{Role: "user", Content: "Continue the bounded project bootstrap setup workflow now. Recovery target: kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution."},
+	}
+	if !projectBootstrapNarrativeOnlyRecoveryReply(messages, &repo.ChatMessage{Role: "assistant", Content: "I recall prior infrastructure details from memory."}) {
+		t.Fatal("expected memory-only recovery reply to be detected")
+	}
+	if projectBootstrapNarrativeOnlyRecoveryReply(messages, &repo.ChatMessage{Role: "assistant", Content: "I cannot continue because the repo credential is missing."}) {
+		t.Fatal("did not expect a concrete blocker to be treated as narrative-only")
+	}
+	if projectBootstrapNarrativeOnlyRecoveryReply(append(messages, repo.ChatMessage{Role: "tool", Content: "{}"}), &repo.ChatMessage{Role: "assistant", Content: "I recall prior infrastructure details from memory."}) {
+		t.Fatal("did not expect tool-backed recovery reply to be treated as narrative-only")
+	}
+}
+
 func TestBuildProjectBootstrapAckOnlyRecoveryFailureReason(t *testing.T) {
 	got := buildProjectBootstrapAckOnlyRecoveryFailureReason("kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent")
 	if !strings.Contains(got, "acknowledgement only") {
@@ -4495,6 +4528,19 @@ func TestBuildProjectBootstrapAckOnlyRestartFailureReason(t *testing.T) {
 	}
 	if !strings.Contains(got, "acknowledgement only") {
 		t.Fatalf("expected acknowledgement-only wording, got %q", got)
+	}
+}
+
+func TestBuildProjectBootstrapNarrativeOnlyRecoveryFailureReason(t *testing.T) {
+	got := buildProjectBootstrapNarrativeOnlyRecoveryFailureReason(
+		"kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent",
+		&repo.ChatMessage{Role: "assistant", Content: "I recall prior infrastructure details from memory."},
+	)
+	if !strings.Contains(got, "narrative only") {
+		t.Fatalf("expected narrative-only wording, got %q", got)
+	}
+	if !strings.Contains(got, "I recall prior infrastructure details from memory.") {
+		t.Fatalf("expected reply content in failure reason, got %q", got)
 	}
 }
 
