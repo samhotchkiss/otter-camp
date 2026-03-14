@@ -1915,6 +1915,61 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	}
 }
 
+func TestShouldBlockProjectBootstrapRestaffingToolAfterTaskTreePersisted(t *testing.T) {
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AssignmentCount:          7,
+		PlannedTaskCount:         12,
+		CurrentPhase:             projectBootstrapCheckpointFlowTemplatesPersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointTaskTreePersisted,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !shouldBlockProjectBootstrapRestaffingTool(rt, "staffing.browse_profiles") {
+		t.Fatal("expected staffing.browse_profiles to be blocked after task tree persisted")
+	}
+	if !shouldBlockProjectBootstrapRestaffingTool(rt, "agent.create_staff") {
+		t.Fatal("expected agent.create_staff to be blocked after task tree persisted")
+	}
+	if shouldBlockProjectBootstrapRestaffingTool(rt, "agent.assign_project") {
+		t.Fatal("agent.assign_project should not be blocked by restaffing guard")
+	}
+}
+
+func TestShouldBlockProjectBootstrapRestaffingToolAllowsMissingPMRecovery(t *testing.T) {
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                 projectBootstrapStatusActive,
+		AssignmentCount:        2,
+		CurrentPhase:           projectBootstrapCheckpointTaskTreePersisted,
+		ValidationStatus:       projectBootstrapValidationFailed,
+		ValidationFailureClass: projectBootstrapFailureMissingPM,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if shouldBlockProjectBootstrapRestaffingTool(rt, "agent.create_staff") {
+		t.Fatal("missing-PM recovery should allow agent.create_staff")
+	}
+	if shouldBlockProjectBootstrapRestaffingTool(rt, "staffing.browse_profiles") {
+		t.Fatal("missing-PM recovery should allow staffing.browse_profiles")
+	}
+}
+
 func TestHandleUserMessageProjectScopeKickoffHandoffRoutesToLoriAfterFrank(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

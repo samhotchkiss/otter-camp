@@ -5634,6 +5634,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if shouldBlockProjectBootstrapRestaffingTool(rt, name) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildProjectBootstrapRestaffingToolGuardError(rt),
+			})
+			continue
+		}
 		if shouldBlockProjectKickoffFollowOnTool(rt, name) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -8900,6 +8908,50 @@ func shouldBlockFreshKickoffAgentBrowseTool(rt *turnRuntime, toolName string) bo
 	}
 }
 
+func shouldBlockProjectBootstrapRestaffingTool(rt *turnRuntime, toolName string) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "staffing.browse_profiles", "staffing.get_profile", "agent.create_staff", "agent.create_temp":
+	default:
+		return false
+	}
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if !projectBootstrapStateActive(state) || state.AssignmentCount == 0 {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
+		switch strings.TrimSpace(state.ValidationFailureClass) {
+		case projectBootstrapFailureMissingAssignments, projectBootstrapFailureMissingPM:
+			return false
+		}
+	}
+	if state.PlannedTaskCount > 0 || state.PlannedFlowTemplateCount > 0 || state.FirstWaveTaskCount > 0 || state.FirstWavePromotedCount > 0 || state.FirstWaveJobCount > 0 {
+		return true
+	}
+	switch strings.TrimSpace(state.CurrentPhase) {
+	case projectBootstrapCheckpointTaskTreePersisted,
+		projectBootstrapCheckpointFlowTemplatesPersisted,
+		projectBootstrapCheckpointFirstWaveSelected,
+		projectBootstrapCheckpointFirstWaveExecutions,
+		projectBootstrapCheckpointFirstWaveJobsClaimed:
+		return true
+	}
+	switch strings.TrimSpace(state.LastSuccessfulCheckpoint) {
+	case projectBootstrapCheckpointTaskTreePersisted,
+		projectBootstrapCheckpointFlowTemplatesPersisted,
+		projectBootstrapCheckpointFirstWaveSelected,
+		projectBootstrapCheckpointFirstWaveExecutions,
+		projectBootstrapCheckpointFirstWaveJobsClaimed:
+		return true
+	}
+	return false
+}
+
 func buildProjectKickoffFollowOnToolGuardError(identity *projectIdentity) string {
 	if identity == nil {
 		return "project kickoff is now handoff-only: provide Lori the handoff summary and end the turn"
@@ -8917,6 +8969,17 @@ func buildFreshKickoffMemoryToolGuardError() string {
 
 func buildFreshKickoffAgentBrowseToolGuardError() string {
 	return "fresh kickoff bootstrap should create dedicated project staff directly; skip browsing existing org agents unless the user explicitly asks to reuse prior staff"
+}
+
+func buildProjectBootstrapRestaffingToolGuardError(rt *turnRuntime) string {
+	assignments := 0
+	if rt != nil && rt.session != nil {
+		assignments = projectBootstrapStateFromMetadata(rt.session.Metadata).AssignmentCount
+	}
+	if assignments <= 0 {
+		return "bootstrap staffing is already persisted; reuse the existing project roster instead of browsing profiles or creating duplicate staff"
+	}
+	return fmt.Sprintf("bootstrap staffing is already persisted for %d active project assignments; reuse the existing project roster instead of browsing profiles or creating duplicate staff unless the validation failure explicitly says staffing is missing", assignments)
 }
 
 func buildFreshKickoffBlockerMessage(identity *projectIdentity, reason string) string {
