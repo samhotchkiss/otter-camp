@@ -1332,11 +1332,6 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		progress.ValidationStatus = projectBootstrapValidationFailed
 		progress.ValidationFailureClass = projectBootstrapFailureRuntime
 		progress.ValidationFailureReason = buildProjectBootstrapRestartScaffoldFailureReason()
-		rt := &turnRuntime{session: session, turn: &chat.ChatTurn{ID: turnID}}
-		if latestCompleted.RespondingID != uuid.Nil {
-			rt.agent.ID = latestCompleted.RespondingID
-		}
-		return e.failProjectBootstrapValidation(ctx, rt, progress, now)
 	}
 
 	if progress.ValidationFailed() {

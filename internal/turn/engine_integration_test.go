@@ -10140,6 +10140,7 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 		t.Fatalf("restart1 failure_history len = %d, want 1", len(restart1Bundle.FailureHistory))
 	}
 	restart1Session := mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restart1Project.ID)
+	runQueuedBootstrapTurnCycleToFailure(t, ctx, fixture, restart1Session.ID)
 	runSingleQueuedBootstrapTurn(t, ctx, fixture, restart1Session.ID)
 
 	restart1Archived := mustGetProjectByID(t, ctx, fixture.pool, restart1Project.ID)
@@ -10179,6 +10180,7 @@ func TestTurnEngineIntegrationBootstrapRetriesAreBoundedAndEscalateEX343(t *test
 	if len(restart2Bundle.FailureHistory) != 2 {
 		t.Fatalf("restart2 failure_history len = %d, want 2", len(restart2Bundle.FailureHistory))
 	}
+	runQueuedBootstrapTurnCycleToFailure(t, ctx, fixture, mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restart2Project.ID).ID)
 	runSingleQueuedBootstrapTurn(t, ctx, fixture, mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restart2Project.ID).ID)
 
 	finalArchived := mustGetProjectByID(t, ctx, fixture.pool, restart2Project.ID)
@@ -10391,19 +10393,8 @@ func TestTurnEngineIntegrationRelaunchArchivedBootstrapProjectBypassesExhaustedR
 	}
 
 	restartSession := mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restartProject.ID)
-	restartJobID, restartPayload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, restartSession.ID)
-	if err := fixture.engine.handleUserMessage(ctx, restartPayload.SessionID, restartPayload.MessageID, restartPayload.AgentID, restartPayload.RetryCount, &restartJobID); err != nil {
-		t.Fatalf("handleUserMessage restart scaffold-only turn: %v", err)
-	}
-
-	restartTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, restartSession.ID)
-	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
-		OrganizationID: fixture.org.ID,
-		EventType:      "chat.turn.completed",
-		Payload:        mustJSON(t, map[string]any{"session_id": restartSession.ID.String(), "turn_id": restartTurn.ID.String()}),
-	}); err != nil {
-		t.Fatalf("HandleTurnCompletedEvent restart scaffold-only turn: %v", err)
-	}
+	runQueuedBootstrapTurnCycleToFailure(t, ctx, fixture, restartSession.ID)
+	runSingleQueuedBootstrapTurn(t, ctx, fixture, restartSession.ID)
 
 	restartArchived := mustGetProjectByID(t, ctx, fixture.pool, restartProject.ID)
 	if restartArchived.Status != "archived" {
