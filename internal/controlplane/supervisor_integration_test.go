@@ -1050,7 +1050,7 @@ func TestSupervisor_StrandedActiveExecutionRecoversBlankReviewNodeWithReviewerAs
 		OrganizationID:    org.ID,
 		ProjectID:         projectRecord.ID,
 		Title:             "Recover blank review execution",
-		WorkStatus:        "in_progress",
+		WorkStatus:        "review",
 		CurrentFlowNodeID: &node.ID,
 		FlowTemplateID:    &template.ID,
 		AssignedAgentID:   &worker.ID,

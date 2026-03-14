@@ -148,7 +148,7 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 			LIMIT 1
 		) recovery_agent ON true
 		WHERE e.status = 'active'
-		  AND t.work_status = 'in_progress'
+		  AND t.work_status IN ('in_progress', 'review')
 		  AND (
 			s.id IS NULL
 			OR s.status <> 'active'
