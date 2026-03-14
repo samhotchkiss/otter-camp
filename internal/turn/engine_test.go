@@ -4566,6 +4566,60 @@ func TestContinuationTurnAppendsDirectActionPromptForAsyncProjectTask(t *testing
 	}
 }
 
+func TestRecoveryTurnAppendsDirectActionPromptForAsyncProjectTaskWithoutCheckpoint(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+	if _, err := fixture.messages.UpdateContent(context.Background(), fixture.userMessageID, "supervisor recovery: resume task"); err != nil {
+		t.Fatalf("UpdateContent recovery kickoff: %v", err)
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var actionPromptFound bool
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "Continue the active task recovery now.") {
+			actionPromptFound = true
+			if !strings.Contains(msg.Content, "Your next response must take direct recovery action on the task instead of generic chat.") {
+				t.Fatalf("action prompt = %q, want direct recovery guidance", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "Do not say that you lack context or ask the user to restate the task when this recovery turn already includes the task session history and recovery kickoff.") {
+				t.Fatalf("action prompt = %q, want anti-no-context guidance", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "Do not start with project.list, project.get, task.list, task.get, task_get, flow.list_templates, flow.get_execution, file.read, file_list, or agent.list unless a specific blocker names that exact record.") {
+				t.Fatalf("action prompt = %q, want anti-reread guidance", msg.Content)
+			}
+		}
+	}
+	if !actionPromptFound {
+		t.Fatal("task recovery action prompt missing")
+	}
+}
+
 func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.session.ScopeType = "project"

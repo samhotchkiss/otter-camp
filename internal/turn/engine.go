@@ -7218,7 +7218,25 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 	}
 	state, ok := e.loadRecoveryResumeState(ctx, rt)
 	if !ok {
-		return false, nil
+		if !shouldAppendTaskRecoveryActionPrompt(rt.session) {
+			return false, nil
+		}
+		actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+			SessionID: rt.session.ID,
+			TurnID:    &rt.turn.ID,
+			Role:      "user",
+			Content:   buildTaskRecoveryActionPrompt(),
+		})
+		if err != nil {
+			return false, err
+		}
+		if preserveInitialMessage && rt.initialMessageID != uuid.Nil {
+			initial := rt.initialMessageID
+			rt.historyStartID = &initial
+			return true, nil
+		}
+		rt.historyStartID = &actionMessage.ID
+		return true, nil
 	}
 	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryResumeStateMessage(state))
 	if err != nil {
@@ -7454,6 +7472,24 @@ func shouldAppendTaskContinuationActionPrompt(session *chat.ChatSession) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(session.Mode), "async")
+}
+
+func shouldAppendTaskRecoveryActionPrompt(session *chat.ChatSession) bool {
+	return shouldAppendTaskContinuationActionPrompt(session)
+}
+
+func buildTaskRecoveryActionPrompt() string {
+	lines := []string{
+		"Continue the active task recovery now.",
+		"Your next response must take direct recovery action on the task instead of generic chat.",
+		"Do not say that you are ready, ask what to do next, or ask the user what they need.",
+		"Do not say that you lack context or ask the user to restate the task when this recovery turn already includes the task session history and recovery kickoff.",
+		"Do not restate the task state or reread broad context before acting.",
+		"Do not start with project.list, project.get, task.list, task.get, task_get, flow.list_templates, flow.get_execution, file.read, file_list, or agent.list unless a specific blocker names that exact record.",
+		"Use the existing workspace, task state, recent tool results, and supervisor metadata to continue the task directly.",
+		"If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.",
+	}
+	return strings.Join(lines, " ")
 }
 
 func buildTaskContinuationActionPrompt() string {
