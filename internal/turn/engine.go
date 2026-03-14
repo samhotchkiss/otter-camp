@@ -1280,6 +1280,11 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 			progress.ValidationFailureClass = projectBootstrapFailureStalled
 		}
 	}
+	if !progress.ValidationFailed() && projectBootstrapRestartSession(session) && projectBootstrapRestartScaffoldOnly(progress) && projectBootstrapAckOnlyReply(assistant) {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureReason = buildProjectBootstrapAckOnlyRestartFailureReason()
+		progress.ValidationFailureClass = projectBootstrapFailureStalled
+	}
 	if narrativeClaimedCompletion && !progress.Materialized() {
 		rt := &turnRuntime{session: session, turn: &chat.ChatTurn{ID: turnID}}
 		if latestCompleted.RespondingID != uuid.Nil {
@@ -5051,14 +5056,20 @@ func projectBootstrapBlockedRecoveryFailure(messages []repo.ChatMessage, state p
 	return reason, projectBootstrapFailureClassForReason(state.ValidationFailureClass, reason)
 }
 
-func projectBootstrapAckOnlyRecoveryReply(messages []repo.ChatMessage, assistant *repo.ChatMessage) bool {
+func projectBootstrapAckOnlyReply(assistant *repo.ChatMessage) bool {
 	if assistant == nil {
 		return false
 	}
 	content := strings.ToLower(strings.TrimSpace(assistant.Content))
 	switch content {
 	case "acknowledged.", "acknowledged", "understood.", "understood":
-	default:
+		return true
+	}
+	return false
+}
+
+func projectBootstrapAckOnlyRecoveryReply(messages []repo.ChatMessage, assistant *repo.ChatMessage) bool {
+	if !projectBootstrapAckOnlyReply(assistant) {
 		return false
 	}
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -5080,6 +5091,10 @@ func buildProjectBootstrapAckOnlyRecoveryFailureReason(target string) string {
 		"kickoff validation failed: automatic bootstrap recovery replied with an acknowledgement only instead of repairing the requested bootstrap target (%s)",
 		target,
 	)
+}
+
+func buildProjectBootstrapAckOnlyRestartFailureReason() string {
+	return "kickoff validation failed: automatic bootstrap restart replied with an acknowledgement only and never persisted staffed executable work"
 }
 
 func projectBootstrapRecoveryTargetFromMessage(content string) string {

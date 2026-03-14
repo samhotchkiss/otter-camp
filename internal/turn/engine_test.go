@@ -4430,6 +4430,12 @@ func TestProjectBootstrapBlockedRecoveryFailureFallsBackToRecentRecoveryMessage(
 }
 
 func TestProjectBootstrapAckOnlyRecoveryReply(t *testing.T) {
+	if !projectBootstrapAckOnlyReply(&repo.ChatMessage{Role: "assistant", Content: "Acknowledged."}) {
+		t.Fatal("expected bare acknowledgement to be detected")
+	}
+	if projectBootstrapAckOnlyReply(&repo.ChatMessage{Role: "assistant", Content: "Acknowledged. I will assign the task now."}) {
+		t.Fatal("did not expect substantive acknowledgement to be treated as ack-only")
+	}
 	if !projectBootstrapAckOnlyRecoveryReply([]repo.ChatMessage{
 		{Role: "user", Content: "Continue the bounded project bootstrap setup workflow now. Recovery target: kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution."},
 	}, &repo.ChatMessage{Role: "assistant", Content: "Acknowledged."}) {
@@ -4454,6 +4460,16 @@ func TestBuildProjectBootstrapAckOnlyRecoveryFailureReason(t *testing.T) {
 	}
 	if !strings.Contains(got, "first-wave task 11 (Site Build) has no assigned agent") {
 		t.Fatalf("expected target in failure reason, got %q", got)
+	}
+}
+
+func TestBuildProjectBootstrapAckOnlyRestartFailureReason(t *testing.T) {
+	got := buildProjectBootstrapAckOnlyRestartFailureReason()
+	if !strings.Contains(got, "automatic bootstrap restart") {
+		t.Fatalf("expected restart wording, got %q", got)
+	}
+	if !strings.Contains(got, "acknowledgement only") {
+		t.Fatalf("expected acknowledgement-only wording, got %q", got)
 	}
 }
 
