@@ -5328,6 +5328,23 @@ func buildProjectBootstrapBoundedSizeRepairTaskLine(blockedTask repo.ProjectTask
 	)
 }
 
+func buildProjectBootstrapUnresolvedFailureRepairTaskLine(taskNumber int, title string) string {
+	if taskNumber <= 0 {
+		return ""
+	}
+	parts := []string{
+		fmt.Sprintf("The current validation failure still names first-wave task %d", taskNumber),
+	}
+	if trimmedTitle := strings.TrimSpace(title); trimmedTitle != "" {
+		parts[len(parts)-1] += fmt.Sprintf(" (%q)", trimmedTitle)
+	}
+	parts[len(parts)-1] += ", but the exact persisted task id is no longer resolvable from that stale task number/title."
+	parts = append(parts, "Do not fabricate a UUID from the bare task number.")
+	parts = append(parts, "If prior repair turns already reassigned, renamed, or split that task, call bootstrap.setup.persist with canonical completed_step_slugs from the current persisted state instead of retrying raw task.update against an invented id.")
+	parts = append(parts, "Only if bootstrap.setup.persist returns a concrete blocker naming a single current task should you inspect that one task directly.")
+	return strings.Join(parts, " ")
+}
+
 func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, projectID uuid.UUID, state projectBootstrapState) (projectBootstrapResumeSnapshot, error) {
 	if e == nil || e.assignments == nil || e.agents == nil || projectID == uuid.Nil {
 		return projectBootstrapResumeSnapshot{}, nil
@@ -5435,6 +5452,8 @@ func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, pro
 			case projectBootstrapFailureFirstWaveSize:
 				snapshot.RepairTaskLine = buildProjectBootstrapBoundedSizeRepairTaskLine(taskRecord)
 			}
+		} else {
+			snapshot.RepairTaskLine = buildProjectBootstrapUnresolvedFailureRepairTaskLine(taskNumber, failureTitle)
 		}
 	}
 	return snapshot, nil

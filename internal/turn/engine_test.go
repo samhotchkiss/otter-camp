@@ -4881,6 +4881,55 @@ func TestLoadProjectBootstrapResumeSnapshotIncludesBroadParentBlockedTaskLine(t 
 	}
 }
 
+func TestLoadProjectBootstrapResumeSnapshotWarnsWhenBlockedTaskIDCannotBeResolved(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	workerID := uuid.New()
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: projectID, AgentID: workerID, Role: "worker"},
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			workerID: {ID: workerID, DisplayName: "Dev"},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {ID: projectID, Slug: "sam-blog-test"},
+		},
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 92,
+				Title:      "Draft first blog post from editorial calendar topic",
+				WorkStatus: "draft",
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.loadProjectBootstrapResumeSnapshot(context.Background(), projectID, projectBootstrapState{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 28 (Use a topic from the editorial calendar) has no assigned agent",
+	})
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapResumeSnapshot: %v", err)
+	}
+	if snapshot.FailedTaskLine != "" {
+		t.Fatalf("FailedTaskLine = %q, want empty when stale task id cannot be resolved", snapshot.FailedTaskLine)
+	}
+	if !strings.Contains(snapshot.RepairTaskLine, "Do not fabricate a UUID from the bare task number.") {
+		t.Fatalf("RepairTaskLine = %q, want anti-fabrication guidance", snapshot.RepairTaskLine)
+	}
+	if !strings.Contains(snapshot.RepairTaskLine, "call bootstrap.setup.persist with canonical completed_step_slugs") {
+		t.Fatalf("RepairTaskLine = %q, want setup.persist fallback guidance", snapshot.RepairTaskLine)
+	}
+}
+
 func TestProjectBootstrapRestartScaffoldFailureReasonMatch(t *testing.T) {
 	if !projectBootstrapRestartScaffoldFailureReason(buildProjectBootstrapRestartScaffoldFailureReason()) {
 		t.Fatal("expected canonical restart scaffold reason to match")
