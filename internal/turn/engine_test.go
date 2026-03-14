@@ -820,6 +820,85 @@ func TestHandleTurnJobRateLimitedRetryCapStopsRequeue(t *testing.T) {
 	}
 }
 
+func TestHandleTurnJobTransientInfrastructureEnqueuesRetry(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+	fixture.engine.modelRetryBudget = 1
+
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, errors.New("failed to connect to database: FATAL: remaining connection slots are reserved for roles with the SUPERUSER attribute (SQLSTATE 53300)")
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil {
+		t.Fatal("retry payload missing")
+	}
+	if jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", jobs[0].payload.RetryCount)
+	}
+	if jobs[0].runAfter == nil {
+		t.Fatal("retry run_after missing")
+	}
+	wantRunAfter := base.Add(defaultTransientInfraBackoff)
+	if !jobs[0].runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", *jobs[0].runAfter, wantRunAfter)
+	}
+	if !fixture.messages.containsContent("[Infrastructure temporarily unavailable, retrying in 15s...]") {
+		t.Fatal("missing transient infrastructure retry status message")
+	}
+	if fixture.messages.containsContentSubstring("[Turn failed:") {
+		t.Fatal("unexpected generic turn failed message for transient infrastructure retry")
+	}
+}
+
+func TestHandleTurnJobTransientInfrastructureRetryCapStopsRequeue(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.engine.modelRetryBudget = 1
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, errors.New("pq: sorry, too many clients already")
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID:  fixture.session.ID,
+		MessageID:  fixture.userMessageID,
+		RetryCount: maxTransientInfraRetries,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn retries = %d, want 0", len(jobs))
+	}
+	if !fixture.messages.containsContent("[Turn failed: temporary infrastructure retries exhausted after 5 attempts.]") {
+		t.Fatal("missing transient infrastructure retries exhausted status message")
+	}
+}
+
 func TestHandleTurnCompletedEventEnqueuesAutoContinuation(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700000000, 0).UTC()
@@ -2349,8 +2428,8 @@ func TestBuildProjectBootstrapRecoveryRereadToolGuardErrorLateCompactResume(t *t
 
 func TestShouldRequireDirectBootstrapRepairActionForBoundedSizeFailure(t *testing.T) {
 	state := projectBootstrapState{
-		ValidationStatus:       projectBootstrapValidationFailed,
-		ValidationFailureClass: projectBootstrapFailureFirstWaveSize,
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveSize,
 		ValidationFailureReason: "kickoff validation failed: first-wave task 105 (SEO, Performance, and Analytics Integration) violates the bounded task-size policy",
 	}
 	snapshot := projectBootstrapResumeSnapshot{
@@ -4802,11 +4881,11 @@ func TestBuildProjectBootstrapNarrativeOnlyRecoveryFailureReason(t *testing.T) {
 
 func TestBuildProjectBootstrapResumeActionPromptForUnassignedTaskRequiresImmediateToolAction(t *testing.T) {
 	state := projectBootstrapState{
-		Status:                projectBootstrapStatusActive,
-		CurrentPhase:          projectBootstrapCheckpointFirstWaveExecutions,
+		Status:                   projectBootstrapStatusActive,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
 		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
-		ValidationStatus:      projectBootstrapValidationFailed,
-		ValidationFailureReason: "kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution",
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureReason:  "kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution",
 	}
 	got := buildProjectBootstrapResumeActionPrompt(state)
 	if !strings.Contains(got, "Your next assistant action should be a tool call, not a narrative reply.") {

@@ -59,6 +59,9 @@ const (
 	defaultRateLimitBackoff                   = 30 * time.Second
 	maxRateLimitBackoff                       = 30 * time.Minute
 	maxRateLimitRetries                       = 5
+	defaultTransientInfraBackoff              = 15 * time.Second
+	maxTransientInfraBackoff                  = 5 * time.Minute
+	maxTransientInfraRetries                  = 5
 	maxConsecutiveAutoTurns                   = 10
 	maxProjectBootstrapAutoTurns              = 3
 	defaultSummarizeLayerBudget               = 0
@@ -3805,17 +3808,17 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	}
 
 	runtime := &turnRuntime{
-		session:          session,
-		agent:            agent,
-		turn:             turn,
-		initialMessageID: messageID,
+		session:            session,
+		agent:              agent,
+		turn:               turn,
+		initialMessageID:   messageID,
 		initialMessageText: strings.TrimSpace(message.Content),
-		currentJobID:     cloneUUIDPointer(currentJobID),
-		runID:            runIDFromMetadata(message.Metadata),
-		runStepID:        runStepIDFromMetadata(message.Metadata),
-		runAttemptID:     runAttemptIDFromMetadata(message.Metadata),
-		startedAt:        e.turnStartTime(turn),
-		recoveryTurn:     isRecoveryResumeMessage(message),
+		currentJobID:       cloneUUIDPointer(currentJobID),
+		runID:              runIDFromMetadata(message.Metadata),
+		runStepID:          runStepIDFromMetadata(message.Metadata),
+		runAttemptID:       runAttemptIDFromMetadata(message.Metadata),
+		startedAt:          e.turnStartTime(turn),
+		recoveryTurn:       isRecoveryResumeMessage(message),
 	}
 	runtime.projectIdentity = e.loadProjectIdentityForMessage(ctx, sessionID, messageID)
 	if messageRequestsFreshKickoff(session, message) {
@@ -3871,6 +3874,15 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	}
 	if errors.Is(err, ErrRateLimited) {
 		handled, handleErr := e.handleRateLimitedTurnFailure(ctx, runtime, messageID, routedAgentID, retryCount, err)
+		if handleErr != nil {
+			return handleErr
+		}
+		if handled {
+			return nil
+		}
+	}
+	if isTransientInfrastructureError(err) {
+		handled, handleErr := e.handleTransientInfrastructureTurnFailure(ctx, runtime, messageID, routedAgentID, retryCount, err)
 		if handleErr != nil {
 			return handleErr
 		}
@@ -4464,6 +4476,52 @@ func (e *TurnEngine) handleRateLimitedTurnFailure(
 
 	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
 	message := fmt.Sprintf("[Rate limited, retrying in %s...]", formatRetryDelay(retryDelay))
+	if !enqueued {
+		message = "[Project paused - retry deferred until resume.]"
+	}
+	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, message)
+	return true, nil
+}
+
+func (e *TurnEngine) handleTransientInfrastructureTurnFailure(
+	ctx context.Context,
+	runtime *turnRuntime,
+	messageID uuid.UUID,
+	routedAgentID *uuid.UUID,
+	retryCount int,
+	cause error,
+) (bool, error) {
+	if runtime == nil || runtime.turn == nil || runtime.session == nil {
+		return false, nil
+	}
+	if retryCount < 0 {
+		retryCount = 0
+	}
+	if retryCount >= maxTransientInfraRetries {
+		_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
+		_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Turn failed: temporary infrastructure retries exhausted after %d attempts.]", maxTransientInfraRetries))
+		return true, nil
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID:  runtime.session.ID,
+		MessageID:  messageID,
+		RetryCount: retryCount + 1,
+	}
+	if routedAgentID != nil && *routedAgentID != uuid.Nil {
+		agentID := *routedAgentID
+		nextPayload.AgentID = &agentID
+	}
+
+	retryDelay := transientInfrastructureRetryDelay(retryCount)
+	runAfter := e.now().Add(retryDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, runtime.session, nextPayload, &runAfter)
+	if err != nil {
+		return false, fmt.Errorf("enqueue transient infrastructure retry: %w", err)
+	}
+
+	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
+	message := fmt.Sprintf("[Infrastructure temporarily unavailable, retrying in %s...]", formatRetryDelay(retryDelay))
 	if !enqueued {
 		message = "[Project paused - retry deferred until resume.]"
 	}
@@ -11184,6 +11242,24 @@ func rateLimitRetryDelay(retryCount int, retryAfterHint time.Duration) time.Dura
 	}
 	if delay > maxRateLimitBackoff {
 		return maxRateLimitBackoff
+	}
+	return delay
+}
+
+func transientInfrastructureRetryDelay(retryCount int) time.Duration {
+	if retryCount < 0 {
+		retryCount = 0
+	}
+
+	delay := defaultTransientInfraBackoff
+	for i := 0; i < retryCount; i++ {
+		if delay >= (maxTransientInfraBackoff / 2) {
+			return maxTransientInfraBackoff
+		}
+		delay *= 2
+	}
+	if delay > maxTransientInfraBackoff {
+		return maxTransientInfraBackoff
 	}
 	return delay
 }
