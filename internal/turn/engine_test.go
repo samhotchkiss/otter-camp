@@ -778,12 +778,13 @@ func TestHandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint(t *testing.T) {
 	if job.runAfter == nil {
 		t.Fatal("retry run_after missing")
 	}
-	wantRunAfter := base.Add(retryAfter)
+	wantRunAfter := base.Add(jitteredRateLimitRetryDelay(retryAfter, fixture.session.ID, fixture.userMessageID, 0))
 	if !job.runAfter.Equal(wantRunAfter) {
 		t.Fatalf("run_after = %s, want %s", *job.runAfter, wantRunAfter)
 	}
 
-	if !fixture.messages.containsContent("[Rate limited, retrying in 8m4s...]") {
+	wantDelayMessage := fmt.Sprintf("[Rate limited, retrying in %s...]", formatRetryDelay(jitteredRateLimitRetryDelay(retryAfter, fixture.session.ID, fixture.userMessageID, 0)))
+	if !fixture.messages.containsContent(wantDelayMessage) {
 		t.Fatal("missing rate-limited retry status message")
 	}
 	if fixture.messages.containsContentSubstring("[Turn failed:") {

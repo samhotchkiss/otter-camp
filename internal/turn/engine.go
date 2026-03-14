@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net"
 	"os"
@@ -59,6 +60,8 @@ const (
 	defaultRateLimitBackoff                   = 30 * time.Second
 	maxRateLimitBackoff                       = 30 * time.Minute
 	maxRateLimitRetries                       = 5
+	rateLimitRetryJitterThreshold             = 5 * time.Minute
+	maxRateLimitRetryJitter                   = 30 * time.Second
 	defaultTransientInfraBackoff              = 15 * time.Second
 	maxTransientInfraBackoff                  = 5 * time.Minute
 	maxTransientInfraRetries                  = 5
@@ -4472,7 +4475,12 @@ func (e *TurnEngine) handleRateLimitedTurnFailure(
 		nextPayload.AgentID = &agentID
 	}
 
-	retryDelay := rateLimitRetryDelay(retryCount, rateLimitRetryAfterHint(cause))
+	retryDelay := jitteredRateLimitRetryDelay(
+		rateLimitRetryDelay(retryCount, rateLimitRetryAfterHint(cause)),
+		runtime.session.ID,
+		messageID,
+		retryCount,
+	)
 	runAfter := e.now().Add(retryDelay).UTC()
 	enqueued, err := e.enqueueAgentTurnIfActive(ctx, runtime.session, nextPayload, &runAfter)
 	if err != nil {
@@ -11354,6 +11362,22 @@ func rateLimitRetryDelay(retryCount int, retryAfterHint time.Duration) time.Dura
 		return maxRateLimitBackoff
 	}
 	return delay
+}
+
+func jitteredRateLimitRetryDelay(delay time.Duration, sessionID, messageID uuid.UUID, retryCount int) time.Duration {
+	if delay < rateLimitRetryJitterThreshold || maxRateLimitRetryJitter <= 0 {
+		return delay
+	}
+	hasher := fnv.New64a()
+	_, _ = hasher.Write(sessionID[:])
+	_, _ = hasher.Write(messageID[:])
+	_, _ = hasher.Write([]byte(strconv.Itoa(retryCount)))
+	jitterRange := uint64(maxRateLimitRetryJitter / time.Second)
+	if jitterRange == 0 {
+		return delay
+	}
+	jitterSeconds := hasher.Sum64() % (jitterRange + 1)
+	return delay + time.Duration(jitterSeconds)*time.Second
 }
 
 func transientInfrastructureRetryDelay(retryCount int) time.Duration {
