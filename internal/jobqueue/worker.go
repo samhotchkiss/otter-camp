@@ -108,6 +108,7 @@ type Worker struct {
 	running bool
 	cancel  context.CancelFunc
 	done    chan struct{}
+	slots   chan struct{}
 }
 
 type queryExecutor interface {
@@ -156,6 +157,7 @@ func New(pool *pgxpool.Pool, logger *slog.Logger, cfg Config) *Worker {
 		listenReconnectDelay: cfg.ListenReconnectDelay,
 		clock:                cfg.Clock,
 		handlers:             make(map[string]JobHandler),
+		slots:                make(chan struct{}, cfg.BatchSize),
 	}
 
 	w.Register(idempotencyCleanupJob, w.idempotencyCleanupHandler)
@@ -926,14 +928,10 @@ func (w *Worker) CloseSupersededTaskAsyncSessions(ctx context.Context) (int64, e
 }
 
 func (w *Worker) processAvailableJobs(ctx context.Context) error {
-	type jobResult struct{}
-	results := make(chan jobResult, max(1, w.batchSize))
-	active := 0
-
 	for {
-		slots := max(1, w.batchSize) - active
+		slots := w.availableExecutionSlots()
 		if slots > 0 {
-			w.logger.Debug("job queue: claiming pending jobs", "slots", slots, "active", active)
+			w.logger.Debug("job queue: claiming pending jobs", "slots", slots, "inflight", w.inflightJobs())
 			jobs, err := w.claimPendingLimit(ctx, slots)
 			if err != nil {
 				if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
@@ -950,13 +948,10 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 
 				for _, job := range jobs {
 					job := job
-					active++
+					w.acquireExecutionSlot()
 					go func() {
 						defer func() {
-							select {
-							case results <- jobResult{}:
-							case <-ctx.Done():
-							}
+							w.releaseExecutionSlot()
 						}()
 						w.logger.Info("job queue: executing", "job_id", job.ID, "job_type", job.JobType, "attempts", job.Attempts)
 						if err := w.executeClaimedJob(ctx, job); err != nil {
@@ -968,20 +963,47 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 				}
 				continue
 			}
-			if active == 0 {
-				w.logger.Debug("job queue: no pending jobs")
-				return nil
-			}
+			w.logger.Debug("job queue: no pending jobs")
+			return nil
 		}
+		w.logger.Debug("job queue: no execution slots available", "inflight", w.inflightJobs(), "capacity", cap(w.slots))
+		return nil
+	}
+}
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-results:
-			if active > 0 {
-				active--
-			}
-		}
+func (w *Worker) availableExecutionSlots() int {
+	if w == nil || w.batchSize <= 0 {
+		return 1
+	}
+	inflight := w.inflightJobs()
+	slots := max(1, w.batchSize) - inflight
+	if slots < 0 {
+		return 0
+	}
+	return slots
+}
+
+func (w *Worker) inflightJobs() int {
+	if w == nil || w.slots == nil {
+		return 0
+	}
+	return len(w.slots)
+}
+
+func (w *Worker) acquireExecutionSlot() {
+	if w == nil || w.slots == nil {
+		return
+	}
+	w.slots <- struct{}{}
+}
+
+func (w *Worker) releaseExecutionSlot() {
+	if w == nil || w.slots == nil {
+		return
+	}
+	select {
+	case <-w.slots:
+	default:
 	}
 }
 

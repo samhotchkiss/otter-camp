@@ -175,6 +175,64 @@ func TestJobWorkerRefillsFreedSlotBeforeWholeBatchFinishes(t *testing.T) {
 	}
 }
 
+func TestJobWorkerPollsNewJobsWhileEarlierClaimedJobStillRunning(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		BatchSize:            2,
+		PollInterval:         20 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	slowRelease := make(chan struct{})
+	slowStarted := make(chan struct{}, 1)
+	fastStarted := make(chan struct{}, 1)
+
+	worker.Register("test.arrival.slow", func(context.Context, Job) error {
+		select {
+		case slowStarted <- struct{}{}:
+		default:
+		}
+		<-slowRelease
+		return nil
+	})
+	worker.Register("test.arrival.fast", func(context.Context, Job) error {
+		select {
+		case fastStarted <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+
+	if _, err := worker.Enqueue(context.Background(), nil, "test.arrival.slow", 100, map[string]any{"n": 1}, nil); err != nil {
+		t.Fatalf("enqueue slow failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startWorker(worker, ctx)
+	defer func() {
+		cancel()
+		close(slowRelease)
+		_ = worker.Stop()
+	}()
+
+	select {
+	case <-slowStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for slow job to start")
+	}
+
+	if _, err := worker.Enqueue(context.Background(), nil, "test.arrival.fast", 90, map[string]any{"n": 2}, nil); err != nil {
+		t.Fatalf("enqueue fast after slow start failed: %v", err)
+	}
+
+	select {
+	case <-fastStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fast job did not start while earlier claimed job was still running")
+	}
+}
+
 func TestJobWorkerClaimPendingLimitClaimsSingleJobEvenWhenBatchSizeIsLarger(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
