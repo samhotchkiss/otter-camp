@@ -87,7 +87,7 @@ const (
 	recoveryArtifactDir                       = ".ottercamp/recovery"
 	recoveryResumeExcerptChars                = 3000
 	maxContinuationSummaryChars               = 4000
-	projectBootstrapStaffingDiscoveryBudget   = 6
+	projectBootstrapStaffingDiscoveryBudget   = 4
 	projectBootstrapMetadataKey               = "project_bootstrap"
 	projectBootstrapStatusActive              = "active"
 	projectBootstrapStatusCompleted           = "completed"
