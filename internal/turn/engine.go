@@ -5480,6 +5480,11 @@ func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, asse
 	if rt != nil && rt.session != nil && strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
 		return false, nil
 	}
+	if rt != nil && rt.session != nil &&
+		strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") &&
+		projectBootstrapStateActive(projectBootstrapStateFromMetadata(rt.session.Metadata)) {
+		return false, nil
+	}
 	pending, err := e.pendingHumanMessages(ctx, rt.session.ID)
 	if err != nil {
 		return false, err
