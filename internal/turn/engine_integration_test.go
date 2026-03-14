@@ -4159,6 +4159,12 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	if !strings.Contains(promptBlob, seed.failureReason) {
 		t.Fatalf("prompt missing checkpoint failure reason:\n%s", promptBlob)
 	}
+	if !strings.Contains(promptBlob, "Your next response must take direct recovery action from the durable drafts above.") {
+		t.Fatalf("prompt missing direct recovery action prompt:\n%s", promptBlob)
+	}
+	if !strings.Contains(promptBlob, "Do not answer with generic chat, acknowledgements, or a question to the user.") {
+		t.Fatalf("prompt missing generic-chat guardrail:\n%s", promptBlob)
+	}
 
 	outputBody, err := os.ReadFile(seed.targetAbs)
 	if err != nil {

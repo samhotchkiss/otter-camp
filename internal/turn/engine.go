@@ -7170,12 +7170,22 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 	if err != nil {
 		return false, err
 	}
+	actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: rt.session.ID,
+		TurnID:    &rt.turn.ID,
+		Role:      "user",
+		Content:   buildRecoveryResumeActionPrompt(state),
+	})
+	if err != nil {
+		return false, err
+	}
 	if preserveInitialMessage && rt.initialMessageID != uuid.Nil {
 		initial := rt.initialMessageID
 		rt.historyStartID = &initial
 		return true, nil
 	}
-	rt.historyStartID = &message.ID
+	_ = message
+	rt.historyStartID = &actionMessage.ID
 	return true, nil
 }
 
@@ -7358,6 +7368,28 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 		lines = append(lines, "If the target file is only a stub but the recovery artifact is fuller, merge the fuller artifact content into the target before retrying the final write.")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
+	lines := []string{
+		"Continue the active task recovery now.",
+		"Your next response must take direct recovery action from the durable drafts above.",
+		"Do not answer with generic chat, acknowledgements, or a question to the user.",
+		"Do not say that you are ready, ask what to do next, or summarize the state instead of acting.",
+	}
+	if target := strings.TrimSpace(state.targetPath); target != "" {
+		lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
+	}
+	switch strings.TrimSpace(state.blockerClass) {
+	case taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
+		taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint:
+		lines = append(lines, "Use the recovered target draft or artifact draft above to write the real file body now. Do not emit placeholder text about intending to write the file.")
+	default:
+		lines = append(lines, "Act directly from the durable drafts above. Prefer the concrete repair tool call or file output needed to resume execution.")
+	}
+	lines = append(lines, "If a draft is already substantive enough, use it directly instead of re-reading workspace artifacts first.")
+	lines = append(lines, "If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.")
+	return strings.Join(lines, " ")
 }
 
 func recoveryArtifactDraftContent(document string) string {
