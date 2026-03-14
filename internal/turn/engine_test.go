@@ -2001,8 +2001,22 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	if !strings.Contains(handoff, "Once enough candidates are known, do not emit another assistant planning summary about staffing.") {
 		t.Fatalf("handoff = %q, want direct-tool-action staffing guidance", handoff)
 	}
+	if !strings.Contains(handoff, "Before you pause to read scaffold artifacts or persist setup, every persisted broad workstream parent must either have bounded executable child tasks under it") {
+		t.Fatalf("handoff = %q, want all-parents-decomposed guidance", handoff)
+	}
 	if !strings.Contains(handoff, content) {
 		t.Fatalf("handoff = %q, want originating request content", handoff)
+	}
+}
+
+func TestBuildProjectBootstrapRestartPromptRequiresFinishingAllBroadParents(t *testing.T) {
+	prompt := buildProjectBootstrapRestartPrompt(
+		projectBootstrapRestartBundle{OperatorBrief: "Frank handoff: create the initial staffed bootstrap for this project."},
+		repo.Project{ID: uuid.New(), Slug: "sam-blog-old"},
+		repo.Project{ID: uuid.New(), Slug: "sam-blog-new"},
+	)
+	if !strings.Contains(prompt, "Before you pause to read scaffold artifacts or persist setup, every persisted broad workstream parent must either have bounded executable child tasks under it") {
+		t.Fatalf("prompt = %q, want all-parents-decomposed guidance", prompt)
 	}
 }
 

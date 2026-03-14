@@ -800,6 +800,7 @@ func buildProjectBootstrapRestartPrompt(bundle projectBootstrapRestartBundle, ar
 		}
 	}
 	lines = append(lines, "Create a fresh bootstrap handoff and setup plan from this canonical input only.")
+	lines = append(lines, "When you start task decomposition, do not stop after creating broad parent workstreams or after decomposing only one of them. Before you pause to read scaffold artifacts or persist setup, every persisted broad workstream parent must either have bounded executable child tasks under it or be replaced by those bounded children directly. Do not leave other broad parents untouched while you deepen only one workstream.")
 	return strings.Join(lines, "\n")
 }
 

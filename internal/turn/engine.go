@@ -4694,6 +4694,7 @@ func (e *TurnEngine) buildSyntheticProjectKickoffHandoff(ctx context.Context, rt
 	lines = append(lines, "Do not spend a turn writing a staffing plan, rationale memo, or markdown table before you materialize staff. As soon as you have enough candidates, create the PM/workers/reviewers, assign them to the project, and continue bootstrap.")
 	lines = append(lines, "Once enough candidates are known, do not emit another assistant planning summary about staffing. Your next step should be the concrete agent.create_staff and assignment tool calls needed to materialize the roster.")
 	lines = append(lines, "Use the canonical bootstrap workflow: staff the project, create bounded tasks/subtasks, attach runnable flows, and move the first executable wave into execution.")
+	lines = append(lines, "When you start task decomposition, do not stop after creating broad parent workstreams or after decomposing only one of them. Before you pause to read scaffold artifacts or persist setup, every persisted broad workstream parent must either have bounded executable child tasks under it or be replaced by those bounded children directly. Do not leave other broad parents untouched while you deepen only one workstream.")
 	return strings.Join(lines, "\n\n")
 }
 
