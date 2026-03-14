@@ -1574,15 +1574,19 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 		status         string
 		requeuedMsgID  uuid.UUID
 		requeuedSessID uuid.UUID
+		retryCount     int
 	)
 	if err := pool.QueryRow(ctx, `
-		SELECT status, (payload->>'message_id')::uuid, (payload->>'session_id')::uuid
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       (payload->>'session_id')::uuid,
+		       COALESCE((payload->>'retry_count')::int, 0)
 		FROM job_queue
 		WHERE job_type = 'agent_turn'
 		  AND (payload->>'session_id')::uuid = $1
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID); err != nil {
+	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID, &retryCount); err != nil {
 		t.Fatalf("query requeued active execution job: %v", err)
 	}
 	if status != "pending" {
@@ -1593,6 +1597,9 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	}
 	if requeuedMsgID != message.ID {
 		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	}
+	if retryCount != 1 {
+		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
 	}
 }
 
@@ -1736,15 +1743,19 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsForTaskQueueKickoff(
 		status         string
 		requeuedMsgID  uuid.UUID
 		requeuedSessID uuid.UUID
+		retryCount     int
 	)
 	if err := pool.QueryRow(ctx, `
-		SELECT status, (payload->>'message_id')::uuid, (payload->>'session_id')::uuid
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       (payload->>'session_id')::uuid,
+		       COALESCE((payload->>'retry_count')::int, 0)
 		FROM job_queue
 		WHERE job_type = 'agent_turn'
 		  AND (payload->>'session_id')::uuid = $1
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID); err != nil {
+	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID, &retryCount); err != nil {
 		t.Fatalf("query requeued task queue execution job: %v", err)
 	}
 	if status != "pending" {
@@ -1755,6 +1766,9 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsForTaskQueueKickoff(
 	}
 	if requeuedMsgID != message.ID {
 		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	}
+	if retryCount != 1 {
+		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
 	}
 }
 

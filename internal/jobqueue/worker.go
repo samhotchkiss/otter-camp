@@ -649,7 +649,14 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 
 func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context) (int64, error) {
 	rows, err := w.pool.Query(ctx, `
-		SELECT DISTINCT ON (cs.id) cs.id, cm.id
+		SELECT DISTINCT ON (cs.id) cs.id,
+		       cm.id,
+		       COALESCE((
+		         SELECT MAX(ct.retry_count) + 1
+		         FROM chat_turn ct
+		         WHERE ct.session_id = cs.id
+		           AND ct.trigger_message_id = cm.id
+		       ), 0) AS next_retry_count
 		FROM chat_session cs
 		JOIN flow_node_execution e
 		  ON e.session_id = cs.id
@@ -695,13 +702,14 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 	for rows.Next() {
 		var sessionID uuid.UUID
 		var messageID uuid.UUID
-		if err := rows.Scan(&sessionID, &messageID); err != nil {
+		var retryCount int
+		if err := rows.Scan(&sessionID, &messageID, &retryCount); err != nil {
 			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
 		}
 		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
 			SessionID:  sessionID,
 			MessageID:  messageID,
-			RetryCount: 0,
+			RetryCount: retryCount,
 		}, nil); err != nil {
 			return repaired, fmt.Errorf("requeue active execution session without turn for session %s: %w", sessionID, err)
 		}
