@@ -2015,6 +2015,15 @@ func TestBuildProjectBootstrapRestartPromptRequiresFinishingAllBroadParents(t *t
 		repo.Project{ID: uuid.New(), Slug: "sam-blog-old"},
 		repo.Project{ID: uuid.New(), Slug: "sam-blog-new"},
 	)
+	if !strings.Contains(prompt, "Do not answer with a standalone acknowledgement or status note.") {
+		t.Fatalf("prompt = %q, want no-acknowledgement guidance", prompt)
+	}
+	if !strings.Contains(prompt, "This first restart turn must contain the concrete staffing/task mutation tool calls needed to recreate staffed executable work") {
+		t.Fatalf("prompt = %q, want direct restart action guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with broad rereads like project.get, task.list, flow.list_templates, file.list, git.log, or memory tools.") {
+		t.Fatalf("prompt = %q, want no-broad-rereads guidance", prompt)
+	}
 	if !strings.Contains(prompt, "Before you pause to read scaffold artifacts or persist setup, every persisted broad workstream parent must either have bounded executable child tasks under it") {
 		t.Fatalf("prompt = %q, want all-parents-decomposed guidance", prompt)
 	}

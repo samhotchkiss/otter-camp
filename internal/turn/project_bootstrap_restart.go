@@ -800,6 +800,8 @@ func buildProjectBootstrapRestartPrompt(bundle projectBootstrapRestartBundle, ar
 		}
 	}
 	lines = append(lines, "Create a fresh bootstrap handoff and setup plan from this canonical input only.")
+	lines = append(lines, "Do not answer with a standalone acknowledgement or status note. This first restart turn must contain the concrete staffing/task mutation tool calls needed to recreate staffed executable work from the canonical bundle, or a concrete blocker if that cannot be done.")
+	lines = append(lines, "Do not begin with broad rereads like project.get, task.list, flow.list_templates, file.list, git.log, or memory tools. Use the canonical bundle above directly, bind the repo/environment records already provided, assign real project staff, and materialize bounded executable workstream tasks plus their child tasks in this restart.")
 	lines = append(lines, "When you start task decomposition, do not stop after creating broad parent workstreams or after decomposing only one of them. Before you pause to read scaffold artifacts or persist setup, every persisted broad workstream parent must either have bounded executable child tasks under it or be replaced by those bounded children directly. Do not leave other broad parents untouched while you deepen only one workstream.")
 	return strings.Join(lines, "\n")
 }
