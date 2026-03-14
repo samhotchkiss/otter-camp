@@ -225,6 +225,11 @@ func (s *Supervisor) recoverStrandedActiveExecution(ctx context.Context, candida
 	if !strings.EqualFold(candidate.SessionStatus, "active") {
 		return errStrandedExecutionUnrecoverable{reason: fmt.Sprintf("execution session is %q", candidate.SessionStatus)}
 	}
+	if live, err := s.hasLiveStrandedExecutionRecovery(ctx, candidate.SessionID, candidate.ExecutionID); err != nil {
+		return err
+	} else if live {
+		return nil
+	}
 
 	agentID, ok, err := s.resolveStrandedExecutionAgent(ctx, candidate)
 	if err != nil {
@@ -318,6 +323,44 @@ func (s *Supervisor) recoverStrandedActiveExecution(ctx context.Context, candida
 		return errStrandedExecutionUnrecoverable{reason: fmt.Sprintf("recovery turn entered non-live status %q", turn.Status)}
 	}
 	return nil
+}
+
+func (s *Supervisor) hasLiveStrandedExecutionRecovery(ctx context.Context, sessionID, executionID uuid.UUID) (bool, error) {
+	if s.pool == nil || sessionID == uuid.Nil || executionID == uuid.Nil {
+		return false, nil
+	}
+
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM chat_message cm
+			WHERE cm.session_id = $1
+			  AND cm.role = 'user'
+			  AND cm.content = 'supervisor recovery: resume task'
+			  AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
+			  AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = $2
+			  AND (
+				EXISTS (
+					SELECT 1
+					FROM chat_turn ct
+					WHERE ct.trigger_message_id = cm.id
+					  AND ct.status IN ('pending', 'in_progress')
+				)
+				OR EXISTS (
+					SELECT 1
+					FROM job_queue jq
+					WHERE jq.job_type = 'agent_turn'
+					  AND jq.status IN ('pending', 'claimed')
+					  AND (jq.payload->>'session_id')::uuid = cm.session_id
+					  AND (jq.payload->>'message_id')::uuid = cm.id
+				)
+			  )
+		)
+	`, sessionID, executionID.String()).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func (s *Supervisor) resolveStrandedExecutionAgent(ctx context.Context, candidate strandedExecutionCandidate) (uuid.UUID, bool, error) {
