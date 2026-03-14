@@ -2803,7 +2803,6 @@ func (e *TurnEngine) countProjectBootstrapFirstWaveExecutions(ctx context.Contex
 		SELECT COUNT(DISTINCT task_id)
 		FROM flow_node_execution
 		WHERE task_id = ANY($1::uuid[])
-		  AND status = 'active'
 	`, taskIDs).Scan(&count); err != nil {
 		return 0, err
 	}
@@ -2858,14 +2857,33 @@ func (e *TurnEngine) countProjectBootstrapFirstWaveJobs(ctx context.Context, tas
 
 	var count int
 	if err := e.pool.QueryRow(ctx, `
-		SELECT COUNT(DISTINCT s.scope_id)
-		FROM job_queue jq
-		JOIN chat_session s ON s.id::text = jq.payload->>'session_id'
-		WHERE jq.job_type = 'agent_turn'
-		  AND jq.status IN ('pending', 'claimed')
-		  AND s.scope_type = 'project_task'
-		  AND s.mode = 'async'
-		  AND s.scope_id = ANY($1::uuid[])
+		WITH runnable_jobs AS (
+			SELECT DISTINCT s.scope_id
+			FROM job_queue jq
+			JOIN chat_session s ON s.id::text = jq.payload->>'session_id'
+			WHERE jq.job_type = 'agent_turn'
+			  AND jq.status IN ('pending', 'claimed')
+			  AND s.scope_type = 'project_task'
+			  AND s.mode = 'async'
+			  AND s.scope_id = ANY($1::uuid[])
+		),
+		started_sessions AS (
+			SELECT DISTINCT scope_id
+			FROM chat_session
+			WHERE scope_type = 'project_task'
+			  AND mode = 'async'
+			  AND scope_id = ANY($1::uuid[])
+			  AND (
+				turn_count > 0 OR
+				current_turn_id IS NOT NULL
+			  )
+		)
+		SELECT COUNT(DISTINCT task_id)
+		FROM (
+			SELECT scope_id AS task_id FROM runnable_jobs
+			UNION
+			SELECT scope_id AS task_id FROM started_sessions
+		) materialized
 	`, taskIDs).Scan(&count); err != nil {
 		return 0, err
 	}

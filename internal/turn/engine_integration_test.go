@@ -8941,6 +8941,132 @@ func TestTurnEngineIntegrationProjectBootstrapIgnoresOrphanChildSessionsWhenCoun
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapCountsWorkedChildSessionsWhenJobsAlreadyDrained(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	parentDescription := "Coordinate the first execution wave without doing the implementation work in the parent."
+	parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "First-wave orchestration parent",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	description := "Implement the first bounded child slice."
+	childTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Define the first execution slice",
+		Description:     &description,
+		WorkStatus:      "in_progress",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create child task: %v", err)
+	}
+
+	taskSession, _ := mustCreateTaskSession(t, ctx, fixture, childTask, "resume the bounded child task")
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE chat_session
+		SET turn_count = 1
+		WHERE id = $1
+	`, taskSession.ID); err != nil {
+		t.Fatalf("mark task session worked: %v", err)
+	}
+
+	jobCount, err := fixture.engine.countProjectBootstrapFirstWaveJobs(ctx, []uuid.UUID{childTask.ID})
+	if err != nil {
+		t.Fatalf("countProjectBootstrapFirstWaveJobs: %v", err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("first-wave job count = %d, want 1 when async child session has already started work", jobCount)
+	}
+}
+
+func TestTurnEngineIntegrationProjectBootstrapCountsCompletedExecutionRows(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	parentDescription := "Coordinate the first execution wave without doing the implementation work in the parent."
+	parentTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "First-wave orchestration parent",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create parent task: %v", err)
+	}
+
+	description := "Implement the first bounded child slice."
+	childTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Define the first execution slice",
+		Description:     &description,
+		WorkStatus:      "done",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		Metadata:        mustJSON(t, map[string]any{"decomposition_parent_task_id": parentTask.ID.String(), "workstream_index": 1}),
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create child task: %v", err)
+	}
+
+	var flowNodeID uuid.UUID
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT id
+		FROM flow_node
+		WHERE flow_template_id = $1
+		ORDER BY created_at ASC
+		LIMIT 1
+	`, template.ID).Scan(&flowNodeID); err != nil {
+		t.Fatalf("select flow node: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		INSERT INTO flow_node_execution (id, task_id, flow_node_id, visit_number, status, started_at, completed_at, metadata)
+		VALUES ($1, $2, $3, 1, 'completed', now(), now(), '{}'::jsonb)
+	`, uuid.New(), childTask.ID, flowNodeID); err != nil {
+		t.Fatalf("insert completed flow_node_execution: %v", err)
+	}
+
+	executionCount, err := fixture.engine.countProjectBootstrapFirstWaveExecutions(ctx, []uuid.UUID{childTask.ID})
+	if err != nil {
+		t.Fatalf("countProjectBootstrapFirstWaveExecutions: %v", err)
+	}
+	if executionCount != 1 {
+		t.Fatalf("first-wave execution count = %d, want 1 when child task already completed execution", executionCount)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapExactV7DraftOnlyShapeWaitsForBootstrapGate(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
