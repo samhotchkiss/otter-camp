@@ -9,7 +9,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -314,6 +316,7 @@ type agentRepository interface {
 
 type taskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+	GetByProjectAndNumber(ctx context.Context, projectID uuid.UUID, taskNumber int) (repo.ProjectTask, error)
 	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error)
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
@@ -3019,7 +3022,7 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 	lowerReason := strings.ToLower(reason)
 	if strings.Contains(lowerReason, "has no assigned agent") {
 		recoveryHint = "Repair the named persisted first-wave task directly. Do not begin with project.get, task.list, task.children, flow.list_templates, agent.list, or other broad rereads. Assign that exact task to one of the already-created active project assignees, then continue bootstrap from the corrected first-wave task set."
-		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent and the corrected first-wave set is ready to validate. Your first repair step should directly fix the named unassigned first-wave task instead of gathering more context. Only inspect that one specific task if its persisted assignment target is still unclear."
+		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent and the corrected first-wave set is ready to validate. Your first repair step should directly fix the named unassigned first-wave task instead of gathering more context. Do not call task.get with the bare task number from the validation error; use the exact task id and active assignee roster from the bootstrap resume system message already in this turn, and only inspect that one specific task if its persisted assignment target is still unclear."
 	}
 	if strings.Contains(lowerReason, "only ") &&
 		(strings.Contains(lowerReason, "selected first-wave child tasks created flow_node_execution rows") ||
@@ -4853,7 +4856,7 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 		}
 		applyProjectBootstrapProgressState(&state, progress)
 	}
-	snapshot, err := e.loadProjectBootstrapResumeSnapshot(ctx, rt.session.ScopeID)
+	snapshot, err := e.loadProjectBootstrapResumeSnapshot(ctx, rt.session.ScopeID, state)
 	if err != nil {
 		return false, err
 	}
@@ -4928,7 +4931,10 @@ type projectBootstrapResumeSnapshot struct {
 	ProjectSlug    string
 	ExistingPM     string
 	AssignmentLine string
+	FailedTaskLine string
 }
+
+var projectBootstrapFailureTaskNumberPattern = regexp.MustCompile(`first-wave task ([0-9]+)`)
 
 func formatBootstrapResumeAgentLabel(agentRecord repo.Agent) string {
 	name := strings.TrimSpace(agentRecord.DisplayName)
@@ -4951,7 +4957,37 @@ func formatBootstrapResumeAgentLabel(agentRecord repo.Agent) string {
 	return fmt.Sprintf("%s (%s)", name, strings.Join(parts, ", "))
 }
 
-func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, projectID uuid.UUID) (projectBootstrapResumeSnapshot, error) {
+func projectBootstrapFailureTaskNumber(reason string) int {
+	matches := projectBootstrapFailureTaskNumberPattern.FindStringSubmatch(strings.ToLower(strings.TrimSpace(reason)))
+	if len(matches) < 2 {
+		return 0
+	}
+	number, err := strconv.Atoi(strings.TrimSpace(matches[1]))
+	if err != nil || number <= 0 {
+		return 0
+	}
+	return number
+}
+
+func formatBootstrapResumeTaskLine(taskRecord repo.ProjectTask) string {
+	if taskRecord.ID == uuid.Nil {
+		return ""
+	}
+	assigned := "unassigned"
+	if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
+		assigned = taskRecord.AssignedAgentID.String()
+	}
+	return fmt.Sprintf(
+		"Named blocked task: task %d id=%s title=%q work_status=%s assigned_agent_id=%s. Use task.update directly on this task id instead of task.get with the bare task number.",
+		taskRecord.TaskNumber,
+		taskRecord.ID.String(),
+		strings.TrimSpace(taskRecord.Title),
+		strings.TrimSpace(taskRecord.WorkStatus),
+		assigned,
+	)
+}
+
+func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, projectID uuid.UUID, state projectBootstrapState) (projectBootstrapResumeSnapshot, error) {
 	if e == nil || e.assignments == nil || e.agents == nil || projectID == uuid.Nil {
 		return projectBootstrapResumeSnapshot{}, nil
 	}
@@ -5022,6 +5058,12 @@ func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, pro
 	if len(parts) > 0 {
 		snapshot.AssignmentLine = strings.Join(parts, "; ")
 	}
+	if taskNumber := projectBootstrapFailureTaskNumber(state.ValidationFailureReason); taskNumber > 0 && e.tasks != nil {
+		taskRecord, taskErr := e.tasks.GetByProjectAndNumber(ctx, projectID, taskNumber)
+		if taskErr == nil {
+			snapshot.FailedTaskLine = formatBootstrapResumeTaskLine(taskRecord)
+		}
+	}
 	return snapshot, nil
 }
 
@@ -5056,6 +5098,9 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 		if reason := strings.TrimSpace(state.ValidationFailureReason); reason != "" {
 			lines = append(lines, "Current validation failure: "+reason)
 		}
+	}
+	if blockedTask := strings.TrimSpace(snapshot.FailedTaskLine); blockedTask != "" {
+		lines = append(lines, blockedTask)
 	}
 	if pm := strings.TrimSpace(snapshot.ExistingPM); pm != "" {
 		lines = append(lines, "Existing PM: "+pm)
@@ -5197,6 +5242,7 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string
 		}
 		if strings.Contains(lowerReason, "has no assigned agent") {
 			lines = append(lines, "This validation failure already names the exact unassigned first-wave task. Repair that persisted task directly instead of gathering more context. Do not start with project.get, task.list, task.children, flow.list_templates, or agent.list unless a single task-specific lookup is strictly necessary to complete that one assignment.")
+			lines = append(lines, "Do not call task.get with the bare task number from the validation error. Use the exact task id and active assignee ids from the bootstrap resume state above, then call task.update directly on that task.")
 		}
 		lines = append(lines, "When the named blocker is fixed, resume with bootstrap.setup.persist using only canonical bootstrap setup step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off. Current phase names like first_wave_executions_created are not valid completed_step_slugs.")
 		lines = append(lines, "If first-wave selection is already persisted, do not use raw task.update to force draft first-wave tasks into queued or in_progress. Leave those tasks in draft and let bootstrap.setup.persist plus the bootstrap governance gate handle promotion after validation passes.")

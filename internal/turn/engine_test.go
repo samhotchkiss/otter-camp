@@ -2960,6 +2960,9 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedFirstWaveTask
 	if !strings.Contains(prompt, "Do not begin with project.get, task.list, task.children, flow.list_templates, agent.list") {
 		t.Fatalf("prompt = %q, want no broad reread guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Do not call task.get with the bare task number from the validation error") {
+		t.Fatalf("prompt = %q, want no bare task.get guidance", prompt)
+	}
 }
 
 func TestEnsureTurnRunExitInvariantRejectsLeakedInProgressTurn(t *testing.T) {
@@ -4034,6 +4037,9 @@ func TestBuildProjectBootstrapResumeActionPromptForUnassignedFirstWaveTask(t *te
 	if !strings.Contains(prompt, "Do not start with project.get, task.list, task.children, flow.list_templates, or agent.list") {
 		t.Fatalf("prompt = %q, want no broad reread guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Do not call task.get with the bare task number from the validation error") {
+		t.Fatalf("prompt = %q, want direct task id guidance", prompt)
+	}
 }
 
 func TestBuildProjectBootstrapResumeStateMessageIncludesValidationFailure(t *testing.T) {
@@ -4048,6 +4054,32 @@ func TestBuildProjectBootstrapResumeStateMessageIncludesValidationFailure(t *tes
 	})
 	if !strings.Contains(message, "Current validation failure: kickoff validation failed: first-wave task 35") {
 		t.Fatalf("message = %q, want validation failure line", message)
+	}
+}
+
+func TestBuildProjectBootstrapResumeStateMessageIncludesNamedBlockedTask(t *testing.T) {
+	message := buildProjectBootstrapResumeStateMessage(projectBootstrapState{
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 19 (Draft homepage hero) has no assigned agent",
+	}, projectBootstrapResumeSnapshot{
+		ProjectID:      uuid.NewString(),
+		ProjectSlug:    "sam-blog-test",
+		FailedTaskLine: "Named blocked task: task 19 id=1234 title=\"Draft homepage hero\" work_status=draft assigned_agent_id=unassigned. Use task.update directly on this task id instead of task.get with the bare task number.",
+	})
+	if !strings.Contains(message, "Named blocked task: task 19 id=1234") {
+		t.Fatalf("message = %q, want blocked task line", message)
+	}
+	if !strings.Contains(message, "Use task.update directly on this task id instead of task.get with the bare task number") {
+		t.Fatalf("message = %q, want direct update guidance", message)
+	}
+}
+
+func TestProjectBootstrapFailureTaskNumber(t *testing.T) {
+	if got := projectBootstrapFailureTaskNumber("kickoff validation failed: first-wave task 19 (Draft homepage hero) has no assigned agent"); got != 19 {
+		t.Fatalf("task number = %d, want 19", got)
+	}
+	if got := projectBootstrapFailureTaskNumber("kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable tasks"); got != 0 {
+		t.Fatalf("task number = %d, want 0", got)
 	}
 }
 
@@ -5797,6 +5829,18 @@ func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTas
 	}
 	if item, ok := f.items[id]; ok {
 		return item, nil
+	}
+	return repo.ProjectTask{}, repo.ErrNotFound
+}
+
+func (f *fakeTaskRepo) GetByProjectAndNumber(_ context.Context, projectID uuid.UUID, taskNumber int) (repo.ProjectTask, error) {
+	if f.err != nil {
+		return repo.ProjectTask{}, f.err
+	}
+	for _, item := range f.items {
+		if item.ProjectID == projectID && item.TaskNumber == taskNumber {
+			return item, nil
+		}
 	}
 	return repo.ProjectTask{}, repo.ErrNotFound
 }
