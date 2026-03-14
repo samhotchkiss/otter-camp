@@ -12,7 +12,9 @@ import (
 )
 
 const (
-	DefaultMaxConns int32 = 20
+	// Each runtime process holds several long-lived LISTEN/event consumers.
+	// Keep enough headroom for foreground job handlers and HTTP requests.
+	DefaultMaxConns int32 = 40
 	DefaultMinConns int32 = 2
 	connectTimeout        = 5 * time.Second
 	acquireTimeout        = 10 * time.Second

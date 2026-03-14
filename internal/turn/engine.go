@@ -807,6 +807,14 @@ func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error 
 	if payload.SessionID == uuid.Nil || payload.MessageID == uuid.Nil {
 		return fmt.Errorf("%s payload missing session_id or message_id", AgentTurnJobType)
 	}
+	if e.logger != nil {
+		e.logger.Debug("agent_turn job: begin",
+			"job_id", job.ID,
+			"session_id", payload.SessionID,
+			"message_id", payload.MessageID,
+			"retry_count", payload.RetryCount,
+		)
+	}
 	if session, err := e.chat.GetSession(ctx, payload.SessionID); err == nil {
 		if paused, reason, pauseErr := e.projectPausedForSession(ctx, session); pauseErr != nil {
 			return pauseErr
@@ -817,6 +825,9 @@ func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error 
 	}
 	err := e.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &job.ID)
 	if err == nil {
+		if e.logger != nil {
+			e.logger.Debug("agent_turn job: completed", "job_id", job.ID, "session_id", payload.SessionID, "message_id", payload.MessageID)
+		}
 		return nil
 	}
 	if handled, recoverErr := e.handleRecoverableBootstrapTurnJobFailure(ctx, payload, &job.ID, err); recoverErr != nil {
@@ -3453,6 +3464,16 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	if err != nil {
 		return err
 	}
+	if e.logger != nil {
+		e.logger.Debug("agent_turn dispatch: loaded session",
+			"session_id", sessionID,
+			"message_id", messageID,
+			"scope_type", strings.TrimSpace(session.ScopeType),
+			"mode", strings.TrimSpace(session.Mode),
+			"status", strings.TrimSpace(session.Status),
+			"current_turn_id", session.CurrentTurnID,
+		)
+	}
 	if strings.EqualFold(session.Status, "closed") || strings.EqualFold(session.Status, "archived") {
 		e.logger.Info("skipping agent turn for closed session", "session_id", sessionID)
 		return nil
@@ -3472,6 +3493,14 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	message, err := e.messages.GetByID(ctx, messageID)
 	if err != nil {
 		return err
+	}
+	if e.logger != nil {
+		e.logger.Debug("agent_turn dispatch: loaded message",
+			"session_id", sessionID,
+			"message_id", messageID,
+			"role", strings.TrimSpace(message.Role),
+			"status", strings.TrimSpace(message.Status),
+		)
 	}
 	if message.SessionID != sessionID {
 		return repo.ErrNotFound
@@ -3503,6 +3532,13 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 			return resolveErr
 		}
 	}
+	if e.logger != nil {
+		e.logger.Debug("agent_turn dispatch: resolved agent",
+			"session_id", sessionID,
+			"message_id", messageID,
+			"agent_id", agentID,
+		)
+	}
 	agent, err := e.agents.GetByID(ctx, agentID)
 	if err != nil {
 		return err
@@ -3512,9 +3548,27 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	if err != nil {
 		return err
 	}
+	if e.logger != nil {
+		e.logger.Debug("agent_turn dispatch: created turn record",
+			"session_id", sessionID,
+			"message_id", messageID,
+			"turn_id", turnRecord.ID,
+			"turn_status", strings.TrimSpace(turnRecord.Status),
+			"retry_count", retryCount,
+		)
+	}
 	turn, shouldRun, err := e.startInboundMessageTurn(ctx, turnRecord)
 	if err != nil {
 		return err
+	}
+	if e.logger != nil {
+		e.logger.Debug("agent_turn dispatch: start inbound turn",
+			"session_id", sessionID,
+			"message_id", messageID,
+			"turn_id", turn.ID,
+			"turn_status", strings.TrimSpace(turn.Status),
+			"should_run", shouldRun,
+		)
 	}
 	if !shouldRun {
 		if recovered, recoverErr := e.recoverRetriedSessionCurrentTurnLeak(ctx, session, messageID, agentID, retryCount, currentJobID, turn); recoverErr != nil {
