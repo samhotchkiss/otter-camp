@@ -1995,19 +1995,19 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksBroadRereads(t *test
 		},
 	}
 
-	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "project.list") {
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "project.list", nil) {
 		t.Fatal("expected project.list to be blocked during late bootstrap validation recovery")
 	}
-	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "project.get") {
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "project.get", nil) {
 		t.Fatal("expected project.get to be blocked during late bootstrap validation recovery")
 	}
-	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "flow.list_templates") {
-		t.Fatal("expected flow.list_templates to be blocked during late bootstrap validation recovery")
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "flow.list_templates", nil) {
+		t.Fatal("expected first flow.list_templates pass to remain available before the turn burns context budget")
 	}
-	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list") {
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
 		t.Fatal("expected first task.list pass to remain available for targeted recovery lookup")
 	}
-	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get") {
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get", nil) {
 		t.Fatal("task.get should remain available for targeted recovery inspection")
 	}
 }
@@ -2038,8 +2038,20 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksRepeatedTaskList(t *
 		},
 	}
 
-	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list") {
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
 		t.Fatal("expected repeated task.list to be blocked after recovery already spent tool budget in this turn")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "flow.list_templates", nil) {
+		t.Fatal("expected late flow.list_templates reread to be blocked after recovery already spent tool budget in this turn")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.search", nil) {
+		t.Fatal("expected file.search to be blocked after recovery already spent tool budget in this turn")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.read", map[string]any{"path": "planning/prd-spec/oc-73.md"}) {
+		t.Fatal("expected scaffold planning file.read to be blocked after recovery already spent tool budget in this turn")
+	}
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.read", map[string]any{"path": "src/components/PostCard.tsx"}) {
+		t.Fatal("non-planning file.read should remain available for targeted code inspection")
 	}
 }
 

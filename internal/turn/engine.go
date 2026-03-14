@@ -5642,7 +5642,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
-		if shouldBlockProjectBootstrapRecoveryRereadTool(rt, name) {
+		if shouldBlockProjectBootstrapRecoveryRereadTool(rt, name, arguments) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -8960,7 +8960,7 @@ func shouldBlockProjectBootstrapRestaffingTool(rt *turnRuntime, toolName string)
 	return false
 }
 
-func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName string) bool {
+func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName string, arguments map[string]any) bool {
 	if rt == nil || rt.session == nil {
 		return false
 	}
@@ -8980,11 +8980,25 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 	case "task.list":
 		return rt.toolCallsUsed > 0
 	case "flow.list_templates":
-		return strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) &&
-			projectBootstrapFailureNeedsDirectRepair(strings.TrimSpace(state.ValidationFailureClass))
+		return rt.toolCallsUsed > 0
+	case "file.search":
+		return rt.toolCallsUsed > 0
+	case "file.read":
+		return rt.toolCallsUsed > 0 && projectBootstrapRecoveryReadsPlanningPath(arguments)
 	default:
 		return false
 	}
+}
+
+func projectBootstrapRecoveryReadsPlanningPath(arguments map[string]any) bool {
+	path := strings.TrimSpace(stringValue(arguments["path"]))
+	if path == "" {
+		return false
+	}
+	normalized := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
+	return normalized == "planning" ||
+		strings.HasPrefix(normalized, "planning/") ||
+		strings.Contains(normalized, "/planning/")
 }
 
 func projectBootstrapFailureNeedsDirectRepair(failureClass string) bool {
@@ -9058,6 +9072,8 @@ func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "task.list":
 		return "bootstrap validation recovery already named the blocker and you already listed the persisted task tree on this turn; do not re-list it again. Repair the named task directly, or inspect only a single specific task if its details are still unclear."
+	case "file.read", "file.search":
+		return "bootstrap validation recovery should not fall back to scaffold planning file rereads once the blocker is named. Repair the persisted task tree directly, and inspect only the specific task you are fixing."
 	default:
 		return "bootstrap validation recovery already has the active project scope and persisted bootstrap state; skip broad project or template rereads and repair the named blocker directly."
 	}
