@@ -2971,6 +2971,19 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedFirstWaveTask
 	}
 }
 
+func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedWaveParent(t *testing.T) {
+	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 11 (Wave 3: Polish, Deploy & Content) has no assigned agent",
+	})
+	if !strings.Contains(prompt, "keep the parent orchestration-only and immediately create bounded executable child tasks beneath it") {
+		t.Fatalf("prompt = %q, want parent-splitting guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call file.read on planning artifacts just to decide the child split") {
+		t.Fatalf("prompt = %q, want no planning-artifact reread guidance", prompt)
+	}
+}
+
 func TestBuildProjectBootstrapValidationRecoveryPromptForRestartScaffoldFailure(t *testing.T) {
 	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureRuntime,
@@ -4061,6 +4074,21 @@ func TestBuildProjectBootstrapResumeActionPromptForUnassignedFirstWaveTask(t *te
 	}
 	if !strings.Contains(prompt, "Do not call task.get with the bare task number from the validation error") {
 		t.Fatalf("prompt = %q, want direct task id guidance", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapResumeActionPromptForUnassignedWaveParent(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		CurrentPhase:            projectBootstrapCheckpointFirstWaveExecutions,
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 11 (Wave 3: Polish, Deploy & Content) has no assigned agent",
+	})
+	if !strings.Contains(prompt, "If the named task is a broad wave/workstream parent, do not read planning artifacts first") {
+		t.Fatalf("prompt = %q, want no planning reread guidance", prompt)
+	}
+	if !strings.Contains(prompt, "create bounded executable child tasks directly beneath it") {
+		t.Fatalf("prompt = %q, want child-task guidance", prompt)
 	}
 }
 
