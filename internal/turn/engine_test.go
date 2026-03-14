@@ -2090,6 +2090,7 @@ func TestShouldBlockProjectBootstrapRestaffingToolAllowsMissingPMRecovery(t *tes
 		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
 	}
 	rt := &turnRuntime{
+		initialMessageText: "Continue bootstrap. Named blocked task: task 12 id=1234 title=\"Content Creation\" work_status=draft assigned_agent_id=unassigned. Use task.update directly on this task id instead of task.get with the bare task number.",
 		session: &chat.ChatSession{
 			ScopeType: "project",
 			Metadata:  metadata,
@@ -2165,6 +2166,7 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksNamedTaskListImmedia
 		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
 	}
 	rt := &turnRuntime{
+		initialMessageText: "Continue bootstrap. Named blocked task: task 12 id=1234 title=\"Content Creation\" work_status=draft assigned_agent_id=unassigned. Use task.update directly on this task id instead of task.get with the bare task number.",
 		session: &chat.ChatSession{
 			ScopeType: "project",
 			Metadata:  metadata,
@@ -2174,8 +2176,8 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksNamedTaskListImmedia
 	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
 		t.Fatal("expected task.list to be blocked immediately when recovery already names the exact failing task")
 	}
-	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get", nil) {
-		t.Fatal("task.get should remain available for targeted recovery inspection")
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get", nil) {
+		t.Fatal("expected task.get to be blocked when recovery already carries the exact task id and direct task.update instructions")
 	}
 	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "flow.list_templates", nil) {
 		t.Fatal("expected flow.list_templates to be blocked immediately when recovery already names the exact failing task")

@@ -9246,6 +9246,8 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 	if !namedFailureTask {
 		namedFailureTask = projectBootstrapFailureTaskNumber(rt.initialMessageText) > 0
 	}
+	namedFailureTaskHasDirectRepairID := namedFailureTask &&
+		strings.Contains(rt.initialMessageText, "Use task.update directly on this task id instead of task.get")
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "project.list", "project.get":
 		return true
@@ -9254,6 +9256,8 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 			return true
 		}
 		return rt.toolCallsUsed > 0
+	case "task.get":
+		return namedFailureTaskHasDirectRepairID
 	case "flow.list_templates":
 		if namedFailureTask {
 			return true
@@ -9360,6 +9364,8 @@ func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "task.list":
 		return "bootstrap validation recovery already named the blocker and you already listed the persisted task tree on this turn; do not re-list it again. Repair the named task directly, or inspect only a single specific task if its details are still unclear."
+	case "task.get":
+		return "bootstrap validation recovery already includes the exact blocked task id and direct-repair instructions in the continuation message. Do not reread that task first; repair it directly with task.update and bounded child task creation."
 	case "file.read", "file.search":
 		return "bootstrap validation recovery should not fall back to scaffold planning file rereads once the blocker is named. Repair the persisted task tree directly, and inspect only the specific task you are fixing."
 	default:
