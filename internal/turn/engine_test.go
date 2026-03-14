@@ -775,6 +775,9 @@ func TestHandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint(t *testing.T) {
 	if job.payload.RetryCount != 1 {
 		t.Fatalf("retry_count = %d, want 1", job.payload.RetryCount)
 	}
+	if !job.payload.RateLimitJitterApplied {
+		t.Fatal("expected rate limit retry payload to be marked as jittered")
+	}
 	if job.runAfter == nil {
 		t.Fatal("retry run_after missing")
 	}
@@ -819,6 +822,9 @@ func TestHandleTurnJobRateLimitedUsesBackoffWhenNoRetryHint(t *testing.T) {
 	jobs := fixture.enqueuer.agentTurnJobs()
 	if len(jobs) != 1 {
 		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if !jobs[0].payload.RateLimitJitterApplied {
+		t.Fatal("expected rate limit retry payload to be marked as jittered")
 	}
 	if jobs[0].runAfter == nil {
 		t.Fatal("retry run_after missing")

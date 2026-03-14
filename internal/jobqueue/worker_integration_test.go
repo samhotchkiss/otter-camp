@@ -990,14 +990,14 @@ func TestJobWorkerPurgeStaleAgentTurnJobsKeepsLiveSupervisorRecoveryTurn(t *test
 		t.Fatalf("create org: %v", err)
 	}
 	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
-		OrganizationID: org.ID,
-		DisplayName:    "Recovery Agent",
-		AgentClass:     "staff",
-		LifecycleStatus:"active",
-		SystemPrompt:   "You recover pending work.",
-		AgentType:      "general",
-		CreatedByType:  "system",
-		CreatedByID:    uuid.Nil,
+		OrganizationID:  org.ID,
+		DisplayName:     "Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover pending work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
 	})
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -1025,12 +1025,12 @@ func TestJobWorkerPurgeStaleAgentTurnJobsKeepsLiveSupervisorRecoveryTurn(t *test
 		t.Fatalf("create supervisor message: %v", err)
 	}
 	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
-		SessionID:         session.ID,
-		TurnNumber:        1,
-		RespondingType:    "agent",
-		RespondingID:      agent.ID,
-		Status:            "pending",
-		TriggerMessageID:  &message.ID,
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "pending",
+		TriggerMessageID: &message.ID,
 	})
 	if err != nil {
 		t.Fatalf("create pending turn: %v", err)
@@ -1130,6 +1130,91 @@ func TestJobWorkerPurgeStaleAgentTurnJobsKeepsSupervisorRetryJob(t *testing.T) {
 	}
 }
 
+func TestJobWorkerRejitterPendingRateLimitedAgentTurns(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "rejitter-pending-rate-limited-agent-turns",
+		DisplayName: "Rejitter Pending Rate Limited Agent Turns",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        uuid.New(),
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "assistant",
+		Content:   "[Rate limited, retrying in 15m...]",
+		Status:    "completed",
+	})
+	if err != nil {
+		t.Fatalf("create rate limit message: %v", err)
+	}
+
+	originalRunAfter := time.Now().UTC().Add(15 * time.Minute).Truncate(time.Second)
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority)
+		VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":1}`, session.ID, message.ID), originalRunAfter).Scan(&jobID); err != nil {
+		t.Fatalf("insert pending retry job: %v", err)
+	}
+
+	rejittered, err := worker.RejitterPendingRateLimitedAgentTurns(ctx)
+	if err != nil {
+		t.Fatalf("RejitterPendingRateLimitedAgentTurns: %v", err)
+	}
+	if rejittered != 1 {
+		t.Fatalf("rejittered jobs = %d, want 1", rejittered)
+	}
+
+	var (
+		runAfter      time.Time
+		jitterApplied bool
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT run_after,
+		       COALESCE((payload->>'rate_limit_jitter_applied')::boolean, false)
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&runAfter, &jitterApplied); err != nil {
+		t.Fatalf("query rejittered job: %v", err)
+	}
+	wantRunAfter := rejitteredRateLimitedRunAfter(worker.clock.Now().UTC(), originalRunAfter, session.ID, message.ID, 1)
+	if !runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", runAfter, wantRunAfter)
+	}
+	if !jitterApplied {
+		t.Fatal("expected rate_limit_jitter_applied flag to be set")
+	}
+
+	rejittered, err = worker.RejitterPendingRateLimitedAgentTurns(ctx)
+	if err != nil {
+		t.Fatalf("RejitterPendingRateLimitedAgentTurns second pass: %v", err)
+	}
+	if rejittered != 0 {
+		t.Fatalf("rejittered jobs on second pass = %d, want 0", rejittered)
+	}
+}
+
 func TestJobWorkerRequeueStrandedSupervisorRecoveryTurns(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -1147,14 +1232,14 @@ func TestJobWorkerRequeueStrandedSupervisorRecoveryTurns(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
-		OrganizationID: org.ID,
-		DisplayName:    "Recovery Agent",
-		AgentClass:     "staff",
-		LifecycleStatus:"active",
-		SystemPrompt:   "You recover pending work.",
-		AgentType:      "general",
-		CreatedByType:  "system",
-		CreatedByID:    uuid.Nil,
+		OrganizationID:  org.ID,
+		DisplayName:     "Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover pending work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
 	})
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -1243,14 +1328,14 @@ func TestJobWorkerRequeueStrandedUserMessageTurns(t *testing.T) {
 		t.Fatalf("create org: %v", err)
 	}
 	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
-		OrganizationID: org.ID,
-		DisplayName:    "Recovery Agent",
-		AgentClass:     "staff",
-		LifecycleStatus:"active",
-		SystemPrompt:   "You recover pending work.",
-		AgentType:      "general",
-		CreatedByType:  "system",
-		CreatedByID:    uuid.Nil,
+		OrganizationID:  org.ID,
+		DisplayName:     "Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover pending work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
 	})
 	if err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -1500,15 +1585,15 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 		t.Fatalf("create flow node: %v", err)
 	}
 	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
-		OrganizationID: org.ID,
-		ProjectID:      project.ID,
-		Title:          "Recover stranded active execution session",
-		WorkStatus:     "draft",
-		BlocksScope:    "task",
-		CreatedByType:  "system",
-		CreatedByID:    &agent.ID,
-		AssignedAgentID:&agent.ID,
-		Metadata:       json.RawMessage(`{}`),
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover stranded active execution session",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        json.RawMessage(`{}`),
 	})
 	if err != nil {
 		t.Fatalf("create project task: %v", err)
@@ -1667,15 +1752,15 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsForTaskQueueKickoff(
 		t.Fatalf("create flow node: %v", err)
 	}
 	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
-		OrganizationID: org.ID,
-		ProjectID:      project.ID,
-		Title:          "Recover task-queue execution kickoff",
-		WorkStatus:     "draft",
-		BlocksScope:    "task",
-		CreatedByType:  "system",
-		CreatedByID:    &agent.ID,
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover task-queue execution kickoff",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
 		AssignedAgentID: &agent.ID,
-		Metadata:       json.RawMessage(`{}`),
+		Metadata:        json.RawMessage(`{}`),
 	})
 	if err != nil {
 		t.Fatalf("create project task: %v", err)

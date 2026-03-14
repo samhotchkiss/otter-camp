@@ -135,7 +135,7 @@ const (
 
 var (
 	errContextCompressionContinuationDepthExceeded = errors.New("context compression continuation depth exceeded")
-	errAgentTurnPromptGuardrailDepthExceeded      = errors.New("agent turn prompt exceeded guardrail continuation depth")
+	errAgentTurnPromptGuardrailDepthExceeded       = errors.New("agent turn prompt exceeded guardrail continuation depth")
 )
 
 const (
@@ -154,10 +154,11 @@ var (
 )
 
 type AgentTurnPayload struct {
-	SessionID  uuid.UUID  `json:"session_id"`
-	MessageID  uuid.UUID  `json:"message_id"`
-	AgentID    *uuid.UUID `json:"agent_id,omitempty"`
-	RetryCount int        `json:"retry_count,omitempty"`
+	SessionID              uuid.UUID  `json:"session_id"`
+	MessageID              uuid.UUID  `json:"message_id"`
+	AgentID                *uuid.UUID `json:"agent_id,omitempty"`
+	RetryCount             int        `json:"retry_count,omitempty"`
+	RateLimitJitterApplied bool       `json:"rate_limit_jitter_applied,omitempty"`
 }
 
 type ModelRequest struct {
@@ -4466,9 +4467,10 @@ func (e *TurnEngine) handleRateLimitedTurnFailure(
 	}
 
 	nextPayload := AgentTurnPayload{
-		SessionID:  runtime.session.ID,
-		MessageID:  messageID,
-		RetryCount: retryCount + 1,
+		SessionID:              runtime.session.ID,
+		MessageID:              messageID,
+		RetryCount:             retryCount + 1,
+		RateLimitJitterApplied: true,
 	}
 	if routedAgentID != nil && *routedAgentID != uuid.Nil {
 		agentID := *routedAgentID

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +38,8 @@ const (
 	agentTurnRateLimitMinBackoff = 30 * time.Second
 	agentTurnRateLimitBackoffCap = 30 * time.Minute
 	agentTurnRateLimitMaxRetries = 6
+	legacyRateLimitJitterFloor   = 5 * time.Minute
+	legacyRateLimitJitterMax     = 30 * time.Second
 )
 
 type JobWorker interface {
@@ -47,9 +51,10 @@ type JobWorker interface {
 type JobHandler func(ctx context.Context, job Job) error
 
 type agentTurnKeyPayload struct {
-	SessionID  uuid.UUID `json:"session_id"`
-	MessageID  uuid.UUID `json:"message_id"`
-	RetryCount int       `json:"retry_count"`
+	SessionID              uuid.UUID `json:"session_id"`
+	MessageID              uuid.UUID `json:"message_id"`
+	RetryCount             int       `json:"retry_count"`
+	RateLimitJitterApplied bool      `json:"rate_limit_jitter_applied,omitempty"`
 }
 
 type chatSummarizeKeyPayload struct {
@@ -231,6 +236,13 @@ func (w *Worker) Start(ctx context.Context) error {
 		}
 	} else if requeued > 0 {
 		w.logger.Info("job queue: requeued active execution sessions without turns on startup", "count", requeued)
+	}
+	if rejittered, err := w.RejitterPendingRateLimitedAgentTurns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup rate-limit retry rejitter failed", "error", err)
+		}
+	} else if rejittered > 0 {
+		w.logger.Info("job queue: rejittered pending rate-limited agent turns on startup", "count", rejittered)
 	}
 
 	wake := make(chan struct{}, 1)
@@ -719,6 +731,90 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		return repaired, fmt.Errorf("iterate active execution sessions without turns: %w", err)
 	}
 	return repaired, nil
+}
+
+func (w *Worker) RejitterPendingRateLimitedAgentTurns(ctx context.Context) (int64, error) {
+	rows, err := w.pool.Query(ctx, `
+		SELECT jq.id,
+		       (jq.payload->>'session_id')::uuid,
+		       (jq.payload->>'message_id')::uuid,
+		       COALESCE((jq.payload->>'retry_count')::int, 0),
+		       jq.run_after
+		FROM job_queue jq
+		JOIN chat_session cs ON cs.id = (jq.payload->>'session_id')::uuid
+		JOIN LATERAL (
+			SELECT cm.content
+			FROM chat_message cm
+			WHERE cm.session_id = cs.id
+			ORDER BY cm.created_at DESC, cm.id DESC
+			LIMIT 1
+		) latest_msg ON true
+		WHERE jq.job_type = 'agent_turn'
+		  AND jq.status = 'pending'
+		  AND COALESCE((jq.payload->>'retry_count')::int, 0) > 0
+		  AND COALESCE(jq.payload->>'rate_limit_jitter_applied', 'false') <> 'true'
+		  AND jq.run_after >= now() + interval '5 minutes'
+		  AND latest_msg.content LIKE '[Rate limited, retrying in %'
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("list pending rate-limited agent turns for rejitter: %w", err)
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var (
+			jobID      uuid.UUID
+			sessionID  uuid.UUID
+			messageID  uuid.UUID
+			retryCount int
+			runAfter   time.Time
+		)
+		if err := rows.Scan(&jobID, &sessionID, &messageID, &retryCount, &runAfter); err != nil {
+			return repaired, fmt.Errorf("scan pending rate-limited agent turn: %w", err)
+		}
+		rejitteredRunAfter := rejitteredRateLimitedRunAfter(w.clock.Now().UTC(), runAfter.UTC(), sessionID, messageID, retryCount)
+		tag, err := w.pool.Exec(ctx, `
+			UPDATE job_queue
+			SET run_after = $2,
+			    payload = jsonb_set(payload, '{rate_limit_jitter_applied}', 'true'::jsonb, true),
+			    updated_at = now()
+			WHERE id = $1
+			  AND status = 'pending'
+			  AND COALESCE(payload->>'rate_limit_jitter_applied', 'false') <> 'true'
+		`, jobID, rejitteredRunAfter)
+		if err != nil {
+			return repaired, fmt.Errorf("update pending rate-limited agent turn %s: %w", jobID, err)
+		}
+		repaired += tag.RowsAffected()
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, fmt.Errorf("iterate pending rate-limited agent turns: %w", err)
+	}
+	return repaired, nil
+}
+
+func rejitteredRateLimitedRunAfter(now, runAfter time.Time, sessionID, messageID uuid.UUID, retryCount int) time.Time {
+	if runAfter.Sub(now) < legacyRateLimitJitterFloor {
+		return runAfter
+	}
+	return runAfter.Add(rateLimitRetryJitterOffset(sessionID, messageID, retryCount))
+}
+
+func rateLimitRetryJitterOffset(sessionID, messageID uuid.UUID, retryCount int) time.Duration {
+	if legacyRateLimitJitterMax <= 0 {
+		return 0
+	}
+	hasher := fnv.New64a()
+	_, _ = hasher.Write(sessionID[:])
+	_, _ = hasher.Write(messageID[:])
+	_, _ = hasher.Write([]byte(strconv.Itoa(retryCount)))
+	jitterRange := uint64(legacyRateLimitJitterMax / time.Second)
+	if jitterRange == 0 {
+		return 0
+	}
+	jitterSeconds := hasher.Sum64() % (jitterRange + 1)
+	return time.Duration(jitterSeconds) * time.Second
 }
 
 func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
@@ -1298,6 +1394,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 				w.logger.Error("active execution session repair failed", "error", err)
 			} else if requeued > 0 {
 				w.logger.Info("job queue: requeued active execution sessions without turns", "count", requeued)
+			}
+			if rejittered, err := w.RejitterPendingRateLimitedAgentTurns(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("rate-limit retry rejitter failed", "error", err)
+			} else if rejittered > 0 {
+				w.logger.Info("job queue: rejittered pending rate-limited agent turns", "count", rejittered)
 			}
 		}
 	}
