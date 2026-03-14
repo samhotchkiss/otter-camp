@@ -254,6 +254,59 @@ func TestHandleUserMessagePartialStreamContextCanceledFailsTurnWithoutCancelling
 	}
 }
 
+func TestHandleUserMessageTaskSessionClosedDuringToolDispatchCancelsTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "task.inspect", Tier: "tier1"}}}
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{
+			ToolCalls: []ModelToolCall{{
+				ID:        "call_1",
+				Name:      "task.inspect",
+				Tier:      "tier1",
+				Arguments: map[string]any{},
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier1Fn = func(context.Context, ToolCall) (ToolResult, error) {
+		fixture.chat.session.Status = "closed"
+		return ToolResult{}, context.Canceled
+	}
+
+	err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID)
+	if !errors.Is(err, errTurnCancelled) {
+		t.Fatalf("HandleUserMessage err = %v, want %v", err, errTurnCancelled)
+	}
+	if fixture.chat.cancelCalls != 1 {
+		t.Fatalf("cancel calls = %d, want 1", fixture.chat.cancelCalls)
+	}
+	if fixture.chat.failCalls != 0 {
+		t.Fatalf("fail calls = %d, want 0", fixture.chat.failCalls)
+	}
+	turn := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.Status != "cancelled" {
+		t.Fatalf("turn status = %q, want cancelled", turn.Status)
+	}
+}
+
 func TestHandleUserMessageAsyncExecutionSessionIdempotentForStableMessageKey(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -4839,6 +4892,9 @@ func (f *fakeChatService) AddParticipant(ctx context.Context, sessionID uuid.UUI
 }
 
 func (f *fakeChatService) AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error) {
+	if !strings.EqualFold(strings.TrimSpace(f.session.Status), "active") {
+		return nil, chat.ErrSessionClosed
+	}
 	item := repo.ChatMessage{
 		SessionID:     input.SessionID,
 		TurnID:        input.TurnID,

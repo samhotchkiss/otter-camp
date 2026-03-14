@@ -3541,6 +3541,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	if err == nil || errors.Is(err, errTurnDeferred) || errors.Is(err, errTurnCancelled) || errors.Is(err, errTurnPaused) {
 		return e.ensureTurnRunExitInvariant(ctx, runtime)
 	}
+	if errors.Is(err, chat.ErrSessionClosed) {
+		closedCtx, cancelClosed := context.WithCancelCause(ctx)
+		cancelClosed(errTurnSessionClosed)
+		return e.handleCancellation(closedCtx, runtime)
+	}
 	if errors.Is(err, context.Canceled) {
 		if ctx.Err() != nil {
 			return e.handleCancellation(ctx, runtime)
