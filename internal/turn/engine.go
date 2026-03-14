@@ -1307,6 +1307,11 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		progress.FirstWavePromotedCount > state.FirstWavePromotedCount ||
 		progress.FirstWaveExecutionCount > state.FirstWaveExecutionCount ||
 		progress.FirstWaveJobCount > state.FirstWaveJobCount
+	if !progress.ValidationFailed() && projectBootstrapRestartSession(session) && !madeProgress && projectBootstrapNarrativeOnlyReply(messages, assistant) {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureReason = buildProjectBootstrapNarrativeOnlyRestartFailureReason(assistant)
+		progress.ValidationFailureClass = projectBootstrapFailureStalled
+	}
 	state.Status = projectBootstrapStatusActive
 	state.LastTurnID = turnID.String()
 	state.BootstrapTaskID = progress.BootstrapTaskID.String()
