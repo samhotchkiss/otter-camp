@@ -225,6 +225,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if requeued > 0 {
 		w.logger.Info("job queue: requeued pending turns without jobs on startup", "count", requeued)
 	}
+	if requeued, err := w.RequeueActiveExecutionSessionsWithoutTurns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup active execution requeue failed", "error", err)
+		}
+	} else if requeued > 0 {
+		w.logger.Info("job queue: requeued active execution sessions without turns on startup", "count", requeued)
+	}
 
 	wake := make(chan struct{}, 1)
 	var bg sync.WaitGroup
@@ -635,6 +642,64 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 	}
 	if err := rows.Err(); err != nil {
 		return repaired, fmt.Errorf("iterate pending turns without jobs: %w", err)
+	}
+	return repaired, nil
+}
+
+func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context) (int64, error) {
+	rows, err := w.pool.Query(ctx, `
+		SELECT DISTINCT ON (cs.id) cs.id, cm.id
+		FROM chat_session cs
+		JOIN flow_node_execution e
+		  ON e.session_id = cs.id
+		 AND e.status = 'active'
+		JOIN chat_message cm
+		  ON cm.session_id = cs.id
+		WHERE cs.scope_type = 'project_task'
+		  AND cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND cs.current_turn_id IS NULL
+		  AND cm.role = 'user'
+		  AND cm.content = 'supervisor recovery: resume task'
+		  AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = cs.id
+		      AND ct.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		  )
+		ORDER BY cs.id, cm.created_at DESC, cm.id DESC
+	`, agentTurnJobType)
+	if err != nil {
+		return 0, fmt.Errorf("list active execution sessions without turns: %w", err)
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var sessionID uuid.UUID
+		var messageID uuid.UUID
+		if err := rows.Scan(&sessionID, &messageID); err != nil {
+			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
+		}
+		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+			SessionID:  sessionID,
+			MessageID:  messageID,
+			RetryCount: 0,
+		}, nil); err != nil {
+			return repaired, fmt.Errorf("requeue active execution session without turn for session %s: %w", sessionID, err)
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, fmt.Errorf("iterate active execution sessions without turns: %w", err)
 	}
 	return repaired, nil
 }
@@ -1211,6 +1276,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 				w.logger.Error("pending turn repair failed", "error", err)
 			} else if requeued > 0 {
 				w.logger.Info("job queue: requeued pending turns without jobs", "count", requeued)
+			}
+			if requeued, err := w.RequeueActiveExecutionSessionsWithoutTurns(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("active execution session repair failed", "error", err)
+			} else if requeued > 0 {
+				w.logger.Info("job queue: requeued active execution sessions without turns", "count", requeued)
 			}
 		}
 	}
