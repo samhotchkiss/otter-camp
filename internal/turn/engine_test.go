@@ -2650,6 +2650,21 @@ func TestIsTransientInfrastructureError(t *testing.T) {
 	}
 }
 
+func TestIsRecoverableExecutionContinuationDepthError(t *testing.T) {
+	if !isRecoverableExecutionContinuationDepthError(errContextCompressionContinuationDepthExceeded) {
+		t.Fatal("context compression continuation depth sentinel should be recoverable")
+	}
+	if !isRecoverableExecutionContinuationDepthError(errAgentTurnPromptGuardrailDepthExceeded) {
+		t.Fatal("prompt guardrail continuation depth sentinel should be recoverable")
+	}
+	if isRecoverableExecutionContinuationDepthError(errors.New("agent turn prompt exceeded guardrail continuation depth")) {
+		t.Fatal("plain string-matched errors should not be treated as recoverable continuation depth failures")
+	}
+	if isRecoverableExecutionContinuationDepthError(nil) {
+		t.Fatal("nil error should not be treated as recoverable continuation depth failure")
+	}
+}
+
 func TestHandleUserMessageProjectScopeKickoffHandoffRoutesToLoriAfterFrank(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

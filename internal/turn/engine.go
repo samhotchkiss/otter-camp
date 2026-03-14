@@ -130,6 +130,11 @@ const (
 	bootstrapChildTaskBoundednessError        = "parent integration follow-on tasks must already be bounded before they are created"
 )
 
+var (
+	errContextCompressionContinuationDepthExceeded = errors.New("context compression continuation depth exceeded")
+	errAgentTurnPromptGuardrailDepthExceeded      = errors.New("agent turn prompt exceeded guardrail continuation depth")
+)
+
 const (
 	errMissingTaskTransitionServiceForValidationBlock = "turn engine requires task transition service to block validation-loop tasks"
 	errMissingTaskTransitionServiceForRecoveryBlock   = "turn engine requires task transition service to block recovery tasks"
@@ -4594,7 +4599,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 				if handled, handleErr := e.handleRecoveryContinuationDepthBlocker(ctx, rt, buildRecoveryContinuationDepthReason("prompt context remained too large")); handled {
 					return handleErr
 				}
-				return fmt.Errorf("context compression continuation depth exceeded")
+				return errContextCompressionContinuationDepthExceeded
 			}
 			rt.stopReason = ""
 			if err := e.continueTurn(ctx, rt); err != nil {
@@ -4617,7 +4622,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 				if handled, handleErr := e.handleRecoveryContinuationDepthBlocker(ctx, rt, buildRecoveryContinuationDepthReason(fmt.Sprintf("prompt input kept exceeding the %d-token guardrail", guardrail))); handled {
 					return handleErr
 				}
-				return fmt.Errorf("agent turn prompt exceeded guardrail continuation depth")
+				return errAgentTurnPromptGuardrailDepthExceeded
 			}
 			rt.stopReason = ""
 			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, fmt.Sprintf("[Prompt input exceeded %d-token guardrail - continuing in a new turn.]", guardrail)); err != nil {
@@ -7650,7 +7655,7 @@ func (e *TurnEngine) pauseProjectAfterExecutionFailure(ctx context.Context, rt *
 	if rt == nil || rt.turn == nil || rt.session == nil {
 		return nil
 	}
-	if isTransientInfrastructureError(cause) {
+	if isTransientInfrastructureError(cause) || isRecoverableExecutionContinuationDepthError(cause) {
 		return nil
 	}
 
@@ -7682,6 +7687,11 @@ func (e *TurnEngine) pauseProjectAfterExecutionFailure(ctx context.Context, rt *
 		return err
 	}
 	return e.applyProjectAutomaticFailure(ctx, *projectID, record)
+}
+
+func isRecoverableExecutionContinuationDepthError(err error) bool {
+	return errors.Is(err, errContextCompressionContinuationDepthExceeded) ||
+		errors.Is(err, errAgentTurnPromptGuardrailDepthExceeded)
 }
 
 func (e *TurnEngine) handleTaskScopedProviderAuthFailure(ctx context.Context, rt *turnRuntime, cause error) (bool, error) {
