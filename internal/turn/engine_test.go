@@ -2665,6 +2665,27 @@ func TestIsRecoverableExecutionContinuationDepthError(t *testing.T) {
 	}
 }
 
+func TestIsRecoverableProjectExecutionFailure(t *testing.T) {
+	if !isRecoverableProjectExecutionFailure(ErrModelTransient) {
+		t.Fatal("transient model failures should be recoverable for project execution")
+	}
+	if !isRecoverableProjectExecutionFailure(ErrRateLimited) {
+		t.Fatal("rate limit failures should be recoverable for project execution")
+	}
+	if !isRecoverableProjectExecutionFailure(errContextCompressionContinuationDepthExceeded) {
+		t.Fatal("continuation depth failures should be recoverable for project execution")
+	}
+	if !isRecoverableProjectExecutionFailure(errors.New("pq: sorry, too many clients already")) {
+		t.Fatal("transient infrastructure failures should be recoverable for project execution")
+	}
+	if isRecoverableProjectExecutionFailure(errors.New("provider auth failed")) {
+		t.Fatal("provider auth failures should not be treated as recoverable project execution failures")
+	}
+	if isRecoverableProjectExecutionFailure(nil) {
+		t.Fatal("nil should not be treated as recoverable project execution failure")
+	}
+}
+
 func TestHandleUserMessageProjectScopeKickoffHandoffRoutesToLoriAfterFrank(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

@@ -7655,7 +7655,7 @@ func (e *TurnEngine) pauseProjectAfterExecutionFailure(ctx context.Context, rt *
 	if rt == nil || rt.turn == nil || rt.session == nil {
 		return nil
 	}
-	if isTransientInfrastructureError(cause) || isRecoverableExecutionContinuationDepthError(cause) {
+	if isRecoverableProjectExecutionFailure(cause) {
 		return nil
 	}
 
@@ -7692,6 +7692,12 @@ func (e *TurnEngine) pauseProjectAfterExecutionFailure(ctx context.Context, rt *
 func isRecoverableExecutionContinuationDepthError(err error) bool {
 	return errors.Is(err, errContextCompressionContinuationDepthExceeded) ||
 		errors.Is(err, errAgentTurnPromptGuardrailDepthExceeded)
+}
+
+func isRecoverableProjectExecutionFailure(err error) bool {
+	return isTransientInfrastructureError(err) ||
+		isTransientModelError(err) ||
+		isRecoverableExecutionContinuationDepthError(err)
 }
 
 func (e *TurnEngine) handleTaskScopedProviderAuthFailure(ctx context.Context, rt *turnRuntime, cause error) (bool, error) {
