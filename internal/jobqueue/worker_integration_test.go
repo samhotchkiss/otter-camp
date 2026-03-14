@@ -116,6 +116,65 @@ func TestJobWorkerProcessesBatchConcurrently(t *testing.T) {
 	waitForDoneJobs(t, pool, 3, 5*time.Second)
 }
 
+func TestJobWorkerRefillsFreedSlotBeforeWholeBatchFinishes(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		BatchSize:            2,
+		PollInterval:         100 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	slowRelease := make(chan struct{})
+	firstFastStarted := make(chan struct{}, 1)
+	secondFastStarted := make(chan struct{}, 1)
+	var fastCount atomic.Int32
+
+	worker.Register("test.refill.slow", func(context.Context, Job) error {
+		<-slowRelease
+		return nil
+	})
+	worker.Register("test.refill.fast", func(context.Context, Job) error {
+		switch fastCount.Add(1) {
+		case 1:
+			firstFastStarted <- struct{}{}
+		case 2:
+			secondFastStarted <- struct{}{}
+		}
+		return nil
+	})
+
+	if _, err := worker.Enqueue(context.Background(), nil, "test.refill.slow", 100, map[string]any{"n": 1}, nil); err != nil {
+		t.Fatalf("enqueue slow failed: %v", err)
+	}
+	if _, err := worker.Enqueue(context.Background(), nil, "test.refill.fast", 90, map[string]any{"n": 2}, nil); err != nil {
+		t.Fatalf("enqueue first fast failed: %v", err)
+	}
+	if _, err := worker.Enqueue(context.Background(), nil, "test.refill.fast", 80, map[string]any{"n": 3}, nil); err != nil {
+		t.Fatalf("enqueue second fast failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startWorker(worker, ctx)
+	defer func() {
+		cancel()
+		close(slowRelease)
+		_ = worker.Stop()
+	}()
+
+	select {
+	case <-firstFastStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first fast job to start")
+	}
+
+	select {
+	case <-secondFastStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second fast job did not start while slow batch peer was still running")
+	}
+}
+
 func TestJobWorkerClaimPendingLimitClaimsSingleJobEvenWhenBatchSizeIsLarger(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

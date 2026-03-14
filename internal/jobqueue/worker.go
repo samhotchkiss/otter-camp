@@ -649,40 +649,62 @@ func (w *Worker) CloseSupersededTaskAsyncSessions(ctx context.Context) (int64, e
 }
 
 func (w *Worker) processAvailableJobs(ctx context.Context) error {
-	for {
-		w.logger.Debug("job queue: claiming pending jobs")
-		jobs, err := w.claimPendingLimit(ctx, w.batchSize)
-		if err != nil {
-			if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-				w.logger.Error("job queue: claim failed", "error", err)
-			}
-			return err
-		}
-		if len(jobs) == 0 {
-			w.logger.Debug("job queue: no pending jobs")
-			return nil
-		}
-		types := make([]string, len(jobs))
-		for i, j := range jobs {
-			types[i] = j.JobType
-		}
-		w.logger.Info("job queue: claimed", "count", len(jobs), "types", strings.Join(types, ","))
+	type jobResult struct{}
+	results := make(chan jobResult, max(1, w.batchSize))
+	active := 0
 
-		var wg sync.WaitGroup
-		for _, job := range jobs {
-			job := job
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				w.logger.Info("job queue: executing", "job_id", job.ID, "job_type", job.JobType, "attempts", job.Attempts)
-				if err := w.executeClaimedJob(ctx, job); err != nil {
-					if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-						w.logger.Error("failed to execute claimed job", "job_id", job.ID, "job_type", job.JobType, "error", err)
-					}
+	for {
+		slots := max(1, w.batchSize) - active
+		if slots > 0 {
+			w.logger.Debug("job queue: claiming pending jobs", "slots", slots, "active", active)
+			jobs, err := w.claimPendingLimit(ctx, slots)
+			if err != nil {
+				if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+					w.logger.Error("job queue: claim failed", "error", err)
 				}
-			}()
+				return err
+			}
+			if len(jobs) > 0 {
+				types := make([]string, len(jobs))
+				for i, j := range jobs {
+					types[i] = j.JobType
+				}
+				w.logger.Info("job queue: claimed", "count", len(jobs), "types", strings.Join(types, ","))
+
+				for _, job := range jobs {
+					job := job
+					active++
+					go func() {
+						defer func() {
+							select {
+							case results <- jobResult{}:
+							case <-ctx.Done():
+							}
+						}()
+						w.logger.Info("job queue: executing", "job_id", job.ID, "job_type", job.JobType, "attempts", job.Attempts)
+						if err := w.executeClaimedJob(ctx, job); err != nil {
+							if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+								w.logger.Error("failed to execute claimed job", "job_id", job.ID, "job_type", job.JobType, "error", err)
+							}
+						}
+					}()
+				}
+				continue
+			}
+			if active == 0 {
+				w.logger.Debug("job queue: no pending jobs")
+				return nil
+			}
 		}
-		wg.Wait()
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-results:
+			if active > 0 {
+				active--
+			}
+		}
 	}
 }
 
