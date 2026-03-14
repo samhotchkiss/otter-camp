@@ -5723,6 +5723,9 @@ func (e *TurnEngine) requireTurnInProgress(ctx context.Context, rt *turnRuntime)
 	if strings.EqualFold(strings.TrimSpace(current.Status), "in_progress") {
 		return nil
 	}
+	if strings.EqualFold(strings.TrimSpace(current.Status), "cancelled") {
+		return errTurnCancelled
+	}
 	return fmt.Errorf(
 		"runTurn preflight invalid turn state (operation=execute_turn expected_status=in_progress turn_status=%s turn_id=%s): %w",
 		strings.ToLower(strings.TrimSpace(current.Status)),

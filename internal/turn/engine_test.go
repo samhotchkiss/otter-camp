@@ -2363,6 +2363,28 @@ func TestBuildProjectBootstrapResumeStateMessageRequiresDirectBoundedSplit(t *te
 	}
 }
 
+func TestRequireTurnInProgressReturnsCancelledSentinel(t *testing.T) {
+	turnID := uuid.New()
+	engine := &TurnEngine{
+		chat: &fakeChatService{
+			turns: map[uuid.UUID]*chat.ChatTurn{
+				turnID: {
+					ID:     turnID,
+					Status: "cancelled",
+				},
+			},
+		},
+	}
+	rt := &turnRuntime{
+		turn: &chat.ChatTurn{ID: turnID},
+	}
+
+	err := engine.requireTurnInProgress(context.Background(), rt)
+	if !errors.Is(err, errTurnCancelled) {
+		t.Fatalf("requireTurnInProgress error = %v, want errTurnCancelled", err)
+	}
+}
+
 func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksNamedTaskListImmediately(t *testing.T) {
 	now := time.Now().UTC()
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
