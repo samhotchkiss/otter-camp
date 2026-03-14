@@ -131,6 +131,7 @@ const (
 	projectBootstrapTemplateSlug              = "bootstrap-governance-gate"
 	bootstrapFrankSignOffStepSlug             = "record-frank-sign-off"
 	bootstrapChildTaskBoundednessError        = "parent integration follow-on tasks must already be bounded before they are created"
+	taskContinuationResumeMessageSource       = "task_continuation_resume"
 )
 
 var (
@@ -3834,6 +3835,8 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		runtime.historyStartID = &message.ID
 		runtime.disableMemory = true
 		runtime.freshKickoff = true
+	} else if taskContinuationResumeMessageRootsHistory(message) {
+		runtime.historyStartID = &message.ID
 	}
 	if handled, handleErr := e.handleProjectBootstrapPreflight(ctx, runtime); handleErr != nil {
 		return handleErr
@@ -3898,6 +3901,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		if handled {
 			return nil
 		}
+	}
+	if handled, handleErr := e.handleTaskContinuationDepthTurnFailure(ctx, runtime, messageID, routedAgentID, err); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
 	}
 	if handled, handleErr := e.handleProjectBootstrapUnhandledFailure(ctx, runtime, err); handleErr != nil {
 		return handleErr
@@ -4543,6 +4551,60 @@ func (e *TurnEngine) handleTransientInfrastructureTurnFailure(
 
 	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
 	message := fmt.Sprintf("[Infrastructure temporarily unavailable, retrying in %s...]", formatRetryDelay(retryDelay))
+	if !enqueued {
+		message = "[Project paused - retry deferred until resume.]"
+	}
+	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, message)
+	return true, nil
+}
+
+func (e *TurnEngine) handleTaskContinuationDepthTurnFailure(
+	ctx context.Context,
+	runtime *turnRuntime,
+	messageID uuid.UUID,
+	routedAgentID *uuid.UUID,
+	cause error,
+) (bool, error) {
+	if runtime == nil || runtime.turn == nil || runtime.session == nil {
+		return false, nil
+	}
+	if !isRecoverableExecutionContinuationDepthError(cause) {
+		return false, nil
+	}
+	if runtime.recoveryTurn || !shouldAppendTaskContinuationActionPrompt(runtime.session) {
+		return false, nil
+	}
+
+	retryAttempt := e.taskContinuationResumeAttempt(ctx, messageID) + 1
+	actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: runtime.session.ID,
+		TurnID:    &runtime.turn.ID,
+		Role:      "user",
+		Content:   buildTaskContinuationActionPrompt(),
+		Metadata:  taskContinuationResumeMessageMetadata(retryAttempt),
+	})
+	if err != nil {
+		return true, err
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID: runtime.session.ID,
+		MessageID: actionMessage.ID,
+	}
+	if routedAgentID != nil && *routedAgentID != uuid.Nil {
+		agentID := *routedAgentID
+		nextPayload.AgentID = &agentID
+	}
+
+	retryDelay := defaultAutoContinueDelay
+	runAfter := e.now().Add(retryDelay).UTC()
+	enqueued, enqueueErr := e.enqueueAgentTurnIfActive(ctx, runtime.session, nextPayload, &runAfter)
+	if enqueueErr != nil {
+		return true, fmt.Errorf("enqueue task continuation depth retry: %w", enqueueErr)
+	}
+
+	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
+	message := fmt.Sprintf("[Task continuation remained too large after %d continuation turns - retrying from a narrowed continuation root in %s.]", maxContinuationTurnDepth, formatRetryDelay(retryDelay))
 	if !enqueued {
 		message = "[Project paused - retry deferred until resume.]"
 	}
@@ -9048,6 +9110,47 @@ func isRecoveryResumeMessage(message repo.ChatMessage) bool {
 	}
 	text := strings.ToLower(normalizeInstructionText(message.Content))
 	return strings.Contains(text, "resume") && strings.Contains(text, "task")
+}
+
+func taskContinuationResumeMessageRootsHistory(message repo.ChatMessage) bool {
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return false
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	if strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), taskContinuationResumeMessageSource) {
+		return true
+	}
+	rooted, _ := metadata["continuation_root"].(bool)
+	return rooted
+}
+
+func taskContinuationResumeMessageMetadata(attempt int) json.RawMessage {
+	if attempt < 1 {
+		attempt = 1
+	}
+	return mustJSONRaw(map[string]any{
+		"source":               taskContinuationResumeMessageSource,
+		"continuation_root":    true,
+		"continuation_attempt": attempt,
+	})
+}
+
+func (e *TurnEngine) taskContinuationResumeAttempt(ctx context.Context, messageID uuid.UUID) int {
+	if e == nil || e.messages == nil || messageID == uuid.Nil {
+		return 0
+	}
+	message, err := e.messages.GetByID(ctx, messageID)
+	if err != nil {
+		return 0
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	if raw, ok := metadata["continuation_attempt"].(float64); ok {
+		return int(raw)
+	}
+	if raw, ok := metadata["continuation_attempt"].(int); ok {
+		return raw
+	}
+	return 0
 }
 
 func (e *TurnEngine) bootstrapInitialMessageRequestsFreshKickoff(ctx context.Context, sessionID uuid.UUID, initialMessageID string) (bool, error) {

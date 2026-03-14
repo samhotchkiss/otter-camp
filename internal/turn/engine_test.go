@@ -4435,6 +4435,127 @@ func TestContinuationTurnCapsSummaryBeforeReusingAsHistoryRoot(t *testing.T) {
 	}
 }
 
+func TestAsyncProjectTaskGuardrailContinuationDepthRequeuesFromSyntheticContinuationRoot(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {ID: taskID, ProjectID: projectID, WorkStatus: "in_progress", AssignedAgentID: &assignedAgentID},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: defaultPromptTokenGuardrail + 1}},
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil {
+		t.Fatal("expected queued agent_turn payload")
+	}
+	if jobs[0].runAfter == nil {
+		t.Fatal("expected delayed continuation retry")
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var actionMessage *repo.ChatMessage
+	var retryNoticeCount int
+	for i := range messages {
+		message := messages[i]
+		if strings.Contains(message.Content, "retrying from a narrowed continuation root") {
+			retryNoticeCount++
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Content), buildTaskContinuationActionPrompt()) {
+			continue
+		}
+		if taskContinuationResumeMessageRootsHistory(message) {
+			copied := message
+			actionMessage = &copied
+		}
+	}
+	if retryNoticeCount != 1 {
+		t.Fatalf("retry notice count = %d, want 1", retryNoticeCount)
+	}
+	if actionMessage == nil {
+		t.Fatal("expected synthetic continuation root message")
+	}
+	if jobs[0].payload.MessageID != actionMessage.ID {
+		t.Fatalf("queued message id = %s, want %s", jobs[0].payload.MessageID, actionMessage.ID)
+	}
+}
+
+func TestTaskContinuationRootMessageStartsAssemblyAtTriggerMessage(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {ID: taskID, ProjectID: projectID, WorkStatus: "in_progress", AssignedAgentID: &assignedAgentID},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	rootMessage := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   buildTaskContinuationActionPrompt(),
+		Metadata:  taskContinuationResumeMessageMetadata(1),
+	})
+
+	var assembledHistoryStart *uuid.UUID
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call != 1 || input.HistoryStartID == nil {
+			return
+		}
+		copied := *input.HistoryStartID
+		assembledHistoryStart = &copied
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, rootMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if assembledHistoryStart == nil {
+		t.Fatal("HistoryStartID is nil, want continuation root message id")
+	}
+	if *assembledHistoryStart != rootMessage.ID {
+		t.Fatalf("HistoryStartID = %s, want %s", *assembledHistoryStart, rootMessage.ID)
+	}
+}
+
 func TestContinuationTurnNormalizesGenericNoContextSummary(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.assembler.results = []assembleResult{
