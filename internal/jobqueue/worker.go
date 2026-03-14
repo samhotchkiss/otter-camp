@@ -218,6 +218,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if requeued > 0 {
 		w.logger.Info("job queue: requeued stranded user message turns on startup", "count", requeued)
 	}
+	if requeued, err := w.RequeuePendingTurnsWithoutJobs(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup pending turn requeue failed", "error", err)
+		}
+	} else if requeued > 0 {
+		w.logger.Info("job queue: requeued pending turns without jobs on startup", "count", requeued)
+	}
 
 	wake := make(chan struct{}, 1)
 	var bg sync.WaitGroup
@@ -584,6 +591,50 @@ func (w *Worker) RequeueStrandedUserMessageTurns(ctx context.Context) (int64, er
 	}
 	if err := rows.Err(); err != nil {
 		return repaired, fmt.Errorf("iterate stranded user message turns: %w", err)
+	}
+	return repaired, nil
+}
+
+func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, error) {
+	rows, err := w.pool.Query(ctx, `
+		SELECT DISTINCT cs.id, ct.trigger_message_id
+		FROM chat_session cs
+		JOIN chat_turn ct ON ct.id = cs.current_turn_id
+		WHERE cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND ct.status = 'pending'
+		  AND ct.trigger_message_id IS NOT NULL
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		  )
+	`, agentTurnJobType)
+	if err != nil {
+		return 0, fmt.Errorf("list pending turns without jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var sessionID uuid.UUID
+		var messageID uuid.UUID
+		if err := rows.Scan(&sessionID, &messageID); err != nil {
+			return repaired, fmt.Errorf("scan pending turn without job: %w", err)
+		}
+		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+			SessionID:  sessionID,
+			MessageID:  messageID,
+			RetryCount: 0,
+		}, nil); err != nil {
+			return repaired, fmt.Errorf("requeue pending turn without job for session %s: %w", sessionID, err)
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, fmt.Errorf("iterate pending turns without jobs: %w", err)
 	}
 	return repaired, nil
 }
