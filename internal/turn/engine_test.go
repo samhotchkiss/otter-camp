@@ -1183,6 +1183,67 @@ func TestAppendProjectBootstrapContinuationMessageWithoutAuthorUsesSystem(t *tes
 	}
 }
 
+func TestAppendProjectBootstrapRecoveryContinuationMessageIncludesNamedTaskFromProgress(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	taskID := uuid.New()
+	pmID := uuid.New()
+	workerID := uuid.New()
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.Metadata = json.RawMessage(`{"project_bootstrap":{"status":"active","current_phase":"first_wave_executions_created"}}`)
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {ID: projectID, Slug: "sam-blog-test"},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: projectID, AgentID: pmID, Role: "project_manager"},
+			{ProjectID: projectID, AgentID: workerID, Role: "worker"},
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			pmID:     {ID: pmID, DisplayName: "Lori"},
+			workerID: {ID: workerID, DisplayName: "Dev"},
+		},
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				ProjectID:       projectID,
+				TaskNumber:      23,
+				Title:           "Draft second blog post",
+				WorkStatus:      "draft",
+				AssignedAgentID: nil,
+			},
+		},
+	}
+
+	msg, err := fixture.engine.appendProjectBootstrapRecoveryContinuationMessage(
+		context.Background(),
+		fixture.session.ID,
+		fixture.chat.participants[0].ParticipantID,
+		fixture.userMessageID.String(),
+		3,
+		projectBootstrapProgress{
+			ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+			ValidationFailureReason: "kickoff validation failed: first-wave task 23 (Draft second blog post) has no assigned agent, so bootstrap cannot queue runnable execution.",
+		},
+	)
+	if err != nil {
+		t.Fatalf("appendProjectBootstrapRecoveryContinuationMessage: %v", err)
+	}
+	if !strings.Contains(msg.Content, "Named blocked task: task 23 id="+taskID.String()) {
+		t.Fatalf("message = %q, want named blocked task line with exact id", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "workers=Dev") {
+		t.Fatalf("message = %q, want assignment roster", msg.Content)
+	}
+}
+
 func TestContinueTurnStopsWhenProjectPaused(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 

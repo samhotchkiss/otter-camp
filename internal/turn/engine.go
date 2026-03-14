@@ -2979,6 +2979,11 @@ func (e *TurnEngine) appendProjectBootstrapRecoveryContinuationMessage(ctx conte
 	if e != nil && e.chat != nil {
 		if session, err := e.chat.GetSession(ctx, sessionID); err == nil && session != nil && strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
 			state := projectBootstrapStateFromMetadata(session.Metadata)
+			if strings.TrimSpace(progress.ValidationFailureReason) != "" {
+				state.ValidationStatus = projectBootstrapValidationFailed
+				state.ValidationFailureReason = strings.TrimSpace(progress.ValidationFailureReason)
+				state.ValidationFailureClass = projectBootstrapFailureClassForReason(progress.ValidationFailureClass, progress.ValidationFailureReason)
+			}
 			snapshot, snapshotErr := e.loadProjectBootstrapResumeSnapshot(ctx, session.ScopeID, state)
 			if snapshotErr == nil {
 				if snippet := buildProjectBootstrapRecoveryContinuationContext(snapshot); snippet != "" {
