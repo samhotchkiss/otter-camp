@@ -50,6 +50,47 @@ func TestListeningEvalSkippedForSyncSinglePending(t *testing.T) {
 	}
 }
 
+func TestLogicalMessageCancelledUsesLatestAttemptForTriggerMessage(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	messageID := uuid.New()
+	sessionID := fixture.session.ID
+	agentID := fixture.chat.participants[0].ParticipantID
+
+	cancelledTurnID := uuid.New()
+	completedRetryTurnID := uuid.New()
+	trigger := messageID
+	fixture.chat.turns[cancelledTurnID] = &chat.ChatTurn{
+		ID:               cancelledTurnID,
+		SessionID:        sessionID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agentID,
+		Status:           "cancelled",
+		TriggerMessageID: &trigger,
+		RetryCount:       0,
+	}
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, cancelledTurnID)
+	fixture.chat.turns[completedRetryTurnID] = &chat.ChatTurn{
+		ID:               completedRetryTurnID,
+		SessionID:        sessionID,
+		TurnNumber:       2,
+		RespondingType:   "agent",
+		RespondingID:     agentID,
+		Status:           "completed",
+		TriggerMessageID: &trigger,
+		RetryCount:       1,
+	}
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, completedRetryTurnID)
+
+	cancelled, err := fixture.engine.logicalMessageCancelled(context.Background(), sessionID, messageID)
+	if err != nil {
+		t.Fatalf("logicalMessageCancelled: %v", err)
+	}
+	if cancelled {
+		t.Fatal("logicalMessageCancelled = true, want false when later retry is not cancelled")
+	}
+}
+
 func TestListeningEvalRunsForAsyncSession(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {

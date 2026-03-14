@@ -11426,15 +11426,22 @@ func (e *TurnEngine) logicalMessageCancelled(ctx context.Context, sessionID, mes
 	if err != nil {
 		return false, err
 	}
+	var latest *repo.ChatTurn
 	for _, turn := range turns {
 		if turn.TriggerMessageID == nil || *turn.TriggerMessageID != messageID {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(turn.Status), "cancelled") {
-			return true, nil
+		turnCopy := turn
+		if latest == nil ||
+			turnCopy.TurnNumber > latest.TurnNumber ||
+			(turnCopy.TurnNumber == latest.TurnNumber && turnCopy.RetryCount > latest.RetryCount) {
+			latest = &turnCopy
 		}
 	}
-	return false, nil
+	if latest == nil {
+		return false, nil
+	}
+	return strings.EqualFold(strings.TrimSpace(latest.Status), "cancelled"), nil
 }
 
 func reactionDelta(emoji string) (float64, bool) {
