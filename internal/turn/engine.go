@@ -4985,7 +4985,7 @@ type projectBootstrapResumeSnapshot struct {
 	FailedTaskLine string
 }
 
-var projectBootstrapFailureTaskNumberPattern = regexp.MustCompile(`first-wave task ([0-9]+)`)
+var projectBootstrapFailureTaskNumberPattern = regexp.MustCompile(`(?:first-wave )?task ([0-9]+)`)
 
 func formatBootstrapResumeAgentLabel(agentRecord repo.Agent) string {
 	name := strings.TrimSpace(agentRecord.DisplayName)

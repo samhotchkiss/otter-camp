@@ -4314,6 +4314,9 @@ func TestProjectBootstrapFailureTaskNumber(t *testing.T) {
 	if got := projectBootstrapFailureTaskNumber("kickoff validation failed: first-wave task 19 (Draft homepage hero) has no assigned agent"); got != 19 {
 		t.Fatalf("task number = %d, want 19", got)
 	}
+	if got := projectBootstrapFailureTaskNumber("kickoff validation failed: task 21 (Build the individual blog post template) is still a broad parent workstream and must be split into bounded executable child tasks before bootstrap can complete"); got != 21 {
+		t.Fatalf("task number = %d, want 21", got)
+	}
 	if got := projectBootstrapFailureTaskNumber("kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable tasks"); got != 0 {
 		t.Fatalf("task number = %d, want 0", got)
 	}
@@ -4339,6 +4342,49 @@ func TestProjectBootstrapBlockedRecoveryFailureFallsBackToRecentRecoveryMessage(
 	}
 	if class != projectBootstrapFailureFirstWaveExecution {
 		t.Fatalf("class = %q, want %q", class, projectBootstrapFailureFirstWaveExecution)
+	}
+}
+
+func TestLoadProjectBootstrapResumeSnapshotIncludesBroadParentBlockedTaskLine(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	taskID := uuid.New()
+	workerID := uuid.New()
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: projectID, AgentID: workerID, Role: "worker"},
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			workerID: {ID: workerID, DisplayName: "Dev"},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {ID: projectID, Slug: "sam-blog-test"},
+		},
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				ProjectID:  projectID,
+				TaskNumber: 21,
+				Title:      "Build the individual blog post template",
+				WorkStatus: "draft",
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.loadProjectBootstrapResumeSnapshot(context.Background(), projectID, projectBootstrapState{
+		ValidationFailureReason: "kickoff validation failed: task 21 (Build the individual blog post template) is still a broad parent workstream and must be split into bounded executable child tasks before bootstrap can complete",
+	})
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapResumeSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.FailedTaskLine, "Named blocked task: task 21 id="+taskID.String()) {
+		t.Fatalf("FailedTaskLine = %q, want task id", snapshot.FailedTaskLine)
 	}
 }
 
