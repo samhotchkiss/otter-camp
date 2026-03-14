@@ -2014,6 +2014,7 @@ func TestBuildProjectBootstrapRestartPromptRequiresFinishingAllBroadParents(t *t
 		projectBootstrapRestartBundle{OperatorBrief: "Frank handoff: create the initial staffed bootstrap for this project."},
 		repo.Project{ID: uuid.New(), Slug: "sam-blog-old"},
 		repo.Project{ID: uuid.New(), Slug: "sam-blog-new"},
+		false,
 	)
 	if !strings.Contains(prompt, "Do not answer with a standalone acknowledgement or status note.") {
 		t.Fatalf("prompt = %q, want no-acknowledgement guidance", prompt)
@@ -2026,6 +2027,21 @@ func TestBuildProjectBootstrapRestartPromptRequiresFinishingAllBroadParents(t *t
 	}
 	if !strings.Contains(prompt, "Before you pause to read scaffold artifacts or persist setup, every persisted broad workstream parent must either have bounded executable child tasks under it") {
 		t.Fatalf("prompt = %q, want all-parents-decomposed guidance", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapRestartPromptForSeededScaffold(t *testing.T) {
+	prompt := buildProjectBootstrapRestartPrompt(
+		projectBootstrapRestartBundle{OperatorBrief: "Frank handoff: repair the archived bootstrap scaffold."},
+		repo.Project{ID: uuid.New(), Slug: "sam-blog-old"},
+		repo.Project{ID: uuid.New(), Slug: "sam-blog-new"},
+		true,
+	)
+	if !strings.Contains(prompt, "already been seeded with the archived project's persisted assignments and draft task scaffold") {
+		t.Fatalf("prompt = %q, want seeded scaffold guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not recreate that scaffold from scratch") {
+		t.Fatalf("prompt = %q, want no-recreate guidance", prompt)
 	}
 }
 

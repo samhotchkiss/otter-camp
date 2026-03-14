@@ -545,6 +545,14 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 	if err := e.applyBootstrapRestartBindings(ctx, bundle, created.ID); err != nil {
 		return err
 	}
+	scaffoldSeeded := false
+	if record.SetupPersisted {
+		if seeded, err := e.seedBootstrapRestartScaffold(ctx, updatedProject.ID, created.ID); err != nil {
+			return err
+		} else {
+			scaffoldSeeded = seeded
+		}
+	}
 
 	sessionMetadata, err := json.Marshal(map[string]any{
 		"bootstrap_restart": map[string]any{
@@ -587,13 +595,14 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 		AuthorType: authorType,
 		AuthorID:   authorID,
 		Role:       "user",
-		Content:    buildProjectBootstrapRestartPrompt(bundle, updatedProject, *created),
+		Content:    buildProjectBootstrapRestartPrompt(bundle, updatedProject, *created, scaffoldSeeded),
 		Metadata: mustJSONRaw(map[string]any{
 			"source":                      projectBootstrapSource,
 			"bootstrap_restart":           true,
 			"bootstrap_source_project_id": updatedProject.ID.String(),
 			"bootstrap_source_session_id": bundle.SourceSessionID,
 			"bootstrap_source_message_id": bundle.SourceMessageID,
+			"bootstrap_restart_scaffold_seeded": scaffoldSeeded,
 		}),
 	})
 	if err != nil {
@@ -763,7 +772,7 @@ func mustJSONRaw(value any) json.RawMessage {
 	return json.RawMessage(encoded)
 }
 
-func buildProjectBootstrapRestartPrompt(bundle projectBootstrapRestartBundle, archivedProject repo.Project, restartedProject repo.Project) string {
+func buildProjectBootstrapRestartPrompt(bundle projectBootstrapRestartBundle, archivedProject repo.Project, restartedProject repo.Project, scaffoldSeeded bool) string {
 	lines := []string{
 		fmt.Sprintf("Start a fresh bootstrap restart for project slug=%s project_id=%s.", strings.TrimSpace(restartedProject.Slug), restartedProject.ID),
 		fmt.Sprintf("The previous bootstrap project slug=%s project_id=%s was archived for audit. Do not reuse its project-session chatter, partial task tree, or stale runtime ownership as live context.", strings.TrimSpace(archivedProject.Slug), archivedProject.ID),
@@ -799,11 +808,138 @@ func buildProjectBootstrapRestartPrompt(bundle projectBootstrapRestartBundle, ar
 			lines = append(lines, line)
 		}
 	}
-	lines = append(lines, "Create a fresh bootstrap handoff and setup plan from this canonical input only.")
-	lines = append(lines, "Do not answer with a standalone acknowledgement or status note. This first restart turn must contain the concrete staffing/task mutation tool calls needed to recreate staffed executable work from the canonical bundle, or a concrete blocker if that cannot be done.")
-	lines = append(lines, "Do not begin with broad rereads like project.get, task.list, flow.list_templates, file.list, git.log, or memory tools. Use the canonical bundle above directly, bind the repo/environment records already provided, assign real project staff, and materialize bounded executable workstream tasks plus their child tasks in this restart.")
+	if scaffoldSeeded {
+		lines = append(lines, "The restart project has already been seeded with the archived project's persisted assignments and draft task scaffold. Do not recreate that scaffold from scratch; inspect and repair the seeded staff/task tree directly.")
+		lines = append(lines, "Do not answer with a standalone acknowledgement or status note. This first restart turn must contain the concrete mutation tool calls needed to repair or advance the seeded scaffold, or a concrete blocker if that cannot be done.")
+		lines = append(lines, "Do not begin with broad rereads like project.get, task.list, flow.list_templates, file.list, git.log, or memory tools. Use the seeded assignments/tasks plus the canonical bundle above directly, then repair missing assignments, missing child tasks, repo binding, or first-wave selection as needed.")
+	} else {
+		lines = append(lines, "Create a fresh bootstrap handoff and setup plan from this canonical input only.")
+		lines = append(lines, "Do not answer with a standalone acknowledgement or status note. This first restart turn must contain the concrete staffing/task mutation tool calls needed to recreate staffed executable work from the canonical bundle, or a concrete blocker if that cannot be done.")
+		lines = append(lines, "Do not begin with broad rereads like project.get, task.list, flow.list_templates, file.list, git.log, or memory tools. Use the canonical bundle above directly, bind the repo/environment records already provided, assign real project staff, and materialize bounded executable workstream tasks plus their child tasks in this restart.")
+	}
 	lines = append(lines, "When you start task decomposition, do not stop after creating broad parent workstreams or after decomposing only one of them. Before you pause to read scaffold artifacts or persist setup, every persisted broad workstream parent must either have bounded executable child tasks under it or be replaced by those bounded children directly. Do not leave other broad parents untouched while you deepen only one workstream.")
 	return strings.Join(lines, "\n")
+}
+
+func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourceProjectID, restartedProjectID uuid.UUID) (bool, error) {
+	if e == nil || e.pool == nil || sourceProjectID == uuid.Nil || restartedProjectID == uuid.Nil {
+		return false, nil
+	}
+	assignmentRepo := repo.NewAgentProjectAssignmentRepo(e.pool)
+	taskRepo := repo.NewProjectTaskRepo(e.pool)
+
+	assignments, err := assignmentRepo.ListByProject(ctx, sourceProjectID)
+	if err != nil {
+		return false, err
+	}
+	activeAssignments := make([]repo.AgentProjectAssignment, 0, len(assignments))
+	for _, assignment := range assignments {
+		if assignment.IsActive {
+			activeAssignments = append(activeAssignments, assignment)
+		}
+	}
+
+	tasks, err := taskRepo.ListByProject(ctx, sourceProjectID)
+	if err != nil {
+		return false, err
+	}
+	if len(activeAssignments) == 0 && len(tasks) == 0 {
+		return false, nil
+	}
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].TaskNumber < tasks[j].TaskNumber })
+
+	for _, assignment := range activeAssignments {
+		if _, err := assignmentRepo.Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        assignment.AgentID,
+			ProjectID:      restartedProjectID,
+			Role:           assignment.Role,
+			AssignedByType: assignment.AssignedByType,
+			AssignedByID:   assignment.AssignedByID,
+		}); err != nil {
+			return false, err
+		}
+	}
+
+	taskIDMap := make(map[string]string, len(tasks))
+	createdTasks := make([]repo.ProjectTask, 0, len(tasks))
+	for _, taskRecord := range tasks {
+		createdTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+			OrganizationID:      taskRecord.OrganizationID,
+			ProjectID:           restartedProjectID,
+			Title:               taskRecord.Title,
+			Description:         taskRecord.Description,
+			WorkStatus:          "draft",
+			BlocksScope:         taskRecord.BlocksScope,
+			CurrentFlowNodeID:   nil,
+			FlowTemplateID:      nil,
+			ScheduleID:          nil,
+			BranchName:          nil,
+			RequiresHumanReview: taskRecord.RequiresHumanReview,
+			Priority:            taskRecord.Priority,
+			CreatedByType:       taskRecord.CreatedByType,
+			CreatedByID:         taskRecord.CreatedByID,
+			AssignedAgentID:     taskRecord.AssignedAgentID,
+			Metadata:            taskRecord.Metadata,
+			CompletedAt:         nil,
+		})
+		if err != nil {
+			return false, err
+		}
+		taskIDMap[taskRecord.ID.String()] = createdTask.ID.String()
+		createdTasks = append(createdTasks, createdTask)
+	}
+
+	for i, taskRecord := range tasks {
+		metadata := remapBootstrapRestartTaskMetadata(taskRecord.Metadata, taskIDMap)
+		if string(metadata) == string(createdTasks[i].Metadata) {
+			continue
+		}
+		if _, err := taskRepo.UpdateMetadata(ctx, createdTasks[i].ID, metadata); err != nil {
+			return false, err
+		}
+	}
+
+	return true, nil
+}
+
+func remapBootstrapRestartTaskMetadata(raw json.RawMessage, taskIDMap map[string]string) json.RawMessage {
+	if len(raw) == 0 || len(taskIDMap) == 0 || !json.Valid(raw) {
+		return raw
+	}
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return raw
+	}
+	updated := remapBootstrapRestartTaskMetadataValue(payload, taskIDMap)
+	encoded, err := json.Marshal(updated)
+	if err != nil {
+		return raw
+	}
+	return encoded
+}
+
+func remapBootstrapRestartTaskMetadataValue(value any, taskIDMap map[string]string) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		updated := make(map[string]any, len(typed))
+		for key, item := range typed {
+			updated[key] = remapBootstrapRestartTaskMetadataValue(item, taskIDMap)
+		}
+		return updated
+	case []any:
+		updated := make([]any, len(typed))
+		for i, item := range typed {
+			updated[i] = remapBootstrapRestartTaskMetadataValue(item, taskIDMap)
+		}
+		return updated
+	case string:
+		if remapped, ok := taskIDMap[strings.TrimSpace(typed)]; ok {
+			return remapped
+		}
+		return typed
+	default:
+		return value
+	}
 }
 
 func (e *TurnEngine) applyBootstrapRestartBindings(ctx context.Context, bundle projectBootstrapRestartBundle, projectID uuid.UUID) error {

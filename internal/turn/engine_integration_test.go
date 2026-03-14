@@ -9947,10 +9947,29 @@ func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t 
 	if err != nil {
 		t.Fatalf("ListByProject restarted tasks: %v", err)
 	}
+	var carriedTask *repo.ProjectTask
 	for _, taskRecord := range restartedTasks {
 		if taskRecord.Title == "Carry-over partial task" {
-			t.Fatalf("restarted project carried forward partial bootstrap task: %+v", taskRecord)
+			cloned := taskRecord
+			carriedTask = &cloned
 		}
+	}
+	if carriedTask == nil {
+		t.Fatal("expected restarted project to be seeded with the persisted carry-over scaffold task")
+	}
+	if carriedTask.WorkStatus != "draft" {
+		t.Fatalf("carried task work_status = %q, want draft", carriedTask.WorkStatus)
+	}
+	if carriedTask.FlowTemplateID != nil || carriedTask.CurrentFlowNodeID != nil || carriedTask.ScheduleID != nil {
+		t.Fatalf("carried task retained stale execution bindings: %+v", carriedTask)
+	}
+
+	restartedAssignments, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).ListByProject(ctx, restartedProject.ID)
+	if err != nil {
+		t.Fatalf("ListByProject restarted assignments: %v", err)
+	}
+	if len(restartedAssignments) != 1 || restartedAssignments[0].AgentID != pmAgent.ID || restartedAssignments[0].Role != "pm" {
+		t.Fatalf("restarted assignments = %+v, want copied PM scaffold assignment", restartedAssignments)
 	}
 
 	restartedEnvironments, err := environmentRepo.ListByProject(ctx, restartedProject.ID)
@@ -10008,6 +10027,9 @@ func TestTurnEngineIntegrationBootstrapArchiveRestartUsesCanonicalBundleEX342(t 
 	}
 	if restartPrompt == "" {
 		t.Fatal("expected canonical restart prompt message on the fresh bootstrap session")
+	}
+	if !strings.Contains(restartPrompt, "already been seeded with the archived project's persisted assignments and draft task scaffold") {
+		t.Fatalf("restart prompt missing seeded scaffold guidance: %q", restartPrompt)
 	}
 	if restartedBootstrapState.InitialMessageID != restartedMessages[0].ID.String() {
 		t.Fatalf("restarted session bootstrap initial_message_id = %q, want %q", restartedBootstrapState.InitialMessageID, restartedMessages[0].ID.String())
