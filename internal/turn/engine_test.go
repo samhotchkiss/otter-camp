@@ -1970,6 +1970,79 @@ func TestShouldBlockProjectBootstrapRestaffingToolAllowsMissingPMRecovery(t *tes
 	}
 }
 
+func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksBroadRereads(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AutoTurnCount:            1,
+		AssignmentCount:          9,
+		PlannedTaskCount:         47,
+		CurrentPhase:             projectBootstrapCheckpointFlowTemplatesPersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointTaskTreePersisted,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureFirstWaveSize,
+		ValidationFailureReason:  "kickoff validation failed: first-wave task 51 violates the bounded task-size policy",
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "project.list") {
+		t.Fatal("expected project.list to be blocked during late bootstrap validation recovery")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "project.get") {
+		t.Fatal("expected project.get to be blocked during late bootstrap validation recovery")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "flow.list_templates") {
+		t.Fatal("expected flow.list_templates to be blocked during late bootstrap validation recovery")
+	}
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list") {
+		t.Fatal("expected first task.list pass to remain available for targeted recovery lookup")
+	}
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get") {
+		t.Fatal("task.get should remain available for targeted recovery inspection")
+	}
+}
+
+func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksRepeatedTaskList(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AutoTurnCount:            2,
+		AssignmentCount:          9,
+		PlannedTaskCount:         47,
+		CurrentPhase:             projectBootstrapCheckpointFlowTemplatesPersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointTaskTreePersisted,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason:  "kickoff validation failed: first-wave task 51 has not materialized execution",
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		toolCallsUsed: 1,
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list") {
+		t.Fatal("expected repeated task.list to be blocked after recovery already spent tool budget in this turn")
+	}
+}
+
 func TestHandleUserMessageProjectScopeKickoffHandoffRoutesToLoriAfterFrank(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

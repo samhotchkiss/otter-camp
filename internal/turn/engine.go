@@ -5642,6 +5642,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if shouldBlockProjectBootstrapRecoveryRereadTool(rt, name) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildProjectBootstrapRecoveryRereadToolGuardError(rt, name),
+			})
+			continue
+		}
 		if shouldBlockProjectKickoffFollowOnTool(rt, name) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -8952,6 +8960,70 @@ func shouldBlockProjectBootstrapRestaffingTool(rt *turnRuntime, toolName string)
 	return false
 }
 
+func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName string) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
+		return false
+	}
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if state.AutoTurnCount <= 0 {
+		return false
+	}
+	if !projectBootstrapStateHasPersistedTaskTree(state) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "project.list", "project.get":
+		return true
+	case "task.list":
+		return rt.toolCallsUsed > 0
+	case "flow.list_templates":
+		return strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) &&
+			projectBootstrapFailureNeedsDirectRepair(strings.TrimSpace(state.ValidationFailureClass))
+	default:
+		return false
+	}
+}
+
+func projectBootstrapFailureNeedsDirectRepair(failureClass string) bool {
+	switch strings.TrimSpace(failureClass) {
+	case projectBootstrapFailureCompoundParent,
+		projectBootstrapFailureSetupTaskScope,
+		projectBootstrapFailureSetupTaskChildren,
+		projectBootstrapFailureFirstWaveSize,
+		projectBootstrapFailureFirstWaveFlow,
+		projectBootstrapFailureFirstWaveExecution:
+		return true
+	default:
+		return false
+	}
+}
+
+func projectBootstrapStateHasPersistedTaskTree(state projectBootstrapState) bool {
+	if state.PlannedTaskCount > 0 || state.PlannedFlowTemplateCount > 0 || state.FirstWaveTaskCount > 0 || state.FirstWavePromotedCount > 0 || state.FirstWaveJobCount > 0 {
+		return true
+	}
+	switch strings.TrimSpace(state.CurrentPhase) {
+	case projectBootstrapCheckpointTaskTreePersisted,
+		projectBootstrapCheckpointFlowTemplatesPersisted,
+		projectBootstrapCheckpointFirstWaveSelected,
+		projectBootstrapCheckpointFirstWaveExecutions,
+		projectBootstrapCheckpointFirstWaveJobsClaimed:
+		return true
+	}
+	switch strings.TrimSpace(state.LastSuccessfulCheckpoint) {
+	case projectBootstrapCheckpointTaskTreePersisted,
+		projectBootstrapCheckpointFlowTemplatesPersisted,
+		projectBootstrapCheckpointFirstWaveSelected,
+		projectBootstrapCheckpointFirstWaveExecutions,
+		projectBootstrapCheckpointFirstWaveJobsClaimed:
+		return true
+	}
+	return false
+}
+
 func buildProjectKickoffFollowOnToolGuardError(identity *projectIdentity) string {
 	if identity == nil {
 		return "project kickoff is now handoff-only: provide Lori the handoff summary and end the turn"
@@ -8980,6 +9052,15 @@ func buildProjectBootstrapRestaffingToolGuardError(rt *turnRuntime) string {
 		return "bootstrap staffing is already persisted; reuse the existing project roster instead of browsing profiles or creating duplicate staff"
 	}
 	return fmt.Sprintf("bootstrap staffing is already persisted for %d active project assignments; reuse the existing project roster instead of browsing profiles or creating duplicate staff unless the validation failure explicitly says staffing is missing", assignments)
+}
+
+func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName string) string {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "task.list":
+		return "bootstrap validation recovery already named the blocker and you already listed the persisted task tree on this turn; do not re-list it again. Repair the named task directly, or inspect only a single specific task if its details are still unclear."
+	default:
+		return "bootstrap validation recovery already has the active project scope and persisted bootstrap state; skip broad project or template rereads and repair the named blocker directly."
+	}
 }
 
 func buildFreshKickoffBlockerMessage(identity *projectIdentity, reason string) string {
