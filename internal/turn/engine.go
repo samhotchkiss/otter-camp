@@ -1311,10 +1311,13 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		projectBootstrapRestartSession(session) &&
 		!madeProgress &&
 		latestCompleted.StopReason != nil &&
-		strings.TrimSpace(*latestCompleted.StopReason) == stopReasonValidationBlocked &&
-		strings.TrimSpace(blockedReason) != "" {
+		strings.TrimSpace(*latestCompleted.StopReason) == stopReasonValidationBlocked {
 		progress.ValidationStatus = projectBootstrapValidationFailed
-		progress.ValidationFailureReason = buildProjectBootstrapNarrativeOnlyRecoveryFailureReason(blockedReason, assistant)
+		if strings.TrimSpace(blockedReason) != "" {
+			progress.ValidationFailureReason = buildProjectBootstrapNarrativeOnlyRecoveryFailureReason(blockedReason, assistant)
+		} else {
+			progress.ValidationFailureReason = buildProjectBootstrapNarrativeOnlyRestartFailureReason(assistant)
+		}
 		progress.ValidationFailureClass = projectBootstrapFailureStalled
 	}
 	if !progress.ValidationFailed() && projectBootstrapRestartSession(session) && !madeProgress && projectBootstrapNarrativeOnlyReply(messages, assistant) {

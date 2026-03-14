@@ -10775,6 +10775,126 @@ func TestTurnEngineIntegrationSeededBootstrapRestartAckOnlyWithNoProgressFailsIm
 	}
 }
 
+func TestTurnEngineIntegrationSeededBootstrapRestartBlockedRereadWithNoProgressFailsImmediately(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	_ = mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: restart this project from the canonical bundle and repair the persisted bootstrap scaffold directly.")
+
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	worker := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, pmAgent.ID, fixture.user.ID)
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        worker.ID,
+		ProjectID:      project.ID,
+		Role:           "worker",
+		AssignedByType: "human_user",
+		AssignedByID:   &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	description := "Create the SEO, performance, and analytics integration package for launch."
+	taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "SEO, Performance, and Analytics Integration",
+		Description:    &description,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &fixture.user.ID,
+		AssignedAgentID: &worker.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create oversized first-wave task: %v", err)
+	}
+
+	if err := repo.NewProjectRepo(fixture.pool).Archive(ctx, project.ID); err != nil {
+		t.Fatalf("Archive source project: %v", err)
+	}
+	archivedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	record := projectAutomaticFailureRecord{
+		Action:                   projectFailureActionArchive,
+		Source:                   projectBootstrapSource,
+		FailureCategory:          projectFailureCategoryBootstrap,
+		FailureClass:             projectBootstrapFailureFirstWaveSize,
+		FailurePhase:             projectBootstrapCheckpointFirstWaveSelected,
+		LastCheckpoint:           projectBootstrapCheckpointFirstWaveSelected,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		FailureReason:            buildProjectBootstrapSetupTaskSizeFailureReason(taskRecord, "task exceeds bounded size policy (estimated 65 minutes > 60 minutes)"),
+		SetupPersisted:           true,
+		RecordedAt:               time.Now().UTC(),
+	}
+	if err := fixture.engine.maybeRestartArchivedBootstrapProject(ctx, archivedProject, record, true); err != nil {
+		t.Fatalf("maybeRestartArchivedBootstrapProject: %v", err)
+	}
+
+	updatedArchived := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	bundle := mustProjectBootstrapRestartBundle(t, updatedArchived)
+	restartProjectID, err := uuid.Parse(bundle.RestartProjectID)
+	if err != nil {
+		t.Fatalf("Parse restart project id: %v", err)
+	}
+	restartedSession := mustFindProjectAsyncSession(t, ctx, fixture.pool, fixture.org.ID, restartProjectID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "project.get", Tier: "tier1"}}}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{
+			Content: "I'll start by gathering the current project state before I split the oversized task.",
+			ToolCalls: []ModelToolCall{
+				{ID: "project-get-1", Name: "project.get", Tier: "tier1"},
+			},
+		}, nil
+	}
+
+	jobID, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, restartedSession.ID)
+	if err := fixture.engine.handleUserMessage(ctx, payload.SessionID, payload.MessageID, payload.AgentID, payload.RetryCount, &jobID); err != nil {
+		t.Fatalf("handleUserMessage restart blocked-reread turn: %v", err)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, restartedSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession restarted turns: %v", err)
+	}
+	latestTurn := latestCompletedTurn(turns)
+	if latestTurn == nil {
+		t.Fatal("expected completed blocked-reread turn")
+	}
+	if latestTurn.StopReason == nil || *latestTurn.StopReason != stopReasonValidationBlocked {
+		t.Fatalf("turn stop_reason = %v, want %q", latestTurn.StopReason, stopReasonValidationBlocked)
+	}
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": restartedSession.ID.String(), "turn_id": latestTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent restart blocked-reread turn: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, restartedSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID restarted session: %v", err)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusFailed {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusFailed)
+	}
+	if bootstrapState.FailureClass != projectBootstrapFailureStalled {
+		t.Fatalf("bootstrap failure_class = %q, want %q", bootstrapState.FailureClass, projectBootstrapFailureStalled)
+	}
+	if !strings.Contains(strings.ToLower(bootstrapState.FailureReason), "narrative only") {
+		t.Fatalf("bootstrap failure_reason = %q, want narrative-only failure", bootstrapState.FailureReason)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, restartedSession.ID); jobs != 0 {
+		t.Fatalf("runnable bootstrap jobs = %d, want 0 after blocked-reread restart failure", jobs)
+	}
+}
+
 func TestTurnEngineIntegrationBootstrapTransientProviderFailureAfterSetupPersistsKeepsSessionActive(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
