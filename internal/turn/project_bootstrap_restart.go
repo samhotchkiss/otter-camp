@@ -866,6 +866,15 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 			templateIDMap[templateID] = templateID
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(templateRecord.Slug), "bootstrap-governance-gate") {
+			restartedProjectIDCopy := restartedProjectID
+			existingTemplate, err := templateRepo.GetCurrentBySlug(ctx, templateRecord.OrganizationID, &restartedProjectIDCopy, templateRecord.Slug)
+			if err != nil {
+				return false, err
+			}
+			templateIDMap[templateID] = existingTemplate.ID
+			continue
+		}
 		restartedProjectIDCopy := restartedProjectID
 		copiedTemplate, err := templateRepo.Create(ctx, repo.FlowTemplate{
 			OrganizationID: templateRecord.OrganizationID,
