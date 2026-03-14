@@ -660,8 +660,16 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		  AND cs.status = 'active'
 		  AND cs.current_turn_id IS NULL
 		  AND cm.role = 'user'
-		  AND cm.content = 'supervisor recovery: resume task'
-		  AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
+		  AND (
+		    (
+		      cm.content = 'supervisor recovery: resume task'
+		      AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
+		    )
+		    OR (
+		      COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
+		      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+		    )
+		  )
 		  AND NOT EXISTS (
 		    SELECT 1
 		    FROM chat_turn ct
