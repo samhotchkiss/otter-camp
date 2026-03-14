@@ -783,6 +783,194 @@ func TestJobWorkerPurgeStaleAgentTurnJobsCollapsesSupersededBootstrapContinuatio
 	}
 }
 
+func TestJobWorkerPurgeStaleAgentTurnJobsKeepsLiveSupervisorRecoveryTurn(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-live-supervisor-recovery",
+		DisplayName: "Purge Live Supervisor Recovery",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID: org.ID,
+		DisplayName:    "Recovery Agent",
+		AgentClass:     "staff",
+		LifecycleStatus:"active",
+		SystemPrompt:   "You recover pending work.",
+		AgentType:      "general",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        uuid.New(),
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Resume the stranded task execution.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"supervisor","reason":"active execution lost live task turn"}`),
+	})
+	if err != nil {
+		t.Fatalf("create supervisor message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:         session.ID,
+		TurnNumber:        1,
+		RespondingType:    "agent",
+		RespondingID:      agent.ID,
+		Status:            "pending",
+		TriggerMessageID:  &message.ID,
+	})
+	if err != nil {
+		t.Fatalf("create pending turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("UpdateCurrentTurn: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, message.ID)).Scan(&jobID); err != nil {
+		t.Fatalf("insert supervisor recovery job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 0 {
+		t.Fatalf("purged jobs = %d, want 0", purged)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, jobID).Scan(&status); err != nil {
+		t.Fatalf("query supervisor recovery job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("supervisor recovery job status = %q, want pending", status)
+	}
+}
+
+func TestJobWorkerRequeueStrandedSupervisorRecoveryTurns(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-stranded-supervisor-recovery",
+		DisplayName: "Requeue Stranded Supervisor Recovery",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID: org.ID,
+		DisplayName:    "Recovery Agent",
+		AgentClass:     "staff",
+		LifecycleStatus:"active",
+		SystemPrompt:   "You recover pending work.",
+		AgentType:      "general",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        uuid.New(),
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Resume the stranded task execution.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"supervisor","reason":"active execution lost live task turn"}`),
+	})
+	if err != nil {
+		t.Fatalf("create supervisor message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "pending",
+		TriggerMessageID: &message.ID,
+	})
+	if err != nil {
+		t.Fatalf("create pending turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("UpdateCurrentTurn: %v", err)
+	}
+
+	requeued, err := worker.RequeueStrandedSupervisorRecoveryTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueStrandedSupervisorRecoveryTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued turns = %d, want 1", requeued)
+	}
+
+	var (
+		status    string
+		messageID uuid.UUID
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, (payload->>'message_id')::uuid
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&status, &messageID); err != nil {
+		t.Fatalf("query requeued supervisor recovery job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("requeued job status = %q, want pending", status)
+	}
+	if messageID != message.ID {
+		t.Fatalf("requeued message_id = %s, want %s", messageID, message.ID)
+	}
+}
+
 func TestJobWorkerCancelsClaimedAgentTurnWhenSessionClosesMidExecution(t *testing.T) {
 	pool := testdb.New(t)
 	org := createOrgForJobQueue(t, pool, "agent-turn-close-mid-execution")

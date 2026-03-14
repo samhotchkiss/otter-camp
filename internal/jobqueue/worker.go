@@ -200,6 +200,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: closed superseded task async sessions on startup", "count", repaired)
 	}
+	if requeued, err := w.RequeueStrandedSupervisorRecoveryTurns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup supervisor recovery requeue failed", "error", err)
+		}
+	} else if requeued > 0 {
+		w.logger.Info("job queue: requeued stranded supervisor recovery turns on startup", "count", requeued)
+	}
 
 	wake := make(chan struct{}, 1)
 	var bg sync.WaitGroup
@@ -388,6 +395,8 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 	// Condition 2: the triggering message was injected by supervisor recovery.
 	// These agent_turn jobs were created as part of supervisor recovery cascade
 	// and will just waste LLM calls repeating "resume task" on stale sessions.
+	// Keep the job if it is still the live backing dispatch for the session's
+	// current pending turn.
 	ct2, err := w.pool.Exec(ctx, `
 		UPDATE job_queue jq
 		SET status = 'dead_letter',
@@ -399,6 +408,14 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		    SELECT 1 FROM chat_message cm
 		    WHERE cm.id = (jq.payload->>'message_id')::uuid
 		      AND cm.metadata->>'source' = 'supervisor'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    JOIN chat_turn ct ON ct.id = cs.current_turn_id
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND ct.status = 'pending'
+		      AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
 		  )
 	`)
 	if err != nil {
@@ -440,6 +457,54 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 
 	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected()
 	return total, nil
+}
+
+func (w *Worker) RequeueStrandedSupervisorRecoveryTurns(ctx context.Context) (int64, error) {
+	rows, err := w.pool.Query(ctx, `
+		SELECT DISTINCT cs.id, cm.id
+		FROM chat_session cs
+		JOIN chat_turn ct ON ct.id = cs.current_turn_id
+		JOIN chat_message cm ON cm.id = ct.trigger_message_id
+		LEFT JOIN model_invocation mi ON mi.turn_id = ct.id
+		WHERE cs.scope_type = 'project_task'
+		  AND cs.status = 'active'
+		  AND ct.status = 'pending'
+		  AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
+		  AND mi.id IS NULL
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = 'agent_turn'
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		      AND (jq.payload->>'message_id')::uuid = cm.id
+		  )
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("list stranded supervisor recovery turns: %w", err)
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var sessionID uuid.UUID
+		var messageID uuid.UUID
+		if err := rows.Scan(&sessionID, &messageID); err != nil {
+			return repaired, fmt.Errorf("scan stranded supervisor recovery turn: %w", err)
+		}
+		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+			SessionID:  sessionID,
+			MessageID:  messageID,
+			RetryCount: 0,
+		}, nil); err != nil {
+			return repaired, fmt.Errorf("requeue stranded supervisor recovery turn for session %s: %w", sessionID, err)
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, fmt.Errorf("iterate stranded supervisor recovery turns: %w", err)
+	}
+	return repaired, nil
 }
 
 func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
