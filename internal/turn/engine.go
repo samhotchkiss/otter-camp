@@ -1358,7 +1358,6 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 
 	if progress.WaitingForBootstrapGate() {
 		state.AutoTurnCount = 0
-		return e.updateProjectBootstrapState(ctx, session, state)
 	}
 
 	if state.AutoTurnCount >= maxProjectBootstrapAutoTurns {
