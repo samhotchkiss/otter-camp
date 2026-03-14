@@ -2962,7 +2962,19 @@ func (e *TurnEngine) appendProjectBootstrapContinuationMessage(ctx context.Conte
 }
 
 func (e *TurnEngine) appendProjectBootstrapRecoveryContinuationMessage(ctx context.Context, sessionID, authorAgentID uuid.UUID, initialMessageID string, autoTurnCount int, progress projectBootstrapProgress) (*chat.ChatMessage, error) {
-	return e.appendProjectBootstrapContinuationMessageWithContent(ctx, sessionID, authorAgentID, initialMessageID, autoTurnCount, buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount, progress))
+	content := buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount, progress)
+	if e != nil && e.chat != nil {
+		if session, err := e.chat.GetSession(ctx, sessionID); err == nil && session != nil && strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
+			state := projectBootstrapStateFromMetadata(session.Metadata)
+			snapshot, snapshotErr := e.loadProjectBootstrapResumeSnapshot(ctx, session.ScopeID, state)
+			if snapshotErr == nil {
+				if snippet := buildProjectBootstrapRecoveryContinuationContext(snapshot); snippet != "" {
+					content = strings.TrimSpace(content + " " + snippet)
+				}
+			}
+		}
+	}
+	return e.appendProjectBootstrapContinuationMessageWithContent(ctx, sessionID, authorAgentID, initialMessageID, autoTurnCount, content)
 }
 
 func (e *TurnEngine) appendProjectBootstrapContinuationMessageWithContent(ctx context.Context, sessionID, authorAgentID uuid.UUID, initialMessageID string, autoTurnCount int, content string) (*chat.ChatMessage, error) {
@@ -3038,6 +3050,17 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 		recoveryHint,
 		nextActionHint,
 	)
+}
+
+func buildProjectBootstrapRecoveryContinuationContext(snapshot projectBootstrapResumeSnapshot) string {
+	parts := []string{}
+	if blockedTask := strings.TrimSpace(snapshot.FailedTaskLine); blockedTask != "" {
+		parts = append(parts, blockedTask)
+	}
+	if assignments := strings.TrimSpace(snapshot.AssignmentLine); assignments != "" {
+		parts = append(parts, "Existing active assignments: "+assignments+". Reuse one of those assigned agent ids directly; do not call agent.list unless the persisted roster itself is inconsistent.")
+	}
+	return strings.Join(parts, " ")
 }
 
 func buildProjectBootstrapFailureReason(autoTurnCount int) string {

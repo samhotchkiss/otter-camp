@@ -4083,6 +4083,22 @@ func TestProjectBootstrapFailureTaskNumber(t *testing.T) {
 	}
 }
 
+func TestBuildProjectBootstrapRecoveryContinuationContext(t *testing.T) {
+	context := buildProjectBootstrapRecoveryContinuationContext(projectBootstrapResumeSnapshot{
+		FailedTaskLine: "Named blocked task: task 19 id=1234 title=\"Draft homepage hero\" work_status=draft assigned_agent_id=unassigned. Use task.update directly on this task id instead of task.get with the bare task number.",
+		AssignmentLine: "workers=Ananya Webb (id=worker-1), Naomi Baptiste (id=worker-2)",
+	})
+	if !strings.Contains(context, "Named blocked task: task 19 id=1234") {
+		t.Fatalf("context = %q, want blocked task line", context)
+	}
+	if !strings.Contains(context, "Existing active assignments: workers=Ananya Webb") {
+		t.Fatalf("context = %q, want assignment roster", context)
+	}
+	if !strings.Contains(context, "do not call agent.list unless the persisted roster itself is inconsistent") {
+		t.Fatalf("context = %q, want no-agent-list guidance", context)
+	}
+}
+
 func TestBuildProjectBootstrapResumeActionPromptStartsWithPersistAfterTaskTree(t *testing.T) {
 	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
 		BootstrapTaskID:          uuid.NewString(),
