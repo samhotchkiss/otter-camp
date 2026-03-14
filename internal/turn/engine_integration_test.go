@@ -15619,6 +15619,20 @@ func TestTurnEngineIntegrationRecoverCancelledBootstrapSessionsRequeuesActiveVal
 	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
 		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1", jobs)
 	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	if !containsMessageContent(messages, "[Recovered cancelled bootstrap turn - retrying in a fresh turn.]") {
+		t.Fatal("missing bootstrap cancellation recovery system message")
+	}
+	if !containsMessageSubstring(messages, "Recovery target: kickoff validation failed:") {
+		t.Fatal("missing bootstrap validation recovery continuation message")
+	}
+	if !containsMessageSubstring(messages, "has no assigned agent") {
+		t.Fatal("missing validation-specific repair guidance for unassigned first-wave task")
+	}
 }
 
 func TestTurnEngineIntegrationReactionFeedbackAdjustsMemoryConfidence(t *testing.T) {
