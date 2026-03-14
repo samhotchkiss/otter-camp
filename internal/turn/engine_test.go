@@ -19,6 +19,7 @@ import (
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/model"
+	"github.com/samhotchkiss/otter-camp/internal/projectfailure"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
@@ -2042,6 +2043,33 @@ func TestBuildProjectBootstrapRestartPromptForSeededScaffold(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Do not recreate that scaffold from scratch") {
 		t.Fatalf("prompt = %q, want no-recreate guidance", prompt)
+	}
+}
+
+func TestProjectBootstrapRestartSeededFailureProgressFallsBackToRecoverableHistory(t *testing.T) {
+	progress, ok := projectBootstrapRestartSeededFailureProgress(
+		projectBootstrapProgress{},
+		projectAutomaticFailureRecord{
+			FailureClass:  projectBootstrapFailureStalled,
+			FailureReason: `kickoff validation failed: automatic bootstrap restart replied with narrative only and never persisted staffed executable work; reply="I'll inspect the seeded scaffold first."`,
+		},
+		projectBootstrapRestartBundle{
+			FailureHistory: []projectfailure.FailureHistoryEntry{
+				{
+					FailureClass:  projectBootstrapFailureFirstWaveExecution,
+					FailureReason: "kickoff validation failed: first-wave task 76 (Use a topic from the editorial calendar) has no assigned agent, so bootstrap cannot queue runnable execution",
+				},
+			},
+		},
+	)
+	if !ok {
+		t.Fatal("projectBootstrapRestartSeededFailureProgress ok = false, want recoverable history fallback")
+	}
+	if got := strings.TrimSpace(progress.ValidationFailureReason); !strings.Contains(got, "Use a topic from the editorial calendar") {
+		t.Fatalf("validation_failure_reason = %q, want recoverable history reason", got)
+	}
+	if got := strings.TrimSpace(progress.ValidationFailureClass); got != projectBootstrapFailureFirstWaveExecution {
+		t.Fatalf("validation_failure_class = %q, want %q", got, projectBootstrapFailureFirstWaveExecution)
 	}
 }
 

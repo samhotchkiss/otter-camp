@@ -608,7 +608,7 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 			bootstrapState.CurrentPhase = checkpoint
 			bootstrapState.LastSuccessfulCheckpoint = checkpoint
 		}
-		if snippet := e.buildProjectBootstrapRestartSeededPrompt(ctx, created.ID, bootstrapState, progress, record); snippet != "" {
+		if snippet := e.buildProjectBootstrapRestartSeededPrompt(ctx, created.ID, bootstrapState, progress, record, bundle); snippet != "" {
 			restartPrompt = snippet
 		}
 	}
@@ -696,13 +696,10 @@ func (e *TurnEngine) buildProjectBootstrapRestartRecoveryPrompt(ctx context.Cont
 	return content
 }
 
-func (e *TurnEngine) buildProjectBootstrapRestartSeededPrompt(ctx context.Context, projectID uuid.UUID, state projectBootstrapState, progress projectBootstrapProgress, record projectAutomaticFailureRecord) string {
-	effective := progress
-	if !effective.ValidationFailed() {
-		effective.ValidationStatus = projectBootstrapValidationFailed
-		effective.ValidationFailureReason = strings.TrimSpace(record.FailureReason)
-		effective.ValidationFailureClass = projectBootstrapFailureClassForReason(record.FailureClass, record.FailureReason)
-		normalizeProjectBootstrapValidationFailure(&effective, false)
+func (e *TurnEngine) buildProjectBootstrapRestartSeededPrompt(ctx context.Context, projectID uuid.UUID, state projectBootstrapState, progress projectBootstrapProgress, record projectAutomaticFailureRecord, bundle projectBootstrapRestartBundle) string {
+	effective, ok := projectBootstrapRestartSeededFailureProgress(progress, record, bundle)
+	if !ok {
+		return ""
 	}
 	if !effective.ValidationFailed() || !projectBootstrapRecoverableMaxToolCallFailure(effective) {
 		return ""
@@ -713,6 +710,35 @@ func (e *TurnEngine) buildProjectBootstrapRestartSeededPrompt(ctx context.Contex
 		return content
 	}
 	return strings.TrimSpace(prefix + " " + content)
+}
+
+func projectBootstrapRestartSeededFailureProgress(progress projectBootstrapProgress, record projectAutomaticFailureRecord, bundle projectBootstrapRestartBundle) (projectBootstrapProgress, bool) {
+	candidates := make([]projectBootstrapProgress, 0, 2+len(bundle.FailureHistory))
+	candidates = append(candidates, progress)
+	candidates = append(candidates, projectBootstrapProgress{
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureClass:  strings.TrimSpace(record.FailureClass),
+		ValidationFailureReason: strings.TrimSpace(record.FailureReason),
+	})
+	for i := len(bundle.FailureHistory) - 1; i >= 0; i-- {
+		entry := bundle.FailureHistory[i]
+		candidates = append(candidates, projectBootstrapProgress{
+			ValidationStatus:        projectBootstrapValidationFailed,
+			ValidationFailureClass:  strings.TrimSpace(entry.FailureClass),
+			ValidationFailureReason: strings.TrimSpace(entry.FailureReason),
+		})
+	}
+	for _, candidate := range candidates {
+		normalizeProjectBootstrapValidationFailure(&candidate, false)
+		if !candidate.ValidationFailed() {
+			continue
+		}
+		candidate.ValidationFailureClass = projectBootstrapFailureClassForReason(candidate.ValidationFailureClass, candidate.ValidationFailureReason)
+		if projectBootstrapRecoverableMaxToolCallFailure(candidate) {
+			return candidate, true
+		}
+	}
+	return projectBootstrapProgress{}, false
 }
 
 // RelaunchArchivedBootstrapProject returns the active restart project for an
