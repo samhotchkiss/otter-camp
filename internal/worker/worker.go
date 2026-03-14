@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -46,13 +47,43 @@ import (
 )
 
 const deterministicQueryEmbeddingDimensions = 1536
+const defaultWorkerMaxConns int32 = 32
+
+func workerDBMaxConns() (int32, error) {
+	if raw := strings.TrimSpace(os.Getenv("OTTERCAMP_WORKER_DB_MAX_CONNS")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v <= 0 {
+			return 0, fmt.Errorf("invalid OTTERCAMP_WORKER_DB_MAX_CONNS %q", raw)
+		}
+		return int32(v), nil
+	}
+	if raw := strings.TrimSpace(os.Getenv("OTTERCAMP_DB_MAX_CONNS")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v <= 0 {
+			return 0, fmt.Errorf("invalid OTTERCAMP_DB_MAX_CONNS %q", raw)
+		}
+		return int32(v), nil
+	}
+	if db.DefaultMaxConns > defaultWorkerMaxConns {
+		return db.DefaultMaxConns, nil
+	}
+	return defaultWorkerMaxConns, nil
+}
 
 func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	pool, err := db.NewFromEnv(ctx)
+	databaseURL := strings.TrimSpace(os.Getenv("OTTERCAMP_DATABASE_URL"))
+	if databaseURL == "" {
+		return fmt.Errorf("worker database setup: OTTERCAMP_DATABASE_URL is required")
+	}
+	maxConns, err := workerDBMaxConns()
+	if err != nil {
+		return fmt.Errorf("worker database setup: %w", err)
+	}
+	pool, err := db.New(ctx, databaseURL, maxConns)
 	if err != nil {
 		return fmt.Errorf("worker database setup: %w", err)
 	}
