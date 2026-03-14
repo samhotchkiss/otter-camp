@@ -4277,6 +4277,79 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 	}
 }
 
+func TestIntegrationBootstrapSetupPersistAcceptsExpandedNaturalStepAliases(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Persist Expanded Aliases",
+		"slug":        "bootstrap-persist-expanded-aliases-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap.setup.persist expands natural aliases like assign-staff and create-tasks.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap persist expanded aliases",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{
+			"assign-staff",
+			"create-tasks",
+			"bind-repo-environment",
+		},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist expanded aliases: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("bootstrap.setup.persist expanded aliases error = %v, want nil", out["error"])
+	}
+
+	completedSteps, ok := out["completed_steps"].([]map[string]any)
+	if !ok {
+		rawSteps, ok := out["completed_steps"].([]any)
+		if !ok {
+			t.Fatalf("completed_steps type = %T, want slice", out["completed_steps"])
+		}
+		completedSteps = make([]map[string]any, 0, len(rawSteps))
+		for _, item := range rawSteps {
+			typed, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("completed_steps item type = %T, want map[string]any", item)
+			}
+			completedSteps = append(completedSteps, typed)
+		}
+	}
+	got := make([]string, 0, len(completedSteps))
+	for _, item := range completedSteps {
+		got = append(got, readStringValue(item["step_slug"]))
+	}
+	sort.Strings(got)
+	want := []string{
+		"bind-repo-environment",
+		"decompose-workstreams",
+		"staff-project",
+		"validate-task-shape",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("completed step slugs = %v, want %v", got, want)
+	}
+}
+
 func TestIntegrationBootstrapSetupPersistUnknownStepReturnsValidCanonicalSlugs(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

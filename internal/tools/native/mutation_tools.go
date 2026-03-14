@@ -1976,6 +1976,10 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 	if len(stepSlugs) == 0 {
 		return map[string]any{"error": "completed_step_slugs_required"}, nil
 	}
+	stepSlugs = normalizeBootstrapStepSlugs(stepSlugs)
+	if len(stepSlugs) == 0 {
+		return map[string]any{"error": "completed_step_slugs_required"}, nil
+	}
 
 	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
 	if err != nil {
@@ -2091,6 +2095,39 @@ func validBootstrapSetupStepSlugs() []string {
 		"attach-validate-flow-templates",
 		"select-first-wave",
 		"record-frank-sign-off",
+	}
+}
+
+func normalizeBootstrapStepSlugs(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		for _, slug := range expandBootstrapStepSlug(raw) {
+			if slug == "" {
+				continue
+			}
+			if _, exists := seen[slug]; exists {
+				continue
+			}
+			seen[slug] = struct{}{}
+			out = append(out, slug)
+		}
+	}
+	return out
+}
+
+func expandBootstrapStepSlug(value string) []string {
+	slug := strings.ToLower(strings.TrimSpace(value))
+	switch slug {
+	case "assign-staff", "assign_staff", "assign-agents", "assign_agents":
+		return []string{"staff-project"}
+	case "create-tasks", "create_tasks":
+		return []string{"decompose-workstreams", "validate-task-shape"}
+	default:
+		return []string{normalizeBootstrapStepSlug(slug)}
 	}
 }
 
