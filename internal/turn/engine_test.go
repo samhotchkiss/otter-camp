@@ -3576,6 +3576,25 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedWaveParent(t 
 	}
 }
 
+func TestBuildProjectBootstrapValidationRecoveryPromptForPartialFirstWaveMaterialization(t *testing.T) {
+	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: only 12 of 20 selected first-wave child tasks created flow_node_execution rows, so bootstrap never materialized the full runnable child wave",
+	})
+	if !strings.Contains(prompt, "Shrink the selected first wave to a smaller bounded subset of the already-created child tasks") {
+		t.Fatalf("prompt = %q, want first-wave narrowing guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with project.list, project.get, task.list, flow.list_templates, flow.get_execution, file.read, file.write, agent.list, or staffing discovery") {
+		t.Fatalf("prompt = %q, want no broad reread guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not rewrite planning artifacts or regenerate the broader scaffold") {
+		t.Fatalf("prompt = %q, want no planning rewrite guidance", prompt)
+	}
+	if !strings.Contains(prompt, "repair the selected runnable subset with direct task and flow mutations only") {
+		t.Fatalf("prompt = %q, want direct repair guidance", prompt)
+	}
+}
+
 func TestBuildProjectBootstrapAdditionalRepairTaskLineListsOtherUnassignedFirstWaveTasks(t *testing.T) {
 	progress := projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
@@ -4704,6 +4723,15 @@ func TestBuildProjectBootstrapResumeActionPromptForPartialFirstWaveMaterializati
 	}
 	if !strings.Contains(prompt, "Reduce the first wave to a smaller bounded subset of the already-created child tasks") {
 		t.Fatalf("prompt = %q, want smaller first-wave guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not start that repair with project.list, project.get, task.list, flow.list_templates, flow.get_execution, file.read, file.write, agent.list, or staffing discovery") {
+		t.Fatalf("prompt = %q, want no broad reread guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not rewrite planning artifacts or restaff the project") {
+		t.Fatalf("prompt = %q, want no planning rewrite guidance", prompt)
+	}
+	if !strings.Contains(prompt, "repair the runnable subset with direct task and flow mutations") {
+		t.Fatalf("prompt = %q, want direct repair guidance", prompt)
 	}
 }
 
