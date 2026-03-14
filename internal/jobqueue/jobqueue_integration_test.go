@@ -413,6 +413,103 @@ func TestJobQueue_BootstrapStaleClaim_RecoverySkipsNonBootstrapSessions(t *testi
 	}
 }
 
+func TestJobQueue_CloseSupersededTaskAsyncSessions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "task-session-cleanup-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	org := createJobQueueOrg079(t, pool, "task-session-cleanup")
+	projectRecord, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "task-session-cleanup-" + uuid.NewString()[:8],
+		DisplayName:    "Task Session Cleanup",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	description := "Verify worker startup cleanup closes older async task sessions."
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      projectRecord.ID,
+		TaskNumber:     1,
+		Title:          "Cleanup duplicate task sessions",
+		Description:    &description,
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		CreatedByID:    nil,
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+
+	var (
+		olderID uuid.UUID
+		newerID uuid.UUID
+	)
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata, created_at, updated_at
+		)
+		VALUES ($1, 'project_task', $2, 'async', 'active', 'system', $3, $4::jsonb, now() - interval '2 minutes', now() - interval '2 minutes')
+		RETURNING id
+	`, org.ID, taskRecord.ID, uuid.Nil, `{"flow_node_execution_id":"older-execution"}`).Scan(&olderID); err != nil {
+		t.Fatalf("insert older task session: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata
+		)
+		VALUES ($1, 'project_task', $2, 'async', 'active', 'system', $3, $4::jsonb)
+		RETURNING id
+	`, org.ID, taskRecord.ID, uuid.Nil, `{"flow_node_execution_id":"newer-execution"}`).Scan(&newerID); err != nil {
+		t.Fatalf("insert newer task session: %v", err)
+	}
+
+	repaired, err := worker.CloseSupersededTaskAsyncSessions(ctx)
+	if err != nil {
+		t.Fatalf("CloseSupersededTaskAsyncSessions: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired rows = %d, want 1", repaired)
+	}
+
+	var olderStatus string
+	var olderClosedAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT status, closed_at
+		FROM chat_session
+		WHERE id = $1
+	`, olderID).Scan(&olderStatus, &olderClosedAt); err != nil {
+		t.Fatalf("query older task session: %v", err)
+	}
+	if olderStatus != "closed" || olderClosedAt == nil {
+		t.Fatalf("older task session = status:%s closed_at:%v, want closed with closed_at", olderStatus, olderClosedAt)
+	}
+
+	var newerStatus string
+	if err := pool.QueryRow(ctx, `
+		SELECT status
+		FROM chat_session
+		WHERE id = $1
+	`, newerID).Scan(&newerStatus); err != nil {
+		t.Fatalf("query newer task session: %v", err)
+	}
+	if newerStatus != "active" {
+		t.Fatalf("newer task session status = %s, want active", newerStatus)
+	}
+}
+
 func TestJobQueue_ListenNotify_Wakeup(t *testing.T) {
 	pool := testdb.New(t)
 	const wakeupTimeout = 8 * time.Second

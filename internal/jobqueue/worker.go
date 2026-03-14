@@ -193,6 +193,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if recovered > 0 {
 		w.logger.Info("job queue: recovered stale claims on startup", "count", recovered)
 	}
+	if repaired, err := w.CloseSupersededTaskAsyncSessions(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup task session cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: closed superseded task async sessions on startup", "count", repaired)
+	}
 
 	wake := make(chan struct{}, 1)
 	var bg sync.WaitGroup
@@ -468,6 +475,33 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 	`, staleBefore, agentTurnJobType, bootstrapStaleBefore)
 	if err != nil {
 		return 0, fmt.Errorf("recover stale claims: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
+func (w *Worker) CloseSupersededTaskAsyncSessions(ctx context.Context) (int64, error) {
+	ct, err := w.pool.Exec(ctx, `
+		WITH ranked AS (
+			SELECT id,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY organization_id, scope_id
+			           ORDER BY created_at DESC, id DESC
+			       ) AS rn
+			FROM chat_session
+			WHERE scope_type = 'project_task'
+			  AND mode = 'async'
+			  AND status = 'active'
+		)
+		UPDATE chat_session cs
+		SET status = 'closed',
+		    closed_at = now(),
+		    current_turn_id = NULL
+		FROM ranked
+		WHERE cs.id = ranked.id
+		  AND ranked.rn > 1
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("close superseded task async sessions: %w", err)
 	}
 	return ct.RowsAffected(), nil
 }
