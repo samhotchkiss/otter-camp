@@ -233,6 +233,103 @@ func TestJobWorkerPollsNewJobsWhileEarlierClaimedJobStillRunning(t *testing.T) {
 	}
 }
 
+func TestJobWorkerReservesSlotsForAgentTurnsOverBackgroundJobs(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		BatchSize:            6,
+		PollInterval:         20 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	backgroundRelease := make(chan struct{})
+	agentRelease := make(chan struct{})
+	agentStarted := make(chan struct{}, 1)
+	initialAgentStarted := make(chan struct{}, 1)
+	var backgroundCount atomic.Int32
+	var agentCount atomic.Int32
+
+	worker.Register("test.background", func(context.Context, Job) error {
+		backgroundCount.Add(1)
+		<-backgroundRelease
+		return nil
+	})
+	worker.Register(agentTurnJobType, func(context.Context, Job) error {
+		switch agentCount.Add(1) {
+		case 1:
+			select {
+			case initialAgentStarted <- struct{}{}:
+			default:
+			}
+			<-agentRelease
+		default:
+			select {
+			case agentStarted <- struct{}{}:
+			default:
+			}
+		}
+		return nil
+	})
+
+	sessionID := uuid.New()
+	messageID := uuid.New()
+	if _, err := worker.Enqueue(context.Background(), nil, agentTurnJobType, 70, map[string]any{
+		"session_id": sessionID,
+		"message_id": messageID,
+	}, nil); err != nil {
+		t.Fatalf("enqueue initial agent_turn failed: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := worker.Enqueue(context.Background(), nil, "test.background", 60, map[string]any{"n": i}, nil); err != nil {
+			t.Fatalf("enqueue background %d failed: %v", i+1, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startWorker(worker, ctx)
+	backgroundClosed := false
+	agentClosed := false
+	defer func() {
+		cancel()
+		if !backgroundClosed {
+			close(backgroundRelease)
+		}
+		if !agentClosed {
+			close(agentRelease)
+		}
+		_ = worker.Stop()
+	}()
+
+	select {
+	case <-initialAgentStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial agent_turn did not start")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && backgroundCount.Load() < 2 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if backgroundCount.Load() != 2 {
+		t.Fatalf("background started = %d, want 2 with reserved agent slots", backgroundCount.Load())
+	}
+
+	if _, err := worker.Enqueue(context.Background(), nil, agentTurnJobType, 70, map[string]any{
+		"session_id": uuid.New(),
+		"message_id": uuid.New(),
+	}, nil); err != nil {
+		t.Fatalf("enqueue agent_turn failed: %v", err)
+	}
+
+	close(agentRelease)
+	agentClosed = true
+	select {
+	case <-agentStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent_turn did not start while background jobs were occupying reserved slots")
+	}
+}
+
 func TestJobWorkerClaimPendingLimitClaimsSingleJobEvenWhenBatchSizeIsLarger(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -109,6 +110,9 @@ type Worker struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	slots   chan struct{}
+
+	agentTurnInFlight  atomic.Int32
+	backgroundInFlight atomic.Int32
 }
 
 type queryExecutor interface {
@@ -932,42 +936,78 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 		slots := w.availableExecutionSlots()
 		if slots > 0 {
 			w.logger.Debug("job queue: claiming pending jobs", "slots", slots, "inflight", w.inflightJobs())
-			jobs, err := w.claimPendingLimit(ctx, slots)
+			claimedAny := false
+
+			agentJobs, err := w.claimPendingAgentTurns(ctx, slots)
 			if err != nil {
 				if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-					w.logger.Error("job queue: claim failed", "error", err)
+					w.logger.Error("job queue: claim failed", "job_class", "agent_turn", "error", err)
 				}
 				return err
 			}
-			if len(jobs) > 0 {
-				types := make([]string, len(jobs))
-				for i, j := range jobs {
-					types[i] = j.JobType
-				}
-				w.logger.Info("job queue: claimed", "count", len(jobs), "types", strings.Join(types, ","))
-
-				for _, job := range jobs {
-					job := job
-					w.acquireExecutionSlot()
-					go func() {
-						defer func() {
-							w.releaseExecutionSlot()
-						}()
-						w.logger.Info("job queue: executing", "job_id", job.ID, "job_type", job.JobType, "attempts", job.Attempts)
-						if err := w.executeClaimedJob(ctx, job); err != nil {
-							if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-								w.logger.Error("failed to execute claimed job", "job_id", job.ID, "job_type", job.JobType, "error", err)
-							}
-						}
-					}()
-				}
+			if len(agentJobs) > 0 {
+				claimedAny = true
+				w.logClaimedJobs(agentJobs)
+				w.launchClaimedJobs(ctx, agentJobs)
 				continue
 			}
-			w.logger.Debug("job queue: no pending jobs")
-			return nil
+
+			backgroundSlots := w.availableExecutionSlots()
+			if w.agentTurnInFlight.Load() > 0 {
+				backgroundSlots = min(backgroundSlots, w.availableBackgroundSlots())
+			}
+			if backgroundSlots > 0 {
+				backgroundJobs, err := w.claimPendingNonAgentJobs(ctx, backgroundSlots)
+				if err != nil {
+					if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+						w.logger.Error("job queue: claim failed", "job_class", "background", "error", err)
+					}
+					return err
+				}
+				if len(backgroundJobs) > 0 {
+					claimedAny = true
+					w.logClaimedJobs(backgroundJobs)
+					w.launchClaimedJobs(ctx, backgroundJobs)
+					continue
+				}
+			}
+
+			if !claimedAny {
+				w.logger.Debug("job queue: no pending jobs")
+				return nil
+			}
 		}
 		w.logger.Debug("job queue: no execution slots available", "inflight", w.inflightJobs(), "capacity", cap(w.slots))
 		return nil
+	}
+}
+
+func (w *Worker) logClaimedJobs(jobs []Job) {
+	if len(jobs) == 0 {
+		return
+	}
+	types := make([]string, len(jobs))
+	for i, j := range jobs {
+		types[i] = j.JobType
+	}
+	w.logger.Info("job queue: claimed", "count", len(jobs), "types", strings.Join(types, ","))
+}
+
+func (w *Worker) launchClaimedJobs(ctx context.Context, jobs []Job) {
+	for _, job := range jobs {
+		job := job
+		w.acquireExecutionSlot(job.JobType)
+		go func() {
+			defer func() {
+				w.releaseExecutionSlot(job.JobType)
+			}()
+			w.logger.Info("job queue: executing", "job_id", job.ID, "job_type", job.JobType, "attempts", job.Attempts)
+			if err := w.executeClaimedJob(ctx, job); err != nil {
+				if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+					w.logger.Error("failed to execute claimed job", "job_id", job.ID, "job_type", job.JobType, "error", err)
+				}
+			}
+		}()
 	}
 }
 
@@ -983,6 +1023,22 @@ func (w *Worker) availableExecutionSlots() int {
 	return slots
 }
 
+func (w *Worker) maxBackgroundInFlight() int {
+	if w == nil || w.batchSize <= 1 {
+		return 1
+	}
+	return max(1, w.batchSize/3)
+}
+
+func (w *Worker) availableBackgroundSlots() int {
+	background := int(w.backgroundInFlight.Load())
+	remaining := w.maxBackgroundInFlight() - background
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 func (w *Worker) inflightJobs() int {
 	if w == nil || w.slots == nil {
 		return 0
@@ -990,16 +1046,26 @@ func (w *Worker) inflightJobs() int {
 	return len(w.slots)
 }
 
-func (w *Worker) acquireExecutionSlot() {
+func (w *Worker) acquireExecutionSlot(jobType string) {
 	if w == nil || w.slots == nil {
 		return
 	}
 	w.slots <- struct{}{}
+	if strings.EqualFold(strings.TrimSpace(jobType), agentTurnJobType) {
+		w.agentTurnInFlight.Add(1)
+		return
+	}
+	w.backgroundInFlight.Add(1)
 }
 
-func (w *Worker) releaseExecutionSlot() {
+func (w *Worker) releaseExecutionSlot(jobType string) {
 	if w == nil || w.slots == nil {
 		return
+	}
+	if strings.EqualFold(strings.TrimSpace(jobType), agentTurnJobType) {
+		w.agentTurnInFlight.Add(-1)
+	} else {
+		w.backgroundInFlight.Add(-1)
 	}
 	select {
 	case <-w.slots:
@@ -1012,15 +1078,32 @@ func (w *Worker) claimPending(ctx context.Context) ([]Job, error) {
 }
 
 func (w *Worker) claimPendingLimit(ctx context.Context, limit int) ([]Job, error) {
+	return w.claimPendingByFilter(ctx, limit, "")
+}
+
+func (w *Worker) claimPendingAgentTurns(ctx context.Context, limit int) ([]Job, error) {
+	return w.claimPendingByFilter(ctx, limit, "job_type = $3")
+}
+
+func (w *Worker) claimPendingNonAgentJobs(ctx context.Context, limit int) ([]Job, error) {
+	return w.claimPendingByFilter(ctx, limit, "job_type <> $3")
+}
+
+func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter string) ([]Job, error) {
 	if limit <= 0 {
 		limit = 1
 	}
-	rows, err := w.pool.Query(ctx, `
+	whereFilter := ""
+	if strings.TrimSpace(filter) != "" {
+		whereFilter = "AND " + filter
+	}
+	rows, err := w.pool.Query(ctx, fmt.Sprintf(`
 		WITH claimable AS (
 			SELECT id
 			FROM job_queue
 			WHERE status = 'pending'
 			  AND run_after <= now()
+			  %s
 			ORDER BY priority DESC, run_after ASC, created_at ASC
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
@@ -1035,7 +1118,7 @@ func (w *Worker) claimPendingLimit(ctx context.Context, limit int) ([]Job, error
 		WHERE jq.id = claimable.id
 		RETURNING jq.id, jq.job_type, jq.priority, jq.payload, jq.status, jq.claimed_by, jq.claimed_at,
 		          jq.attempts, jq.max_attempts, jq.last_error, jq.run_after, jq.created_at, jq.updated_at
-	`, limit, w.workerID)
+	`, whereFilter), limit, w.workerID, agentTurnJobType)
 	if err != nil {
 		return nil, fmt.Errorf("claim pending jobs: %w", err)
 	}
