@@ -467,6 +467,7 @@ type turnRuntime struct {
 	agent               repo.Agent
 	turn                *chat.ChatTurn
 	initialMessageID    uuid.UUID
+	initialMessageText  string
 	currentJobID        *uuid.UUID
 	runID               *uuid.UUID
 	runStepID           *uuid.UUID
@@ -3637,6 +3638,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		agent:            agent,
 		turn:             turn,
 		initialMessageID: messageID,
+		initialMessageText: strings.TrimSpace(message.Content),
 		currentJobID:     cloneUUIDPointer(currentJobID),
 		runID:            runIDFromMetadata(message.Metadata),
 		runStepID:        runStepIDFromMetadata(message.Metadata),
@@ -9169,6 +9171,9 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 		return false
 	}
 	namedFailureTask := projectBootstrapFailureTaskNumber(state.ValidationFailureReason) > 0
+	if !namedFailureTask {
+		namedFailureTask = projectBootstrapFailureTaskNumber(rt.initialMessageText) > 0
+	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "project.list", "project.get":
 		return true

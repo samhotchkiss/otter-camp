@@ -2118,6 +2118,40 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksNamedTaskListImmedia
 	}
 }
 
+func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksNamedTaskListFromRecoveryMessage(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AutoTurnCount:            3,
+		AssignmentCount:          9,
+		PlannedTaskCount:         47,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason:  "",
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		initialMessageText: "Continue the bounded project bootstrap setup workflow now. Recovery target: kickoff validation failed: first-wave task 12 (Content Creation) has no assigned agent.",
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
+		t.Fatal("expected task.list to be blocked immediately when the recovery message already names the exact failing task")
+	}
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get", nil) {
+		t.Fatal("task.get should remain available for targeted recovery inspection")
+	}
+}
+
 func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksRepeatedTaskList(t *testing.T) {
 	now := time.Now().UTC()
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
