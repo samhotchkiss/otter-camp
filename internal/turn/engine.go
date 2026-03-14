@@ -87,6 +87,7 @@ const (
 	recoveryArtifactDir                       = ".ottercamp/recovery"
 	recoveryResumeExcerptChars                = 3000
 	maxContinuationSummaryChars               = 4000
+	projectBootstrapStaffingDiscoveryBudget   = 6
 	projectBootstrapMetadataKey               = "project_bootstrap"
 	projectBootstrapStatusActive              = "active"
 	projectBootstrapStatusCompleted           = "completed"
@@ -5797,6 +5798,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, name) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildProjectBootstrapExcessStaffingDiscoveryGuardError(),
+			})
+			continue
+		}
 		if shouldBlockProjectBootstrapRecoveryRereadTool(rt, name, arguments) {
 			blockedBootstrapRecoveryReread = true
 			blockedCalls = append(blockedCalls, ToolResult{
@@ -9121,6 +9130,28 @@ func shouldBlockProjectBootstrapRestaffingTool(rt *turnRuntime, toolName string)
 	return false
 }
 
+func shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt *turnRuntime, toolName string) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "staffing.browse_profiles", "staffing.get_profile":
+	default:
+		return false
+	}
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	if !projectBootstrapStateActive(state) || state.AssignmentCount > 0 {
+		return false
+	}
+	if rt.toolCallsUsed < projectBootstrapStaffingDiscoveryBudget {
+		return false
+	}
+	return true
+}
+
 func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName string, arguments map[string]any) bool {
 	if rt == nil || rt.session == nil {
 		return false
@@ -9227,6 +9258,10 @@ func buildProjectBootstrapRestaffingToolGuardError(rt *turnRuntime) string {
 		return "bootstrap staffing is already persisted; reuse the existing project roster instead of browsing profiles or creating duplicate staff"
 	}
 	return fmt.Sprintf("bootstrap staffing is already persisted for %d active project assignments; reuse the existing project roster instead of browsing profiles or creating duplicate staff unless the validation failure explicitly says staffing is missing", assignments)
+}
+
+func buildProjectBootstrapExcessStaffingDiscoveryGuardError() string {
+	return "bootstrap staffing discovery budget is exhausted for this turn. You already have enough project and profile context to act; stop browsing profiles and create/assign the concrete PM, workers, and reviewers now."
 }
 
 func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName string) string {

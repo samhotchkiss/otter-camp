@@ -1974,6 +1974,49 @@ func TestShouldBlockProjectBootstrapRestaffingToolAfterTaskTreePersisted(t *test
 	}
 }
 
+func TestShouldBlockProjectBootstrapExcessStaffingDiscoveryTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+		},
+		toolCallsUsed: projectBootstrapStaffingDiscoveryBudget,
+	}
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{Status: projectBootstrapStatusActive})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt.session.Metadata = metadata
+	if !shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.browse_profiles") {
+		t.Fatal("expected staffing browse to be blocked after discovery budget is exhausted")
+	}
+	if !shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.get_profile") {
+		t.Fatal("expected staffing get_profile to be blocked after discovery budget is exhausted")
+	}
+	rt.toolCallsUsed = projectBootstrapStaffingDiscoveryBudget - 1
+	if shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.browse_profiles") {
+		t.Fatal("unexpected staffing browse block before discovery budget is exhausted")
+	}
+	metadata, err = projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:          projectBootstrapStatusActive,
+		AssignmentCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON assignments: %v", err)
+	}
+	rt.session.Metadata = metadata
+	rt.toolCallsUsed = projectBootstrapStaffingDiscoveryBudget
+	if shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.browse_profiles") {
+		t.Fatal("unexpected staffing browse block once assignments already exist")
+	}
+}
+
+func TestBuildProjectBootstrapExcessStaffingDiscoveryGuardError(t *testing.T) {
+	msg := buildProjectBootstrapExcessStaffingDiscoveryGuardError()
+	if !strings.Contains(msg, "stop browsing profiles and create/assign the concrete PM, workers, and reviewers now") {
+		t.Fatalf("guard error = %q, want direct staffing action guidance", msg)
+	}
+}
+
 func TestShouldBlockProjectBootstrapRestaffingToolAllowsMissingPMRecovery(t *testing.T) {
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
 		Status:                 projectBootstrapStatusActive,
