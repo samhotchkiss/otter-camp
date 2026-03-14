@@ -2055,6 +2055,26 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksRepeatedTaskList(t *
 	}
 }
 
+func TestShouldStopAfterBlockedProjectBootstrapRecoveryReread(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+		},
+	}
+
+	if !shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt, true) {
+		t.Fatal("expected blocked late bootstrap reread to stop the current turn")
+	}
+	if shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt, false) {
+		t.Fatal("unexpected stop without a blocked reread")
+	}
+
+	rt.session.ScopeType = "organization"
+	if shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt, true) {
+		t.Fatal("unexpected stop outside project scope")
+	}
+}
+
 func TestHandleUserMessageProjectScopeKickoffHandoffRoutesToLoriAfterFrank(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

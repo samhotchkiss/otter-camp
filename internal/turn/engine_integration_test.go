@@ -14665,6 +14665,131 @@ func TestTurnEngineIntegrationMaxToolCallsSetsStopReason(t *testing.T) {
 	}
 }
 
+func TestTurnEngineIntegrationBlockedBootstrapRecoveryRereadEndsTurnEarly(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, pmAgent.ID, fixture.user.ID)
+
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID, pmAgent.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: resume the active bootstrap workflow from persisted state.")
+
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	description := "Implement the first bounded child slice."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Define the first execution slice",
+		Description:    &description,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	}); err != nil {
+		t.Fatalf("Create unassigned child task: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if !progress.ValidationFailed() {
+		t.Fatal("expected bootstrap validation failure for unassigned first-wave task")
+	}
+
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		InitialMessageID:         handoff.ID.String(),
+		AutoTurnCount:            1,
+		AssignmentCount:          progress.AssignmentCount,
+		PlannedTaskCount:         progress.PlannedTaskCount,
+		PlannedFlowTemplateCount: progress.PlannedFlowTemplateCount,
+		FirstWaveTaskCount:       progress.FirstWaveTaskCount,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveSelected,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointTaskTreePersisted,
+		ValidationStatus:         progress.ValidationStatus,
+		ValidationFailureClass:   progress.ValidationFailureClass,
+		ValidationFailureReason:  progress.ValidationFailureReason,
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE chat_session
+		SET metadata = $2::jsonb
+		WHERE id = $1
+	`, projectSession.ID, metadata); err != nil {
+		t.Fatalf("seed bootstrap session metadata: %v", err)
+	}
+
+	continuationMessage, err := fixture.engine.appendProjectBootstrapRecoveryContinuationMessage(ctx, projectSession.ID, lori.ID, handoff.ID.String(), 1, progress)
+	if err != nil {
+		t.Fatalf("appendProjectBootstrapRecoveryContinuationMessage: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "project.get", Tier: "tier1"}}}
+	modelCalls := 0
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls > 1 {
+			t.Fatalf("unexpected extra model call after blocked bootstrap recovery reread")
+		}
+		return ModelResponse{ToolCalls: []ModelToolCall{{ID: "project-get-1", Name: "project.get", Tier: "tier1"}}}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, projectSession.ID, continuationMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage bootstrap recovery continuation: %v", err)
+	}
+
+	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	last := turns[len(turns)-1]
+	if last.StopReason == nil || *last.StopReason != stopReasonValidationBlocked {
+		t.Fatalf("turn stop_reason = %v, want %q", last.StopReason, stopReasonValidationBlocked)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	if !containsMessageSubstring(messages, "Bootstrap validation recovery reread blocked") {
+		t.Fatal("missing bootstrap reread block system message")
+	}
+
+	foundBlockedResult := false
+	for _, item := range messages {
+		if item.Role != "tool_result" || item.ToolCallID == nil || *item.ToolCallID != "project-get-1" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(item.Content), "skip broad project or template rereads") {
+			foundBlockedResult = true
+			break
+		}
+	}
+	if !foundBlockedResult {
+		t.Fatal("missing blocked bootstrap recovery reread tool_result")
+	}
+
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": last.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent bootstrap recovery continuation: %v", err)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 follow-on recovery continuation", jobs)
+	}
+}
+
 func TestTurnEngineIntegrationMaxToolCallsRecoversLeakedCompletionHandoff(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	fixture.engine.maxToolCalls = 1

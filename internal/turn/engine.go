@@ -5568,6 +5568,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 
 	toolCalls := make([]ToolCall, 0, len(calls))
 	blockedCalls := make([]ToolResult, 0)
+	blockedBootstrapRecoveryReread := false
 	for i, call := range calls {
 		id := strings.TrimSpace(call.ID)
 		if id == "" {
@@ -5643,6 +5644,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			continue
 		}
 		if shouldBlockProjectBootstrapRecoveryRereadTool(rt, name, arguments) {
+			blockedBootstrapRecoveryReread = true
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
@@ -5683,6 +5685,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return false, err
 		}
 		rt.toolCallsUsed += len(blockedCalls)
+		if shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt, blockedBootstrapRecoveryReread) {
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Bootstrap validation recovery reread blocked - ending this turn so the next continuation can repair the named blocker directly.]")
+			return true, nil
+		}
 	}
 	if rt.toolCallsUsed >= toolBudget {
 		rt.stopReason = stopReasonMaxToolCalls
@@ -9077,6 +9084,16 @@ func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName
 	default:
 		return "bootstrap validation recovery already has the active project scope and persisted bootstrap state; skip broad project or template rereads and repair the named blocker directly."
 	}
+}
+
+func shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt *turnRuntime, blocked bool) bool {
+	if !blocked || rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
+		return false
+	}
+	return true
 }
 
 func buildFreshKickoffBlockerMessage(identity *projectIdentity, reason string) string {
