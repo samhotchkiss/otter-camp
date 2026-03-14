@@ -556,11 +556,15 @@ func (w *Worker) RequeueStrandedSupervisorRecoveryTurns(ctx context.Context) (in
 	rows, err := w.pool.Query(ctx, `
 		SELECT DISTINCT cs.id, cm.id
 		FROM chat_session cs
+		JOIN project_task pt ON pt.id = cs.scope_id
+		JOIN project p ON p.id = pt.project_id
 		JOIN chat_turn ct ON ct.id = cs.current_turn_id
 		JOIN chat_message cm ON cm.id = ct.trigger_message_id
 		LEFT JOIN model_invocation mi ON mi.turn_id = ct.id
 		WHERE cs.scope_type = 'project_task'
 		  AND cs.status = 'active'
+		  AND p.status = 'active'
+		  AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
 		  AND ct.status = 'pending'
 		  AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
 		  AND mi.id IS NULL
