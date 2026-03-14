@@ -2101,6 +2101,11 @@ func buildProjectBootstrapRestartScaffoldFailureReason() string {
 	return "kickoff validation failed: automatic bootstrap restart recreated only the canonical bootstrap scaffold and never persisted staffed executable work, so the restart was archived instead of remaining active"
 }
 
+func projectBootstrapRestartScaffoldFailureReason(reason string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(normalized, "automatic bootstrap restart recreated only the canonical bootstrap scaffold")
+}
+
 func projectBootstrapLastCheckpoint(progress projectBootstrapProgress) string {
 	checkpoint := projectBootstrapCheckpointProjectCreated
 	if progress.AssignmentCount > 0 {
@@ -3035,6 +3040,10 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 	if strings.Contains(lowerReason, "has no assigned agent") {
 		recoveryHint = "Repair the named persisted first-wave task directly. Do not begin with project.get, task.list, task.children, flow.list_templates, agent.list, or other broad rereads. Assign that exact task to one of the already-created active project assignees, then continue bootstrap from the corrected first-wave task set."
 		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent and the corrected first-wave set is ready to validate. Your first repair step should directly fix the named unassigned first-wave task instead of gathering more context. Do not call task.get with the bare task number from the validation error; use the exact task id and active assignee roster from the bootstrap resume system message already in this turn, and only inspect that one specific task if its persisted assignment target is still unclear."
+	}
+	if projectBootstrapRestartScaffoldFailureReason(reason) {
+		recoveryHint = "This restart already created staff drafts but did not materialize staffed executable project work. Do not begin with project.get, task.list, flow.list_templates, file.list, git.log, or other broad rereads. Reuse the dedicated project staff already created in this session, assign them to the project if that assignment step is still incomplete, then immediately create bounded executable workstream tasks and child tasks so bootstrap moves past scaffold-only state."
+		nextActionHint = "Do not spend this turn rediscovering repo state or profile catalogs. Your first repair step should be to persist staffed executable work using the existing project staff and then continue bootstrap from that materialized task tree."
 	}
 	if strings.Contains(lowerReason, "only ") &&
 		(strings.Contains(lowerReason, "selected first-wave child tasks created flow_node_execution rows") ||
@@ -5459,6 +5468,8 @@ func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProg
 				(strings.Contains(reason, "selected first-wave child tasks created flow_node_execution rows") ||
 					strings.Contains(reason, "selected first-wave child tasks produced runnable agent_turn jobs") ||
 					strings.Contains(reason, "selected first-wave child tasks left draft or entered queued execution")))
+	case projectBootstrapFailureRuntime:
+		return projectBootstrapRestartScaffoldFailureReason(progress.ValidationFailureReason)
 	default:
 		return false
 	}

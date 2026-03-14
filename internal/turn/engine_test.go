@@ -2872,6 +2872,12 @@ func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
 	}) {
 		t.Fatal("partial first-wave execution materialization should be recoverable")
 	}
+	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureRuntime,
+		ValidationFailureReason: buildProjectBootstrapRestartScaffoldFailureReason(),
+	}) {
+		t.Fatal("restart scaffold runtime failure should be recoverable")
+	}
 	if projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
 		ValidationFailureReason: "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave",
@@ -2962,6 +2968,22 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedFirstWaveTask
 	}
 	if !strings.Contains(prompt, "Do not call task.get with the bare task number from the validation error") {
 		t.Fatalf("prompt = %q, want no bare task.get guidance", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapValidationRecoveryPromptForRestartScaffoldFailure(t *testing.T) {
+	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureRuntime,
+		ValidationFailureReason: buildProjectBootstrapRestartScaffoldFailureReason(),
+	})
+	if !strings.Contains(prompt, "did not materialize staffed executable project work") {
+		t.Fatalf("prompt = %q, want scaffold recovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with project.get, task.list, flow.list_templates, file.list, git.log") {
+		t.Fatalf("prompt = %q, want no broad reread guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Reuse the dedicated project staff already created in this session") {
+		t.Fatalf("prompt = %q, want direct staffing reuse guidance", prompt)
 	}
 }
 
@@ -4080,6 +4102,15 @@ func TestProjectBootstrapFailureTaskNumber(t *testing.T) {
 	}
 	if got := projectBootstrapFailureTaskNumber("kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable tasks"); got != 0 {
 		t.Fatalf("task number = %d, want 0", got)
+	}
+}
+
+func TestProjectBootstrapRestartScaffoldFailureReasonMatch(t *testing.T) {
+	if !projectBootstrapRestartScaffoldFailureReason(buildProjectBootstrapRestartScaffoldFailureReason()) {
+		t.Fatal("expected canonical restart scaffold reason to match")
+	}
+	if projectBootstrapRestartScaffoldFailureReason("kickoff validation failed: first-wave task 19 has no assigned agent") {
+		t.Fatal("unexpected scaffold reason match")
 	}
 }
 
