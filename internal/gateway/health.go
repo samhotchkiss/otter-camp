@@ -171,6 +171,10 @@ func (h *HealthChecker) MarkDegraded(connectionID uuid.UUID) {
 }
 
 func (h *HealthChecker) MarkRateLimited(connectionID uuid.UUID) {
+	h.MarkRateLimitedFor(connectionID, 0)
+}
+
+func (h *HealthChecker) MarkRateLimitedFor(connectionID uuid.UUID, retryAfter time.Duration) {
 	now := h.now().UTC()
 
 	h.mu.Lock()
@@ -180,6 +184,10 @@ func (h *HealthChecker) MarkRateLimited(connectionID uuid.UUID) {
 	record.state = HealthStateRateLimited
 	record.lastFailureAt = now
 	record.consecutiveFailures = max(record.consecutiveFailures, 2)
+	if retryAfter > 0 {
+		setRecoveryProbe(record, now, retryAfter)
+		return
+	}
 	bumpRecoveryProbe(record, now)
 }
 
@@ -213,6 +221,14 @@ func bumpRecoveryProbe(record *healthRecord, now time.Time) {
 		}
 	}
 	record.recoveryReadyAt = now.Add(record.recoveryBackoff)
+}
+
+func setRecoveryProbe(record *healthRecord, now time.Time, delay time.Duration) {
+	if delay <= 0 {
+		delay = healthProbeBackoffBase
+	}
+	record.recoveryBackoff = delay
+	record.recoveryReadyAt = now.Add(delay)
 }
 
 func (h *HealthChecker) recordLocked(connectionID uuid.UUID) *healthRecord {

@@ -115,3 +115,24 @@ func TestHealthCheckerRateLimitedRecoversToDegradedAfterBackoff(t *testing.T) {
 		t.Fatalf("state after successful recovery probe = %q, want %q", state, HealthStateHealthy)
 	}
 }
+
+func TestHealthCheckerRateLimitedHonorsProviderRetryAfter(t *testing.T) {
+	clock := &mutableClock{now: time.Date(2026, time.February, 24, 13, 30, 0, 0, time.UTC)}
+	checker := newHealthCheckerWithClock(clock.Now)
+	connectionID := uuid.New()
+
+	checker.MarkRateLimitedFor(connectionID, 45*time.Minute)
+	if state := checker.GetState(connectionID); state != HealthStateRateLimited {
+		t.Fatalf("state after mark rate limited = %q, want %q", state, HealthStateRateLimited)
+	}
+
+	clock.now = clock.now.Add(44 * time.Minute)
+	if state := checker.GetState(connectionID); state != HealthStateRateLimited {
+		t.Fatalf("state before provider retry_after elapsed = %q, want %q", state, HealthStateRateLimited)
+	}
+
+	clock.now = clock.now.Add(1 * time.Minute)
+	if state := checker.GetState(connectionID); state != HealthStateDegraded {
+		t.Fatalf("state after provider retry_after elapsed = %q, want %q", state, HealthStateDegraded)
+	}
+}

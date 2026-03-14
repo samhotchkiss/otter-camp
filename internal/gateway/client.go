@@ -517,7 +517,7 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 			return fmt.Errorf("%w", turn.ErrAuthFailed), false
 		case http.StatusTooManyRequests:
 			slog.Warn("provider rate limited", "connection_id", connectionID, "retry_after", providerErr.RetryAfter, "detail", providerErr.Err)
-			g.health.MarkRateLimited(connectionID)
+			g.health.MarkRateLimitedFor(connectionID, providerErr.RetryAfter)
 			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateRateLimited))
 			return turn.NewRateLimitedError(providerErr.RetryAfter, providerErr), true
 		default:

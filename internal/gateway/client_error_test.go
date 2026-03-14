@@ -112,6 +112,32 @@ func TestMapProviderErrorRateLimitMarksRateLimited(t *testing.T) {
 	}
 }
 
+func TestMapProviderErrorRateLimitKeepsConnectionLimitedForProviderWindow(t *testing.T) {
+	clock := &mutableClock{now: time.Date(2026, time.February, 24, 14, 0, 0, 0, time.UTC)}
+	health := newHealthCheckerWithClock(clock.Now)
+	gateway := &LiveModelGateway{health: health}
+	connectionID := uuid.New()
+	retryAfter := 2 * time.Hour
+
+	_, retryable := gateway.mapProviderError(connectionID, ProviderHTTPError{
+		StatusCode: http.StatusTooManyRequests,
+		RetryAfter: retryAfter,
+	})
+	if !retryable {
+		t.Fatal("retryable for 429 = false, want true")
+	}
+
+	clock.now = clock.now.Add(time.Hour)
+	if state := health.GetState(connectionID); state != HealthStateRateLimited {
+		t.Fatalf("state one hour into retry window = %q, want %q", state, HealthStateRateLimited)
+	}
+
+	clock.now = clock.now.Add(time.Hour)
+	if state := health.GetState(connectionID); state != HealthStateDegraded {
+		t.Fatalf("state after retry window elapsed = %q, want %q", state, HealthStateDegraded)
+	}
+}
+
 type mockNetworkError struct {
 	msg string
 }
