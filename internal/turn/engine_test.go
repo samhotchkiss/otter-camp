@@ -4453,6 +4453,118 @@ func TestBuildProjectBootstrapRecoveryContinuationContext(t *testing.T) {
 	}
 }
 
+func TestBuildProjectBootstrapCompoundParentRepairTaskLineListsTopLevelDrafts(t *testing.T) {
+	blockedID := uuid.New()
+	childParentID := uuid.New()
+	line := buildProjectBootstrapCompoundParentRepairTaskLine([]repo.ProjectTask{
+		{
+			ID:         blockedID,
+			TaskNumber: 11,
+			Title:      "Page Build",
+			WorkStatus: "draft",
+		},
+		{
+			ID:         uuid.New(),
+			TaskNumber: 13,
+			Title:      "Homepage layout",
+			WorkStatus: "draft",
+		},
+		{
+			ID:         uuid.New(),
+			TaskNumber: 14,
+			Title:      "Blog index layout",
+			WorkStatus: "draft",
+			Metadata:   json.RawMessage(`{"decomposition_parent_task_id":"` + childParentID.String() + `"}`),
+		},
+		{
+			ID:         uuid.New(),
+			TaskNumber: 15,
+			Title:      "Post template",
+			WorkStatus: "queued",
+		},
+		{
+			ID:         uuid.New(),
+			TaskNumber: 16,
+			Title:      "Navigation shell",
+			WorkStatus: "draft",
+		},
+	}, repo.ProjectTask{
+		ID:         blockedID,
+		TaskNumber: 11,
+		Title:      "Page Build",
+		WorkStatus: "draft",
+	})
+	if !strings.Contains(line, "task 13") || !strings.Contains(line, "Homepage layout") {
+		t.Fatalf("line = %q, want top-level draft task", line)
+	}
+	if !strings.Contains(line, "task 16") || !strings.Contains(line, "Navigation shell") {
+		t.Fatalf("line = %q, want second top-level draft task", line)
+	}
+	if strings.Contains(line, "task 14") {
+		t.Fatalf("line = %q, should skip existing child task", line)
+	}
+	if strings.Contains(line, "task 15") {
+		t.Fatalf("line = %q, should skip non-draft task", line)
+	}
+}
+
+func TestLoadProjectBootstrapResumeSnapshotAddsCompoundParentRepairTargets(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	taskID := uuid.New()
+	task13ID := uuid.New()
+	task14ID := uuid.New()
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: projectID, AgentID: uuid.New(), Role: "worker"},
+		},
+	}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{},
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {ID: projectID, Slug: "sam-blog-test"},
+		},
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				ProjectID:  projectID,
+				TaskNumber: 11,
+				Title:      "Page Build",
+				WorkStatus: "draft",
+			},
+			task13ID: {
+				ID:         task13ID,
+				ProjectID:  projectID,
+				TaskNumber: 13,
+				Title:      "Homepage layout",
+				WorkStatus: "draft",
+			},
+			task14ID: {
+				ID:         task14ID,
+				ProjectID:  projectID,
+				TaskNumber: 14,
+				Title:      "Blog index layout",
+				WorkStatus: "draft",
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.loadProjectBootstrapResumeSnapshot(context.Background(), projectID, projectBootstrapState{
+		ValidationFailureClass:  projectBootstrapFailureCompoundParent,
+		ValidationFailureReason: "kickoff validation failed: task 11 (Page Build) is still a broad parent workstream and must be split into bounded executable child tasks before bootstrap can complete",
+	})
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapResumeSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.RepairTaskLine, "task 13") || !strings.Contains(snapshot.RepairTaskLine, "task 14") {
+		t.Fatalf("RepairTaskLine = %q, want top-level repair targets", snapshot.RepairTaskLine)
+	}
+}
+
 func TestBuildProjectBootstrapResumeActionPromptStartsWithPersistAfterTaskTree(t *testing.T) {
 	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
 		BootstrapTaskID:          uuid.NewString(),
@@ -6213,6 +6325,25 @@ func (f *fakeTaskRepo) GetByProjectAndNumber(_ context.Context, projectID uuid.U
 		}
 	}
 	return repo.ProjectTask{}, repo.ErrNotFound
+}
+
+func (f *fakeTaskRepo) ListByProject(_ context.Context, projectID uuid.UUID, _ ...string) ([]repo.ProjectTask, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	items := make([]repo.ProjectTask, 0, len(f.items))
+	for _, item := range f.items {
+		if item.ProjectID == projectID {
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TaskNumber == items[j].TaskNumber {
+			return items[i].ID.String() < items[j].ID.String()
+		}
+		return items[i].TaskNumber < items[j].TaskNumber
+	})
+	return items, nil
 }
 
 func (f *fakeTaskRepo) Update(_ context.Context, task repo.ProjectTask) (repo.ProjectTask, error) {

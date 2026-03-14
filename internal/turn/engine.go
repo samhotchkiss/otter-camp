@@ -318,6 +318,7 @@ type agentRepository interface {
 type taskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
 	GetByProjectAndNumber(ctx context.Context, projectID uuid.UUID, taskNumber int) (repo.ProjectTask, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID, statuses ...string) ([]repo.ProjectTask, error)
 	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error)
 	Update(ctx context.Context, task repo.ProjectTask) (repo.ProjectTask, error)
 }
@@ -5134,6 +5135,34 @@ func buildProjectBootstrapAdditionalRepairTaskLine(progress projectBootstrapProg
 	return line + strings.Join(parts, "; ") + "."
 }
 
+func buildProjectBootstrapCompoundParentRepairTaskLine(tasks []repo.ProjectTask, blockedTask repo.ProjectTask) string {
+	if blockedTask.ID == uuid.Nil {
+		return ""
+	}
+	parts := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task.ID == uuid.Nil || task.ID == blockedTask.ID || task.TaskNumber <= 0 {
+			continue
+		}
+		if taskdecomp.ParseParentTaskID(task.Metadata) != uuid.Nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("task %d id=%s title=%q", task.TaskNumber, task.ID.String(), strings.TrimSpace(task.Title)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	const maxListed = 4
+	line := "Other existing top-level draft tasks you can fold under this blocked parent without rereading the task tree: "
+	if len(parts) > maxListed {
+		return line + strings.Join(parts[:maxListed], "; ") + fmt.Sprintf("; plus %d more top-level draft tasks.", len(parts)-maxListed)
+	}
+	return line + strings.Join(parts, "; ") + "."
+}
+
 func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, projectID uuid.UUID, state projectBootstrapState) (projectBootstrapResumeSnapshot, error) {
 	if e == nil || e.assignments == nil || e.agents == nil || projectID == uuid.Nil {
 		return projectBootstrapResumeSnapshot{}, nil
@@ -5209,6 +5238,11 @@ func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, pro
 		taskRecord, taskErr := e.tasks.GetByProjectAndNumber(ctx, projectID, taskNumber)
 		if taskErr == nil {
 			snapshot.FailedTaskLine = formatBootstrapResumeTaskLine(taskRecord)
+			if strings.TrimSpace(projectBootstrapFailureClassForReason(state.ValidationFailureClass, state.ValidationFailureReason)) == projectBootstrapFailureCompoundParent {
+				if tasks, listErr := e.tasks.ListByProject(ctx, projectID); listErr == nil {
+					snapshot.RepairTaskLine = buildProjectBootstrapCompoundParentRepairTaskLine(tasks, taskRecord)
+				}
+			}
 		}
 	}
 	return snapshot, nil
