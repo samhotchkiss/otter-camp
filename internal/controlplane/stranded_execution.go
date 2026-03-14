@@ -324,15 +324,18 @@ func (s *Supervisor) resolveStrandedExecutionAgent(ctx context.Context, candidat
 	if candidate.RecoveryAgentID != uuid.Nil {
 		return candidate.RecoveryAgentID, true, nil
 	}
-	if candidate.AssignedAgentID != uuid.Nil {
-		return candidate.AssignedAgentID, true, nil
-	}
 	if s.pool == nil || candidate.FlowNodeID == uuid.Nil {
+		if candidate.AssignedAgentID != uuid.Nil {
+			return candidate.AssignedAgentID, true, nil
+		}
 		return uuid.Nil, false, nil
 	}
 
 	node, err := repo.NewFlowNodeRepo(s.pool).GetByID(ctx, candidate.FlowNodeID)
 	if errors.Is(err, repo.ErrNotFound) {
+		if candidate.AssignedAgentID != uuid.Nil {
+			return candidate.AssignedAgentID, true, nil
+		}
 		return uuid.Nil, false, nil
 	}
 	if err != nil {
@@ -374,6 +377,19 @@ func (s *Supervisor) resolveStrandedExecutionAgent(ctx context.Context, candidat
 		}
 		return uuid.Nil, false, nil
 	default:
+		assignments, err := repo.NewAgentProjectAssignmentRepo(s.pool).ListByProject(ctx, candidate.ProjectID)
+		if err != nil {
+			return uuid.Nil, false, err
+		}
+		role := resolveFlowNodeRole(node)
+		for _, assignment := range assignments {
+			if strings.EqualFold(strings.TrimSpace(assignment.Role), role) {
+				return assignment.AgentID, true, nil
+			}
+		}
+		if candidate.AssignedAgentID != uuid.Nil {
+			return candidate.AssignedAgentID, true, nil
+		}
 		return uuid.Nil, false, nil
 	}
 }
