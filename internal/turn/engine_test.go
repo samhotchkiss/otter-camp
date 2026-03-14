@@ -3444,6 +3444,12 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedFirstWaveTask
 	if !strings.Contains(prompt, "Do not call task.get with the bare task number from the validation error") {
 		t.Fatalf("prompt = %q, want no bare task.get guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Do not call task.get on the named blocked task first") {
+		t.Fatalf("prompt = %q, want direct no task.get guidance for named blocked task", prompt)
+	}
+	if !strings.Contains(prompt, "Your next assistant action should be a tool call, not a narrative reply") {
+		t.Fatalf("prompt = %q, want direct tool-call guidance for named blocked task", prompt)
+	}
 }
 
 func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedWaveParent(t *testing.T) {
