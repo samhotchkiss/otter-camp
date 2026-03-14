@@ -55,4 +55,7 @@ func TestNewFromEnvUsesDefaultMaxConns(t *testing.T) {
 	if got := p.Raw().Config().MinConns; got != DefaultMinConns {
 		t.Fatalf("min conns = %d, want %d", got, DefaultMinConns)
 	}
+	if got := p.Raw().Config().MaxConnIdleTime; got != maxConnIdleTime {
+		t.Fatalf("max conn idle time = %s, want %s", got, maxConnIdleTime)
+	}
 }

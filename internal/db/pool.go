@@ -13,11 +13,13 @@ import (
 
 const (
 	// Each runtime process holds several long-lived LISTEN/event consumers.
-	// Keep enough headroom for foreground job handlers and HTTP requests.
-	DefaultMaxConns int32 = 40
+	// Keep enough headroom for foreground job handlers and HTTP requests
+	// without letting a local serve+worker pair reserve most of the cluster.
+	DefaultMaxConns int32 = 16
 	DefaultMinConns int32 = 2
 	connectTimeout        = 5 * time.Second
 	acquireTimeout        = 10 * time.Second
+	maxConnIdleTime       = 2 * time.Minute
 )
 
 type Pool struct {
@@ -57,6 +59,7 @@ func New(ctx context.Context, databaseURL string, maxConns int32) (*Pool, error)
 
 	cfg.MinConns = DefaultMinConns
 	cfg.MaxConns = maxConns
+	cfg.MaxConnIdleTime = maxConnIdleTime
 	cfg.ConnConfig.ConnectTimeout = connectTimeout
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
