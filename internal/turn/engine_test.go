@@ -4429,6 +4429,24 @@ func TestProjectBootstrapBlockedRecoveryFailureFallsBackToRecentRecoveryMessage(
 	}
 }
 
+func TestProjectBootstrapAckOnlyRecoveryReply(t *testing.T) {
+	if !projectBootstrapAckOnlyRecoveryReply([]repo.ChatMessage{
+		{Role: "user", Content: "Continue the bounded project bootstrap setup workflow now. Recovery target: kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution."},
+	}, &repo.ChatMessage{Role: "assistant", Content: "Acknowledged."}) {
+		t.Fatal("expected ack-only recovery reply to be detected")
+	}
+	if projectBootstrapAckOnlyRecoveryReply([]repo.ChatMessage{
+		{Role: "user", Content: "Continue bootstrap."},
+	}, &repo.ChatMessage{Role: "assistant", Content: "Acknowledged."}) {
+		t.Fatal("did not expect non-recovery ack to be detected")
+	}
+	if projectBootstrapAckOnlyRecoveryReply([]repo.ChatMessage{
+		{Role: "user", Content: "Continue the bounded project bootstrap setup workflow now. Recovery target: kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution."},
+	}, &repo.ChatMessage{Role: "assistant", Content: "Acknowledged. I will assign the task now."}) {
+		t.Fatal("did not expect substantive reply to be treated as ack-only")
+	}
+}
+
 func TestLoadProjectBootstrapResumeSnapshotIncludesBroadParentBlockedTaskLine(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

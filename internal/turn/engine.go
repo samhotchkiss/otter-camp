@@ -1273,6 +1273,13 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 			progress.ValidationFailureClass = blockedClass
 		}
 	}
+	if !progress.ValidationFailed() && projectBootstrapAckOnlyRecoveryReply(messages, assistant) {
+		if blockedReason, blockedClass := projectBootstrapBlockedRecoveryFailure(messages, state); strings.TrimSpace(blockedReason) != "" {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureReason = blockedReason
+			progress.ValidationFailureClass = blockedClass
+		}
+	}
 	if narrativeClaimedCompletion && !progress.Materialized() {
 		rt := &turnRuntime{session: session, turn: &chat.ChatTurn{ID: turnID}}
 		if latestCompleted.RespondingID != uuid.Nil {
@@ -5042,6 +5049,26 @@ func projectBootstrapBlockedRecoveryFailure(messages []repo.ChatMessage, state p
 		return "", ""
 	}
 	return reason, projectBootstrapFailureClassForReason(state.ValidationFailureClass, reason)
+}
+
+func projectBootstrapAckOnlyRecoveryReply(messages []repo.ChatMessage, assistant *repo.ChatMessage) bool {
+	if assistant == nil {
+		return false
+	}
+	content := strings.ToLower(strings.TrimSpace(assistant.Content))
+	switch content {
+	case "acknowledged.", "acknowledged", "understood.", "understood":
+	default:
+		return false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		return strings.TrimSpace(projectBootstrapRecoveryTargetFromMessage(message.Content)) != ""
+	}
+	return false
 }
 
 func projectBootstrapRecoveryTargetFromMessage(content string) string {
