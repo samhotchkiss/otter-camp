@@ -3017,6 +3017,10 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent and the corrected first-wave set is ready to validate."
 	}
 	lowerReason := strings.ToLower(reason)
+	if strings.Contains(lowerReason, "has no assigned agent") {
+		recoveryHint = "Repair the named persisted first-wave task directly. Do not begin with project.get, task.list, task.children, flow.list_templates, agent.list, or other broad rereads. Assign that exact task to one of the already-created active project assignees, then continue bootstrap from the corrected first-wave task set."
+		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent and the corrected first-wave set is ready to validate. Your first repair step should directly fix the named unassigned first-wave task instead of gathering more context. Only inspect that one specific task if its persisted assignment target is still unclear."
+	}
 	if strings.Contains(lowerReason, "only ") &&
 		(strings.Contains(lowerReason, "selected first-wave child tasks created flow_node_execution rows") ||
 			strings.Contains(lowerReason, "selected first-wave child tasks produced runnable agent_turn jobs") ||
@@ -5190,6 +5194,9 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string
 				strings.Contains(lowerReason, "selected first-wave child tasks produced runnable agent_turn jobs") ||
 				strings.Contains(lowerReason, "selected first-wave child tasks left draft or entered queued execution")) {
 			lines = append(lines, "This validation failure means the selected first wave is too large or too broad to materialize cleanly in one pass. Reduce the first wave to a smaller bounded subset of the already-created child tasks, leave later-wave tasks in draft, and then persist the corrected first-wave selection.")
+		}
+		if strings.Contains(lowerReason, "has no assigned agent") {
+			lines = append(lines, "This validation failure already names the exact unassigned first-wave task. Repair that persisted task directly instead of gathering more context. Do not start with project.get, task.list, task.children, flow.list_templates, or agent.list unless a single task-specific lookup is strictly necessary to complete that one assignment.")
 		}
 		lines = append(lines, "When the named blocker is fixed, resume with bootstrap.setup.persist using only canonical bootstrap setup step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off. Current phase names like first_wave_executions_created are not valid completed_step_slugs.")
 		lines = append(lines, "If first-wave selection is already persisted, do not use raw task.update to force draft first-wave tasks into queued or in_progress. Leave those tasks in draft and let bootstrap.setup.persist plus the bootstrap governance gate handle promotion after validation passes.")

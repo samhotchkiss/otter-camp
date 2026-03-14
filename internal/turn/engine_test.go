@@ -2954,6 +2954,12 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedFirstWaveTask
 	if !strings.Contains(prompt, "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent") {
 		t.Fatalf("prompt = %q, want first-wave assignment guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Repair the named persisted first-wave task directly") {
+		t.Fatalf("prompt = %q, want direct task repair guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with project.get, task.list, task.children, flow.list_templates, agent.list") {
+		t.Fatalf("prompt = %q, want no broad reread guidance", prompt)
+	}
 }
 
 func TestEnsureTurnRunExitInvariantRejectsLeakedInProgressTurn(t *testing.T) {
@@ -4012,6 +4018,21 @@ func TestBuildProjectBootstrapResumeActionPromptForPartialFirstWaveMaterializati
 	}
 	if !strings.Contains(prompt, "Reduce the first wave to a smaller bounded subset of the already-created child tasks") {
 		t.Fatalf("prompt = %q, want smaller first-wave guidance", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapResumeActionPromptForUnassignedFirstWaveTask(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		CurrentPhase:            projectBootstrapCheckpointFirstWaveExecutions,
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 19 (Draft homepage hero) has no assigned agent",
+	})
+	if !strings.Contains(prompt, "already names the exact unassigned first-wave task") {
+		t.Fatalf("prompt = %q, want exact-task repair guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not start with project.get, task.list, task.children, flow.list_templates, or agent.list") {
+		t.Fatalf("prompt = %q, want no broad reread guidance", prompt)
 	}
 }
 
