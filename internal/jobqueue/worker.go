@@ -1042,7 +1042,7 @@ func (w *Worker) enqueueWithExecutor(
 		createdAt time.Time
 		updatedAt time.Time
 	)
-	err := executor.QueryRow(ctx, `
+	query := `
 		INSERT INTO job_queue (job_type, priority, payload, run_after, dedupe_key, group_key)
 		VALUES ($1, $2, $3::jsonb, $4, NULLIF($5, ''), NULLIF($6, ''))
 		ON CONFLICT (dedupe_key)
@@ -1053,7 +1053,61 @@ func (w *Worker) enqueueWithExecutor(
 		    run_after = LEAST(job_queue.run_after, EXCLUDED.run_after),
 		    updated_at = now()
 		RETURNING id, created_at, updated_at
-	`, jobType, priority, payload, runAfter, dedupeKey, groupKey).Scan(&id, &createdAt, &updatedAt)
+	`
+	args := []any{jobType, priority, payload, runAfter, dedupeKey, groupKey}
+	if jobType == agentTurnJobType && groupKey != "" {
+		query = `
+			WITH pending_ranked AS (
+				SELECT id,
+				       ROW_NUMBER() OVER (
+				           ORDER BY run_after DESC, created_at DESC, id DESC
+				       ) AS rn
+				FROM job_queue
+				WHERE group_key = $1
+				  AND status = 'pending'
+			),
+			pruned AS (
+				UPDATE job_queue jq
+				SET status = 'dead_letter',
+				    last_error = 'superseded queued agent_turn dispatch',
+				    updated_at = now()
+				FROM pending_ranked ranked
+				WHERE jq.id = ranked.id
+				  AND ranked.rn > 1
+			),
+			updated AS (
+				UPDATE job_queue jq
+				SET priority = GREATEST(jq.priority, $3),
+				    payload = $4::jsonb,
+				    run_after = $5,
+				    dedupe_key = NULLIF($6, ''),
+				    updated_at = now()
+				FROM pending_ranked ranked
+				WHERE jq.id = ranked.id
+				  AND ranked.rn = 1
+				RETURNING jq.id, jq.created_at, jq.updated_at
+			),
+			inserted AS (
+				INSERT INTO job_queue (job_type, priority, payload, run_after, dedupe_key, group_key)
+				SELECT $2, $3, $4::jsonb, $5, NULLIF($6, ''), NULLIF($1, '')
+				WHERE NOT EXISTS (SELECT 1 FROM updated)
+				ON CONFLICT (dedupe_key)
+				WHERE dedupe_key IS NOT NULL
+				  AND status IN ('pending', 'claimed')
+				DO UPDATE
+				SET priority = GREATEST(job_queue.priority, EXCLUDED.priority),
+				    run_after = LEAST(job_queue.run_after, EXCLUDED.run_after),
+				    updated_at = now()
+				RETURNING id, created_at, updated_at
+			)
+			SELECT id, created_at, updated_at FROM updated
+			UNION ALL
+			SELECT id, created_at, updated_at FROM inserted
+			LIMIT 1
+		`
+		args = []any{groupKey, jobType, priority, payload, runAfter, dedupeKey}
+	}
+	err := executor.QueryRow(ctx, query, args...).Scan(&id, &createdAt, &updatedAt)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("insert job: %w", err)
 	}

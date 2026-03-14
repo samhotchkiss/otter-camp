@@ -336,6 +336,80 @@ func TestAgentTurnDuplicateEnqueueWhileClaimedDoesNotCreateSecondLiveClaim(t *te
 	}
 }
 
+func TestAgentTurnRetryEnqueueCollapsesPendingGroupToNewestAttempt(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	sessionID := uuid.New()
+	messageID := uuid.New()
+
+	firstRunAfter := time.Now().UTC().Add(30 * time.Minute)
+	secondRunAfter := firstRunAfter.Add(30 * time.Minute)
+	thirdRunAfter := secondRunAfter.Add(30 * time.Minute)
+
+	if _, err := worker.Enqueue(context.Background(), nil, agentTurnJobType, 70, agentTurnKeyPayload{
+		SessionID:  sessionID,
+		MessageID:  messageID,
+		RetryCount: 0,
+	}, &firstRunAfter); err != nil {
+		t.Fatalf("enqueue first retry attempt: %v", err)
+	}
+	if _, err := worker.Enqueue(context.Background(), nil, agentTurnJobType, 70, agentTurnKeyPayload{
+		SessionID:  sessionID,
+		MessageID:  messageID,
+		RetryCount: 1,
+	}, &secondRunAfter); err != nil {
+		t.Fatalf("enqueue second retry attempt: %v", err)
+	}
+	if _, err := worker.Enqueue(context.Background(), nil, agentTurnJobType, 70, agentTurnKeyPayload{
+		SessionID:  sessionID,
+		MessageID:  messageID,
+		RetryCount: 2,
+	}, &thirdRunAfter); err != nil {
+		t.Fatalf("enqueue third retry attempt: %v", err)
+	}
+
+	var (
+		activeRows int
+		rawPayload []byte
+		runAfter   time.Time
+	)
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE group_key = $1
+		  AND status = 'pending'
+	`, AgentTurnGroupKey(sessionID, messageID)).Scan(&activeRows); err != nil {
+		t.Fatalf("count pending group rows: %v", err)
+	}
+	if activeRows != 1 {
+		t.Fatalf("pending group rows = %d, want 1", activeRows)
+	}
+	if err := pool.QueryRow(context.Background(), `
+		SELECT payload, run_after
+		FROM job_queue
+		WHERE group_key = $1
+		  AND status = 'pending'
+	`, AgentTurnGroupKey(sessionID, messageID)).Scan(&rawPayload, &runAfter); err != nil {
+		t.Fatalf("load collapsed pending row: %v", err)
+	}
+
+	var payload agentTurnKeyPayload
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		t.Fatalf("unmarshal collapsed pending payload: %v", err)
+	}
+	if payload.RetryCount != 2 {
+		t.Fatalf("retry_count = %d, want 2", payload.RetryCount)
+	}
+	if !runAfter.Equal(thirdRunAfter) {
+		t.Fatalf("run_after = %s, want %s", runAfter, thirdRunAfter)
+	}
+}
+
 func TestChatSummarizeEnqueueDedupesActiveSession(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
