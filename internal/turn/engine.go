@@ -3085,6 +3085,7 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 			recoveryHint += " If that named task is still a broad wave/workstream parent, keep the parent orchestration-only and immediately create bounded executable child tasks beneath it instead of trying to execute the parent directly."
 			nextActionHint += " Do not call file.read on planning artifacts just to decide the child split. Use the persisted wave/workstream title and existing task tree to create the bounded children directly."
 		}
+		nextActionHint += " After you fix the assignment, do not call project.list, project.get, task.list, or flow.list_templates to rediscover the broader scaffold. If that same named task still looks broad, keep it orchestration-only and split it directly into bounded executable child tasks beneath the exact task id already provided."
 		if progress.PlannedFlowTemplateCount > 0 || progress.BootstrapSetupDoneCount > 0 || progress.BootstrapTaskOutstanding {
 			nextActionHint += " Once that direct repair is complete, do not go back to flow.list_templates or other broad rereads just to finish the checklist. The persisted bootstrap state already contains staffed tasks, flow attachments, and setup progress; return straight to bootstrap.setup.persist with canonical step slugs such as attach-validate-flow-templates, select-first-wave, and record-frank-sign-off if those steps are already satisfied."
 		}

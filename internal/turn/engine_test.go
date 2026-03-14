@@ -3471,6 +3471,19 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedFirstWaveTask
 	}
 }
 
+func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedFirstWaveTaskSkipsProjectRereadAfterAssignmentFix(t *testing.T) {
+	prompt := buildProjectBootstrapValidationRecoveryPrompt(3, projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 19 (Draft homepage hero) has no assigned agent",
+	})
+	if !strings.Contains(prompt, "After you fix the assignment, do not call project.list, project.get, task.list, or flow.list_templates") {
+		t.Fatalf("prompt = %q, want no broad reread guidance after assignment fix", prompt)
+	}
+	if !strings.Contains(prompt, "If that same named task still looks broad, keep it orchestration-only and split it directly") {
+		t.Fatalf("prompt = %q, want direct split guidance after assignment fix", prompt)
+	}
+}
+
 func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedWaveParent(t *testing.T) {
 	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
