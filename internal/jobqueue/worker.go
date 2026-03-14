@@ -52,6 +52,10 @@ type agentTurnKeyPayload struct {
 	RetryCount int       `json:"retry_count"`
 }
 
+type chatSummarizeKeyPayload struct {
+	SessionID uuid.UUID `json:"session_id"`
+}
+
 type Job struct {
 	ID          uuid.UUID
 	JobType     string
@@ -1022,14 +1026,26 @@ func (w *Worker) enqueueWithExecutor(
 }
 
 func deriveJobKeys(jobType string, payload json.RawMessage) (string, string) {
-	if strings.TrimSpace(jobType) != agentTurnJobType {
+	switch strings.TrimSpace(jobType) {
+	case agentTurnJobType:
+		var parsed agentTurnKeyPayload
+		if err := json.Unmarshal(payload, &parsed); err != nil {
+			return "", ""
+		}
+		return AgentTurnAttemptKey(parsed.SessionID, parsed.MessageID, parsed.RetryCount), AgentTurnGroupKey(parsed.SessionID, parsed.MessageID)
+	case "chat_summarize":
+		var parsed chatSummarizeKeyPayload
+		if err := json.Unmarshal(payload, &parsed); err != nil {
+			return "", ""
+		}
+		if parsed.SessionID == uuid.Nil {
+			return "", ""
+		}
+		key := fmt.Sprintf("chat_summarize:%s", parsed.SessionID)
+		return key, key
+	default:
 		return "", ""
 	}
-	var parsed agentTurnKeyPayload
-	if err := json.Unmarshal(payload, &parsed); err != nil {
-		return "", ""
-	}
-	return AgentTurnAttemptKey(parsed.SessionID, parsed.MessageID, parsed.RetryCount), AgentTurnGroupKey(parsed.SessionID, parsed.MessageID)
 }
 
 func (w *Worker) listenForEnqueue(ctx context.Context, wake chan<- struct{}) {

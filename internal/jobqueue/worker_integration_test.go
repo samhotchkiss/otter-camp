@@ -336,6 +336,46 @@ func TestAgentTurnDuplicateEnqueueWhileClaimedDoesNotCreateSecondLiveClaim(t *te
 	}
 }
 
+func TestChatSummarizeEnqueueDedupesActiveSession(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	sessionID := uuid.New()
+	payload := map[string]any{
+		"session_id":          sessionID,
+		"layer_budget_tokens": 130000,
+	}
+
+	firstID, err := worker.Enqueue(context.Background(), nil, "chat_summarize", 60, payload, nil)
+	if err != nil {
+		t.Fatalf("enqueue first chat_summarize: %v", err)
+	}
+	secondID, err := worker.Enqueue(context.Background(), nil, "chat_summarize", 60, payload, nil)
+	if err != nil {
+		t.Fatalf("enqueue duplicate chat_summarize: %v", err)
+	}
+	if secondID != firstID {
+		t.Fatalf("duplicate enqueue id = %s, want %s", secondID, firstID)
+	}
+
+	var activeRows int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE dedupe_key = $1
+		  AND status IN ('pending', 'claimed')
+	`, "chat_summarize:"+sessionID.String()).Scan(&activeRows); err != nil {
+		t.Fatalf("count active deduped rows: %v", err)
+	}
+	if activeRows != 1 {
+		t.Fatalf("active deduped rows = %d, want 1", activeRows)
+	}
+}
+
 func TestJobWorkerSkipLockedAcrossTwoWorkers(t *testing.T) {
 	pool := testdb.New(t)
 
