@@ -9166,10 +9166,14 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 	if !projectBootstrapStateHasPersistedTaskTree(state) {
 		return false
 	}
+	namedFailureTask := projectBootstrapFailureTaskNumber(state.ValidationFailureReason) > 0
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "project.list", "project.get":
 		return true
 	case "task.list":
+		if namedFailureTask {
+			return true
+		}
 		return rt.toolCallsUsed > 0
 	case "flow.list_templates":
 		return rt.toolCallsUsed > 0

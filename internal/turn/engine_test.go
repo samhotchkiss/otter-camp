@@ -2054,7 +2054,7 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksBroadRereads(t *test
 		LastSuccessfulCheckpoint: projectBootstrapCheckpointTaskTreePersisted,
 		ValidationStatus:         projectBootstrapValidationFailed,
 		ValidationFailureClass:   projectBootstrapFailureFirstWaveSize,
-		ValidationFailureReason:  "kickoff validation failed: first-wave task 51 violates the bounded task-size policy",
+		ValidationFailureReason:  "kickoff validation failed: first-wave tasks violate the bounded task-size policy",
 		StartedAt:                &now,
 		UpdatedAt:                &now,
 	})
@@ -2079,6 +2079,39 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksBroadRereads(t *test
 	}
 	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
 		t.Fatal("expected first task.list pass to remain available for targeted recovery lookup")
+	}
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get", nil) {
+		t.Fatal("task.get should remain available for targeted recovery inspection")
+	}
+}
+
+func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksNamedTaskListImmediately(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AutoTurnCount:            1,
+		AssignmentCount:          9,
+		PlannedTaskCount:         47,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason:  "kickoff validation failed: first-wave task 12 (Content Creation) has no assigned agent",
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
+		t.Fatal("expected task.list to be blocked immediately when recovery already names the exact failing task")
 	}
 	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get", nil) {
 		t.Fatal("task.get should remain available for targeted recovery inspection")
