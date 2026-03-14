@@ -13704,6 +13704,164 @@ func TestTurnEngineIntegrationProjectBootstrapWatchdogContinuesAfterHungTurnWith
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapWatchdogContinuesRecoverableValidationRepair(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: resume the active bootstrap workflow from persisted state.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	fixture.engine.projectBootstrapTurnTimeout = 40 * time.Millisecond
+
+	repoPath, err := workspace.ProjectRoot("", project.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE project_environment
+		SET repo_path = $2,
+		    is_active = true
+		WHERE project_id = $1
+		  AND name = 'workspace'
+	`, project.ID, repoPath); err != nil {
+		t.Fatalf("seed repo binding environment: %v", err)
+	}
+
+	modelCalls := 0
+	followOnStarted := make(chan struct{}, 1)
+	fixture.model.streamFn = func(ctx context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{Content: "I have the handoff and will start the bootstrap setup now."}, nil
+		case 2:
+			select {
+			case followOnStarted <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			return ModelResponse{}, ctx.Err()
+		default:
+			return ModelResponse{Content: "unexpected bootstrap watchdog call"}, nil
+		}
+	}
+
+	if err := fixture.engine.handleUserMessage(ctx, projectSession.ID, handoff.ID, &lori.ID, 0, nil); err != nil {
+		t.Fatalf("handleUserMessage initial bootstrap acknowledgement: %v", err)
+	}
+
+	firstTurn := latestCompletedTurnForSession(t, ctx, fixture.pool, projectSession.ID)
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": projectSession.ID.String(), "turn_id": firstTurn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent initial bootstrap acknowledgement: %v", err)
+	}
+
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "pm",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("Assign validation-repair PM: %v", err)
+	}
+
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	description := "Draft homepage hero"
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Draft homepage hero",
+		Description:    &description,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &lori.ID,
+	}); err != nil {
+		t.Fatalf("Create unassigned bootstrap task: %v", err)
+	}
+
+	var hungJobID uuid.UUID
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT id
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND payload->>'session_id' = $1
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1
+	`, projectSession.ID.String()).Scan(&hungJobID); err != nil {
+		t.Fatalf("load pending validation-repair watchdog job: %v", err)
+	}
+
+	worker := jobqueue.New(fixture.pool, slog.New(slog.NewTextHandler(io.Discard, nil)), jobqueue.Config{
+		WorkerID:             "bootstrap-validation-watchdog-worker",
+		PollInterval:         5 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+	worker.Register(AgentTurnJobType, fixture.engine.HandleTurnJob)
+	workerCtx, cancelWorker := context.WithCancel(ctx)
+	defer cancelWorker()
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		_ = worker.Start(workerCtx)
+	}()
+	defer func() {
+		cancelWorker()
+		_ = worker.Stop()
+		<-workerDone
+	}()
+
+	select {
+	case <-followOnStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for validation-repair watchdog turn to start")
+	}
+
+	waitForJobStatus(t, fixture.pool, hungJobID, "done", 3*time.Second)
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable bootstrap agent_turn jobs = %d, want 1 continuation after validation-repair watchdog timeout", jobs)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.pool).GetByID(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetByID project session: %v", err)
+	}
+	if storedSession.CurrentTurnID != nil {
+		t.Fatalf("project session current_turn_id = %v, want nil after validation-repair watchdog timeout", storedSession.CurrentTurnID)
+	}
+	bootstrapState := projectBootstrapStateFromMetadata(storedSession.Metadata)
+	if bootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("bootstrap status = %q, want %q", bootstrapState.Status, projectBootstrapStatusActive)
+	}
+	if bootstrapState.FailureClass != "" {
+		t.Fatalf("bootstrap failure_class = %q, want empty", bootstrapState.FailureClass)
+	}
+	if bootstrapState.ValidationFailureClass != "" {
+		t.Fatalf("bootstrap validation_failure_class = %q, want cleared for recovery continuation", bootstrapState.ValidationFailureClass)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	if !containsMessageSubstring(messages, "Recovery target: kickoff validation failed:") {
+		t.Fatal("missing validation recovery continuation message after watchdog timeout")
+	}
+	if !containsMessageSubstring(messages, "has no assigned agent") {
+		t.Fatal("missing validation-specific repair guidance after watchdog timeout")
+	}
+}
+
 func TestTurnEngineIntegrationProjectExecutionFailureAfterFirstWaveClaimPausesProject(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	enableTaskQueueProcessor(t, fixture)

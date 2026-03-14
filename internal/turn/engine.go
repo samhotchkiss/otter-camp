@@ -8289,6 +8289,9 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 	if !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) || progress.Materialized() {
 		return false, nil
 	}
+	recoverableValidation := projectBootstrapSetupPersisted(progress) &&
+		progress.ValidationFailed() &&
+		projectBootstrapRecoverableMaxToolCallFailure(progress)
 	now := e.now().UTC()
 	workflowMessageID := rt.initialMessageID
 	if e.messages != nil && rt.initialMessageID != uuid.Nil {
@@ -8307,7 +8310,7 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 		startedAt := rt.startedAt.UTC()
 		state.StartedAt = &startedAt
 	}
-	if projectBootstrapSetupPersisted(progress) && !progress.ValidationFailed() {
+	if projectBootstrapSetupPersisted(progress) && (!progress.ValidationFailed() || recoverableValidation) {
 		now = e.now().UTC()
 		state.Status = projectBootstrapStatusActive
 		state.LastTurnID = rt.turn.ID.String()
@@ -8316,6 +8319,11 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 		}
 		state.AutoTurnCount++
 		applyProjectBootstrapProgressState(&state, progress)
+		if recoverableValidation {
+			state.ValidationStatus = ""
+			state.ValidationFailureClass = ""
+			state.ValidationFailureReason = ""
+		}
 		state.UpdatedAt = &now
 		state.FailedAt = nil
 		state.CompletedAt = nil
@@ -8337,7 +8345,12 @@ func (e *TurnEngine) handleProjectBootstrapWatchdogTimeout(ctx context.Context, 
 			return true, failErr
 		}
 		continuationAgentID := e.projectBootstrapContinuationAgent(ctx, rt.session, rt.agent.ID)
-		continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, rt.session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount)
+		var continuationMessage *chat.ChatMessage
+		if recoverableValidation {
+			continuationMessage, err = e.appendProjectBootstrapRecoveryContinuationMessage(ctx, rt.session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount, progress)
+		} else {
+			continuationMessage, err = e.appendProjectBootstrapContinuationMessage(ctx, rt.session.ID, continuationAgentID, state.InitialMessageID, state.AutoTurnCount)
+		}
 		if err != nil {
 			return true, err
 		}
@@ -8511,7 +8524,10 @@ func (e *TurnEngine) projectBootstrapStreamWatchdog(ctx context.Context, rt *tur
 	if err != nil {
 		return projectBootstrapWatchdog{}, false, err
 	}
-	if !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) || progress.Materialized() || progress.ValidationFailed() {
+	recoverableValidation := projectBootstrapSetupPersisted(progress) &&
+		progress.ValidationFailed() &&
+		projectBootstrapRecoverableMaxToolCallFailure(progress)
+	if !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) || progress.Materialized() || (progress.ValidationFailed() && !recoverableValidation) {
 		return projectBootstrapWatchdog{}, false, nil
 	}
 
