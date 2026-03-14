@@ -7082,6 +7082,9 @@ func (e *TurnEngine) pauseProjectAfterExecutionFailure(ctx context.Context, rt *
 	if rt == nil || rt.turn == nil || rt.session == nil {
 		return nil
 	}
+	if isTransientInfrastructureError(cause) {
+		return nil
+	}
 
 	projectID := resolveProjectID(ctx, rt.session, e.tasks)
 	if projectID == nil || *projectID == uuid.Nil {
@@ -10955,6 +10958,16 @@ func isTransientModelError(err error) bool {
 		return true
 	}
 	return false
+}
+
+func isTransientInfrastructureError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "sqlstate 53300") ||
+		strings.Contains(text, "remaining connection slots are reserved") ||
+		strings.Contains(text, "too many clients")
 }
 
 func retryBackoff(attempt int) time.Duration {

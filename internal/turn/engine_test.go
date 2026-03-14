@@ -2181,6 +2181,18 @@ func TestShouldStopAfterBlockedProjectBootstrapRecoveryReread(t *testing.T) {
 	}
 }
 
+func TestIsTransientInfrastructureError(t *testing.T) {
+	if !isTransientInfrastructureError(errors.New("failed to connect to database: FATAL: remaining connection slots are reserved for roles with the SUPERUSER attribute (SQLSTATE 53300)")) {
+		t.Fatal("expected SQLSTATE 53300 connection exhaustion to classify as transient infrastructure error")
+	}
+	if !isTransientInfrastructureError(errors.New("pq: sorry, too many clients already")) {
+		t.Fatal("expected too many clients error to classify as transient infrastructure error")
+	}
+	if isTransientInfrastructureError(errors.New("provider auth failed")) {
+		t.Fatal("unexpected infrastructure classification for unrelated error")
+	}
+}
+
 func TestHandleUserMessageProjectScopeKickoffHandoffRoutesToLoriAfterFrank(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()
