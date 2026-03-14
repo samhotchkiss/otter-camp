@@ -1273,7 +1273,7 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 			progress.ValidationFailureClass = blockedClass
 		}
 	}
-	if !progress.ValidationFailed() && projectBootstrapAckOnlyRecoveryReply(messages, assistant) {
+	if projectBootstrapAckOnlyRecoveryReply(messages, assistant) {
 		if blockedReason, _ := projectBootstrapBlockedRecoveryFailure(messages, state); strings.TrimSpace(blockedReason) != "" {
 			progress.ValidationStatus = projectBootstrapValidationFailed
 			progress.ValidationFailureReason = buildProjectBootstrapAckOnlyRecoveryFailureReason(blockedReason)
