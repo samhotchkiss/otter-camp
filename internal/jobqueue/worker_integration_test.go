@@ -1065,6 +1065,71 @@ func TestJobWorkerPurgeStaleAgentTurnJobsKeepsLiveSupervisorRecoveryTurn(t *test
 	}
 }
 
+func TestJobWorkerPurgeStaleAgentTurnJobsKeepsSupervisorRetryJob(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-supervisor-retry-job",
+		DisplayName: "Purge Supervisor Retry Job",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        uuid.New(),
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Resume the stranded task execution.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"supervisor","reason":"active execution lost live task turn"}`),
+	})
+	if err != nil {
+		t.Fatalf("create supervisor message: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now() + interval '15 minutes', 70)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":1}`, session.ID, message.ID)).Scan(&jobID); err != nil {
+		t.Fatalf("insert supervisor retry job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 0 {
+		t.Fatalf("purged jobs = %d, want 0", purged)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, jobID).Scan(&status); err != nil {
+		t.Fatalf("query supervisor retry job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("supervisor retry job status = %q, want pending", status)
+	}
+}
+
 func TestJobWorkerRequeueStrandedSupervisorRecoveryTurns(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

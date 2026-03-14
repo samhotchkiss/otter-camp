@@ -429,6 +429,7 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		    updated_at = now()
 		WHERE jq.status = 'pending'
 		  AND jq.job_type = 'agent_turn'
+		  AND COALESCE((jq.payload->>'retry_count')::int, 0) = 0
 		  AND EXISTS (
 		    SELECT 1 FROM chat_message cm
 		    WHERE cm.id = (jq.payload->>'message_id')::uuid
