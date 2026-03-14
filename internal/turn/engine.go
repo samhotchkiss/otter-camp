@@ -1422,9 +1422,6 @@ func (e *TurnEngine) handleProjectBootstrapCancelledTurn(ctx context.Context, se
 	if !strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusActive) {
 		return nil
 	}
-	if strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
-		return nil
-	}
 	if strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusFailed) {
 		return nil
 	}
@@ -1433,7 +1430,12 @@ func (e *TurnEngine) handleProjectBootstrapCancelledTurn(ctx context.Context, se
 	if err != nil {
 		return err
 	}
+	normalizeProjectBootstrapValidationFailure(&progress, false)
 	if progress.Materialized() {
+		return nil
+	}
+	recoveryProgress, recoverableValidation := projectBootstrapCancelledRecoveryProgress(state, progress)
+	if recoveryProgress.ValidationFailed() && !recoverableValidation {
 		return nil
 	}
 
@@ -1498,6 +1500,11 @@ func (e *TurnEngine) handleProjectBootstrapCancelledTurn(ctx context.Context, se
 	state.BootstrapTaskID = progress.BootstrapTaskID.String()
 	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
 	applyProjectBootstrapProgressState(&state, progress)
+	if recoverableValidation {
+		state.ValidationStatus = ""
+		state.ValidationFailureClass = ""
+		state.ValidationFailureReason = ""
+	}
 	state.UpdatedAt = &now
 	if cancelled.RespondingID != uuid.Nil {
 		state.LastResponderID = cancelled.RespondingID.String()
@@ -1508,7 +1515,12 @@ func (e *TurnEngine) handleProjectBootstrapCancelledTurn(ctx context.Context, se
 
 	_, _ = e.appendSystemMessage(ctx, turnID, session.ID, "[Recovered cancelled bootstrap turn - retrying in a fresh turn.]")
 	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, session, cancelled.RespondingID)
-	continuationMessage, err := e.appendProjectBootstrapContinuationMessage(ctx, session.ID, continuationAgentID, initialMessageID, state.AutoTurnCount)
+	var continuationMessage *chat.ChatMessage
+	if recoverableValidation {
+		continuationMessage, err = e.appendProjectBootstrapRecoveryContinuationMessage(ctx, session.ID, continuationAgentID, initialMessageID, state.AutoTurnCount, recoveryProgress)
+	} else {
+		continuationMessage, err = e.appendProjectBootstrapContinuationMessage(ctx, session.ID, continuationAgentID, initialMessageID, state.AutoTurnCount)
+	}
 	if err != nil {
 		return err
 	}
@@ -5313,6 +5325,24 @@ func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProg
 	default:
 		return false
 	}
+}
+
+func projectBootstrapCancelledRecoveryProgress(state projectBootstrapState, progress projectBootstrapProgress) (projectBootstrapProgress, bool) {
+	normalizeProjectBootstrapValidationFailure(&progress, false)
+	if progress.ValidationFailed() {
+		return progress, projectBootstrapRecoverableMaxToolCallFailure(progress)
+	}
+
+	stateValidation := projectBootstrapProgress{
+		ValidationStatus:        strings.TrimSpace(state.ValidationStatus),
+		ValidationFailureClass:  strings.TrimSpace(state.ValidationFailureClass),
+		ValidationFailureReason: strings.TrimSpace(state.ValidationFailureReason),
+	}
+	normalizeProjectBootstrapValidationFailure(&stateValidation, false)
+	if stateValidation.ValidationFailed() {
+		return stateValidation, projectBootstrapRecoverableMaxToolCallFailure(stateValidation)
+	}
+	return progress, false
 }
 
 func (e *TurnEngine) shouldDeferRecoverableProjectBootstrapValidation(ctx context.Context, session *chat.ChatSession, currentTurn *chat.ChatTurn, progress projectBootstrapProgress) (bool, error) {

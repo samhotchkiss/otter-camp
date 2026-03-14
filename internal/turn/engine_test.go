@@ -1790,13 +1790,13 @@ func TestHandleUserMessageRecoveryMessageWithFreshKickoffMetadataDisablesMemory(
 		t.Fatalf("marshal metadata: %v", err)
 	}
 	fixture.messages.items[fixture.userMessageID] = repo.ChatMessage{
-		ID:            fixture.userMessageID,
-		SessionID:     fixture.session.ID,
+		ID:             fixture.userMessageID,
+		SessionID:      fixture.session.ID,
 		SequenceNumber: 1,
-		Role:          "user",
-		Status:        "pending",
-		Content:       "Continue the bootstrap recovery now.",
-		Metadata:      metadata,
+		Role:           "user",
+		Status:         "pending",
+		Content:        "Continue the bootstrap recovery now.",
+		Metadata:       metadata,
 	}
 	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
 		if !input.DisableMemory {
@@ -2695,34 +2695,34 @@ func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
 
 func TestProjectBootstrapProgressAdvancedBeyondState(t *testing.T) {
 	state := projectBootstrapState{
-		AssignmentCount:         4,
-		PlannedTaskCount:        20,
+		AssignmentCount:          4,
+		PlannedTaskCount:         20,
 		PlannedFlowTemplateCount: 1,
-		FirstWaveTaskCount:      18,
-		FirstWavePromotedCount:  17,
-		FirstWaveExecutionCount: 17,
-		FirstWaveJobCount:       16,
+		FirstWaveTaskCount:       18,
+		FirstWavePromotedCount:   17,
+		FirstWaveExecutionCount:  17,
+		FirstWaveJobCount:        16,
 	}
 	progress := projectBootstrapProgress{
-		AssignmentCount:         4,
-		PlannedTaskCount:        20,
+		AssignmentCount:          4,
+		PlannedTaskCount:         20,
 		PlannedFlowTemplateCount: 1,
-		FirstWaveTaskCount:      18,
-		FirstWavePromotedCount:  18,
-		FirstWaveExecutionCount: 18,
-		FirstWaveJobCount:       17,
+		FirstWaveTaskCount:       18,
+		FirstWavePromotedCount:   18,
+		FirstWaveExecutionCount:  18,
+		FirstWaveJobCount:        17,
 	}
 	if !projectBootstrapProgressAdvancedBeyondState(state, progress) {
 		t.Fatal("later first-wave counts should reset recoverable continuation budget")
 	}
 	if projectBootstrapProgressAdvancedBeyondState(state, projectBootstrapProgress{
-		AssignmentCount:         4,
-		PlannedTaskCount:        20,
+		AssignmentCount:          4,
+		PlannedTaskCount:         20,
 		PlannedFlowTemplateCount: 1,
-		FirstWaveTaskCount:      18,
-		FirstWavePromotedCount:  17,
-		FirstWaveExecutionCount: 17,
-		FirstWaveJobCount:       16,
+		FirstWaveTaskCount:       18,
+		FirstWavePromotedCount:   17,
+		FirstWaveExecutionCount:  17,
+		FirstWaveJobCount:        16,
 	}) {
 		t.Fatal("unchanged progress should not reset recoverable continuation budget")
 	}
@@ -3120,8 +3120,8 @@ func TestHandleTurnCancelledEventSkipsBootstrapRecoveryWhenValidationAlreadyFail
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
 		Status:                  projectBootstrapStatusActive,
 		ValidationStatus:        projectBootstrapValidationFailed,
-		ValidationFailureClass:  projectBootstrapFailureFirstWaveSize,
-		ValidationFailureReason: "kickoff validation failed: first-wave task stayed oversized",
+		ValidationFailureClass:  projectBootstrapFailureMissingAssignments,
+		ValidationFailureReason: "kickoff validation failed: planned tasks were created before any active project assignments were persisted",
 		InitialMessageID:        fixture.userMessageID.String(),
 		StartedAt:               &now,
 	})
@@ -3163,6 +3163,43 @@ func TestHandleTurnCancelledEventSkipsBootstrapRecoveryWhenValidationAlreadyFail
 	}
 	if fixture.messages.containsContent("[Recovered cancelled bootstrap turn - retrying in a fresh turn.]") {
 		t.Fatal("unexpected bootstrap cancellation recovery message")
+	}
+}
+
+func TestProjectBootstrapCancelledRecoveryProgressPrefersRecoverableValidation(t *testing.T) {
+	progress, recoverable := projectBootstrapCancelledRecoveryProgress(
+		projectBootstrapState{
+			ValidationStatus:        projectBootstrapValidationFailed,
+			ValidationFailureClass:  projectBootstrapFailureCompoundParent,
+			ValidationFailureReason: "kickoff validation failed: task 34 is still a broad parent workstream and must be split into bounded executable child tasks before bootstrap can complete",
+		},
+		projectBootstrapProgress{},
+	)
+	if !recoverable {
+		t.Fatal("recoverable = false, want true")
+	}
+	if progress.ValidationFailureClass != projectBootstrapFailureCompoundParent {
+		t.Fatalf("validation failure class = %q, want %q", progress.ValidationFailureClass, projectBootstrapFailureCompoundParent)
+	}
+	if !strings.Contains(progress.ValidationFailureReason, "task 34 is still a broad parent workstream") {
+		t.Fatalf("validation failure reason = %q, want recoverable compound parent reason", progress.ValidationFailureReason)
+	}
+}
+
+func TestProjectBootstrapCancelledRecoveryProgressRejectsNonRecoverableValidation(t *testing.T) {
+	progress, recoverable := projectBootstrapCancelledRecoveryProgress(
+		projectBootstrapState{
+			ValidationStatus:        projectBootstrapValidationFailed,
+			ValidationFailureClass:  projectBootstrapFailureMissingAssignments,
+			ValidationFailureReason: "kickoff validation failed: planned tasks were created before any active project assignments were persisted",
+		},
+		projectBootstrapProgress{},
+	)
+	if recoverable {
+		t.Fatal("recoverable = true, want false")
+	}
+	if progress.ValidationFailureClass != projectBootstrapFailureMissingAssignments {
+		t.Fatalf("validation failure class = %q, want %q", progress.ValidationFailureClass, projectBootstrapFailureMissingAssignments)
 	}
 }
 
@@ -3777,10 +3814,10 @@ func TestBuildProjectBootstrapResumeActionPromptForPartialFirstWaveMaterializati
 
 func TestBuildProjectBootstrapResumeStateMessageIncludesValidationFailure(t *testing.T) {
 	message := buildProjectBootstrapResumeStateMessage(projectBootstrapState{
-		CurrentPhase:            projectBootstrapCheckpointFlowTemplatesPersisted,
+		CurrentPhase:             projectBootstrapCheckpointFlowTemplatesPersisted,
 		LastSuccessfulCheckpoint: projectBootstrapCheckpointTaskTreePersisted,
-		ValidationStatus:        projectBootstrapValidationFailed,
-		ValidationFailureReason: "kickoff validation failed: first-wave task 35 (List blog personality traits) violates the bounded task-size policy",
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureReason:  "kickoff validation failed: first-wave task 35 (List blog personality traits) violates the bounded task-size policy",
 	}, projectBootstrapResumeSnapshot{
 		ProjectID:   uuid.NewString(),
 		ProjectSlug: "sam-blog-test",
