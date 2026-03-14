@@ -2063,6 +2063,43 @@ func TestBootstrapRestartSlugCandidateStaysWithinProjectSlugLimit(t *testing.T) 
 	}
 }
 
+func TestChooseBootstrapRestartTaskAssigneePrefersContentWorkerForContentTasks(t *testing.T) {
+	engineerID := uuid.New()
+	contentID := uuid.New()
+	got := chooseBootstrapRestartTaskAssignee(repo.ProjectTask{
+		Title: "Create editorial calendar and initial content plan",
+	}, []repo.AgentProjectAssignment{
+		{AgentID: engineerID, Role: "worker", IsActive: true},
+		{AgentID: contentID, Role: "worker", IsActive: true},
+	})
+	if got == nil || *got != contentID {
+		t.Fatalf("content task assignee = %v, want %s", got, contentID)
+	}
+}
+
+func TestChooseBootstrapRestartTaskAssigneeFallsBackToWorkerThenPM(t *testing.T) {
+	workerID := uuid.New()
+	pmID := uuid.New()
+	got := chooseBootstrapRestartTaskAssignee(repo.ProjectTask{
+		Title: "Set up deployment pipeline and hosting",
+	}, []repo.AgentProjectAssignment{
+		{AgentID: workerID, Role: "worker", IsActive: true},
+		{AgentID: pmID, Role: "pm", IsActive: true},
+	})
+	if got == nil || *got != workerID {
+		t.Fatalf("technical task assignee = %v, want %s", got, workerID)
+	}
+
+	got = chooseBootstrapRestartTaskAssignee(repo.ProjectTask{
+		Title: "Define delivery milestones",
+	}, []repo.AgentProjectAssignment{
+		{AgentID: pmID, Role: "pm", IsActive: true},
+	})
+	if got == nil || *got != pmID {
+		t.Fatalf("fallback assignee = %v, want %s", got, pmID)
+	}
+}
+
 func TestShouldBlockProjectBootstrapRestaffingToolAfterTaskTreePersisted(t *testing.T) {
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
 		Status:                   projectBootstrapStatusActive,
@@ -4541,6 +4578,44 @@ func TestBuildProjectBootstrapNarrativeOnlyRecoveryFailureReason(t *testing.T) {
 	}
 	if !strings.Contains(got, "I recall prior infrastructure details from memory.") {
 		t.Fatalf("expected reply content in failure reason, got %q", got)
+	}
+}
+
+func TestBuildProjectBootstrapResumeActionPromptForUnassignedTaskRequiresImmediateToolAction(t *testing.T) {
+	state := projectBootstrapState{
+		Status:                projectBootstrapStatusActive,
+		CurrentPhase:          projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		ValidationStatus:      projectBootstrapValidationFailed,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution",
+	}
+	got := buildProjectBootstrapResumeActionPrompt(state)
+	if !strings.Contains(got, "Your next assistant action should be a tool call, not a narrative reply.") {
+		t.Fatalf("expected immediate tool action guidance, got %q", got)
+	}
+	if !strings.Contains(got, "call task.update on that task now") {
+		t.Fatalf("expected direct task.update guidance, got %q", got)
+	}
+}
+
+func TestBuildProjectBootstrapResumeStateMessageRequiresDirectRepairAction(t *testing.T) {
+	state := projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		AssignmentCount:          3,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureReason:  "kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution",
+	}
+	snapshot := projectBootstrapResumeSnapshot{
+		ProjectID:      uuid.New().String(),
+		ProjectSlug:    "sam-blog-test",
+		FailedTaskLine: "Named blocked task: task 11 id=abc title=\"Site Build\" work_status=draft assigned_agent_id=unassigned.",
+		AssignmentLine: "workers=Dev (id=worker-1), Rina (id=worker-2)",
+	}
+	got := buildProjectBootstrapResumeStateMessage(state, snapshot)
+	if !strings.Contains(got, "The next acceptable bootstrap action is a direct task.update") {
+		t.Fatalf("expected direct repair contract, got %q", got)
 	}
 }
 

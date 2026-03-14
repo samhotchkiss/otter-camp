@@ -999,7 +999,7 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 			AssignedByType: assignment.AssignedByType,
 			AssignedByID:   assignment.AssignedByID,
 		}); err != nil {
-			return false, err
+			return false, fmt.Errorf("seed restart assignment agent=%s role=%s: %w", assignment.AgentID, strings.TrimSpace(assignment.Role), err)
 		}
 	}
 
@@ -1026,7 +1026,7 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 			CompletedAt:         nil,
 		})
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("seed restart task source_task=%s title=%q: %w", taskRecord.ID, strings.TrimSpace(taskRecord.Title), err)
 		}
 		taskIDMap[taskRecord.ID.String()] = createdTask.ID.String()
 		createdTasks = append(createdTasks, createdTask)
@@ -1037,12 +1037,97 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 		if string(metadata) == string(createdTasks[i].Metadata) {
 			continue
 		}
-		if _, err := taskRepo.UpdateMetadata(ctx, createdTasks[i].ID, metadata); err != nil {
-			return false, err
+		updatedTask, err := taskRepo.UpdateMetadata(ctx, createdTasks[i].ID, metadata)
+		if err != nil {
+			return false, fmt.Errorf("seed restart task metadata task=%s: %w", createdTasks[i].ID, err)
+		}
+		createdTasks[i] = updatedTask
+	}
+
+	for i := range createdTasks {
+		if createdTasks[i].AssignedAgentID != nil && *createdTasks[i].AssignedAgentID != uuid.Nil {
+			continue
+		}
+		assigneeID := chooseBootstrapRestartTaskAssignee(createdTasks[i], activeAssignments)
+		if assigneeID == nil || *assigneeID == uuid.Nil {
+			continue
+		}
+		createdTasks[i].AssignedAgentID = assigneeID
+		if _, err := taskRepo.Update(ctx, createdTasks[i]); err != nil {
+			return false, fmt.Errorf("seed restart auto-assign task=%s assignee=%s: %w", createdTasks[i].ID, *assigneeID, err)
 		}
 	}
 
 	return true, nil
+}
+
+func chooseBootstrapRestartTaskAssignee(task repo.ProjectTask, assignments []repo.AgentProjectAssignment) *uuid.UUID {
+	if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
+		value := *task.AssignedAgentID
+		return &value
+	}
+	lowerTitle := strings.ToLower(strings.TrimSpace(task.Title))
+	lowerDescription := ""
+	if task.Description != nil {
+		lowerDescription = strings.ToLower(strings.TrimSpace(*task.Description))
+	}
+	roleBuckets := make(map[string][]uuid.UUID)
+	for _, assignment := range assignments {
+		if !assignment.IsActive || assignment.AgentID == uuid.Nil {
+			continue
+		}
+		role := strings.ToLower(strings.TrimSpace(assignment.Role))
+		roleBuckets[role] = append(roleBuckets[role], assignment.AgentID)
+	}
+	pick := func(role string) *uuid.UUID {
+		ids := roleBuckets[role]
+		if len(ids) == 0 {
+			return nil
+		}
+		value := ids[0]
+		return &value
+	}
+	containsAny := func(values ...string) bool {
+		for _, value := range values {
+			if value == "" {
+				continue
+			}
+			if strings.Contains(lowerTitle, value) || strings.Contains(lowerDescription, value) {
+				return true
+			}
+		}
+		return false
+	}
+	if containsAny("review", "qa", "validate", "approval", "sign-off") {
+		if assignee := pick("reviewer"); assignee != nil {
+			return assignee
+		}
+	}
+	if containsAny(
+		"content", "editorial", "blog", "post", "topic", "audience", "persona",
+		"brand", "messaging", "copy", "sitemap", "information architecture",
+	) {
+		if assignee := pick("worker"); assignee != nil {
+			if len(roleBuckets["worker"]) > 1 {
+				value := roleBuckets["worker"][len(roleBuckets["worker"])-1]
+				return &value
+			}
+			return assignee
+		}
+	}
+	if containsAny(
+		"repo", "framework", "astro", "next.js", "nextjs", "hugo", "cms", "adr",
+		"tailwind", "design token", "deploy", "hosting", "layout", "style",
+		"tech stack", "performance", "architecture", "frontend",
+	) {
+		if assignee := pick("worker"); assignee != nil {
+			return assignee
+		}
+	}
+	if assignee := pick("worker"); assignee != nil {
+		return assignee
+	}
+	return pick("pm")
 }
 
 func remapBootstrapRestartTaskMetadata(raw json.RawMessage, taskIDMap map[string]string) json.RawMessage {

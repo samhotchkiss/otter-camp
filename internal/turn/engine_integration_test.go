@@ -10450,7 +10450,7 @@ func TestTurnEngineIntegrationRelaunchArchivedBootstrapProjectBypassesExhaustedR
 	}
 }
 
-func TestTurnEngineIntegrationSeededBootstrapRestartStartsFromRecoverableRepairPrompt(t *testing.T) {
+func TestTurnEngineIntegrationSeededBootstrapRestartStartsFromSeededScaffoldPrompt(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
@@ -10554,28 +10554,116 @@ func TestTurnEngineIntegrationSeededBootstrapRestartStartsFromRecoverableRepairP
 	if firstUserMessage == "" {
 		t.Fatalf("restart session messages = %v, want at least one user prompt", messageSummaries)
 	}
-	if !strings.Contains(firstUserMessage, "Recovery target:") {
-		t.Fatalf("restart project=%s session=%s messages=%v initial prompt = %q, want concrete recovery target", restartProjectID, restartedSession.ID, messageSummaries, firstUserMessage)
+	if !strings.Contains(firstUserMessage, "The restart project has already been seeded with the archived project's persisted assignments and draft task scaffold") {
+		t.Fatalf("restart project=%s session=%s messages=%v initial prompt = %q, want seeded scaffold guidance", restartProjectID, restartedSession.ID, messageSummaries, firstUserMessage)
 	}
-	if strings.Contains(firstUserMessage, "Start a fresh bootstrap restart") {
-		t.Fatalf("restart initial prompt = %q, want direct repair prompt instead of generic restart handoff", firstUserMessage)
+	if !strings.Contains(firstUserMessage, restartedTaskID.String()) && strings.Contains(firstUserMessage, "Recovery target:") {
+		t.Fatalf("restart initial prompt = %q, want blocked task id %s when a recovery target is present", firstUserMessage, restartedTaskID)
 	}
-	if !strings.Contains(firstUserMessage, restartedTaskID.String()) {
-		t.Fatalf("restart initial prompt = %q, want blocked task id %s", firstUserMessage, restartedTaskID)
-	}
-	if !strings.Contains(firstUserMessage, worker.ID.String()) {
-		t.Fatalf("restart initial prompt = %q, want active assignee roster with worker id %s", firstUserMessage, worker.ID)
+	if !strings.Contains(firstUserMessage, worker.ID.String()) && strings.Contains(firstUserMessage, "Recovery target:") {
+		t.Fatalf("restart initial prompt = %q, want active assignee roster with worker id %s when a recovery target is present", firstUserMessage, worker.ID)
 	}
 
 	bootstrapState := projectBootstrapStateFromMetadata(restartedSession.Metadata)
-	if bootstrapState.ValidationFailureClass != projectBootstrapFailureFirstWaveExecution {
-		t.Fatalf("restart validation_failure_class = %q, want %q", bootstrapState.ValidationFailureClass, projectBootstrapFailureFirstWaveExecution)
+	foundAssigned := false
+	for _, taskRecord := range restartedTasks {
+		if strings.TrimSpace(taskRecord.Title) == "Use a topic from the editorial calendar" && taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
+			foundAssigned = true
+			break
+		}
 	}
-	if !strings.Contains(bootstrapState.ValidationFailureReason, "has no assigned agent") {
-		t.Fatalf("restart validation_failure_reason = %q, want unassigned first-wave detail", bootstrapState.ValidationFailureReason)
+	if !foundAssigned {
+		t.Fatal("expected seeded restart task to be auto-assigned during scaffold seeding")
 	}
 	if bootstrapState.AssignmentCount != 2 || bootstrapState.PlannedTaskCount != 1 || bootstrapState.FirstWaveTaskCount != 1 {
 		t.Fatalf("restart bootstrap state = %+v, want persisted seeded progress reflected before first turn", bootstrapState)
+	}
+}
+
+func TestTurnEngineIntegrationSeedBootstrapRestartScaffoldAutoAssignsUnassignedDraftTasks(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	sourceProject := mustCreateBootstrapProject(t, ctx, fixture)
+	projectService, err := projectsvc.NewService(projectsvc.Options{
+		Pool:   fixture.pool,
+		Events: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("New project service: %v", err)
+	}
+	restartedProject, err := projectService.Create(ctx, projectsvc.CreateProjectRequest{
+		OrganizationID: sourceProject.OrganizationID,
+		Slug:           "restart-seed-target",
+		DisplayName:    sourceProject.DisplayName,
+		Description:    sourceProject.Description,
+		DeliveryMode:   sourceProject.DeliveryMode,
+		CreatedByType:  "system",
+		CreatedByID:    fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create restart target project: %v", err)
+	}
+
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerA := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerB := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, sourceProject.ID, pmAgent.ID, fixture.user.ID)
+	for _, workerID := range []uuid.UUID{workerA.ID, workerB.ID} {
+		if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+			AgentID:        workerID,
+			ProjectID:      sourceProject.ID,
+			Role:           "worker",
+			AssignedByType: "human_user",
+			AssignedByID:   &fixture.user.ID,
+		}); err != nil {
+			t.Fatalf("assign worker %s: %v", workerID, err)
+		}
+	}
+
+	description := "Use a topic from the editorial calendar to draft the first launch article."
+	created, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      sourceProject.ID,
+		Title:          "Create editorial calendar and initial content plan",
+		Description:    &description,
+		WorkStatus:     "draft",
+		CreatedByType:  "human_user",
+		CreatedByID:    &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create unassigned source task: %v", err)
+	}
+
+	seeded, err := fixture.engine.seedBootstrapRestartScaffold(ctx, sourceProject.ID, restartedProject.ID)
+	if err != nil {
+		t.Fatalf("seedBootstrapRestartScaffold: %v", err)
+	}
+	if !seeded {
+		t.Fatal("expected restart scaffold to be seeded")
+	}
+
+	restartedTasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, restartedProject.ID)
+	if err != nil {
+		t.Fatalf("ListByProject restarted tasks: %v", err)
+	}
+	var restartedTask repo.ProjectTask
+	found := false
+	for _, taskRecord := range restartedTasks {
+		if strings.TrimSpace(taskRecord.Title) == created.Title {
+			restartedTask = taskRecord
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected restarted project to contain the seeded task")
+	}
+	if restartedTask.AssignedAgentID == nil || *restartedTask.AssignedAgentID == uuid.Nil {
+		t.Fatalf("restarted task assigned_agent_id = %v, want worker assignment", restartedTask.AssignedAgentID)
+	}
+	if *restartedTask.AssignedAgentID != workerA.ID && *restartedTask.AssignedAgentID != workerB.ID {
+		t.Fatalf("restarted task assigned_agent_id = %s, want one of workers %s or %s", *restartedTask.AssignedAgentID, workerA.ID, workerB.ID)
 	}
 }
 

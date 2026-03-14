@@ -5413,6 +5413,9 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 			lines = append(lines, "Existing active assignments: "+assignments)
 		}
 	}
+	if shouldRequireDirectBootstrapRepairAction(state, snapshot) {
+		lines = append(lines, "The next acceptable bootstrap action is a direct task.update on the named blocked task id above using one of the active assignee ids above. Do not answer with narrative, recollection, or a state summary. If you do not take that direct repair action or report a concrete blocker, bootstrap will be treated as failed.")
+	}
 	flowTemplatesReady := state.PlannedFlowTemplateCount > 0 ||
 		strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointFlowTemplatesPersisted ||
 		strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointFlowTemplatesPersisted
@@ -5440,6 +5443,20 @@ func projectBootstrapResumeUsesCompactRoster(state projectBootstrapState) bool {
 		return true
 	}
 	return false
+}
+
+func shouldRequireDirectBootstrapRepairAction(state projectBootstrapState, snapshot projectBootstrapResumeSnapshot) bool {
+	if !strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
+		return false
+	}
+	reason := strings.ToLower(strings.TrimSpace(state.ValidationFailureReason))
+	if !strings.Contains(reason, "has no assigned agent") {
+		return false
+	}
+	if strings.TrimSpace(snapshot.FailedTaskLine) == "" {
+		return false
+	}
+	return strings.TrimSpace(snapshot.AssignmentLine) != ""
 }
 
 func projectBootstrapResumeShouldRootAtResumeMessage(state projectBootstrapState) bool {
@@ -5542,6 +5559,7 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string
 		if strings.Contains(lowerReason, "has no assigned agent") {
 			lines = append(lines, "This validation failure already names the exact unassigned first-wave task. Repair that persisted task directly instead of gathering more context. Do not start with project.get, task.list, task.children, flow.list_templates, or agent.list unless a single task-specific lookup is strictly necessary to complete that one assignment.")
 			lines = append(lines, "Do not call task.get with the bare task number from the validation error. Use the exact task id and active assignee ids from the bootstrap resume state above, then call task.update directly on that task.")
+			lines = append(lines, "Your next assistant action should be a tool call, not a narrative reply. Do not say that you recall prior details from memory or summarize the state. If the exact task id and active assignee ids are already present above, call task.update on that task now.")
 			if strings.Contains(lowerReason, "wave ") || strings.Contains(lowerReason, "workstream") || strings.Contains(lowerReason, "parent") {
 				lines = append(lines, "If the named task is a broad wave/workstream parent, do not read planning artifacts first. Keep the parent orchestration-only and create bounded executable child tasks directly beneath it using the persisted task title and current task tree.")
 			}
