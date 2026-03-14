@@ -195,9 +195,7 @@ func (e *TurnEngine) captureProjectBootstrapRestartBundle(ctx context.Context, p
 	if err != nil {
 		return projectRecord, bundle, err
 	}
-	if strings.TrimSpace(bundle.SourceProjectID) == "" {
-		bundle.SourceProjectID = projectRecord.ID.String()
-	}
+	bundle.SourceProjectID = projectRecord.ID.String()
 	if session != nil {
 		bundle.SourceSessionID = session.ID.String()
 		state := projectBootstrapStateFromMetadata(session.Metadata)
