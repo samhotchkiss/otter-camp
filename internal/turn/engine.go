@@ -1265,6 +1265,13 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	}
 	narrativeClaimedCompletion := projectBootstrapNarrativeClaimsCompletion(assistant)
 	normalizeProjectBootstrapValidationFailure(&progress, narrativeClaimedCompletion)
+	if !progress.ValidationFailed() && latestCompleted.StopReason != nil && strings.TrimSpace(*latestCompleted.StopReason) == stopReasonValidationBlocked {
+		if blockedReason, blockedClass := projectBootstrapBlockedRecoveryFailure(messages, state); strings.TrimSpace(blockedReason) != "" {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureReason = blockedReason
+			progress.ValidationFailureClass = blockedClass
+		}
+	}
 	if narrativeClaimedCompletion && !progress.Materialized() {
 		rt := &turnRuntime{session: session, turn: &chat.ChatTurn{ID: turnID}}
 		if latestCompleted.RespondingID != uuid.Nil {
@@ -5006,6 +5013,66 @@ func projectBootstrapFailureTaskNumber(reason string) int {
 		return 0
 	}
 	return number
+}
+
+func projectBootstrapBlockedRecoveryFailure(messages []repo.ChatMessage, state projectBootstrapState) (string, string) {
+	reason := strings.TrimSpace(state.ValidationFailureReason)
+	if reason == "" {
+		for i := len(messages) - 1; i >= 0; i-- {
+			message := messages[i]
+			if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+				continue
+			}
+			reason = projectBootstrapRecoveryTargetFromMessage(message.Content)
+			if reason != "" {
+				break
+			}
+		}
+	}
+	if reason == "" {
+		return "", ""
+	}
+	return reason, projectBootstrapFailureClassForReason(state.ValidationFailureClass, reason)
+}
+
+func projectBootstrapRecoveryTargetFromMessage(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+	lower := strings.ToLower(trimmed)
+	marker := "recovery target:"
+	idx := strings.Index(lower, marker)
+	if idx < 0 {
+		return ""
+	}
+	target := strings.TrimSpace(trimmed[idx+len(marker):])
+	for _, stop := range []string{"\n", " Do not ", " Repair the named ", " Repair target:", " Current validation failure:"} {
+		if cut := strings.Index(target, stop); cut >= 0 {
+			target = strings.TrimSpace(target[:cut])
+		}
+	}
+	return strings.TrimSpace(target)
+}
+
+func projectBootstrapFailureClassForReason(currentClass, reason string) string {
+	if strings.TrimSpace(currentClass) != "" {
+		return strings.TrimSpace(currentClass)
+	}
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case strings.Contains(lower, "bounded size policy"), strings.Contains(lower, "bounded task-size policy"):
+		return projectBootstrapFailureFirstWaveSize
+	case strings.Contains(lower, "flow"), strings.Contains(lower, "template"):
+		return projectBootstrapFailureFirstWaveFlow
+	case strings.Contains(lower, "has no assigned agent"),
+		strings.Contains(lower, "queue runnable execution"),
+		strings.Contains(lower, "materialized execution"),
+		projectBootstrapFailureTaskNumber(reason) > 0:
+		return projectBootstrapFailureFirstWaveExecution
+	default:
+		return ""
+	}
 }
 
 func formatBootstrapResumeTaskLine(taskRecord repo.ProjectTask) string {

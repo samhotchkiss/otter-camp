@@ -4258,6 +4258,29 @@ func TestProjectBootstrapFailureTaskNumber(t *testing.T) {
 	}
 }
 
+func TestProjectBootstrapRecoveryTargetFromMessage(t *testing.T) {
+	message := "Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn 3. Recovery target: kickoff validation failed: first-wave task 12 (Content Creation) has no assigned agent, so bootstrap cannot queue runnable execution. Do not repeat the same oversized task definitions."
+	if got := projectBootstrapRecoveryTargetFromMessage(message); got != "kickoff validation failed: first-wave task 12 (Content Creation) has no assigned agent, so bootstrap cannot queue runnable execution." {
+		t.Fatalf("recovery target = %q", got)
+	}
+	if got := projectBootstrapRecoveryTargetFromMessage("Continue bootstrap."); got != "" {
+		t.Fatalf("recovery target = %q, want empty", got)
+	}
+}
+
+func TestProjectBootstrapBlockedRecoveryFailureFallsBackToRecentRecoveryMessage(t *testing.T) {
+	reason, class := projectBootstrapBlockedRecoveryFailure([]repo.ChatMessage{
+		{Role: "user", Content: "Continue the bounded project bootstrap setup workflow now. Recovery target: kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution. Do not stop at acknowledgement."},
+		{Role: "assistant", Content: "I'll first reread the state."},
+	}, projectBootstrapState{})
+	if reason != "kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution." {
+		t.Fatalf("reason = %q", reason)
+	}
+	if class != projectBootstrapFailureFirstWaveExecution {
+		t.Fatalf("class = %q, want %q", class, projectBootstrapFailureFirstWaveExecution)
+	}
+}
+
 func TestProjectBootstrapRestartScaffoldFailureReasonMatch(t *testing.T) {
 	if !projectBootstrapRestartScaffoldFailureReason(buildProjectBootstrapRestartScaffoldFailureReason()) {
 		t.Fatal("expected canonical restart scaffold reason to match")
