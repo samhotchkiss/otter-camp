@@ -583,6 +583,75 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresHumanActor(t *testing.T
 	}
 }
 
+func TestTaskQueueProcessorHandleFlowAdvancedEventDefaultsBlankReviewActorToReviewerAssignment(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	reviewerID := uuid.New()
+	sessionID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{}
+	chatService := &fakeTaskQueueChatService{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				Title:             "Review draft",
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+		assignments: &fakeTaskQueueAssignmentRepository{
+			assignments: []repo.AgentProjectAssignment{
+				{ProjectID: projectID, AgentID: reviewerID, Role: "reviewer", IsActive: true},
+			},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{
+				ID:       nodeID,
+				NodeType: "review",
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, Status: "active", SessionID: &sessionID},
+		},
+		runs:  runService,
+		chats: chatService,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":              taskID,
+		"project_id":           projectID,
+		"to_flow_node_id":      nodeID,
+		"to_flow_execution_id": executionID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := processor.handleFlowAdvancedEvent(ctx, eventbus.DomainEvent{EventType: "flow.advanced", Payload: payload}); err != nil {
+		t.Fatalf("handleFlowAdvancedEvent: %v", err)
+	}
+
+	if len(runService.createRunInputs) != 1 {
+		t.Fatalf("CreateRun calls = %d, want 1", len(runService.createRunInputs))
+	}
+	createInput := runService.createRunInputs[0]
+	if createInput.PrincipalType != "agent" || createInput.PrincipalID != reviewerID {
+		t.Fatalf("CreateRun principal = (%s,%s), want (agent,%s)", createInput.PrincipalType, createInput.PrincipalID, reviewerID)
+	}
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("AppendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+	if !strings.Contains(chatService.appendMessages[0].Content, "Start work on task: Review draft") {
+		t.Fatalf("kickoff content missing task details: %q", chatService.appendMessages[0].Content)
+	}
+}
+
 func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresTerminalTransition(t *testing.T) {
 	ctx := context.Background()
 

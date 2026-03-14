@@ -1414,7 +1414,20 @@ func taskFlowEventMatchesRuntime(taskRecord repo.ProjectTask, nextNode repo.Flow
 func (p *TaskQueueProcessor) resolveFlowTransitionAgent(ctx context.Context, taskRecord repo.ProjectTask, node repo.FlowNode) (*uuid.UUID, error) {
 	actorType := strings.ToLower(strings.TrimSpace(valueOrEmpty(node.ActorType)))
 	switch actorType {
-	case "", "human":
+	case "":
+		assignments, err := p.assignments.ListByProject(ctx, taskRecord.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		role := resolveFlowNodeRole(node)
+		for _, assignment := range assignments {
+			if strings.EqualFold(strings.TrimSpace(assignment.Role), role) {
+				id := assignment.AgentID
+				return &id, nil
+			}
+		}
+		return nil, nil
+	case "human":
 		return nil, nil
 	case "agent":
 		if node.ActorID != nil && *node.ActorID != uuid.Nil {
