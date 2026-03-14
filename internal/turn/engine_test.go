@@ -3220,6 +3220,37 @@ func TestBuildProjectBootstrapAdditionalRepairTaskLineListsOtherUnassignedFirstW
 	}
 }
 
+func TestBuildProjectBootstrapAdditionalRepairTaskLineListsFullRemainingRoster(t *testing.T) {
+	progress := projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 50 (Blocked task) has no assigned agent",
+		FirstWaveTasks: []repo.ProjectTask{
+			{ID: uuid.MustParse("6d95d68c-87cc-47f2-a4f6-d74695d0c2f3"), TaskNumber: 50, Title: "Blocked task"},
+			{ID: uuid.MustParse("7ec50721-96a7-4f2d-a2f1-a8ac578a8941"), TaskNumber: 49, Title: "Task A"},
+			{ID: uuid.MustParse("f5a10df9-7f3e-4fd4-8ee0-a4a45fd936db"), TaskNumber: 48, Title: "Task B"},
+			{ID: uuid.MustParse("5c74f97c-c856-42e2-904c-bc85eb03a9c3"), TaskNumber: 47, Title: "Task C"},
+			{ID: uuid.MustParse("5c0852ca-1503-4bff-a837-bfdbd4429f02"), TaskNumber: 46, Title: "Task D"},
+			{ID: uuid.MustParse("7bb2a8a4-e34e-47fa-b4d5-2ad85da9ad34"), TaskNumber: 45, Title: "Task E"},
+		},
+	}
+
+	line := buildProjectBootstrapAdditionalRepairTaskLine(progress)
+	for _, snippet := range []string{
+		`task 49 id=7ec50721-96a7-4f2d-a2f1-a8ac578a8941 title="Task A"`,
+		`task 48 id=f5a10df9-7f3e-4fd4-8ee0-a4a45fd936db title="Task B"`,
+		`task 47 id=5c74f97c-c856-42e2-904c-bc85eb03a9c3 title="Task C"`,
+		`task 46 id=5c0852ca-1503-4bff-a837-bfdbd4429f02 title="Task D"`,
+		`task 45 id=7bb2a8a4-e34e-47fa-b4d5-2ad85da9ad34 title="Task E"`,
+	} {
+		if !strings.Contains(line, snippet) {
+			t.Fatalf("line = %q, want %q", line, snippet)
+		}
+	}
+	if strings.Contains(line, "plus ") {
+		t.Fatalf("line = %q, should not truncate remaining repair targets", line)
+	}
+}
+
 func TestBuildProjectBootstrapValidationRecoveryPromptForRestartScaffoldFailure(t *testing.T) {
 	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureRuntime,

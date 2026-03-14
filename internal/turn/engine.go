@@ -5128,11 +5128,7 @@ func buildProjectBootstrapAdditionalRepairTaskLine(progress projectBootstrapProg
 	if len(parts) == 0 {
 		return ""
 	}
-	const maxListed = 4
 	line := "Other still-unassigned first-wave tasks you can repair in this same turn without rereading the task tree: "
-	if len(parts) > maxListed {
-		return line + strings.Join(parts[:maxListed], "; ") + fmt.Sprintf("; plus %d more unassigned first-wave tasks.", len(parts)-maxListed)
-	}
 	return line + strings.Join(parts, "; ") + "."
 }
 
