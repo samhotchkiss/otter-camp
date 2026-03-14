@@ -979,6 +979,30 @@ func TestTurnEngineIntegrationTaskRecoveryTurnUsesAssignedAgentAndTaskContext(t 
 		t.Fatalf("project_id = %v, want %s", got, project.ID)
 	}
 
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var recoveryPromptFound bool
+	for _, msg := range messages {
+		if !strings.Contains(msg.Content, "Continue the active task recovery now.") {
+			continue
+		}
+		recoveryPromptFound = true
+		if !strings.Contains(msg.Content, "Your next response must take direct recovery action on the task instead of generic chat.") {
+			t.Fatalf("recovery action prompt = %q, want direct recovery guidance", msg.Content)
+		}
+		if !strings.Contains(msg.Content, "Do not say that you lack context or ask the user to restate the task when this recovery turn already includes the task session history and recovery kickoff.") {
+			t.Fatalf("recovery action prompt = %q, want anti-no-context guidance", msg.Content)
+		}
+		if !strings.Contains(msg.Content, "Do not start with project.list, project.get, task.list, task.get, task_get, flow.list_templates, flow.get_execution, file.read, file_list, or agent.list unless a specific blocker names that exact record.") {
+			t.Fatalf("recovery action prompt = %q, want anti-reread guidance", msg.Content)
+		}
+	}
+	if !recoveryPromptFound {
+		t.Fatal("expected fallback recovery action prompt")
+	}
+
 	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
 	if err != nil {
 		t.Fatalf("ListBySession turns: %v", err)
