@@ -713,6 +713,23 @@ func TestJobWorkerPurgeStaleAgentTurnJobsCollapsesSupersededBootstrapContinuatio
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
+	cancelledTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   uuid.New(),
+		Status:         "cancelled",
+	})
+	if err != nil {
+		t.Fatalf("create cancelled turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_session
+		SET current_turn_id = $2
+		WHERE id = $1
+	`, session.ID, cancelledTurn.ID); err != nil {
+		t.Fatalf("set current_turn_id: %v", err)
+	}
 
 	messageRepo := repo.NewChatMessageRepo(pool)
 	messageIDs := make([]uuid.UUID, 0, 3)
