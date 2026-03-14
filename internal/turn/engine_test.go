@@ -3452,6 +3452,25 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedFirstWaveTask
 	}
 }
 
+func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedFirstWaveTaskSkipsFlowRereadAfterRepair(t *testing.T) {
+	prompt := buildProjectBootstrapValidationRecoveryPrompt(3, projectBootstrapProgress{
+		ValidationFailureClass:   projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason:  "kickoff validation failed: first-wave task 19 (Draft homepage hero) has no assigned agent",
+		PlannedFlowTemplateCount: 2,
+		BootstrapSetupDoneCount:  5,
+		BootstrapTaskOutstanding: true,
+	})
+	if !strings.Contains(prompt, "do not go back to flow.list_templates") {
+		t.Fatalf("prompt = %q, want no flow reread guidance after direct repair", prompt)
+	}
+	if !strings.Contains(prompt, "return straight to bootstrap.setup.persist with canonical step slugs") {
+		t.Fatalf("prompt = %q, want persist-after-repair guidance", prompt)
+	}
+	if !strings.Contains(prompt, "attach-validate-flow-templates, select-first-wave, and record-frank-sign-off") {
+		t.Fatalf("prompt = %q, want canonical remaining-step guidance", prompt)
+	}
+}
+
 func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedWaveParent(t *testing.T) {
 	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,

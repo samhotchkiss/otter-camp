@@ -3085,6 +3085,9 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 			recoveryHint += " If that named task is still a broad wave/workstream parent, keep the parent orchestration-only and immediately create bounded executable child tasks beneath it instead of trying to execute the parent directly."
 			nextActionHint += " Do not call file.read on planning artifacts just to decide the child split. Use the persisted wave/workstream title and existing task tree to create the bounded children directly."
 		}
+		if progress.PlannedFlowTemplateCount > 0 || progress.BootstrapSetupDoneCount > 0 || progress.BootstrapTaskOutstanding {
+			nextActionHint += " Once that direct repair is complete, do not go back to flow.list_templates or other broad rereads just to finish the checklist. The persisted bootstrap state already contains staffed tasks, flow attachments, and setup progress; return straight to bootstrap.setup.persist with canonical step slugs such as attach-validate-flow-templates, select-first-wave, and record-frank-sign-off if those steps are already satisfied."
+		}
 	}
 	if strings.Contains(lowerReason, "bounded task-size policy") || strings.Contains(lowerReason, "bounded size policy") {
 		recoveryHint += " Your next assistant action should be a tool call, not a narrative reply. Do not call task.get on the named oversized task first when the blocked task id is already present in the bootstrap resume message; keep that task orchestration-only and go straight to task.update plus bounded child-task creation."
