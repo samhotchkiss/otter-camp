@@ -2241,6 +2241,128 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksBroadRereads(t *test
 	}
 }
 
+func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksLateCompactResumeRereads(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AssignmentCount:          4,
+		PlannedTaskCount:         35,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:       30,
+		BootstrapTaskOutstanding: true,
+		BootstrapTaskID:          uuid.New().String(),
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		ValidationStatus:         projectBootstrapValidationPassed,
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "project.list", nil) {
+		t.Fatal("expected project.list to be blocked during late compact bootstrap resume")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
+		t.Fatal("expected task.list to be blocked during late compact bootstrap resume")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "flow.list_templates", nil) {
+		t.Fatal("expected flow.list_templates to be blocked during late compact bootstrap resume")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.search", nil) {
+		t.Fatal("expected file.search to be blocked during late compact bootstrap resume")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.read", map[string]any{"path": "planning/prd-spec/spec.md"}) {
+		t.Fatal("expected planning file.read to be blocked during late compact bootstrap resume")
+	}
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get", nil) {
+		t.Fatal("task.get should remain available for a single specific late-phase blocker inspection")
+	}
+}
+
+func TestBuildProjectBootstrapRecoveryRereadToolGuardErrorLateCompactResume(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AssignmentCount:          4,
+		PlannedTaskCount:         35,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:       30,
+		BootstrapTaskOutstanding: true,
+		BootstrapTaskID:          uuid.New().String(),
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		ValidationStatus:         projectBootstrapValidationPassed,
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	msg := buildProjectBootstrapRecoveryRereadToolGuardError(rt, "task.list")
+	if !strings.Contains(msg, "call bootstrap.setup.persist now") {
+		t.Fatalf("guard error = %q, want bootstrap.setup.persist guidance", msg)
+	}
+}
+
+func TestShouldRequireDirectBootstrapRepairActionForBoundedSizeFailure(t *testing.T) {
+	state := projectBootstrapState{
+		ValidationStatus:       projectBootstrapValidationFailed,
+		ValidationFailureClass: projectBootstrapFailureFirstWaveSize,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 105 (SEO, Performance, and Analytics Integration) violates the bounded task-size policy",
+	}
+	snapshot := projectBootstrapResumeSnapshot{
+		FailedTaskLine: `Named blocked task: task 105 id=1234 title="SEO, Performance, and Analytics Integration" work_status=draft assigned_agent_id=06ff.`,
+	}
+
+	if !shouldRequireDirectBootstrapRepairAction(state, snapshot) {
+		t.Fatal("expected bounded-size failures with a named task to require direct repair action")
+	}
+}
+
+func TestBuildProjectBootstrapResumeStateMessageRequiresDirectBoundedSplit(t *testing.T) {
+	state := projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureFirstWaveSize,
+		ValidationFailureReason:  "kickoff validation failed: first-wave task 105 (SEO, Performance, and Analytics Integration) violates the bounded task-size policy",
+		AssignmentCount:          4,
+		PlannedTaskCount:         35,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:       30,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+	}
+	snapshot := projectBootstrapResumeSnapshot{
+		ProjectID:      "028a3f39-be56-45bc-b9f8-5978ab9cf28f",
+		ProjectSlug:    "sam-blog-110-restart-9",
+		FailedTaskLine: `Named blocked task: task 105 id=1234 title="SEO, Performance, and Analytics Integration" work_status=draft assigned_agent_id=06ff.`,
+		RepairTaskLine: "Direct repair for the named oversized task: keep task 105 orchestration-only, create 2-4 bounded executable child tasks directly beneath task id=1234, keep each child to a single concrete deliverable under 60 minutes, and assign each child to an existing active project assignee before resuming bootstrap.setup.persist.",
+	}
+
+	msg := buildProjectBootstrapResumeStateMessage(state, snapshot)
+	if !strings.Contains(msg, "next acceptable bootstrap action is direct bounded child-task creation") {
+		t.Fatalf("resume state message = %q, want direct bounded child-task creation guidance", msg)
+	}
+	if !strings.Contains(msg, "Direct repair for the named oversized task") {
+		t.Fatalf("resume state message = %q, want explicit oversized-task repair line", msg)
+	}
+}
+
 func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksNamedTaskListImmediately(t *testing.T) {
 	now := time.Now().UTC()
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{

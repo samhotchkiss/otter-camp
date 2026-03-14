@@ -1307,6 +1307,16 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		progress.FirstWavePromotedCount > state.FirstWavePromotedCount ||
 		progress.FirstWaveExecutionCount > state.FirstWaveExecutionCount ||
 		progress.FirstWaveJobCount > state.FirstWaveJobCount
+	if !progress.ValidationFailed() &&
+		projectBootstrapRestartSession(session) &&
+		!madeProgress &&
+		latestCompleted.StopReason != nil &&
+		strings.TrimSpace(*latestCompleted.StopReason) == stopReasonValidationBlocked &&
+		strings.TrimSpace(blockedReason) != "" {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureReason = buildProjectBootstrapNarrativeOnlyRecoveryFailureReason(blockedReason, assistant)
+		progress.ValidationFailureClass = projectBootstrapFailureStalled
+	}
 	if !progress.ValidationFailed() && projectBootstrapRestartSession(session) && !madeProgress && projectBootstrapNarrativeOnlyReply(messages, assistant) {
 		progress.ValidationStatus = projectBootstrapValidationFailed
 		progress.ValidationFailureReason = buildProjectBootstrapNarrativeOnlyRestartFailureReason(assistant)
@@ -5286,6 +5296,17 @@ func buildProjectBootstrapCompoundParentRepairTaskLine(tasks []repo.ProjectTask,
 	return line + strings.Join(parts, "; ") + "."
 }
 
+func buildProjectBootstrapBoundedSizeRepairTaskLine(blockedTask repo.ProjectTask) string {
+	if blockedTask.ID == uuid.Nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Direct repair for the named oversized task: keep task %d orchestration-only, create 2-4 bounded executable child tasks directly beneath task id=%s, keep each child to a single concrete deliverable under 60 minutes, and assign each child to an existing active project assignee before resuming bootstrap.setup.persist.",
+		blockedTask.TaskNumber,
+		blockedTask.ID.String(),
+	)
+}
+
 func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, projectID uuid.UUID, state projectBootstrapState) (projectBootstrapResumeSnapshot, error) {
 	if e == nil || e.assignments == nil || e.agents == nil || projectID == uuid.Nil {
 		return projectBootstrapResumeSnapshot{}, nil
@@ -5361,10 +5382,13 @@ func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, pro
 		taskRecord, taskErr := e.tasks.GetByProjectAndNumber(ctx, projectID, taskNumber)
 		if taskErr == nil {
 			snapshot.FailedTaskLine = formatBootstrapResumeTaskLine(taskRecord)
-			if strings.TrimSpace(projectBootstrapFailureClassForReason(state.ValidationFailureClass, state.ValidationFailureReason)) == projectBootstrapFailureCompoundParent {
+			switch strings.TrimSpace(projectBootstrapFailureClassForReason(state.ValidationFailureClass, state.ValidationFailureReason)) {
+			case projectBootstrapFailureCompoundParent:
 				if tasks, listErr := e.tasks.ListByProject(ctx, projectID); listErr == nil {
 					snapshot.RepairTaskLine = buildProjectBootstrapCompoundParentRepairTaskLine(tasks, taskRecord)
 				}
+			case projectBootstrapFailureFirstWaveSize:
+				snapshot.RepairTaskLine = buildProjectBootstrapBoundedSizeRepairTaskLine(taskRecord)
 			}
 		}
 	}
@@ -5406,6 +5430,9 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	if blockedTask := strings.TrimSpace(snapshot.FailedTaskLine); blockedTask != "" {
 		lines = append(lines, blockedTask)
 	}
+	if repairLine := strings.TrimSpace(snapshot.RepairTaskLine); repairLine != "" {
+		lines = append(lines, repairLine)
+	}
 	if pm := strings.TrimSpace(snapshot.ExistingPM); pm != "" {
 		lines = append(lines, "Existing PM: "+pm)
 	}
@@ -5419,7 +5446,12 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 		}
 	}
 	if shouldRequireDirectBootstrapRepairAction(state, snapshot) {
-		lines = append(lines, "The next acceptable bootstrap action is a direct task.update on the named blocked task id above using one of the active assignee ids above. Do not answer with narrative, recollection, or a state summary. If you do not take that direct repair action or report a concrete blocker, bootstrap will be treated as failed.")
+		switch strings.TrimSpace(projectBootstrapFailureClassForReason(state.ValidationFailureClass, state.ValidationFailureReason)) {
+		case projectBootstrapFailureFirstWaveSize, projectBootstrapFailureCompoundParent:
+			lines = append(lines, "The next acceptable bootstrap action is direct bounded child-task creation beneath the named blocked task id above. Do not answer with narrative, recollection, or a state summary. If you do not take that direct repair action or report a concrete blocker, bootstrap will be treated as failed.")
+		default:
+			lines = append(lines, "The next acceptable bootstrap action is a direct task.update on the named blocked task id above using one of the active assignee ids above. Do not answer with narrative, recollection, or a state summary. If you do not take that direct repair action or report a concrete blocker, bootstrap will be treated as failed.")
+		}
 	}
 	flowTemplatesReady := state.PlannedFlowTemplateCount > 0 ||
 		strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointFlowTemplatesPersisted ||
@@ -5454,11 +5486,16 @@ func shouldRequireDirectBootstrapRepairAction(state projectBootstrapState, snaps
 	if !strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
 		return false
 	}
-	reason := strings.ToLower(strings.TrimSpace(state.ValidationFailureReason))
-	if !strings.Contains(reason, "has no assigned agent") {
+	if strings.TrimSpace(snapshot.FailedTaskLine) == "" {
 		return false
 	}
-	if strings.TrimSpace(snapshot.FailedTaskLine) == "" {
+	failureClass := strings.TrimSpace(projectBootstrapFailureClassForReason(state.ValidationFailureClass, state.ValidationFailureReason))
+	switch failureClass {
+	case projectBootstrapFailureFirstWaveSize, projectBootstrapFailureCompoundParent:
+		return true
+	}
+	reason := strings.ToLower(strings.TrimSpace(state.ValidationFailureReason))
+	if !strings.Contains(reason, "has no assigned agent") {
 		return false
 	}
 	return strings.TrimSpace(snapshot.AssignmentLine) != ""
@@ -9447,7 +9484,8 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 		return false
 	}
 	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
-	if state.AutoTurnCount <= 0 {
+	compactLateResume := projectBootstrapResumeUsesCompactRoster(state) && projectBootstrapResumeShouldStartWithPersist(state)
+	if state.AutoTurnCount <= 0 && !compactLateResume {
 		return false
 	}
 	if !projectBootstrapStateHasPersistedTaskTree(state) {
@@ -9463,6 +9501,9 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 	case "project.list", "project.get":
 		return true
 	case "task.list":
+		if compactLateResume {
+			return true
+		}
 		if namedFailureTask {
 			return true
 		}
@@ -9470,16 +9511,25 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 	case "task.get":
 		return namedFailureTaskHasDirectRepairID
 	case "flow.list_templates":
+		if compactLateResume {
+			return true
+		}
 		if namedFailureTask {
 			return true
 		}
 		return rt.toolCallsUsed > 0
 	case "file.search":
+		if compactLateResume {
+			return true
+		}
 		if namedFailureTask {
 			return true
 		}
 		return rt.toolCallsUsed > 0
 	case "file.read":
+		if compactLateResume && projectBootstrapRecoveryReadsPlanningPath(arguments) {
+			return true
+		}
 		if namedFailureTask && projectBootstrapRecoveryReadsPlanningPath(arguments) {
 			return true
 		}
@@ -9572,6 +9622,18 @@ func buildProjectBootstrapExcessStaffingDiscoveryGuardError() string {
 }
 
 func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName string) string {
+	state := projectBootstrapState{}
+	if rt != nil && rt.session != nil {
+		state = projectBootstrapStateFromMetadata(rt.session.Metadata)
+	}
+	if projectBootstrapResumeUsesCompactRoster(state) && projectBootstrapResumeShouldStartWithPersist(state) {
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "task.list", "flow.list_templates", "project.list", "project.get":
+			return "late bootstrap resume already has persisted staffing, tasks, flows, and first-wave state. Do not reread broad project state first; call bootstrap.setup.persist now, or inspect only a single specifically blocked task or template if that tool names it."
+		case "file.read", "file.search":
+			return "late bootstrap resume should not reread scaffold planning artifacts before acting on the persisted first-wave state. Start with bootstrap.setup.persist, and only inspect a single specifically blocked task or template if that tool names it."
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "task.list":
 		return "bootstrap validation recovery already named the blocker and you already listed the persisted task tree on this turn; do not re-list it again. Repair the named task directly, or inspect only a single specific task if its details are still unclear."
