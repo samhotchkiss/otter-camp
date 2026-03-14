@@ -4671,6 +4671,7 @@ func (e *TurnEngine) buildSyntheticProjectKickoffHandoff(ctx context.Context, rt
 	lines = append(lines, "Frank, Lori, and Ellie are starter-trio governance agents for setup/review only, not project staff. Do not assign them to project roles; create or assign dedicated project staff instead.")
 	lines = append(lines, "Keep staffing discovery bounded. Use at most one staffing.browse_profiles pass per needed category and at most one staffing.get_profile call per candidate you actually intend to staff. Once you can name one staff PM, the concrete workers, and the needed reviewers, stop browsing profiles and persist staffing. Do not spend multiple rounds re-browsing similar profiles when the current candidates are already sufficient to act.")
 	lines = append(lines, "Do not spend a turn writing a staffing plan, rationale memo, or markdown table before you materialize staff. As soon as you have enough candidates, create the PM/workers/reviewers, assign them to the project, and continue bootstrap.")
+	lines = append(lines, "Once enough candidates are known, do not emit another assistant planning summary about staffing. Your next step should be the concrete agent.create_staff and assignment tool calls needed to materialize the roster.")
 	lines = append(lines, "Use the canonical bootstrap workflow: staff the project, create bounded tasks/subtasks, attach runnable flows, and move the first executable wave into execution.")
 	return strings.Join(lines, "\n\n")
 }

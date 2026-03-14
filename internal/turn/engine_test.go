@@ -1937,6 +1937,9 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	if !strings.Contains(handoff, "Do not spend a turn writing a staffing plan, rationale memo, or markdown table before you materialize staff.") {
 		t.Fatalf("handoff = %q, want no-staffing-memo guidance", handoff)
 	}
+	if !strings.Contains(handoff, "Once enough candidates are known, do not emit another assistant planning summary about staffing.") {
+		t.Fatalf("handoff = %q, want direct-tool-action staffing guidance", handoff)
+	}
 	if !strings.Contains(handoff, content) {
 		t.Fatalf("handoff = %q, want originating request content", handoff)
 	}
