@@ -2745,11 +2745,27 @@ func TestBuildProjectBootstrapValidationRecoveryPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "splitting the offending broad parent or first-wave task into narrower executable child tasks") {
 		t.Fatalf("prompt = %q, want bounded child-splitting guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Do not return to bootstrap.setup.persist until that structural repair is complete") {
+		t.Fatalf("prompt = %q, want setup persist deferral guidance", prompt)
+	}
 	if !strings.Contains(prompt, "Every task.create or subtask.create call must include a concrete non-empty title") {
 		t.Fatalf("prompt = %q, want title guidance", prompt)
 	}
 	if !strings.Contains(prompt, "The bootstrap governance gate task is system-managed") {
 		t.Fatalf("prompt = %q, want governance gate guidance", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedFirstWaveTask(t *testing.T) {
+	prompt := buildProjectBootstrapValidationRecoveryPrompt(3, projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 19 (Draft homepage hero) has no assigned agent",
+	})
+	if !strings.Contains(prompt, "has no assigned agent") {
+		t.Fatalf("prompt = %q, want validation reason detail", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent") {
+		t.Fatalf("prompt = %q, want first-wave assignment guidance", prompt)
 	}
 }
 

@@ -3000,18 +3000,25 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 		reason = "bootstrap validation found recoverable bounded work that still needs correction"
 	}
 	recoveryHint := "Correct the persisted task tree by splitting the offending broad parent or first-wave task into narrower executable child tasks, assign every executable child to an existing active project assignee, then continue first-wave selection from those bounded children."
+	nextActionHint := "Do not return to bootstrap.setup.persist until that structural repair is complete and the first-wave selection points at the corrected bounded child tasks."
+	switch strings.TrimSpace(progress.ValidationFailureClass) {
+	case projectBootstrapFailureFirstWaveExecution:
+		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent and the corrected first-wave set is ready to validate."
+	}
 	lowerReason := strings.ToLower(reason)
 	if strings.Contains(lowerReason, "only ") &&
 		(strings.Contains(lowerReason, "selected first-wave child tasks created flow_node_execution rows") ||
 			strings.Contains(lowerReason, "selected first-wave child tasks produced runnable agent_turn jobs") ||
 			strings.Contains(lowerReason, "selected first-wave child tasks left draft or entered queued execution")) {
 		recoveryHint = "Shrink the selected first wave to a smaller bounded subset of the already-created child tasks so every selected task can leave draft and fully materialize execution. Leave later-wave tasks in draft, keep the staffed task tree intact, and persist the corrected first-wave selection instead of broadening the task tree further."
+		nextActionHint = "Do not call bootstrap.setup.persist again until the selected first wave is reduced to that smaller runnable subset."
 	}
 	return fmt.Sprintf(
-		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Recovery target: %s. Do not repeat the same oversized task definitions or re-run the same rejected task.create calls. Every task.create or subtask.create call must include a concrete non-empty title. The bootstrap governance gate task is system-managed: do not edit it, do not try to assign it, and do not try to queue or complete it manually. Keep first-wave execution tasks in draft until the gate auto-completes after validation passes. Frank, Lori, and Ellie are starter-trio governance agents, not project staff, so do not assign them to project roles. The project manager must be a staff PM agent, not a temp agent. %s Treat bind-repo-environment as confirming the canonical repo/workspace binding and environment records already present for the project; do not use git.commit or ad hoc cli.execute commands just to satisfy the bootstrap checklist. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
+		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Recovery target: %s. Do not repeat the same oversized task definitions or re-run the same rejected task.create calls. Every task.create or subtask.create call must include a concrete non-empty title. The bootstrap governance gate task is system-managed: do not edit it, do not try to assign it, and do not try to queue or complete it manually. Keep first-wave execution tasks in draft until the gate auto-completes after validation passes. Frank, Lori, and Ellie are starter-trio governance agents, not project staff, so do not assign them to project roles. The project manager must be a staff PM agent, not a temp agent. %s %s Treat bind-repo-environment as confirming the canonical repo/workspace binding and environment records already present for the project; do not use git.commit or ad hoc cli.execute commands just to satisfy the bootstrap checklist. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
 		autoTurnCount,
 		reason,
 		recoveryHint,
+		nextActionHint,
 	)
 }
 
