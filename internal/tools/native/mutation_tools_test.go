@@ -241,6 +241,23 @@ func TestNormalizeTaskWorkStatusAlias(t *testing.T) {
 	}
 }
 
+func TestNormalizeBootstrapStepSlugAliases(t *testing.T) {
+	got := normalizeBootstrapStepSlugs([]string{
+		"first-wave-assignments",
+		"staffing-plan",
+		"task-scaffold",
+	})
+	want := []string{
+		"staff-project",
+		"select-first-wave",
+		"decompose-workstreams",
+		"validate-task-shape",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalizeBootstrapStepSlugs() = %v, want %v", got, want)
+	}
+}
+
 func TestGitCommitMainBranchReturnsPayloadError(t *testing.T) {
 	executor := NewExecutor(ExecutorOptions{
 		WorkspaceRoot: t.TempDir(),
@@ -1238,27 +1255,27 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 
 	tasks := &mockTaskRepo{
 		task: repo.ProjectTask{
-			ID:             taskID,
-			OrganizationID: uuid.New(),
-			ProjectID:      projectID,
-			Title:          "Blog migration epic",
-			Description:    &description,
-			WorkStatus:     "draft",
+			ID:              taskID,
+			OrganizationID:  uuid.New(),
+			ProjectID:       projectID,
+			Title:           "Blog migration epic",
+			Description:     &description,
+			WorkStatus:      "draft",
 			AssignedAgentID: &assignedAgentID,
-			FlowTemplateID: &flowTemplateID,
-			Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
+			FlowTemplateID:  &flowTemplateID,
+			Metadata:        taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 		},
 		listByProjectTasks: []repo.ProjectTask{
 			{
-				ID:             taskID,
-				OrganizationID: uuid.New(),
-				ProjectID:      projectID,
-				Title:          "Blog migration epic",
-				Description:    &description,
-				WorkStatus:     "draft",
+				ID:              taskID,
+				OrganizationID:  uuid.New(),
+				ProjectID:       projectID,
+				Title:           "Blog migration epic",
+				Description:     &description,
+				WorkStatus:      "draft",
 				AssignedAgentID: &assignedAgentID,
-				FlowTemplateID: &flowTemplateID,
-				Metadata:       taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
+				FlowTemplateID:  &flowTemplateID,
+				Metadata:        taskdecomp.ApplyQueueDecompositionMode(json.RawMessage(`{}`), taskdecomp.QueueDecompositionModeParallelChildren),
 			},
 			{
 				ID:             childOneID,

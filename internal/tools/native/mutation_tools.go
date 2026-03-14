@@ -144,7 +144,7 @@ func boundedTaskTooLargeResponse(title string, description *string, err error) m
 		return response
 	}
 	suggested := map[string]any{
-		"mode": "parallel_children",
+		"mode":        "parallel_children",
 		"next_action": "Do not retry the rejected task title or minor wording variants. Replace it with the suggested child tasks below or create equivalent narrower children under the same parent.",
 	}
 	if primary := strings.TrimSpace(plan.PrimaryDeliverable); primary != "" {
@@ -2071,11 +2071,11 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		return fmt.Sprintf("%v", completed[i]["step_slug"]) < fmt.Sprintf("%v", completed[j]["step_slug"])
 	})
 	response := map[string]any{
-		"project_id":      projectID,
-		"status":          "persisted",
-		"completed_steps": completed,
+		"project_id":               projectID,
+		"status":                   "persisted",
+		"completed_steps":          completed,
 		"setup_checklist_complete": len(remaining) == 0,
-		"remaining_step_slugs":    remaining,
+		"remaining_step_slugs":     remaining,
 	}
 	if len(remaining) > 0 {
 		response["message"] = fmt.Sprintf("Bootstrap setup is not complete yet. Persist the remaining canonical step slugs next: %s.", strings.Join(remaining, ", "))
@@ -2124,6 +2124,12 @@ func expandBootstrapStepSlug(value string) []string {
 	switch slug {
 	case "assign-staff", "assign_staff", "assign-agents", "assign_agents":
 		return []string{"staff-project"}
+	case "first-wave-assignments", "first_wave_assignments":
+		return []string{"staff-project", "select-first-wave"}
+	case "staffing-plan", "staffing_plan":
+		return []string{"staff-project"}
+	case "task-scaffold", "task_scaffold":
+		return []string{"decompose-workstreams", "validate-task-shape"}
 	case "create-tasks", "create_tasks", "create-first-wave-tasks", "create_first_wave_tasks", "first-wave-tasks", "first_wave_tasks":
 		return []string{"decompose-workstreams", "validate-task-shape"}
 	default:
@@ -2995,7 +3001,7 @@ func (e *NativeToolExecutor) repairTaskIfNeeded(ctx context.Context, existing re
 		changed = true
 	}
 
-		if strings.EqualFold(strings.TrimSpace(updated.WorkStatus), "draft") {
+	if strings.EqualFold(strings.TrimSpace(updated.WorkStatus), "draft") {
 		if desiredTitle := strings.TrimSpace(desired.Title); desiredTitle != "" &&
 			normalizeComparableText(updated.Title) != normalizeComparableText(desiredTitle) {
 			updated.Title = desiredTitle
