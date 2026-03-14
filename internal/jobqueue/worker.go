@@ -1207,6 +1207,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 			if _, err := w.RecoverStaleClaims(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("stale claim recovery failed", "error", err)
 			}
+			if requeued, err := w.RequeuePendingTurnsWithoutJobs(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("pending turn repair failed", "error", err)
+			} else if requeued > 0 {
+				w.logger.Info("job queue: requeued pending turns without jobs", "count", requeued)
+			}
 		}
 	}
 }
