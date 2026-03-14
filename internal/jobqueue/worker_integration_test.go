@@ -988,6 +988,117 @@ func TestJobWorkerRequeueStrandedSupervisorRecoveryTurns(t *testing.T) {
 	}
 }
 
+func TestJobWorkerRequeueStrandedUserMessageTurns(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-stranded-user-message",
+		DisplayName: "Requeue Stranded User Message",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID: org.ID,
+		DisplayName:    "Recovery Agent",
+		AgentClass:     "staff",
+		LifecycleStatus:"active",
+		SystemPrompt:   "You recover pending work.",
+		AgentType:      "general",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "organization",
+		ScopeID:        org.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "human_user",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	cancelledMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Old cancelled kickoff",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"agent_turn_dispatch":{"cancelled_at":%q,"cancel_reason":"user_cancelled"}}`, time.Now().UTC().Format(time.RFC3339Nano))),
+	})
+	if err != nil {
+		t.Fatalf("create cancelled message: %v", err)
+	}
+	cancelledTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "cancelled",
+		TriggerMessageID: &cancelledMessage.ID,
+	})
+	if err != nil {
+		t.Fatalf("create cancelled turn: %v", err)
+	}
+	if cancelledTurn.TriggerMessageID == nil || *cancelledTurn.TriggerMessageID != cancelledMessage.ID {
+		t.Fatalf("cancelled turn trigger_message_id = %v, want %s", cancelledTurn.TriggerMessageID, cancelledMessage.ID)
+	}
+
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Start a fresh Sam.blog project from scratch.",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("create stranded user message: %v", err)
+	}
+
+	requeued, err := worker.RequeueStrandedUserMessageTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueStrandedUserMessageTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued turns = %d, want 1", requeued)
+	}
+
+	var (
+		status         string
+		requeuedMsgID  uuid.UUID
+		requeuedSessID uuid.UUID
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, (payload->>'message_id')::uuid, (payload->>'session_id')::uuid
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID); err != nil {
+		t.Fatalf("query requeued user message job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("requeued job status = %q, want pending", status)
+	}
+	if requeuedSessID != session.ID {
+		t.Fatalf("requeued session_id = %s, want %s", requeuedSessID, session.ID)
+	}
+	if requeuedMsgID != message.ID {
+		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	}
+}
+
 func TestJobWorkerCancelsClaimedAgentTurnWhenSessionClosesMidExecution(t *testing.T) {
 	pool := testdb.New(t)
 	org := createOrgForJobQueue(t, pool, "agent-turn-close-mid-execution")

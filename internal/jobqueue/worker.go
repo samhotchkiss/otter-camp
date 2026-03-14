@@ -207,6 +207,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if requeued > 0 {
 		w.logger.Info("job queue: requeued stranded supervisor recovery turns on startup", "count", requeued)
 	}
+	if requeued, err := w.RequeueStrandedUserMessageTurns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup user message requeue failed", "error", err)
+		}
+	} else if requeued > 0 {
+		w.logger.Info("job queue: requeued stranded user message turns on startup", "count", requeued)
+	}
 
 	wake := make(chan struct{}, 1)
 	var bg sync.WaitGroup
@@ -508,6 +515,71 @@ func (w *Worker) RequeueStrandedSupervisorRecoveryTurns(ctx context.Context) (in
 	}
 	if err := rows.Err(); err != nil {
 		return repaired, fmt.Errorf("iterate stranded supervisor recovery turns: %w", err)
+	}
+	return repaired, nil
+}
+
+func (w *Worker) RequeueStrandedUserMessageTurns(ctx context.Context) (int64, error) {
+	rows, err := w.pool.Query(ctx, `
+		SELECT DISTINCT ON (cs.id) cs.id, cm.id
+		FROM chat_session cs
+		JOIN chat_message cm ON cm.session_id = cs.id
+		WHERE cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND cm.role = 'user'
+		  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_message newer
+		    WHERE newer.session_id = cs.id
+		      AND (
+		        newer.created_at > cm.created_at
+		        OR (newer.created_at = cm.created_at AND newer.id > cm.id)
+		      )
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = cs.id
+		      AND ct.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.trigger_message_id = cm.id
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		  )
+		ORDER BY cs.id, cm.created_at DESC, cm.id DESC
+	`, agentTurnJobType)
+	if err != nil {
+		return 0, fmt.Errorf("list stranded user message turns: %w", err)
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var sessionID uuid.UUID
+		var messageID uuid.UUID
+		if err := rows.Scan(&sessionID, &messageID); err != nil {
+			return repaired, fmt.Errorf("scan stranded user message turn: %w", err)
+		}
+		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+			SessionID:  sessionID,
+			MessageID:  messageID,
+			RetryCount: 0,
+		}, nil); err != nil {
+			return repaired, fmt.Errorf("requeue stranded user message turn for session %s: %w", sessionID, err)
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, fmt.Errorf("iterate stranded user message turns: %w", err)
 	}
 	return repaired, nil
 }
