@@ -1335,7 +1335,7 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		return e.updateProjectBootstrapState(ctx, session, state)
 	}
 
-	if projectBootstrapRestartSession(session) && projectBootstrapRestartScaffoldOnly(progress) {
+	if !progress.ValidationFailed() && projectBootstrapRestartSession(session) && projectBootstrapRestartScaffoldOnly(progress) {
 		progress.ValidationStatus = projectBootstrapValidationFailed
 		progress.ValidationFailureClass = projectBootstrapFailureRuntime
 		progress.ValidationFailureReason = buildProjectBootstrapRestartScaffoldFailureReason()
