@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -4419,6 +4420,75 @@ func TestIntegrationBootstrapSetupPersistUnknownStepReturnsValidCanonicalSlugs(t
 	}
 	if !reflect.DeepEqual(valid, want) {
 		t.Fatalf("valid_step_slugs = %v, want %v", valid, want)
+	}
+}
+
+func TestIntegrationBootstrapSetupPersistAcceptsFirstWaveTaskAliasExpansion(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Persist First Wave Alias",
+		"slug":        "bootstrap-persist-first-wave-alias-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap.setup.persist accepts first-wave task alias expansions.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap persist first-wave alias",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{"assign-staff", "create-first-wave-tasks"},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist alias expansion: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("error = %v, want nil", out["error"])
+	}
+
+	completedSteps, ok := out["completed_steps"].([]map[string]any)
+	if !ok {
+		raw, ok := out["completed_steps"].([]any)
+		if !ok {
+			t.Fatalf("completed_steps type = %T, want slice", out["completed_steps"])
+		}
+		completedSteps = make([]map[string]any, 0, len(raw))
+		for _, item := range raw {
+			typed, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("completed_steps item type = %T, want map", item)
+			}
+			completedSteps = append(completedSteps, typed)
+		}
+	}
+
+	got := make([]string, 0, len(completedSteps))
+	for _, item := range completedSteps {
+		got = append(got, readStringValue(item["step_slug"]))
+	}
+	sort.Strings(got)
+	want := []string{
+		"decompose-workstreams",
+		"staff-project",
+		"validate-task-shape",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("completed step slugs = %v, want %v", got, want)
 	}
 }
 

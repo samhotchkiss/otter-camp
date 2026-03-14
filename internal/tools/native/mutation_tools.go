@@ -2124,7 +2124,7 @@ func expandBootstrapStepSlug(value string) []string {
 	switch slug {
 	case "assign-staff", "assign_staff", "assign-agents", "assign_agents":
 		return []string{"staff-project"}
-	case "create-tasks", "create_tasks":
+	case "create-tasks", "create_tasks", "create-first-wave-tasks", "create_first_wave_tasks", "first-wave-tasks", "first_wave_tasks":
 		return []string{"decompose-workstreams", "validate-task-shape"}
 	default:
 		return []string{normalizeBootstrapStepSlug(slug)}
