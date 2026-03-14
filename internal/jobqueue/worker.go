@@ -202,6 +202,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if recovered > 0 {
 		w.logger.Info("job queue: recovered stale claims on startup", "count", recovered)
 	}
+	if purged, err := w.PurgeStaleAgentTurnJobs(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup stale agent_turn purge failed", "error", err)
+		}
+	} else if purged > 0 {
+		w.logger.Info("job queue: purged stale agent_turn jobs on startup", "count", purged)
+	}
 	if repaired, err := w.CloseSupersededTaskAsyncSessions(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup task session cleanup failed", "error", err)
@@ -498,7 +505,44 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (superseded bootstrap continuations): %w", err)
 	}
 
-	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected()
+	// Condition 4: active async project-task sessions with no live turn should
+	// also have at most one pending continuation. Prompt compression and retry
+	// recovery can leave stacked pending jobs for superseded continuation
+	// messages; keep only the newest pending dispatch for the session.
+	ct4, err := w.pool.Exec(ctx, `
+		WITH ranked AS (
+			SELECT jq.id,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY jq.payload->>'session_id'
+			           ORDER BY jq.created_at DESC, jq.run_after DESC, jq.id DESC
+			       ) AS rn
+			FROM job_queue jq
+			JOIN chat_session cs ON cs.id = (jq.payload->>'session_id')::uuid
+			LEFT JOIN chat_turn current_turn ON current_turn.id = cs.current_turn_id
+			WHERE jq.status = 'pending'
+			  AND jq.job_type = 'agent_turn'
+			  AND cs.scope_type = 'project_task'
+			  AND cs.mode = 'async'
+			  AND cs.status = 'active'
+			  AND (
+			    cs.current_turn_id IS NULL
+			    OR current_turn.id IS NULL
+			    OR current_turn.status NOT IN ('pending', 'in_progress')
+			  )
+		)
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    last_error = 'purged stale project_task continuation',
+		    updated_at = now()
+		FROM ranked
+		WHERE jq.id = ranked.id
+		  AND ranked.rn > 1
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("purge stale agent_turn jobs (superseded project_task continuations): %w", err)
+	}
+
+	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected()
 	return total, nil
 }
 
@@ -1384,6 +1428,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 		case <-ticker.C:
 			if _, err := w.RecoverStaleClaims(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("stale claim recovery failed", "error", err)
+			}
+			if purged, err := w.PurgeStaleAgentTurnJobs(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("stale agent_turn purge failed", "error", err)
+			} else if purged > 0 {
+				w.logger.Info("job queue: purged stale agent_turn jobs", "count", purged)
 			}
 			if requeued, err := w.RequeuePendingTurnsWithoutJobs(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("pending turn repair failed", "error", err)

@@ -1215,6 +1215,103 @@ func TestJobWorkerRejitterPendingRateLimitedAgentTurns(t *testing.T) {
 	}
 }
 
+func TestJobWorkerPurgeStaleAgentTurnJobsCollapsesSupersededProjectTaskContinuations(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-project-task-continuations",
+		DisplayName: "Purge Project Task Continuations",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        uuid.New(),
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	messageIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	for i, messageID := range messageIDs {
+		runAfter := time.Now().UTC().Add(time.Duration(i+1) * time.Hour)
+		createdAt := time.Now().UTC().Add(time.Duration(i) * time.Minute)
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO chat_message (id, session_id, role, content, status, created_at, updated_at)
+			VALUES ($1, $2, 'system', $3, 'completed', $4, $4)
+		`, messageID, session.ID, fmt.Sprintf("[Continuation %d]", i+1), createdAt); err != nil {
+			t.Fatalf("insert continuation message %d: %v", i+1, err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO job_queue (job_type, status, payload, run_after, priority, created_at, updated_at, group_key, dedupe_key)
+			VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70, $3, $3, $4, $5)
+		`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":1}`, session.ID, messageID), runAfter, createdAt,
+			fmt.Sprintf("agent_turn:%s:%s", session.ID, messageID),
+			fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, messageID, 1),
+		); err != nil {
+			t.Fatalf("insert pending continuation job %d: %v", i+1, err)
+		}
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 2 {
+		t.Fatalf("purged jobs = %d, want 2", purged)
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at ASC
+	`, session.ID)
+	if err != nil {
+		t.Fatalf("query continuation jobs: %v", err)
+	}
+	defer rows.Close()
+
+	var statuses []string
+	var errors []string
+	for rows.Next() {
+		var status, lastError string
+		if err := rows.Scan(&status, &lastError); err != nil {
+			t.Fatalf("scan continuation jobs: %v", err)
+		}
+		statuses = append(statuses, status)
+		errors = append(errors, lastError)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate continuation jobs: %v", err)
+	}
+	if len(statuses) != 3 {
+		t.Fatalf("continuation jobs = %d, want 3", len(statuses))
+	}
+	if statuses[0] != "dead_letter" || errors[0] != "purged stale project_task continuation" {
+		t.Fatalf("oldest job = (%q, %q), want dead_letter/purged stale project_task continuation", statuses[0], errors[0])
+	}
+	if statuses[1] != "dead_letter" || errors[1] != "purged stale project_task continuation" {
+		t.Fatalf("middle job = (%q, %q), want dead_letter/purged stale project_task continuation", statuses[1], errors[1])
+	}
+	if statuses[2] != "pending" {
+		t.Fatalf("newest job status = %q, want pending", statuses[2])
+	}
+}
+
 func TestJobWorkerRequeueStrandedSupervisorRecoveryTurns(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
