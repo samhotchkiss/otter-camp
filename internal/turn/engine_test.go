@@ -3184,6 +3184,28 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedWaveParent(t 
 	}
 }
 
+func TestBuildProjectBootstrapAdditionalRepairTaskLineListsOtherUnassignedFirstWaveTasks(t *testing.T) {
+	progress := projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 23 (Build base layout with header and footer) has no assigned agent",
+		FirstWaveTasks: []repo.ProjectTask{
+			{ID: uuid.MustParse("268af254-cc71-487c-9852-8841a0e84238"), TaskNumber: 23, Title: "Build base layout with header and footer"},
+			{ID: uuid.MustParse("04d0f869-dfe2-4e87-b52d-0f82b6b8ea5f"), TaskNumber: 22, Title: "Configure Tailwind and design tokens"},
+			{ID: uuid.MustParse("c0fbed7a-d298-4efc-84ba-6102f7d20766"), TaskNumber: 31, Title: "Responsive styling for CTA banner section"},
+		},
+	}
+	line := buildProjectBootstrapAdditionalRepairTaskLine(progress)
+	if !strings.Contains(line, "task 22 id=04d0f869-dfe2-4e87-b52d-0f82b6b8ea5f") {
+		t.Fatalf("line = %q, want remaining unassigned first-wave task", line)
+	}
+	if !strings.Contains(line, "task 31 id=c0fbed7a-d298-4efc-84ba-6102f7d20766") {
+		t.Fatalf("line = %q, want second unassigned first-wave task", line)
+	}
+	if strings.Contains(line, "task 23 id=268af254-cc71-487c-9852-8841a0e84238") {
+		t.Fatalf("line = %q, should not repeat the named blocked task", line)
+	}
+}
+
 func TestBuildProjectBootstrapValidationRecoveryPromptForRestartScaffoldFailure(t *testing.T) {
 	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureRuntime,
@@ -4414,10 +4436,14 @@ func TestProjectBootstrapRestartScaffoldFailureReasonMatch(t *testing.T) {
 func TestBuildProjectBootstrapRecoveryContinuationContext(t *testing.T) {
 	context := buildProjectBootstrapRecoveryContinuationContext(projectBootstrapResumeSnapshot{
 		FailedTaskLine: "Named blocked task: task 19 id=1234 title=\"Draft homepage hero\" work_status=draft assigned_agent_id=unassigned. Use task.update directly on this task id instead of task.get with the bare task number.",
+		RepairTaskLine: "Other still-unassigned first-wave tasks you can repair in this same turn without rereading the task tree: task 22 id=5678 title=\"Configure Tailwind and design tokens\".",
 		AssignmentLine: "workers=Ananya Webb (id=worker-1), Naomi Baptiste (id=worker-2)",
 	})
 	if !strings.Contains(context, "Named blocked task: task 19 id=1234") {
 		t.Fatalf("context = %q, want blocked task line", context)
+	}
+	if !strings.Contains(context, "task 22 id=5678") {
+		t.Fatalf("context = %q, want additional repair targets", context)
 	}
 	if !strings.Contains(context, "Existing active assignments: workers=Ananya Webb") {
 		t.Fatalf("context = %q, want assignment roster", context)

@@ -2986,6 +2986,9 @@ func (e *TurnEngine) appendProjectBootstrapRecoveryContinuationMessage(ctx conte
 			}
 			snapshot, snapshotErr := e.loadProjectBootstrapResumeSnapshot(ctx, session.ScopeID, state)
 			if snapshotErr == nil {
+				if repairLine := buildProjectBootstrapAdditionalRepairTaskLine(progress); repairLine != "" {
+					snapshot.RepairTaskLine = repairLine
+				}
 				if snippet := buildProjectBootstrapRecoveryContinuationContext(snapshot); snippet != "" {
 					content = strings.TrimSpace(content + " " + snippet)
 				}
@@ -3082,6 +3085,9 @@ func buildProjectBootstrapRecoveryContinuationContext(snapshot projectBootstrapR
 	parts := []string{}
 	if blockedTask := strings.TrimSpace(snapshot.FailedTaskLine); blockedTask != "" {
 		parts = append(parts, blockedTask)
+	}
+	if repairLine := strings.TrimSpace(snapshot.RepairTaskLine); repairLine != "" {
+		parts = append(parts, repairLine)
 	}
 	if assignments := strings.TrimSpace(snapshot.AssignmentLine); assignments != "" {
 		parts = append(parts, "Existing active assignments: "+assignments+". Reuse one of those assigned agent ids directly; do not call agent.list unless the persisted roster itself is inconsistent.")
@@ -4983,6 +4989,7 @@ type projectBootstrapResumeSnapshot struct {
 	ExistingPM     string
 	AssignmentLine string
 	FailedTaskLine string
+	RepairTaskLine string
 }
 
 var projectBootstrapFailureTaskNumberPattern = regexp.MustCompile(`(?:first-wave )?task ([0-9]+)`)
@@ -5096,6 +5103,35 @@ func formatBootstrapResumeTaskLine(taskRecord repo.ProjectTask) string {
 		strings.TrimSpace(taskRecord.WorkStatus),
 		assigned,
 	)
+}
+
+func buildProjectBootstrapAdditionalRepairTaskLine(progress projectBootstrapProgress) string {
+	if strings.TrimSpace(progress.ValidationFailureClass) != projectBootstrapFailureFirstWaveExecution {
+		return ""
+	}
+	blockedTaskNumber := projectBootstrapFailureTaskNumber(progress.ValidationFailureReason)
+	if blockedTaskNumber <= 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(progress.FirstWaveTasks))
+	for _, task := range progress.FirstWaveTasks {
+		if task.TaskNumber == blockedTaskNumber {
+			continue
+		}
+		if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("task %d id=%s title=%q", task.TaskNumber, task.ID.String(), strings.TrimSpace(task.Title)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	const maxListed = 4
+	line := "Other still-unassigned first-wave tasks you can repair in this same turn without rereading the task tree: "
+	if len(parts) > maxListed {
+		return line + strings.Join(parts[:maxListed], "; ") + fmt.Sprintf("; plus %d more unassigned first-wave tasks.", len(parts)-maxListed)
+	}
+	return line + strings.Join(parts, "; ") + "."
 }
 
 func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, projectID uuid.UUID, state projectBootstrapState) (projectBootstrapResumeSnapshot, error) {
