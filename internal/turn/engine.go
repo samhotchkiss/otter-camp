@@ -5103,6 +5103,9 @@ func compactContinuationSummary(summary string) string {
 	if trimmed == "" {
 		return "Continuation summary unavailable."
 	}
+	if continuationSummaryLooksUnavailable(trimmed) {
+		return "Continuation summary unavailable."
+	}
 	if len(trimmed) <= maxContinuationSummaryChars {
 		return trimmed
 	}
@@ -5115,6 +5118,31 @@ func compactContinuationSummary(summary string) string {
 		return "Continuation summary unavailable."
 	}
 	return cut + "\n[Summary truncated]"
+}
+
+func continuationSummaryLooksUnavailable(summary string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(summary))
+	if normalized == "" {
+		return true
+	}
+	patterns := []string{
+		"i don't have a continuation summary",
+		"i do not have a continuation summary",
+		"i don't have context",
+		"i do not have context",
+		"i don't have prior context",
+		"i do not have prior context",
+		"please provide the task details",
+		"please provide: 1.",
+		"what task were we working on",
+		"what specific task was previously in progress",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(normalized, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *turnRuntime) (bool, error) {
