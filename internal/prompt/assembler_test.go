@@ -938,3 +938,42 @@ func TestSummarizeHistorySkipsFailedMessages(t *testing.T) {
 		t.Fatalf("summary[1] = %#v, want continuation system message", summary[1])
 	}
 }
+
+func TestSummarizeHistorySkipsNonFinalMessages(t *testing.T) {
+	summary := summarizeHistory([]repo.ChatMessage{
+		{
+			SequenceNumber: 1,
+			Role:           "user",
+			Content:        "Keep going.",
+			Status:         "final",
+		},
+		{
+			SequenceNumber: 2,
+			Role:           "system",
+			Content:        "[Continuation summary] stale placeholder",
+			Status:         "pending",
+		},
+		{
+			SequenceNumber: 3,
+			Role:           "assistant",
+			Content:        "placeholder",
+			Status:         "failed",
+		},
+		{
+			SequenceNumber: 4,
+			Role:           "tool_result",
+			Content:        "{\"ok\":true}",
+			Status:         "final",
+		},
+	}, nil)
+
+	if len(summary) != 2 {
+		t.Fatalf("summary len = %d, want 2", len(summary))
+	}
+	if summary[0].Role != "user" || summary[0].Content != "Keep going." {
+		t.Fatalf("summary[0] = %#v, want durable user message", summary[0])
+	}
+	if summary[1].Role != "tool_result" || summary[1].Content != "{\"ok\":true}" {
+		t.Fatalf("summary[1] = %#v, want durable tool_result message", summary[1])
+	}
+}
