@@ -215,12 +215,12 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if purged > 0 {
 		w.logger.Info("job queue: purged stale agent_turn jobs on startup", "count", purged)
 	}
-	if repaired, err := w.CloseSupersededTaskAsyncSessions(runCtx); err != nil {
+	if repaired, err := w.CloseSupersededCanonicalAsyncSessions(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup task session cleanup failed", "error", err)
 		}
 	} else if repaired > 0 {
-		w.logger.Info("job queue: closed superseded task async sessions on startup", "count", repaired)
+		w.logger.Info("job queue: closed superseded canonical async sessions on startup", "count", repaired)
 	}
 	if requeued, err := w.RequeueStrandedSupervisorRecoveryTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
@@ -928,16 +928,16 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 	return ct.RowsAffected(), nil
 }
 
-func (w *Worker) CloseSupersededTaskAsyncSessions(ctx context.Context) (int64, error) {
+func (w *Worker) CloseSupersededCanonicalAsyncSessions(ctx context.Context) (int64, error) {
 	ct, err := w.pool.Exec(ctx, `
 		WITH ranked AS (
 			SELECT id,
 			       ROW_NUMBER() OVER (
-			           PARTITION BY organization_id, scope_id
+			           PARTITION BY organization_id, scope_type, scope_id
 			           ORDER BY created_at DESC, id DESC
 			       ) AS rn
 			FROM chat_session
-			WHERE scope_type = 'project_task'
+			WHERE scope_type IN ('organization', 'project', 'project_task')
 			  AND mode = 'async'
 			  AND status = 'active'
 		)
@@ -950,7 +950,7 @@ func (w *Worker) CloseSupersededTaskAsyncSessions(ctx context.Context) (int64, e
 		  AND ranked.rn > 1
 	`)
 	if err != nil {
-		return 0, fmt.Errorf("close superseded task async sessions: %w", err)
+		return 0, fmt.Errorf("close superseded canonical async sessions: %w", err)
 	}
 	return ct.RowsAffected(), nil
 }

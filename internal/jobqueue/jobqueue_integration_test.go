@@ -413,7 +413,7 @@ func TestJobQueue_BootstrapStaleClaim_RecoverySkipsNonBootstrapSessions(t *testi
 	}
 }
 
-func TestJobQueue_CloseSupersededTaskAsyncSessions(t *testing.T) {
+func TestJobQueue_CloseSupersededCanonicalAsyncSessions(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -452,8 +452,12 @@ func TestJobQueue_CloseSupersededTaskAsyncSessions(t *testing.T) {
 	}
 
 	var (
-		olderID uuid.UUID
-		newerID uuid.UUID
+		olderTaskID uuid.UUID
+		newerTaskID uuid.UUID
+		olderProjID uuid.UUID
+		newerProjID uuid.UUID
+		olderOrgID  uuid.UUID
+		newerOrgID  uuid.UUID
 	)
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO chat_session (
@@ -462,7 +466,7 @@ func TestJobQueue_CloseSupersededTaskAsyncSessions(t *testing.T) {
 		)
 		VALUES ($1, 'project_task', $2, 'async', 'active', 'system', $3, $4::jsonb, now() - interval '2 minutes', now() - interval '2 minutes')
 		RETURNING id
-	`, org.ID, taskRecord.ID, uuid.Nil, `{"flow_node_execution_id":"older-execution"}`).Scan(&olderID); err != nil {
+	`, org.ID, taskRecord.ID, uuid.Nil, `{"flow_node_execution_id":"older-execution"}`).Scan(&olderTaskID); err != nil {
 		t.Fatalf("insert older task session: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
@@ -472,42 +476,95 @@ func TestJobQueue_CloseSupersededTaskAsyncSessions(t *testing.T) {
 		)
 		VALUES ($1, 'project_task', $2, 'async', 'active', 'system', $3, $4::jsonb)
 		RETURNING id
-	`, org.ID, taskRecord.ID, uuid.Nil, `{"flow_node_execution_id":"newer-execution"}`).Scan(&newerID); err != nil {
+	`, org.ID, taskRecord.ID, uuid.Nil, `{"flow_node_execution_id":"newer-execution"}`).Scan(&newerTaskID); err != nil {
 		t.Fatalf("insert newer task session: %v", err)
 	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata, created_at, updated_at
+		)
+		VALUES ($1, 'project', $2, 'async', 'active', 'system', $3, $4::jsonb, now() - interval '2 minutes', now() - interval '2 minutes')
+		RETURNING id
+	`, org.ID, projectRecord.ID, uuid.Nil, `{"source":"older-project-session"}`).Scan(&olderProjID); err != nil {
+		t.Fatalf("insert older project session: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata
+		)
+		VALUES ($1, 'project', $2, 'async', 'active', 'system', $3, $4::jsonb)
+		RETURNING id
+	`, org.ID, projectRecord.ID, uuid.Nil, `{"source":"newer-project-session"}`).Scan(&newerProjID); err != nil {
+		t.Fatalf("insert newer project session: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata, created_at, updated_at
+		)
+		VALUES ($1, 'organization', $1, 'async', 'active', 'system', $2, $3::jsonb, now() - interval '2 minutes', now() - interval '2 minutes')
+		RETURNING id
+	`, org.ID, uuid.Nil, `{"source":"older-org-session"}`).Scan(&olderOrgID); err != nil {
+		t.Fatalf("insert older org session: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata
+		)
+		VALUES ($1, 'organization', $1, 'async', 'active', 'system', $2, $3::jsonb)
+		RETURNING id
+	`, org.ID, uuid.Nil, `{"source":"newer-org-session"}`).Scan(&newerOrgID); err != nil {
+		t.Fatalf("insert newer org session: %v", err)
+	}
 
-	repaired, err := worker.CloseSupersededTaskAsyncSessions(ctx)
+	repaired, err := worker.CloseSupersededCanonicalAsyncSessions(ctx)
 	if err != nil {
-		t.Fatalf("CloseSupersededTaskAsyncSessions: %v", err)
+		t.Fatalf("CloseSupersededCanonicalAsyncSessions: %v", err)
 	}
-	if repaired != 1 {
-		t.Fatalf("repaired rows = %d, want 1", repaired)
-	}
-
-	var olderStatus string
-	var olderClosedAt *time.Time
-	if err := pool.QueryRow(ctx, `
-		SELECT status, closed_at
-		FROM chat_session
-		WHERE id = $1
-	`, olderID).Scan(&olderStatus, &olderClosedAt); err != nil {
-		t.Fatalf("query older task session: %v", err)
-	}
-	if olderStatus != "closed" || olderClosedAt == nil {
-		t.Fatalf("older task session = status:%s closed_at:%v, want closed with closed_at", olderStatus, olderClosedAt)
+	if repaired != 3 {
+		t.Fatalf("repaired rows = %d, want 3", repaired)
 	}
 
-	var newerStatus string
-	if err := pool.QueryRow(ctx, `
-		SELECT status
-		FROM chat_session
-		WHERE id = $1
-	`, newerID).Scan(&newerStatus); err != nil {
-		t.Fatalf("query newer task session: %v", err)
+	assertClosed := func(sessionID uuid.UUID, label string) {
+		t.Helper()
+		var status string
+		var closedAt *time.Time
+		if err := pool.QueryRow(ctx, `
+			SELECT status, closed_at
+			FROM chat_session
+			WHERE id = $1
+		`, sessionID).Scan(&status, &closedAt); err != nil {
+			t.Fatalf("query %s session: %v", label, err)
+		}
+		if status != "closed" || closedAt == nil {
+			t.Fatalf("%s session = status:%s closed_at:%v, want closed with closed_at", label, status, closedAt)
+		}
 	}
-	if newerStatus != "active" {
-		t.Fatalf("newer task session status = %s, want active", newerStatus)
+
+	assertActive := func(sessionID uuid.UUID, label string) {
+		t.Helper()
+		var status string
+		if err := pool.QueryRow(ctx, `
+			SELECT status
+			FROM chat_session
+			WHERE id = $1
+		`, sessionID).Scan(&status); err != nil {
+			t.Fatalf("query %s session: %v", label, err)
+		}
+		if status != "active" {
+			t.Fatalf("%s session status = %s, want active", label, status)
+		}
 	}
+
+	assertClosed(olderTaskID, "older task")
+	assertClosed(olderProjID, "older project")
+	assertClosed(olderOrgID, "older organization")
+	assertActive(newerTaskID, "newer task")
+	assertActive(newerProjID, "newer project")
+	assertActive(newerOrgID, "newer organization")
 }
 
 func TestJobQueue_ListenNotify_Wakeup(t *testing.T) {
