@@ -208,7 +208,8 @@ func (r *ChatSessionRepo) Close(ctx context.Context, id uuid.UUID) (ChatSession,
 	row := r.db.QueryRow(ctx, `
 		UPDATE chat_session
 		SET status = 'closed',
-		    closed_at = now()
+		    closed_at = now(),
+		    current_turn_id = NULL
 		WHERE id = $1
 		RETURNING id, organization_id, scope_type, scope_id, mode, status, title, created_by_type, created_by_id,
 		          current_turn_id, last_message_at, turn_count, message_count, metadata, closed_at, created_at, updated_at
@@ -244,7 +245,8 @@ func (r *ChatSessionRepo) CloseProjectScoped(ctx context.Context, projectID uuid
 	_, err := r.db.Exec(ctx, `
 		UPDATE chat_session
 		SET status = 'closed',
-		    closed_at = now()
+		    closed_at = now(),
+		    current_turn_id = NULL
 		WHERE status = 'active'
 		  AND (
 			(scope_type = 'project' AND scope_id = $1)

@@ -229,6 +229,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: closed archived project async sessions on startup", "count", repaired)
 	}
+	if repaired, err := w.ClearInactiveSessionCurrentTurns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup inactive session current turn cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: cleared inactive session current turns on startup", "count", repaired)
+	}
 	if requeued, err := w.RequeueStrandedSupervisorRecoveryTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup supervisor recovery requeue failed", "error", err)
@@ -989,6 +996,19 @@ func (w *Worker) CloseArchivedProjectAsyncSessions(ctx context.Context) (int64, 
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("close archived project async sessions: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
+func (w *Worker) ClearInactiveSessionCurrentTurns(ctx context.Context) (int64, error) {
+	ct, err := w.pool.Exec(ctx, `
+		UPDATE chat_session
+		SET current_turn_id = NULL
+		WHERE status IN ('closed', 'archived')
+		  AND current_turn_id IS NOT NULL
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("clear inactive session current turns: %w", err)
 	}
 	return ct.RowsAffected(), nil
 }

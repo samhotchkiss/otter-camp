@@ -661,6 +661,166 @@ func TestJobQueue_CloseArchivedProjectAsyncSessions(t *testing.T) {
 	assertClosed(taskSessionID, "task")
 }
 
+func TestJobQueue_ClearInactiveSessionCurrentTurns(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "inactive-session-current-turn-cleanup-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	org := createJobQueueOrg079(t, pool, "inactive-session-current-turn-cleanup")
+	projectRecord, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "inactive-session-current-turn-cleanup-" + uuid.NewString()[:8],
+		DisplayName:    "Inactive Session Current Turn Cleanup",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	description := "Clear stale current turn pointers on closed sessions."
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      projectRecord.ID,
+		TaskNumber:     1,
+		Title:          "Inactive cleanup task",
+		Description:    &description,
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		CreatedByID:    nil,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Inactive Cleanup Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You handle stale session cleanup.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	var closedSessionID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata, closed_at
+		)
+		VALUES ($1, 'project_task', $2, 'async', 'closed', 'system', $3, '{}'::jsonb, now())
+		RETURNING id
+	`, org.ID, taskRecord.ID, uuid.Nil).Scan(&closedSessionID); err != nil {
+		t.Fatalf("insert closed session: %v", err)
+	}
+	var archivedSessionID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata, closed_at
+		)
+		VALUES ($1, 'project', $2, 'async', 'archived', 'system', $3, '{}'::jsonb, now())
+		RETURNING id
+	`, org.ID, projectRecord.ID, uuid.Nil).Scan(&archivedSessionID); err != nil {
+		t.Fatalf("insert archived session: %v", err)
+	}
+	var activeSessionID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata
+		)
+		VALUES ($1, 'project_task', $2, 'async', 'active', 'system', $3, '{}'::jsonb)
+		RETURNING id
+	`, org.ID, taskRecord.ID, uuid.Nil).Scan(&activeSessionID); err != nil {
+		t.Fatalf("insert active session: %v", err)
+	}
+
+	insertTurn := func(sessionID uuid.UUID, turnNumber int) uuid.UUID {
+		t.Helper()
+		var turnID uuid.UUID
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO chat_turn (
+				session_id, turn_number, responding_type, responding_id, status
+			)
+			VALUES ($1, $2, 'agent', $3, 'pending')
+			RETURNING id
+		`, sessionID, turnNumber, agent.ID).Scan(&turnID); err != nil {
+			t.Fatalf("insert turn: %v", err)
+		}
+		return turnID
+	}
+
+	closedTurnID := insertTurn(closedSessionID, 1)
+	archivedTurnID := insertTurn(archivedSessionID, 1)
+	activeTurnID := insertTurn(activeSessionID, 1)
+
+	for _, tc := range []struct {
+		sessionID uuid.UUID
+		turnID    uuid.UUID
+	}{
+		{closedSessionID, closedTurnID},
+		{archivedSessionID, archivedTurnID},
+		{activeSessionID, activeTurnID},
+	} {
+		if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, tc.sessionID, &tc.turnID); err != nil {
+			t.Fatalf("set current turn for %s: %v", tc.sessionID, err)
+		}
+	}
+
+	repaired, err := worker.ClearInactiveSessionCurrentTurns(ctx)
+	if err != nil {
+		t.Fatalf("ClearInactiveSessionCurrentTurns: %v", err)
+	}
+	if repaired != 2 {
+		t.Fatalf("repaired rows = %d, want 2", repaired)
+	}
+
+	assertNilCurrentTurn := func(sessionID uuid.UUID, label string) {
+		t.Helper()
+		var currentTurnID *uuid.UUID
+		if err := pool.QueryRow(ctx, `
+			SELECT current_turn_id
+			FROM chat_session
+			WHERE id = $1
+		`, sessionID).Scan(&currentTurnID); err != nil {
+			t.Fatalf("query %s session: %v", label, err)
+		}
+		if currentTurnID != nil {
+			t.Fatalf("%s current_turn_id = %s, want NULL", label, *currentTurnID)
+		}
+	}
+
+	assertPresentCurrentTurn := func(sessionID uuid.UUID, want uuid.UUID, label string) {
+		t.Helper()
+		var currentTurnID *uuid.UUID
+		if err := pool.QueryRow(ctx, `
+			SELECT current_turn_id
+			FROM chat_session
+			WHERE id = $1
+		`, sessionID).Scan(&currentTurnID); err != nil {
+			t.Fatalf("query %s session: %v", label, err)
+		}
+		if currentTurnID == nil || *currentTurnID != want {
+			t.Fatalf("%s current_turn_id = %v, want %s", label, currentTurnID, want)
+		}
+	}
+
+	assertNilCurrentTurn(closedSessionID, "closed")
+	assertNilCurrentTurn(archivedSessionID, "archived")
+	assertPresentCurrentTurn(activeSessionID, activeTurnID, "active")
+}
+
 func TestJobQueue_ListenNotify_Wakeup(t *testing.T) {
 	pool := testdb.New(t)
 	const wakeupTimeout = 8 * time.Second
