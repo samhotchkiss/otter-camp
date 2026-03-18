@@ -317,7 +317,15 @@ func NewService(opts Options) (ChatService, error) {
 }
 
 func shouldReuseCanonicalSession(scopeType, mode string) bool {
-	return strings.EqualFold(strings.TrimSpace(scopeType), "project") && strings.EqualFold(strings.TrimSpace(mode), "async")
+	if !strings.EqualFold(strings.TrimSpace(mode), "async") {
+		return false
+	}
+	switch strings.TrimSpace(scopeType) {
+	case "project", "organization":
+		return true
+	default:
+		return false
+	}
 }
 
 func canonicalSessionLess(left, right repo.ChatSession) bool {

@@ -122,6 +122,67 @@ func TestCreateSessionProjectAsyncReusesCanonicalSession(t *testing.T) {
 	}
 }
 
+func TestCreateSessionOrganizationAsyncReusesCanonicalSession(t *testing.T) {
+	orgID := uuid.New()
+	canonicalID := uuid.New()
+	created := 0
+
+	svc := newUnitService(t, unitDeps{
+		sessions: &fakeSessionRepo{
+			listByOrgFn: func(_ context.Context, organizationID uuid.UUID) ([]repo.ChatSession, error) {
+				if organizationID != orgID {
+					t.Fatalf("unexpected organization id %s", organizationID)
+				}
+				newerTitle := "newer"
+				olderTitle := "older"
+				return []repo.ChatSession{
+					{
+						ID:             uuid.New(),
+						OrganizationID: orgID,
+						ScopeType:      "organization",
+						ScopeID:        orgID,
+						Mode:           "async",
+						Status:         "active",
+						Title:          &newerTitle,
+						CreatedAt:      time.Now().Add(1 * time.Minute),
+					},
+					{
+						ID:             canonicalID,
+						OrganizationID: orgID,
+						ScopeType:      "organization",
+						ScopeID:        orgID,
+						Mode:           "async",
+						Status:         "active",
+						Title:          &olderTitle,
+						CreatedAt:      time.Now(),
+					},
+				}, nil
+			},
+			createFn: func(_ context.Context, session repo.ChatSession) (repo.ChatSession, error) {
+				created++
+				session.ID = uuid.New()
+				return session, nil
+			},
+		},
+	})
+
+	session, err := svc.CreateSession(context.Background(), CreateSessionInput{
+		OrganizationID: orgID,
+		ScopeType:      "organization",
+		ScopeID:        orgID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession error = %v", err)
+	}
+	if session.ID != canonicalID {
+		t.Fatalf("session id = %s, want canonical %s", session.ID, canonicalID)
+	}
+	if created != 0 {
+		t.Fatalf("create calls = %d, want 0 when canonical session is reused", created)
+	}
+}
+
 func TestCreateSessionPublishesSessionCreatedEvent(t *testing.T) {
 	orgID := uuid.New()
 	scopeID := uuid.New()

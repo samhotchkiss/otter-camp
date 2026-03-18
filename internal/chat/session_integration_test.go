@@ -178,6 +178,50 @@ func TestSession_Create_ProjectScopeAsyncReusesCanonicalSession(t *testing.T) {
 	}
 }
 
+func TestSession_Create_OrgScopeAsyncReusesCanonicalSession(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	svc := newIntegrationService(t, pool, nil)
+
+	first, err := svc.CreateSession(ctx, CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "organization",
+		ScopeID:        org.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession first async org: %v", err)
+	}
+	second, err := svc.CreateSession(ctx, CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "organization",
+		ScopeID:        org.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession second async org: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("session ids = %s and %s, want canonical reuse", first.ID, second.ID)
+	}
+
+	var activeCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_session
+		WHERE scope_type = 'organization'
+		  AND scope_id = $1
+		  AND mode = 'async'
+		  AND status = 'active'
+	`, org.ID).Scan(&activeCount); err != nil {
+		t.Fatalf("count active async org sessions: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("active async org sessions = %d, want 1", activeCount)
+	}
+}
+
 func TestSession_Create_TaskScope(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
