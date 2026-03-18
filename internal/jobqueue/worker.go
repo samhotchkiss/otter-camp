@@ -236,6 +236,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: cleared inactive session current turns on startup", "count", repaired)
 	}
+	if repaired, err := w.BackfillCancelledTurnStopReasons(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup cancelled turn stop_reason backfill failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: backfilled cancelled turn stop reasons on startup", "count", repaired)
+	}
 	if requeued, err := w.RequeueStrandedSupervisorRecoveryTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup supervisor recovery requeue failed", "error", err)
@@ -1025,6 +1032,37 @@ func (w *Worker) ClearInactiveSessionCurrentTurns(ctx context.Context) (int64, e
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("clear inactive session current turns: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
+func (w *Worker) BackfillCancelledTurnStopReasons(ctx context.Context) (int64, error) {
+	ct, err := w.pool.Exec(ctx, `
+		WITH mapped AS (
+			SELECT DISTINCT ON (de.payload->>'turn_id')
+			       (de.payload->>'turn_id')::uuid AS turn_id,
+			       CASE de.payload->>'reason'
+			           WHEN 'cancel_current_turn' THEN 'user_cancelled'
+			           WHEN 'user_cancelled' THEN 'user_cancelled'
+			           WHEN 'steer_turn' THEN 'user_steered'
+			           WHEN 'session_closed' THEN 'session_closed'
+			           ELSE NULL
+			       END AS stop_reason
+			FROM domain_event de
+			WHERE de.event_type = 'chat.turn.cancelled'
+			  AND de.payload ? 'turn_id'
+			ORDER BY de.payload->>'turn_id', de.created_at DESC, de.id DESC
+		)
+		UPDATE chat_turn t
+		SET stop_reason = mapped.stop_reason
+		FROM mapped
+		WHERE t.id = mapped.turn_id
+		  AND t.status = 'cancelled'
+		  AND t.stop_reason IS NULL
+		  AND mapped.stop_reason IS NOT NULL
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("backfill cancelled turn stop reasons: %w", err)
 	}
 	return ct.RowsAffected(), nil
 }

@@ -846,6 +846,135 @@ func TestJobQueue_ClearInactiveSessionCurrentTurns(t *testing.T) {
 	assertTurnStatus(activeTurnID, "pending", "active")
 }
 
+func TestJobQueue_BackfillCancelledTurnStopReasons(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "cancelled-turn-stop-reason-backfill-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	org := createJobQueueOrg079(t, pool, "cancelled-turn-stop-reason-backfill")
+	projectRecord, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "cancelled-turn-stop-reason-backfill-" + uuid.NewString()[:8],
+		DisplayName:    "Cancelled Turn Stop Reason Backfill",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Backfill Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You handle backfill tests.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	insertSession := func() uuid.UUID {
+		t.Helper()
+		var sessionID uuid.UUID
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO chat_session (
+				organization_id, scope_type, scope_id, mode, status,
+				created_by_type, created_by_id, metadata
+			)
+			VALUES ($1, 'project', $2, 'async', 'active', 'system', $3, '{}'::jsonb)
+			RETURNING id
+		`, org.ID, projectRecord.ID, uuid.Nil).Scan(&sessionID); err != nil {
+			t.Fatalf("insert session: %v", err)
+		}
+		return sessionID
+	}
+
+	insertCancelledTurn := func(sessionID uuid.UUID, turnNumber int) uuid.UUID {
+		t.Helper()
+		var turnID uuid.UUID
+		cancelledAt := time.Now().UTC()
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO chat_turn (
+				session_id, turn_number, responding_type, responding_id, status,
+				cancel_requested_at, completed_at
+			)
+			VALUES ($1, $2, 'agent', $3, 'cancelled', $4, $4)
+			RETURNING id
+		`, sessionID, turnNumber, agent.ID, cancelledAt).Scan(&turnID); err != nil {
+			t.Fatalf("insert cancelled turn: %v", err)
+		}
+		return turnID
+	}
+
+	userCancelledTurnID := insertCancelledTurn(insertSession(), 1)
+	sessionClosedTurnID := insertCancelledTurn(insertSession(), 2)
+	cancelCurrentTurnID := insertCancelledTurn(insertSession(), 3)
+	ambiguousTurnID := insertCancelledTurn(insertSession(), 4)
+
+	testdb.PublishEvent(t, pool, org.ID, "chat.turn.cancelled", map[string]any{
+		"turn_id": userCancelledTurnID.String(),
+		"reason":  "user_cancelled",
+	})
+	testdb.PublishEvent(t, pool, org.ID, "chat.turn.cancelled", map[string]any{
+		"turn_id": sessionClosedTurnID.String(),
+		"reason":  "session_closed",
+	})
+	testdb.PublishEvent(t, pool, org.ID, "chat.turn.cancelled", map[string]any{
+		"turn_id": cancelCurrentTurnID.String(),
+		"reason":  "cancel_current_turn",
+	})
+	testdb.PublishEvent(t, pool, org.ID, "chat.turn.cancelled", map[string]any{
+		"turn_id": ambiguousTurnID.String(),
+		"reason":  "watcher cancelled duplicate concurrent turn",
+	})
+
+	repaired, err := worker.BackfillCancelledTurnStopReasons(ctx)
+	if err != nil {
+		t.Fatalf("BackfillCancelledTurnStopReasons: %v", err)
+	}
+	if repaired != 3 {
+		t.Fatalf("repaired rows = %d, want 3", repaired)
+	}
+
+	assertStopReason := func(turnID uuid.UUID, want *string) {
+		t.Helper()
+		var got *string
+		if err := pool.QueryRow(ctx, `
+			SELECT stop_reason
+			FROM chat_turn
+			WHERE id = $1
+		`, turnID).Scan(&got); err != nil {
+			t.Fatalf("query turn stop_reason: %v", err)
+		}
+		if want == nil {
+			if got != nil {
+				t.Fatalf("turn %s stop_reason = %v, want nil", turnID, got)
+			}
+			return
+		}
+		if got == nil || *got != *want {
+			t.Fatalf("turn %s stop_reason = %v, want %q", turnID, got, *want)
+		}
+	}
+
+	userCancelled := "user_cancelled"
+	sessionClosed := "session_closed"
+	assertStopReason(userCancelledTurnID, &userCancelled)
+	assertStopReason(sessionClosedTurnID, &sessionClosed)
+	assertStopReason(cancelCurrentTurnID, &userCancelled)
+	assertStopReason(ambiguousTurnID, nil)
+}
+
 func TestJobQueue_ListenNotify_Wakeup(t *testing.T) {
 	pool := testdb.New(t)
 	const wakeupTimeout = 8 * time.Second
