@@ -1726,6 +1726,9 @@ func summarizeHistory(messages []repo.ChatMessage, summaries []repo.ChatSummary)
 		if coveredBySummary(message.SequenceNumber, summaryRanges) {
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(message.Status), "failed") {
+			continue
+		}
 		pm := PromptMessage{
 			Role:       strings.TrimSpace(message.Role),
 			Content:    strings.TrimSpace(message.Content),

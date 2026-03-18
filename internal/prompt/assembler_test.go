@@ -905,3 +905,36 @@ func strPtr(value string) *string {
 func osWriteFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o644)
 }
+
+func TestSummarizeHistorySkipsFailedMessages(t *testing.T) {
+	summary := summarizeHistory([]repo.ChatMessage{
+		{
+			SequenceNumber: 1,
+			Role:           "user",
+			Content:        "Keep going.",
+			Status:         "final",
+		},
+		{
+			SequenceNumber: 2,
+			Role:           "assistant",
+			Content:        "",
+			Status:         "failed",
+		},
+		{
+			SequenceNumber: 3,
+			Role:           "system",
+			Content:        "[Continuation summary] Continuation summary unavailable.",
+			Status:         "final",
+		},
+	}, nil)
+
+	if len(summary) != 2 {
+		t.Fatalf("summary len = %d, want 2", len(summary))
+	}
+	if summary[0].Role != "user" || summary[0].Content != "Keep going." {
+		t.Fatalf("summary[0] = %#v, want user message", summary[0])
+	}
+	if summary[1].Role != "system" || !strings.Contains(summary[1].Content, "Continuation summary unavailable") {
+		t.Fatalf("summary[1] = %#v, want continuation system message", summary[1])
+	}
+}
