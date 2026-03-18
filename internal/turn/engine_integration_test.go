@@ -264,12 +264,49 @@ func TestTurnEngineIntegrationCancelConsumerCursorReusedAcrossTurns(t *testing.T
 		SELECT COUNT(*)
 		FROM consumer_cursor
 		WHERE organization_id = $1
-		  AND consumer_name LIKE 'turn-engine.cancel.%'
+		  AND consumer_name = 'turn-engine.cancel'
 	`, fixture.org.ID).Scan(&count); err != nil {
 		t.Fatalf("count turn cancel cursors: %v", err)
 	}
 	if count != 1 {
 		t.Fatalf("turn cancel consumer_cursor rows = %d, want 1", count)
+	}
+}
+
+func TestTurnEngineIntegrationCleanupLegacyCancelConsumerCursors(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	if _, err := fixture.pool.Exec(ctx, `
+		INSERT INTO consumer_cursor (consumer_name, organization_id, last_seq)
+		VALUES
+		  ('turn-engine.cancel.legacy-a', $1, 10),
+		  ('turn-engine.cancel.legacy-b', $1, 20),
+		  ('turn-engine.cancel', $1, 30)
+		ON CONFLICT DO NOTHING
+	`, fixture.org.ID); err != nil {
+		t.Fatalf("seed legacy cancel cursors: %v", err)
+	}
+
+	cleaned, err := fixture.engine.CleanupLegacyCancelConsumerCursors(ctx)
+	if err != nil {
+		t.Fatalf("CleanupLegacyCancelConsumerCursors: %v", err)
+	}
+	if cleaned != 2 {
+		t.Fatalf("cleaned = %d, want 2", cleaned)
+	}
+
+	var count int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM consumer_cursor
+		WHERE organization_id = $1
+		  AND consumer_name LIKE 'turn-engine.cancel%'
+	`, fixture.org.ID).Scan(&count); err != nil {
+		t.Fatalf("count remaining cancel cursors: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("remaining cancel cursor rows = %d, want 1", count)
 	}
 }
 

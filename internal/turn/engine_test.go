@@ -4307,7 +4307,7 @@ func TestCancellationWatchReusesConsumerNameAcrossTurns(t *testing.T) {
 		t.Fatalf("HandleUserMessage second turn: %v", err)
 	}
 
-	cancelSubs := fixture.events.subscriptionNamesWithPrefix("turn-engine.cancel.")
+	cancelSubs := fixture.events.subscriptionNamesWithPrefix("turn-engine.cancel")
 	if len(cancelSubs) != 2 {
 		t.Fatalf("cancel subscription count = %d, want 2", len(cancelSubs))
 	}

@@ -503,6 +503,11 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(turnTaskStatusSub)
 	turnProjectResumedSub := turnEngine.SubscribeProjectResumedPendingTurns(nil)
 	defer bus.Unsubscribe(turnProjectResumedSub)
+	if cleaned, cleanErr := turnEngine.CleanupLegacyCancelConsumerCursors(context.Background()); cleanErr != nil {
+		logger.Warn("failed to clean legacy turn cancel consumer cursors", "error", cleanErr)
+	} else if cleaned > 0 {
+		logger.Info("cleaned legacy turn cancel consumer cursors", "count", cleaned)
+	}
 	if recovered, recoverErr := turnEngine.RecoverCancelledBootstrapSessions(context.Background()); recoverErr != nil {
 		logger.Warn("failed to recover cancelled bootstrap sessions", "error", recoverErr)
 	} else if recovered > 0 {

@@ -702,7 +702,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		now:                         opts.Now,
 		sleep:                       opts.Sleep,
 		logger:                      opts.Logger,
-		cancelConsumerName:          defaultCancelConsumerPrefix + "." + uuid.NewString(),
+		cancelConsumerName:          defaultCancelConsumerPrefix,
 		rollupUpdater:               rollupUpdater,
 	}, nil
 }
@@ -820,6 +820,22 @@ func (e *TurnEngine) RecoverCancelledBootstrapSessions(ctx context.Context) (int
 		return recovered, rows.Err()
 	}
 	return recovered, nil
+}
+
+func (e *TurnEngine) CleanupLegacyCancelConsumerCursors(ctx context.Context) (int, error) {
+	if e == nil || e.pool == nil {
+		return 0, nil
+	}
+
+	commandTag, err := e.pool.Exec(ctx, `
+		DELETE FROM consumer_cursor
+		WHERE consumer_name LIKE $1
+		  AND consumer_name <> $2
+	`, defaultCancelConsumerPrefix+".%", defaultCancelConsumerPrefix)
+	if err != nil {
+		return 0, err
+	}
+	return int(commandTag.RowsAffected()), nil
 }
 
 func (e *TurnEngine) HandleTurnJob(ctx context.Context, job jobqueue.Job) error {
