@@ -222,6 +222,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: closed superseded canonical async sessions on startup", "count", repaired)
 	}
+	if repaired, err := w.CloseArchivedProjectAsyncSessions(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup archived project session cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: closed archived project async sessions on startup", "count", repaired)
+	}
 	if requeued, err := w.RequeueStrandedSupervisorRecoveryTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup supervisor recovery requeue failed", "error", err)
@@ -951,6 +958,37 @@ func (w *Worker) CloseSupersededCanonicalAsyncSessions(ctx context.Context) (int
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("close superseded canonical async sessions: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
+func (w *Worker) CloseArchivedProjectAsyncSessions(ctx context.Context) (int64, error) {
+	ct, err := w.pool.Exec(ctx, `
+		UPDATE chat_session cs
+		SET status = 'closed',
+		    closed_at = now(),
+		    current_turn_id = NULL
+		WHERE cs.status = 'active'
+		  AND cs.mode = 'async'
+		  AND (
+		    (cs.scope_type = 'project' AND EXISTS (
+		      SELECT 1
+		      FROM project p
+		      WHERE p.id = cs.scope_id
+		        AND p.status = 'archived'
+		    ))
+		    OR
+		    (cs.scope_type = 'project_task' AND EXISTS (
+		      SELECT 1
+		      FROM project_task pt
+		      JOIN project p ON p.id = pt.project_id
+		      WHERE pt.id = cs.scope_id
+		        AND p.status = 'archived'
+		    ))
+		  )
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("close archived project async sessions: %w", err)
 	}
 	return ct.RowsAffected(), nil
 }

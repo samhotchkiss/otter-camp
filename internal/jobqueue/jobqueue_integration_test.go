@@ -567,6 +567,100 @@ func TestJobQueue_CloseSupersededCanonicalAsyncSessions(t *testing.T) {
 	assertActive(newerOrgID, "newer organization")
 }
 
+func TestJobQueue_CloseArchivedProjectAsyncSessions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "archived-project-session-cleanup-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	org := createJobQueueOrg079(t, pool, "archived-project-session-cleanup")
+	projectRecord, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "archived-project-session-cleanup-" + uuid.NewString()[:8],
+		DisplayName:    "Archived Project Session Cleanup",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	description := "Close archived project-scoped async sessions."
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      projectRecord.ID,
+		TaskNumber:     1,
+		Title:          "Archived cleanup task",
+		Description:    &description,
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		CreatedByID:    nil,
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+
+	var projectSessionID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata
+		)
+		VALUES ($1, 'project', $2, 'async', 'active', 'system', $3, '{}'::jsonb)
+		RETURNING id
+	`, org.ID, projectRecord.ID, uuid.Nil).Scan(&projectSessionID); err != nil {
+		t.Fatalf("insert project session: %v", err)
+	}
+
+	var taskSessionID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata
+		)
+		VALUES ($1, 'project_task', $2, 'async', 'active', 'system', $3, '{}'::jsonb)
+		RETURNING id
+	`, org.ID, taskRecord.ID, uuid.Nil).Scan(&taskSessionID); err != nil {
+		t.Fatalf("insert task session: %v", err)
+	}
+
+	if err := repo.NewProjectRepo(pool).Archive(ctx, projectRecord.ID); err != nil {
+		t.Fatalf("archive project: %v", err)
+	}
+
+	repaired, err := worker.CloseArchivedProjectAsyncSessions(ctx)
+	if err != nil {
+		t.Fatalf("CloseArchivedProjectAsyncSessions: %v", err)
+	}
+	if repaired != 2 {
+		t.Fatalf("repaired rows = %d, want 2", repaired)
+	}
+
+	assertClosed := func(sessionID uuid.UUID, label string) {
+		t.Helper()
+		var status string
+		var closedAt *time.Time
+		if err := pool.QueryRow(ctx, `
+			SELECT status, closed_at
+			FROM chat_session
+			WHERE id = $1
+		`, sessionID).Scan(&status, &closedAt); err != nil {
+			t.Fatalf("query %s session: %v", label, err)
+		}
+		if status != "closed" || closedAt == nil {
+			t.Fatalf("%s session = status:%s closed_at:%v, want closed with closed_at", label, status, closedAt)
+		}
+	}
+
+	assertClosed(projectSessionID, "project")
+	assertClosed(taskSessionID, "task")
+}
+
 func TestJobQueue_ListenNotify_Wakeup(t *testing.T) {
 	pool := testdb.New(t)
 	const wakeupTimeout = 8 * time.Second
