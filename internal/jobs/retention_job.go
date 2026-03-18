@@ -136,7 +136,7 @@ func (j *RetentionJob) deleteOldTerminalJobs(ctx context.Context, cutoff time.Ti
 	tag, err := tx.Exec(ctx, `
 		DELETE FROM job_queue
 		WHERE status IN ('done', 'dead_letter')
-		  AND created_at < $1
+		  AND updated_at < $1
 	`, cutoff.UTC())
 	if err != nil {
 		return 0, fmt.Errorf("delete old terminal job_queue rows: %w", err)

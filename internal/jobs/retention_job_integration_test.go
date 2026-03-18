@@ -87,6 +87,7 @@ func TestRetentionJobRunDeletesOldTerminalJobQueueRows(t *testing.T) {
 		VALUES
 			('old.done', 10, '{}'::jsonb, 'done', now() - interval '91 days', now() - interval '91 days'),
 			('old.dead', 10, '{}'::jsonb, 'dead_letter', now() - interval '91 days', now() - interval '91 days'),
+			('old.created.recently.terminal', 10, '{}'::jsonb, 'dead_letter', now() - interval '120 days', now() - interval '1 day'),
 			('new.done', 10, '{}'::jsonb, 'done', now() - interval '1 day', now() - interval '1 day'),
 			('new.dead', 10, '{}'::jsonb, 'dead_letter', now() - interval '1 day', now() - interval '1 day'),
 			('old.pending', 10, '{}'::jsonb, 'pending', now() - interval '91 days', now() - interval '91 days')
@@ -119,6 +120,7 @@ func TestRetentionJobRunDeletesOldTerminalJobQueueRows(t *testing.T) {
 
 	assertCount("old.done", 0)
 	assertCount("old.dead", 0)
+	assertCount("old.created.recently.terminal", 1)
 	assertCount("new.done", 1)
 	assertCount("new.dead", 1)
 	assertCount("old.pending", 1)
