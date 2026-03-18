@@ -205,6 +205,18 @@ func (r *ChatSessionRepo) UpdateLastMessageAt(ctx context.Context, id uuid.UUID,
 }
 
 func (r *ChatSessionRepo) Close(ctx context.Context, id uuid.UUID) (ChatSession, error) {
+	if _, err := r.db.Exec(ctx, `
+		UPDATE chat_turn
+		SET status = 'cancelled',
+		    cancel_requested_at = now(),
+		    completed_at = now(),
+		    stop_reason = 'session_closed'
+		WHERE session_id = $1
+		  AND status IN ('pending', 'in_progress')
+	`, id); err != nil {
+		return ChatSession{}, mapDBError(err)
+	}
+
 	row := r.db.QueryRow(ctx, `
 		UPDATE chat_session
 		SET status = 'closed',
@@ -242,6 +254,30 @@ func (r *ChatSessionRepo) DeleteProjectScoped(ctx context.Context, projectID uui
 }
 
 func (r *ChatSessionRepo) CloseProjectScoped(ctx context.Context, projectID uuid.UUID) error {
+	if _, err := r.db.Exec(ctx, `
+		UPDATE chat_turn
+		SET status = 'cancelled',
+		    cancel_requested_at = now(),
+		    completed_at = now(),
+		    stop_reason = 'session_closed'
+		WHERE session_id IN (
+			SELECT id
+			FROM chat_session
+			WHERE status = 'active'
+			  AND (
+				(scope_type = 'project' AND scope_id = $1)
+				OR (scope_type = 'project_task' AND scope_id IN (
+					SELECT id
+					FROM project_task
+					WHERE project_id = $1
+				))
+			  )
+		)
+		  AND status IN ('pending', 'in_progress')
+	`, projectID); err != nil {
+		return mapDBError(err)
+	}
+
 	_, err := r.db.Exec(ctx, `
 		UPDATE chat_session
 		SET status = 'closed',

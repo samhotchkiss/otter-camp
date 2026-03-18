@@ -1001,6 +1001,22 @@ func (w *Worker) CloseArchivedProjectAsyncSessions(ctx context.Context) (int64, 
 }
 
 func (w *Worker) ClearInactiveSessionCurrentTurns(ctx context.Context) (int64, error) {
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET status = 'cancelled',
+		    cancel_requested_at = now(),
+		    completed_at = now(),
+		    stop_reason = 'session_closed'
+		WHERE session_id IN (
+			SELECT id
+			FROM chat_session
+			WHERE status IN ('closed', 'archived')
+		)
+		  AND status IN ('pending', 'in_progress')
+	`); err != nil {
+		return 0, fmt.Errorf("cancel inactive session turns: %w", err)
+	}
+
 	ct, err := w.pool.Exec(ctx, `
 		UPDATE chat_session
 		SET current_turn_id = NULL

@@ -819,6 +819,31 @@ func TestJobQueue_ClearInactiveSessionCurrentTurns(t *testing.T) {
 	assertNilCurrentTurn(closedSessionID, "closed")
 	assertNilCurrentTurn(archivedSessionID, "archived")
 	assertPresentCurrentTurn(activeSessionID, activeTurnID, "active")
+
+	assertTurnStatus := func(turnID uuid.UUID, want string, label string) {
+		t.Helper()
+		var status string
+		var stopReason *string
+		if err := pool.QueryRow(ctx, `
+			SELECT status, stop_reason
+			FROM chat_turn
+			WHERE id = $1
+		`, turnID).Scan(&status, &stopReason); err != nil {
+			t.Fatalf("query %s turn: %v", label, err)
+		}
+		if status != want {
+			t.Fatalf("%s turn status = %s, want %s", label, status, want)
+		}
+		if want == "cancelled" {
+			if stopReason == nil || *stopReason != "session_closed" {
+				t.Fatalf("%s turn stop_reason = %v, want session_closed", label, stopReason)
+			}
+		}
+	}
+
+	assertTurnStatus(closedTurnID, "cancelled", "closed")
+	assertTurnStatus(archivedTurnID, "cancelled", "archived")
+	assertTurnStatus(activeTurnID, "pending", "active")
 }
 
 func TestJobQueue_ListenNotify_Wakeup(t *testing.T) {

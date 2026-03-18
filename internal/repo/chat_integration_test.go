@@ -338,6 +338,172 @@ func TestChatTurnRepoCreateForMessageAttemptCancelsDuplicateInProgressTurnsEX305
 	}
 }
 
+func TestChatSessionRepoCloseCancelsNonTerminalTurns(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedChatFixture(t, ctx, pool)
+
+	sessionRepo := NewChatSessionRepo(pool)
+	turnRepo := NewChatTurnRepo(pool)
+
+	pendingTurn, err := turnRepo.Create(ctx, ChatTurn{
+		SessionID:      fixture.session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   fixture.agent.ID,
+		Status:         "pending",
+	})
+	if err != nil {
+		t.Fatalf("create pending turn: %v", err)
+	}
+	inProgressTurn, err := turnRepo.Create(ctx, ChatTurn{
+		SessionID:      fixture.session.ID,
+		TurnNumber:     2,
+		RespondingType: "agent",
+		RespondingID:   fixture.agent.ID,
+		Status:         "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("create in_progress turn: %v", err)
+	}
+	if _, err := sessionRepo.UpdateCurrentTurn(ctx, fixture.session.ID, &inProgressTurn.ID); err != nil {
+		t.Fatalf("set current turn: %v", err)
+	}
+
+	closed, err := sessionRepo.Close(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if closed.Status != "closed" {
+		t.Fatalf("session status = %q, want closed", closed.Status)
+	}
+	if closed.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil", closed.CurrentTurnID)
+	}
+	if closed.ClosedAt == nil {
+		t.Fatal("closed_at is nil")
+	}
+
+	assertChatTurnStatus(t, ctx, pool, pendingTurn.ID, "cancelled", "session_closed")
+	assertChatTurnStatus(t, ctx, pool, inProgressTurn.ID, "cancelled", "session_closed")
+}
+
+func TestChatSessionRepoCloseProjectScopedCancelsNonTerminalTurns(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedChatFixture(t, ctx, pool)
+
+	sessionRepo := NewChatSessionRepo(pool)
+	turnRepo := NewChatTurnRepo(pool)
+	taskRepo := NewProjectTaskRepo(pool)
+
+	projectSession, err := sessionRepo.Create(ctx, ChatSession{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project",
+		ScopeID:        fixture.project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       jsonRaw(`{"source":"close-project-scoped"}`),
+	})
+	if err != nil {
+		t.Fatalf("create project session: %v", err)
+	}
+	projectTurn, err := turnRepo.Create(ctx, ChatTurn{
+		SessionID:      projectSession.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   fixture.agent.ID,
+		Status:         "pending",
+	})
+	if err != nil {
+		t.Fatalf("create project turn: %v", err)
+	}
+	if _, err := sessionRepo.UpdateCurrentTurn(ctx, projectSession.ID, &projectTurn.ID); err != nil {
+		t.Fatalf("set project current turn: %v", err)
+	}
+
+	task, err := taskRepo.Create(ctx, ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      fixture.project.ID,
+		Title:          "Task scoped chat",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		Metadata:       jsonRaw(`{"source":"close-project-scoped"}`),
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	taskSession, err := sessionRepo.Create(ctx, ChatSession{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       jsonRaw(`{"source":"close-project-scoped-task"}`),
+	})
+	if err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+	taskTurn, err := turnRepo.Create(ctx, ChatTurn{
+		SessionID:      taskSession.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   fixture.agent.ID,
+		Status:         "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("create task turn: %v", err)
+	}
+	if _, err := sessionRepo.UpdateCurrentTurn(ctx, taskSession.ID, &taskTurn.ID); err != nil {
+		t.Fatalf("set task current turn: %v", err)
+	}
+
+	otherOrg, otherProject := seedTaskRepoOrgProject(t, ctx, pool)
+	otherAgent := seedChatAgent(t, ctx, pool, otherOrg.ID)
+	otherSession, err := sessionRepo.Create(ctx, ChatSession{
+		OrganizationID: otherOrg.ID,
+		ScopeType:      "project",
+		ScopeID:        otherProject.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       jsonRaw(`{"source":"close-project-scoped-other"}`),
+	})
+	if err != nil {
+		t.Fatalf("create other session: %v", err)
+	}
+	otherTurn, err := turnRepo.Create(ctx, ChatTurn{
+		SessionID:      otherSession.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   otherAgent.ID,
+		Status:         "pending",
+	})
+	if err != nil {
+		t.Fatalf("create other turn: %v", err)
+	}
+	if _, err := sessionRepo.UpdateCurrentTurn(ctx, otherSession.ID, &otherTurn.ID); err != nil {
+		t.Fatalf("set other current turn: %v", err)
+	}
+
+	if err := sessionRepo.CloseProjectScoped(ctx, fixture.project.ID); err != nil {
+		t.Fatalf("CloseProjectScoped: %v", err)
+	}
+
+	assertChatSessionState(t, ctx, pool, projectSession.ID, "closed", false)
+	assertChatSessionState(t, ctx, pool, taskSession.ID, "closed", false)
+	assertChatSessionState(t, ctx, pool, otherSession.ID, "active", true)
+
+	assertChatTurnStatus(t, ctx, pool, projectTurn.ID, "cancelled", "session_closed")
+	assertChatTurnStatus(t, ctx, pool, taskTurn.ID, "cancelled", "session_closed")
+	assertChatTurnStatus(t, ctx, pool, otherTurn.ID, "pending", "")
+}
+
 func TestChatMessageReactionUniqueConstraint(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -558,4 +724,53 @@ func seedChatAgent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID 
 func trimTestString(value string) *string {
 	trimmed := value
 	return &trimmed
+}
+
+func assertChatTurnStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, turnID uuid.UUID, wantStatus string, wantStopReason string) {
+	t.Helper()
+
+	var status string
+	var stopReason *string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, stop_reason
+		FROM chat_turn
+		WHERE id = $1
+	`, turnID).Scan(&status, &stopReason); err != nil {
+		t.Fatalf("query turn %s: %v", turnID, err)
+	}
+	if normalizeChatTurnStatus(status) != wantStatus {
+		t.Fatalf("turn %s status = %q, want %q", turnID, status, wantStatus)
+	}
+	if wantStopReason == "" {
+		if stopReason != nil {
+			t.Fatalf("turn %s stop_reason = %v, want nil", turnID, stopReason)
+		}
+		return
+	}
+	if stopReason == nil || *stopReason != wantStopReason {
+		t.Fatalf("turn %s stop_reason = %v, want %q", turnID, stopReason, wantStopReason)
+	}
+}
+
+func assertChatSessionState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sessionID uuid.UUID, wantStatus string, wantCurrentTurn bool) {
+	t.Helper()
+
+	var status string
+	var currentTurnID *uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		SELECT status, current_turn_id
+		FROM chat_session
+		WHERE id = $1
+	`, sessionID).Scan(&status, &currentTurnID); err != nil {
+		t.Fatalf("query session %s: %v", sessionID, err)
+	}
+	if status != wantStatus {
+		t.Fatalf("session %s status = %q, want %q", sessionID, status, wantStatus)
+	}
+	if wantCurrentTurn && currentTurnID == nil {
+		t.Fatalf("session %s current_turn_id = nil, want present", sessionID)
+	}
+	if !wantCurrentTurn && currentTurnID != nil {
+		t.Fatalf("session %s current_turn_id = %v, want nil", sessionID, currentTurnID)
+	}
 }
