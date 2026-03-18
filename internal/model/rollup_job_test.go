@@ -26,11 +26,11 @@ func TestDailyRollupJobRunUpsertsAgentAndProjectRowsIdempotently(t *testing.T) {
 		orgID: orgID,
 		rowsByDimension: map[string][][]any{
 			"agent_id": {
-				{orgID, &agentA, "claude-opus-4-6", json.RawMessage(`{}`), 3, int64(100), int64(50)},
+				{orgID, &agentA, "claude-opus-4-20250514", json.RawMessage(`{}`), 3, int64(100), int64(50)},
 				{orgID, &agentB, "claude-haiku-3-5", json.RawMessage(`{}`), 2, int64(40), int64(20)},
 			},
 			"project_id": {
-				{orgID, &projectID, "claude-opus-4-6", json.RawMessage(`{}`), 3, int64(100), int64(50)},
+				{orgID, &projectID, "claude-opus-4-20250514", json.RawMessage(`{}`), 3, int64(100), int64(50)},
 				{orgID, &projectID, "claude-haiku-3-5", json.RawMessage(`{}`), 2, int64(40), int64(20)},
 			},
 		},
@@ -184,7 +184,7 @@ func TestDefaultModelCostsPer1KKnownModels(t *testing.T) {
 		inputCost  float64
 		outputCost float64
 	}{
-		{modelName: "claude-opus-4-6", inputCost: 1.5, outputCost: 7.5},
+		{modelName: "claude-opus-4-20250514", inputCost: 1.5, outputCost: 7.5},
 		{modelName: "claude-sonnet-4-5", inputCost: 0.3, outputCost: 1.5},
 		{modelName: "claude-haiku-4-5", inputCost: 0.08, outputCost: 0.4},
 		{modelName: "gpt-4o", inputCost: 0.5, outputCost: 1.5},

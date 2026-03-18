@@ -8927,7 +8927,7 @@ func profilePickerOptions(data *SettingsData) []settingsItem {
 		modelName    string
 	}
 	knownModels := map[string][]string{
-		"Anthropic": {"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"},
+		"Anthropic": {"claude-opus-4-20250514", "claude-sonnet-4-20250514", "claude-haiku-4-5-20251001"},
 		"OpenAI":    {"gpt-4o", "gpt-4o-mini"},
 	}
 	var options []settingsItem
