@@ -952,12 +952,12 @@ func summarizationBudgetReserveTokens(contextWindow int) int {
 	if contextWindow <= 0 {
 		return 256
 	}
-	reserve := contextWindow / 12
+	reserve := contextWindow / 8
 	if reserve < 256 {
 		return 256
 	}
-	if reserve > 16*1024 {
-		return 16 * 1024
+	if reserve > 32*1024 {
+		return 32 * 1024
 	}
 	return reserve
 }
