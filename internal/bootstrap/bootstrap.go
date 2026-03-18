@@ -980,7 +980,7 @@ func defaultProfileSeeds() []modelProfileSeed {
 		{
 			LogicalProfileID:    "high-capability",
 			ProviderSlug:        "anthropic",
-			ModelName:           "claude-opus-4-20250514",
+			ModelName:           "claude-haiku-4-5-20251001",
 			ContextWindowTokens: 200000,
 			MaxOutputTokens:     4096,
 			SupportsStreaming:   true,
@@ -990,7 +990,7 @@ func defaultProfileSeeds() []modelProfileSeed {
 		{
 			LogicalProfileID:    "standard",
 			ProviderSlug:        "anthropic",
-			ModelName:           "claude-sonnet-4-20250514",
+			ModelName:           "claude-haiku-4-5-20251001",
 			ContextWindowTokens: 200000,
 			MaxOutputTokens:     4096,
 			SupportsStreaming:   true,
