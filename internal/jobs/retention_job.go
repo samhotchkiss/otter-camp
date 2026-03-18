@@ -18,6 +18,7 @@ const (
 	RetentionEnforceJobType      = "retention_enforce"
 	RetentionChatDays            = 90
 	RetentionRunDays             = 90
+	RetentionJobQueueDays        = 90
 	RetentionModelInvocationDays = 90
 	RetentionDomainEventDays     = 90
 	RetentionRunArtifactDays     = 90
@@ -81,6 +82,9 @@ func (j *RetentionJob) Run(ctx context.Context) error {
 	if rowsDeleted["chat_turn"], err = j.deleteOlderThan(ctx, "chat_turn", now.AddDate(0, 0, -RetentionChatDays)); err != nil {
 		return err
 	}
+	if rowsDeleted["job_queue"], err = j.deleteOldTerminalJobs(ctx, now.AddDate(0, 0, -RetentionJobQueueDays)); err != nil {
+		return err
+	}
 	if rowsDeleted["run"], err = j.deleteOlderThan(ctx, "run", now.AddDate(0, 0, -RetentionRunDays)); err != nil {
 		return err
 	}
@@ -118,6 +122,27 @@ func (j *RetentionJob) deleteOlderThan(ctx context.Context, table string, cutoff
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit retention delete for %s: %w", table, err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (j *RetentionJob) deleteOldTerminalJobs(ctx context.Context, cutoff time.Time) (int64, error) {
+	tx, err := j.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("begin retention delete for job_queue: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM job_queue
+		WHERE status IN ('done', 'dead_letter')
+		  AND created_at < $1
+	`, cutoff.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("delete old terminal job_queue rows: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit retention delete for job_queue: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }
