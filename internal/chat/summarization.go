@@ -34,6 +34,8 @@ const (
 	cacheEstimateTTL               = 30 * time.Second
 	tokenEstimatorDivisor          = 4
 	messageEstimatorOverheadChars  = 16
+	summarizationFitDivisor        = 3
+	summarizationFitOverheadChars  = 32
 
 	toolResultCompactionThresholdBytes = 4 * 1024
 	retentionWindow                    = 90 * 24 * time.Hour
@@ -285,7 +287,7 @@ func (s *Summarizer) RunForSession(ctx context.Context, sessionID uuid.UUID) (*r
 	if err != nil {
 		return nil, err
 	}
-	maxInputTokens := profile.ContextWindowTokens - profile.MaxOutputTokens - 1024
+	maxInputTokens := profile.ContextWindowTokens - profile.MaxOutputTokens - summarizationBudgetReserveTokens(profile.ContextWindowTokens)
 	if maxInputTokens > 0 {
 		candidate = fitSummaryCandidateToBudget(candidate, maxInputTokens)
 	}
@@ -833,9 +835,9 @@ func fitSummaryCandidateToBudget(candidate *summaryCandidate, maxInputTokens int
 	estimate := func(messages []repo.ChatMessage) int {
 		charCount := 0
 		for _, message := range messages {
-			charCount += len(strings.TrimSpace(message.Role)) + len(strings.TrimSpace(message.Content)) + messageEstimatorOverheadChars
+			charCount += len(strings.TrimSpace(message.Role)) + len(strings.TrimSpace(message.Content)) + summarizationFitOverheadChars
 		}
-		return estimateTokensFromChars(charCount)
+		return int(math.Ceil(float64(charCount) / float64(summarizationFitDivisor)))
 	}
 
 	if estimate(candidate.Messages) <= maxInputTokens {
@@ -944,6 +946,20 @@ func targetMessageCount(totalMessages int) int {
 		count = totalMessages
 	}
 	return count
+}
+
+func summarizationBudgetReserveTokens(contextWindow int) int {
+	if contextWindow <= 0 {
+		return 256
+	}
+	reserve := contextWindow / 12
+	if reserve < 256 {
+		return 256
+	}
+	if reserve > 16*1024 {
+		return 16 * 1024
+	}
+	return reserve
 }
 
 func estimateTokensFromChars(charCount int) int {

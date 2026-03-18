@@ -246,7 +246,7 @@ func TestSummarizerIntegrationShrinksCandidateToProfileBudget(t *testing.T) {
 			TurnID:    &turn.ID,
 			Role:      "user",
 			Status:    "final",
-			Content:   strings.Repeat(string(rune('a'+i)), 900),
+			Content:   strings.Repeat(string(rune('a'+i)), 1800),
 		}); err != nil {
 			t.Fatalf("create message %d: %v", i, err)
 		}

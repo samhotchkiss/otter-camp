@@ -80,11 +80,12 @@ func (m *gatewaySummarizationModel) Summarize(ctx context.Context, req chat.Summ
 func estimateSummarizationPromptTokens(systemPrompt, transcript string) int {
 	total := 0
 	if strings.TrimSpace(systemPrompt) != "" {
-		total += len(systemPrompt) / 4
+		total += len(systemPrompt) / 3
+		total += 64
 	}
 	if strings.TrimSpace(transcript) != "" {
-		total += len(transcript) / 4
-		total += 16
+		total += len(transcript) / 3
+		total += 64
 	}
 	return total
 }
