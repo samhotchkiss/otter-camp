@@ -898,12 +898,6 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 		      AND jq.status IN ('pending', 'claimed')
 		      AND (jq.payload->>'session_id')::uuid = cs.id
 		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM flow_node_execution e
-		    WHERE e.session_id = cs.id
-		      AND e.status = 'active'
-		  )
 	`, agentTurnJobType, w.clock.Now().UTC().Add(-staleContinuationThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("list stale in-progress continuation turns: %w", err)

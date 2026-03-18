@@ -2519,6 +2519,28 @@ func TestJobWorkerRecoverStaleInProgressContinuationTurns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "recover-stale-continuation-template",
+		DisplayName:    "Recover Stale Continuation Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
 	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
 		OrganizationID:  org.ID,
 		ProjectID:       project.ID,
@@ -2579,6 +2601,15 @@ func TestJobWorkerRecoverStaleInProgressContinuationTurns(t *testing.T) {
 	}
 	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &continuationTurn.ID); err != nil {
 		t.Fatalf("set current continuation turn: %v", err)
+	}
+	if _, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	}); err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		UPDATE chat_turn
