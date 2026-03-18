@@ -941,16 +941,17 @@ func (r *ChatTurnRepo) SetCompleted(ctx context.Context, id uuid.UUID, completed
 	return scanChatTurnWithNotFound(row)
 }
 
-func (r *ChatTurnRepo) SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time) (ChatTurn, error) {
+func (r *ChatTurnRepo) SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time, stopReason string) (ChatTurn, error) {
 	row := r.db.QueryRow(ctx, `
 		UPDATE chat_turn
 		SET status = 'cancelled',
 		    cancel_requested_at = $2,
-		    completed_at = $3
+		    completed_at = $3,
+		    stop_reason = NULLIF(BTRIM($4), '')
 		WHERE id = $1
 		RETURNING id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
 		          started_at, completed_at, duration_ms, error_message, stop_reason, trigger_message_id, retry_count, created_at
-	`, id, cancelRequestedAt.UTC(), completedAt.UTC())
+	`, id, cancelRequestedAt.UTC(), completedAt.UTC(), strings.TrimSpace(stopReason))
 	return scanChatTurnWithNotFound(row)
 }
 

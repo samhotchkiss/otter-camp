@@ -372,11 +372,12 @@ func TestChatServiceIntegrationCancelTurnSetsCompletedAt(t *testing.T) {
 	var status string
 	var cancelRequestedAt *time.Time
 	var completedAt *time.Time
+	var stopReason *string
 	if err := pool.QueryRow(ctx, `
-		SELECT status, cancel_requested_at, completed_at
+		SELECT status, cancel_requested_at, completed_at, stop_reason
 		FROM chat_turn
 		WHERE id = $1
-	`, turn.ID).Scan(&status, &cancelRequestedAt, &completedAt); err != nil {
+	`, turn.ID).Scan(&status, &cancelRequestedAt, &completedAt, &stopReason); err != nil {
 		t.Fatalf("query chat_turn: %v", err)
 	}
 
@@ -388,6 +389,9 @@ func TestChatServiceIntegrationCancelTurnSetsCompletedAt(t *testing.T) {
 	}
 	if completedAt == nil {
 		t.Fatal("completed_at is NULL, want non-NULL")
+	}
+	if stopReason == nil || *stopReason != "user_cancelled" {
+		t.Fatalf("stop_reason = %v, want user_cancelled", stopReason)
 	}
 }
 

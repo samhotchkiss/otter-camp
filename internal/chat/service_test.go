@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -559,18 +560,23 @@ func TestCancelTurnSetsCompletedAt(t *testing.T) {
 				}
 				return repo.ChatTurn{ID: turnID, SessionID: sessionID, Status: "in_progress", TurnNumber: 1}, nil
 			},
-			setCancelledFn: func(_ context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time) (repo.ChatTurn, error) {
+			setCancelledFn: func(_ context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time, stopReason string) (repo.ChatTurn, error) {
 				if id != turnID {
 					t.Fatalf("unexpected turn id for SetCancelled: %s", id)
 				}
+				if stopReason != "user_cancelled" {
+					t.Fatalf("stopReason = %q, want user_cancelled", stopReason)
+				}
 				gotCancelRequestedAt = cancelRequestedAt
 				gotCompletedAt = completedAt
+				reasonCopy := stopReason
 				return repo.ChatTurn{
 					ID:                id,
 					SessionID:         sessionID,
 					Status:            "cancelled",
 					CancelRequestedAt: &cancelRequestedAt,
 					CompletedAt:       &completedAt,
+					StopReason:        &reasonCopy,
 				}, nil
 			},
 		},
@@ -652,7 +658,7 @@ func TestCancelTurnCancelsLogicalMessageGroupAndDrainsQueuedDispatches(t *testin
 				copy(copied, sessionTurns)
 				return copied, nil
 			},
-			setCancelledFn: func(_ context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time) (repo.ChatTurn, error) {
+			setCancelledFn: func(_ context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time, stopReason string) (repo.ChatTurn, error) {
 				cancelled[id]++
 				for i := range sessionTurns {
 					if sessionTurns[i].ID != id {
@@ -661,8 +667,12 @@ func TestCancelTurnCancelsLogicalMessageGroupAndDrainsQueuedDispatches(t *testin
 					sessionTurns[i].Status = "cancelled"
 					sessionTurns[i].CancelRequestedAt = &cancelRequestedAt
 					sessionTurns[i].CompletedAt = &completedAt
+					sessionTurns[i].StopReason = &stopReason
 				}
-				return repo.ChatTurn{ID: id, SessionID: sessionID, Status: "cancelled", CancelRequestedAt: &cancelRequestedAt, CompletedAt: &completedAt}, nil
+				if stopReason != "user_cancelled" {
+					t.Fatalf("stopReason = %q, want user_cancelled", stopReason)
+				}
+				return repo.ChatTurn{ID: id, SessionID: sessionID, Status: "cancelled", CancelRequestedAt: &cancelRequestedAt, CompletedAt: &completedAt, StopReason: &stopReason}, nil
 			},
 		},
 	})
@@ -1213,7 +1223,7 @@ type fakeTurnRepo struct {
 	listBySessionFn func(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatTurn, error)
 	setStartedFn    func(ctx context.Context, id uuid.UUID, startedAt time.Time) (repo.ChatTurn, error)
 	setCompletedFn  func(ctx context.Context, id uuid.UUID, completedAt time.Time, durationMS int) (repo.ChatTurn, error)
-	setCancelledFn  func(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time) (repo.ChatTurn, error)
+	setCancelledFn  func(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time, stopReason string) (repo.ChatTurn, error)
 	setFailedFn     func(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (repo.ChatTurn, error)
 }
 
@@ -1253,11 +1263,15 @@ func (f *fakeTurnRepo) SetCompleted(ctx context.Context, id uuid.UUID, completed
 	return repo.ChatTurn{ID: id, Status: "completed", CompletedAt: &completedAt, DurationMS: &durationMS}, nil
 }
 
-func (f *fakeTurnRepo) SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time) (repo.ChatTurn, error) {
+func (f *fakeTurnRepo) SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time, stopReason string) (repo.ChatTurn, error) {
 	if f.setCancelledFn != nil {
-		return f.setCancelledFn(ctx, id, cancelRequestedAt, completedAt)
+		return f.setCancelledFn(ctx, id, cancelRequestedAt, completedAt, stopReason)
 	}
-	return repo.ChatTurn{ID: id, Status: "cancelled", CancelRequestedAt: &cancelRequestedAt, CompletedAt: &completedAt}, nil
+	reasonCopy := strings.TrimSpace(stopReason)
+	if reasonCopy == "" {
+		return repo.ChatTurn{ID: id, Status: "cancelled", CancelRequestedAt: &cancelRequestedAt, CompletedAt: &completedAt}, nil
+	}
+	return repo.ChatTurn{ID: id, Status: "cancelled", CancelRequestedAt: &cancelRequestedAt, CompletedAt: &completedAt, StopReason: &reasonCopy}, nil
 }
 
 func (f *fakeTurnRepo) SetFailed(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (repo.ChatTurn, error) {

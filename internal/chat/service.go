@@ -174,7 +174,7 @@ type chatTurnRepository interface {
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatTurn, error)
 	SetStarted(ctx context.Context, id uuid.UUID, startedAt time.Time) (repo.ChatTurn, error)
 	SetCompleted(ctx context.Context, id uuid.UUID, completedAt time.Time, durationMS int) (repo.ChatTurn, error)
-	SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time) (repo.ChatTurn, error)
+	SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time, stopReason string) (repo.ChatTurn, error)
 	SetFailed(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (repo.ChatTurn, error)
 }
 
@@ -1484,6 +1484,7 @@ func (s *service) CancelTurn(ctx context.Context, turnID uuid.UUID, reason strin
 	if err != nil {
 		return err
 	}
+	storedStopReason := cancelTurnStopReason(reason)
 
 	turnsToCancel := []repo.ChatTurn{repo.ChatTurn(*turn)}
 	if turn.TriggerMessageID != nil && *turn.TriggerMessageID != uuid.Nil {
@@ -1510,7 +1511,7 @@ func (s *service) CancelTurn(ctx context.Context, turnID uuid.UUID, reason strin
 		if isTerminalTurnStatus(candidate.Status) {
 			continue
 		}
-		cancelled, err := s.turns.SetCancelled(ctx, candidate.ID, now, now)
+		cancelled, err := s.turns.SetCancelled(ctx, candidate.ID, now, now, storedStopReason)
 		if err != nil {
 			return err
 		}
@@ -1896,7 +1897,7 @@ func (s *service) reconcileSessionCurrentTurn(ctx context.Context, sessionID uui
 	if len(duplicateTurns) > 0 {
 		now := s.clock.Now().UTC()
 		for _, turn := range duplicateTurns {
-			if _, err := s.turns.SetCancelled(ctx, turn.ID, now, now); err != nil {
+			if _, err := s.turns.SetCancelled(ctx, turn.ID, now, now, ""); err != nil {
 				return nil, err
 			}
 		}
@@ -1911,6 +1912,17 @@ func (s *service) reconcileSessionCurrentTurn(ctx context.Context, sessionID uui
 		return nil, err
 	}
 	return current, nil
+}
+
+func cancelTurnStopReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "steer_turn":
+		return "user_steered"
+	case "session_closed":
+		return "session_closed"
+	default:
+		return "user_cancelled"
+	}
 }
 
 func (s *service) hasInProgressTurn(ctx context.Context, sessionID uuid.UUID) (bool, error) {
