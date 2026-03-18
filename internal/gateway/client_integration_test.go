@@ -1219,6 +1219,9 @@ func TestLiveModelGatewayCompleteAnthropicSubscriptionAuth(t *testing.T) {
 		if got := r.Header.Get("anthropic-beta"); !strings.Contains(got, "oauth-2025-04-20") {
 			http.Error(w, "missing oauth beta header", http.StatusBadRequest)
 			return
+		} else if strings.Contains(got, "fine-grained-tool-streaming-2025-05-14") {
+			http.Error(w, "deprecated fine-grained-tool-streaming beta header must be omitted", http.StatusBadRequest)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":4,"output_tokens":1}}`))

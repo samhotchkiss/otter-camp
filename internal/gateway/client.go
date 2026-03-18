@@ -36,7 +36,7 @@ const (
 	anthropicSubscriptionTokenURL   = "https://console.anthropic.com/v1/oauth/token"
 	anthropicSubscriptionClientID   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 	anthropicClaudeCodeUserAgent    = "claude-cli/2.1.2 (external, cli)"
-	anthropicSubscriptionBeta       = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14"
+	anthropicSubscriptionBeta       = "claude-code-20250219,oauth-2025-04-20"
 	anthropicTokenRefreshSkew       = 5 * time.Minute
 )
 
