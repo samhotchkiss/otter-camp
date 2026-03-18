@@ -52,6 +52,7 @@ func (m *gatewaySummarizationModel) Summarize(ctx context.Context, req chat.Summ
 	if systemPrompt == "" {
 		systemPrompt = "Summarize the provided conversation."
 	}
+	totalTokens := estimateSummarizationPromptTokens(systemPrompt, transcript)
 
 	modelReq := turn.ModelRequest{
 		OrganizationID: req.OrganizationID,
@@ -64,6 +65,7 @@ func (m *gatewaySummarizationModel) Summarize(ctx context.Context, req chat.Summ
 			Messages: []prompt.PromptMessage{
 				{Role: "user", Content: transcript},
 			},
+			TotalTokens: totalTokens,
 		},
 	}
 
@@ -73,4 +75,16 @@ func (m *gatewaySummarizationModel) Summarize(ctx context.Context, req chat.Summ
 	}
 
 	return chat.SummarizationResponse{SummaryText: strings.TrimSpace(response.Content)}, nil
+}
+
+func estimateSummarizationPromptTokens(systemPrompt, transcript string) int {
+	total := 0
+	if strings.TrimSpace(systemPrompt) != "" {
+		total += len(systemPrompt) / 4
+	}
+	if strings.TrimSpace(transcript) != "" {
+		total += len(transcript) / 4
+		total += 16
+	}
+	return total
 }

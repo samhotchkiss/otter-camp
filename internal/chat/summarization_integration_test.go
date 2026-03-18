@@ -219,6 +219,60 @@ func TestSummarization_PreservesArtifactRefs(t *testing.T) {
 	}
 }
 
+func TestSummarizerIntegrationShrinksCandidateToProfileBudget(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	seedSmallSummarizationProfile(t, ctx, pool, org.ID)
+
+	svc := newIntegrationService(t, pool, nil)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+	agent := seedChatServiceAgent(t, ctx, pool, org.ID)
+
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "completed",
+	})
+	if err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+	messageRepo := repo.NewChatMessageRepo(pool)
+	for i := 0; i < 3; i++ {
+		if _, err := messageRepo.Create(ctx, repo.ChatMessage{
+			SessionID: session.ID,
+			TurnID:    &turn.ID,
+			Role:      "user",
+			Status:    "final",
+			Content:   strings.Repeat(string(rune('a'+i)), 900),
+		}); err != nil {
+			t.Fatalf("create message %d: %v", i, err)
+		}
+	}
+
+	modelStub := &integrationSummarizationModel{invocations: repo.NewModelInvocationRepo(pool)}
+	summarizer, err := NewSummarizer(SummarizerOptions{Pool: pool, Model: modelStub})
+	if err != nil {
+		t.Fatalf("NewSummarizer: %v", err)
+	}
+
+	summary, err := summarizer.RunForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("RunForSession: %v", err)
+	}
+	if summary.FromSequence != 1 || summary.ToSequence != 1 {
+		t.Fatalf("summary range = %d-%d, want 1-1", summary.FromSequence, summary.ToSequence)
+	}
+	if len(modelStub.calls) != 1 {
+		t.Fatalf("model call count = %d, want 1", len(modelStub.calls))
+	}
+	if got := len(modelStub.calls[0].Messages); got != 1 {
+		t.Fatalf("model message count = %d, want 1", got)
+	}
+}
+
 func TestSummarization_SummarizesOldestTurns(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -625,6 +679,52 @@ func seedSummarizationProfile(t *testing.T, ctx context.Context, pool *pgxpool.P
 		DisplayName:         "Chat Summary",
 		ContextWindowTokens: 64000,
 		MaxOutputTokens:     2000,
+		SupportsStreaming:   false,
+		SupportsVision:      false,
+		InvocationPurpose:   "summarization",
+	})
+	if err != nil {
+		t.Fatalf("create model profile: %v", err)
+	}
+
+	if _, err := assignmentRepo.Upsert(ctx, repo.ModelProfileAssignment{
+		OrganizationID:    orgID,
+		ScopeType:         "organization",
+		ScopeID:           orgID,
+		LogicalProfileID:  created.LogicalProfileID,
+		InvocationPurpose: "summarization",
+	}); err != nil {
+		t.Fatalf("upsert model profile assignment: %v", err)
+	}
+}
+
+func seedSmallSummarizationProfile(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID) {
+	t.Helper()
+	providerRepo := repo.NewModelProviderRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+	assignmentRepo := repo.NewModelProfileAssignmentRepo(pool)
+
+	provider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "chat-summary-small-provider-" + uuid.NewString()[:8],
+		DisplayName: "Chat Summary Small Provider",
+		APIBaseURL:  "https://example.invalid/v1",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create model provider: %v", err)
+	}
+
+	logicalProfileID := "chat-summary-small-" + uuid.NewString()[:8]
+	created, err := profileRepo.Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    logicalProfileID,
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          provider.ID,
+		ModelName:           "gpt-4o-mini",
+		DisplayName:         "Chat Summary Small",
+		ContextWindowTokens: 1400,
+		MaxOutputTokens:     200,
 		SupportsStreaming:   false,
 		SupportsVision:      false,
 		InvocationPurpose:   "summarization",

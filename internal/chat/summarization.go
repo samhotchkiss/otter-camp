@@ -285,6 +285,10 @@ func (s *Summarizer) RunForSession(ctx context.Context, sessionID uuid.UUID) (*r
 	if err != nil {
 		return nil, err
 	}
+	maxInputTokens := profile.ContextWindowTokens - profile.MaxOutputTokens - 1024
+	if maxInputTokens > 0 {
+		candidate = fitSummaryCandidateToBudget(candidate, maxInputTokens)
+	}
 
 	response, err := s.model.Summarize(ctx, SummarizationRequest{
 		OrganizationID:    session.OrganizationID,
@@ -819,6 +823,47 @@ func summarizeCandidate(messages []repo.ChatMessage, summaries []repo.ChatSummar
 		TurnCount:    turnCount,
 		Messages:     selectedMessages,
 	}, nil
+}
+
+func fitSummaryCandidateToBudget(candidate *summaryCandidate, maxInputTokens int) *summaryCandidate {
+	if candidate == nil || len(candidate.Messages) == 0 || maxInputTokens <= 0 {
+		return candidate
+	}
+
+	estimate := func(messages []repo.ChatMessage) int {
+		charCount := 0
+		for _, message := range messages {
+			charCount += len(strings.TrimSpace(message.Role)) + len(strings.TrimSpace(message.Content)) + messageEstimatorOverheadChars
+		}
+		return estimateTokensFromChars(charCount)
+	}
+
+	if estimate(candidate.Messages) <= maxInputTokens {
+		return candidate
+	}
+
+	retained := make([]repo.ChatMessage, len(candidate.Messages))
+	copy(retained, candidate.Messages)
+	for len(retained) > 1 && estimate(retained) > maxInputTokens {
+		retained = retained[:len(retained)-1]
+	}
+	if len(retained) == 0 {
+		return candidate
+	}
+
+	turns := buildUnsummarizedTurnWindows(retained)
+	turnCount := len(turns)
+	toSequence := retained[len(retained)-1].SequenceNumber
+	if len(turns) > 0 {
+		toSequence = turns[len(turns)-1].toSequence
+	}
+
+	return &summaryCandidate{
+		FromSequence: candidate.FromSequence,
+		ToSequence:   toSequence,
+		TurnCount:    turnCount,
+		Messages:     retained,
+	}
 }
 
 func filterUnsummarizedMessages(messages []repo.ChatMessage, summaries []repo.ChatSummary) []repo.ChatMessage {
