@@ -1037,7 +1037,7 @@ func (w *Worker) ClearInactiveSessionCurrentTurns(ctx context.Context) (int64, e
 }
 
 func (w *Worker) BackfillCancelledTurnStopReasons(ctx context.Context) (int64, error) {
-	ct, err := w.pool.Exec(ctx, `
+	ct1, err := w.pool.Exec(ctx, `
 		WITH mapped AS (
 			SELECT DISTINCT ON (de.payload->>'turn_id')
 			       (de.payload->>'turn_id')::uuid AS turn_id,
@@ -1064,7 +1064,31 @@ func (w *Worker) BackfillCancelledTurnStopReasons(ctx context.Context) (int64, e
 	if err != nil {
 		return 0, fmt.Errorf("backfill cancelled turn stop reasons: %w", err)
 	}
-	return ct.RowsAffected(), nil
+
+	ct2, err := w.pool.Exec(ctx, `
+		UPDATE chat_turn t
+		SET stop_reason = 'superseded_live_turn'
+		WHERE t.status = 'cancelled'
+		  AND t.stop_reason IS NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM chat_turn later
+			WHERE later.session_id = t.session_id
+			  AND later.turn_number > t.turn_number
+		  )
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM domain_event de
+			WHERE de.event_type = 'chat.turn.cancelled'
+			  AND de.payload->>'turn_id' = t.id::text
+			  AND de.payload ? 'reason'
+		  )
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("backfill superseded cancelled turns: %w", err)
+	}
+
+	return ct1.RowsAffected() + ct2.RowsAffected(), nil
 }
 
 func (w *Worker) processAvailableJobs(ctx context.Context) error {

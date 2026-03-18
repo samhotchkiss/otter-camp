@@ -920,6 +920,16 @@ func TestJobQueue_BackfillCancelledTurnStopReasons(t *testing.T) {
 	sessionClosedTurnID := insertCancelledTurn(insertSession(), 2)
 	cancelCurrentTurnID := insertCancelledTurn(insertSession(), 3)
 	ambiguousTurnID := insertCancelledTurn(insertSession(), 4)
+	supersededSessionID := insertSession()
+	supersededTurnID := insertCancelledTurn(supersededSessionID, 5)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO chat_turn (
+			session_id, turn_number, responding_type, responding_id, status
+		)
+		VALUES ($1, 6, 'agent', $2, 'completed')
+	`, supersededSessionID, agent.ID); err != nil {
+		t.Fatalf("insert later completed turn: %v", err)
+	}
 
 	testdb.PublishEvent(t, pool, org.ID, "chat.turn.cancelled", map[string]any{
 		"turn_id": userCancelledTurnID.String(),
@@ -942,8 +952,8 @@ func TestJobQueue_BackfillCancelledTurnStopReasons(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BackfillCancelledTurnStopReasons: %v", err)
 	}
-	if repaired != 3 {
-		t.Fatalf("repaired rows = %d, want 3", repaired)
+	if repaired != 4 {
+		t.Fatalf("repaired rows = %d, want 4", repaired)
 	}
 
 	assertStopReason := func(turnID uuid.UUID, want *string) {
@@ -972,6 +982,8 @@ func TestJobQueue_BackfillCancelledTurnStopReasons(t *testing.T) {
 	assertStopReason(userCancelledTurnID, &userCancelled)
 	assertStopReason(sessionClosedTurnID, &sessionClosed)
 	assertStopReason(cancelCurrentTurnID, &userCancelled)
+	supersededLiveTurn := "superseded_live_turn"
+	assertStopReason(supersededTurnID, &supersededLiveTurn)
 	assertStopReason(ambiguousTurnID, nil)
 }
 
