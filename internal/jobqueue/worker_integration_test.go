@@ -2172,6 +2172,146 @@ func TestJobWorkerRequeuePendingTurnsWithoutJobsSkipsPausedAndArchivedProjects(t
 	}
 }
 
+func TestJobWorkerRequeuePendingTurnsWithoutJobsRequeuesAfterProjectResume(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-pending-turns-after-resume",
+		DisplayName: "Requeue Pending Turns After Resume",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover pending work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "paused-then-resumed-project",
+		DisplayName:    "Paused Then Resumed Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       []byte(`{"pause":{"is_paused":true,"reason":"operator pause"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Pending task turn",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Resume the pending task turn.",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("create user message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "pending",
+		TriggerMessageID: &message.ID,
+	})
+	if err != nil {
+		t.Fatalf("create pending turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("update current turn: %v", err)
+	}
+
+	requeued, err := worker.RequeuePendingTurnsWithoutJobs(ctx)
+	if err != nil {
+		t.Fatalf("RequeuePendingTurnsWithoutJobs while paused: %v", err)
+	}
+	if requeued != 0 {
+		t.Fatalf("requeued turns while paused = %d, want 0", requeued)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE project
+		SET settings = '{}'::jsonb
+		WHERE id = $1
+	`, project.ID); err != nil {
+		t.Fatalf("resume project: %v", err)
+	}
+
+	requeued, err = worker.RequeuePendingTurnsWithoutJobs(ctx)
+	if err != nil {
+		t.Fatalf("RequeuePendingTurnsWithoutJobs after resume: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued turns after resume = %d, want 1", requeued)
+	}
+
+	var (
+		status         string
+		requeuedMsgID  uuid.UUID
+		requeuedSessID uuid.UUID
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, (payload->>'message_id')::uuid, (payload->>'session_id')::uuid
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID); err != nil {
+		t.Fatalf("query requeued pending turn job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("requeued job status = %q, want pending", status)
+	}
+	if requeuedSessID != session.ID {
+		t.Fatalf("requeued session_id = %s, want %s", requeuedSessID, session.ID)
+	}
+	if requeuedMsgID != message.ID {
+		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	}
+}
+
 func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
