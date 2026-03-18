@@ -142,6 +142,55 @@ func TestRealtimeSSEReconnectReplay(t *testing.T) {
 	}
 }
 
+func TestRealtimeHubCleansLegacyFanoutConsumerCursors(t *testing.T) {
+	pool := testdb.New(t)
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO consumer_cursor (consumer_name, organization_id, last_seq)
+		VALUES
+		  ('realtime.fanout.legacy-a', NULL, 10),
+		  ('realtime.fanout.legacy-b', NULL, 20)
+	`); err != nil {
+		t.Fatalf("seed legacy realtime fanout cursors: %v", err)
+	}
+
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{PollInterval: 10 * time.Millisecond})
+	realtimeRegistrar := NewRealtimeRouteRegistrar(RealtimeRouteOptions{
+		Pool:   pool,
+		Events: bus,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	defer func() {
+		_ = realtimeRegistrar.Close()
+	}()
+
+	var legacyCount int
+	var staticCount int
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := pool.QueryRow(context.Background(), `
+			SELECT COUNT(*)
+			FROM consumer_cursor
+			WHERE consumer_name LIKE 'realtime.fanout.%'
+		`).Scan(&legacyCount); err != nil {
+			t.Fatalf("count legacy realtime fanout cursors: %v", err)
+		}
+		if err := pool.QueryRow(context.Background(), `
+			SELECT COUNT(*)
+			FROM consumer_cursor
+			WHERE consumer_name = 'realtime.fanout'
+		`).Scan(&staticCount); err != nil {
+			t.Fatalf("count static realtime fanout cursor: %v", err)
+		}
+		if legacyCount == 0 && staticCount == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("realtime fanout cursor state legacy=%d static=%d, want legacy=0 static=1", legacyCount, staticCount)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 func TestRealtimeSSEMultiScopeRouting(t *testing.T) {
 	t.Setenv("OTTERCAMP_AUTH_MODE", "standard")
 	fixture := newRealtimeTestServer(t)

@@ -30,6 +30,7 @@ const (
 	realtimeTypingTTL         = 15 * time.Second
 	realtimeHeartbeatInterval = 15 * time.Second
 	realtimeReplayBatchSize   = 500
+	realtimeFanoutConsumer    = "realtime.fanout"
 	// freshReplayWindow caps how many events are replayed on a fresh connect
 	// (last-event-id=0) to avoid flooding the TUI with full event history.
 	freshReplayWindow = 150
@@ -241,8 +242,12 @@ func newRealtimeHub(pool *pgxpool.Pool, events eventbus.EventBus, logger *slog.L
 	}
 
 	if events != nil {
-		consumerName := "realtime.fanout." + uuid.NewString()
-		hub.sub = events.Subscribe(consumerName, nil, func(ctx context.Context, event eventbus.DomainEvent) error {
+		if cleaned, err := hub.cleanupLegacyFanoutConsumerCursors(context.Background()); err != nil {
+			logger.Warn("failed to clean legacy realtime fanout consumer cursors", "error", err)
+		} else if cleaned > 0 {
+			logger.Info("cleaned legacy realtime fanout consumer cursors", "count", cleaned)
+		}
+		hub.sub = events.Subscribe(realtimeFanoutConsumer, nil, func(ctx context.Context, event eventbus.DomainEvent) error {
 			hub.dispatchDomainEvent(ctx, event)
 			return nil
 		})
@@ -250,6 +255,21 @@ func newRealtimeHub(pool *pgxpool.Pool, events eventbus.EventBus, logger *slog.L
 	}
 
 	return hub
+}
+
+func (h *realtimeHub) cleanupLegacyFanoutConsumerCursors(ctx context.Context) (int, error) {
+	if h == nil || h.pool == nil {
+		return 0, nil
+	}
+	commandTag, err := h.pool.Exec(ctx, `
+		DELETE FROM consumer_cursor
+		WHERE consumer_name LIKE $1
+		  AND consumer_name <> $2
+	`, realtimeFanoutConsumer+".%", realtimeFanoutConsumer)
+	if err != nil {
+		return 0, err
+	}
+	return int(commandTag.RowsAffected()), nil
 }
 
 func (h *realtimeHub) heartbeatInterval() time.Duration {
