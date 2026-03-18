@@ -939,7 +939,7 @@ func TestSummarizeHistorySkipsFailedMessages(t *testing.T) {
 	}
 }
 
-func TestSummarizeHistorySkipsNonFinalMessages(t *testing.T) {
+func TestSummarizeHistoryIncludesPendingMessages(t *testing.T) {
 	summary := summarizeHistory([]repo.ChatMessage{
 		{
 			SequenceNumber: 1,
@@ -967,13 +967,16 @@ func TestSummarizeHistorySkipsNonFinalMessages(t *testing.T) {
 		},
 	}, nil)
 
-	if len(summary) != 2 {
-		t.Fatalf("summary len = %d, want 2", len(summary))
+	if len(summary) != 3 {
+		t.Fatalf("summary len = %d, want 3", len(summary))
 	}
 	if summary[0].Role != "user" || summary[0].Content != "Keep going." {
-		t.Fatalf("summary[0] = %#v, want durable user message", summary[0])
+		t.Fatalf("summary[0] = %#v, want user message", summary[0])
 	}
-	if summary[1].Role != "tool_result" || summary[1].Content != "{\"ok\":true}" {
-		t.Fatalf("summary[1] = %#v, want durable tool_result message", summary[1])
+	if summary[1].Role != "system" || summary[1].Content != "[Continuation summary] stale placeholder" {
+		t.Fatalf("summary[1] = %#v, want pending system message", summary[1])
+	}
+	if summary[2].Role != "tool_result" || summary[2].Content != "{\"ok\":true}" {
+		t.Fatalf("summary[2] = %#v, want durable tool_result message", summary[2])
 	}
 }
