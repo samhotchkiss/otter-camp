@@ -73,6 +73,58 @@ func TestEventBusPublishSubscribeAndCursorAdvance(t *testing.T) {
 	waitForConsumerCursor(t, pool, "eventbus.order.consumer", org.ID, lastSeq, 2*time.Second)
 }
 
+func TestEventBusNewConsumerStartsAtCurrentSeq(t *testing.T) {
+	pool := testdb.New(t)
+	org := createOrgForEventBus(t, pool, "eventbus-start-current-org")
+	bus := New(pool, nil, Config{PollInterval: 200 * time.Millisecond})
+
+	if err := bus.Publish(context.Background(), nil, DomainEvent{
+		OrganizationID: org.ID,
+		EventType:      "event.preexisting",
+		ActorType:      "system",
+		Payload:        []byte(`{"phase":"before"}`),
+	}); err != nil {
+		t.Fatalf("publish preexisting event: %v", err)
+	}
+
+	received := make(chan DomainEvent, 2)
+	sub := bus.Subscribe("eventbus.start-current.consumer", &org.ID, func(_ context.Context, event DomainEvent) error {
+		select {
+		case received <- event:
+		default:
+		}
+		return nil
+	})
+	defer bus.Unsubscribe(sub)
+
+	select {
+	case event := <-received:
+		t.Fatalf("unexpected replayed event on new consumer start: seq=%d type=%s", event.Seq, event.EventType)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	if err := bus.Publish(context.Background(), nil, DomainEvent{
+		OrganizationID: org.ID,
+		EventType:      "event.after-subscribe",
+		ActorType:      "system",
+		Payload:        []byte(`{"phase":"after"}`),
+	}); err != nil {
+		t.Fatalf("publish post-subscribe event: %v", err)
+	}
+
+	var event DomainEvent
+	select {
+	case event = <-received:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for post-subscribe event")
+	}
+
+	if event.EventType != "event.after-subscribe" {
+		t.Fatalf("event type = %q, want post-subscribe event", event.EventType)
+	}
+	waitForConsumerCursor(t, pool, "eventbus.start-current.consumer", org.ID, event.Seq, 2*time.Second)
+}
+
 func TestEventBusAtLeastOnceRedeliveryAfterRestart(t *testing.T) {
 	pool := testdb.New(t)
 	org := createOrgForEventBus(t, pool, "eventbus-redelivery-org")

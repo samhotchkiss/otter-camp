@@ -75,6 +75,7 @@ const (
 	defaultTurnCompletedName                  = "turn-engine.turn-completed"
 	defaultTurnCancelledName                  = "turn-engine.turn-cancelled"
 	defaultTaskStatusName                     = "turn-engine.task-status"
+	defaultProjectResumedName                 = "turn-engine.project-resumed"
 	defaultCancelConsumerPrefix               = "turn-engine.cancel"
 	stopReasonMaxToolCalls                    = "max_tool_calls"
 	stopReasonMaxDuration                     = "max_duration"
@@ -745,6 +746,12 @@ func (e *TurnEngine) SubscribeTaskStatusBootstrap(orgID *uuid.UUID) eventbus.Sub
 	})
 }
 
+func (e *TurnEngine) SubscribeProjectResumedPendingTurns(orgID *uuid.UUID) eventbus.Subscription {
+	return e.events.Subscribe(defaultProjectResumedName, orgID, func(ctx context.Context, event eventbus.DomainEvent) error {
+		return e.HandleProjectResumedEvent(ctx, event)
+	})
+}
+
 func (e *TurnEngine) RecoverCancelledBootstrapSessions(ctx context.Context) (int, error) {
 	if e == nil || e.pool == nil || e.chat == nil {
 		return 0, nil
@@ -1209,6 +1216,73 @@ func (e *TurnEngine) HandleTaskStatusChangedEvent(ctx context.Context, event eve
 		return err
 	}
 	return e.refreshProjectBootstrapSessionState(ctx, session, progress)
+}
+
+func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventbus.DomainEvent) error {
+	if event.EventType != "project.resumed" || e == nil || e.pool == nil || e.enqueuer == nil || e.chat == nil {
+		return nil
+	}
+
+	var payload struct {
+		ProjectID uuid.UUID `json:"project_id"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return nil
+	}
+	if payload.ProjectID == uuid.Nil {
+		return nil
+	}
+
+	rows, err := e.pool.Query(ctx, `
+		SELECT DISTINCT cs.id, ct.trigger_message_id
+		FROM chat_session cs
+		LEFT JOIN project_task pt
+		  ON cs.scope_type = 'project_task'
+		 AND pt.id = cs.scope_id
+		JOIN chat_turn ct ON ct.id = cs.current_turn_id
+		WHERE cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND ct.status = 'pending'
+		  AND ct.trigger_message_id IS NOT NULL
+		  AND (
+		    (cs.scope_type = 'project' AND cs.scope_id = $1)
+		    OR
+		    (cs.scope_type = 'project_task' AND pt.project_id = $1)
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $2
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		  )
+	`, payload.ProjectID, AgentTurnJobType)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var sessionID uuid.UUID
+		var messageID uuid.UUID
+		if err := rows.Scan(&sessionID, &messageID); err != nil {
+			return err
+		}
+		session, err := e.chat.GetSession(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				continue
+			}
+			return err
+		}
+		if _, err := e.enqueueAgentTurnIfActive(ctx, session, AgentTurnPayload{
+			SessionID: sessionID,
+			MessageID: messageID,
+		}, nil); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, session *chat.ChatSession, turnID uuid.UUID) error {

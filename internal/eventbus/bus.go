@@ -377,15 +377,20 @@ func (b *Bus) fetchEvents(ctx context.Context, orgID *uuid.UUID, lastSeq int64, 
 }
 
 func (b *Bus) ensureCursor(ctx context.Context, consumerName string, orgID *uuid.UUID) (int64, error) {
+	initialSeq, err := b.currentMaxSeq(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+
 	if orgID == nil {
 		var lastSeq int64
 		err := b.pool.QueryRow(ctx, `
 			INSERT INTO consumer_cursor (consumer_name, organization_id, last_seq)
-			VALUES ($1, NULL, 0)
+			VALUES ($1, NULL, $2)
 			ON CONFLICT (consumer_name) WHERE organization_id IS NULL
 			DO UPDATE SET consumer_name = EXCLUDED.consumer_name
 			RETURNING last_seq
-		`, consumerName).Scan(&lastSeq)
+		`, consumerName, initialSeq).Scan(&lastSeq)
 		if err != nil {
 			return 0, fmt.Errorf("ensure global cursor: %w", err)
 		}
@@ -393,17 +398,29 @@ func (b *Bus) ensureCursor(ctx context.Context, consumerName string, orgID *uuid
 	}
 
 	var lastSeq int64
-	err := b.pool.QueryRow(ctx, `
+	err = b.pool.QueryRow(ctx, `
 		INSERT INTO consumer_cursor (consumer_name, organization_id, last_seq)
-		VALUES ($1, $2, 0)
+		VALUES ($1, $2, $3)
 		ON CONFLICT (consumer_name, organization_id) WHERE organization_id IS NOT NULL
 		DO UPDATE SET consumer_name = EXCLUDED.consumer_name
 		RETURNING last_seq
-	`, consumerName, orgID).Scan(&lastSeq)
+	`, consumerName, orgID, initialSeq).Scan(&lastSeq)
 	if err != nil {
 		return 0, fmt.Errorf("ensure org cursor: %w", err)
 	}
 	return lastSeq, nil
+}
+
+func (b *Bus) currentMaxSeq(ctx context.Context, orgID *uuid.UUID) (int64, error) {
+	var seq int64
+	if err := b.pool.QueryRow(ctx, `
+		SELECT COALESCE(MAX(seq), 0)
+		FROM domain_event
+		WHERE ($1::uuid IS NULL OR organization_id = $1)
+	`, orgID).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("query current max seq: %w", err)
+	}
+	return seq, nil
 }
 
 func (b *Bus) advanceCursor(ctx context.Context, consumerName string, orgID *uuid.UUID, seq int64) error {

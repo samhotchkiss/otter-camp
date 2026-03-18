@@ -16575,6 +16575,101 @@ func TestTurnEngineIntegrationRecoverCancelledBootstrapSessionsRequeuesWhileBoot
 	}
 }
 
+func TestTurnEngineHandleProjectResumedEventRequeuesPendingTurnsWithoutJobs(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project, err := repo.NewProjectRepo(fixture.pool).Create(ctx, repo.Project{
+		OrganizationID: fixture.org.ID,
+		Slug:           "resume-requeue-project-" + uuid.NewString()[:8],
+		DisplayName:    "Resume Requeue Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{"pause":{"is_paused":true,"reason":"operator pause"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	description := "Resume pending work after the project is unpaused."
+	taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Resume pending turn",
+		Description:    &description,
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    &fixture.agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(fixture.pool).Create(ctx, repo.ChatSession{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create paused task session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(fixture.pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Resume the pending task turn.",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("create user message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(fixture.pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     fixture.agent.ID,
+		Status:           "pending",
+		TriggerMessageID: &message.ID,
+	})
+	if err != nil {
+		t.Fatalf("create pending turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(fixture.pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("update current turn: %v", err)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, session.ID); jobs != 0 {
+		t.Fatalf("runnable agent_turn jobs before resume = %d, want 0", jobs)
+	}
+
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE project
+		SET settings = '{}'::jsonb
+		WHERE id = $1
+	`, project.ID); err != nil {
+		t.Fatalf("resume project settings: %v", err)
+	}
+
+	payload, err := json.Marshal(map[string]any{"project_id": project.ID})
+	if err != nil {
+		t.Fatalf("marshal project.resumed payload: %v", err)
+	}
+	if err := fixture.engine.HandleProjectResumedEvent(ctx, eventbus.DomainEvent{
+		EventType:      "project.resumed",
+		OrganizationID: fixture.org.ID,
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("HandleProjectResumedEvent: %v", err)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, session.ID); jobs != 1 {
+		t.Fatalf("runnable agent_turn jobs after resume = %d, want 1", jobs)
+	}
+}
+
 func TestTurnEngineIntegrationRecoverCancelledBootstrapSessionsRequeuesActiveValidationRepair(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

@@ -501,6 +501,8 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(turnBootstrapCancelledSub)
 	turnTaskStatusSub := turnEngine.SubscribeTaskStatusBootstrap(nil)
 	defer bus.Unsubscribe(turnTaskStatusSub)
+	turnProjectResumedSub := turnEngine.SubscribeProjectResumedPendingTurns(nil)
+	defer bus.Unsubscribe(turnProjectResumedSub)
 	if recovered, recoverErr := turnEngine.RecoverCancelledBootstrapSessions(context.Background()); recoverErr != nil {
 		logger.Warn("failed to recover cancelled bootstrap sessions", "error", recoverErr)
 	} else if recovered > 0 {
