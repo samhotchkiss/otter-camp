@@ -229,6 +229,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: closed archived project async sessions on startup", "count", repaired)
 	}
+	if repaired, err := w.CloseOrphanedProjectTaskAsyncSessions(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup orphaned project_task session cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: closed orphaned project_task async sessions on startup", "count", repaired)
+	}
 	if repaired, err := w.ClearInactiveSessionCurrentTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup inactive session current turn cleanup failed", "error", err)
@@ -1003,6 +1010,50 @@ func (w *Worker) CloseArchivedProjectAsyncSessions(ctx context.Context) (int64, 
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("close archived project async sessions: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
+func (w *Worker) CloseOrphanedProjectTaskAsyncSessions(ctx context.Context) (int64, error) {
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET status = 'cancelled',
+		    cancel_requested_at = now(),
+		    completed_at = now(),
+		    stop_reason = 'session_closed'
+		WHERE session_id IN (
+			SELECT cs.id
+			FROM chat_session cs
+			WHERE cs.status = 'active'
+			  AND cs.mode = 'async'
+			  AND cs.scope_type = 'project_task'
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM project_task pt
+				WHERE pt.id = cs.scope_id
+			  )
+		)
+		  AND status IN ('pending', 'in_progress')
+	`); err != nil {
+		return 0, fmt.Errorf("cancel orphaned project_task session turns: %w", err)
+	}
+
+	ct, err := w.pool.Exec(ctx, `
+		UPDATE chat_session cs
+		SET status = 'closed',
+		    closed_at = now(),
+		    current_turn_id = NULL
+		WHERE cs.status = 'active'
+		  AND cs.mode = 'async'
+		  AND cs.scope_type = 'project_task'
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM project_task pt
+			WHERE pt.id = cs.scope_id
+		  )
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("close orphaned project_task async sessions: %w", err)
 	}
 	return ct.RowsAffected(), nil
 }

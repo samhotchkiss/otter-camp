@@ -661,6 +661,106 @@ func TestJobQueue_CloseArchivedProjectAsyncSessions(t *testing.T) {
 	assertClosed(taskSessionID, "task")
 }
 
+func TestJobQueue_CloseOrphanedProjectTaskAsyncSessions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "orphaned-project-task-session-cleanup-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	org := createJobQueueOrg079(t, pool, "orphaned-project-task-session-cleanup")
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Orphaned Session Cleanup Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You handle orphaned session cleanup.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	missingTaskID := uuid.New()
+	var sessionID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata
+		)
+		VALUES ($1, 'project_task', $2, 'async', 'active', 'system', $3, '{}'::jsonb)
+		RETURNING id
+	`, org.ID, missingTaskID, uuid.Nil).Scan(&sessionID); err != nil {
+		t.Fatalf("insert orphaned task session: %v", err)
+	}
+	var turnID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_turn (
+			session_id, turn_number, responding_type, responding_id, status
+		)
+		VALUES ($1, 1, 'agent', $2, 'pending')
+		RETURNING id
+	`, sessionID, agent.ID).Scan(&turnID); err != nil {
+		t.Fatalf("insert pending turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_session
+		SET current_turn_id = $2
+		WHERE id = $1
+	`, sessionID, turnID); err != nil {
+		t.Fatalf("set current_turn_id: %v", err)
+	}
+
+	repaired, err := worker.CloseOrphanedProjectTaskAsyncSessions(ctx)
+	if err != nil {
+		t.Fatalf("CloseOrphanedProjectTaskAsyncSessions: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired rows = %d, want 1", repaired)
+	}
+
+	var status string
+	var currentTurnID *uuid.UUID
+	var closedAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT status, current_turn_id, closed_at
+		FROM chat_session
+		WHERE id = $1
+	`, sessionID).Scan(&status, &currentTurnID, &closedAt); err != nil {
+		t.Fatalf("query session: %v", err)
+	}
+	if status != "closed" {
+		t.Fatalf("session status = %q, want closed", status)
+	}
+	if currentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil", currentTurnID)
+	}
+	if closedAt == nil {
+		t.Fatal("closed_at is nil")
+	}
+
+	var turnStatus string
+	var stopReason *string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, stop_reason
+		FROM chat_turn
+		WHERE id = $1
+	`, turnID).Scan(&turnStatus, &stopReason); err != nil {
+		t.Fatalf("query turn: %v", err)
+	}
+	if turnStatus != "cancelled" {
+		t.Fatalf("turn status = %q, want cancelled", turnStatus)
+	}
+	if stopReason == nil || *stopReason != "session_closed" {
+		t.Fatalf("turn stop_reason = %v, want session_closed", stopReason)
+	}
+}
+
 func TestJobQueue_ClearInactiveSessionCurrentTurns(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
