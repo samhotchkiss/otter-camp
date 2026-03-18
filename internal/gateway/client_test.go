@@ -92,6 +92,42 @@ func TestBuildProviderBodyAnthropicIncludesTools(t *testing.T) {
 	}
 }
 
+func TestBuildProviderBodyAnthropicCoalescesConsecutiveUserMessages(t *testing.T) {
+	req := turn.ModelRequest{
+		Profile: repo.ModelProfile{ModelName: "claude-3-5-sonnet"},
+		Prompt: &prompt.AssembledPrompt{
+			Messages: []prompt.PromptMessage{
+				{Role: "system", Content: "sys-1"},
+				{Role: "user", Content: "first"},
+				{Role: "system", Content: "sys-2"},
+				{Role: "user", Content: "second"},
+				{Role: "user", Content: "third"},
+			},
+		},
+	}
+
+	body, err := buildProviderBody("anthropic", req, false)
+	if err != nil {
+		t.Fatalf("buildProviderBody() error = %v", err)
+	}
+
+	payload := decodeBody(t, body)
+	if payload["system"] != "sys-1\n\nsys-2" {
+		t.Fatalf("system = %v, want merged system prompt", payload["system"])
+	}
+	messagesPayload := expectArray(t, payload, "messages")
+	if len(messagesPayload) != 1 {
+		t.Fatalf("len(messages) = %d, want 1 coalesced user message", len(messagesPayload))
+	}
+	msg := expectMapValue(t, messagesPayload[0], "messages[0]")
+	if msg["role"] != "user" {
+		t.Fatalf("messages[0].role = %v, want user", msg["role"])
+	}
+	if msg["content"] != "first\n\nsecond\n\nthird" {
+		t.Fatalf("messages[0].content = %v, want merged user content", msg["content"])
+	}
+}
+
 func TestBuildProviderBodyOmitsToolsWhenNoDescriptors(t *testing.T) {
 	testCases := []struct {
 		name         string

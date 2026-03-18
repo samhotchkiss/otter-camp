@@ -1921,10 +1921,7 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 					})
 				}
 			}
-			out = append(out, map[string]any{
-				"role":    "user",
-				"content": pendingToolResults,
-			})
+			out = appendAnthropicMessage(out, "user", pendingToolResults)
 			pendingToolResults = nil
 		} else if lastAssistantHadToolCalls && lastToolCallsIdx >= 0 {
 			// No tool results were accumulated despite having an assistant+tool_calls.
@@ -1972,10 +1969,10 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 				}
 				lastAssistantHadToolCalls = true
 				lastToolCallsIdx = len(out)
-				out = append(out, map[string]any{"role": "assistant", "content": content})
-				continue
-			}
-			out = append(out, map[string]any{"role": "assistant", "content": item.Content})
+			out = append(out, map[string]any{"role": "assistant", "content": content})
+			continue
+		}
+			out = appendAnthropicMessage(out, "assistant", item.Content)
 		case "tool_result":
 			// Skip orphaned tool results with no preceding assistant+tool_calls.
 			if !lastAssistantHadToolCalls {
@@ -2000,7 +1997,7 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 		default:
 			// Flush pending tool results before a user/other message.
 			flushToolResults()
-			out = append(out, map[string]any{"role": "user", "content": item.Content})
+			out = appendAnthropicMessage(out, "user", item.Content)
 		}
 	}
 	// Flush any trailing tool results.
@@ -2024,6 +2021,62 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 		out = append(out, map[string]any{"role": "user", "content": "Respond with a concise answer."})
 	}
 	return strings.Join(systemParts, "\n\n"), out
+}
+
+func appendAnthropicMessage(out []any, role string, content any) []any {
+	if strings.TrimSpace(role) == "" {
+		return out
+	}
+	if len(out) == 0 {
+		return append(out, map[string]any{"role": role, "content": content})
+	}
+	last, ok := out[len(out)-1].(map[string]any)
+	if !ok {
+		return append(out, map[string]any{"role": role, "content": content})
+	}
+	lastRole, _ := last["role"].(string)
+	if lastRole != role {
+		return append(out, map[string]any{"role": role, "content": content})
+	}
+	last["content"] = mergeAnthropicContent(last["content"], content)
+	out[len(out)-1] = last
+	return out
+}
+
+func mergeAnthropicContent(left, right any) any {
+	switch leftVal := left.(type) {
+	case string:
+		switch rightVal := right.(type) {
+		case string:
+			if strings.TrimSpace(leftVal) == "" {
+				return rightVal
+			}
+			if strings.TrimSpace(rightVal) == "" {
+				return leftVal
+			}
+			return leftVal + "\n\n" + rightVal
+		default:
+			return append(anthropicContentBlocks(leftVal), anthropicContentBlocks(right)...)
+		}
+	default:
+		return append(anthropicContentBlocks(left), anthropicContentBlocks(right)...)
+	}
+}
+
+func anthropicContentBlocks(content any) []any {
+	switch value := content.(type) {
+	case nil:
+		return nil
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return nil
+		}
+		return []any{map[string]any{"type": "text", "text": value}}
+	case []any:
+		return append([]any(nil), value...)
+	default:
+		return []any{value}
+	}
 }
 
 func requestMessages(req turn.ModelRequest) []prompt.PromptMessage {
