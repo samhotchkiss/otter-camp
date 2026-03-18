@@ -24,13 +24,14 @@ import (
 )
 
 const (
-	jobEnqueuedChannel       = "job_enqueued"
-	idempotencyCleanupJob    = "idempotency.cleanup"
-	agentTurnJobType         = "agent_turn"
-	defaultBatchSize         = 10
-	defaultPollInterval      = 5 * time.Second
-	defaultStaleScanInterval = 60 * time.Second
-	defaultStaleThreshold    = 5 * time.Minute
+	jobEnqueuedChannel         = "job_enqueued"
+	idempotencyCleanupJob      = "idempotency.cleanup"
+	agentTurnJobType           = "agent_turn"
+	defaultBatchSize           = 10
+	defaultPollInterval        = 5 * time.Second
+	defaultStaleScanInterval   = 60 * time.Second
+	defaultStaleThreshold      = 5 * time.Minute
+	staleContinuationThreshold = 15 * time.Minute
 	// Bootstrap turns have their own watchdog budget; stale job recovery should
 	// not wait for the generic five-minute claim threshold before retrying them.
 	projectBootstrapStaleThreshold = 2 * time.Minute
@@ -249,6 +250,13 @@ func (w *Worker) Start(ctx context.Context) error {
 		}
 	} else if repaired > 0 {
 		w.logger.Info("job queue: backfilled cancelled turn stop reasons on startup", "count", repaired)
+	}
+	if repaired, err := w.RecoverStaleInProgressContinuationTurns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup stale continuation recovery failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: recovered stale in-progress continuation turns on startup", "count", repaired)
 	}
 	if requeued, err := w.RequeueStrandedSupervisorRecoveryTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
@@ -831,6 +839,150 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 	}
 	if err := rows.Err(); err != nil {
 		return repaired, fmt.Errorf("iterate active execution sessions without turns: %w", err)
+	}
+	return repaired, nil
+}
+
+func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (int64, error) {
+	rows, err := w.pool.Query(ctx, `
+		SELECT cs.id,
+		       ct.id,
+		       prior.trigger_message_id,
+		       COALESCE((
+		         SELECT MAX(retry_turn.retry_count)
+		         FROM chat_turn retry_turn
+		         WHERE retry_turn.session_id = cs.id
+		           AND retry_turn.trigger_message_id = prior.trigger_message_id
+		       ), 0) + 1 AS next_retry_count
+		FROM chat_session cs
+		JOIN chat_turn ct ON ct.id = cs.current_turn_id
+		JOIN LATERAL (
+			SELECT prior_turn.trigger_message_id
+			FROM chat_turn prior_turn
+			WHERE prior_turn.session_id = cs.id
+			  AND prior_turn.turn_number < ct.turn_number
+			  AND prior_turn.trigger_message_id IS NOT NULL
+			ORDER BY prior_turn.turn_number DESC
+			LIMIT 1
+		) prior ON true
+		LEFT JOIN project_task pt
+		  ON cs.scope_type = 'project_task'
+		 AND pt.id = cs.scope_id
+		LEFT JOIN project p
+		  ON (
+		       cs.scope_type = 'project'
+		   AND p.id = cs.scope_id
+		  )
+		  OR (
+		       cs.scope_type = 'project_task'
+		   AND p.id = pt.project_id
+		  )
+		WHERE cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND ct.status = 'in_progress'
+		  AND ct.trigger_message_id IS NULL
+		  AND ct.started_at IS NOT NULL
+		  AND ct.started_at < $2
+		  AND (
+		    cs.scope_type NOT IN ('project', 'project_task')
+		    OR (
+		      p.id IS NOT NULL
+		      AND p.status = 'active'
+		      AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
+		    )
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM flow_node_execution e
+		    WHERE e.session_id = cs.id
+		      AND e.status = 'active'
+		  )
+	`, agentTurnJobType, w.clock.Now().UTC().Add(-staleContinuationThreshold))
+	if err != nil {
+		return 0, fmt.Errorf("list stale in-progress continuation turns: %w", err)
+	}
+	defer rows.Close()
+
+	type staleContinuationCandidate struct {
+		sessionID  uuid.UUID
+		turnID     uuid.UUID
+		messageID  uuid.UUID
+		retryCount int
+	}
+	candidates := make([]staleContinuationCandidate, 0)
+	for rows.Next() {
+		var item staleContinuationCandidate
+		if err := rows.Scan(&item.sessionID, &item.turnID, &item.messageID, &item.retryCount); err != nil {
+			return 0, fmt.Errorf("scan stale in-progress continuation turn: %w", err)
+		}
+		candidates = append(candidates, item)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate stale in-progress continuation turns: %w", err)
+	}
+
+	const failureReason = "recovered stale in-progress continuation turn without live job or execution; scheduling a fresh retry"
+	var repaired int64
+	for _, item := range candidates {
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE model_invocation
+			SET status = 'failed',
+			    failure_class = 'product_runtime',
+			    error_code = 'stale_turn_recovered',
+			    error_message = $2,
+			    completed_at = COALESCE(completed_at, now())
+			WHERE turn_id = $1
+			  AND status = 'in_flight'
+		`, item.turnID, failureReason); err != nil {
+			return repaired, fmt.Errorf("fail stale continuation model invocations for turn %s: %w", item.turnID, err)
+		}
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE chat_message
+			SET status = 'failed',
+			    error_message = $2
+			WHERE turn_id = $1
+			  AND role = 'assistant'
+			  AND status IN ('pending', 'streaming')
+		`, item.turnID, failureReason); err != nil {
+			return repaired, fmt.Errorf("fail stale continuation assistant messages for turn %s: %w", item.turnID, err)
+		}
+		ct, err := w.pool.Exec(ctx, `
+			UPDATE chat_turn
+			SET status = 'failed',
+			    error_message = $2,
+			    completed_at = now()
+			WHERE id = $1
+			  AND status = 'in_progress'
+		`, item.turnID, failureReason)
+		if err != nil {
+			return repaired, fmt.Errorf("fail stale continuation turn %s: %w", item.turnID, err)
+		}
+		if ct.RowsAffected() == 0 {
+			continue
+		}
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE chat_session
+			SET current_turn_id = NULL
+			WHERE id = $1
+			  AND current_turn_id = $2
+		`, item.sessionID, item.turnID); err != nil {
+			return repaired, fmt.Errorf("clear stale continuation current turn for session %s: %w", item.sessionID, err)
+		}
+		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+			SessionID:  item.sessionID,
+			MessageID:  item.messageID,
+			RetryCount: item.retryCount,
+		}, nil); err != nil {
+			return repaired, fmt.Errorf("enqueue recovered stale continuation retry for session %s: %w", item.sessionID, err)
+		}
+		repaired++
 	}
 	return repaired, nil
 }
@@ -1765,6 +1917,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 				w.logger.Error("pending turn repair failed", "error", err)
 			} else if requeued > 0 {
 				w.logger.Info("job queue: requeued pending turns without jobs", "count", requeued)
+			}
+			if repaired, err := w.RecoverStaleInProgressContinuationTurns(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("stale continuation recovery failed", "error", err)
+			} else if repaired > 0 {
+				w.logger.Info("job queue: recovered stale in-progress continuation turns", "count", repaired)
 			}
 			if requeued, err := w.RequeueActiveExecutionSessionsWithoutTurns(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("active execution session repair failed", "error", err)
