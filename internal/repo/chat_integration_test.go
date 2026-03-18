@@ -328,6 +328,9 @@ func TestChatTurnRepoCreateForMessageAttemptCancelsDuplicateInProgressTurnsEX305
 	if staleAfter.CompletedAt == nil || !staleAfter.CompletedAt.Equal(cancelledAt) {
 		t.Fatalf("stale completed_at = %v, want %s", staleAfter.CompletedAt, cancelledAt)
 	}
+	if staleAfter.StopReason == nil || *staleAfter.StopReason != "superseded_live_turn" {
+		t.Fatalf("stale stop_reason = %v, want superseded_live_turn", staleAfter.StopReason)
+	}
 
 	liveAfter, err := turnRepo.GetByID(ctx, liveTurn.ID)
 	if err != nil {

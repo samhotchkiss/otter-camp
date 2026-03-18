@@ -781,7 +781,8 @@ func (r *ChatTurnRepo) reconcileSessionCurrentTurn(ctx context.Context, exec cha
 				UPDATE chat_turn
 				SET status = 'cancelled',
 				    cancel_requested_at = $2,
-				    completed_at = $2
+				    completed_at = $2,
+				    stop_reason = 'superseded_live_turn'
 				WHERE id = $1
 			`, turn.ID, now); err != nil {
 				return nil, mapDBError(err)

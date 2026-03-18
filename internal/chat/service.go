@@ -1897,7 +1897,7 @@ func (s *service) reconcileSessionCurrentTurn(ctx context.Context, sessionID uui
 	if len(duplicateTurns) > 0 {
 		now := s.clock.Now().UTC()
 		for _, turn := range duplicateTurns {
-			if _, err := s.turns.SetCancelled(ctx, turn.ID, now, now, ""); err != nil {
+			if _, err := s.turns.SetCancelled(ctx, turn.ID, now, now, "superseded_live_turn"); err != nil {
 				return nil, err
 			}
 		}
