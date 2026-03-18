@@ -980,6 +980,17 @@ func (r *ChatTurnRepo) SetStopReason(ctx context.Context, id uuid.UUID, stopReas
 	return scanChatTurnWithNotFound(row)
 }
 
+func (r *ChatTurnRepo) SetTriggerMessageID(ctx context.Context, id uuid.UUID, triggerMessageID *uuid.UUID) (ChatTurn, error) {
+	row := r.db.QueryRow(ctx, `
+		UPDATE chat_turn
+		SET trigger_message_id = $2
+		WHERE id = $1
+		RETURNING id, session_id, turn_number, cycle_id, responding_type, responding_id, status, cancel_requested_at,
+		          started_at, completed_at, duration_ms, error_message, stop_reason, trigger_message_id, retry_count, created_at
+	`, id, triggerMessageID)
+	return scanChatTurnWithNotFound(row)
+}
+
 func scanChatTurnWithNotFound(row pgx.Row) (ChatTurn, error) {
 	item, err := scanChatTurn(row)
 	if errors.Is(err, pgx.ErrNoRows) {

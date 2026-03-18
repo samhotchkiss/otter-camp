@@ -4685,6 +4685,17 @@ func TestContinuationTurnAppendsDirectActionPromptForAsyncProjectTask(t *testing
 	if *secondHistoryStart != summaryMessageID {
 		t.Fatalf("second assemble HistoryStartID = %s, want continuation summary %s", *secondHistoryStart, summaryMessageID)
 	}
+	turns, err := fixture.chat.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	if len(turns) != 2 {
+		t.Fatalf("turn count = %d, want 2", len(turns))
+	}
+	last := turns[len(turns)-1]
+	if last.TriggerMessageID == nil || *last.TriggerMessageID != summaryMessageID {
+		t.Fatalf("continuation turn trigger_message_id = %v, want %s", last.TriggerMessageID, summaryMessageID)
+	}
 }
 
 func TestRecoveryTurnAppendsDirectActionPromptForAsyncProjectTaskWithoutCheckpoint(t *testing.T) {
@@ -6912,6 +6923,22 @@ func (f *fakeChatService) SetStopReason(ctx context.Context, id uuid.UUID, stopR
 	} else {
 		reason := strings.TrimSpace(*stopReason)
 		turn.StopReason = &reason
+	}
+	return repo.ChatTurn(*turn), nil
+}
+
+func (f *fakeChatService) SetTriggerMessageID(ctx context.Context, id uuid.UUID, triggerMessageID *uuid.UUID) (repo.ChatTurn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	turn := f.turns[id]
+	if turn == nil {
+		return repo.ChatTurn{}, repo.ErrNotFound
+	}
+	if triggerMessageID == nil || *triggerMessageID == uuid.Nil {
+		turn.TriggerMessageID = nil
+	} else {
+		copyID := *triggerMessageID
+		turn.TriggerMessageID = &copyID
 	}
 	return repo.ChatTurn(*turn), nil
 }

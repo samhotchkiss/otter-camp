@@ -317,6 +317,7 @@ type turnRepository interface {
 	Create(ctx context.Context, turn repo.ChatTurn) (repo.ChatTurn, error)
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]repo.ChatTurn, error)
 	SetStopReason(ctx context.Context, id uuid.UUID, stopReason *string) (repo.ChatTurn, error)
+	SetTriggerMessageID(ctx context.Context, id uuid.UUID, triggerMessageID *uuid.UUID) (repo.ChatTurn, error)
 }
 
 type sessionRepository interface {
@@ -5263,6 +5264,21 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		}
 	}
 	rt.historyStartID = &message.ID
+	if err := e.persistTurnHistoryStart(ctx, rt, message.ID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *TurnEngine) persistTurnHistoryStart(ctx context.Context, rt *turnRuntime, messageID uuid.UUID) error {
+	if e == nil || e.turns == nil || rt == nil || rt.turn == nil || messageID == uuid.Nil {
+		return nil
+	}
+	updated, err := e.turns.SetTriggerMessageID(ctx, rt.turn.ID, &messageID)
+	if err != nil {
+		return err
+	}
+	rt.turn = &updated
 	return nil
 }
 
@@ -5348,6 +5364,9 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 		return false, err
 	} else if ok {
 		rt.historyStartID = &message.ID
+		if err := e.persistTurnHistoryStart(ctx, rt, message.ID); err != nil {
+			return false, err
+		}
 		if compactAction != nil && compactAction.ID != uuid.Nil {
 			rt.initialMessageID = compactAction.ID
 		}
@@ -5355,14 +5374,23 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	}
 	if projectBootstrapResumeShouldRootAtResumeMessage(state) {
 		rt.historyStartID = &message.ID
+		if err := e.persistTurnHistoryStart(ctx, rt, message.ID); err != nil {
+			return false, err
+		}
 		return true, nil
 	}
 	if rt.initialMessageID != uuid.Nil {
 		initial := rt.initialMessageID
 		rt.historyStartID = &initial
+		if err := e.persistTurnHistoryStart(ctx, rt, initial); err != nil {
+			return false, err
+		}
 		return true, nil
 	}
 	rt.historyStartID = &message.ID
+	if err := e.persistTurnHistoryStart(ctx, rt, message.ID); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -7385,9 +7413,15 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 		if preserveInitialMessage && rt.initialMessageID != uuid.Nil {
 			initial := rt.initialMessageID
 			rt.historyStartID = &initial
+			if err := e.persistTurnHistoryStart(ctx, rt, initial); err != nil {
+				return false, err
+			}
 			return true, nil
 		}
 		rt.historyStartID = &actionMessage.ID
+		if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
+			return false, err
+		}
 		return true, nil
 	}
 	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryResumeStateMessage(state))
@@ -7406,10 +7440,16 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 	if preserveInitialMessage && rt.initialMessageID != uuid.Nil {
 		initial := rt.initialMessageID
 		rt.historyStartID = &initial
+		if err := e.persistTurnHistoryStart(ctx, rt, initial); err != nil {
+			return false, err
+		}
 		return true, nil
 	}
 	_ = message
 	rt.historyStartID = &actionMessage.ID
+	if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
