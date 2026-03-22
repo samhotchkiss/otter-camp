@@ -631,11 +631,11 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 		Role:       "user",
 		Content:    restartPrompt,
 		Metadata: mustJSONRaw(map[string]any{
-			"source":                      projectBootstrapSource,
-			"bootstrap_restart":           true,
-			"bootstrap_source_project_id": updatedProject.ID.String(),
-			"bootstrap_source_session_id": bundle.SourceSessionID,
-			"bootstrap_source_message_id": bundle.SourceMessageID,
+			"source":                            projectBootstrapSource,
+			"bootstrap_restart":                 true,
+			"bootstrap_source_project_id":       updatedProject.ID.String(),
+			"bootstrap_source_session_id":       bundle.SourceSessionID,
+			"bootstrap_source_message_id":       bundle.SourceMessageID,
 			"bootstrap_restart_scaffold_seeded": scaffoldSeeded,
 		}),
 	})
@@ -933,13 +933,20 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 	if err != nil {
 		return false, err
 	}
-	if len(activeAssignments) == 0 && len(tasks) == 0 {
+	seededTasks := make([]repo.ProjectTask, 0, len(tasks))
+	for _, taskRecord := range tasks {
+		if shouldSkipBootstrapRestartSeedTask(taskRecord) {
+			continue
+		}
+		seededTasks = append(seededTasks, taskRecord)
+	}
+	if len(activeAssignments) == 0 && len(seededTasks) == 0 {
 		return false, nil
 	}
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].TaskNumber < tasks[j].TaskNumber })
+	sort.Slice(seededTasks, func(i, j int) bool { return seededTasks[i].TaskNumber < seededTasks[j].TaskNumber })
 
 	templateIDMap := make(map[uuid.UUID]uuid.UUID)
-	for _, taskRecord := range tasks {
+	for _, taskRecord := range seededTasks {
 		if taskRecord.FlowTemplateID == nil || *taskRecord.FlowTemplateID == uuid.Nil {
 			continue
 		}
@@ -1052,9 +1059,9 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 		}
 	}
 
-	taskIDMap := make(map[string]string, len(tasks))
-	createdTasks := make([]repo.ProjectTask, 0, len(tasks))
-	for _, taskRecord := range tasks {
+	taskIDMap := make(map[string]string, len(seededTasks))
+	createdTasks := make([]repo.ProjectTask, 0, len(seededTasks))
+	for _, taskRecord := range seededTasks {
 		createdTask, err := taskRepo.Create(ctx, repo.ProjectTask{
 			OrganizationID:      taskRecord.OrganizationID,
 			ProjectID:           restartedProjectID,
@@ -1081,7 +1088,7 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 		createdTasks = append(createdTasks, createdTask)
 	}
 
-	for i, taskRecord := range tasks {
+	for i, taskRecord := range seededTasks {
 		metadata := remapBootstrapRestartTaskMetadata(taskRecord.Metadata, taskIDMap)
 		if string(metadata) == string(createdTasks[i].Metadata) {
 			continue
@@ -1108,6 +1115,17 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 	}
 
 	return true, nil
+}
+
+func shouldSkipBootstrapRestartSeedTask(taskRecord repo.ProjectTask) bool {
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+		return true
+	}
+	if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); bootstrapSetupTask {
+		return true
+	}
+	return false
 }
 
 func chooseBootstrapRestartTaskAssignee(task repo.ProjectTask, assignments []repo.AgentProjectAssignment) *uuid.UUID {

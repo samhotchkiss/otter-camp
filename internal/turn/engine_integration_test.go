@@ -10873,6 +10873,92 @@ func TestTurnEngineIntegrationSeedBootstrapRestartScaffoldAutoAssignsUnassignedD
 	}
 }
 
+func TestTurnEngineIntegrationSeedBootstrapRestartScaffoldSkipsCanonicalBootstrapTasks(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	sourceProject := mustCreateBootstrapProject(t, ctx, fixture)
+	projectService, err := projectsvc.NewService(projectsvc.Options{
+		Pool:   fixture.pool,
+		Events: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("New project service: %v", err)
+	}
+	restartedProject, err := projectService.Create(ctx, projectsvc.CreateProjectRequest{
+		OrganizationID: sourceProject.OrganizationID,
+		Slug:           "restart-seed-skip-bootstrap",
+		DisplayName:    sourceProject.DisplayName,
+		Description:    sourceProject.Description,
+		DeliveryMode:   sourceProject.DeliveryMode,
+		CreatedByType:  "system",
+		CreatedByID:    fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create restart target project: %v", err)
+	}
+
+	beforeTasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, restartedProject.ID)
+	if err != nil {
+		t.Fatalf("ListByProject restart target before seed: %v", err)
+	}
+	beforeGateCount, beforeSetupCount := countBootstrapScaffoldTasks(beforeTasks)
+	if beforeGateCount == 0 || beforeSetupCount == 0 {
+		t.Fatalf("restart target scaffold counts before seed = (%d gates, %d setup), want canonical scaffold", beforeGateCount, beforeSetupCount)
+	}
+
+	description := "Map the launch funnel, content pillars, and first implementation slices for the refreshed SAM.blog."
+	createdTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: sourceProject.OrganizationID,
+		ProjectID:      sourceProject.ID,
+		Title:          "Map content across the conversion funnel",
+		Description:    &description,
+		WorkStatus:     "draft",
+		CreatedByType:  "human_user",
+		CreatedByID:    &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create seeded source task: %v", err)
+	}
+
+	seeded, err := fixture.engine.seedBootstrapRestartScaffold(ctx, sourceProject.ID, restartedProject.ID)
+	if err != nil {
+		t.Fatalf("seedBootstrapRestartScaffold: %v", err)
+	}
+	if !seeded {
+		t.Fatal("expected restart scaffold to be seeded")
+	}
+
+	afterTasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, restartedProject.ID)
+	if err != nil {
+		t.Fatalf("ListByProject restart target after seed: %v", err)
+	}
+	afterGateCount, afterSetupCount := countBootstrapScaffoldTasks(afterTasks)
+	if afterGateCount != beforeGateCount {
+		t.Fatalf("bootstrap gate count after seed = %d, want %d", afterGateCount, beforeGateCount)
+	}
+	if afterSetupCount != beforeSetupCount {
+		t.Fatalf("bootstrap setup count after seed = %d, want %d", afterSetupCount, beforeSetupCount)
+	}
+
+	var restartedTask repo.ProjectTask
+	found := false
+	for _, taskRecord := range afterTasks {
+		if strings.TrimSpace(taskRecord.Title) != createdTask.Title {
+			continue
+		}
+		restartedTask = taskRecord
+		found = true
+		break
+	}
+	if !found {
+		t.Fatal("expected restarted project to contain the seeded non-bootstrap task")
+	}
+	if restartedTask.TaskNumber != len(beforeTasks)+1 {
+		t.Fatalf("seeded non-bootstrap task number = %d, want %d", restartedTask.TaskNumber, len(beforeTasks)+1)
+	}
+}
+
 func TestTurnEngineIntegrationSeededBootstrapRestartAckOnlyWithNoProgressFailsImmediately(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -11255,7 +11341,7 @@ func TestTurnEngineIntegrationBootstrapTransientProviderFailureAfterSetupPersist
 	}
 }
 
-func TestTurnEngineIntegrationBootstrapRestartFailsClosedWhenRestartOnlyRecreatesScaffoldEX364(t *testing.T) {
+func TestTurnEngineIntegrationBootstrapRestartWithoutPersistedWorkStartsFreshBootstrapEX364(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
@@ -11321,33 +11407,24 @@ func TestTurnEngineIntegrationBootstrapRestartFailsClosedWhenRestartOnlyRecreate
 		t.Fatalf("HandleTurnCompletedEvent restart scaffold-only turn: %v", err)
 	}
 
-	restartArchived := mustGetProjectByID(t, ctx, fixture.pool, restartProject.ID)
-	if restartArchived.Status != "archived" {
-		t.Fatalf("restart project status = %q, want archived", restartArchived.Status)
+	restartActive := mustGetProjectByID(t, ctx, fixture.pool, restartProject.ID)
+	if restartActive.Status != "active" {
+		t.Fatalf("restart project status = %q, want active", restartActive.Status)
 	}
-	restartFailure := projectfailure.Parse(restartArchived.Settings)
-	if restartFailure.FailureClass != projectBootstrapFailureRuntime {
-		t.Fatalf("restart automatic_failure failure_class = %q, want %q", restartFailure.FailureClass, projectBootstrapFailureRuntime)
-	}
-	if !strings.Contains(restartFailure.FailureReason, "canonical bootstrap scaffold") {
-		t.Fatalf("restart automatic_failure failure_reason = %q, want scaffold dead-end detail", restartFailure.FailureReason)
-	}
-	if restartFailure.SetupPersisted {
-		t.Fatal("restart automatic_failure setup_persisted = true, want false for scaffold-only restart")
-	}
-	if restartFailure.RetryAttemptCount != 1 {
-		t.Fatalf("restart automatic_failure retry_attempt_count = %d, want 1", restartFailure.RetryAttemptCount)
+	restartFailure := projectfailure.Parse(restartActive.Settings)
+	if restartFailure.FailureClass != "" || restartFailure.FailureReason != "" {
+		t.Fatalf("restart automatic_failure = %+v, want cleared for fresh restart bootstrap", restartFailure)
 	}
 
-	restartState := mustProjectBootstrapProjectState(t, restartArchived)
-	if restartState.Status != projectBootstrapStatusFailed {
-		t.Fatalf("restart bootstrap status = %q, want %q", restartState.Status, projectBootstrapStatusFailed)
+	restartState := mustProjectBootstrapProjectState(t, restartActive)
+	if restartState.Status != projectBootstrapStatusActive {
+		t.Fatalf("restart bootstrap status = %q, want %q", restartState.Status, projectBootstrapStatusActive)
 	}
-	if restartState.AssignmentCount != 0 || restartState.PlannedTaskCount != 0 || restartState.FirstWaveExecutionCount != 0 || restartState.FirstWaveJobCount != 0 {
-		t.Fatalf("restart bootstrap state = %+v, want scaffold-only zero-execution failure", restartState)
+	if restartState.AssignmentCount != 0 || restartState.PlannedTaskCount != 0 || restartState.FirstWaveExecutionCount != 0 {
+		t.Fatalf("restart bootstrap state = %+v, want fresh restart with no persisted seeded work", restartState)
 	}
-	if jobs := countRunnableAgentTurnJobsForProject(t, ctx, fixture.pool, restartProject.ID); jobs != 0 {
-		t.Fatalf("restart project runnable bootstrap jobs = %d, want 0 after fail-closed archive", jobs)
+	if jobs := countRunnableAgentTurnJobsForProject(t, ctx, fixture.pool, restartProject.ID); jobs != 1 {
+		t.Fatalf("restart project runnable bootstrap jobs = %d, want 1 continuation for fresh bootstrap", jobs)
 	}
 }
 
@@ -17863,6 +17940,22 @@ func mustFindFirstNonBootstrapTask(t *testing.T, ctx context.Context, pool *pgxp
 	}
 	t.Fatal("expected non-bootstrap project task")
 	return repo.ProjectTask{}
+}
+
+func countBootstrapScaffoldTasks(tasks []repo.ProjectTask) (int, int) {
+	gateCount := 0
+	setupCount := 0
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			gateCount++
+			continue
+		}
+		if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); bootstrapSetupTask {
+			setupCount++
+		}
+	}
+	return gateCount, setupCount
 }
 
 func mustFindBootstrapSetupTaskBySlug(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID uuid.UUID, slug string) repo.ProjectTask {
