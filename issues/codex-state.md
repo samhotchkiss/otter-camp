@@ -232,6 +232,8 @@ Sam.blog run artifacts:
   - the shorter raw project brief/directive that was injected into OtterCamp
 - `reports/oc-test-human-interventions.md`
   - intervention log for manual actions taken during monitored runs
+- `reports/2026-03-22-speaker-pipeline-ops-validation-package.md`
+  - canonical kickoff package for the next mixed operational validation run after SAM.blog
 
 ## Current repo state at time of writing
 
