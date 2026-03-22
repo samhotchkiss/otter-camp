@@ -1395,6 +1395,59 @@ func TestTaskServiceIntegrationOrchestrationAutoCompleteSynthesizesPlanningArtif
 	}
 }
 
+func TestTaskServiceIntegrationBootstrapPlanningAutoCompleteSynthesizesPlanningArtifactEvidence(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	description := "Define the mission, positioning, and strategic direction for the new site."
+	parent, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Bootstrap: Site Strategy & Direction",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	parentRecord, err := taskRepo.GetByID(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	parentRecord.Metadata = taskplan.ApplyMetadata(parentRecord.Metadata, taskplan.Analyze(parentRecord.Title, &description))
+	if _, err := taskRepo.Update(ctx, parentRecord); err != nil {
+		t.Fatalf("Update planning metadata: %v", err)
+	}
+
+	completed, err := svc.TransitionStatus(ctx, parentRecord.ID, "done", Actor{
+		Type:                               "system",
+		AllowBootstrapPlanningAutoComplete: true,
+	})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+	if completed.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", completed.WorkStatus)
+	}
+
+	stored, err := taskRepo.GetByID(ctx, parentRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID completed task: %v", err)
+	}
+	plan, ok := taskplan.Parse(stored.Metadata)
+	if !ok {
+		t.Fatal("expected planning metadata")
+	}
+	if len(plan.ArtifactEvidence) != 4 {
+		t.Fatalf("artifact evidence len = %d, want 4", len(plan.ArtifactEvidence))
+	}
+}
+
 func seedOrchestrationChildrenForParent(t *testing.T, ctx context.Context, svc TaskService, taskRepo *repo.ProjectTaskRepo, parentID, projectID, flowTemplateID uuid.UUID, titles []string) (repo.ProjectTask, []repo.ProjectTask) {
 	t.Helper()
 

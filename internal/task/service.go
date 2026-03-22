@@ -148,17 +148,18 @@ func (e ErrTaskFlowStateConflict) Is(target error) bool {
 }
 
 type Actor struct {
-	Type                           string
-	ID                             uuid.UUID
-	ExpectedFromStatus             string
-	AllowNoActiveFlow              bool
-	AllowFlowRuntimeBypass         bool
-	AllowDoneBypass                bool
-	AllowOrchestrationAutoComplete bool
-	AllowGateBypass                bool
-	AllowBootstrapGateAutoComplete bool
-	AllowBootstrapSetupComplete    bool
-	AllowCompletedChildReopen      bool
+	Type                               string
+	ID                                 uuid.UUID
+	ExpectedFromStatus                 string
+	AllowNoActiveFlow                  bool
+	AllowFlowRuntimeBypass             bool
+	AllowDoneBypass                    bool
+	AllowOrchestrationAutoComplete     bool
+	AllowBootstrapPlanningAutoComplete bool
+	AllowGateBypass                    bool
+	AllowBootstrapGateAutoComplete     bool
+	AllowBootstrapSetupComplete        bool
+	AllowCompletedChildReopen          bool
 }
 
 type ErrInProgressRequiresActiveFlow struct {
@@ -649,9 +650,10 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 	}
 	bootstrapGateAutoComplete := allowsBootstrapGateAutoComplete(taskRecord, from, target, actor)
 	bootstrapSetupComplete := allowsBootstrapSetupComplete(taskRecord, from, target, actor)
+	bootstrapPlanningAutoComplete := allowsBootstrapPlanningAutoComplete(taskRecord, from, target, actor)
 	childReopen := allowsCompletedChildReopen(taskRecord, from, target, actor)
 	orchestrationAutoComplete := allowsOrchestrationAutoComplete(taskRecord, from, target, actor)
-	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !childReopen && !orchestrationAutoComplete {
+	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !childReopen && !orchestrationAutoComplete {
 		return nil, ErrInvalidStatusTransition{From: from, To: target}
 	}
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
@@ -677,7 +679,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 			return nil, ErrFlowTemplateReviewRequired
 		}
 	}
-	if !actor.AllowFlowRuntimeBypass && !bootstrapSetupComplete && !orchestrationAutoComplete {
+	if !actor.AllowFlowRuntimeBypass && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !orchestrationAutoComplete {
 		if err := s.validateFlowRuntimeStatus(ctx, taskRecord, target); err != nil {
 			return nil, err
 		}
@@ -739,6 +741,13 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		}
 	}
 	if target == "done" && !actor.AllowDoneBypass && !bootstrapGateAutoComplete && !bootstrapSetupComplete {
+		if bootstrapPlanningAutoComplete {
+			if enriched, enrichErr := enrichPlanningArtifactEvidence(taskRecord, s.clock.Now().UTC()); enrichErr != nil {
+				return nil, enrichErr
+			} else {
+				taskRecord = enriched
+			}
+		}
 		if orchestrationAutoComplete {
 			if enriched, enrichErr := s.enrichOrchestrationAutoCompleteMetadata(ctx, taskRecord); enrichErr != nil {
 				return nil, enrichErr
@@ -756,7 +765,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 				extraPayload[key] = value
 			}
 		}
-		if err := s.validateDoneTransition(ctx, taskRecord, orchestrationAutoComplete); err != nil {
+		if err := s.validateDoneTransition(ctx, taskRecord, orchestrationAutoComplete || bootstrapPlanningAutoComplete); err != nil {
 			return nil, err
 		}
 	}
@@ -1157,6 +1166,31 @@ func allowsOrchestrationAutoComplete(taskRecord repo.ProjectTask, from, target s
 	}
 }
 
+func allowsBootstrapPlanningAutoComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
+	if !actor.AllowBootstrapPlanningAutoComplete {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(actor.Type), "system") {
+		return false
+	}
+	if normalizeStatus(target) != "done" {
+		return false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(taskRecord.Title), "Bootstrap:") {
+		return false
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok || !plan.ProcessEnforced || len(plan.Artifacts) == 0 {
+		return false
+	}
+	switch normalizeStatus(from) {
+	case "draft", "queued", "in_progress", "review":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.ProjectTask, allowOrchestrationAutoComplete bool) error {
 	children, err := s.listDecompositionChildren(ctx, taskRecord)
 	if err != nil {
@@ -1165,7 +1199,7 @@ func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.Pr
 	if err := taskorchestration.ValidateCompletion(taskRecord, children); err != nil {
 		return err
 	}
-	if allowOrchestrationAutoComplete && isOrchestrationOnlyParentTask(taskRecord, children) {
+	if allowOrchestrationAutoComplete && (isOrchestrationOnlyParentTask(taskRecord, children) || isBootstrapPlanningTask(taskRecord)) {
 		return nil
 	}
 	if taskRecord.FlowTemplateID == nil || taskRecord.CurrentFlowNodeID == nil {
@@ -1359,6 +1393,14 @@ func isOrchestrationOnlyParentTask(taskRecord repo.ProjectTask, children []repo.
 	decomp, _ := metadata["decomposition"].(map[string]any)
 	orchestrationOnly, _ := decomp["orchestration_only"].(bool)
 	return orchestrationOnly
+}
+
+func isBootstrapPlanningTask(taskRecord repo.ProjectTask) bool {
+	if !strings.HasPrefix(strings.TrimSpace(taskRecord.Title), "Bootstrap:") {
+		return false
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	return ok && plan.ProcessEnforced && len(plan.Artifacts) > 0
 }
 
 type executionReviewProgress struct {

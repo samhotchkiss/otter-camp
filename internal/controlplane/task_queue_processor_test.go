@@ -1072,6 +1072,64 @@ func TestTaskQueueProcessorHandleTaskCompletedEventAutoCompletesParentTask(t *te
 	}
 }
 
+func TestTaskQueueProcessorHandleTaskCompletedEventAutoCompletesBootstrapPlanningTasks(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	bootstrapTaskID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{}
+	taskService := &fakeTaskQueueStatusTransitioner{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+			},
+			tasksByProject: []repo.ProjectTask{
+				{
+					ID:             bootstrapTaskID,
+					OrganizationID: orgID,
+					ProjectID:      projectID,
+					Title:          "Bootstrap: Site Strategy & Direction",
+					WorkStatus:     "draft",
+				},
+			},
+		},
+		taskService: taskService,
+		runs:        runService,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":   taskID,
+		"to_status": "done",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "task.status_changed",
+		Payload:        payload,
+	}
+	if err := processor.handleTaskCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("handleTaskCompletedEvent: %v", err)
+	}
+
+	if len(taskService.transitionCalls) != 1 {
+		t.Fatalf("TransitionStatus calls = %d, want 1", len(taskService.transitionCalls))
+	}
+	call := taskService.transitionCalls[0]
+	if call.taskID != bootstrapTaskID || call.toStatus != "done" {
+		t.Fatalf("transition call = %+v, want bootstrap task done", call)
+	}
+	if call.actor.Type != "system" || !call.actor.AllowBootstrapPlanningAutoComplete {
+		t.Fatalf("actor = %+v, want system bootstrap planning auto-complete", call.actor)
+	}
+}
+
 func TestTaskQueueProcessorHandleRunCancellationRequestedEventAutoConfirmsSchedulerAndSupervisor(t *testing.T) {
 	ctx := context.Background()
 	schedulerRunID := uuid.New()
