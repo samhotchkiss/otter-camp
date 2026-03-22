@@ -7672,6 +7672,22 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 	if target := strings.TrimSpace(state.targetPath); target != "" {
 		lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
 	}
+	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
+		target := strings.TrimSpace(state.targetPath)
+		if target == "" {
+			target = "the target file"
+		}
+		lines = append(lines,
+			"Your next assistant message must begin with the concrete file body for "+target+" itself, not narration about planning to write it.",
+			"Do not preface the file body with readiness text, explanations, or intent-to-write filler.",
+		)
+		if strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == "" {
+			lines = append(lines, "No substantive durable draft is available. Draft the file body from scratch in the assistant message before any file.write. If the target is Markdown, start immediately with a heading and real section content.")
+		}
+		if taskcheckpoint.RecoveryFileWriteFailureIsRepeatedDraftReject(state.failureReason) {
+			lines = append(lines, "This checkpoint is already hardened after repeated non-substantive drafts. Another intent-to-write sentence will fail; either write the file body now or report one concrete blocker sentence.")
+		}
+	}
 	switch strings.TrimSpace(state.blockerClass) {
 	case taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
 		taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint:

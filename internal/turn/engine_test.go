@@ -23,6 +23,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 )
 
@@ -4749,6 +4750,29 @@ func TestRecoveryTurnAppendsDirectActionPromptForAsyncProjectTaskWithoutCheckpoi
 	}
 	if !actionPromptFound {
 		t.Fatal("task recovery action prompt missing")
+	}
+}
+
+func TestBuildRecoveryResumeActionPromptHardensIntentOnlyCheckpointWithoutDraft(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:    "docs/sitemap-and-navigation.md",
+		blockerClass:  taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint,
+		failureReason: "repeated intent-only recovery drafts for docs/sitemap-and-navigation.md across explicit resume attempts; latest assistant draft for docs/sitemap-and-navigation.md described intent to write the deliverable instead of the file body",
+	})
+
+	if !strings.Contains(prompt, "must begin with the concrete file body for docs/sitemap-and-navigation.md itself") {
+		t.Fatalf("prompt = %q, want direct begin-with-file-body guidance", prompt)
+	}
+	if !strings.Contains(prompt, "No substantive durable draft is available.") {
+		t.Fatalf("prompt = %q, want no-draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "If the target is Markdown, start immediately with a heading and real section content.") {
+		t.Fatalf("prompt = %q, want markdown-start guidance", prompt)
+	}
+	if !strings.Contains(prompt, "already hardened after repeated non-substantive drafts") {
+		t.Fatalf("prompt = %q, want repeated-draft hardening guidance", prompt)
 	}
 }
 
