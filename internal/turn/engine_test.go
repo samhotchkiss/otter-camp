@@ -6120,6 +6120,52 @@ func TestContinuationTurnRecoversWhenTurnAlreadyCompleted(t *testing.T) {
 	}
 }
 
+func TestContinuationTurnRecoversWhenTurnAlreadyCancelled(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+
+	var cancelErr error
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call != 1 || cancelErr != nil {
+			return
+		}
+		cancelErr = fixture.chat.CancelTurn(context.Background(), input.TurnID, "steer_turn")
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: "summary"}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if cancelErr != nil {
+		t.Fatalf("external cancellation err = %v, want nil", cancelErr)
+	}
+	if len(fixture.chat.turnOrder) < 2 {
+		t.Fatalf("turn count = %d, want >= 2", len(fixture.chat.turnOrder))
+	}
+	first := fixture.chat.turnByID(fixture.chat.turnOrder[0])
+	if first == nil || first.Status != "cancelled" {
+		t.Fatalf("first turn status = %v, want cancelled", first)
+	}
+	last := fixture.chat.turnByID(fixture.chat.turnOrder[len(fixture.chat.turnOrder)-1])
+	if last == nil || last.Status != "completed" {
+		t.Fatalf("last turn status = %v, want completed", last)
+	}
+}
+
 func TestHandleUserMessageCarriesRunAttributionIntoInvocationAndModelRequest(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	runID := uuid.New()

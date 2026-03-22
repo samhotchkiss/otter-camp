@@ -4955,10 +4955,13 @@ func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
 	}
 	if err := e.chat.CompleteTurn(ctx, rt.turn.ID); err != nil {
 		if errors.Is(err, chat.ErrInvalidStatusTransition) {
-			if current, getErr := e.chat.GetTurn(ctx, rt.turn.ID); getErr == nil && strings.EqualFold(strings.TrimSpace(current.Status), "completed") {
-				e.logger.Warn("completeTurn no-op for already completed turn",
+			if current, getErr := e.chat.GetTurn(ctx, rt.turn.ID); getErr == nil &&
+				(strings.EqualFold(strings.TrimSpace(current.Status), "completed") ||
+					strings.EqualFold(strings.TrimSpace(current.Status), "cancelled")) {
+				e.logger.Warn("completeTurn no-op for stale terminal turn",
 					"session_id", rt.session.ID,
 					"turn_id", rt.turn.ID,
+					"turn_status", current.Status,
 				)
 				rt.turn = current
 				return e.ensureRecoveryTurnDurableTaskState(ctx, rt)
