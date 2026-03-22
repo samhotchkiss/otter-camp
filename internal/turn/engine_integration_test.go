@@ -5455,8 +5455,8 @@ func TestTurnEngineIntegrationFreshKickoffRetryKeepsSingleProjectAndSession(t *t
 		t.Fatalf("retry handleUserMessage: %v", err)
 	}
 
-	if strings.Join(dispatched, ",") != "create-1,session-1,session-retry" {
-		t.Fatalf("dispatched tier1 calls = %v, want [create-1 session-1 session-retry]", dispatched)
+	if strings.Join(dispatched, ",") != "create-1" {
+		t.Fatalf("dispatched tier1 calls = %v, want only [create-1]", dispatched)
 	}
 	if createdProjectID == uuid.Nil {
 		t.Fatal("expected created project id")
@@ -5488,22 +5488,32 @@ func TestTurnEngineIntegrationFreshKickoffRetryKeepsSingleProjectAndSession(t *t
 		t.Fatalf("count active project sessions: %v", err)
 	}
 	if activeSessions != 1 {
-		t.Fatalf("active project session count = %d, want 1", activeSessions)
+		t.Fatalf("active project session count = %d, want 1 canonical project session", activeSessions)
 	}
 
 	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, fixture.session.ID)
 	if err != nil {
 		t.Fatalf("ListBySession messages: %v", err)
 	}
+	foundBlockedFollowOn := false
 	foundBlockedRetry := false
 	for _, message := range messages {
-		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || message.ToolCallID == nil || *message.ToolCallID != "create-retry" {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || message.ToolCallID == nil {
+			continue
+		}
+		if *message.ToolCallID == "session-1" && strings.Contains(message.Content, "handoff-only") {
+			foundBlockedFollowOn = true
+		}
+		if *message.ToolCallID != "create-retry" {
 			continue
 		}
 		if strings.Contains(message.Content, "project already created in this flow") {
 			foundBlockedRetry = true
 			break
 		}
+	}
+	if !foundBlockedFollowOn {
+		t.Fatal("missing blocked follow-on session.create tool result")
 	}
 	if !foundBlockedRetry {
 		t.Fatal("missing blocked retry project.create tool result")

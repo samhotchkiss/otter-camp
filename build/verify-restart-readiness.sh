@@ -9,7 +9,7 @@ mkdir -p bin
 echo "[restart-smoke] build ottercamp binary"
 go build -o bin/ottercamp ./cmd/ottercamp
 
-echo "[restart-smoke] kickoff path stays single-project/single-session"
+echo "[restart-smoke] kickoff retry stays single-project and blocks duplicate follow-on mutations"
 go test ./internal/turn -tags integration -count=1 -run 'TestTurnEngineIntegrationFreshKickoffRetryKeepsSingleProjectAndSession'
 
 echo "[restart-smoke] queued task reaches in_progress with live execution state"

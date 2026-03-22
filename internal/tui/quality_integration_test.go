@@ -679,7 +679,7 @@ func TestSidebarShowsPausedProjectMarker(t *testing.T) {
 
 	model = pressRealtimeMsg(model, loadSidebarDataCmd(model.runtimeHints)())
 
-	rendered := model.renderSidebar(40, 30)
+	rendered := model.renderSidebarPanel(40, 30, false)
 	if !strings.Contains(rendered, "Paused Project [paused]") {
 		t.Fatalf("sidebar missing paused project marker:\n%s", rendered)
 	}
