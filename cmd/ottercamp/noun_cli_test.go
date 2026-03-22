@@ -298,3 +298,33 @@ func TestRunProjectArchiveSlugPrefixCallsListAndArchiveEndpoints(t *testing.T) {
 		t.Fatalf("archiveCalls = %d, want 2", archiveCalls)
 	}
 }
+
+func TestRunAuthStatusCallsMeEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/auth/me" {
+			t.Fatalf("path = %q, want %q", r.URL.Path, "/v1/auth/me")
+		}
+		if got := strings.TrimSpace(r.Header.Get("X-API-Key")); got != "status-key" {
+			t.Fatalf("X-API-Key = %q, want %q", got, "status-key")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"11111111-1111-1111-1111-111111111111","organization_id":"22222222-2222-2222-2222-222222222222","email":"sam@example.test","display_name":"Sam","role":"admin","auth_method":"api_key","scopes":["projects:read","projects:write"]}}`))
+	}))
+	defer server.Close()
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runAuthStatus([]string{"--server-url", server.URL, "--api-key", "status-key", "--output", "table"})
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stdout, "sam@example.test") {
+		t.Fatalf("stdout = %q, want email", stdout)
+	}
+	if !strings.Contains(stdout, "api_key") {
+		t.Fatalf("stdout = %q, want auth_method", stdout)
+	}
+	if !strings.Contains(stdout, "projects:read,projects:write") {
+		t.Fatalf("stdout = %q, want scopes", stdout)
+	}
+}

@@ -197,6 +197,12 @@ func TestAuthHTTPAPIKeyLifecycleAndAdminRevoke(t *testing.T) {
 	if got := jsonPathString(t, byAPIKey.Body, "data", "email"); got != memberUser.Email {
 		t.Fatalf("api key me email = %q, want %q", got, memberUser.Email)
 	}
+	if got := jsonPathString(t, byAPIKey.Body, "data", "auth_method"); got != "api_key" {
+		t.Fatalf("api key me auth_method = %q, want %q", got, "api_key")
+	}
+	if got := jsonPathString(t, byAPIKey.Body, "data", "scopes", "0"); got != "chat:read" {
+		t.Fatalf("api key me scopes[0] = %q, want %q", got, "chat:read")
+	}
 
 	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
 	revoked := mustJSON(t, http.MethodDelete, testServer.URL+"/v1/api-keys/"+apiKeyID, nil, map[string]string{

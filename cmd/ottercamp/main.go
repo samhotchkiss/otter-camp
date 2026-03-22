@@ -1663,6 +1663,16 @@ type cliAdminUser struct {
 	Email string `json:"email"`
 }
 
+type cliAuthStatus struct {
+	ID             string   `json:"id"`
+	OrganizationID string   `json:"organization_id"`
+	Email          string   `json:"email"`
+	DisplayName    string   `json:"display_name"`
+	Role           string   `json:"role"`
+	AuthMethod     string   `json:"auth_method"`
+	Scopes         []string `json:"scopes"`
+}
+
 func (c *cliAPIClient) toggleSchedule(ctx context.Context, projectID, scheduleID string, enable bool) (*cliScheduleToggleResult, error) {
 	action := "disable"
 	if enable {
@@ -1694,6 +1704,16 @@ func (c *cliAPIClient) lookupUserIDByEmail(ctx context.Context, email string) (s
 		}
 	}
 	return "", fmt.Errorf("user %q not found", email)
+}
+
+func (c *cliAPIClient) authStatus(ctx context.Context) (*cliAuthStatus, error) {
+	var resp struct {
+		Data cliAuthStatus `json:"data"`
+	}
+	if err := c.request(ctx, http.MethodGet, "/v1/auth/me", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.Data, nil
 }
 
 func (c *cliAPIClient) adminResetPassword(ctx context.Context, userID, newPassword string) error {
@@ -2491,12 +2511,14 @@ func runDBReset(args []string) int {
 
 func runAuthCommand(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: ottercamp auth <login|reset-password|magic-link|unlock-account> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: ottercamp auth <login|status|reset-password|magic-link|unlock-account> [flags]")
 		return 1
 	}
 	switch args[0] {
 	case "login":
 		return runAuthLogin(args[1:])
+	case "status":
+		return runAuthStatus(args[1:])
 	case "reset-password":
 		return runAuthResetPassword(args[1:])
 	case "magic-link":
@@ -2505,6 +2527,7 @@ func runAuthCommand(args []string) int {
 		return runAuthUnlockAccount(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown auth command: %s\n", args[0])
+		fmt.Fprintln(os.Stderr, "usage: ottercamp auth <login|status|reset-password|magic-link|unlock-account> [flags]")
 		return 1
 	}
 }
@@ -2617,6 +2640,49 @@ func runAuthLogin(args []string) int {
 	}
 	fmt.Fprintf(os.Stdout, "logged in as %s — credentials saved to %s\n", email, store.Path)
 	return 0
+}
+
+func runAuthStatus(args []string) int {
+	flags := flag.NewFlagSet("auth status", flag.ContinueOnError)
+	serverURL := flags.String("server-url", "", "server URL override")
+	apiKey := flags.String("api-key", "", "api key override")
+	outputModeFlag := flags.String("output", defaultOutputMode, "output mode: table|json|quiet")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "auth status argument error: %v\n", err)
+		return 1
+	}
+
+	outputMode, err := normalizeOutputMode(*outputModeFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth status output error: %v\n", err)
+		return 1
+	}
+
+	client, err := newCLIAPIClient(*serverURL, *apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth status setup error: %v\n", err)
+		return 1
+	}
+
+	status, err := client.authStatus(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "auth status failed: %v\n", err)
+		return 1
+	}
+
+	switch outputMode {
+	case clitools.OutputModeJSON:
+		return writeJSONEnvelope(map[string]any{"data": status}, "auth status")
+	case clitools.OutputModeQuiet:
+		fmt.Fprintln(os.Stdout, status.Email)
+		return 0
+	default:
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "EMAIL\tROLE\tAUTH_METHOD\tSCOPES")
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", status.Email, status.Role, status.AuthMethod, strings.Join(status.Scopes, ","))
+		_ = tw.Flush()
+		return 0
+	}
 }
 
 func readPassword(fd int) ([]byte, error) {

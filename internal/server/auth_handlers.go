@@ -119,6 +119,8 @@ type userResponse struct {
 	Email          string    `json:"email"`
 	DisplayName    string    `json:"display_name"`
 	Role           string    `json:"role"`
+	AuthMethod     string    `json:"auth_method,omitempty"`
+	Scopes         []string  `json:"scopes,omitempty"`
 }
 
 type apiKeyResponse struct {
@@ -394,7 +396,16 @@ func (h authHandlers) me(w http.ResponseWriter, r *http.Request) {
 		Email:          principal.Email,
 		DisplayName:    principal.DisplayName,
 		Role:           principal.Role,
+		AuthMethod:     strings.TrimSpace(principal.AuthMethod),
+		Scopes:         authScopesForPrincipal(principal),
 	})
+}
+
+func authScopesForPrincipal(principal middleware.Principal) []string {
+	if principal.APIKey == nil || len(principal.APIKey.Scopes) == 0 {
+		return nil
+	}
+	return append([]string{}, principal.APIKey.Scopes...)
 }
 
 func (h authHandlers) listSessions(w http.ResponseWriter, r *http.Request) {
