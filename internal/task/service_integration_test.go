@@ -846,6 +846,98 @@ func TestTaskServiceIntegrationResumeDurableRecoveryCheckpointQueuesRecoveryEX32
 	}
 }
 
+func TestTaskServiceIntegrationResumeValidationBlockedReviewTaskRestoresReviewStatus(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "pm-user", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "PM Agent", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Validation blocked review task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("GetByTemplateOrdered: %v", err)
+	}
+	if len(nodes) < 2 {
+		t.Fatalf("nodes len = %d, want >= 2", len(nodes))
+	}
+	reviewNode := nodes[1]
+
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	taskRecord.CurrentFlowNodeID = &reviewNode.ID
+	taskRecord.WorkStatus = "review"
+	guardedMetadata, err := MergeValidationGuardMetadata(taskRecord.Metadata, ValidationGuardState{
+		InitialMessageID:   uuid.NewString(),
+		Fingerprint:        "file.write:content_required",
+		AttemptFingerprint: "file.write:content_required:attempt",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "content_required",
+		FailureReason:      "content_required",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	taskRecord.Metadata = guardedMetadata
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update review task: %v", err)
+	}
+	if _, err := svc.MarkBlocked(ctx, created.ID, "deterministic tool validation loop blocked after 3 identical failures: file.write (content_required)", Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	resumed, err := svc.ResumeValidationBlockedTask(ctx, created.ID, Actor{Type: "human_user", ID: pmUser.ID})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "review" {
+		t.Fatalf("resumed work_status = %q, want review", resumed.WorkStatus)
+	}
+	if _, ok := ParseValidationGuard(resumed.Metadata); ok {
+		t.Fatalf("expected validation guard to be cleared, metadata=%s", string(resumed.Metadata))
+	}
+
+	var payload []byte
+	if err := pool.QueryRow(ctx, `
+		SELECT payload
+		FROM project_task_event
+		WHERE task_id = $1
+		  AND event_type = 'status.changed'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, created.ID).Scan(&payload); err != nil {
+		t.Fatalf("load latest task event: %v", err)
+	}
+	var eventPayload map[string]any
+	if err := json.Unmarshal(payload, &eventPayload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["to_status"])); got != "review" {
+		t.Fatalf("to_status = %q, want review", got)
+	}
+}
+
 func TestTaskServiceIntegrationResumeMissingDurableRecoveryCheckpointRepairsFromWorkspaceEX325(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

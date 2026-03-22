@@ -66,6 +66,7 @@ var validStatusTransitions = map[string]map[string]struct{}{
 	},
 	"queued": {
 		"in_progress": {},
+		"review":      {},
 		"on_hold":     {},
 		"cancelled":   {},
 	},
@@ -79,6 +80,7 @@ var validStatusTransitions = map[string]map[string]struct{}{
 	"blocked": {
 		"queued":      {},
 		"in_progress": {},
+		"review":      {},
 		"on_hold":     {},
 		"cancelled":   {},
 	},
@@ -861,7 +863,25 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 			payload[key] = value
 		}
 	}
-	return s.transitionTaskRecord(ctx, taskRecord, "queued", actor, payload, false)
+	return s.transitionTaskRecord(ctx, taskRecord, resumeBlockedTaskTargetStatus(ctx, s.flowNodes, taskRecord), actor, payload, false)
+}
+
+func resumeBlockedTaskTargetStatus(ctx context.Context, flowNodes flowNodeRepository, taskRecord repo.ProjectTask) string {
+	if flowNodes == nil || taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {
+		return "queued"
+	}
+	currentNode, err := flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		return "queued"
+	}
+	switch expectedTaskRuntimeStatusForNode(currentNode) {
+	case "review":
+		return "review"
+	case "in_progress":
+		return "in_progress"
+	default:
+		return "queued"
+	}
 }
 
 func (s *service) loadLatestBlockedTaskReason(ctx context.Context, taskID uuid.UUID) string {

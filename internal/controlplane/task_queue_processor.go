@@ -296,7 +296,11 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 		if _, err := p.ensureTaskFlowExecutionState(ctx, taskRecord); err != nil {
 			return err
 		}
-		if _, err := p.taskService.TransitionStatus(ctx, taskID, "in_progress", tasksvc.Actor{Type: "system", ExpectedFromStatus: "queued"}); err != nil {
+		targetStatus, err := p.queuedTaskRuntimeStatus(ctx, taskRecord)
+		if err != nil {
+			return err
+		}
+		if _, err := p.taskService.TransitionStatus(ctx, taskID, targetStatus, tasksvc.Actor{Type: "system", ExpectedFromStatus: "queued"}); err != nil {
 			var transitionErr tasksvc.ErrInvalidStatusTransition
 			if !errors.As(err, &transitionErr) && !errors.Is(err, repo.ErrConflict) {
 				return err
@@ -340,6 +344,23 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 		return p.ensureAssignedAgentRun(ctx, event, taskRecord)
 	}
 	return nil
+}
+
+func (p *TaskQueueProcessor) queuedTaskRuntimeStatus(ctx context.Context, taskRecord repo.ProjectTask) (string, error) {
+	if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil || p.flowNodes == nil {
+		return "in_progress", nil
+	}
+	currentNode, err := p.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return "in_progress", nil
+		}
+		return "", err
+	}
+	if strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") || currentNode.RequiresHumanReview {
+		return "review", nil
+	}
+	return "in_progress", nil
 }
 
 func (p *TaskQueueProcessor) isBlockedByOutstandingProjectGate(ctx context.Context, taskRecord repo.ProjectTask) (bool, error) {

@@ -341,6 +341,65 @@ func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn
 	}
 }
 
+func TestTaskQueueProcessorIntegrationQueuedReviewTaskRepairsRuntimeStatus(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+
+	template := seedTaskQueueFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Repair queued review task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+	if _, err := fx.flow.StartFlow(ctx, created.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fx.flow.PauseAtReviewCheckpoint(ctx, created.ID, flowsvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("PauseAtReviewCheckpoint: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	corrupted, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	corrupted.WorkStatus = "queued"
+	if _, err := taskRepo.Update(ctx, corrupted); err != nil {
+		t.Fatalf("Update corrupted task: %v", err)
+	}
+
+	if err := fx.processor.processQueuedTask(ctx, eventbus.DomainEvent{}, created.ID); err != nil {
+		t.Fatalf("processQueuedTask: %v", err)
+	}
+
+	repaired, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID repaired task: %v", err)
+	}
+	if repaired.WorkStatus != "review" {
+		t.Fatalf("work_status = %q, want review", repaired.WorkStatus)
+	}
+	if repaired.CurrentFlowNodeID == nil {
+		t.Fatal("current_flow_node_id is nil, want review node")
+	}
+}
+
 func TestTaskQueueProcessorIntegrationResumeDurableRecoveryCheckpointCreatesFollowOnTurnEX324(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)
