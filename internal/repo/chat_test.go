@@ -98,6 +98,9 @@ func TestCanonicalLiveTurn(t *testing.T) {
 	inProgressTwo := turn("in_progress", 5, base.Add(5*time.Minute), &startedNew)
 	inProgressThree := turn("in_progress", 5, base.Add(6*time.Minute), &startedTie)
 	inProgressFour := turn("in_progress", 5, base.Add(7*time.Minute), &startedTie)
+	cancellingStarted := base.Add(-45 * time.Second)
+	inProgressCancelling := turn("in_progress", 6, base.Add(8*time.Minute), &cancellingStarted)
+	inProgressCancelling.CancelRequestedAt = &base
 
 	tests := []struct {
 		name             string
@@ -143,6 +146,18 @@ func TestCanonicalLiveTurn(t *testing.T) {
 			turns:            []ChatTurn{pendingTwo, inProgressOne, pendingOne},
 			wantCurrentID:    inProgressOne.ID,
 			wantDuplicateIDs: []uuid.UUID{pendingOne.ID, pendingTwo.ID},
+		},
+		{
+			name:             "cancelling in progress does not stay canonical",
+			turns:            []ChatTurn{inProgressCancelling, pendingOne},
+			wantCurrentID:    pendingOne.ID,
+			wantDuplicateIDs: []uuid.UUID{inProgressCancelling.ID},
+		},
+		{
+			name:             "only cancelling in progress yields no canonical live turn",
+			turns:            []ChatTurn{inProgressCancelling},
+			wantCurrentNil:   true,
+			wantDuplicateIDs: []uuid.UUID{inProgressCancelling.ID},
 		},
 	}
 

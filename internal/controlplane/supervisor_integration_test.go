@@ -1354,6 +1354,156 @@ func TestSupervisor_StrandedActiveExecutionRecoversBlankReviewNodeWithReviewerAs
 	}
 }
 
+func TestSupervisor_StrandedActiveExecutionRecoversLiveTurnWithoutRunOwnership(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord := seedRunProject(t, ctx, pool, org.ID)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Recovery Worker")
+	template, node := seedSupervisorFlowTemplateNode(t, ctx, pool, org.ID, projectRecord.ID, nil, nil)
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         projectRecord.ID,
+		Title:             "Recover stranded live turn without run",
+		WorkStatus:        "in_progress",
+		CurrentFlowNodeID: &node.ID,
+		FlowTemplateID:    &template.ID,
+		AssignedAgentID:   &worker.ID,
+		CreatedByType:     "system",
+		CreatedByID:       nil,
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("chat.NewService: %v", err)
+	}
+	session, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"supervisor_integration"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := chatService.AddParticipant(ctx, session.ID, "agent", worker.ID, "responder"); err != nil {
+		t.Fatalf("AddParticipant: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  node.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	turn, err := chatService.CreateTurn(ctx, session.ID, worker.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	userMessage, err := chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "continue the task",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if _, err := repo.NewChatTurnRepo(pool).SetTriggerMessageID(ctx, turn.ID, &userMessage.ID); err != nil {
+		t.Fatalf("SetTriggerMessageID: %v", err)
+	}
+	if err := chatService.StartTurn(ctx, turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	staleAt := time.Now().UTC().Add(-5 * time.Minute)
+	backdateStrandedExecutionFixture(t, ctx, pool, taskRecord.ID, session.ID, execution.ID, staleAt)
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET started_at = $2
+		WHERE id = $1
+	`, turn.ID, staleAt); err != nil {
+		t.Fatalf("backdate turn: %v", err)
+	}
+
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:        pool,
+		RunService:  runService,
+		ChatService: chatService,
+		EventBus:    bus,
+		Logger:      newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectStrandedActiveExecutions(ctx); err != nil {
+		t.Fatalf("detectStrandedActiveExecutions: %v", err)
+	}
+
+	recoveryRunID := loadLatestStrandedRecoveryRunID(t, ctx, pool, taskRecord.ID)
+	if recoveryRunID == uuid.Nil {
+		t.Fatal("expected stranded recovery supervisor run")
+	}
+
+	staleTurn, err := repo.NewChatTurnRepo(pool).GetByID(ctx, turn.ID)
+	if err != nil {
+		t.Fatalf("GetByID stale turn: %v", err)
+	}
+	if staleTurn.Status != "failed" {
+		t.Fatalf("stale turn status = %q, want failed", staleTurn.Status)
+	}
+
+	refreshedSession, err := repo.NewChatSessionRepo(pool).GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetByID session: %v", err)
+	}
+	if refreshedSession.CurrentTurnID == nil || *refreshedSession.CurrentTurnID == uuid.Nil {
+		t.Fatal("expected supervisor recovery to create a fresh current turn")
+	}
+	if *refreshedSession.CurrentTurnID == turn.ID {
+		t.Fatalf("current_turn_id = %s, want fresh recovery turn", *refreshedSession.CurrentTurnID)
+	}
+
+	currentTurn, err := repo.NewChatTurnRepo(pool).GetByID(ctx, *refreshedSession.CurrentTurnID)
+	if err != nil {
+		t.Fatalf("GetByID current turn: %v", err)
+	}
+	if currentTurn.Status != "pending" {
+		t.Fatalf("current turn status = %q, want pending", currentTurn.Status)
+	}
+
+	messages, err := repo.NewChatMessageRepo(pool).ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	if !hasSupervisorRecoveryKickoff(messages, recoveryRunID, execution.ID) {
+		t.Fatal("expected supervisor recovery kickoff message")
+	}
+}
+
 func TestSupervisor_StrandedActiveExecutionRepairsClosedExecutionSession(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

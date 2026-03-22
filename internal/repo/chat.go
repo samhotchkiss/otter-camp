@@ -546,9 +546,14 @@ func NewChatTurnRepo(pool *pgxpool.Pool) *ChatTurnRepo {
 func CanonicalLiveTurn(turns []ChatTurn) (*ChatTurn, []ChatTurn) {
 	inProgress := make([]ChatTurn, 0)
 	pending := make([]ChatTurn, 0)
+	duplicates := make([]ChatTurn, 0)
 	for _, turn := range turns {
 		switch normalizeChatTurnStatus(turn.Status) {
 		case "in_progress":
+			if turn.CancelRequestedAt != nil {
+				duplicates = append(duplicates, turn)
+				continue
+			}
 			inProgress = append(inProgress, turn)
 		case "pending":
 			pending = append(pending, turn)
@@ -591,7 +596,6 @@ func CanonicalLiveTurn(turns []ChatTurn) (*ChatTurn, []ChatTurn) {
 		current = &candidate
 	}
 
-	duplicates := make([]ChatTurn, 0)
 	if len(inProgress) > 1 {
 		duplicates = append(duplicates, inProgress[1:]...)
 	}

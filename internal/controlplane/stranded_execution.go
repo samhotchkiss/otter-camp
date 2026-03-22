@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	strandedExecutionPendingWakeReason = "no_live_task_turn"
-	strandedExecutionRecoveryReason    = "active execution lost live task turn"
-	strandedExecutionFailureReason     = "active execution lost live task turn and automatic recovery failed"
+	strandedExecutionPendingWakeReason                  = "no_live_task_turn"
+	strandedExecutionRecoveryReason                     = "active execution lost live task turn"
+	strandedExecutionFailureReason                      = "active execution lost live task turn and automatic recovery failed"
 	errMissingTaskTransitionServiceForStrandedExecution = "supervisor requires task transition service to block stranded executions"
 )
 
@@ -154,6 +154,18 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 			OR s.status <> 'active'
 			OR s.current_turn_id IS NULL
 			OR COALESCE(turn_row.status, '') NOT IN ('pending', 'in_progress')
+			OR (
+				rs.active_run_id IS NULL
+				AND s.current_turn_id IS NOT NULL
+				AND COALESCE(turn_row.status, '') IN ('pending', 'in_progress')
+				AND NOT EXISTS (
+					SELECT 1
+					FROM job_queue jq
+					WHERE jq.job_type = 'agent_turn'
+					  AND jq.status IN ('pending', 'claimed')
+					  AND (jq.payload->>'session_id')::uuid = s.id
+				)
+			)
 		  )
 		  AND COALESCE(s.last_message_at, s.updated_at, t.updated_at, e.started_at) < $1
 	`
@@ -236,6 +248,13 @@ func (s *Supervisor) recoverStrandedActiveExecution(ctx context.Context, candida
 	}
 	if !strings.EqualFold(candidate.SessionStatus, "active") {
 		return errStrandedExecutionUnrecoverable{reason: fmt.Sprintf("execution session is %q", candidate.SessionStatus)}
+	}
+	if candidate.ActiveRunID == uuid.Nil && candidate.CurrentTurnID != uuid.Nil && isLiveTurnStatus(candidate.CurrentTurnStatus) {
+		if err := s.clearStrandedExecutionLiveTurn(ctx, candidate); err != nil {
+			return err
+		}
+		candidate.CurrentTurnID = uuid.Nil
+		candidate.CurrentTurnStatus = ""
 	}
 	if live, err := s.hasLiveStrandedExecutionRecovery(ctx, candidate.SessionID, candidate.ExecutionID); err != nil {
 		return err
@@ -326,6 +345,54 @@ func (s *Supervisor) recoverStrandedActiveExecution(ctx context.Context, candida
 	}
 	if !isLiveTurnStatus(turn.Status) {
 		return errStrandedExecutionUnrecoverable{reason: fmt.Sprintf("recovery turn entered non-live status %q", turn.Status)}
+	}
+	return nil
+}
+
+func (s *Supervisor) clearStrandedExecutionLiveTurn(ctx context.Context, candidate strandedExecutionCandidate) error {
+	if s == nil || s.pool == nil || candidate.SessionID == uuid.Nil || candidate.CurrentTurnID == uuid.Nil || !isLiveTurnStatus(candidate.CurrentTurnStatus) {
+		return nil
+	}
+	const failureReason = "supervisor recovery cleared stale live task turn without active run ownership"
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE model_invocation
+		SET status = 'failed',
+		    failure_class = 'product_runtime',
+		    error_code = 'stale_turn_recovered',
+		    error_message = $2,
+		    completed_at = COALESCE(completed_at, now())
+		WHERE turn_id = $1
+		  AND status = 'in_flight'
+	`, candidate.CurrentTurnID, failureReason); err != nil {
+		return err
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = $2
+		WHERE turn_id = $1
+		  AND role = 'assistant'
+		  AND status IN ('pending', 'streaming')
+	`, candidate.CurrentTurnID, failureReason); err != nil {
+		return err
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET status = 'failed',
+		    error_message = $2,
+		    completed_at = COALESCE(completed_at, now())
+		WHERE id = $1
+		  AND status IN ('pending', 'in_progress')
+	`, candidate.CurrentTurnID, failureReason); err != nil {
+		return err
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE chat_session
+		SET current_turn_id = NULL
+		WHERE id = $1
+		  AND current_turn_id = $2
+	`, candidate.SessionID, candidate.CurrentTurnID); err != nil {
+		return err
 	}
 	return nil
 }
