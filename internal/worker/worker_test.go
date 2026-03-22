@@ -19,6 +19,38 @@ func TestWorkerDBMaxConnsDefaultsAboveGlobalFloor(t *testing.T) {
 	}
 }
 
+func TestWorkerConcurrencyUsesOverride(t *testing.T) {
+	t.Setenv("OTTERCAMP_WORKER_CONCURRENCY", "12")
+
+	got, err := workerConcurrency()
+	if err != nil {
+		t.Fatalf("workerConcurrency returned error: %v", err)
+	}
+	if got != 12 {
+		t.Fatalf("worker concurrency = %d, want 12", got)
+	}
+}
+
+func TestWorkerConcurrencyDefaultsWhenUnset(t *testing.T) {
+	t.Setenv("OTTERCAMP_WORKER_CONCURRENCY", "")
+
+	got, err := workerConcurrency()
+	if err != nil {
+		t.Fatalf("workerConcurrency returned error: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("worker concurrency = %d, want 0 when unset", got)
+	}
+}
+
+func TestWorkerConcurrencyRejectsInvalidOverride(t *testing.T) {
+	t.Setenv("OTTERCAMP_WORKER_CONCURRENCY", "bad")
+
+	if _, err := workerConcurrency(); err == nil {
+		t.Fatal("expected error for invalid worker concurrency override")
+	}
+}
+
 func TestWorkerDBMaxConnsPrefersWorkerOverride(t *testing.T) {
 	t.Setenv("OTTERCAMP_WORKER_DB_MAX_CONNS", "41")
 	t.Setenv("OTTERCAMP_DB_MAX_CONNS", "24")

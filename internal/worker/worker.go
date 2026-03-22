@@ -49,6 +49,17 @@ import (
 const deterministicQueryEmbeddingDimensions = 1536
 const defaultWorkerMaxConns int32 = 32
 
+func workerConcurrency() (int, error) {
+	if raw := strings.TrimSpace(os.Getenv("OTTERCAMP_WORKER_CONCURRENCY")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v <= 0 {
+			return 0, fmt.Errorf("invalid OTTERCAMP_WORKER_CONCURRENCY %q", raw)
+		}
+		return v, nil
+	}
+	return 0, nil
+}
+
 func workerDBMaxConns() (int32, error) {
 	if raw := strings.TrimSpace(os.Getenv("OTTERCAMP_WORKER_DB_MAX_CONNS")); raw != "" {
 		v, err := strconv.Atoi(raw)
@@ -118,7 +129,13 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		return fmt.Errorf("worker schedule engine setup: %w", err)
 	}
 
-	jqWorker := jobqueue.New(pool.Raw(), logger, jobqueue.Config{})
+	workerBatchSize, err := workerConcurrency()
+	if err != nil {
+		return fmt.Errorf("worker queue setup: %w", err)
+	}
+	jqWorker := jobqueue.New(pool.Raw(), logger, jobqueue.Config{
+		BatchSize: workerBatchSize,
+	})
 	tickWorker := scheduling.NewScheduleTickWorker(pool.Raw(), scheduleEngine, logger)
 	jqWorker.Register(scheduling.ScheduleTickJobType, tickWorker.Execute)
 
