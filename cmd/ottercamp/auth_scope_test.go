@@ -2,7 +2,7 @@ package main
 
 import "testing"
 
-func TestInteractiveClientAPIKeyScopesCoverTUIRuntimeReads(t *testing.T) {
+func TestInteractiveClientAPIKeyScopesCoverTUIRuntimeOperatorFlows(t *testing.T) {
 	scopes := interactiveClientAPIKeyScopes()
 	required := []string{
 		"realtime:read",
@@ -10,6 +10,7 @@ func TestInteractiveClientAPIKeyScopesCoverTUIRuntimeReads(t *testing.T) {
 		"chat:read",
 		"chat:write",
 		"projects:read",
+		"projects:write",
 		"agents:read",
 	}
 

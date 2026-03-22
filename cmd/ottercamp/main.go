@@ -101,6 +101,7 @@ func interactiveClientAPIKeyScopes() []string {
 		"chat:read",
 		"chat:write",
 		"projects:read",
+		"projects:write",
 		"agents:read",
 	}
 }
