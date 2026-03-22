@@ -19,7 +19,7 @@ The product goal is not just to generate plans or chats. It must reliably create
 
 ## Current product priorities
 
-The main priority is core-system reliability, especially around project bootstrap and task-flow execution.
+The main priority is core-system reliability for unattended end-to-end project execution, followed immediately by making completed projects settle cleanly without operator cleanup.
 
 The standing rule from Sam is:
 
@@ -112,7 +112,7 @@ These are not tentative.
 - If the issue queue is being used, keep it accurate, but do not let queue bookkeeping distract from fixing the product.
 - `issues/discuss.md` is only for product-direction or implementation decisions that truly need Sam's input.
 - Fixable bugs do not belong in `issues/discuss.md`; they should be fixed or queued through the issue flow.
-- `issues/notes.md` is the running operational log and review trail.
+- there is no reliable `issues/notes.md` running log anymore; use the latest reports, recent git history, and issue queue files instead.
 
 ## How to use `issues/discuss.md`
 
@@ -157,14 +157,14 @@ There was also earlier experimentation with cron/tmux message injection. The imp
 
 ## Current failure themes
 
-These are the repeated classes of failures that have cost time:
+These were the repeated classes of failures that cost time during the SAM.blog validation run:
 
 - bootstrap persisted planning/setup artifacts without creating runnable first-wave execution
 - session or summary text claimed success when DB/runtime truth did not
 - archived/failed projects left behind active task sessions or stale memory that contaminated fresh runs
 - project/task runtime state drifted away from flow state
 - tasks were scoped too broadly, causing long stalls and poor decomposition
-- queue bookkeeping and review-state drift obscured the real product state
+- orchestration parent tasks and bootstrap planning shells could finish their real work but still remain stuck in `draft`
 - provider/API failures were not surfaced clearly enough to distinguish external outages from OtterCamp bugs
 
 When debugging, assume the real problem is usually one of:
@@ -181,10 +181,10 @@ Start here:
 
 - `issues/discuss.md`
   - active product decisions that may still need Sam's input
-- `issues/notes.md`
-  - operational history, reviews, fixes, and queue notes
 - `reports/oc-test-human-interventions.md`
   - records of manual interventions during live tests
+- `reports/2026-03-22-samblog-clean-run-followup.md`
+  - summary of the 2026-03-22 SAM.blog clean-run repairs, shipped commits, live verification, and remaining product gaps
 - `docsv2/`
   - product spec; must stay aligned with behavioral changes
 - `decisions.md`
@@ -235,12 +235,21 @@ Sam.blog run artifacts:
 
 ## Current repo state at time of writing
 
-As of this handoff:
+As of 2026-03-22 16:25 MDT:
 
 - branch is `main`
-- recent `main` work includes bootstrap hardening and archived-slug project-create fixes
-- queue directories `01-ready` through `04-in-review` may be empty even while repo is dirty
-- the worktree has included queue bookkeeping changes, appended notes, and untracked workspace data
+- recent pushed `main` work includes the SAM.blog clean-run fixes:
+  - `dede48bd` `Auto-complete orchestration parent tasks`
+  - `1d20cda2` `Hydrate planning evidence for parent auto-complete`
+  - `952fc150` `Auto-complete bootstrap planning tasks`
+- the live `sam-blog` project (`424bd0d3-dace-46ef-99fc-f21b817cdfc3`) now has `36` tasks and all `36` are `done`
+- `oc-svc` and `oc-worker` are running from the latest pushed build; `oc-recover` was intentionally removed because the product paths it was compensating for are now fixed
+- queue directories outside `05-completed` are nearly empty; the repo should not be treated as “actively queued” unless new issues are added
+- the remaining untracked local artifacts are workspace/support files, not active tracked product edits:
+  - `.oc.db`
+  - `data/objects/`
+  - `internal/turn/bootstrap_refresh_codex_test.go`
+  - `skills/`
 
 Do not assume the worktree is clean.
 Check `git status --short` before editing.
@@ -341,9 +350,9 @@ The goal is that a fresh Codex instance can start from this file, inspect the re
 
 1. Verify current git and queue state.
 2. Read `issues/discuss.md` to see whether any real product decisions are still open.
-3. Read the latest entries in `issues/notes.md`.
+3. Read the latest relevant report(s), especially the most recent SAM.blog follow-up report.
 4. Inspect recent completed bootstrap/state-machine issues and the tests they added.
-5. Check whether `docsv2` actually matches product behavior.
+5. Check whether `docsv2` actually matches current product behavior.
 6. If there is an active run, inspect DB/runtime truth and tmux/TUI state before trusting summaries.
 
 ## What not to do
@@ -372,7 +381,15 @@ OtterCamp should be able to:
 
 If a fresh session can hold this model in its head, inspect the repo, and continue implementing from there, this handoff file has done its job.
 
-## Changelog
+- 2026-03-22 16:25 MDT
+  - SAM.blog clean-run validation is now complete in live runtime state: project `424bd0d3-dace-46ef-99fc-f21b817cdfc3` has `36/36` tasks `done`.
+  - Recorded the three cleanup fixes that landed on `main`:
+    - `dede48bd` `Auto-complete orchestration parent tasks`
+    - `1d20cda2` `Hydrate planning evidence for parent auto-complete`
+    - `952fc150` `Auto-complete bootstrap planning tasks`
+  - Updated the handoff to remove dependence on stale `issues/notes.md`, point future sessions at the report-based record instead, and capture that `oc-recover` is no longer part of the intended live stack.
+  - Captured the next product focus: use the SAM.blog run as a closed validation baseline, then shift to identifying remaining unattended-run weaknesses before starting the next mixed operational validation project.
+
 - 2026-03-10 22:50 MDT: Fixed the recovery state-machine mismatch for `ResumeValidationBlockedTask`. The service now re-queues blocked recovery tasks (`blocked -> queued`) instead of jumping straight to `in_progress`, the transition matrix and task-service integration tests were aligned to that contract, and the failing `internal/turn` recovery integration tests (EX327/EX329) now pass.
 - 2026-03-10 22:50 MDT: Fixed the fake control-plane run repository to honor the injected fake clock so deferred wakeup ordering tests are deterministic. Revalidated `./internal/task ./internal/flow ./internal/controlplane ./internal/turn` with and without `-tags integration`.
 - 2026-03-10 23:10 MDT: Closed the blocked-task resume escape hatch. `blocked -> in_progress` now still requires a live active flow; `AllowNoActiveFlow` no longer bypasses that path. Added unit and integration coverage and revalidated the core task/flow/controlplane/turn suites.
