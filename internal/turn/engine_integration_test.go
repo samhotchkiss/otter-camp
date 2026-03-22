@@ -12481,6 +12481,139 @@ func TestTurnEngineIntegrationRecoveredClaimedProjectTaskRetryKeepsLiveContinuat
 	}
 }
 
+func TestTurnEngineIntegrationRecoveredProjectTaskStaleInboundTurnWithoutRunEnqueuesRetry(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover stale task inbound turn without run",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &fixture.agent.ID,
+		AssignedAgentID: &fixture.agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Create task: %v", err)
+	}
+
+	session, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession project_task: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, session.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant agent: %v", err)
+	}
+
+	message, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: stringPtr("agent"),
+		AuthorID:   &fixture.agent.ID,
+		Role:       "user",
+		Content:    "Continue work on the task.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage task handoff: %v", err)
+	}
+
+	staleTurn, _, err := fixture.engine.turns.CreateForMessageAttempt(ctx, session.ID, fixture.agent.ID, message.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt stale turn: %v", err)
+	}
+	startedTurn, shouldRun, err := fixture.engine.startInboundMessageTurn(ctx, staleTurn)
+	if err != nil {
+		t.Fatalf("startInboundMessageTurn stale turn: %v", err)
+	}
+	if !shouldRun {
+		t.Fatal("expected stale inbound turn to start initially")
+	}
+
+	jobID := testdb.EnqueueJob(t, fixture.pool, AgentTurnJobType, 100, map[string]any{
+		"session_id":  session.ID,
+		"message_id":  message.ID,
+		"retry_count": 0,
+	})
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'integration-worker',
+		    claimed_at = now(),
+		    attempts = 1,
+		    updated_at = now()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("Update claimed retry job: %v", err)
+	}
+
+	var payload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&payload); err != nil {
+		t.Fatalf("load claimed job payload: %v", err)
+	}
+	claimedJob := jobqueue.Job{
+		ID:      jobID,
+		JobType: AgentTurnJobType,
+		Payload: payload,
+		Status:  "claimed",
+	}
+
+	if err := fixture.engine.HandleTurnJob(ctx, claimedJob); err != nil {
+		t.Fatalf("HandleTurnJob recovered stale project_task inbound turn: %v", err)
+	}
+
+	storedTurn, err := fixture.chatService.GetTurn(ctx, startedTurn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn stale turn: %v", err)
+	}
+	if storedTurn.Status != "failed" {
+		t.Fatalf("stale turn status = %q, want failed", storedTurn.Status)
+	}
+
+	storedSession, err := fixture.chatService.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetSession stored session: %v", err)
+	}
+	if storedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil after stale project_task recovery", storedSession.CurrentTurnID)
+	}
+
+	var pendingJobs int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = $2
+		  AND status = 'pending'
+		  AND payload->>'session_id' = $1
+	`, session.ID.String(), AgentTurnJobType).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending task agent_turn jobs: %v", err)
+	}
+	if pendingJobs != 1 {
+		t.Fatalf("pending task agent_turn jobs = %d, want 1 after stale project_task recovery", pendingJobs)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	if !containsSystemMessage(messages, "[Recovered stale in-progress task turn without active run ownership - retrying in a fresh turn.]") {
+		t.Fatal("missing stale project_task recovery system message")
+	}
+}
+
 func TestTurnEngineIntegrationHandleRecoverableBootstrapTurnJobFailureHandlesBoundedSizeError(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

@@ -3918,6 +3918,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		)
 	}
 	if !shouldRun {
+		if recovered, recoverErr := e.recoverProjectTaskStaleInboundTurnWithoutRun(ctx, session, messageID, agentID, retryCount, currentJobID, turn); recoverErr != nil {
+			return recoverErr
+		} else if recovered {
+			return nil
+		}
 		if recovered, recoverErr := e.recoverRetriedSessionCurrentTurnLeak(ctx, session, messageID, agentID, retryCount, currentJobID, turn); recoverErr != nil {
 			return recoverErr
 		} else if recovered {
@@ -4177,6 +4182,61 @@ func (e *TurnEngine) recoverRetriedAgentTurnLeak(
 	}
 	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, nil); err != nil {
 		return false, fmt.Errorf("enqueue recovered stale-turn retry: %w", err)
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) recoverProjectTaskStaleInboundTurnWithoutRun(
+	ctx context.Context,
+	session *chat.ChatSession,
+	messageID, agentID uuid.UUID,
+	retryCount int,
+	currentJobID *uuid.UUID,
+	turn *chat.ChatTurn,
+) (bool, error) {
+	if e == nil || e.pool == nil || e.chat == nil || e.enqueuer == nil || session == nil || turn == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+		return false, nil
+	}
+	if session.CurrentTurnID == nil || *session.CurrentTurnID == uuid.Nil || *session.CurrentTurnID != turn.ID {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(turn.Status), "in_progress") {
+		return false, nil
+	}
+
+	var activeRuns int
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM run
+		WHERE session_id = $1
+		  AND status IN ('created', 'queued', 'in_progress')
+	`, session.ID).Scan(&activeRuns); err != nil {
+		return false, fmt.Errorf("count active runs for project_task stale inbound turn recovery: %w", err)
+	}
+	if activeRuns > 0 {
+		return false, nil
+	}
+
+	failureReason := "recovered stale project_task inbound turn without active run ownership; scheduling a fresh retry"
+	if err := e.failRetriedLeakedTurn(ctx, turn.ID, failureReason); err != nil {
+		return false, err
+	}
+	_, _ = e.appendSystemMessage(ctx, turn.ID, session.ID, "[Recovered stale in-progress task turn without active run ownership - retrying in a fresh turn.]")
+
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  messageID,
+		RetryCount: retryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextAgentID := agentID
+		nextPayload.AgentID = &nextAgentID
+	}
+	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, nil); err != nil {
+		return false, fmt.Errorf("enqueue recovered stale project_task retry: %w", err)
 	}
 	return true, nil
 }
