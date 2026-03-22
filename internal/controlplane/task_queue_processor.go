@@ -53,6 +53,7 @@ type taskQueueFlowStarter interface {
 	StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
 	EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
 	PauseAtReviewCheckpoint(ctx context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error)
+	AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error)
 }
 
 type taskQueueFlowExecutionRepository interface {
@@ -1184,6 +1185,13 @@ func (p *TaskQueueProcessor) handleFlowAdvancedEvent(ctx context.Context, event 
 	}
 	if payload.HoldForAsyncReview {
 		return nil
+	}
+	if nextNode.NextNodeID == nil && !strings.EqualFold(strings.TrimSpace(nextNode.NodeType), "review") && !nextNode.RequiresHumanReview {
+		if p.flow == nil {
+			return nil
+		}
+		_, err := p.flow.AdvanceFlow(ctx, taskRecord.ID, flowsvc.Actor{Type: "system"})
+		return err
 	}
 
 	agentID, err := p.resolveFlowTransitionAgent(ctx, taskRecord, nextNode)

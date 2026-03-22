@@ -583,6 +583,66 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresHumanActor(t *testing.T
 	}
 }
 
+func TestTaskQueueProcessorHandleFlowAdvancedEventAutoAdvancesTerminalMergeNode(t *testing.T) {
+	ctx := context.Background()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	sessionID := uuid.New()
+
+	flowService := &fakeTaskQueueFlowStarter{}
+	runService := &fakeTaskQueueRunStarter{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:                taskID,
+				ProjectID:         projectID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+		flow: flowService,
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{
+				ID:       nodeID,
+				NodeType: "merge",
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, Status: "active", SessionID: &sessionID},
+		},
+		runs:  runService,
+		chats: &fakeTaskQueueChatService{},
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":              taskID,
+		"project_id":           projectID,
+		"to_flow_node_id":      nodeID,
+		"to_flow_execution_id": executionID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := processor.handleFlowAdvancedEvent(ctx, eventbus.DomainEvent{EventType: "flow.advanced", Payload: payload}); err != nil {
+		t.Fatalf("handleFlowAdvancedEvent: %v", err)
+	}
+
+	if flowService.advanceCalls != 1 {
+		t.Fatalf("AdvanceFlow calls = %d, want 1", flowService.advanceCalls)
+	}
+	if flowService.lastAdvanceTask != taskID {
+		t.Fatalf("AdvanceFlow task_id = %s, want %s", flowService.lastAdvanceTask, taskID)
+	}
+	if flowService.lastAdvanceActor.Type != "system" {
+		t.Fatalf("AdvanceFlow actor.type = %q, want system", flowService.lastAdvanceActor.Type)
+	}
+	if len(runService.createRunInputs) != 0 {
+		t.Fatalf("CreateRun calls = %d, want 0", len(runService.createRunInputs))
+	}
+}
+
 func TestTaskQueueProcessorHandleFlowAdvancedEventDefaultsBlankReviewActorToReviewerAssignment(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -1807,8 +1867,11 @@ func (f *fakeTaskQueueStatusTransitioner) CreateInboxItem(context.Context, tasks
 }
 
 type fakeTaskQueueFlowStarter struct {
-	execution repo.FlowNodeExecution
-	err       error
+	execution        repo.FlowNodeExecution
+	err              error
+	advanceCalls     int
+	lastAdvanceTask  uuid.UUID
+	lastAdvanceActor flowsvc.Actor
 }
 
 func (f *fakeTaskQueueFlowStarter) StartFlow(context.Context, uuid.UUID) (*repo.FlowNodeExecution, error) {
@@ -1831,6 +1894,17 @@ func (f *fakeTaskQueueFlowStarter) PauseAtReviewCheckpoint(context.Context, uuid
 	if f.err != nil {
 		return nil, f.err
 	}
+	execution := f.execution
+	return &execution, nil
+}
+
+func (f *fakeTaskQueueFlowStarter) AdvanceFlow(_ context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.advanceCalls++
+	f.lastAdvanceTask = taskID
+	f.lastAdvanceActor = actor
 	execution := f.execution
 	return &execution, nil
 }
