@@ -105,6 +105,7 @@ func (r *ChatRouteRegistrar) RegisterRoutes(router chi.Router) {
 
 type orgAgentLister interface {
 	GetStarterTrio(ctx context.Context, organizationID uuid.UUID) ([]repo.Agent, error)
+	GetByID(ctx context.Context, id uuid.UUID) (repo.Agent, error)
 }
 
 type projectTaskReader interface {
@@ -1742,6 +1743,7 @@ func (h chatHandlers) firstActiveAgentParticipant(ctx context.Context, sessionID
 	if err != nil {
 		return uuid.Nil, false
 	}
+	activeAgentIDs := make([]uuid.UUID, 0, len(participants))
 	for _, participant := range participants {
 		if participant == nil {
 			continue
@@ -1752,7 +1754,71 @@ func (h chatHandlers) firstActiveAgentParticipant(ctx context.Context, sessionID
 		if participant.ParticipantID == uuid.Nil || participant.RemovedAt != nil {
 			continue
 		}
-		return participant.ParticipantID, true
+		activeAgentIDs = append(activeAgentIDs, participant.ParticipantID)
+	}
+	if len(activeAgentIDs) == 0 {
+		return uuid.Nil, false
+	}
+
+	session, err := h.service.GetSession(ctx, sessionID)
+	if err == nil && session != nil {
+		if preferredID, ok := h.preferredProjectAgentParticipant(ctx, session, activeAgentIDs); ok {
+			return preferredID, true
+		}
+	}
+	return activeAgentIDs[0], true
+}
+
+func (h chatHandlers) preferredProjectAgentParticipant(ctx context.Context, session *chat.ChatSession, activeAgentIDs []uuid.UUID) (uuid.UUID, bool) {
+	if session == nil {
+		return uuid.Nil, false
+	}
+	scopeType := strings.TrimSpace(session.ScopeType)
+	if scopeType != "project" && scopeType != "project_task" {
+		return uuid.Nil, false
+	}
+
+	activeSet := make(map[uuid.UUID]struct{}, len(activeAgentIDs))
+	for _, agentID := range activeAgentIDs {
+		if agentID != uuid.Nil {
+			activeSet[agentID] = struct{}{}
+		}
+	}
+
+	projectID := session.ScopeID
+	if scopeType == "project_task" {
+		if h.tasks == nil {
+			return uuid.Nil, false
+		}
+		taskRecord, err := h.tasks.GetByID(ctx, session.ScopeID)
+		if err != nil {
+			return uuid.Nil, false
+		}
+		projectID = taskRecord.ProjectID
+	}
+
+	if h.assignments != nil && projectID != uuid.Nil {
+		if assignment, err := h.assignments.GetPM(ctx, projectID); err == nil {
+			if _, ok := activeSet[assignment.AgentID]; ok {
+				return assignment.AgentID, true
+			}
+		}
+	}
+
+	if h.agents == nil {
+		return uuid.Nil, false
+	}
+	for _, agentID := range activeAgentIDs {
+		agent, err := h.agents.GetByID(ctx, agentID)
+		if err != nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(agent.LifecycleStatus), "active") {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(agent.AgentType), "pm") {
+			return agentID, true
+		}
 	}
 	return uuid.Nil, false
 }

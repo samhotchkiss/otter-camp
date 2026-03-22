@@ -510,6 +510,42 @@ func TestCreateSessionProjectScopeAutoAddsAssignedProjectAgentsButNotStarterTrio
 	}
 }
 
+func TestFirstActiveAgentParticipantPrefersPMForProjectSessions(t *testing.T) {
+	sessionID := uuid.New()
+	projectID := uuid.New()
+	frankID := uuid.New()
+	loriID := uuid.New()
+
+	svc := &fakeChatService{
+		getSessionFn: func(context.Context, uuid.UUID) (*chat.ChatSession, error) {
+			return &chat.ChatSession{ID: sessionID, ScopeType: "project", ScopeID: projectID}, nil
+		},
+		listParticipantsFn: func(context.Context, uuid.UUID) ([]*chat.ChatParticipant, error) {
+			return []*chat.ChatParticipant{
+				{SessionID: sessionID, ParticipantType: "agent", ParticipantID: frankID, Role: "member"},
+				{SessionID: sessionID, ParticipantType: "agent", ParticipantID: loriID, Role: "member"},
+			}, nil
+		},
+	}
+
+	h := chatHandlers{
+		service: svc,
+		agents: fakeStarterAgentLister{agents: []repo.Agent{
+			{ID: frankID, DisplayName: "Frank", AgentType: "general", LifecycleStatus: "active"},
+			{ID: loriID, DisplayName: "Lori", AgentType: "pm", LifecycleStatus: "active"},
+		}},
+		assignments: fakeProjectAssignmentReader{},
+	}
+
+	agentID, ok := h.firstActiveAgentParticipant(context.Background(), sessionID)
+	if !ok {
+		t.Fatal("expected active agent participant")
+	}
+	if agentID != loriID {
+		t.Fatalf("agentID = %s, want PM participant %s", agentID, loriID)
+	}
+}
+
 func TestEditQueuedMessageRejectsAgentAPIKey(t *testing.T) {
 	svc := &fakeChatService{}
 	h := chatHandlers{service: svc}
@@ -1028,6 +1064,18 @@ func (f fakeStarterAgentLister) GetStarterTrio(context.Context, uuid.UUID) ([]re
 		return nil, f.err
 	}
 	return append([]repo.Agent(nil), f.agents...), nil
+}
+
+func (f fakeStarterAgentLister) GetByID(_ context.Context, id uuid.UUID) (repo.Agent, error) {
+	if f.err != nil {
+		return repo.Agent{}, f.err
+	}
+	for _, agent := range f.agents {
+		if agent.ID == id {
+			return agent, nil
+		}
+	}
+	return repo.Agent{}, repo.ErrNotFound
 }
 
 type fakeChatService struct {

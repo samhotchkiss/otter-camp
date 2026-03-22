@@ -3308,6 +3308,46 @@ func TestIntegrationSessionCreateTaskBoundAsyncWorkUsesTaskSession(t *testing.T)
 	}
 }
 
+func TestIntegrationMessageSendNormalizesInvalidRoleToUser(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	project := testutil.MakeProject(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project", project.ID)
+	messageRepo := repo.NewChatMessageRepo(pool)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	execCtx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agent.ID,
+		SessionID:      &session.ID,
+	})
+
+	out, err := executor.Execute(execCtx, "message.send", map[string]any{
+		"session_id": session.ID.String(),
+		"role":       "agent",
+		"content":    "bootstrap handoff",
+	})
+	if err != nil {
+		t.Fatalf("message.send with invalid role: %v", err)
+	}
+	if out["message_id"] == nil {
+		t.Fatalf("message_id = nil, want created message")
+	}
+
+	messages, err := messageRepo.ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("session messages = %d, want 1", len(messages))
+	}
+	if got := messages[0].Role; got != "user" {
+		t.Fatalf("stored role = %q, want user", got)
+	}
+}
+
 func TestIntegrationSessionInviteAgentIsIdempotent(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

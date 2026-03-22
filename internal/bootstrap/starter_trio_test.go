@@ -30,3 +30,28 @@ func TestLoriPromptIncludesStaffingWorkflowRequirements(t *testing.T) {
 		}
 	}
 }
+
+func TestFrankPromptAvoidsSameSessionHandoffLoops(t *testing.T) {
+	var frankPrompt string
+	for _, seed := range defaultStarterTrio {
+		if seed.displayName == "Frank" {
+			frankPrompt = seed.systemPrompt
+			break
+		}
+	}
+	if frankPrompt == "" {
+		t.Fatal("missing Frank starter trio prompt")
+	}
+	requiredSnippets := []string{
+		"Call message.send to the new project session with a handoff message",
+		"do not use message.send to echo a handoff back into that same session",
+		"Treat the existing project session as the handoff channel",
+		"treat that as an in-progress bootstrap continuation",
+		"Do not spend turns auditing git history",
+	}
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(frankPrompt, snippet) {
+			t.Fatalf("Frank prompt missing %q", snippet)
+		}
+	}
+}

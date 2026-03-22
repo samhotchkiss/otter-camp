@@ -209,6 +209,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if recovered > 0 {
 		w.logger.Info("job queue: recovered stale claims on startup", "count", recovered)
 	}
+	if repaired, err := w.CloseTerminalProjectTaskAsyncSessions(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup terminal project_task session cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: closed terminal project_task async sessions on startup", "count", repaired)
+	}
 	if purged, err := w.PurgeStaleAgentTurnJobs(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup stale agent_turn purge failed", "error", err)
@@ -1200,6 +1207,45 @@ func (w *Worker) CloseOrphanedProjectTaskAsyncSessions(ctx context.Context) (int
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("close orphaned project_task async sessions: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
+func (w *Worker) CloseTerminalProjectTaskAsyncSessions(ctx context.Context) (int64, error) {
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET status = 'cancelled',
+		    cancel_requested_at = now(),
+		    completed_at = now(),
+		    stop_reason = 'session_closed'
+		WHERE session_id IN (
+			SELECT cs.id
+			FROM chat_session cs
+			JOIN project_task pt ON pt.id = cs.scope_id
+			WHERE cs.status = 'active'
+			  AND cs.mode = 'async'
+			  AND cs.scope_type = 'project_task'
+			  AND pt.work_status IN ('done', 'cancelled')
+		)
+		  AND status IN ('pending', 'in_progress')
+	`); err != nil {
+		return 0, fmt.Errorf("cancel terminal project_task session turns: %w", err)
+	}
+
+	ct, err := w.pool.Exec(ctx, `
+		UPDATE chat_session cs
+		SET status = 'closed',
+		    closed_at = now(),
+		    current_turn_id = NULL
+		FROM project_task pt
+		WHERE cs.status = 'active'
+		  AND cs.mode = 'async'
+		  AND cs.scope_type = 'project_task'
+		  AND pt.id = cs.scope_id
+		  AND pt.work_status IN ('done', 'cancelled')
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("close terminal project_task async sessions: %w", err)
 	}
 	return ct.RowsAffected(), nil
 }

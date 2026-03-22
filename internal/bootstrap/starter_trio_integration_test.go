@@ -113,3 +113,50 @@ func TestStarterTrioLoriPromptIncludesStaffingWorkflow(t *testing.T) {
 		}
 	}
 }
+
+func TestStarterTrioFrankPromptAvoidsSameSessionHandoffLoops(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	agentRepo := repo.NewAgentRepo(pool)
+
+	org, err := orgRepo.Create(ctx, repo.Organization{Slug: "bootstrap-frank-prompt", DisplayName: "Bootstrap Frank Prompt"})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	bootstrapper := NewBootstrapper(Options{DisableDefaultStep: true})
+	RegisterStarterTrioStep(bootstrapper, agentRepo)
+	if err := bootstrapper.RunWithState(ctx, &State{OrganizationID: org.ID}); err != nil {
+		t.Fatalf("bootstrap run: %v", err)
+	}
+
+	trio, err := agentRepo.GetStarterTrio(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("GetStarterTrio: %v", err)
+	}
+
+	var frankPrompt string
+	for _, agent := range trio {
+		if agent.DisplayName == "Frank" {
+			frankPrompt = agent.SystemPrompt
+			break
+		}
+	}
+	if frankPrompt == "" {
+		t.Fatal("missing Frank prompt in starter trio")
+	}
+
+	for _, snippet := range []string{
+		"Call message.send to the new project session with a handoff message",
+		"do not use message.send to echo a handoff back into that same session",
+		"Treat the existing project session as the handoff channel",
+		"treat that as an in-progress bootstrap continuation",
+		"Do not spend turns auditing git history",
+	} {
+		if !strings.Contains(frankPrompt, snippet) {
+			t.Fatalf("Frank prompt missing %q", snippet)
+		}
+	}
+}

@@ -4570,6 +4570,7 @@ func (e *NativeToolExecutor) handleMessageSend(ctx context.Context, input map[st
 	if !ok || role == "" {
 		role = "user"
 	}
+	role = normalizeMessageSendRole(role)
 	scope, err := e.resolveScope(ctx)
 	if err != nil {
 		return nil, err
@@ -4629,6 +4630,15 @@ func (e *NativeToolExecutor) handleMessageSend(ctx context.Context, input map[st
 		"message_id": created.ID,
 		"sequence":   created.SequenceNumber,
 	}, nil
+}
+
+func normalizeMessageSendRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "assistant", "tool_call", "tool_result", "system", "user":
+		return strings.ToLower(strings.TrimSpace(role))
+	default:
+		return "user"
+	}
 }
 
 func (e *NativeToolExecutor) createDraftActionReview(ctx context.Context, action string, input map[string]any) (map[string]any, error) {

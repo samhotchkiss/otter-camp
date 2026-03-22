@@ -168,6 +168,27 @@ func TestFileEditAmbiguousMatchDoesNotModifyFile(t *testing.T) {
 	}
 }
 
+func TestNormalizeMessageSendRole(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "defaults invalid role to user", in: "agent", want: "user"},
+		{name: "trims and lowercases valid role", in: " Assistant ", want: "assistant"},
+		{name: "preserves tool result role", in: "tool_result", want: "tool_result"},
+		{name: "empty becomes user", in: "", want: "user"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeMessageSendRole(tc.in); got != tc.want {
+				t.Fatalf("normalizeMessageSendRole(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFileEditOldStringNotFound(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("hello"), 0o644); err != nil {

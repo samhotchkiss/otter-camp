@@ -761,6 +761,138 @@ func TestJobQueue_CloseOrphanedProjectTaskAsyncSessions(t *testing.T) {
 	}
 }
 
+func TestJobQueue_CloseTerminalProjectTaskAsyncSessions(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "terminal-project-task-session-cleanup-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	org := createJobQueueOrg079(t, pool, "terminal-project-task-session-cleanup")
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "terminal-project-task-session-cleanup-" + uuid.NewString()[:8],
+		DisplayName:    "Terminal Project Task Session Cleanup",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Terminal Session Cleanup Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You handle terminal session cleanup.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	description := "Verify worker startup cleanup closes async task sessions for terminal tasks."
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     1,
+		Title:          "Terminal task cleanup",
+		Description:    &description,
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		CreatedByID:    nil,
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE project_task
+		SET work_status = 'cancelled'
+		WHERE id = $1
+	`, task.ID); err != nil {
+		t.Fatalf("mark task cancelled: %v", err)
+	}
+
+	var sessionID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			organization_id, scope_type, scope_id, mode, status,
+			created_by_type, created_by_id, metadata
+		)
+		VALUES ($1, 'project_task', $2, 'async', 'active', 'system', $3, '{}'::jsonb)
+		RETURNING id
+	`, org.ID, task.ID, uuid.Nil).Scan(&sessionID); err != nil {
+		t.Fatalf("insert terminal task session: %v", err)
+	}
+	var turnID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chat_turn (
+			session_id, turn_number, responding_type, responding_id, status
+		)
+		VALUES ($1, 1, 'agent', $2, 'in_progress')
+		RETURNING id
+	`, sessionID, agent.ID).Scan(&turnID); err != nil {
+		t.Fatalf("insert in-progress turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_session
+		SET current_turn_id = $2
+		WHERE id = $1
+	`, sessionID, turnID); err != nil {
+		t.Fatalf("set current_turn_id: %v", err)
+	}
+
+	repaired, err := worker.CloseTerminalProjectTaskAsyncSessions(ctx)
+	if err != nil {
+		t.Fatalf("CloseTerminalProjectTaskAsyncSessions: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired rows = %d, want 1", repaired)
+	}
+
+	var status string
+	var currentTurnID *uuid.UUID
+	var closedAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT status, current_turn_id, closed_at
+		FROM chat_session
+		WHERE id = $1
+	`, sessionID).Scan(&status, &currentTurnID, &closedAt); err != nil {
+		t.Fatalf("query session: %v", err)
+	}
+	if status != "closed" {
+		t.Fatalf("session status = %q, want closed", status)
+	}
+	if currentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil", currentTurnID)
+	}
+	if closedAt == nil {
+		t.Fatal("closed_at is nil")
+	}
+
+	var turnStatus string
+	var stopReason *string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, stop_reason
+		FROM chat_turn
+		WHERE id = $1
+	`, turnID).Scan(&turnStatus, &stopReason); err != nil {
+		t.Fatalf("query turn: %v", err)
+	}
+	if turnStatus != "cancelled" {
+		t.Fatalf("turn status = %q, want cancelled", turnStatus)
+	}
+	if stopReason == nil || *stopReason != "session_closed" {
+		t.Fatalf("turn stop_reason = %v, want session_closed", stopReason)
+	}
+}
+
 func TestJobQueue_ClearInactiveSessionCurrentTurns(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

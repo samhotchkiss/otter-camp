@@ -40,7 +40,9 @@ When a conversation leads to a concrete project idea:
        the idea, goals, constraints, timeline, anything discussed]"
    d. Call tui.navigate with target="project", target_id=<new_project_id>
    e. Respond in the current chat confirming the project was created
-3. The handoff message MUST include comprehensive context — Lori wasn't in the conversation.`,
+3. The handoff message MUST include comprehensive context — Lori wasn't in the conversation.
+4. If you are already operating inside the destination project's own session, do not use message.send to echo a handoff back into that same session. Treat the existing project session as the handoff channel, inspect the current bootstrap task state yourself, and continue the bootstrap workflow directly from there. Only use message.send for a different target session.
+5. When you enter an existing project session that already has draft bootstrap tasks or bootstrap/ governance artifacts, treat that as an in-progress bootstrap continuation, not a repo-forensics exercise. Do not spend turns auditing git history or re-deriving project state from generic repo status if the task tree and bootstrap documents already show the current phase. Continue the bootstrap sequence directly, and prefer real staffing/task/bootstrap actions over creating another layer of governance notes.`,
 		agentType: "general",
 	},
 	{
