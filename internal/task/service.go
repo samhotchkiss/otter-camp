@@ -1221,6 +1221,9 @@ func (s *service) enrichOrchestrationAutoCompleteMetadata(ctx context.Context, t
 	}
 
 	now := s.clock.Now().UTC()
+	if taskRecord, err = enrichPlanningArtifactEvidence(taskRecord, now); err != nil {
+		return taskRecord, err
+	}
 	state, _ := taskorchestration.Parse(taskRecord.Metadata)
 	update := taskorchestration.Update{}
 
@@ -1238,6 +1241,67 @@ func (s *service) enrichOrchestrationAutoCompleteMetadata(ctx context.Context, t
 	}
 
 	metadata, err := taskorchestration.Apply(taskRecord.Metadata, update)
+	if err != nil {
+		return taskRecord, err
+	}
+	taskRecord.Metadata = metadata
+	return taskRecord, nil
+}
+
+func enrichPlanningArtifactEvidence(taskRecord repo.ProjectTask, now time.Time) (repo.ProjectTask, error) {
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok || !plan.ProcessEnforced || len(plan.Artifacts) == 0 {
+		return taskRecord, nil
+	}
+
+	contracts := taskplan.ArtifactContractForPlan(plan)
+	if len(contracts) == 0 {
+		return taskRecord, nil
+	}
+
+	artifactsBySlug := make(map[string]taskplan.PlannedArtifact, len(plan.Artifacts))
+	for _, artifact := range plan.Artifacts {
+		slug := strings.TrimSpace(artifact.Slug)
+		if slug == "" {
+			continue
+		}
+		artifactsBySlug[slug] = artifact
+	}
+
+	updates := make([]taskplan.ArtifactEvidence, 0, len(contracts))
+	for _, contract := range contracts {
+		artifact, ok := artifactsBySlug[strings.TrimSpace(contract.Slug)]
+		if !ok {
+			continue
+		}
+		title := strings.TrimSpace(artifact.Title)
+		if title == "" {
+			title = strings.TrimSpace(contract.Title)
+		}
+		summary := "Recorded artifact for completion."
+		if path := strings.TrimSpace(artifact.RepoPath); path != "" {
+			summary = "Recorded artifact at " + path + "."
+		} else if title != "" {
+			summary = "Recorded artifact for " + title + "."
+		}
+		updates = append(updates, taskplan.ArtifactEvidence{
+			Slug:     contract.Slug,
+			Title:    title,
+			Summary:  summary,
+			Sections: append([]string(nil), contract.RequiredSections...),
+			Notes:    "Auto-synthesized from recorded planning artifacts during orchestration parent settlement.",
+		})
+	}
+	if len(updates) == 0 {
+		return taskRecord, nil
+	}
+
+	metadata, _, _, err := taskplan.ApplyProcessUpdate(taskRecord.Metadata, taskplan.ProcessUpdate{
+		Artifacts:          updates,
+		HasArtifactChanges: true,
+		ActorType:          "system",
+		RecordedAt:         now,
+	})
 	if err != nil {
 		return taskRecord, err
 	}

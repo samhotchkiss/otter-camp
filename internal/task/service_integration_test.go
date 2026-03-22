@@ -23,6 +23,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
@@ -1320,6 +1321,77 @@ func TestTaskServiceIntegrationOrchestrationOnlyParentAutoCompletesWithSynthesiz
 	}
 	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
 		t.Fatalf("outcome assessment = %+v, want satisfied", state.OutcomeAssessment)
+	}
+}
+
+func TestTaskServiceIntegrationOrchestrationAutoCompleteSynthesizesPlanningArtifactEvidence(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	description := "Map the information architecture for the new site. Define the main content pillars. Produce a sitemap and navigation structure."
+	parent, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Define site structure and primary content pillars",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	parentRecord, err := taskRepo.GetByID(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("GetByID parent: %v", err)
+	}
+	parentRecord.Metadata = taskplan.ApplyMetadata(parentRecord.Metadata, taskplan.Analyze(parentRecord.Title, &description))
+	if _, err := taskRepo.Update(ctx, parentRecord); err != nil {
+		t.Fatalf("Update parent planning metadata: %v", err)
+	}
+	parentRecord, children := seedOrchestrationChildrenForParent(t, ctx, svc, taskRepo, parent.ID, project.ID, template.ID, []string{
+		"Map the information architecture",
+		"Define the content pillars",
+		"Produce the sitemap",
+	})
+	for _, child := range children {
+		child.WorkStatus = "done"
+		if _, updateErr := taskRepo.Update(ctx, child); updateErr != nil {
+			t.Fatalf("Update child %s: %v", child.ID, updateErr)
+		}
+	}
+
+	completed, err := svc.TransitionStatus(ctx, parentRecord.ID, "done", Actor{
+		Type:                           "system",
+		AllowOrchestrationAutoComplete: true,
+	})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+	if completed.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", completed.WorkStatus)
+	}
+
+	stored, err := taskRepo.GetByID(ctx, parentRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID completed parent: %v", err)
+	}
+	plan, ok := taskplan.Parse(stored.Metadata)
+	if !ok {
+		t.Fatal("expected planning metadata")
+	}
+	if len(plan.ArtifactEvidence) != 4 {
+		t.Fatalf("artifact evidence len = %d, want 4", len(plan.ArtifactEvidence))
+	}
+	report, reportErr := taskplan.CompletionReport(stored.Metadata)
+	if reportErr != nil {
+		t.Fatalf("CompletionReport err = %v", reportErr)
+	}
+	if report.ProcessStatus != taskplan.ProcessStatusFollowed {
+		t.Fatalf("process_status = %q, want %q", report.ProcessStatus, taskplan.ProcessStatusFollowed)
 	}
 }
 
