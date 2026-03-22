@@ -1354,6 +1354,180 @@ func TestSupervisor_StrandedActiveExecutionRecoversBlankReviewNodeWithReviewerAs
 	}
 }
 
+func TestSupervisor_StrandedActiveExecutionRepairsClosedExecutionSession(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord := seedRunProject(t, ctx, pool, org.ID)
+	template, node := seedSupervisorFlowTemplateNode(t, ctx, pool, org.ID, projectRecord.ID, nil, nil)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Recovery Worker")
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        worker.ID,
+		ProjectID:      projectRecord.ID,
+		Role:           "worker",
+		AssignedByType: "system",
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         projectRecord.ID,
+		Title:             "Recover stranded execution with closed session",
+		WorkStatus:        "in_progress",
+		CurrentFlowNodeID: &node.ID,
+		FlowTemplateID:    &template.ID,
+		AssignedAgentID:   &worker.ID,
+		CreatedByType:     "system",
+		CreatedByID:       nil,
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("chat.NewService: %v", err)
+	}
+	session, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"supervisor_integration"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := chatService.AddParticipant(ctx, session.ID, "agent", worker.ID, "responder"); err != nil {
+		t.Fatalf("AddParticipant: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  node.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+	if err := chatService.CloseSession(ctx, session.ID); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+	wakeSvc := runService.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+	started, err := wakeSvc.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: org.ID,
+			ProjectID:      &projectRecord.ID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     &node.ID,
+			SessionID:      &session.ID,
+			PrincipalType:  "agent",
+			PrincipalID:    worker.ID,
+			TriggerType:    "scheduler",
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+		WakeupPayload: map[string]any{
+			"flow_node_execution_id": execution.ID.String(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup: %v", err)
+	}
+
+	staleAt := time.Now().UTC().Add(-5 * time.Minute)
+	backdateStrandedExecutionFixture(t, ctx, pool, taskRecord.ID, session.ID, execution.ID, staleAt)
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:        pool,
+		RunService:  runService,
+		ChatService: chatService,
+		EventBus:    bus,
+		Logger:      newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectStrandedActiveExecutions(ctx); err != nil {
+		t.Fatalf("detectStrandedActiveExecutions: %v", err)
+	}
+
+	updatedStarted, err := NewRunRepository(pool).Get(ctx, started.Run.ID)
+	if err != nil {
+		t.Fatalf("Get started run: %v", err)
+	}
+	if updatedStarted.Status != "failed" {
+		t.Fatalf("started run status = %q, want failed", updatedStarted.Status)
+	}
+
+	recoveryRunID := loadLatestStrandedRecoveryRunID(t, ctx, pool, taskRecord.ID)
+	if recoveryRunID == uuid.Nil {
+		t.Fatal("expected stranded recovery supervisor run")
+	}
+
+	refreshedTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if refreshedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", refreshedTask.WorkStatus)
+	}
+
+	refreshedExecution, err := repo.NewFlowNodeExecutionRepo(pool).GetByID(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("GetByID execution: %v", err)
+	}
+	if refreshedExecution.Status != "active" {
+		t.Fatalf("execution status = %q, want active", refreshedExecution.Status)
+	}
+	if refreshedExecution.SessionID == nil || *refreshedExecution.SessionID == uuid.Nil {
+		t.Fatal("expected repaired execution session")
+	}
+	if *refreshedExecution.SessionID == session.ID {
+		t.Fatalf("execution session_id = %s, want repaired session distinct from closed session %s", *refreshedExecution.SessionID, session.ID)
+	}
+
+	repairedSession, err := repo.NewChatSessionRepo(pool).GetByID(ctx, *refreshedExecution.SessionID)
+	if err != nil {
+		t.Fatalf("GetByID repaired session: %v", err)
+	}
+	if repairedSession.Status != "active" {
+		t.Fatalf("repaired session status = %q, want active", repairedSession.Status)
+	}
+	if repairedSession.CurrentTurnID == nil || *repairedSession.CurrentTurnID == uuid.Nil {
+		t.Fatal("expected supervisor recovery to create a live turn on repaired session")
+	}
+
+	messages, err := repo.NewChatMessageRepo(pool).ListBySession(ctx, repairedSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession repaired messages: %v", err)
+	}
+	if !hasSupervisorRecoveryKickoff(messages, recoveryRunID, execution.ID) {
+		t.Fatal("expected supervisor recovery kickoff message on repaired session")
+	}
+}
+
 func TestSupervisor_ImpossibleInProgressTaskWithoutRuntimeOrExecutionBlocksTask(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

@@ -58,6 +58,7 @@ type deadLetterNotifier interface {
 
 type supervisorChatService interface {
 	GetSession(ctx context.Context, sessionID uuid.UUID) (*chat.ChatSession, error)
+	GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionID, agentID uuid.UUID) (*chat.ChatSession, error)
 	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
 }

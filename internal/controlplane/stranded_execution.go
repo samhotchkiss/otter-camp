@@ -219,6 +219,18 @@ func (s *Supervisor) recoverStrandedActiveExecution(ctx context.Context, candida
 	if candidate.ExecutionID == uuid.Nil || candidate.TaskID == uuid.Nil || candidate.FlowNodeID == uuid.Nil {
 		return errStrandedExecutionUnrecoverable{reason: "active execution record is incomplete"}
 	}
+	agentID, ok, err := s.resolveStrandedExecutionAgent(ctx, candidate)
+	if err != nil {
+		return err
+	}
+	if !ok || agentID == uuid.Nil {
+		return errStrandedExecutionUnrecoverable{reason: "no recovery agent could be resolved for stranded execution"}
+	}
+	repairedCandidate, err := s.repairStrandedExecutionSession(ctx, candidate, agentID)
+	if err != nil {
+		return err
+	}
+	candidate = repairedCandidate
 	if candidate.SessionID == uuid.Nil {
 		return errStrandedExecutionUnrecoverable{reason: "active execution has no execution session"}
 	}
@@ -231,13 +243,6 @@ func (s *Supervisor) recoverStrandedActiveExecution(ctx context.Context, candida
 		return nil
 	}
 
-	agentID, ok, err := s.resolveStrandedExecutionAgent(ctx, candidate)
-	if err != nil {
-		return err
-	}
-	if !ok || agentID == uuid.Nil {
-		return errStrandedExecutionUnrecoverable{reason: "no recovery agent could be resolved for stranded execution"}
-	}
 	if err := s.releaseStrandedExecutionOwner(ctx, candidate); err != nil {
 		return err
 	}
@@ -323,6 +328,38 @@ func (s *Supervisor) recoverStrandedActiveExecution(ctx context.Context, candida
 		return errStrandedExecutionUnrecoverable{reason: fmt.Sprintf("recovery turn entered non-live status %q", turn.Status)}
 	}
 	return nil
+}
+
+func (s *Supervisor) repairStrandedExecutionSession(ctx context.Context, candidate strandedExecutionCandidate, agentID uuid.UUID) (strandedExecutionCandidate, error) {
+	if s.chatService == nil {
+		return candidate, nil
+	}
+	if candidate.ExecutionID == uuid.Nil || agentID == uuid.Nil {
+		return candidate, nil
+	}
+	if candidate.SessionID != uuid.Nil && strings.EqualFold(candidate.SessionStatus, "active") {
+		return candidate, nil
+	}
+
+	session, err := s.chatService.GetOrCreateNodeSession(ctx, candidate.ExecutionID, agentID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return candidate, errStrandedExecutionUnrecoverable{reason: "active execution has no repairable execution session"}
+	}
+	if err != nil {
+		return candidate, err
+	}
+	if session == nil || session.ID == uuid.Nil {
+		return candidate, errStrandedExecutionUnrecoverable{reason: "active execution session repair returned empty session"}
+	}
+
+	candidate.SessionID = session.ID
+	candidate.SessionStatus = strings.TrimSpace(session.Status)
+	if session.CurrentTurnID != nil {
+		candidate.CurrentTurnID = *session.CurrentTurnID
+	} else {
+		candidate.CurrentTurnID = uuid.Nil
+	}
+	return candidate, nil
 }
 
 func (s *Supervisor) hasLiveStrandedExecutionRecovery(ctx context.Context, sessionID, executionID uuid.UUID) (bool, error) {

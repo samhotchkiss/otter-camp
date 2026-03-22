@@ -1378,7 +1378,19 @@ func (p *TaskQueueProcessor) ensureFlowTransitionRun(
 
 func (p *TaskQueueProcessor) repairFlowExecutionSession(ctx context.Context, taskRecord repo.ProjectTask, execution repo.FlowNodeExecution, agentID uuid.UUID) (repo.FlowNodeExecution, error) {
 	if execution.SessionID != nil && *execution.SessionID != uuid.Nil {
-		return execution, nil
+		session, err := p.chats.GetSession(ctx, *execution.SessionID)
+		switch {
+		case err == nil:
+			if session != nil && session.ID != uuid.Nil &&
+				!strings.EqualFold(strings.TrimSpace(session.Status), "closed") &&
+				!strings.EqualFold(strings.TrimSpace(session.Status), "archived") {
+				return execution, nil
+			}
+		case errors.Is(err, repo.ErrNotFound):
+			// Repair missing execution sessions by creating a fresh node session below.
+		default:
+			return execution, err
+		}
 	}
 	if agentID == uuid.Nil {
 		return execution, fmt.Errorf("task %s execution %s missing session_id and no agent available to repair it", taskRecord.ID, execution.ID)

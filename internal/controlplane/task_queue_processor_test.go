@@ -1406,6 +1406,75 @@ func TestDispatchTaskQueueWakeupFlowCurrentUsesExecutionSession(t *testing.T) {
 	}
 }
 
+func TestDispatchTaskQueueWakeupFlowCurrentRepairsClosedExecutionSession(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	runID := uuid.New()
+	agentID := uuid.New()
+	closedSessionID := uuid.New()
+	repairedSessionID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{
+		session:     &chat.ChatSession{ID: closedSessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID, Mode: "async", Status: "closed"},
+		nodeSession: &chat.ChatSession{ID: repairedSessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID, Mode: "async", Status: "active"},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:              taskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				Title:           "Flow dispatch task",
+				FlowTemplateID:  &nodeID,
+				AssignedAgentID: &agentID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, SessionID: &closedSessionID, Status: "active"},
+		},
+		chats: chatService,
+	}
+
+	metadata, err := json.Marshal(map[string]any{
+		"execution_wakeup": map[string]any{
+			"source": "task_queue_processor",
+			"kind":   "flow_current",
+		},
+		"flow_node_execution_id": executionID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	err = processor.dispatchTaskQueueWakeup(ctx, Run{
+		ID:             runID,
+		OrganizationID: orgID,
+		PrincipalType:  "agent",
+		PrincipalID:    agentID,
+		TaskID:         &taskID,
+		FlowNodeID:     &nodeID,
+		SessionID:      &closedSessionID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		t.Fatalf("dispatchTaskQueueWakeup() error = %v", err)
+	}
+
+	if len(chatService.getOrCreateNodeCalls) != 1 {
+		t.Fatalf("GetOrCreateNodeSession calls = %d, want 1", len(chatService.getOrCreateNodeCalls))
+	}
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("appendMessage calls = %d, want 1", len(chatService.appendMessages))
+	}
+	if chatService.appendMessages[0].SessionID != repairedSessionID {
+		t.Fatalf("kickoff session_id = %s, want repaired execution session %s", chatService.appendMessages[0].SessionID, repairedSessionID)
+	}
+}
+
 func TestDispatchTaskQueueWakeupFlowTransitionUsesExecutionSession(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
