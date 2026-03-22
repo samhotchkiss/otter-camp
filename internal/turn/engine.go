@@ -8232,16 +8232,35 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 		return "", "", false
 	}
 	draft, ok := e.latestRecoveryAssistantDraftContent(ctx, rt)
+	if ok {
+		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" {
+			return draft, reason, false
+		}
+		if looksLikeRecoveryFileDraft(draft) {
+			return draft, "", true
+		}
+	}
+	return e.recoveryPersistedDraftContent(ctx, rt, targetPath)
+}
+
+func (e *TurnEngine) recoveryPersistedDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, string, bool) {
+	if e == nil || rt == nil {
+		return "", "", false
+	}
+	state, ok := e.loadRecoveryResumeState(ctx, rt)
 	if !ok {
 		return "", "", false
 	}
-	if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" {
-		return draft, reason, false
-	}
-	if !looksLikeRecoveryFileDraft(draft) {
+	if checkpointTarget := strings.TrimSpace(state.targetPath); checkpointTarget != "" && checkpointTarget != strings.TrimSpace(targetPath) {
 		return "", "", false
 	}
-	return draft, "", true
+	if draft := strings.TrimSpace(state.targetDraft); draft != "" {
+		return draft, "", true
+	}
+	if draft := strings.TrimSpace(state.artifactDraft); draft != "" {
+		return draft, "", true
+	}
+	return "", "", false
 }
 
 func (e *TurnEngine) latestRecoveryAssistantDraftContent(ctx context.Context, rt *turnRuntime) (string, bool) {

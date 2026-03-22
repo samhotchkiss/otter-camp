@@ -2251,7 +2251,7 @@ Ship one flagship essay each week, one supporting checklist, and one short proof
 		switch modelCalls {
 		case 1:
 			return ModelResponse{
-				Content: "I'll draft the file body first.",
+				Content: "",
 				ToolCalls: []ModelToolCall{{
 					ID:   "empty-write-1",
 					Name: "file.write",
@@ -6552,6 +6552,159 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	}
 	if got := anyStrings(resumePayload["recovery_checkpoint_prior_failure_reasons"]); len(got) != 1 || got[0] != priorFailureReason {
 		t.Fatalf("resume payload prior_failure_reasons = %v, want [%q]", got, priorFailureReason)
+	}
+}
+
+func TestTurnEngineIntegrationRecoveryResumeAutopopulatesFileWriteFromPersistedArtifactDraft(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, initialUserMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
+	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, initialUserMessage.ID)
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	blockerReason := "recovery halted after assistant draft for docs/content-strategy.md described tool-recovery troubleshooting instead of the file body; resume from .ottercamp/recovery/docs/content-strategy.md and re-queue only after concrete content exists"
+	if _, err := taskService.MarkBlocked(ctx, taskRecord.ID, blockerReason, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+	if _, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	resumedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	resumedTask.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
+		t.Fatalf("Update resumed task in_progress: %v", err)
+	}
+
+	authorType := "human_user"
+	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(taskRecord),
+		Metadata: mustJSON(t, map[string]any{
+			"source":                    "task_queue_processor",
+			"recovery_action":           "resume_validation_blocked_task",
+			"validation_tool_name":      "cli.execute",
+			"validation_failure_code":   "command_required",
+			"validation_failure_reason": "command is required",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage recovery kickoff: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls > 2 {
+			t.Fatalf("unexpected extra model call after persisted-draft autopopulation: %d", modelCalls)
+		}
+		if modelCalls == 2 {
+			return ModelResponse{Content: "persisted recovery draft applied"}, nil
+		}
+		return ModelResponse{
+			Content: "",
+			ToolCalls: []ModelToolCall{{
+				ID:   "resume-write",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path": seed.targetPath,
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		dispatched++
+		path := stringValue(call.Arguments["path"])
+		content := stringValue(call.Arguments["content"])
+		if path != seed.targetPath {
+			t.Fatalf("path = %q, want %q", path, seed.targetPath)
+		}
+		if content != seed.artifactDraft {
+			t.Fatalf("content = %q, want persisted artifact draft", content)
+		}
+		if err := os.WriteFile(seed.targetAbs, []byte(content), 0o644); err != nil {
+			t.Fatalf("write target file: %v", err)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      path,
+				"byte_size": len(content),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage persisted recovery draft autopopulation: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2 after persisted-draft autopopulation", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+
+	body, err := os.ReadFile(seed.targetAbs)
+	if err != nil {
+		t.Fatalf("read target file: %v", err)
+	}
+	if string(body) != seed.artifactDraft {
+		t.Fatalf("target file body = %q, want persisted artifact draft", string(body))
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after persisted-draft autopopulation: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want not blocked", updatedTask.WorkStatus)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"content_required"`) {
+			t.Fatalf("unexpected content_required tool_result: %s", item.Content)
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: file.write for `docs/content-strategy.md` was emitted without `content`") {
+			t.Fatalf("unexpected recovery correction during persisted-draft autopopulation: %s", item.Content)
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery turn halted: file.write for `docs/content-strategy.md`") {
+			t.Fatalf("unexpected recovery halt message: %s", item.Content)
+		}
 	}
 }
 
