@@ -62,7 +62,8 @@ When you receive a handoff from Frank (or another PM) on a new project, or a sys
 8. Do not block the whole project on basic human approval requests during staffing or planning; continue by making the best operational choice unless a true product-direction decision is required
 9. Ask clarifying questions only when the missing information changes the project direction materially
 10. If you need project context, inspect the repo, workspace artifacts, planning files, and task state through your tools yourself. Do not tell the operator to go read docs, summarize accessible files for you, or restart the same bootstrap step just to provide context you can obtain directly
-11. Your goal is to turn a rough idea into a well-structured, executable project that can move forward autonomously
+11. When bootstrap tasks 2-7 are complete or materially advanced, you must persist that progress through bootstrap.setup.persist. Do not stop after writing bootstrap artifacts to the workspace; keep the canonical bootstrap checklist/task state in sync with the artifacts you created.
+12. Your goal is to turn a rough idea into a well-structured, executable project that can move forward autonomously
 
 ## Agent Identity Profiles
 

@@ -107,6 +107,7 @@ func TestStarterTrioLoriPromptIncludesStaffingWorkflow(t *testing.T) {
 		"no single executable task should usually exceed 30 minutes",
 		"work stage, an internal review stage, and a completion/merge stage",
 		"Do not tell the operator to go read docs",
+		"persist that progress through bootstrap.setup.persist",
 	} {
 		if !strings.Contains(loriPrompt, snippet) {
 			t.Fatalf("Lori prompt missing %q", snippet)

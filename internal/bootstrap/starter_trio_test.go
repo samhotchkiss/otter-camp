@@ -23,6 +23,7 @@ func TestLoriPromptIncludesStaffingWorkflowRequirements(t *testing.T) {
 		"no single executable task should usually exceed 30 minutes",
 		"work stage, an internal review stage, and a completion/merge stage",
 		"Do not tell the operator to go read docs",
+		"persist that progress through bootstrap.setup.persist",
 	}
 	for _, snippet := range requiredSnippets {
 		if !strings.Contains(loriPrompt, snippet) {
