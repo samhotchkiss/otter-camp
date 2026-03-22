@@ -4699,7 +4699,7 @@ func (e *TurnEngine) handleTaskContinuationDepthTurnFailure(
 		SessionID: runtime.session.ID,
 		TurnID:    &runtime.turn.ID,
 		Role:      "user",
-		Content:   buildTaskContinuationActionPrompt(),
+		Content:   buildTaskContinuationActionPrompt(""),
 		Metadata:  taskContinuationResumeMessageMetadata(retryAttempt),
 	})
 	if err != nil {
@@ -5286,7 +5286,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 			SessionID: rt.session.ID,
 			TurnID:    &rt.turn.ID,
 			Role:      "user",
-			Content:   buildTaskContinuationActionPrompt(),
+			Content:   buildTaskContinuationActionPrompt(summary),
 		}); err != nil {
 			return err
 		}
@@ -7728,7 +7728,7 @@ func buildTaskRecoveryActionPrompt() string {
 	return strings.Join(lines, " ")
 }
 
-func buildTaskContinuationActionPrompt() string {
+func buildTaskContinuationActionPrompt(summary string) string {
 	lines := []string{
 		"Continue the active task now from the continuation summary above.",
 		"Your next response must take direct action on the task instead of generic chat.",
@@ -7739,7 +7739,25 @@ func buildTaskContinuationActionPrompt() string {
 		"Use the existing workspace, task state, and recent tool results to continue the task directly.",
 		"If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.",
 	}
+	if continuationSummaryLooksLikeDraft(summary) {
+		lines = append(lines,
+			"The continuation summary above already contains draft deliverable content. Treat it as the working artifact draft for this turn.",
+			"Do not reopen broad workspace context or search for more source material before using that draft.",
+			"If a target file is in scope, revise the draft directly and write the file with concrete content instead of re-deriving the document from scratch.",
+		)
+	}
 	return strings.Join(lines, " ")
+}
+
+func continuationSummaryLooksLikeDraft(summary string) bool {
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return false
+	}
+	if !strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+	return strings.Contains(trimmed, "\n## ") || strings.Contains(trimmed, "\n- Kind:")
 }
 
 func recoveryArtifactDraftContent(document string) string {

@@ -4486,7 +4486,7 @@ func TestAsyncProjectTaskGuardrailContinuationDepthRequeuesFromSyntheticContinua
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 			continue
 		}
-		if !strings.EqualFold(strings.TrimSpace(message.Content), buildTaskContinuationActionPrompt()) {
+		if !strings.EqualFold(strings.TrimSpace(message.Content), buildTaskContinuationActionPrompt("")) {
 			continue
 		}
 		if taskContinuationResumeMessageRootsHistory(message) {
@@ -4524,7 +4524,7 @@ func TestTaskContinuationRootMessageStartsAssemblyAtTriggerMessage(t *testing.T)
 		SessionID: fixture.session.ID,
 		Role:      "user",
 		Status:    "pending",
-		Content:   buildTaskContinuationActionPrompt(),
+		Content:   buildTaskContinuationActionPrompt(""),
 		Metadata:  taskContinuationResumeMessageMetadata(1),
 	})
 
@@ -4696,6 +4696,22 @@ func TestContinuationTurnAppendsDirectActionPromptForAsyncProjectTask(t *testing
 	last := turns[len(turns)-1]
 	if last.TriggerMessageID == nil || *last.TriggerMessageID != summaryMessageID {
 		t.Fatalf("continuation turn trigger_message_id = %v, want %s", last.TriggerMessageID, summaryMessageID)
+	}
+}
+
+func TestBuildTaskContinuationActionPromptTreatsDocumentSummaryAsDraft(t *testing.T) {
+	summary := "# Visual Direction\n\n- Kind: strategy_artifact\n\n## Design Principles\nConcrete draft body."
+
+	prompt := buildTaskContinuationActionPrompt(summary)
+
+	if !strings.Contains(prompt, "The continuation summary above already contains draft deliverable content. Treat it as the working artifact draft for this turn.") {
+		t.Fatalf("prompt = %q, want draft-summary guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not reopen broad workspace context or search for more source material before using that draft.") {
+		t.Fatalf("prompt = %q, want anti-reread draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "If a target file is in scope, revise the draft directly and write the file with concrete content instead of re-deriving the document from scratch.") {
+		t.Fatalf("prompt = %q, want direct-write guidance", prompt)
 	}
 }
 
