@@ -176,6 +176,7 @@ type chatTurnRepository interface {
 	SetCompleted(ctx context.Context, id uuid.UUID, completedAt time.Time, durationMS int) (repo.ChatTurn, error)
 	SetCancelled(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time, stopReason string) (repo.ChatTurn, error)
 	SetFailed(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (repo.ChatTurn, error)
+	SetTriggerMessageID(ctx context.Context, id uuid.UUID, triggerMessageID *uuid.UUID) (repo.ChatTurn, error)
 }
 
 type chatReactionRepository interface {
@@ -1631,7 +1632,7 @@ func (s *service) CancelAndQueueNew(ctx context.Context, sessionID uuid.UUID, ne
 }
 
 func (s *service) SteerTurn(ctx context.Context, sessionID, messageID uuid.UUID, steerContent string) error {
-	_, err := s.GetSession(ctx, sessionID)
+	session, err := s.GetSession(ctx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -1643,18 +1644,18 @@ func (s *service) SteerTurn(ctx context.Context, sessionID, messageID uuid.UUID,
 		return ErrNoActiveTurn
 	}
 
-	message, err := s.GetMessage(ctx, messageID)
+	targetMessage, err := s.GetMessage(ctx, messageID)
 	if err != nil {
 		return err
 	}
-	if message.SessionID != sessionID {
+	if targetMessage.SessionID != sessionID {
 		return repo.ErrNotFound
 	}
 
 	if err := s.CancelTurn(ctx, turn.ID, "steer_turn"); err != nil {
 		return err
 	}
-	if err := s.RedactMessage(ctx, message.ID); err != nil {
+	if err := s.RedactMessage(ctx, targetMessage.ID); err != nil {
 		return err
 	}
 
@@ -1669,14 +1670,39 @@ func (s *service) SteerTurn(ctx context.Context, sessionID, messageID uuid.UUID,
 		"steer_message_id": messageID,
 		"steer_turn_id":    turn.ID,
 	})
-	_, err = s.AppendMessage(ctx, AppendMessageInput{
+	steerMessage, err := s.AppendMessage(ctx, AppendMessageInput{
 		SessionID: sessionID,
 		TurnID:    &nextTurn.ID,
 		Role:      "user",
 		Content:   steerContent,
 		Metadata:  steerMetadata,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if _, err := s.turns.SetTriggerMessageID(ctx, nextTurn.ID, &steerMessage.ID); err != nil {
+		return err
+	}
+
+	actorType, actorID := actorFromContext(ctx)
+	if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.user_sent", actorType, actorID, map[string]any{
+		"session_id":      session.ID,
+		"message_id":      steerMessage.ID,
+		"sequence_number": steerMessage.SequenceNumber,
+		"status":          steerMessage.Status,
+	}); err != nil {
+		return err
+	}
+	if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.finalized", actorType, actorID, map[string]any{
+		"session_id": session.ID,
+		"message_id": steerMessage.ID,
+		"role":       "user",
+		"content":    steerMessage.Content,
+	}); err != nil {
+		return err
+	}
+	go s.monitorTurnResponse(session.OrganizationID, session.ID, steerMessage.CreatedAt)
+	return nil
 }
 
 func (s *service) AddReaction(ctx context.Context, messageID uuid.UUID, reactorType string, reactorID uuid.UUID, emoji string) (*ChatMessageReaction, error) {

@@ -1285,6 +1285,7 @@ type fakeTurnRepo struct {
 	setCompletedFn  func(ctx context.Context, id uuid.UUID, completedAt time.Time, durationMS int) (repo.ChatTurn, error)
 	setCancelledFn  func(ctx context.Context, id uuid.UUID, cancelRequestedAt time.Time, completedAt time.Time, stopReason string) (repo.ChatTurn, error)
 	setFailedFn     func(ctx context.Context, id uuid.UUID, errorMessage string, completedAt time.Time) (repo.ChatTurn, error)
+	setTriggerFn    func(ctx context.Context, id uuid.UUID, triggerMessageID *uuid.UUID) (repo.ChatTurn, error)
 }
 
 func (f *fakeTurnRepo) Create(ctx context.Context, turn repo.ChatTurn) (repo.ChatTurn, error) {
@@ -1340,6 +1341,13 @@ func (f *fakeTurnRepo) SetFailed(ctx context.Context, id uuid.UUID, errorMessage
 	}
 	errCopy := errorMessage
 	return repo.ChatTurn{ID: id, Status: "failed", ErrorMessage: &errCopy, CompletedAt: &completedAt}, nil
+}
+
+func (f *fakeTurnRepo) SetTriggerMessageID(ctx context.Context, id uuid.UUID, triggerMessageID *uuid.UUID) (repo.ChatTurn, error) {
+	if f.setTriggerFn != nil {
+		return f.setTriggerFn(ctx, id, triggerMessageID)
+	}
+	return repo.ChatTurn{ID: id, TriggerMessageID: triggerMessageID}, nil
 }
 
 type fakeReactionRepo struct {

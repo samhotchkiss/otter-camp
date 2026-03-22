@@ -590,6 +590,89 @@ func TestTurn_SteerAllowsAdminForNonOwnedSession(t *testing.T) {
 	}
 }
 
+func TestTurn_SteerPublishesUserSentAndBindsTriggerMessage(t *testing.T) {
+	baseCtx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, baseCtx, pool)
+	user := seedChatServiceUser(t, baseCtx, pool, org.ID, "steer-events-author", "member")
+	agent := seedChatServiceAgent(t, baseCtx, pool, org.ID)
+	bus := newIntegrationEventBus(pool)
+	svc := newIntegrationService(t, pool, bus)
+	session := mustCreateSession(t, baseCtx, svc, org.ID)
+	ctx := principalContext(baseCtx, org.ID, user.ID, "member")
+
+	events := make(chan eventbus.DomainEvent, 8)
+	sub := bus.Subscribe("chat-steer-user-sent-"+uuid.NewString(), &org.ID, func(_ context.Context, event eventbus.DomainEvent) error {
+		if event.EventType == "chat.message.user_sent" {
+			events <- event
+		}
+		return nil
+	})
+	defer bus.Unsubscribe(sub)
+
+	authorType := "human_user"
+	original, err := svc.AppendMessage(ctx, AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &user.ID,
+		Role:       "user",
+		Content:    "initial direction",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage original: %v", err)
+	}
+	turn, err := svc.CreateTurn(baseCtx, session.ID, agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := svc.StartTurn(baseCtx, turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	if err := svc.SteerTurn(ctx, session.ID, original.ID, "new direction"); err != nil {
+		t.Fatalf("SteerTurn: %v", err)
+	}
+
+	select {
+	case event := <-events:
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal user_sent payload: %v", err)
+		}
+		if payload["session_id"] != session.ID.String() {
+			t.Fatalf("user_sent session_id = %v, want %s", payload["session_id"], session.ID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for steer chat.message.user_sent")
+	}
+
+	turns, err := svc.ListTurns(baseCtx, session.ID)
+	if err != nil {
+		t.Fatalf("ListTurns: %v", err)
+	}
+	var pendingTurn *ChatTurn
+	for _, item := range turns {
+		if item.Status == "pending" {
+			pendingTurn = item
+		}
+	}
+	if pendingTurn == nil {
+		t.Fatal("expected pending steer turn")
+	}
+	if pendingTurn.TriggerMessageID == nil {
+		t.Fatal("pending steer turn trigger_message_id is nil")
+	}
+
+	messages, err := svc.ListMessages(baseCtx, session.ID, MessageFilter{Limit: 20})
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	steer := messages[len(messages)-1]
+	if *pendingTurn.TriggerMessageID != steer.ID {
+		t.Fatalf("pending steer turn trigger_message_id = %s, want %s", *pendingTurn.TriggerMessageID, steer.ID)
+	}
+}
+
 func TestMultiHuman_MessageQueue(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
