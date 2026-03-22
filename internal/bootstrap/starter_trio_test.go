@@ -22,6 +22,7 @@ func TestLoriPromptIncludesStaffingWorkflowRequirements(t *testing.T) {
 		"Never assign Frank, Lori, or Ellie to project PM/worker/reviewer roles",
 		"no single executable task should usually exceed 30 minutes",
 		"work stage, an internal review stage, and a completion/merge stage",
+		"Do not tell the operator to go read docs",
 	}
 	for _, snippet := range requiredSnippets {
 		if !strings.Contains(loriPrompt, snippet) {

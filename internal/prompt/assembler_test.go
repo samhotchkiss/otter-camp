@@ -87,6 +87,32 @@ func TestPromptAssemblerOmitsTaskContextForOrgScope(t *testing.T) {
 	}
 }
 
+func TestPromptAssemblerLayer2RequiresDirectContextInspection(t *testing.T) {
+	orgID := uuid.New()
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session:  repo.ChatSession{ID: uuid.New(), OrganizationID: orgID, ScopeType: "organization", ScopeID: orgID, Mode: "sync"},
+		agent:    repo.Agent{ID: uuid.New(), OrganizationID: orgID, SystemPrompt: "Agent"},
+		messages: []repo.ChatMessage{{SequenceNumber: 1, Role: "user", Content: "Please continue the project."}},
+	})
+
+	assembled, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID: assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:   assembler.agents.(*fakeAgentRepo).agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("Assemble error = %v", err)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "inspect those materials yourself") {
+		t.Fatalf("system prompt missing direct-inspection guidance:\n%s", assembled.SystemPrompt)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Do not ask the operator to go read existing docs") {
+		t.Fatalf("system prompt missing anti-doc-bounce guidance:\n%s", assembled.SystemPrompt)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Ask the operator only for information that is truly unavailable") {
+		t.Fatalf("system prompt missing unavailable-info guard:\n%s", assembled.SystemPrompt)
+	}
+}
+
 func TestPromptAssemblerTaskContextBlockFormat(t *testing.T) {
 	assembled := assembleTaskContextPrompt(t)
 	expectedLines := []string{

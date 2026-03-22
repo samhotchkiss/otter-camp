@@ -2130,6 +2130,9 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	if !strings.Contains(handoff, "Once enough candidates are known, do not emit another assistant planning summary about staffing.") {
 		t.Fatalf("handoff = %q, want direct-tool-action staffing guidance", handoff)
 	}
+	if !strings.Contains(handoff, "If you need project docs, files, planning artifacts, or current task state during bootstrap, inspect them directly with tools.") {
+		t.Fatalf("handoff = %q, want direct-doc-inspection guidance", handoff)
+	}
 	if !strings.Contains(handoff, "Before you pause to read scaffold artifacts or persist setup, every persisted broad workstream parent must either have bounded executable child tasks under it") {
 		t.Fatalf("handoff = %q, want all-parents-decomposed guidance", handoff)
 	}

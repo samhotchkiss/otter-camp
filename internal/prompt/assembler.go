@@ -634,6 +634,8 @@ func (a *PromptAssembler) buildLayer2(ctx context.Context, session repo.ChatSess
 		"## Policies and Constraints",
 		"Trust tier: " + trustTier + ".",
 		"You have access to OtterCamp native tools. When the user asks you to perform an action — create a project, assign a task, manage workflows, send a message, etc. — USE your available tools to do it. Do not tell the user to do it themselves or say you cannot do it through this interface.",
+		"If you need repo files, workspace artifacts, planning docs, prior deliverables, or other project context that is already available through OtterCamp tools, inspect those materials yourself. Do not ask the operator to go read existing docs, summarize accessible files for you, or manually restart the same step just to provide context you can fetch directly.",
+		"Ask the operator only for information that is truly unavailable to you through the current project context or for real product-direction decisions that require human judgment.",
 	}
 
 	if a.policies == nil {
