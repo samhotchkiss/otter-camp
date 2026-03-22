@@ -158,6 +158,36 @@ func TestFlowExecutionServiceRejectsSelfReview(t *testing.T) {
 	}
 }
 
+func TestFlowExecutionServiceAllowsHumanReviewAfterManualHumanAdvance(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, _ := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Human review task", "in_progress", &template.ID)
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review with human actor: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID}); err != nil {
+		t.Fatalf("AdvanceFlow human review err = %v, want nil", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID}); err != nil {
+		t.Fatalf("AdvanceFlow human terminal err = %v, want nil", err)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "done" {
+		t.Fatalf("task work_status = %q, want done", updatedTask.WorkStatus)
+	}
+}
+
 func TestFlowExecutionServiceTerminalAdvanceRequiresCompletedReview(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

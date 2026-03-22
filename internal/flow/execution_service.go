@@ -1510,7 +1510,10 @@ func (s *service) validateReviewAdvanceActor(ctx context.Context, taskID uuid.UU
 	if !progress.pendingReviewWork {
 		return nil
 	}
-	if actorMatchesExecutionActor(actor, progress.pendingReviewActor) {
+	// Preserve the no-self-review invariant for agents, but allow the human
+	// operator to complete review even if they manually advanced rescued work
+	// into review in a single-operator org.
+	if strings.EqualFold(normalizeTaskActorType(actor.Type), "agent") && actorMatchesExecutionActor(actor, progress.pendingReviewActor) {
 		return ErrSelfReviewForbidden
 	}
 	return nil
