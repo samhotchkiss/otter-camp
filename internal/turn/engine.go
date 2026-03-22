@@ -2598,6 +2598,7 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	}
 
 	firstWaveTasks := make([]repo.ProjectTask, 0, len(plannedTasks))
+	assignedFirstWaveTasks := make([]repo.ProjectTask, 0, len(plannedTasks))
 	firstWaveTemplateIDs := make(map[uuid.UUID]struct{})
 	structuralFailureClass := ""
 	structuralFailureReason := ""
@@ -2650,12 +2651,18 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 			continue
 		}
 		firstWaveTasks = append(firstWaveTasks, task)
+		if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
+			assignedFirstWaveTasks = append(assignedFirstWaveTasks, task)
+		}
 		if projectBootstrapTaskEnteredExecution(task.WorkStatus) {
 			progress.FirstWavePromotedCount++
 		}
 		if task.FlowTemplateID != nil && *task.FlowTemplateID != uuid.Nil {
 			firstWaveTemplateIDs[*task.FlowTemplateID] = struct{}{}
 		}
+	}
+	if len(assignedFirstWaveTasks) > 0 {
+		firstWaveTasks = assignedFirstWaveTasks
 	}
 	progress.FirstWaveTaskCount = len(firstWaveTasks)
 	if len(firstWaveTemplateIDs) > progress.PlannedFlowTemplateCount {
