@@ -4784,6 +4784,12 @@ func TestBuildRecoveryResumeActionPromptHardensIntentOnlyCheckpointWithoutDraft(
 	if !strings.Contains(prompt, "must begin with the concrete file body for docs/sitemap-and-navigation.md itself") {
 		t.Fatalf("prompt = %q, want direct begin-with-file-body guidance", prompt)
 	}
+	if !strings.Contains(prompt, "The first non-whitespace character of your next assistant message must be the first character of the deliverable body itself.") {
+		t.Fatalf("prompt = %q, want first-character guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not start with phrases like 'I', 'I'll', 'I will', 'Now I'll', 'Let me', 'Here is', or 'Below is' before the file body.") {
+		t.Fatalf("prompt = %q, want anti-preface guidance", prompt)
+	}
 	if !strings.Contains(prompt, "No substantive durable draft is available.") {
 		t.Fatalf("prompt = %q, want no-draft guidance", prompt)
 	}
@@ -4792,6 +4798,14 @@ func TestBuildRecoveryResumeActionPromptHardensIntentOnlyCheckpointWithoutDraft(
 	}
 	if !strings.Contains(prompt, "already hardened after repeated non-substantive drafts") {
 		t.Fatalf("prompt = %q, want repeated-draft hardening guidance", prompt)
+	}
+}
+
+func TestLooksLikeRecoveryIntentNarrationPlaceholderDetectsNowIllWritePreface(t *testing.T) {
+	t.Parallel()
+
+	if !looksLikeRecoveryIntentNarrationPlaceholder("Now I'll write the substantive blog post template design specification:") {
+		t.Fatal("expected now-I'll-write preface to be rejected as intent narration")
 	}
 }
 

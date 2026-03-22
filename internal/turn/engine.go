@@ -7249,7 +7249,7 @@ func buildRecoveryFileWriteRetryMessage(targetPath string) string {
 	if path == "" {
 		path = "the requested workspace file"
 	}
-	return fmt.Sprintf("[Recovery correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. If you already have the draft text, carry that exact text into the next write instead of emitting another empty-content call.]", path)
+	return fmt.Sprintf("[Recovery correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. The first non-whitespace character of your next assistant message must be the first character of the deliverable itself, not a sentence like 'I will write' or 'Now I'll draft'. If you already have the draft text, carry that exact text into the next write instead of emitting another empty-content call.]", path)
 }
 
 func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReason string) string {
@@ -7700,7 +7700,9 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 		}
 		lines = append(lines,
 			"Your next assistant message must begin with the concrete file body for "+target+" itself, not narration about planning to write it.",
+			"The first non-whitespace character of your next assistant message must be the first character of the deliverable body itself.",
 			"Do not preface the file body with readiness text, explanations, or intent-to-write filler.",
+			"Do not start with phrases like 'I', 'I'll', 'I will', 'Now I'll', 'Let me', 'Here is', or 'Below is' before the file body.",
 		)
 		if strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == "" {
 			lines = append(lines, "No substantive durable draft is available. Draft the file body from scratch in the assistant message before any file.write. If the target is Markdown, start immediately with a heading and real section content.")
@@ -8313,6 +8315,14 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 	hasWriteIntent := containsAny(lower,
 		"let me write",
 		"let me draft",
+		"now i'll write",
+		"now i will write",
+		"i'll write",
+		"i will write",
+		"i'll draft",
+		"i will draft",
+		"here is the draft",
+		"below is the draft",
 		"i'm going to write",
 		"i am going to write",
 		"time to write",
