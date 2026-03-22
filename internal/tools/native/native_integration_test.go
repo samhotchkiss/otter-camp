@@ -3168,8 +3168,8 @@ func TestIntegrationProjectCreateReusesArchivedSlugThroughProjectService(t *test
 		t.Fatalf("created project id = %s, want fresh project distinct from archived %s", createdID, archived.ID)
 	}
 	gotSlug := strings.TrimSpace(fmt.Sprintf("%v", projectOut["slug"]))
-	if gotSlug == "samblog" {
-		t.Fatalf("created slug = %q, want archived slug suffixing", gotSlug)
+	if gotSlug != "samblog" {
+		t.Fatalf("created slug = %q, want canonical archived slug reuse", gotSlug)
 	}
 
 	created, err := projectRepo.GetByID(ctx, createdID)
@@ -3178,6 +3178,13 @@ func TestIntegrationProjectCreateReusesArchivedSlugThroughProjectService(t *test
 	}
 	if created.Status != "active" {
 		t.Fatalf("created project status = %q, want active", created.Status)
+	}
+	releasedArchived, err := projectRepo.GetByID(ctx, archived.ID)
+	if err != nil {
+		t.Fatalf("GetByID archived project after reuse: %v", err)
+	}
+	if releasedArchived.Slug == "samblog" {
+		t.Fatalf("archived project slug = %q, want canonical slug released before native create", releasedArchived.Slug)
 	}
 
 	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, created.ID)
@@ -5191,15 +5198,15 @@ func TestIntegrationParentTaskRepeatedDecompositionReusesCanonicalChildren(t *te
 
 	taskRepo := repo.NewProjectTaskRepo(pool)
 	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
-		OrganizationID: orgID,
-		ProjectID:      project.ID,
-		Title:          "Generate 20 new blog post ideas",
-		Description:    stringPtr("Break the ideas into bounded child tasks that can be reviewed independently."),
-		WorkStatus:     "review",
+		OrganizationID:  orgID,
+		ProjectID:       project.ID,
+		Title:           "Generate 20 new blog post ideas",
+		Description:     stringPtr("Break the ideas into bounded child tasks that can be reviewed independently."),
+		WorkStatus:      "review",
 		AssignedAgentID: &assignee.ID,
-		FlowTemplateID: &template.ID,
-		CreatedByType:  "agent",
-		CreatedByID:    &agent.ID,
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &agent.ID,
 	})
 	if err != nil {
 		t.Fatalf("create parent task: %v", err)

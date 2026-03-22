@@ -79,7 +79,7 @@ func TestProjectServiceCreateGetBySlugAndUniqueness(t *testing.T) {
 	}
 }
 
-func TestProjectServiceCreateAllowsArchivedSlugReuseWithFreshDerivedSlug(t *testing.T) {
+func TestProjectServiceCreateAllowsArchivedSlugReuseWithCanonicalSlug(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	svc := newIntegrationService(t, pool)
@@ -119,8 +119,15 @@ func TestProjectServiceCreateAllowsArchivedSlugReuseWithFreshDerivedSlug(t *test
 	if err != nil {
 		t.Fatalf("Create second after archive: %v", err)
 	}
-	if second.Slug != "alpha-2" {
-		t.Fatalf("second slug = %q, want alpha-2", second.Slug)
+	if second.Slug != "alpha" {
+		t.Fatalf("second slug = %q, want canonical archived slug reuse", second.Slug)
+	}
+	updatedArchived, err := repo.NewProjectRepo(pool).GetByID(ctx, archived.ID)
+	if err != nil {
+		t.Fatalf("GetByID archived project after reuse: %v", err)
+	}
+	if updatedArchived.Slug == "alpha" {
+		t.Fatalf("archived project slug = %q, want archived record moved off canonical slug", updatedArchived.Slug)
 	}
 }
 

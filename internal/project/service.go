@@ -818,11 +818,10 @@ func (s *service) resolveCreateSlug(ctx context.Context, orgID uuid.UUID, reques
 		if status != "archived" {
 			return "", ErrSlugTaken
 		}
-		projects, listErr := s.listProjectsForSlugResolution(ctx, orgID)
-		if listErr != nil {
-			return "", listErr
+		if err := s.releaseArchivedProjectSlug(ctx, projectRecord); err != nil {
+			return "", err
 		}
-		return nextArchivedSlugCandidate(slug, projects), nil
+		return slug, nil
 	}
 	if !errors.Is(err, repo.ErrNotFound) {
 		return "", err
@@ -830,24 +829,34 @@ func (s *service) resolveCreateSlug(ctx context.Context, orgID uuid.UUID, reques
 	return slug, nil
 }
 
-func (s *service) listProjectsForSlugResolution(ctx context.Context, orgID uuid.UUID) ([]repo.Project, error) {
-	if listAllRepo, ok := s.projects.(projectRepositoryListAll); ok {
-		return listAllRepo.ListAll(ctx, orgID)
+func (s *service) releaseArchivedProjectSlug(ctx context.Context, projectRecord repo.Project) error {
+	if projectRecord.ID == uuid.Nil {
+		return nil
 	}
-	return s.projects.List(ctx, orgID)
+	currentSlug := strings.TrimSpace(projectRecord.Slug)
+	if currentSlug == "" {
+		return nil
+	}
+	nextSlug, err := archivedProjectSlug(currentSlug, projectRecord.ID)
+	if err != nil {
+		return err
+	}
+	if nextSlug == currentSlug {
+		return nil
+	}
+	projectRecord.Slug = nextSlug
+	_, err = s.projects.Update(ctx, projectRecord)
+	return err
 }
 
-func nextArchivedSlugCandidate(base string, projects []repo.Project) string {
-	used := make(map[string]struct{}, len(projects))
-	for _, item := range projects {
-		used[strings.ToLower(strings.TrimSpace(item.Slug))] = struct{}{}
+func archivedProjectSlug(base string, projectID uuid.UUID) (string, error) {
+	suffix := "-archived-" + strings.ToLower(projectID.String()[:8])
+	base = strings.TrimSpace(base)
+	if len(base)+len(suffix) > 64 {
+		base = strings.TrimSpace(base[:64-len(suffix)])
+		base = strings.TrimRight(base, "-")
 	}
-	for attempt := 2; ; attempt++ {
-		candidate := fmt.Sprintf("%s-%d", base, attempt)
-		if _, ok := used[strings.ToLower(candidate)]; !ok {
-			return candidate
-		}
-	}
+	return validateSlug(base + suffix)
 }
 
 func (s *service) Update(ctx context.Context, orgID, projectID uuid.UUID, req UpdateProjectRequest) (*Project, error) {
