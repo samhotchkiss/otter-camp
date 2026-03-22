@@ -874,6 +874,61 @@ func TestJobWorkerHeartbeatPreventsStaleClaimRecoveryForRunningJob(t *testing.T)
 	}
 }
 
+func TestJobWorkerRecoverStaleClaimsReleasesForeignAgentTurnClaimsQuickly(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "new-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	var claimedID uuid.UUID
+	if err := pool.QueryRow(context.Background(), `
+		INSERT INTO job_queue (job_type, status, claimed_by, claimed_at, attempts, max_attempts, run_after, payload)
+		VALUES (
+			'agent_turn',
+			'claimed',
+			'dead-worker',
+			now() - interval '45 seconds',
+			1,
+			3,
+			now(),
+			'{"session_id":"11111111-1111-1111-1111-111111111111","message_id":"22222222-2222-2222-2222-222222222222"}'::jsonb
+		)
+		RETURNING id
+	`).Scan(&claimedID); err != nil {
+		t.Fatalf("insert foreign claimed agent_turn failed: %v", err)
+	}
+
+	recovered, err := worker.RecoverStaleClaims(context.Background())
+	if err != nil {
+		t.Fatalf("RecoverStaleClaims failed: %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("recovered rows = %d, want 1", recovered)
+	}
+
+	var (
+		status    string
+		claimedBy *string
+		claimedAt *time.Time
+	)
+	if err := pool.QueryRow(context.Background(), `
+		SELECT status, claimed_by, claimed_at
+		FROM job_queue
+		WHERE id = $1
+	`, claimedID).Scan(&status, &claimedBy, &claimedAt); err != nil {
+		t.Fatalf("query recovered foreign claim failed: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("status = %q, want pending", status)
+	}
+	if claimedBy != nil || claimedAt != nil {
+		t.Fatalf("claimed fields should be cleared, got claimed_by=%v claimed_at=%v", claimedBy, claimedAt)
+	}
+}
+
 func TestJobWorkerReleaseClaimsForWorkerRequeuesGracefulShutdownClaims(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

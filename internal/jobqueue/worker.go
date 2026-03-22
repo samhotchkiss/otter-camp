@@ -24,14 +24,15 @@ import (
 )
 
 const (
-	jobEnqueuedChannel         = "job_enqueued"
-	idempotencyCleanupJob      = "idempotency.cleanup"
-	agentTurnJobType           = "agent_turn"
-	defaultBatchSize           = 10
-	defaultPollInterval        = 5 * time.Second
-	defaultStaleScanInterval   = 60 * time.Second
-	defaultStaleThreshold      = 5 * time.Minute
-	staleContinuationThreshold = 15 * time.Minute
+	jobEnqueuedChannel                    = "job_enqueued"
+	idempotencyCleanupJob                 = "idempotency.cleanup"
+	agentTurnJobType                      = "agent_turn"
+	defaultBatchSize                      = 10
+	defaultPollInterval                   = 5 * time.Second
+	defaultStaleScanInterval              = 60 * time.Second
+	defaultStaleThreshold                 = 5 * time.Minute
+	staleContinuationThreshold            = 15 * time.Minute
+	startupForeignAgentTurnClaimThreshold = 30 * time.Second
 	// Bootstrap turns have their own watchdog budget; stale job recovery should
 	// not wait for the generic five-minute claim threshold before retrying them.
 	projectBootstrapStaleThreshold = 2 * time.Minute
@@ -1075,6 +1076,7 @@ func rateLimitRetryJitterOffset(sessionID, messageID uuid.UUID, retryCount int) 
 func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 	staleBefore := w.clock.Now().UTC().Add(-w.staleClaimThreshold)
 	bootstrapStaleBefore := w.clock.Now().UTC().Add(-projectBootstrapStaleThreshold)
+	foreignAgentTurnStaleBefore := w.clock.Now().UTC().Add(-startupForeignAgentTurnClaimThreshold)
 	ct, err := w.pool.Exec(ctx, `
 		UPDATE job_queue
 		SET status = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'dead_letter' END,
@@ -1101,8 +1103,14 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 					  AND COALESCE(NULLIF(cs.metadata->'project_bootstrap'->>'status', ''), '') = 'active'
 				)
 			)
+			OR (
+				job_type = $2
+				AND claimed_by IS NOT NULL
+				AND claimed_by <> $4
+				AND claimed_at < $5
+			)
 		  )
-	`, staleBefore, agentTurnJobType, bootstrapStaleBefore)
+	`, staleBefore, agentTurnJobType, bootstrapStaleBefore, w.workerID, foreignAgentTurnStaleBefore)
 	if err != nil {
 		return 0, fmt.Errorf("recover stale claims: %w", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -11018,11 +11019,8 @@ func TestTurnEngineIntegrationSeedBootstrapRestartScaffoldAutoAssignsUnassignedD
 	if !found {
 		t.Fatal("expected restarted project to contain the seeded task")
 	}
-	if restartedTask.AssignedAgentID == nil || *restartedTask.AssignedAgentID == uuid.Nil {
-		t.Fatalf("restarted task assigned_agent_id = %v, want worker assignment", restartedTask.AssignedAgentID)
-	}
-	if *restartedTask.AssignedAgentID != workerA.ID && *restartedTask.AssignedAgentID != workerB.ID {
-		t.Fatalf("restarted task assigned_agent_id = %s, want one of workers %s or %s", *restartedTask.AssignedAgentID, workerA.ID, workerB.ID)
+	if restartedTask.AssignedAgentID != nil && *restartedTask.AssignedAgentID != uuid.Nil {
+		t.Fatalf("restarted task assigned_agent_id = %s, want unassigned seed task", *restartedTask.AssignedAgentID)
 	}
 }
 
@@ -11110,6 +11108,81 @@ func TestTurnEngineIntegrationSeedBootstrapRestartScaffoldSkipsCanonicalBootstra
 	if restartedTask.TaskNumber != len(beforeTasks)+1 {
 		t.Fatalf("seeded non-bootstrap task number = %d, want %d", restartedTask.TaskNumber, len(beforeTasks)+1)
 	}
+}
+
+func TestTurnEngineIntegrationSeedBootstrapRestartScaffoldClearsCopiedDraftAssignments(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	sourceProject := mustCreateBootstrapProject(t, ctx, fixture)
+	projectService, err := projectsvc.NewService(projectsvc.Options{
+		Pool:   fixture.pool,
+		Events: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("New project service: %v", err)
+	}
+	restartedProject, err := projectService.Create(ctx, projectsvc.CreateProjectRequest{
+		OrganizationID: sourceProject.OrganizationID,
+		Slug:           "restart-seed-clear-assignments",
+		DisplayName:    sourceProject.DisplayName,
+		Description:    sourceProject.Description,
+		DeliveryMode:   sourceProject.DeliveryMode,
+		CreatedByType:  "system",
+		CreatedByID:    fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create restart target project: %v", err)
+	}
+
+	worker := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        worker.ID,
+		ProjectID:      sourceProject.ID,
+		Role:           "worker",
+		AssignedByType: "human_user",
+		AssignedByID:   &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	description := "Design the broad reporting framework and operational dashboard plan."
+	createdTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  sourceProject.OrganizationID,
+		ProjectID:       sourceProject.ID,
+		Title:           "Reporting framework and dashboard plan",
+		Description:     &description,
+		WorkStatus:      "draft",
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create assigned source task: %v", err)
+	}
+
+	seeded, err := fixture.engine.seedBootstrapRestartScaffold(ctx, sourceProject.ID, restartedProject.ID)
+	if err != nil {
+		t.Fatalf("seedBootstrapRestartScaffold: %v", err)
+	}
+	if !seeded {
+		t.Fatal("expected restart scaffold to be seeded")
+	}
+
+	restartedTasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, restartedProject.ID)
+	if err != nil {
+		t.Fatalf("ListByProject restarted tasks: %v", err)
+	}
+	for _, taskRecord := range restartedTasks {
+		if strings.TrimSpace(taskRecord.Title) != createdTask.Title {
+			continue
+		}
+		if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
+			t.Fatalf("restarted task assigned_agent_id = %s, want cleared assignment", *taskRecord.AssignedAgentID)
+		}
+		return
+	}
+	t.Fatal("expected restarted project to contain the assigned source task")
 }
 
 func TestTurnEngineIntegrationSeededBootstrapRestartAckOnlyWithNoProgressFailsImmediately(t *testing.T) {
@@ -15164,6 +15237,112 @@ func TestTurnEngineIntegrationProjectBootstrapWatchdogContinuesRecoverableValida
 	}
 	if !containsMessageSubstring(messages, "has no assigned agent") {
 		t.Fatal("missing validation-specific repair guidance after watchdog timeout")
+	}
+}
+
+func TestTurnEngineIntegrationSyncProjectBootstrapSetupFromWorkspaceAutoPersistsBackedSteps(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	_ = mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: resume the active bootstrap workflow from persisted state.")
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "pm",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("Assign bootstrap PM: %v", err)
+	}
+
+	projectChatSession, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project scope: %v", err)
+	}
+
+	workspaceRoot, err := workspace.ProjectRoot(fixture.engine.dataDir, project.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "bootstrap"), 0o755); err != nil {
+		t.Fatalf("MkdirAll bootstrap workspace: %v", err)
+	}
+	for _, rel := range []string{
+		"bootstrap/02-repo-and-environment.md",
+		"bootstrap/03-staffing-plan.md",
+	} {
+		if err := os.WriteFile(filepath.Join(workspaceRoot, filepath.FromSlash(rel)), []byte("# artifact\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", rel, err)
+		}
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	stepSlugs, _, err := fixture.engine.inferBootstrapSetupPersistFromWorkspace(ctx, project.ID, progress)
+	if err != nil {
+		t.Fatalf("inferBootstrapSetupPersistFromWorkspace: %v", err)
+	}
+	if !reflect.DeepEqual(stepSlugs, []string{"bind-repo-environment", "staff-project"}) {
+		t.Fatalf("inferred bootstrap step slugs = %v, want bind/staff", stepSlugs)
+	}
+
+	turn, err := fixture.chatService.CreateTurn(ctx, projectSession.ID, lori.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn bootstrap sync: %v", err)
+	}
+	if persisted, err := fixture.engine.syncProjectBootstrapSetupFromWorkspace(ctx, projectChatSession, turn.ID); err != nil {
+		t.Fatalf("syncProjectBootstrapSetupFromWorkspace: %v", err)
+	} else if !persisted {
+		t.Fatal("expected bootstrap setup sync to persist workspace-backed steps")
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(fixture.pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject tasks: %v", err)
+	}
+	statusBySlug := map[string]string{}
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
+			continue
+		}
+		slug := strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"]))
+		if slug == "" {
+			continue
+		}
+		statusBySlug[slug] = strings.TrimSpace(task.WorkStatus)
+	}
+	if got := statusBySlug["bind-repo-environment"]; got != "done" {
+		t.Fatalf("bind-repo-environment status = %q, want done", got)
+	}
+	if got := statusBySlug["staff-project"]; got != "done" {
+		t.Fatalf("staff-project status = %q, want done", got)
+	}
+	for _, slug := range []string{
+		"decompose-workstreams",
+		"validate-task-shape",
+		"attach-validate-flow-templates",
+		"select-first-wave",
+		bootstrapFrankSignOffStepSlug,
+	} {
+		if got := statusBySlug[slug]; got != "draft" {
+			t.Fatalf("%s status = %q, want draft", slug, got)
+		}
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	if !containsMessageSubstring(messages, "\"tool_name\":\"bootstrap.setup.persist\"") {
+		t.Fatal("expected auto-persist bootstrap tool result in project session history")
 	}
 }
 

@@ -2222,43 +2222,6 @@ func TestBootstrapRestartSlugCandidateStaysWithinProjectSlugLimit(t *testing.T) 
 	}
 }
 
-func TestChooseBootstrapRestartTaskAssigneePrefersContentWorkerForContentTasks(t *testing.T) {
-	engineerID := uuid.New()
-	contentID := uuid.New()
-	got := chooseBootstrapRestartTaskAssignee(repo.ProjectTask{
-		Title: "Create editorial calendar and initial content plan",
-	}, []repo.AgentProjectAssignment{
-		{AgentID: engineerID, Role: "worker", IsActive: true},
-		{AgentID: contentID, Role: "worker", IsActive: true},
-	})
-	if got == nil || *got != contentID {
-		t.Fatalf("content task assignee = %v, want %s", got, contentID)
-	}
-}
-
-func TestChooseBootstrapRestartTaskAssigneeFallsBackToWorkerThenPM(t *testing.T) {
-	workerID := uuid.New()
-	pmID := uuid.New()
-	got := chooseBootstrapRestartTaskAssignee(repo.ProjectTask{
-		Title: "Set up deployment pipeline and hosting",
-	}, []repo.AgentProjectAssignment{
-		{AgentID: workerID, Role: "worker", IsActive: true},
-		{AgentID: pmID, Role: "pm", IsActive: true},
-	})
-	if got == nil || *got != workerID {
-		t.Fatalf("technical task assignee = %v, want %s", got, workerID)
-	}
-
-	got = chooseBootstrapRestartTaskAssignee(repo.ProjectTask{
-		Title: "Define delivery milestones",
-	}, []repo.AgentProjectAssignment{
-		{AgentID: pmID, Role: "pm", IsActive: true},
-	})
-	if got == nil || *got != pmID {
-		t.Fatalf("fallback assignee = %v, want %s", got, pmID)
-	}
-}
-
 func TestShouldBlockProjectBootstrapRestaffingToolAfterTaskTreePersisted(t *testing.T) {
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
 		Status:                   projectBootstrapStatusActive,

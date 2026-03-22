@@ -1077,7 +1077,7 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 			Priority:            taskRecord.Priority,
 			CreatedByType:       taskRecord.CreatedByType,
 			CreatedByID:         taskRecord.CreatedByID,
-			AssignedAgentID:     taskRecord.AssignedAgentID,
+			AssignedAgentID:     seededBootstrapRestartAssignedAgentID(taskRecord),
 			Metadata:            taskRecord.Metadata,
 			CompletedAt:         nil,
 		})
@@ -1100,21 +1100,18 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 		createdTasks[i] = updatedTask
 	}
 
-	for i := range createdTasks {
-		if createdTasks[i].AssignedAgentID != nil && *createdTasks[i].AssignedAgentID != uuid.Nil {
-			continue
-		}
-		assigneeID := chooseBootstrapRestartTaskAssignee(createdTasks[i], activeAssignments)
-		if assigneeID == nil || *assigneeID == uuid.Nil {
-			continue
-		}
-		createdTasks[i].AssignedAgentID = assigneeID
-		if _, err := taskRepo.Update(ctx, createdTasks[i]); err != nil {
-			return false, fmt.Errorf("seed restart auto-assign task=%s assignee=%s: %w", createdTasks[i].ID, *assigneeID, err)
-		}
-	}
-
 	return true, nil
+}
+
+func seededBootstrapRestartAssignedAgentID(taskRecord repo.ProjectTask) *uuid.UUID {
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+		return taskRecord.AssignedAgentID
+	}
+	if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); bootstrapSetupTask {
+		return taskRecord.AssignedAgentID
+	}
+	return nil
 }
 
 func shouldSkipBootstrapRestartSeedTask(taskRecord repo.ProjectTask) bool {
@@ -1126,75 +1123,6 @@ func shouldSkipBootstrapRestartSeedTask(taskRecord repo.ProjectTask) bool {
 		return true
 	}
 	return false
-}
-
-func chooseBootstrapRestartTaskAssignee(task repo.ProjectTask, assignments []repo.AgentProjectAssignment) *uuid.UUID {
-	if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
-		value := *task.AssignedAgentID
-		return &value
-	}
-	lowerTitle := strings.ToLower(strings.TrimSpace(task.Title))
-	lowerDescription := ""
-	if task.Description != nil {
-		lowerDescription = strings.ToLower(strings.TrimSpace(*task.Description))
-	}
-	roleBuckets := make(map[string][]uuid.UUID)
-	for _, assignment := range assignments {
-		if !assignment.IsActive || assignment.AgentID == uuid.Nil {
-			continue
-		}
-		role := strings.ToLower(strings.TrimSpace(assignment.Role))
-		roleBuckets[role] = append(roleBuckets[role], assignment.AgentID)
-	}
-	pick := func(role string) *uuid.UUID {
-		ids := roleBuckets[role]
-		if len(ids) == 0 {
-			return nil
-		}
-		value := ids[0]
-		return &value
-	}
-	containsAny := func(values ...string) bool {
-		for _, value := range values {
-			if value == "" {
-				continue
-			}
-			if strings.Contains(lowerTitle, value) || strings.Contains(lowerDescription, value) {
-				return true
-			}
-		}
-		return false
-	}
-	if containsAny("review", "qa", "validate", "approval", "sign-off") {
-		if assignee := pick("reviewer"); assignee != nil {
-			return assignee
-		}
-	}
-	if containsAny(
-		"content", "editorial", "blog", "post", "topic", "audience", "persona",
-		"brand", "messaging", "copy", "sitemap", "information architecture",
-	) {
-		if assignee := pick("worker"); assignee != nil {
-			if len(roleBuckets["worker"]) > 1 {
-				value := roleBuckets["worker"][len(roleBuckets["worker"])-1]
-				return &value
-			}
-			return assignee
-		}
-	}
-	if containsAny(
-		"repo", "framework", "astro", "next.js", "nextjs", "hugo", "cms", "adr",
-		"tailwind", "design token", "deploy", "hosting", "layout", "style",
-		"tech stack", "performance", "architecture", "frontend",
-	) {
-		if assignee := pick("worker"); assignee != nil {
-			return assignee
-		}
-	}
-	if assignee := pick("worker"); assignee != nil {
-		return assignee
-	}
-	return pick("pm")
 }
 
 func remapBootstrapRestartTaskMetadata(raw json.RawMessage, taskIDMap map[string]string) json.RawMessage {

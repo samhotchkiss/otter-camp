@@ -1364,6 +1364,17 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 			StartedAt:        &now,
 		}
 	}
+	if progress.BootstrapTaskOutstanding && progress.BootstrapSetupTaskCount > 0 && !projectBootstrapStateActive(state) {
+		state.Status = projectBootstrapStatusActive
+	}
+	if persisted, persistErr := e.syncProjectBootstrapSetupFromWorkspace(ctx, session, turnID); persistErr != nil {
+		return persistErr
+	} else if persisted {
+		progress, err = e.loadProjectBootstrapProgress(ctx, session.ScopeID)
+		if err != nil {
+			return err
+		}
+	}
 	progress, err = e.ensureProjectBootstrapFirstWaveExecution(ctx, progress)
 	if err != nil {
 		return err
@@ -2560,6 +2571,11 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		return progress, nil
 	}
 	for _, task := range bootstrapSetupTasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if persisted, _ := metadata["bootstrap_setup_persisted"].(bool); persisted &&
+			strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") {
+			continue
+		}
 		prepared, decompErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
 			ParentTaskID: task.ID,
 			Title:        task.Title,
@@ -2804,6 +2820,9 @@ func projectBootstrapStateActive(state projectBootstrapState) bool {
 func projectBootstrapCompletedTurnManaged(messages []repo.ChatMessage, latestUser *repo.ChatMessage, state projectBootstrapState, progress projectBootstrapProgress) bool {
 	if progress.Materialized() || latestUser == nil || latestUser.ID == uuid.Nil {
 		return false
+	}
+	if progress.BootstrapTaskOutstanding && progress.BootstrapSetupTaskCount > 0 {
+		return true
 	}
 	if projectBootstrapStateActive(state) {
 		return true
@@ -4958,6 +4977,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			if _, err := e.messages.UpdateStatus(ctx, assistantMessage.ID, "final", ""); err != nil {
 				return fmt.Errorf("no-tool →final (msg status=%s): %w", currentMessage.Status, err)
 			}
+			if _, err := e.autoPersistBootstrapSetupFromWorkspace(ctx, rt); err != nil {
+				return fmt.Errorf("auto persist bootstrap setup: %w", err)
+			}
 			if _, err := e.handleToolValidationResults(ctx, rt, nil, nil); err != nil {
 				return fmt.Errorf("clear validation guard: %w", err)
 			}
@@ -6982,6 +7004,267 @@ func bootstrapPersistChecklistComplete(results []ToolResult) bool {
 		}
 	}
 	return false
+}
+
+func (e *TurnEngine) autoPersistBootstrapSetupFromWorkspace(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || rt == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	if !progress.BootstrapTaskOutstanding || progress.BootstrapSetupTaskCount == 0 {
+		return false, nil
+	}
+	stepSlugs, signOffSummary, err := e.inferBootstrapSetupPersistFromWorkspace(ctx, rt.session.ScopeID, progress)
+	if err != nil {
+		return false, err
+	}
+	if len(stepSlugs) == 0 {
+		return false, nil
+	}
+	output, err := e.persistBootstrapSetupSteps(ctx, rt.session.ScopeID, stepSlugs, signOffSummary)
+	if err != nil {
+		return false, err
+	}
+	call := ToolCall{ID: "bootstrap-setup-persist-auto", Name: "bootstrap.setup.persist", Tier: "tier1"}
+	results := []ToolResult{{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Output:     output,
+	}}
+	if err := e.appendToolResults(ctx, rt, results); err != nil {
+		return false, err
+	}
+	rt.toolCallsUsed++
+	if _, err := e.handleToolValidationResults(ctx, rt, []ToolCall{call}, results); err != nil {
+		return false, err
+	}
+	if _, err := e.shouldStopAfterBootstrapPersist(ctx, rt, results); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) syncProjectBootstrapSetupFromWorkspace(ctx context.Context, session *chat.ChatSession, turnID uuid.UUID) (bool, error) {
+	if e == nil || session == nil || turnID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") || session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	progress, err := e.loadProjectBootstrapProgress(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	if !progress.BootstrapTaskOutstanding || progress.BootstrapSetupTaskCount == 0 {
+		return false, nil
+	}
+	stepSlugs, signOffSummary, err := e.inferBootstrapSetupPersistFromWorkspace(ctx, session.ScopeID, progress)
+	if err != nil {
+		return false, err
+	}
+	if len(stepSlugs) == 0 {
+		return false, nil
+	}
+	output, err := e.persistBootstrapSetupSteps(ctx, session.ScopeID, stepSlugs, signOffSummary)
+	if err != nil {
+		return false, err
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"tool_name": "bootstrap.setup.persist",
+		"output":    output,
+	})
+	if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Content:   string(payload),
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) persistBootstrapSetupSteps(ctx context.Context, projectID uuid.UUID, stepSlugs []string, signOffSummary string) (map[string]any, error) {
+	if e == nil || e.tasks == nil || e.taskTransitions == nil || projectID == uuid.Nil {
+		return nil, nil
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	setupTasks := make([]repo.ProjectTask, 0, len(projectTasks))
+	for _, task := range projectTasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
+			continue
+		}
+		setupTasks = append(setupTasks, task)
+	}
+	canonicalSetupTasks, _ := canonicalProjectBootstrapSetupTasks(setupTasks)
+	tasksBySlug := make(map[string]repo.ProjectTask, len(canonicalSetupTasks))
+	for _, task := range canonicalSetupTasks {
+		metadata := messageMetadataMap(task.Metadata)
+		slug := strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"]))
+		if slug == "" {
+			continue
+		}
+		tasksBySlug[slug] = task
+	}
+
+	completed := make([]map[string]any, 0, len(stepSlugs))
+	for _, slug := range stepSlugs {
+		taskRecord, ok := tasksBySlug[slug]
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
+			payload := map[string]any{
+				"bootstrap_setup_persisted": true,
+				"bootstrap_step_slug":       slug,
+			}
+			if strings.TrimSpace(signOffSummary) != "" {
+				payload["sign_off_summary"] = strings.TrimSpace(signOffSummary)
+			}
+			updated, err := e.taskTransitions.TransitionStatusWithPayload(ctx, taskRecord.ID, "done", tasksvc.Actor{
+				Type:                        "system",
+				AllowFlowRuntimeBypass:      true,
+				AllowDoneBypass:             true,
+				AllowBootstrapSetupComplete: true,
+			}, payload)
+			if err != nil {
+				return nil, err
+			}
+			taskRecord = repo.ProjectTask(*updated)
+			tasksBySlug[slug] = taskRecord
+		}
+		completed = append(completed, map[string]any{
+			"task_id":     taskRecord.ID,
+			"task_number": taskRecord.TaskNumber,
+			"title":       taskRecord.Title,
+			"step_slug":   slug,
+			"work_status": taskRecord.WorkStatus,
+		})
+	}
+
+	remaining := make([]string, 0)
+	for _, slug := range []string{
+		"bind-repo-environment",
+		"staff-project",
+		"decompose-workstreams",
+		"validate-task-shape",
+		"attach-validate-flow-templates",
+		"select-first-wave",
+		bootstrapFrankSignOffStepSlug,
+	} {
+		taskRecord, ok := tasksBySlug[slug]
+		if !ok || !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
+			remaining = append(remaining, slug)
+		}
+	}
+
+	return map[string]any{
+		"project_id":               projectID,
+		"status":                   "persisted",
+		"completed_steps":          completed,
+		"setup_checklist_complete": len(remaining) == 0,
+		"remaining_step_slugs":     remaining,
+	}, nil
+}
+
+func (e *TurnEngine) inferBootstrapSetupPersistFromWorkspace(ctx context.Context, projectID uuid.UUID, progress projectBootstrapProgress) ([]string, string, error) {
+	if e == nil || e.projects == nil || e.tasks == nil || projectID == uuid.Nil {
+		return nil, "", nil
+	}
+	projectRecord, err := e.projects.GetByID(ctx, projectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	workspaceRoot, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+	if err != nil {
+		return nil, "", err
+	}
+
+	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, "", err
+	}
+	setupTasks := make([]repo.ProjectTask, 0, len(projectTasks))
+	for _, task := range projectTasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
+			continue
+		}
+		setupTasks = append(setupTasks, task)
+	}
+	canonicalSetupTasks, _ := canonicalProjectBootstrapSetupTasks(setupTasks)
+	statusBySlug := make(map[string]string, len(canonicalSetupTasks))
+	for _, task := range canonicalSetupTasks {
+		metadata := messageMetadataMap(task.Metadata)
+		slug := strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"]))
+		if slug == "" {
+			continue
+		}
+		statusBySlug[slug] = strings.TrimSpace(task.WorkStatus)
+	}
+	filePresent := func(rel string) bool {
+		abs := filepath.Join(workspaceRoot, filepath.FromSlash(rel))
+		info, statErr := os.Stat(abs)
+		return statErr == nil && !info.IsDir()
+	}
+	stepReady := map[string]bool{
+		"bind-repo-environment":          filePresent("bootstrap/02-repo-and-environment.md"),
+		"staff-project":                  filePresent("bootstrap/03-staffing-plan.md") && progress.AssignmentCount > 0,
+		"decompose-workstreams":          filePresent("bootstrap/04-workstream-decomposition.md") && progress.PlannedTaskCount > 0,
+		"validate-task-shape":            filePresent("bootstrap/05-task-validation.md") && progress.PlannedTaskCount > 0,
+		"attach-validate-flow-templates": filePresent("bootstrap/06-flow-templates.md") && progress.PlannedTaskCount > 0 && progress.PlannedFlowTemplateCount > 0,
+		"select-first-wave":              filePresent("bootstrap/07-first-wave-tasks.md") && progress.FirstWaveTaskCount > 0,
+	}
+	if filePresent("bootstrap/08-frank-sign-off-request.md") &&
+		stepReady["bind-repo-environment"] &&
+		stepReady["staff-project"] &&
+		stepReady["decompose-workstreams"] &&
+		stepReady["validate-task-shape"] &&
+		stepReady["attach-validate-flow-templates"] &&
+		stepReady["select-first-wave"] {
+		stepReady[bootstrapFrankSignOffStepSlug] = true
+	}
+
+	canonicalOrder := []string{
+		"bind-repo-environment",
+		"staff-project",
+		"decompose-workstreams",
+		"validate-task-shape",
+		"attach-validate-flow-templates",
+		"select-first-wave",
+		bootstrapFrankSignOffStepSlug,
+	}
+	completed := make([]string, 0, len(canonicalOrder))
+	for _, slug := range canonicalOrder {
+		if !stepReady[slug] {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(statusBySlug[slug]), "done") {
+			continue
+		}
+		completed = append(completed, slug)
+	}
+	signOffSummary := ""
+	for _, slug := range completed {
+		if slug == bootstrapFrankSignOffStepSlug {
+			signOffSummary = "Frank sign-off request artifact exists and bootstrap setup progress was synchronized automatically from the persisted workspace state."
+			break
+		}
+	}
+	return completed, signOffSummary, nil
 }
 
 func toolResultsContainNamedTool(results []ToolResult, toolName string) bool {
