@@ -447,6 +447,66 @@ func TestRedactMessageRejectsNonOwnerNonAuthor(t *testing.T) {
 	}
 }
 
+func TestRedactMessageAllowsAdmin(t *testing.T) {
+	messageID := uuid.New()
+	sessionID := uuid.New()
+	orgID := uuid.New()
+	ownerID := uuid.New()
+	authorID := uuid.New()
+	adminID := uuid.New()
+	authorType := "human_user"
+	redactCalls := 0
+
+	svc := newUnitService(t, unitDeps{
+		sessions: &fakeSessionRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				if id != sessionID {
+					t.Fatalf("unexpected session id %s", id)
+				}
+				return repo.ChatSession{
+					ID:             sessionID,
+					OrganizationID: orgID,
+					CreatedByType:  "human_user",
+					CreatedByID:    ownerID,
+				}, nil
+			},
+		},
+		messages: &fakeMessageRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatMessage, error) {
+				if id != messageID {
+					t.Fatalf("unexpected message id %s", id)
+				}
+				return repo.ChatMessage{
+					ID:         messageID,
+					SessionID:  sessionID,
+					Status:     "final",
+					AuthorType: &authorType,
+					AuthorID:   &authorID,
+				}, nil
+			},
+			redactFn: func(_ context.Context, id uuid.UUID) (repo.ChatMessage, error) {
+				redactCalls++
+				if id != messageID {
+					t.Fatalf("unexpected redaction message id %s", id)
+				}
+				return repo.ChatMessage{ID: id, SessionID: sessionID, Status: "redacted", IsRedacted: true}, nil
+			},
+		},
+	})
+
+	ctx := middleware.WithPrincipal(context.Background(), middleware.Principal{
+		UserID:         adminID,
+		OrganizationID: orgID,
+		Role:           "admin",
+	})
+	if err := svc.RedactMessage(ctx, messageID); err != nil {
+		t.Fatalf("RedactMessage error = %v, want nil", err)
+	}
+	if redactCalls != 1 {
+		t.Fatalf("redact calls = %d, want 1", redactCalls)
+	}
+}
+
 func TestCancelCurrentTurnWithoutActiveTurnReturnsErrNoActiveTurn(t *testing.T) {
 	sessionID := uuid.New()
 	orgID := uuid.New()

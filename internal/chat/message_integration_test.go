@@ -546,6 +546,50 @@ func TestTurn_Steer(t *testing.T) {
 	}
 }
 
+func TestTurn_SteerAllowsAdminForNonOwnedSession(t *testing.T) {
+	baseCtx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, baseCtx, pool)
+	user := seedChatServiceUser(t, baseCtx, pool, org.ID, "steer-admin-author", "member")
+	admin := seedChatServiceUser(t, baseCtx, pool, org.ID, "steer-admin-operator", "admin")
+	agent := seedChatServiceAgent(t, baseCtx, pool, org.ID)
+	svc := newIntegrationService(t, pool, nil)
+	session := mustCreateSession(t, principalContext(baseCtx, org.ID, user.ID, "member"), svc, org.ID)
+	authorCtx := principalContext(baseCtx, org.ID, user.ID, "member")
+	adminCtx := principalContext(baseCtx, org.ID, admin.ID, "admin")
+
+	authorType := "human_user"
+	original, err := svc.AppendMessage(authorCtx, AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &user.ID,
+		Role:       "user",
+		Content:    "initial direction",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage original: %v", err)
+	}
+	turn, err := svc.CreateTurn(baseCtx, session.ID, agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := svc.StartTurn(baseCtx, turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	if err := svc.SteerTurn(adminCtx, session.ID, original.ID, "admin correction"); err != nil {
+		t.Fatalf("SteerTurn admin: %v", err)
+	}
+
+	redactedOriginal, err := svc.GetMessage(baseCtx, original.ID)
+	if err != nil {
+		t.Fatalf("GetMessage original: %v", err)
+	}
+	if redactedOriginal.Status != "redacted" {
+		t.Fatalf("original message status = %q, want redacted", redactedOriginal.Status)
+	}
+}
+
 func TestMultiHuman_MessageQueue(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
