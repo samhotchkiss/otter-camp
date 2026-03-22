@@ -4200,7 +4200,11 @@ func (e *TurnEngine) recoverProjectTaskStaleInboundTurnWithoutRun(
 	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
 		return false, nil
 	}
-	if session.CurrentTurnID == nil || *session.CurrentTurnID == uuid.Nil || *session.CurrentTurnID != turn.ID {
+	currentSession := session
+	if refreshed, err := e.chat.GetSession(ctx, session.ID); err == nil && refreshed != nil {
+		currentSession = refreshed
+	}
+	if currentSession.CurrentTurnID == nil || *currentSession.CurrentTurnID == uuid.Nil || *currentSession.CurrentTurnID != turn.ID {
 		return false, nil
 	}
 	if !strings.EqualFold(strings.TrimSpace(turn.Status), "in_progress") {
@@ -4224,10 +4228,10 @@ func (e *TurnEngine) recoverProjectTaskStaleInboundTurnWithoutRun(
 	if err := e.failRetriedLeakedTurn(ctx, turn.ID, failureReason); err != nil {
 		return false, err
 	}
-	_, _ = e.appendSystemMessage(ctx, turn.ID, session.ID, "[Recovered stale in-progress task turn without active run ownership - retrying in a fresh turn.]")
+	_, _ = e.appendSystemMessage(ctx, turn.ID, currentSession.ID, "[Recovered stale in-progress task turn without active run ownership - retrying in a fresh turn.]")
 
 	nextPayload := AgentTurnPayload{
-		SessionID:  session.ID,
+		SessionID:  currentSession.ID,
 		MessageID:  messageID,
 		RetryCount: retryCount + 1,
 	}
