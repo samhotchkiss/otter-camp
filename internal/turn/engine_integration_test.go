@@ -14232,6 +14232,71 @@ func TestTurnEngineIntegrationBootstrapProgressPrefersAssignedLeavesForFirstWave
 	}
 }
 
+func TestTurnEngineIntegrationBootstrapProgressIgnoresUnassignedOversizedLeavesWhenAssignedFirstWaveExists(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "pm",
+		AssignedByType: "human_user",
+		AssignedByID:   &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("Assign pm agent: %v", err)
+	}
+
+	assignedDescription := "Produce the first 2 concrete AI/orchestration ideas for review."
+	assignedTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Generate 2 AI/orchestration ideas",
+		Description:     &assignedDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create assigned first-wave task: %v", err)
+	}
+
+	unassignedDescription := "Generate 10 additional blog post ideas across multiple categories and package them for later review."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: fixture.org.ID,
+		ProjectID:      project.ID,
+		Title:          "Generate 10 more blog post ideas",
+		Description:    &unassignedDescription,
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "human_user",
+		CreatedByID:    &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("Create unassigned oversized task: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if progress.ValidationStatus != projectBootstrapValidationPassed {
+		t.Fatalf("validation_status = %q, want %q", progress.ValidationStatus, projectBootstrapValidationPassed)
+	}
+	if progress.ValidationFailureClass != "" || progress.ValidationFailureReason != "" {
+		t.Fatalf("validation failure = (%q, %q), want empty", progress.ValidationFailureClass, progress.ValidationFailureReason)
+	}
+	if progress.FirstWaveTaskCount != 1 {
+		t.Fatalf("first_wave_task_count = %d, want 1", progress.FirstWaveTaskCount)
+	}
+	if len(progress.FirstWaveTasks) != 1 || progress.FirstWaveTasks[0].ID != assignedTask.ID {
+		t.Fatalf("first_wave_tasks = %+v, want only assigned task %s", progress.FirstWaveTasks, assignedTask.ID)
+	}
+}
+
 func TestTurnEngineIntegrationBootstrapProgressCountsStaffingDraftsWithoutAssignments(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

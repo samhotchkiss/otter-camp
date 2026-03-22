@@ -2602,6 +2602,8 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	firstWaveTemplateIDs := make(map[uuid.UUID]struct{})
 	structuralFailureClass := ""
 	structuralFailureReason := ""
+	unassignedLeafFailureClass := ""
+	unassignedLeafFailureReason := ""
 	for _, task := range plannedTasks {
 		if parentID := taskdecomp.ParseParentTaskID(task.Metadata); parentID != uuid.Nil {
 			if setupTask, ok := bootstrapSetupTaskByID[parentID]; ok {
@@ -2620,10 +2622,17 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		})
 		if decompErr != nil && errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) {
 			if childCount == 0 {
-				progress.ValidationStatus = projectBootstrapValidationFailed
-				progress.ValidationFailureClass = projectBootstrapFailureFirstWaveSize
-				progress.ValidationFailureReason = buildProjectBootstrapFirstWaveSizeFailureReason(task, decompErr.Error())
-				return progress, nil
+				if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
+					progress.ValidationStatus = projectBootstrapValidationFailed
+					progress.ValidationFailureClass = projectBootstrapFailureFirstWaveSize
+					progress.ValidationFailureReason = buildProjectBootstrapFirstWaveSizeFailureReason(task, decompErr.Error())
+					return progress, nil
+				}
+				if unassignedLeafFailureClass == "" {
+					unassignedLeafFailureClass = projectBootstrapFailureFirstWaveSize
+					unassignedLeafFailureReason = buildProjectBootstrapFirstWaveSizeFailureReason(task, decompErr.Error())
+				}
+				continue
 			}
 			if projectBootstrapTaskEnteredExecution(task.WorkStatus) && structuralFailureClass == "" {
 				structuralFailureClass = projectBootstrapFailureCompoundParent
@@ -2635,10 +2644,17 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 			return projectBootstrapProgress{}, decompErr
 		}
 		if prepared.Applied && childCount == 0 {
-			progress.ValidationStatus = projectBootstrapValidationFailed
-			progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
-			progress.ValidationFailureReason = buildProjectBootstrapCompoundParentFailureReason(task)
-			return progress, nil
+			if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
+				progress.ValidationStatus = projectBootstrapValidationFailed
+				progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
+				progress.ValidationFailureReason = buildProjectBootstrapCompoundParentFailureReason(task)
+				return progress, nil
+			}
+			if unassignedLeafFailureClass == "" {
+				unassignedLeafFailureClass = projectBootstrapFailureCompoundParent
+				unassignedLeafFailureReason = buildProjectBootstrapCompoundParentFailureReason(task)
+			}
+			continue
 		}
 		if childCount > 0 && projectBootstrapTaskEnteredExecution(task.WorkStatus) && structuralFailureClass == "" {
 			structuralFailureClass = projectBootstrapFailureCompoundParent
@@ -2663,6 +2679,11 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	}
 	if len(assignedFirstWaveTasks) > 0 {
 		firstWaveTasks = assignedFirstWaveTasks
+	} else if unassignedLeafFailureClass != "" {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = unassignedLeafFailureClass
+		progress.ValidationFailureReason = unassignedLeafFailureReason
+		return progress, nil
 	}
 	progress.FirstWaveTaskCount = len(firstWaveTasks)
 	if len(firstWaveTemplateIDs) > progress.PlannedFlowTemplateCount {
