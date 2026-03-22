@@ -1207,46 +1207,26 @@ func TestTaskServiceIntegrationParentDoneRequiresVerificationAndIntegration(t *t
 	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
 	taskRepo := repo.NewProjectTaskRepo(pool)
 
-	description := strings.Join([]string{
-		"- Finalize the landing page launch checklist.",
-		"- Verify the billing handoff and checkout path.",
-		"- Validate analytics coverage across the launch funnel.",
-	}, "\n")
 	parent, err := svc.CreateTask(ctx, CreateTaskRequest{
 		ProjectID:      project.ID,
 		Title:          "Launch integration gate",
-		Description:    &description,
 		FlowTemplateID: &template.ID,
 		CreatedByType:  "system",
 	})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
+	parentRecord, children := seedOrchestrationChildrenForParent(t, ctx, svc, taskRepo, parent.ID, project.ID, template.ID, []string{
+		"Finalize landing checklist",
+		"Verify billing handoff",
+		"Validate analytics coverage",
+	})
 
-	queued, err := svc.TransitionStatus(ctx, parent.ID, "queued", Actor{Type: "system"})
-	if err != nil {
-		t.Fatalf("TransitionStatus queued: %v", err)
-	}
-	parentRecord, err := taskRepo.GetByID(ctx, queued.ID)
-	if err != nil {
-		t.Fatalf("GetByID parent: %v", err)
-	}
-	childIDs := taskdecomp.ParseChildTaskIDs(parentRecord.Metadata)
-	if len(childIDs) < 2 {
-		t.Fatalf("child task ids len = %d, want >= 2", len(childIDs))
-	}
-
-	children := make([]repo.ProjectTask, 0, len(childIDs))
-	for _, childID := range childIDs {
-		child, getErr := taskRepo.GetByID(ctx, childID)
-		if getErr != nil {
-			t.Fatalf("GetByID child %s: %v", childID, getErr)
-		}
+	for _, child := range children {
 		child.WorkStatus = "done"
 		if _, updateErr := taskRepo.Update(ctx, child); updateErr != nil {
-			t.Fatalf("Update child %s: %v", childID, updateErr)
+			t.Fatalf("Update child %s: %v", child.ID, updateErr)
 		}
-		children = append(children, child)
 	}
 
 	markTaskReadyForDone(t, ctx, pool, parentRecord.ID, template.ID)
@@ -1282,6 +1262,103 @@ func TestTaskServiceIntegrationParentDoneRequiresVerificationAndIntegration(t *t
 	if completed.WorkStatus != "done" {
 		t.Fatalf("work_status = %q, want done", completed.WorkStatus)
 	}
+}
+
+func TestTaskServiceIntegrationOrchestrationOnlyParentAutoCompletesWithSynthesizedMetadata(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	parent, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Relaunch planning integration",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	parentRecord, children := seedOrchestrationChildrenForParent(t, ctx, svc, taskRepo, parent.ID, project.ID, template.ID, []string{
+		"Define site structure",
+		"Draft content pillars",
+		"Confirm delivery plan",
+	})
+	for _, child := range children {
+		child.WorkStatus = "done"
+		if _, updateErr := taskRepo.Update(ctx, child); updateErr != nil {
+			t.Fatalf("Update child %s: %v", child.ID, updateErr)
+		}
+	}
+
+	completed, err := svc.TransitionStatus(ctx, parentRecord.ID, "done", Actor{
+		Type:                           "system",
+		AllowOrchestrationAutoComplete: true,
+	})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+	if completed.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", completed.WorkStatus)
+	}
+
+	stored, err := taskRepo.GetByID(ctx, parentRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID completed parent: %v", err)
+	}
+	state, ok := taskorchestration.Parse(stored.Metadata)
+	if !ok {
+		t.Fatal("expected parent orchestration metadata")
+	}
+	if len(state.ChildVerifications) != len(children) {
+		t.Fatalf("child verifications len = %d, want %d", len(state.ChildVerifications), len(children))
+	}
+	if state.IntegrationCheck == nil || state.IntegrationCheck.Status != "passed" {
+		t.Fatalf("integration check = %+v, want passed", state.IntegrationCheck)
+	}
+	if state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
+		t.Fatalf("outcome assessment = %+v, want satisfied", state.OutcomeAssessment)
+	}
+}
+
+func seedOrchestrationChildrenForParent(t *testing.T, ctx context.Context, svc TaskService, taskRepo *repo.ProjectTaskRepo, parentID, projectID, flowTemplateID uuid.UUID, titles []string) (repo.ProjectTask, []repo.ProjectTask) {
+	t.Helper()
+
+	children := make([]repo.ProjectTask, 0, len(titles))
+	childIDs := make([]uuid.UUID, 0, len(titles))
+	for idx, title := range titles {
+		child, err := svc.CreateTask(ctx, CreateTaskRequest{
+			ProjectID:      projectID,
+			Title:          title,
+			FlowTemplateID: &flowTemplateID,
+			CreatedByType:  "system",
+			Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentID, idx+1),
+		})
+		if err != nil {
+			t.Fatalf("CreateTask child %d: %v", idx+1, err)
+		}
+		children = append(children, *child)
+		childIDs = append(childIDs, child.ID)
+	}
+
+	parentRecord, err := taskRepo.GetByID(ctx, parentID)
+	if err != nil {
+		t.Fatalf("GetByID parent: %v", err)
+	}
+	parentRecord.Metadata = taskdecomp.ApplyMetadata(parentRecord.Metadata, taskdecomp.Plan{
+		RequiresDecomposition: true,
+		PrimaryDeliverable:    strings.TrimSpace(parentRecord.Title),
+	}, "Seeded orchestration children for integration coverage.", childIDs)
+	if _, err := taskRepo.Update(ctx, parentRecord); err != nil {
+		t.Fatalf("Update parent decomposition metadata: %v", err)
+	}
+	parentRecord, err = taskRepo.GetByID(ctx, parentID)
+	if err != nil {
+		t.Fatalf("GetByID parent after decomposition: %v", err)
+	}
+	return parentRecord, children
 }
 
 func TestTaskServiceIntegrationCompletedChildReopenPersistsParentFeedback(t *testing.T) {

@@ -154,6 +154,7 @@ type Actor struct {
 	AllowNoActiveFlow              bool
 	AllowFlowRuntimeBypass         bool
 	AllowDoneBypass                bool
+	AllowOrchestrationAutoComplete bool
 	AllowGateBypass                bool
 	AllowBootstrapGateAutoComplete bool
 	AllowBootstrapSetupComplete    bool
@@ -649,7 +650,8 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 	bootstrapGateAutoComplete := allowsBootstrapGateAutoComplete(taskRecord, from, target, actor)
 	bootstrapSetupComplete := allowsBootstrapSetupComplete(taskRecord, from, target, actor)
 	childReopen := allowsCompletedChildReopen(taskRecord, from, target, actor)
-	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !childReopen {
+	orchestrationAutoComplete := allowsOrchestrationAutoComplete(taskRecord, from, target, actor)
+	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !childReopen && !orchestrationAutoComplete {
 		return nil, ErrInvalidStatusTransition{From: from, To: target}
 	}
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
@@ -675,7 +677,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 			return nil, ErrFlowTemplateReviewRequired
 		}
 	}
-	if !actor.AllowFlowRuntimeBypass && !bootstrapSetupComplete {
+	if !actor.AllowFlowRuntimeBypass && !bootstrapSetupComplete && !orchestrationAutoComplete {
 		if err := s.validateFlowRuntimeStatus(ctx, taskRecord, target); err != nil {
 			return nil, err
 		}
@@ -737,6 +739,13 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		}
 	}
 	if target == "done" && !actor.AllowDoneBypass && !bootstrapGateAutoComplete && !bootstrapSetupComplete {
+		if orchestrationAutoComplete {
+			if enriched, enrichErr := s.enrichOrchestrationAutoCompleteMetadata(ctx, taskRecord); enrichErr != nil {
+				return nil, enrichErr
+			} else {
+				taskRecord = enriched
+			}
+		}
 		if report, reportErr := taskplan.CompletionReport(taskRecord.Metadata); reportErr != nil {
 			return nil, reportErr
 		} else if payload := report.Payload(); len(payload) > 0 {
@@ -747,7 +756,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 				extraPayload[key] = value
 			}
 		}
-		if err := s.validateDoneTransition(ctx, taskRecord); err != nil {
+		if err := s.validateDoneTransition(ctx, taskRecord, orchestrationAutoComplete); err != nil {
 			return nil, err
 		}
 	}
@@ -1127,13 +1136,37 @@ func projectRequiresPMBeforeQueueSetting(settings json.RawMessage) bool {
 	return ok && flag
 }
 
-func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.ProjectTask) error {
+func allowsOrchestrationAutoComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
+	if !actor.AllowOrchestrationAutoComplete {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(actor.Type), "system") {
+		return false
+	}
+	if normalizeStatus(target) != "done" {
+		return false
+	}
+	if len(taskdecomp.ParseChildTaskIDs(taskRecord.Metadata)) == 0 {
+		return false
+	}
+	switch normalizeStatus(from) {
+	case "draft", "queued", "in_progress", "review":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.ProjectTask, allowOrchestrationAutoComplete bool) error {
 	children, err := s.listDecompositionChildren(ctx, taskRecord)
 	if err != nil {
 		return err
 	}
 	if err := taskorchestration.ValidateCompletion(taskRecord, children); err != nil {
 		return err
+	}
+	if allowOrchestrationAutoComplete && isOrchestrationOnlyParentTask(taskRecord, children) {
+		return nil
 	}
 	if taskRecord.FlowTemplateID == nil || taskRecord.CurrentFlowNodeID == nil {
 		return ErrDoneRequiresTerminalFlow
@@ -1176,6 +1209,92 @@ func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.Pr
 		return ErrDoneRequiresTerminalFlow
 	}
 	return nil
+}
+
+func (s *service) enrichOrchestrationAutoCompleteMetadata(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, error) {
+	children, err := s.listDecompositionChildren(ctx, taskRecord)
+	if err != nil {
+		return taskRecord, err
+	}
+	if !isOrchestrationOnlyParentTask(taskRecord, children) {
+		return taskRecord, nil
+	}
+
+	now := s.clock.Now().UTC()
+	state, _ := taskorchestration.Parse(taskRecord.Metadata)
+	update := taskorchestration.Update{}
+
+	if verifications := missingChildVerifications(children, state, now); len(verifications) > 0 {
+		update.ChildVerifications = verifications
+	}
+	if state.IntegrationCheck == nil {
+		update.IntegrationCheck = taskorchestration.NewIntegrationCheck("passed", orchestrationIntegrationSummary(taskRecord), now)
+	}
+	if state.OutcomeAssessment == nil {
+		update.OutcomeAssessment = taskorchestration.NewOutcomeAssessment(true, orchestrationOutcomeSummary(taskRecord), now)
+	}
+	if len(update.ChildVerifications) == 0 && update.IntegrationCheck == nil && update.OutcomeAssessment == nil {
+		return taskRecord, nil
+	}
+
+	metadata, err := taskorchestration.Apply(taskRecord.Metadata, update)
+	if err != nil {
+		return taskRecord, err
+	}
+	taskRecord.Metadata = metadata
+	return taskRecord, nil
+}
+
+func missingChildVerifications(children []repo.ProjectTask, state taskorchestration.ParentState, now time.Time) []taskorchestration.ChildVerification {
+	verified := map[string]struct{}{}
+	for _, item := range state.ChildVerifications {
+		verified[strings.TrimSpace(item.TaskID)] = struct{}{}
+	}
+	out := make([]taskorchestration.ChildVerification, 0, len(children))
+	for _, child := range children {
+		if normalizeStatus(child.WorkStatus) != "done" {
+			continue
+		}
+		if _, ok := verified[child.ID.String()]; ok {
+			continue
+		}
+		summary := "Verified completed child output."
+		if title := strings.TrimSpace(child.Title); title != "" {
+			summary = "Verified completed child output for " + title + "."
+		}
+		out = append(out, taskorchestration.NewChildVerification(child.ID, summary, now))
+	}
+	return out
+}
+
+func orchestrationIntegrationSummary(taskRecord repo.ProjectTask) string {
+	if primary := strings.TrimSpace(taskdecomp.ParsePrimaryDeliverable(taskRecord.Metadata)); primary != "" {
+		return "Validated completed child outputs against parent deliverable: " + primary + "."
+	}
+	if title := strings.TrimSpace(taskRecord.Title); title != "" {
+		return "Validated completed child outputs against parent task: " + title + "."
+	}
+	return "Validated completed child outputs against the parent integration outcome."
+}
+
+func orchestrationOutcomeSummary(taskRecord repo.ProjectTask) string {
+	if primary := strings.TrimSpace(taskdecomp.ParsePrimaryDeliverable(taskRecord.Metadata)); primary != "" {
+		return "Parent deliverable satisfied: " + primary + "."
+	}
+	if title := strings.TrimSpace(taskRecord.Title); title != "" {
+		return "Parent task outcome satisfied for " + title + "."
+	}
+	return "Parent task outcome is satisfied."
+}
+
+func isOrchestrationOnlyParentTask(taskRecord repo.ProjectTask, children []repo.ProjectTask) bool {
+	if len(children) == 0 || len(taskdecomp.ParseChildTaskIDs(taskRecord.Metadata)) == 0 {
+		return false
+	}
+	metadata := taskMetadataMap(taskRecord.Metadata)
+	decomp, _ := metadata["decomposition"].(map[string]any)
+	orchestrationOnly, _ := decomp["orchestration_only"].(bool)
+	return orchestrationOnly
 }
 
 type executionReviewProgress struct {

@@ -14,6 +14,8 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
@@ -1052,6 +1054,17 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 	if payload.TaskID == uuid.Nil || event.OrganizationID == uuid.Nil {
 		return nil
 	}
+	var completedTask repo.ProjectTask
+	if p.tasks != nil {
+		var err error
+		completedTask, err = p.tasks.GetByID(ctx, payload.TaskID)
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 
 	for _, triggerType := range []string{taskQueueTriggerType, taskSupervisorTriggerType} {
 		// Complete terminal task tracking runs, or fail them permanently when the
@@ -1079,6 +1092,11 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 	if toStatus == "blocked" {
 		return nil
 	}
+	if toStatus == "done" {
+		if err := p.maybeAutoCompleteParentTask(ctx, completedTask); err != nil {
+			return err
+		}
+	}
 	if err := p.runs.RetireRuntimeStateForTask(ctx, payload.TaskID, toStatus); err != nil {
 		return err
 	}
@@ -1088,6 +1106,25 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 		}
 	}
 	return nil
+}
+
+func (p *TaskQueueProcessor) maybeAutoCompleteParentTask(ctx context.Context, completedTask repo.ProjectTask) error {
+	parentID := taskdecomp.ParseParentTaskID(completedTask.Metadata)
+	if parentID == uuid.Nil || p.taskService == nil {
+		return nil
+	}
+	_, err := p.taskService.TransitionStatus(ctx, parentID, "done", tasksvc.Actor{
+		Type:                           "system",
+		AllowOrchestrationAutoComplete: true,
+	})
+	if err == nil || errors.Is(err, repo.ErrConflict) || errors.Is(err, taskorchestration.ErrParentCompletionRequirements) {
+		return nil
+	}
+	var invalidTransition tasksvc.ErrInvalidStatusTransition
+	if errors.As(err, &invalidTransition) {
+		return nil
+	}
+	return err
 }
 
 // SubscribeRunCancellationRequested subscribes to run.cancellation_requested events

@@ -13,6 +13,7 @@ import (
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 )
 
 func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresIrrelevantStatusesAndEvents(t *testing.T) {
@@ -1017,6 +1018,57 @@ func TestTaskQueueProcessorHandleTaskCompletedEventFailsBlockedTrackingRuns(t *t
 	}
 	if len(runService.retireRuntimeTaskCalls) != 0 {
 		t.Fatalf("RetireRuntimeStateForTask calls = %+v, want none for blocked task", runService.retireRuntimeTaskCalls)
+	}
+}
+
+func TestTaskQueueProcessorHandleTaskCompletedEventAutoCompletesParentTask(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	parentID := uuid.New()
+	taskID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{}
+	taskService := &fakeTaskQueueStatusTransitioner{}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentID, 1),
+			},
+		},
+		taskService: taskService,
+		runs:        runService,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":   taskID,
+		"to_status": "done",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "task.status_changed",
+		Payload:        payload,
+	}
+	if err := processor.handleTaskCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("handleTaskCompletedEvent: %v", err)
+	}
+
+	if len(taskService.transitionCalls) != 1 {
+		t.Fatalf("TransitionStatus calls = %d, want 1", len(taskService.transitionCalls))
+	}
+	call := taskService.transitionCalls[0]
+	if call.taskID != parentID || call.toStatus != "done" {
+		t.Fatalf("transition call = %+v, want parent done", call)
+	}
+	if call.actor.Type != "system" || !call.actor.AllowOrchestrationAutoComplete {
+		t.Fatalf("actor = %+v, want system orchestration auto-complete", call.actor)
+	}
+	if len(runService.retireRuntimeTaskCalls) != 1 || runService.retireRuntimeTaskCalls[0].taskID != taskID {
+		t.Fatalf("RetireRuntimeStateForTask calls = %+v, want child task %s", runService.retireRuntimeTaskCalls, taskID)
 	}
 }
 
