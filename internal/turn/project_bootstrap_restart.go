@@ -547,7 +547,8 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 	}
 	scaffoldSeeded := false
 	if record.SetupPersisted {
-		if seeded, err := e.seedBootstrapRestartScaffold(ctx, updatedProject.ID, created.ID); err != nil {
+		seedTaskTree := shouldSeedBootstrapRestartTaskTree(record)
+		if seeded, err := e.seedBootstrapRestartScaffold(ctx, updatedProject.ID, created.ID, seedTaskTree); err != nil {
 			return err
 		} else {
 			scaffoldSeeded = seeded
@@ -596,6 +597,9 @@ func (e *TurnEngine) maybeRestartArchivedBootstrapProject(ctx context.Context, a
 	bootstrapState.ProviderFailureClass = ""
 	bootstrapState.ProviderFailureReason = ""
 	restartPrompt := buildProjectBootstrapRestartPrompt(bundle, updatedProject, *created, scaffoldSeeded)
+	if record.SetupPersisted && !scaffoldSeeded && !shouldSeedBootstrapRestartTaskTree(record) {
+		restartPrompt = strings.TrimSpace("The archived project's prior task tree failed bounded-task validation. Preserve the verified staffing and environment bindings, but rebuild a fresh bounded task tree instead of reusing the archived backlog. " + restartPrompt)
+	}
 	if scaffoldSeeded {
 		progress, progressErr := e.loadProjectBootstrapProgress(ctx, created.ID)
 		if progressErr != nil {
@@ -908,7 +912,12 @@ func buildProjectBootstrapRestartPrompt(bundle projectBootstrapRestartBundle, ar
 	return strings.Join(lines, "\n")
 }
 
-func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourceProjectID, restartedProjectID uuid.UUID) (bool, error) {
+func shouldSeedBootstrapRestartTaskTree(record projectAutomaticFailureRecord) bool {
+	failureClass := projectBootstrapFailureClassForReason(strings.TrimSpace(record.FailureClass), strings.TrimSpace(record.FailureReason))
+	return failureClass != projectBootstrapFailureCompoundParent
+}
+
+func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourceProjectID, restartedProjectID uuid.UUID, seedTaskTree bool) (bool, error) {
 	if e == nil || e.pool == nil || sourceProjectID == uuid.Nil || restartedProjectID == uuid.Nil {
 		return false, nil
 	}
@@ -929,16 +938,19 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 		}
 	}
 
-	tasks, err := taskRepo.ListByProject(ctx, sourceProjectID)
-	if err != nil {
-		return false, err
-	}
-	seededTasks := make([]repo.ProjectTask, 0, len(tasks))
-	for _, taskRecord := range tasks {
-		if shouldSkipBootstrapRestartSeedTask(taskRecord) {
-			continue
+	seededTasks := []repo.ProjectTask{}
+	if seedTaskTree {
+		tasks, err := taskRepo.ListByProject(ctx, sourceProjectID)
+		if err != nil {
+			return false, err
 		}
-		seededTasks = append(seededTasks, taskRecord)
+		seededTasks = make([]repo.ProjectTask, 0, len(tasks))
+		for _, taskRecord := range tasks {
+			if shouldSkipBootstrapRestartSeedTask(taskRecord) {
+				continue
+			}
+			seededTasks = append(seededTasks, taskRecord)
+		}
 	}
 	if len(activeAssignments) == 0 && len(seededTasks) == 0 {
 		return false, nil

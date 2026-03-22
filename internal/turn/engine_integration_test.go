@@ -10995,7 +10995,7 @@ func TestTurnEngineIntegrationSeedBootstrapRestartScaffoldAutoAssignsUnassignedD
 		t.Fatalf("Create unassigned source task: %v", err)
 	}
 
-	seeded, err := fixture.engine.seedBootstrapRestartScaffold(ctx, sourceProject.ID, restartedProject.ID)
+	seeded, err := fixture.engine.seedBootstrapRestartScaffold(ctx, sourceProject.ID, restartedProject.ID, true)
 	if err != nil {
 		t.Fatalf("seedBootstrapRestartScaffold: %v", err)
 	}
@@ -11072,7 +11072,7 @@ func TestTurnEngineIntegrationSeedBootstrapRestartScaffoldSkipsCanonicalBootstra
 		t.Fatalf("Create seeded source task: %v", err)
 	}
 
-	seeded, err := fixture.engine.seedBootstrapRestartScaffold(ctx, sourceProject.ID, restartedProject.ID)
+	seeded, err := fixture.engine.seedBootstrapRestartScaffold(ctx, sourceProject.ID, restartedProject.ID, true)
 	if err != nil {
 		t.Fatalf("seedBootstrapRestartScaffold: %v", err)
 	}
@@ -11161,7 +11161,7 @@ func TestTurnEngineIntegrationSeedBootstrapRestartScaffoldClearsCopiedDraftAssig
 		t.Fatalf("Create assigned source task: %v", err)
 	}
 
-	seeded, err := fixture.engine.seedBootstrapRestartScaffold(ctx, sourceProject.ID, restartedProject.ID)
+	seeded, err := fixture.engine.seedBootstrapRestartScaffold(ctx, sourceProject.ID, restartedProject.ID, true)
 	if err != nil {
 		t.Fatalf("seedBootstrapRestartScaffold: %v", err)
 	}
