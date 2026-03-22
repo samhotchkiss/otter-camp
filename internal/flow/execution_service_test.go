@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -228,6 +229,69 @@ func TestRejectFlowNodeMaxVisitsExceeded(t *testing.T) {
 	_, err := svc.RejectFlowNode(context.Background(), taskID, Actor{Type: "system"})
 	if !errors.Is(err, ErrMaxVisitsExceeded) {
 		t.Fatalf("RejectFlowNode err = %v, want ErrMaxVisitsExceeded", err)
+	}
+}
+
+func TestRejectFlowNodeFallsBackToPreviousOrderedNodeForReviewWithoutExplicitRejectPath(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	workNodeID := uuid.New()
+	reviewNodeID := uuid.New()
+	execID := uuid.New()
+	projectID := uuid.New()
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				ProjectID:         projectID,
+				OrganizationID:    uuid.New(),
+				FlowTemplateID:    &flowTemplateID,
+				CurrentFlowNodeID: &reviewNodeID,
+				WorkStatus:        "review",
+			},
+		},
+	}
+	taskService := &fakeTaskCoordinator{tasks: taskRepo}
+	svc := &service{
+		tasks: taskRepo,
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				workNodeID:   {ID: workNodeID, FlowTemplateID: flowTemplateID, NodeType: "work", Position: 1, MaxVisits: 10},
+				reviewNodeID: {ID: reviewNodeID, FlowTemplateID: flowTemplateID, NodeType: "review", Position: 2, MaxVisits: 10},
+			},
+		},
+		executions: &fakeExecutionRepo{
+			active: repo.FlowNodeExecution{
+				ID:         execID,
+				TaskID:     taskID,
+				FlowNodeID: reviewNodeID,
+				Status:     "active",
+			},
+			byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+				taskID: {
+					{ID: execID, TaskID: taskID, FlowNodeID: reviewNodeID, Status: "active", VisitNumber: 1},
+				},
+			},
+		},
+		taskService: taskService,
+		taskEvents:  &fakeTaskEventRepo{},
+		events:      &fakeEventBus{},
+	}
+
+	nextExecution, err := svc.RejectFlowNode(context.Background(), taskID, Actor{Type: "human_user", ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("RejectFlowNode: %v", err)
+	}
+	if nextExecution.FlowNodeID != workNodeID {
+		t.Fatalf("reject execution flow_node_id = %s, want %s", nextExecution.FlowNodeID, workNodeID)
+	}
+	taskRecord := taskRepo.items[taskID]
+	if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID != workNodeID {
+		t.Fatalf("task current_flow_node_id = %v, want %s", taskRecord.CurrentFlowNodeID, workNodeID)
+	}
+	if taskRecord.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", taskRecord.WorkStatus)
 	}
 }
 
@@ -913,6 +977,22 @@ func (f *fakeNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, 
 		return repo.FlowNode{}, repo.ErrNotFound
 	}
 	return item, nil
+}
+
+func (f *fakeNodeRepo) GetByTemplateOrdered(_ context.Context, flowTemplateID uuid.UUID) ([]repo.FlowNode, error) {
+	nodes := make([]repo.FlowNode, 0)
+	for _, item := range f.items {
+		if item.FlowTemplateID == flowTemplateID {
+			nodes = append(nodes, item)
+		}
+	}
+	slices.SortFunc(nodes, func(a, b repo.FlowNode) int {
+		if a.Position != b.Position {
+			return a.Position - b.Position
+		}
+		return strings.Compare(a.ID.String(), b.ID.String())
+	})
+	return nodes, nil
 }
 
 type taskTransitionCall struct {

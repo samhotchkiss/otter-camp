@@ -74,6 +74,7 @@ type flowTemplateRepository interface {
 
 type flowNodeRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowNode, error)
+	GetByTemplateOrdered(ctx context.Context, flowTemplateID uuid.UUID) ([]repo.FlowNode, error)
 }
 
 type flowNodeExecutionRepository interface {
@@ -942,11 +943,7 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 	if err := s.ensureProjectNotPaused(ctx, taskRecord.ProjectID); err != nil {
 		return nil, err
 	}
-	if currentNode.RejectNodeID == nil {
-		return nil, ErrNoRejectionPath
-	}
-
-	rejectNode, err := s.flowNodes.GetByID(ctx, *currentNode.RejectNodeID)
+	rejectNodeID, rejectNode, err := s.resolveRejectNode(ctx, currentNode)
 	if err != nil {
 		return nil, err
 	}
@@ -961,24 +958,53 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 		}
 		return nil, ErrMaxVisitsExceeded
 	}
-	return s.rejectFlowNodeTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+	return s.rejectFlowNodeTx(ctx, taskRecord, currentNode, activeExecution, rejectNodeID, rejectNode, nextVisit, actor)
 }
 
-func (s *service) rejectFlowNodeTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, rejectNode repo.FlowNode, nextVisit int, actor Actor) (*repo.FlowNodeExecution, error) {
+func (s *service) resolveRejectNode(ctx context.Context, currentNode repo.FlowNode) (*uuid.UUID, repo.FlowNode, error) {
+	if currentNode.RejectNodeID != nil {
+		rejectNode, err := s.flowNodes.GetByID(ctx, *currentNode.RejectNodeID)
+		if err != nil {
+			return nil, repo.FlowNode{}, err
+		}
+		return currentNode.RejectNodeID, rejectNode, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") {
+		return nil, repo.FlowNode{}, ErrNoRejectionPath
+	}
+
+	nodes, err := s.flowNodes.GetByTemplateOrdered(ctx, currentNode.FlowTemplateID)
+	if err != nil {
+		return nil, repo.FlowNode{}, err
+	}
+	for i, node := range nodes {
+		if node.ID != currentNode.ID {
+			continue
+		}
+		if i == 0 {
+			break
+		}
+		rejectNode := nodes[i-1]
+		return &rejectNode.ID, rejectNode, nil
+	}
+	return nil, repo.FlowNode{}, ErrNoRejectionPath
+}
+
+func (s *service) rejectFlowNodeTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, rejectNodeID *uuid.UUID, rejectNode repo.FlowNode, nextVisit int, actor Actor) (*repo.FlowNodeExecution, error) {
 	if s.pool == nil {
-		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNodeID, rejectNode, nextVisit, actor)
 	}
 	executionsTx, ok := s.executions.(flowNodeExecutionRepositoryTx)
 	if !ok {
-		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNodeID, rejectNode, nextVisit, actor)
 	}
 	tasksTx, ok := s.tasks.(projectTaskRepositoryTx)
 	if !ok {
-		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNodeID, rejectNode, nextVisit, actor)
 	}
 	taskServiceTx, ok := s.taskService.(taskCoordinatorTx)
 	if !ok {
-		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+		return s.rejectFlowNodeNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNodeID, rejectNode, nextVisit, actor)
 	}
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -995,12 +1021,12 @@ func (s *service) rejectFlowNodeTx(ctx context.Context, taskRecord repo.ProjectT
 	if _, err := executionsTx.RejectTx(ctx, tx, activeExecution.ID); err != nil {
 		return nil, err
 	}
-	updatedTaskRecord, err := tasksTx.SetFlowNodeTx(ctx, tx, taskRecord.ID, currentNode.RejectNodeID)
+	updatedTaskRecord, err := tasksTx.SetFlowNodeTx(ctx, tx, taskRecord.ID, rejectNodeID)
 	if err != nil {
 		return nil, err
 	}
 	taskRecord = updatedTaskRecord
-	taskRecord.CurrentFlowNodeID = currentNode.RejectNodeID
+	taskRecord.CurrentFlowNodeID = rejectNodeID
 	created, err := executionsTx.CreateTx(ctx, tx, repo.FlowNodeExecution{
 		TaskID:      taskRecord.ID,
 		FlowNodeID:  rejectNode.ID,
@@ -1049,17 +1075,17 @@ func (s *service) rejectFlowNodeTx(ctx context.Context, taskRecord repo.ProjectT
 	return &created, nil
 }
 
-func (s *service) rejectFlowNodeNonTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, rejectNode repo.FlowNode, nextVisit int, actor Actor) (*repo.FlowNodeExecution, error) {
+func (s *service) rejectFlowNodeNonTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, rejectNodeID *uuid.UUID, rejectNode repo.FlowNode, nextVisit int, actor Actor) (*repo.FlowNodeExecution, error) {
 	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
 		return nil, err
 	}
 	if _, err := s.executions.Reject(ctx, activeExecution.ID); err != nil {
 		return nil, err
 	}
-	if _, err := s.tasks.SetFlowNode(ctx, taskRecord.ID, currentNode.RejectNodeID); err != nil {
+	if _, err := s.tasks.SetFlowNode(ctx, taskRecord.ID, rejectNodeID); err != nil {
 		return nil, err
 	}
-	taskRecord.CurrentFlowNodeID = currentNode.RejectNodeID
+	taskRecord.CurrentFlowNodeID = rejectNodeID
 	created, err := s.executions.Create(ctx, repo.FlowNodeExecution{
 		TaskID:      taskRecord.ID,
 		FlowNodeID:  rejectNode.ID,

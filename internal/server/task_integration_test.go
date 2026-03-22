@@ -181,6 +181,60 @@ func TestTaskHTTPReviewDecisionRejectPreservesCanonicalFlowLineage(t *testing.T)
 	}
 }
 
+func TestTaskHTTPReviewDecisionRejectFallsBackToPreviousOrderedNodeWithoutExplicitRejectPath(t *testing.T) {
+	testServer, org, adminUser, _ := newTaskTestServer(t)
+	defer testServer.Close()
+
+	project := seedTaskProject(t, testServer.Pool, org.ID, adminUser.ID, "task-review-reject-fallback", false)
+	pmAgent := seedPMAssignment(t, testServer.Pool, org.ID, project.ID, adminUser.ID)
+	graph := seedTaskFlowGraph(t, testServer.Pool, org.ID, project.ID, pmAgent.ID, adminUser.ID, false)
+	taskRecord := seedTaskForFlowTemplate(t, testServer.Pool, org.ID, project.ID, graph.Template.ID, graph.Review.ID, "review")
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(testServer.Pool)
+	if _, err := executionRepo.Create(context.Background(), repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  graph.Review.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	}); err != nil {
+		t.Fatalf("create active review execution: %v", err)
+	}
+
+	body := "Review this task"
+	if _, err := repo.NewInboxItemRepo(testServer.Pool).Create(context.Background(), repo.InboxItem{
+		OrganizationID:  org.ID,
+		TargetUserID:    &adminUser.ID,
+		ItemType:        "task_review",
+		SourceProjectID: &project.ID,
+		SourceTaskID:    &taskRecord.ID,
+		CreatedByType:   "system",
+		Title:           "Task review required",
+		Body:            &body,
+		ActionPayload:   json.RawMessage(`{"action":"review"}`),
+	}); err != nil {
+		t.Fatalf("create task_review inbox: %v", err)
+	}
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	rejected := mustJSON(t, http.MethodPost, testServer.URL+"/v1/tasks/"+taskRecord.ID.String()+"/review-decision", map[string]any{
+		"decision": "reject",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if rejected.StatusCode != http.StatusOK {
+		t.Fatalf("review reject status = %d, want %d body=%s", rejected.StatusCode, http.StatusOK, string(rejected.Body))
+	}
+
+	got := mustJSON(t, http.MethodGet, testServer.URL+"/v1/tasks/"+taskRecord.ID.String(), nil, map[string]string{"Authorization": "Bearer " + adminToken})
+	if got.StatusCode != http.StatusOK {
+		t.Fatalf("get task status = %d, want %d body=%s", got.StatusCode, http.StatusOK, string(got.Body))
+	}
+	if status := jsonPathString(t, got.Body, "data", "work_status"); status != "in_progress" {
+		t.Fatalf("work_status = %q, want %q body=%s", status, "in_progress", string(got.Body))
+	}
+	if nodeType := jsonPathString(t, got.Body, "data", "current_flow_node", "node_type"); nodeType != "work" {
+		t.Fatalf("current_flow_node.node_type = %q, want %q body=%s", nodeType, "work", string(got.Body))
+	}
+}
+
 func TestTaskHTTPQueueRequiresFlowTemplate(t *testing.T) {
 	testServer, org, adminUser, _ := newTaskTestServer(t)
 	defer testServer.Close()

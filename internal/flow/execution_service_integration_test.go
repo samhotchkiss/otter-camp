@@ -399,6 +399,41 @@ func TestFlowExecutionServiceRejectFlowNodeMaxVisits(t *testing.T) {
 	}
 }
 
+func TestFlowExecutionServiceRejectFlowNodeFallsBackToPreviousOrderedNodeWhenReviewPathIsImplicit(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Implicit rejection loop task", "in_progress", &template.ID)
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review: %v", err)
+	}
+
+	rejected, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID})
+	if err != nil {
+		t.Fatalf("RejectFlowNode: %v", err)
+	}
+	if rejected.FlowNodeID != nodes[0].ID {
+		t.Fatalf("rejected flow_node_id = %s, want %s", rejected.FlowNodeID, nodes[0].ID)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[0].ID {
+		t.Fatalf("task current_flow_node_id = %v, want %s", updatedTask.CurrentFlowNodeID, nodes[0].ID)
+	}
+}
+
 func TestFlowExecutionServiceDependencyCycleDetection(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
