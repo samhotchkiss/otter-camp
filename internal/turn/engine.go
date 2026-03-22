@@ -6244,6 +6244,23 @@ func (e *TurnEngine) requireTurnInProgress(ctx context.Context, rt *turnRuntime)
 	)
 }
 
+func (e *TurnEngine) immutableMessageWriteForTerminalTurn(ctx context.Context, rt *turnRuntime, err error) bool {
+	if e == nil || rt == nil || rt.turn == nil || !errors.Is(err, repo.ErrMessageContentImmutable) {
+		return false
+	}
+	current, getErr := e.chat.GetTurn(ctx, rt.turn.ID)
+	if getErr != nil || current == nil || !isTerminalTurnStatus(current.Status) {
+		return false
+	}
+	e.logger.Warn("ignoring immutable message write for terminal turn",
+		"session_id", rt.session.ID,
+		"turn_id", rt.turn.ID,
+		"turn_status", strings.ToLower(strings.TrimSpace(current.Status)),
+	)
+	rt.turn = current
+	return true
+}
+
 func (e *TurnEngine) describeTurnTransitionError(ctx context.Context, turnID uuid.UUID, operation, transition string, err error) error {
 	if !errors.Is(err, chat.ErrInvalidStatusTransition) {
 		return err
@@ -10495,6 +10512,9 @@ func (e *TurnEngine) callMainModel(
 				tokensSeen++
 				builder.WriteString(token)
 				if _, err := e.messages.UpdateContent(streamCtx, assistant.ID, builder.String()); err != nil {
+					if e.immutableMessageWriteForTerminalTurn(streamCtx, rt, err) {
+						return errTurnCancelled
+					}
 					return err
 				}
 				*chunkSeq++
@@ -10535,6 +10555,9 @@ func (e *TurnEngine) callMainModel(
 		cancelWatchdog()
 
 		if callErr != nil {
+			if errors.Is(callErr, errTurnCancelled) {
+				return ModelResponse{}, errTurnCancelled
+			}
 			if watchdogActive && errors.Is(context.Cause(streamCtx), errProjectBootstrapWatchdog) {
 				timeoutErr := &projectBootstrapTimeoutError{
 					InvocationID: invocation.ID,
@@ -10592,6 +10615,9 @@ func (e *TurnEngine) callMainModel(
 			content = strings.TrimSpace(response.Content)
 		}
 		if _, err := e.messages.UpdateContent(ctx, assistant.ID, content); err != nil {
+			if e.immutableMessageWriteForTerminalTurn(ctx, rt, err) {
+				return ModelResponse{}, errTurnCancelled
+			}
 			return ModelResponse{}, err
 		}
 		_ = e.publishEvent(ctx, rt.session.OrganizationID, "chat.message.finalized", "agent", &rt.agent.ID, map[string]any{

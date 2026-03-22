@@ -6166,6 +6166,40 @@ func TestContinuationTurnRecoversWhenTurnAlreadyCancelled(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageIgnoresImmutableAssistantWriteAfterTurnCancelled(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.messages.updateContentFn = func(ctx context.Context, id uuid.UUID, content string) (repo.ChatMessage, error) {
+		turnID := fixture.chat.turnOrder[len(fixture.chat.turnOrder)-1]
+		if err := fixture.chat.CancelTurn(context.Background(), turnID, "steer_turn"); err != nil {
+			t.Fatalf("CancelTurn: %v", err)
+		}
+		return repo.ChatMessage{}, repo.ErrMessageContentImmutable
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("#"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "# draft"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(fixture.chat.turnOrder) == 0 {
+		t.Fatal("expected at least one turn")
+	}
+	last := fixture.chat.turnByID(fixture.chat.turnOrder[len(fixture.chat.turnOrder)-1])
+	if last == nil || last.Status != "cancelled" {
+		t.Fatalf("last turn status = %v, want cancelled", last)
+	}
+}
+
 func TestHandleUserMessageCarriesRunAttributionIntoInvocationAndModelRequest(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	runID := uuid.New()
