@@ -1733,6 +1733,44 @@ func TestTaskCreateSanitizesMalformedParameterEchoes(t *testing.T) {
 	}
 }
 
+func TestTaskCreateSanitizesDanglingTrailingQuote(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+	tasks := &mockTaskRepo{}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "sam-blog",
+				DisplayName:    "SAM.blog",
+			},
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+
+	out, err := executor.Execute(testExecCtx(), "task.create", map[string]any{
+		"project_id":   projectID.String(),
+		"title":        "Define cross-linking strategy.\"",
+		"description":  "URL schema specification complete and ready for internal review.\"",
+		"blocks_scope": "none",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.create error = %v, want nil", out["error"])
+	}
+	if got := tasks.createdTasks[0].Title; got != "Define cross-linking strategy." {
+		t.Fatalf("created title = %q, want sanitized title", got)
+	}
+	if got := derefString(tasks.createdTasks[0].Description); got != "URL schema specification complete and ready for internal review." {
+		t.Fatalf("created description = %q, want sanitized description", got)
+	}
+}
+
 func TestTaskCreateDelegatedCreativePolicyUsesInternalReviewTemplate(t *testing.T) {
 	projectID := uuid.New()
 	orgID := uuid.New()
@@ -2301,6 +2339,41 @@ func TestTaskUpdateSanitizesMalformedParameterEchoes(t *testing.T) {
 		t.Fatal("description = nil, want sanitized description")
 	}
 	if got := *tasks.task.Description; got != "Audit the technical architecture of the existing SAM.blog." {
+		t.Fatalf("updated description = %q, want sanitized description", got)
+	}
+}
+
+func TestTaskUpdateSanitizesDanglingTrailingQuote(t *testing.T) {
+	taskID := uuid.New()
+	description := "Original description"
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			Title:          "Original title",
+			Description:    &description,
+			WorkStatus:     "draft",
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"title":       "Establish gap and gutter rules for all breakpoints.\"",
+		"description": "Design a responsive 12-column grid system for the archive pages.\"",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update error = %v, want nil", out["error"])
+	}
+	if got := tasks.task.Title; got != "Establish gap and gutter rules for all breakpoints." {
+		t.Fatalf("updated title = %q, want sanitized title", got)
+	}
+	if got := derefString(tasks.task.Description); got != "Design a responsive 12-column grid system for the archive pages." {
 		t.Fatalf("updated description = %q, want sanitized description", got)
 	}
 }

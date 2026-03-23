@@ -306,12 +306,15 @@ func sanitizeStructuredTaskText(value string) string {
 		return ""
 	}
 	loc := malformedParameterEchoPattern.FindStringIndex(trimmed)
-	if loc == nil {
-		return trimmed
+	if loc != nil {
+		sanitized := strings.TrimSpace(trimmed[:loc[0]])
+		sanitized = strings.TrimRight(sanitized, " \t\r\n,;\"'")
+		trimmed = strings.TrimSpace(sanitized)
 	}
-	sanitized := strings.TrimSpace(trimmed[:loc[0]])
-	sanitized = strings.TrimRight(sanitized, " \t\r\n,;\"'")
-	return strings.TrimSpace(sanitized)
+	if strings.HasSuffix(trimmed, "\"") && strings.Count(trimmed, "\"")%2 == 1 {
+		trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, "\""))
+	}
+	return trimmed
 }
 
 func applyPlanningProcessInput(existing json.RawMessage, input map[string]any, actor executionActor) (json.RawMessage, planningProcessInputResult, error) {
