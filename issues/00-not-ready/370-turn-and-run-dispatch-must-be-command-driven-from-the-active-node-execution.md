@@ -127,3 +127,5 @@ Latest slice completed:
 - Focused chat integration coverage now asserts steered task-session user events remain execution-owned instead of falling back to message-only dispatch identity.
 - synthetic continuation/recovery user prompts appended by the turn engine now also inherit `flow_node_execution_id` from the bound task session metadata.
 - Focused turn-engine coverage now asserts both continuation-root and synthetic recovery metadata keep execution ownership when present.
+- worker pending-turn repair now ignores failed execution `live_turn_id` pointers when selecting the authoritative pending turn to requeue.
+- Focused jobqueue integration coverage now asserts a stale failed `live_turn_id` can no longer mask a real pending `current_turn_id`.

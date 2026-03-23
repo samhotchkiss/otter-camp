@@ -932,7 +932,10 @@ func (w *Worker) RequeueStrandedUserMessageTurns(ctx context.Context) (int64, er
 
 func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, error) {
 	rows, err := w.pool.Query(ctx, `
-		SELECT DISTINCT cs.id, COALESCE(live_turn.trigger_message_id, ct.trigger_message_id)
+		SELECT DISTINCT cs.id, CASE
+			WHEN COALESCE(live_turn.status, '') = 'pending' THEN live_turn.trigger_message_id
+			ELSE ct.trigger_message_id
+		END
 		FROM chat_session cs
 		LEFT JOIN LATERAL (
 			SELECT e.metadata
@@ -962,8 +965,14 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 		LEFT JOIN chat_turn ct ON ct.id = cs.current_turn_id
 		WHERE cs.mode = 'async'
 		  AND cs.status = 'active'
-		  AND COALESCE(live_turn.status, ct.status, '') = 'pending'
-		  AND COALESCE(live_turn.trigger_message_id, ct.trigger_message_id) IS NOT NULL
+		  AND CASE
+		    WHEN COALESCE(live_turn.status, '') = 'pending' THEN live_turn.status
+		    ELSE ct.status
+		  END = 'pending'
+		  AND CASE
+		    WHEN COALESCE(live_turn.status, '') = 'pending' THEN live_turn.trigger_message_id
+		    ELSE ct.trigger_message_id
+		  END IS NOT NULL
 		  AND (
 		    cs.scope_type <> 'project_task'
 		    OR COALESCE(pt.work_status, '') <> 'blocked'
