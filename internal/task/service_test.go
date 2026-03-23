@@ -16,6 +16,8 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
 func TestStatusTransitionMatrix(t *testing.T) {
@@ -498,6 +500,57 @@ func TestTransitionStatusCompletedAtBehavior(t *testing.T) {
 	}
 	if cancelledTask.CompletedAt == nil {
 		t.Fatal("completed_at is nil for cancelled transition")
+	}
+}
+
+func TestTransitionStatusAllowsSatisfiedDraftAutoComplete(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := "Document findings on sourcing channels, qualification criteria, and intake workflows."
+	plan := taskplan.Analyze("Document sourcing findings", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+	metadata, _, _, err := taskplan.ApplyProcessUpdate(metadata, taskplan.ProcessUpdate{
+		HasArtifactChanges: true,
+		Artifacts: []taskplan.ArtifactEvidence{
+			{Slug: "prd", Summary: "Scope complete.", Sections: []string{"goals", "non-goals", "scope", "constraints", "success metrics", "open questions"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+	metadata, err = taskorchestration.Apply(metadata, taskorchestration.Update{
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "The task is complete.", time.Now().UTC()),
+	})
+	if err != nil {
+		t.Fatalf("taskorchestration.Apply: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      uuid.New(),
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Document sourcing findings",
+				CreatedByType:  "system",
+				Metadata:       metadata,
+			},
+		},
+	}
+	svc := newUnitService(taskRepo)
+
+	doneTask, err := svc.TransitionStatus(context.Background(), taskID, "done", Actor{
+		Type:                            "system",
+		AllowDoneBypass:                 true,
+		AllowSatisfiedDraftAutoComplete: true,
+	})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+	if doneTask.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", doneTask.WorkStatus)
 	}
 }
 

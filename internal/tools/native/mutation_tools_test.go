@@ -3130,6 +3130,45 @@ func TestTaskUpdateAutoCompletesSatisfiedDraftTaskFromMetadata(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateRejectsSatisfiedDraftTaskWithIncompletePlanningContract(t *testing.T) {
+	taskID := uuid.New()
+	description := "Document findings on sourcing channels, qualification criteria, and intake workflows."
+	plan := taskplan.Analyze("Document sourcing findings", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:          taskID,
+			Title:       "Document sourcing findings",
+			Description: &description,
+			WorkStatus:  "draft",
+			Metadata:    metadata,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id": taskID.String(),
+		"planning_artifacts": []map[string]any{
+			{"slug": "prd", "summary": "Only the PRD was provided.", "sections": []string{"goals", "scope"}},
+		},
+		"outcome_assessment": map[string]any{
+			"satisfied": true,
+			"summary":   "The task is complete.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != "draft_completion_contract_incomplete" {
+		t.Fatalf("error = %v, want draft_completion_contract_incomplete", out["error"])
+	}
+	if tasks.updateCalls != 0 {
+		t.Fatalf("update calls = %d, want 0 when update is rejected", tasks.updateCalls)
+	}
+}
+
 func TestTaskUpdatePersistsPlanningFollowOnStopReason(t *testing.T) {
 	taskID := uuid.New()
 	description := "Run customer interviews, document assumptions, and build a validation plan for this new product idea before we commit scope."

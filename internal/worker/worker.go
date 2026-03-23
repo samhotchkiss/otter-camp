@@ -768,8 +768,9 @@ func startupCleanupProjectDrafts(ctx context.Context, taskRepo *repo.ProjectTask
 				return parentRepaired, draftSettled, gatesCancelled, err
 			case draftTaskAutoCompletes(task):
 				_, err := tasks.TransitionStatus(ctx, task.ID, "done", tasksvc.Actor{
-					Type:            "system",
-					AllowDoneBypass: true,
+					Type:                            "system",
+					AllowDoneBypass:                 true,
+					AllowSatisfiedDraftAutoComplete: true,
 				})
 				if err == nil {
 					draftSettled++

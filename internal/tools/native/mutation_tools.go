@@ -110,6 +110,52 @@ func autoCompleteSatisfiedDraftTask(taskRecord repo.ProjectTask) (taskplan.Valid
 	return report, true
 }
 
+func satisfiedDraftCompletionConflict(taskRecord repo.ProjectTask) ([]string, bool) {
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "draft") {
+		return nil, false
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok {
+		return nil, false
+	}
+	state, ok := taskorchestration.Parse(taskRecord.Metadata)
+	if !ok || state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
+		return nil, false
+	}
+	contracts := taskplan.ArtifactContractForPlan(plan)
+	if len(contracts) == 0 {
+		return nil, false
+	}
+	evidenceBySlug := make(map[string]taskplan.ArtifactEvidence, len(plan.ArtifactEvidence))
+	for _, evidence := range plan.ArtifactEvidence {
+		slug := strings.TrimSpace(evidence.Slug)
+		if slug == "" {
+			continue
+		}
+		evidenceBySlug[slug] = evidence
+	}
+	missing := make([]string, 0)
+	for _, contract := range contracts {
+		evidence, ok := evidenceBySlug[strings.TrimSpace(contract.Slug)]
+		if !ok {
+			missing = append(missing, contract.Title+" artifact evidence is missing")
+			continue
+		}
+		if strings.TrimSpace(evidence.Summary) == "" {
+			missing = append(missing, contract.Title+" summary is missing")
+		}
+		for _, section := range contract.RequiredSections {
+			if !containsFold(evidence.Sections, section) {
+				missing = append(missing, contract.Title+" is missing section "+section)
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil, false
+	}
+	return missing, true
+}
+
 func derefString(value *string) string {
 	if value == nil {
 		return ""
@@ -143,6 +189,19 @@ func sameOrNestedWorkspacePath(path, root string) bool {
 		return false
 	}
 	return normalizedPath == normalizedRoot || strings.HasPrefix(normalizedPath, normalizedRoot+"/")
+}
+
+func containsFold(values []string, needle string) bool {
+	target := strings.TrimSpace(needle)
+	if target == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), target) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *NativeToolExecutor) rejectExecutionFirstPlanningMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
@@ -1992,6 +2051,13 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		}
 	}
 	if !statusChanged {
+		if missingRequirements, conflicted := satisfiedDraftCompletionConflict(current); conflicted {
+			return map[string]any{
+				"error":                "draft_completion_contract_incomplete",
+				"missing_requirements": missingRequirements,
+				"message":              "This draft task already records a satisfied outcome assessment, so do not leave it in draft with an incomplete planning contract. Either provide the missing planning artifacts now or omit the satisfied outcome until the task is actually complete.",
+			}, nil
+		}
 		if report, ok := autoCompleteSatisfiedDraftTask(current); ok {
 			desiredStatus = "done"
 			statusChanged = true
@@ -2018,6 +2084,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		transitionActor.ExpectedFromStatus = previousStatus
 		if autoCompleted, _ := extraStatusPayload["auto_completed_from_metadata"].(bool); autoCompleted && strings.EqualFold(strings.TrimSpace(desiredStatus), "done") {
 			transitionActor.AllowDoneBypass = true
+			transitionActor.AllowSatisfiedDraftAutoComplete = true
 		}
 		if extraStatusPayload != nil {
 			if _, hasFeedback := extraStatusPayload["parent_integration_feedback"]; hasFeedback {

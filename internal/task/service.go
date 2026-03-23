@@ -155,6 +155,7 @@ type Actor struct {
 	AllowNoActiveFlow                  bool
 	AllowFlowRuntimeBypass             bool
 	AllowDoneBypass                    bool
+	AllowSatisfiedDraftAutoComplete    bool
 	AllowOrchestrationAutoComplete     bool
 	AllowBootstrapPlanningAutoComplete bool
 	AllowGateBypass                    bool
@@ -656,9 +657,10 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 	bootstrapGateAutoComplete := allowsBootstrapGateAutoComplete(taskRecord, from, target, actor)
 	bootstrapSetupComplete := allowsBootstrapSetupComplete(taskRecord, from, target, actor)
 	bootstrapPlanningAutoComplete := allowsBootstrapPlanningAutoComplete(taskRecord, from, target, actor)
+	satisfiedDraftAutoComplete := allowsSatisfiedDraftAutoComplete(taskRecord, from, target, actor)
 	childReopen := allowsCompletedChildReopen(taskRecord, from, target, actor)
 	orchestrationAutoComplete := allowsOrchestrationAutoComplete(taskRecord, from, target, actor)
-	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !childReopen && !orchestrationAutoComplete {
+	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !satisfiedDraftAutoComplete && !childReopen && !orchestrationAutoComplete {
 		return nil, ErrInvalidStatusTransition{From: from, To: target}
 	}
 	if target == "queued" && taskRecord.RequiresHumanReview && !approvalOverride {
@@ -687,7 +689,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 			return nil, ErrFlowTemplateReviewRequired
 		}
 	}
-	if !actor.AllowFlowRuntimeBypass && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !orchestrationAutoComplete {
+	if !actor.AllowFlowRuntimeBypass && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !satisfiedDraftAutoComplete && !orchestrationAutoComplete {
 		if err := s.validateFlowRuntimeStatus(ctx, taskRecord, target); err != nil {
 			return nil, err
 		}
@@ -771,7 +773,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 				extraPayload[key] = value
 			}
 		}
-		if err := s.validateDoneTransition(ctx, taskRecord, orchestrationAutoComplete || bootstrapPlanningAutoComplete || actor.AllowFlowRuntimeBypass); err != nil {
+		if err := s.validateDoneTransition(ctx, taskRecord, orchestrationAutoComplete || bootstrapPlanningAutoComplete || satisfiedDraftAutoComplete || actor.AllowFlowRuntimeBypass); err != nil {
 			return nil, err
 		}
 	}
@@ -1304,6 +1306,25 @@ func allowsBootstrapPlanningAutoComplete(taskRecord repo.ProjectTask, from, targ
 	default:
 		return false
 	}
+}
+
+func allowsSatisfiedDraftAutoComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
+	if !actor.AllowSatisfiedDraftAutoComplete {
+		return false
+	}
+	if normalizeStatus(from) != "draft" || normalizeStatus(target) != "done" {
+		return false
+	}
+	state, ok := taskorchestration.Parse(taskRecord.Metadata)
+	if !ok || state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
+		return false
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok || len(plan.ArtifactEvidence) == 0 {
+		return false
+	}
+	_, err := taskplan.CompletionReport(taskRecord.Metadata)
+	return err == nil
 }
 
 func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.ProjectTask, allowFlowCompletionBypass bool) error {
