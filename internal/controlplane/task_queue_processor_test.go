@@ -794,8 +794,11 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventDefaultsBlankReviewActorToRevi
 	if len(chatService.appendMessages) != 1 {
 		t.Fatalf("AppendMessage calls = %d, want 1", len(chatService.appendMessages))
 	}
-	if !strings.Contains(chatService.appendMessages[0].Content, "Start work on task: Review draft") {
+	if !strings.Contains(chatService.appendMessages[0].Content, "Start review on task: Review draft") {
 		t.Fatalf("kickoff content missing task details: %q", chatService.appendMessages[0].Content)
+	}
+	if !strings.Contains(chatService.appendMessages[0].Content, "flow.review_decision") {
+		t.Fatalf("kickoff content missing explicit review instruction: %q", chatService.appendMessages[0].Content)
 	}
 }
 

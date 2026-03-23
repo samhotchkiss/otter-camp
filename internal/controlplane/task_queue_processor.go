@@ -944,7 +944,13 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		return p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, buildFlowKickoffMessage(taskRecord, execution), messageMetadata)
+		var flowNode *repo.FlowNode
+		if p.flowNodes != nil {
+			if node, nodeErr := p.flowNodes.GetByID(ctx, execution.FlowNodeID); nodeErr == nil {
+				flowNode = &node
+			}
+		}
+		return p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, buildFlowKickoffMessage(taskRecord, execution, flowNode), messageMetadata)
 	case "flow_transition":
 		executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
 		if !ok {
@@ -1056,8 +1062,20 @@ func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {
 	return "Start work on task: " + title + "\n\nTask description:\n" + description
 }
 
-func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNodeExecution) string {
+func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNodeExecution, node *repo.FlowNode) string {
 	base := buildQueueKickoffMessage(taskRecord)
+	if node != nil && strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
+		title := strings.TrimSpace(taskRecord.Title)
+		if title == "" {
+			title = "Untitled task"
+		}
+		description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+		base = "Start review on task: " + title
+		if description != "" {
+			base += "\n\nTask description:\n" + description
+		}
+		base += "\n\nReview instruction:\nInspect the current deliverables and use flow.review_decision to approve or reject this review step."
+	}
 	if execution.ID == uuid.Nil {
 		return base
 	}
