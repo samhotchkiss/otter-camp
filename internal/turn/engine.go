@@ -8506,7 +8506,12 @@ func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, r
 	if e == nil || rt == nil {
 		return checkpoint
 	}
+	var (
+		taskRecord     repo.ProjectTask
+		haveTaskRecord bool
+	)
 	if taskRecord, ok := e.recoveryCheckpointTaskRecord(ctx, rt); ok {
+		haveTaskRecord = true
 		if e.recoveryCheckpointClearlyBelongsToDifferentTask(ctx, rt, taskRecord, checkpoint) {
 			checkpoint.TargetPath = ""
 			checkpoint.ArtifactPath = ""
@@ -8529,6 +8534,19 @@ func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, r
 	}
 	if sameWorkspaceRelativePath(candidateTarget, historicalTarget) {
 		return checkpoint
+	}
+	if haveTaskRecord {
+		candidateDraft := e.recoveryCheckpointDraftPreview(ctx, rt, candidateTarget)
+		historicalDraft := e.recoveryCheckpointDraftPreview(ctx, rt, historicalTarget)
+		if recoveryTaskDeliverableMatchScore(taskRecord, historicalTarget, historicalDraft) > recoveryTaskDeliverableMatchScore(taskRecord, candidateTarget, candidateDraft) {
+			checkpoint.TargetPath = historicalTarget
+			if checkpoint.ArtifactPath != "" {
+				if recoveredTarget, targetOK := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); !targetOK || !sameWorkspaceRelativePath(recoveredTarget, historicalTarget) {
+					checkpoint.ArtifactPath = ""
+				}
+			}
+			return checkpoint
+		}
 	}
 	if candidateDraft, found := e.readRecoveryWorkspaceText(ctx, rt, candidateTarget); found {
 		if reason := recoveryFileWriteDraftRejectReason(candidateDraft, candidateTarget); reason == "" && looksLikeRecoveryFileDraft(candidateDraft) {
