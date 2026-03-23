@@ -27,6 +27,7 @@ const (
 	jobEnqueuedChannel                    = "job_enqueued"
 	idempotencyCleanupJob                 = "idempotency.cleanup"
 	agentTurnJobType                      = "agent_turn"
+	memoryExtractTurnJobType              = "memory_extract_turn"
 	rollupUpdateJobType                   = "rollup_update"
 	modelUsageRollupDailyJobType          = "model_usage_rollup_daily"
 	retentionEnforceJobType               = "retention_enforce"
@@ -2220,7 +2221,8 @@ func (w *Worker) claimPendingMaintenanceJobs(ctx context.Context, limit int) ([]
 
 func maintenanceBackgroundJobFilter() string {
 	return fmt.Sprintf(
-		"job_type <> $3 AND job_type IN ('%s', '%s', '%s', '%s')",
+		"job_type <> $3 AND job_type IN ('%s', '%s', '%s', '%s', '%s')",
+		memoryExtractTurnJobType,
 		rollupUpdateJobType,
 		modelUsageRollupDailyJobType,
 		retentionEnforceJobType,
@@ -2230,7 +2232,7 @@ func maintenanceBackgroundJobFilter() string {
 
 func isMaintenanceJobType(jobType string) bool {
 	switch strings.TrimSpace(jobType) {
-	case rollupUpdateJobType, modelUsageRollupDailyJobType, retentionEnforceJobType, traceSpanPartitionCreateJobType:
+	case memoryExtractTurnJobType, rollupUpdateJobType, modelUsageRollupDailyJobType, retentionEnforceJobType, traceSpanPartitionCreateJobType:
 		return true
 	default:
 		return false
@@ -2239,7 +2241,8 @@ func isMaintenanceJobType(jobType string) bool {
 
 func nonMaintenanceBackgroundJobFilter() string {
 	return fmt.Sprintf(
-		"job_type <> $3 AND job_type NOT IN ('%s', '%s', '%s', '%s')",
+		"job_type <> $3 AND job_type NOT IN ('%s', '%s', '%s', '%s', '%s')",
+		memoryExtractTurnJobType,
 		rollupUpdateJobType,
 		modelUsageRollupDailyJobType,
 		retentionEnforceJobType,

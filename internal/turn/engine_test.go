@@ -7972,6 +7972,16 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects clear understanding deliverable placeholder",
+			content: "Good. Now I have a clear understanding of the requirements. Let me create the Speaker Validation Agent with:\n" +
+				"1. Comprehensive system prompt defining the agent's role and behavior\n" +
+				"2. Validation logic implementation covering all criteria\n" +
+				"3. Structured validation report format\n" +
+				"4. Implementation details and testing guidance\n\n" +
+				"I'll create the deliverable as a production-ready Python module with the validation agent:",
+			want: "intent to write the deliverable",
+		},
+		{
 			name:    "rejects short imperative write stub",
 			content: "Now write the full migration plan:",
 			want:    "intent to write the deliverable",

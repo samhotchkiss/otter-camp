@@ -40,8 +40,10 @@ The active fresh canary has already validated these product expectations under t
 
 Most recent shipped commits relevant to the current validation run:
 
-- `525ddd13` `Guard project sessions during bootstrap execution`
+- pending local slice: `memory_extract_turn` is now classified with reserved low-priority background work so it cannot consume the final worker slot ahead of active `agent_turn` execution
+- pending local slice: recovery draft rejection now treats the exact live task-13 “Good. Now I have a clear understanding...” deliverable preface as non-substantive, so that 413-byte placeholder stops being reused from `[Recovery resume state]`
 - pending local slice: task-scoped `file.write` now rejects narrated placeholder content such as “Let me create the deliverable...” instead of persisting junk markdown into deliverable files
+- `525ddd13` `Guard project sessions during bootstrap execution`
 - `6f6a1f25` `Harden bootstrap recovery and draft settlement`
 - `a64dd6c8` `Handle approval-gated bootstrap tasks cleanly`
 - `a23ba8d4` `Stabilize archived and approval-gated recovery`
@@ -104,6 +106,8 @@ What those changed:
 - project sessions now get a hard tool-layer rejection if they attempt to mutate a task that already has `CurrentFlowNodeID` set, so active task lanes remain owned by their `project_task` session instead of being re-mutated by the PM lane
 - bootstrap-active project sessions now get a hard tool-layer rejection if they call `git.commit`, forcing canonical bootstrap persistence through `bootstrap.setup.persist` instead of ad hoc repo commits
 - task-scoped `file.write` is being hardened against imperative first-person placeholder prose after live `fresh-5` task `13` persisted a 413-byte “Let me create the deliverable...” stub into `deliverables/oc-13-speaker-validation-agent.md` before falling into `cli.execute command_required`
+- worker execution-slot reservation is being widened beyond rollups: live `fresh-5` showed repeated `memory_extract_turn` claims consuming the last slot while active task lanes were waiting, and the local integration reproducer now covers that starvation case explicitly
+- recovery draft rejection is being widened to drop the exact task-13 “clear understanding of the requirements” preface so the stale placeholder no longer survives as a durable draft candidate
 
 Current live cleanup result:
 
@@ -118,6 +122,7 @@ Current live cleanup result:
 - there are currently no blocked tasks on the project
 - the next bug to watch is task-lane completion/review quality, not PM/bootstrap queue ownership
 - live repro just before the latest local slice: task `13` wrote narrated placeholder prose directly into its deliverable file and then blocked on repeated empty `cli.execute`; the local validator now rejects that content pattern before write
+- live repro after that: worker capacity still let `memory_extract_turn` fill the last free slot, which delayed active task sessions despite the earlier maintenance reservation work; the new local fix classifies memory extraction into the reserved low-priority lane too
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
