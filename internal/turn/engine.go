@@ -1099,14 +1099,14 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	}
 	assistant := latestAssistantFinalForTurn(messages, payload.TurnID)
 	if assistant == nil {
-		if handled, handleErr := e.handleCompletedRecoveryTurnWithoutUsableAssistant(ctx, session, taskRecord, latestCompleted, latestUser, ""); handleErr != nil {
+		if handled, handleErr := e.handleCompletedTaskResumeWithoutUsableAssistant(ctx, session, taskRecord, latestCompleted, latestUser, ""); handleErr != nil {
 			return handleErr
 		} else if handled {
 			return nil
 		}
 		return nil
 	}
-	if handled, handleErr := e.handleCompletedRecoveryTurnWithoutUsableAssistant(ctx, session, taskRecord, latestCompleted, latestUser, assistant.Content); handleErr != nil {
+	if handled, handleErr := e.handleCompletedTaskResumeWithoutUsableAssistant(ctx, session, taskRecord, latestCompleted, latestUser, assistant.Content); handleErr != nil {
 		return handleErr
 	} else if handled {
 		return nil
@@ -1152,7 +1152,7 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	return nil
 }
 
-func (e *TurnEngine) handleCompletedRecoveryTurnWithoutUsableAssistant(
+func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 	ctx context.Context,
 	session *chat.ChatSession,
 	taskRecord repo.ProjectTask,
@@ -1160,7 +1160,10 @@ func (e *TurnEngine) handleCompletedRecoveryTurnWithoutUsableAssistant(
 	latestUser *repo.ChatMessage,
 	assistantContent string,
 ) (bool, error) {
-	if session == nil || latestCompleted == nil || latestUser == nil || !isRecoveryResumeMessage(*latestUser) {
+	if session == nil || latestCompleted == nil || latestUser == nil {
+		return false, nil
+	}
+	if !isRecoveryResumeMessage(*latestUser) && !taskContinuationResumeMessageRootsHistory(*latestUser) {
 		return false, nil
 	}
 	if strings.TrimSpace(assistantContent) != "" && !looksLikeGenericTaskRecoveryReply(assistantContent) {
