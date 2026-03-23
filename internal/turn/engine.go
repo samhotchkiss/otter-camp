@@ -7872,21 +7872,8 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 		return false, false, nil
 	}
 
-	draft, ok := e.latestSubstantiveAssistantDraftContent(ctx, rt, targetPath)
+	draft, ok := e.taskContinuationDraftContent(ctx, rt, targetPath)
 	if !ok {
-		draft, ok = e.latestRecoveryAssistantDraftContent(ctx, rt)
-		if !ok {
-			var rejectReason string
-			draft, rejectReason, ok = e.recoveryPersistedDraftContent(ctx, rt, targetPath)
-			if !ok || strings.TrimSpace(rejectReason) != "" {
-				return false, false, nil
-			}
-		}
-	}
-	if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" {
-		return false, false, nil
-	}
-	if !looksLikeRecoveryFileDraft(draft) {
 		return false, false, nil
 	}
 
@@ -7923,7 +7910,7 @@ func (e *TurnEngine) handleTaskMalformedFileEditWithoutPath(ctx context.Context,
 	if !ok || strings.TrimSpace(targetPath) == "" {
 		return false, false, nil
 	}
-	draft, ok := e.latestSubstantiveAssistantDraftContent(ctx, rt, targetPath)
+	draft, ok := e.taskContinuationDraftContent(ctx, rt, targetPath)
 	if !ok {
 		return false, false, nil
 	}
@@ -7940,6 +7927,26 @@ func (e *TurnEngine) handleTaskMalformedFileEditWithoutPath(ctx context.Context,
 		"path", targetPath,
 	)
 	return false, false, nil
+}
+
+func (e *TurnEngine) taskContinuationDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	if draft, ok := e.latestSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
+		return draft, true
+	}
+	if draft, ok := e.latestRecoveryAssistantDraftContent(ctx, rt); ok {
+		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason == "" && looksLikeRecoveryFileDraft(draft) {
+			return draft, true
+		}
+	}
+	if draft, ok := e.latestRecoveryArtifactDraftContent(ctx, rt, targetPath); ok {
+		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason == "" && looksLikeRecoveryFileDraft(draft) {
+			return draft, true
+		}
+	}
+	if draft, rejectReason, ok := e.recoveryPersistedDraftContent(ctx, rt, targetPath); ok && strings.TrimSpace(rejectReason) == "" && looksLikeRecoveryFileDraft(draft) {
+		return draft, true
+	}
+	return "", false
 }
 
 func mergeRewrittenFileWriteArguments(existing, overrides map[string]any) map[string]any {
@@ -9072,6 +9079,17 @@ func (e *TurnEngine) latestRecoveryAssistantDraftContent(ctx context.Context, rt
 	return draft.Content, true
 }
 
+func (e *TurnEngine) latestRecoveryArtifactDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", false
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return "", false
+	}
+	return latestRecoveryArtifactDraftForTurn(messages, rt.turn.ID, targetPath)
+}
+
 func (e *TurnEngine) latestSubstantiveAssistantDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return "", false
@@ -9085,6 +9103,35 @@ func (e *TurnEngine) latestSubstantiveAssistantDraftContent(ctx context.Context,
 		return "", false
 	}
 	return draft.Content, true
+}
+
+func latestRecoveryArtifactDraftForTurn(messages []repo.ChatMessage, turnID uuid.UUID, targetPath string) (string, bool) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" || !strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+			continue
+		}
+		recoveredTargetPath, usedArtifactPath := recoveryTargetPathFromToolOutput(output)
+		if !usedArtifactPath || strings.TrimSpace(recoveredTargetPath) == "" {
+			continue
+		}
+		if strings.TrimSpace(targetPath) != "" && !sameWorkspaceRelativePath(recoveredTargetPath, targetPath) {
+			continue
+		}
+		draft := strings.TrimSpace(recoveryArtifactDraftContent(anyString(output["content"])))
+		if draft == "" {
+			continue
+		}
+		return draft, true
+	}
+	return "", false
 }
 
 func latestNonEmptyAssistantFinalForTurn(messages []repo.ChatMessage, turnID uuid.UUID) *repo.ChatMessage {

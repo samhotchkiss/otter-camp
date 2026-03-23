@@ -8607,6 +8607,86 @@ Real file body content that should be reused for the write fallback.
 	}
 }
 
+func TestHandleTaskFileWriteWithoutContentUsesRecoveryArtifactDraftAfterIntentReply(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "design-system/03-accessibility-standards.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	recoveryArtifact := strings.TrimSpace(`# Recovery file.write artifact
+
+Task: OC-28
+Target Path: design-system/03-accessibility-standards.md
+Generated: 2026-03-23T06:21:48Z
+
+## Draft Content
+
+# Accessibility Standards
+
+## Contrast Requirements
+- Body copy must meet WCAG 2.2 AA contrast thresholds.
+- Interactive focus states must remain visible on every background.
+`)
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":    ".ottercamp/recovery/design-system/03-accessibility-standards.md",
+				"content": recoveryArtifact,
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Now I'll write the full accessibility standards document:",
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWithoutContent: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "# Accessibility Standards") {
+		t.Fatalf("content = %q, want hydrated recovery artifact draft", got)
+	}
+	if got := stringValue(call.Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
+		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
+	}
+}
+
 func mustRawJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)
