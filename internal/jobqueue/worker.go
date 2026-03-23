@@ -1001,17 +1001,40 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		    error_message = 'worker cleanup failed stale in_flight model invocation without live in-progress turn',
 		    completed_at = COALESCE(completed_at, now())
 		WHERE mi.status = 'in_flight'
-		  AND mi.created_at < $1
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM chat_turn ct
-		    JOIN chat_session cs ON cs.id = ct.session_id
-		    WHERE ct.id = mi.turn_id
-		      AND ct.status = 'in_progress'
-		      AND cs.status = 'active'
-		      AND cs.current_turn_id = ct.id
+		  AND (
+		    (
+		      mi.created_at < $1
+		      AND NOT EXISTS (
+		        SELECT 1
+		        FROM chat_turn ct
+		        JOIN chat_session cs ON cs.id = ct.session_id
+		        WHERE ct.id = mi.turn_id
+		          AND ct.status = 'in_progress'
+		          AND cs.status = 'active'
+		          AND cs.current_turn_id = ct.id
+		      )
+		    )
+		    OR (
+		      mi.created_at < $2
+		      AND EXISTS (
+		        SELECT 1
+		        FROM chat_turn ct
+		        JOIN chat_session cs ON cs.id = ct.session_id
+		        WHERE ct.id = mi.turn_id
+		          AND ct.status = 'in_progress'
+		          AND cs.status = 'active'
+		          AND cs.current_turn_id = ct.id
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM job_queue jq
+		            WHERE jq.job_type = 'agent_turn'
+		              AND jq.status = 'claimed'
+		              AND (jq.payload->>'session_id')::uuid = cs.id
+		          )
+		      )
+		    )
 		  )
-	`, w.clock.Now().UTC().Add(-30*time.Minute))
+	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second))
 	if err != nil {
 		return 0, fmt.Errorf("fail stale model invocations: %w", err)
 	}
