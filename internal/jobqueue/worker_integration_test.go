@@ -3238,6 +3238,154 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	}
 }
 
+func TestJobWorkerClearCompletedSessionCurrentTurnsEnablesRequeue(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "clear-completed-session-current-turns",
+		DisplayName: "Clear Completed Session Current Turns",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Cleanup Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover stranded task sessions.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "clear-completed-current-turn-project",
+		DisplayName:    "Clear Completed Current Turn Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "clear-completed-current-turn-template",
+		DisplayName:    "Clear Completed Current Turn Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover failed current turn leak",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "supervisor recovery: resume task",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"supervisor","reason":"current turn leaked after failure"}`),
+	})
+	if err != nil {
+		t.Fatalf("create supervisor kickoff message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "failed",
+		TriggerMessageID: &message.ID,
+	})
+	if err != nil {
+		t.Fatalf("create failed turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("set current turn: %v", err)
+	}
+	if _, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	}); err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+
+	cleared, err := worker.ClearCompletedSessionCurrentTurns(ctx)
+	if err != nil {
+		t.Fatalf("ClearCompletedSessionCurrentTurns: %v", err)
+	}
+	if cleared != 1 {
+		t.Fatalf("cleared sessions = %d, want 1", cleared)
+	}
+
+	refreshedSession, err := repo.NewChatSessionRepo(pool).GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if refreshedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil", *refreshedSession.CurrentTurnID)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+}
+
 func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsRecoveryHaltLoop(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

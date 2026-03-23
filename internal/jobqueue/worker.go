@@ -270,6 +270,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: cleared inactive session current turns on startup", "count", repaired)
 	}
+	if repaired, err := w.ClearCompletedSessionCurrentTurns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup completed session current turn cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: cleared completed session current turns on startup", "count", repaired)
+	}
 	if repaired, err := w.BackfillCancelledTurnStopReasons(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup cancelled turn stop_reason backfill failed", "error", err)
@@ -1607,6 +1614,22 @@ func (w *Worker) ClearInactiveSessionCurrentTurns(ctx context.Context) (int64, e
 	return ct.RowsAffected(), nil
 }
 
+func (w *Worker) ClearCompletedSessionCurrentTurns(ctx context.Context) (int64, error) {
+	ct, err := w.pool.Exec(ctx, `
+		UPDATE chat_session cs
+		SET current_turn_id = NULL
+		FROM chat_turn ct
+		WHERE cs.current_turn_id = ct.id
+		  AND cs.status = 'active'
+		  AND cs.mode = 'async'
+		  AND ct.status NOT IN ('pending', 'in_progress')
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("clear completed session current turns: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
 func (w *Worker) BackfillCancelledTurnStopReasons(ctx context.Context) (int64, error) {
 	ct1, err := w.pool.Exec(ctx, `
 		WITH mapped AS (
@@ -2381,6 +2404,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 				w.logger.Error("stale agent_turn purge failed", "error", err)
 			} else if purged > 0 {
 				w.logger.Info("job queue: purged stale agent_turn jobs", "count", purged)
+			}
+			if repaired, err := w.ClearCompletedSessionCurrentTurns(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("completed session current turn cleanup failed", "error", err)
+			} else if repaired > 0 {
+				w.logger.Info("job queue: cleared completed session current turns", "count", repaired)
 			}
 			if repaired, err := w.FailStaleModelInvocations(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("stale model invocation cleanup failed", "error", err)

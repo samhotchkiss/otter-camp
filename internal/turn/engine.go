@@ -8209,6 +8209,43 @@ func (e *TurnEngine) recoveryCheckpointFromInitialMessageMetadata(ctx context.Co
 	return &checkpoint, true
 }
 
+func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, rt *turnRuntime, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) taskcheckpoint.RecoveryFileWriteCheckpoint {
+	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
+	if e == nil || rt == nil {
+		return checkpoint
+	}
+	historicalTarget, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt)
+	historicalTarget = strings.TrimSpace(historicalTarget)
+	if !ok || historicalTarget == "" {
+		return checkpoint
+	}
+	candidateTarget := strings.TrimSpace(checkpoint.TargetPath)
+	if candidateTarget == "" {
+		checkpoint.TargetPath = historicalTarget
+		if checkpoint.ArtifactPath != "" {
+			if recoveredTarget, targetOK := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); !targetOK || !sameWorkspaceRelativePath(recoveredTarget, historicalTarget) {
+				checkpoint.ArtifactPath = ""
+			}
+		}
+		return checkpoint
+	}
+	if sameWorkspaceRelativePath(candidateTarget, historicalTarget) {
+		return checkpoint
+	}
+	if candidateDraft, found := e.readRecoveryWorkspaceText(ctx, rt, candidateTarget); found {
+		if reason := recoveryFileWriteDraftRejectReason(candidateDraft, candidateTarget); reason == "" && looksLikeRecoveryFileDraft(candidateDraft) {
+			return checkpoint
+		}
+	}
+	checkpoint.TargetPath = historicalTarget
+	if checkpoint.ArtifactPath != "" {
+		if recoveredTarget, targetOK := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); !targetOK || !sameWorkspaceRelativePath(recoveredTarget, historicalTarget) {
+			checkpoint.ArtifactPath = ""
+		}
+	}
+	return checkpoint
+}
+
 func (e *TurnEngine) recoveryFileWriteCheckpointCandidate(ctx context.Context, rt *turnRuntime, fallbackReason string) (*taskcheckpoint.RecoveryFileWriteCheckpoint, bool) {
 	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok && hasRecoveryFileWriteCheckpointState(*checkpoint) {
 		candidate := *checkpoint
@@ -8220,10 +8257,19 @@ func (e *TurnEngine) recoveryFileWriteCheckpointCandidate(ctx context.Context, r
 		if strings.TrimSpace(candidate.FailureReason) == "" {
 			candidate.FailureReason = strings.TrimSpace(fallbackReason)
 		}
+		candidate = e.reconcileRecoveryCheckpointCandidate(ctx, rt, candidate)
 		return &candidate, true
 	}
 	if checkpoint, ok := e.recoveryCheckpointFromInitialMessageMetadata(ctx, rt, fallbackReason); ok {
-		return checkpoint, true
+		reconciled := e.reconcileRecoveryCheckpointCandidate(ctx, rt, *checkpoint)
+		return &reconciled, true
+	}
+	if targetPath, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt); ok && strings.TrimSpace(targetPath) != "" {
+		checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+			TargetPath:    strings.TrimSpace(targetPath),
+			FailureReason: strings.TrimSpace(fallbackReason),
+		}
+		return &checkpoint, true
 	}
 	targetPath, _, ok := e.recoveryFileOutputContext(ctx, rt)
 	if !ok || strings.TrimSpace(targetPath) == "" {
@@ -8732,6 +8778,9 @@ func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRunt
 			}
 		}
 	}
+	if targetPath, draft, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt); ok {
+		return targetPath, draft, true
+	}
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return "", "", false
 	}
@@ -8791,6 +8840,113 @@ func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRunt
 		return fallbackPath, fallbackDraft, true
 	}
 	return "", "", false
+}
+
+func (e *TurnEngine) recoveryHistoricalSubstantiveOutputContext(ctx context.Context, rt *turnRuntime) (string, string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", "", false
+	}
+	sessionIDs := []uuid.UUID{rt.session.ID}
+	fallbackPath := ""
+	fallbackDraft := ""
+	if e.pool != nil && strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") && rt.session.ScopeID != uuid.Nil {
+		rows, err := e.pool.Query(ctx, `
+			SELECT id
+			FROM chat_session
+			WHERE scope_type = 'project_task'
+			  AND scope_id = $1
+			ORDER BY created_at DESC
+		`, rt.session.ScopeID)
+		if err == nil {
+			defer rows.Close()
+			sessionIDs = sessionIDs[:0]
+			for rows.Next() {
+				var sessionID uuid.UUID
+				if scanErr := rows.Scan(&sessionID); scanErr != nil {
+					sessionIDs = []uuid.UUID{rt.session.ID}
+					break
+				}
+				sessionIDs = append(sessionIDs, sessionID)
+			}
+			if rows.Err() != nil || len(sessionIDs) == 0 {
+				sessionIDs = []uuid.UUID{rt.session.ID}
+			}
+		}
+	}
+	for _, sessionID := range sessionIDs {
+		messages, err := e.messages.ListBySession(ctx, sessionID)
+		if err != nil {
+			continue
+		}
+		for i := len(messages) - 1; i >= 0; i-- {
+			message := messages[i]
+			if sessionID == rt.session.ID && message.TurnID != nil && *message.TurnID == rt.turn.ID {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+				continue
+			}
+			toolName, output, errText, ok := parseToolResultMessage(message.Content)
+			if !ok || strings.TrimSpace(errText) != "" {
+				continue
+			}
+			switch strings.ToLower(strings.TrimSpace(toolName)) {
+			case "file.read", "file.write", "cli.execute":
+			default:
+				continue
+			}
+			targetPath, usedArtifactPath := recoveryTargetPathFromToolOutput(output)
+			if targetPath == "" {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(toolName), "file.read") && !usedArtifactPath {
+				draft := strings.TrimSpace(anyString(output["content"]))
+				if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason == "" && looksLikeRecoveryFileDraft(draft) {
+					if recoveryHistoricalDraftPathLooksLikeDeliverable(targetPath) {
+						return targetPath, draft, true
+					}
+					if fallbackPath == "" {
+						fallbackPath = targetPath
+						fallbackDraft = draft
+					}
+				}
+			}
+			if workspaceDraft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
+				if reason := recoveryFileWriteDraftRejectReason(workspaceDraft, targetPath); reason == "" && looksLikeRecoveryFileDraft(workspaceDraft) {
+					if recoveryHistoricalDraftPathLooksLikeDeliverable(targetPath) {
+						return targetPath, workspaceDraft, true
+					}
+					if fallbackPath == "" {
+						fallbackPath = targetPath
+						fallbackDraft = workspaceDraft
+					}
+				}
+			}
+		}
+	}
+	if fallbackPath != "" {
+		return fallbackPath, fallbackDraft, true
+	}
+	return "", "", false
+}
+
+func recoveryHistoricalDraftPathLooksLikeDeliverable(targetPath string) bool {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(targetPath, "\\", "/"))
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	switch {
+	case strings.HasPrefix(lower, ".ottercamp/"):
+		return false
+	case strings.HasPrefix(lower, "planning/checkpoint/"):
+		return false
+	case strings.HasPrefix(lower, "planning/recovery-state/"):
+		return false
+	case strings.HasPrefix(lower, "planning/strategy-artifact/"):
+		return false
+	}
+	return true
 }
 
 func recoveryTargetPathFromToolOutput(output map[string]any) (string, bool) {
@@ -9860,10 +10016,39 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	if err != nil {
 		return err
 	}
+	targetPath = strings.TrimSpace(targetPath)
+	artifactPath = strings.TrimSpace(artifactPath)
+	if existing, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+		existingTarget := strings.TrimSpace(existing.TargetPath)
+		if existingTarget != "" && !sameWorkspaceRelativePath(existingTarget, targetPath) {
+			if existingDraft, found := e.readRecoveryWorkspaceText(ctx, rt, existingTarget); found {
+				if reason := recoveryFileWriteDraftRejectReason(existingDraft, existingTarget); reason == "" && looksLikeRecoveryFileDraft(existingDraft) {
+					targetPath = existingTarget
+					if existingArtifact := strings.TrimSpace(existing.ArtifactPath); existingArtifact != "" {
+						if recoveredTarget, ok := recoveryTargetPathFromArtifact(existingArtifact); ok && sameWorkspaceRelativePath(recoveredTarget, existingTarget) {
+							artifactPath = existingArtifact
+						} else {
+							artifactPath = ""
+						}
+					}
+				}
+			}
+		}
+	}
+	if historicalTarget, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt); ok && historicalTarget != "" && !sameWorkspaceRelativePath(historicalTarget, targetPath) {
+		if currentDraft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); !found || recoveryFileWriteDraftRejectReason(currentDraft, targetPath) != "" || !looksLikeRecoveryFileDraft(currentDraft) {
+			targetPath = historicalTarget
+			if artifactPath != "" {
+				if recoveredTarget, ok := recoveryTargetPathFromArtifact(artifactPath); ok && !sameWorkspaceRelativePath(recoveredTarget, historicalTarget) {
+					artifactPath = ""
+				}
+			}
+		}
+	}
 	priorFailureReasons := e.recoveryCheckpointPriorFailureReasons(ctx, rt, failureReason)
 	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
-		TargetPath:            strings.TrimSpace(targetPath),
-		ArtifactPath:          strings.TrimSpace(artifactPath),
+		TargetPath:            targetPath,
+		ArtifactPath:          artifactPath,
 		FailureReason:         strings.TrimSpace(failureReason),
 		PriorFailureReasons:   priorFailureReasons,
 		HistoryStartMessageID: messageID.String(),

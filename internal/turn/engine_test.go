@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -8682,6 +8684,21 @@ func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project
 	return repo.Project{}, repo.ErrNotFound
 }
 
+type fakeOrganizationRepo struct {
+	items map[uuid.UUID]repo.Organization
+	err   error
+}
+
+func (f *fakeOrganizationRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Organization, error) {
+	if f.err != nil {
+		return repo.Organization{}, f.err
+	}
+	if item, ok := f.items[id]; ok {
+		return item, nil
+	}
+	return repo.Organization{}, repo.ErrNotFound
+}
+
 type fakeMemorySourceRepo struct {
 	sources []repo.MemorySource
 }
@@ -9181,6 +9198,215 @@ This migration plan operationalizes the staged cutover and validation strategy.
 	}
 	if !strings.Contains(draft, "## Executive Summary") {
 		t.Fatalf("draft = %q, want substantive draft", draft)
+	}
+}
+
+func TestRecoveryHistoricalSubstantiveOutputContextSkipsNewerStrategyArtifacts(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	oldTurnID := uuid.New()
+	newTurnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "planning/prd-spec/oc-24-infrastructure-spec.md",
+				"content": strings.TrimSpace(`# Infrastructure Specification
+
+## Hosting Provider
+- Vercel
+`),
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &newTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "planning/strategy-artifact/oc-24-success-narrative.md",
+				"content": strings.TrimSpace(`# Success Narrative
+
+## Scenario
+- Launch day goes well.
+`),
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	targetPath, draft, ok := fixture.engine.recoveryHistoricalSubstantiveOutputContext(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected historical substantive output context")
+	}
+	if targetPath != "planning/prd-spec/oc-24-infrastructure-spec.md" {
+		t.Fatalf("targetPath = %q, want deliverable path", targetPath)
+	}
+	if !strings.Contains(draft, "## Hosting Provider") {
+		t.Fatalf("draft = %q, want deliverable draft", draft)
+	}
+}
+
+func TestRecoveryFileWriteCheckpointCandidatePrefersHistoricalSubstantivePathOverInitialMessageMetadata(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	poisonedInitialID := uuid.New()
+	oldTurnID := uuid.New()
+	currentTurnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.messages.create(repo.ChatMessage{
+		ID:        poisonedInitialID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "supervisor recovery: resume task",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                             "supervisor",
+			"recovery_action":                    "resume",
+			"recovery_checkpoint_target_path":    "docs/migration-plan/oc-15-complete-migration-plan.md",
+			"recovery_checkpoint_artifact_path":  ".ottercamp/recovery/docs/migration-plan/oc-15-complete-migration-plan.md",
+			"recovery_checkpoint_failure_reason": "placeholder",
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "docs/migration-plan/oc-15-content-migration-plan.md",
+				"content": strings.TrimSpace(`# OC-15: Content Migration Plan
+
+## Executive Summary
+This migration plan operationalizes the staged cutover and validation strategy.
+`),
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: poisonedInitialID,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	checkpoint, ok := fixture.engine.recoveryFileWriteCheckpointCandidate(context.Background(), rt, "placeholder")
+	if !ok {
+		t.Fatal("expected recovery checkpoint candidate")
+	}
+	if checkpoint.TargetPath != "docs/migration-plan/oc-15-content-migration-plan.md" {
+		t.Fatalf("TargetPath = %q, want historical substantive path", checkpoint.TargetPath)
+	}
+	if checkpoint.ArtifactPath != "" {
+		t.Fatalf("ArtifactPath = %q, want empty after poisoned checkpoint override", checkpoint.ArtifactPath)
+	}
+}
+
+func TestPersistRecoveryFileWriteCheckpointKeepsExistingSubstantiveTargetPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "sam-blog"
+	orgSlug := "default"
+	workspaceRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	existingTarget := "docs/migration-plan/oc-15-content-migration-plan.md"
+	driftTarget := "docs/migration-plan/oc-15-complete-migration-plan.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	existingMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:   existingTarget,
+		ArtifactPath: ".ottercamp/recovery/docs/migration-plan/oc-15-content-migration-plan.md",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				ProjectID:      projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				WorkStatus:     "in_progress",
+				Metadata:       existingMetadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	existingAbs := filepath.Join(workspaceRoot, filepath.FromSlash(existingTarget))
+	if err := os.MkdirAll(filepath.Dir(existingAbs), 0o755); err != nil {
+		t.Fatalf("mkdir existing target: %v", err)
+	}
+	if err := os.WriteFile(existingAbs, []byte("# Migration Plan\n\n## Executive Summary\nSubstantive body.\n"), 0o644); err != nil {
+		t.Fatalf("write existing target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	if err := fixture.engine.persistRecoveryFileWriteCheckpoint(context.Background(), rt, driftTarget, ".ottercamp/recovery/docs/migration-plan/oc-15-complete-migration-plan.md", "placeholder", uuid.New()); err != nil {
+		t.Fatalf("persistRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	updated := taskRepo.items[taskID]
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint")
+	}
+	if checkpoint.TargetPath != existingTarget {
+		t.Fatalf("TargetPath = %q, want %q", checkpoint.TargetPath, existingTarget)
 	}
 }
 
