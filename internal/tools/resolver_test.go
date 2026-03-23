@@ -745,6 +745,48 @@ func TestResolveToolSetPropagatesFlowExecutionError(t *testing.T) {
 	}
 }
 
+func TestResolveToolSetRemovesExecutionIntrospectionToolsForReviewTask(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+
+	resolver := newResolverFixture()
+	resolver.toolDefs.items = []repo.ToolDefinition{
+		{Name: "flow.review_decision", ToolTier: "tier2", ToolDomain: "flow"},
+		{Name: "flow.get_execution", ToolTier: "tier1", ToolDomain: "flow"},
+		{Name: "flow.list_templates", ToolTier: "tier1", ToolDomain: "flow"},
+		{Name: "file.read", ToolTier: "tier1", ToolDomain: "file"},
+	}
+	resolver.agents.items[agentID] = repo.Agent{ID: agentID}
+	resolver.tasks.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		ProjectID:  projectID,
+		WorkStatus: "review",
+	}
+
+	got, err := resolver.resolver.resolveToolSet(context.Background(), repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        taskID,
+	}, agentID)
+	if err != nil {
+		t.Fatalf("resolveToolSet: %v", err)
+	}
+	if containsTool(got, "flow.get_execution") {
+		t.Fatalf("review toolset retained flow.get_execution: %+v", got)
+	}
+	if containsTool(got, "flow.list_templates") {
+		t.Fatalf("review toolset retained flow.list_templates: %+v", got)
+	}
+	if !containsTool(got, "flow.review_decision") {
+		t.Fatalf("review toolset dropped flow.review_decision: %+v", got)
+	}
+	if !containsTool(got, "file.read") {
+		t.Fatalf("review toolset dropped file.read: %+v", got)
+	}
+}
+
 func TestApplyFlowNodeOrderingHandlesCurrentNodeNil(t *testing.T) {
 	taskID := uuid.New()
 	session := repo.ChatSession{ScopeType: "project_task", ScopeID: taskID}

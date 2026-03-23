@@ -284,11 +284,15 @@ func (r *ToolResolver) resolveToolSet(ctx context.Context, session repo.ChatSess
 	if err != nil {
 		return nil, err
 	}
+	stage5, err := r.applyReviewModeFilters(ctx, session, stage4)
+	if err != nil {
+		return nil, err
+	}
 	// Sort tier1 tools before tier2 so they appear first in the model's tool list.
 	// LLMs have diminishing attention for tools that appear late in long lists, so
 	// putting tier1 (read/query) tools first improves their reliability of being called.
-	stage5 := sortToolsByTier(stage4)
-	return stage5, nil
+	stage6 := sortToolsByTier(stage5)
+	return stage6, nil
 }
 
 // sortToolsByTier returns tools sorted so tier1 tools appear before tier2 tools.
@@ -322,6 +326,30 @@ func (r *ToolResolver) resolveSessionProjectID(ctx context.Context, session repo
 	default:
 		return nil, nil
 	}
+}
+
+func (r *ToolResolver) applyReviewModeFilters(ctx context.Context, session repo.ChatSession, tools []ToolDescriptor) ([]ToolDescriptor, error) {
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+		return tools, nil
+	}
+	taskRecord, err := r.tasks.GetByID(ctx, session.ScopeID)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return tools, nil
+	}
+
+	filtered := make([]ToolDescriptor, 0, len(tools))
+	for _, tool := range tools {
+		switch strings.TrimSpace(tool.Name) {
+		case "flow.get_execution", "flow.list_templates":
+			continue
+		default:
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered, nil
 }
 
 func (r *ToolResolver) buildUniverse(ctx context.Context, session repo.ChatSession, sessionProjectID *uuid.UUID) ([]ToolDescriptor, error) {
