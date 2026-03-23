@@ -4241,6 +4241,7 @@ func (e *TurnEngine) recoverProjectTaskStaleInboundTurnWithoutRun(
 		SELECT COUNT(*)
 		FROM run
 		WHERE session_id = $1
+		  AND turn_id IS NOT NULL
 		  AND status IN ('created', 'queued', 'in_progress')
 	`, session.ID).Scan(&activeRuns); err != nil {
 		return false, fmt.Errorf("count active runs for project_task stale inbound turn recovery: %w", err)

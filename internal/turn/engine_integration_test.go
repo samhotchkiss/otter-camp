@@ -12781,6 +12781,28 @@ func TestTurnEngineIntegrationRecoveredProjectTaskStaleInboundTurnWithoutRunEnqu
 	`, jobID); err != nil {
 		t.Fatalf("Update claimed retry job: %v", err)
 	}
+	if _, err := fixture.pool.Exec(ctx, `
+		INSERT INTO run (
+			id,
+			organization_id,
+			project_id,
+			task_id,
+			session_id,
+			principal_type,
+			principal_id,
+			status,
+			trigger_type,
+			version,
+			metadata,
+			created_at,
+			updated_at,
+			started_at
+		) VALUES (
+			$1, $2, $3, $4, $5, 'agent', $6, 'in_progress', 'manual', 1, '{}'::jsonb, now(), now(), now()
+		)
+	`, uuid.New(), fixture.org.ID, project.ID, taskRecord.ID, session.ID, fixture.agent.ID); err != nil {
+		t.Fatalf("Insert orphaned active run: %v", err)
+	}
 
 	var payload []byte
 	if err := fixture.pool.QueryRow(ctx, `
