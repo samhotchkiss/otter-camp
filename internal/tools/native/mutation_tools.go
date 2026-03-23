@@ -4588,6 +4588,16 @@ func (e *NativeToolExecutor) handleMessageSend(ctx context.Context, input map[st
 	if err != nil {
 		return nil, err
 	}
+	if role == "user" && scope.agentID != nil && *scope.agentID != uuid.Nil &&
+		scope.sessionID != nil && *scope.sessionID == sessionID && e.chatSessions != nil {
+		if currentSession, sessionErr := e.chatSessions.GetByID(ctx, sessionID); sessionErr == nil &&
+			strings.EqualFold(strings.TrimSpace(currentSession.ScopeType), "project") {
+			return map[string]any{
+				"error": "same_session_project_handoff_disallowed",
+				"message": "Do not use message.send to inject a user handoff back into the current project session. Treat the existing project session as the handoff channel and continue the bootstrap or execution workflow directly in this turn instead.",
+			}, nil
+		}
+	}
 	var authorType *string
 	var authorID *uuid.UUID
 	actorType := "system"

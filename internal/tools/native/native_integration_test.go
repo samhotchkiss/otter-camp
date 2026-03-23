@@ -3314,6 +3314,47 @@ func TestIntegrationMessageSendNormalizesInvalidRoleToUser(t *testing.T) {
 	orgID := testutil.MakeOrg(t, pool)
 	agent := testutil.MakeAgent(t, pool, orgID)
 	project := testutil.MakeProject(t, pool, orgID)
+	sourceSession := testutil.MakeSession(t, pool, orgID, "project", project.ID)
+	targetSession := testutil.MakeSession(t, pool, orgID, "project", project.ID)
+	messageRepo := repo.NewChatMessageRepo(pool)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	execCtx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agent.ID,
+		SessionID:      &sourceSession.ID,
+	})
+
+	out, err := executor.Execute(execCtx, "message.send", map[string]any{
+		"session_id": targetSession.ID.String(),
+		"role":       "agent",
+		"content":    "bootstrap handoff",
+	})
+	if err != nil {
+		t.Fatalf("message.send with invalid role: %v", err)
+	}
+	if out["message_id"] == nil {
+		t.Fatalf("message_id = nil, want created message")
+	}
+
+	messages, err := messageRepo.ListBySession(ctx, targetSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("session messages = %d, want 1", len(messages))
+	}
+	if got := messages[0].Role; got != "user" {
+		t.Fatalf("stored role = %q, want user", got)
+	}
+}
+
+func TestIntegrationMessageSendRejectsSameSessionProjectHandoff(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	project := testutil.MakeProject(t, pool, orgID)
 	session := testutil.MakeSession(t, pool, orgID, "project", project.ID)
 	messageRepo := repo.NewChatMessageRepo(pool)
 
@@ -3326,25 +3367,25 @@ func TestIntegrationMessageSendNormalizesInvalidRoleToUser(t *testing.T) {
 
 	out, err := executor.Execute(execCtx, "message.send", map[string]any{
 		"session_id": session.ID.String(),
-		"role":       "agent",
-		"content":    "bootstrap handoff",
+		"role":       "user",
+		"content":    "Hey Lori, handing this back to you in the same project session.",
 	})
 	if err != nil {
-		t.Fatalf("message.send with invalid role: %v", err)
+		t.Fatalf("message.send same-session project handoff: %v", err)
 	}
-	if out["message_id"] == nil {
-		t.Fatalf("message_id = nil, want created message")
+	if got := strings.TrimSpace(fmt.Sprintf("%v", out["error"])); got != "same_session_project_handoff_disallowed" {
+		t.Fatalf("error = %q, want same_session_project_handoff_disallowed", got)
+	}
+	if !strings.Contains(fmt.Sprintf("%v", out["message"]), "Treat the existing project session as the handoff channel") {
+		t.Fatalf("message = %v, want same-session continuation guidance", out["message"])
 	}
 
 	messages, err := messageRepo.ListBySession(ctx, session.ID)
 	if err != nil {
 		t.Fatalf("ListBySession: %v", err)
 	}
-	if len(messages) != 1 {
-		t.Fatalf("session messages = %d, want 1", len(messages))
-	}
-	if got := messages[0].Role; got != "user" {
-		t.Fatalf("stored role = %q, want user", got)
+	if len(messages) != 0 {
+		t.Fatalf("session messages = %d, want 0", len(messages))
 	}
 }
 
