@@ -932,6 +932,23 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
+		    FROM chat_turn latest
+		    WHERE latest.session_id = cs.id
+		      AND latest.trigger_message_id = cm.id
+		      AND latest.status = 'cancelled'
+		      AND NOT EXISTS (
+		        SELECT 1
+		        FROM chat_turn newer
+		        WHERE newer.session_id = latest.session_id
+		          AND newer.trigger_message_id = latest.trigger_message_id
+		          AND (
+		            newer.turn_number > latest.turn_number
+		            OR (newer.turn_number = latest.turn_number AND newer.retry_count > latest.retry_count)
+		          )
+		      )
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
 		    FROM chat_turn halted
 		    WHERE halted.session_id = cs.id
 		      AND halted.trigger_message_id = cm.id

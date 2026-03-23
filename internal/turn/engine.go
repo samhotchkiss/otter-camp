@@ -9752,6 +9752,14 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"let me check what's in the workspace",
 		"let me check the acceptance criteria",
 		"let me check the dependency log",
+		"let me first examine the current state of the project and task",
+		"let me examine the current state of the project and task",
+		"let me read the strategy artifacts that are already locked",
+		"let me read those to understand the locked decisions",
+		"let me check the task flow and understand what step we're on",
+		"before i proceed with drafting",
+		"the decisions are locked and clear",
+		"i need to confirm",
 		"the draft document exists but is incomplete",
 		"continue from where it was cut off",
 	)
@@ -13381,6 +13389,14 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"or is there a specific decision or constraint",
 		"i'm currently working on",
 		"my task is to create",
+		"before i proceed with drafting",
+		"let me first examine the current state of the project and task",
+		"let me examine the current state of the project and task",
+		"let me read the strategy artifacts that are already locked",
+		"let me read those to understand the locked decisions",
+		"let me check the task flow and understand what step we're on",
+		"the decisions are locked and clear",
+		"i need to confirm",
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(normalized, pattern) {

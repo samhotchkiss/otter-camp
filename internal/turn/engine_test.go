@@ -5555,6 +5555,16 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsMoveForwardStatusReply(t *testi
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsDraftingConfirmationReply(t *testing.T) {
+	t.Parallel()
+
+	content := "I'm ready to continue on OC-24: Plan hosting and infrastructure. " +
+		"Before I proceed with drafting the infrastructure spec, I need to confirm the locked decisions are still valid."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected drafting confirmation reply to be treated as generic recovery output")
+	}
+}
+
 func TestLooksLikeRecoveryQuestionEchoDetectsClarificationMenu(t *testing.T) {
 	t.Parallel()
 
@@ -7486,6 +7496,25 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 				"- **Target file:** planning/prd-spec/oc-24-infrastructure-spec.md (partially drafted)\n\n" +
 				"The task is in the **Work phase**. I need to complete the infrastructure spec file. Let me check the full file to see what sections still need content:",
 			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects locked decisions task flow placeholder narration",
+			content: "Perfect. I have all four strategy artifacts. The decisions are locked and clear. " +
+				"Now I need to move forward to the infrastructure spec deliverable. " +
+				"Let me check the task flow and understand what step we're on:",
+			want: "generic recovery reply",
+		},
+		{
+			name: "rejects drafting confirmation placeholder narration",
+			content: "I'm ready to continue on OC-24: Plan hosting and infrastructure. " +
+				"Before I proceed with drafting the infrastructure spec, I need to confirm the locked decisions are still valid.",
+			want: "generic recovery reply",
+		},
+		{
+			name: "rejects current state examination placeholder narration",
+			content: "I'll help you resume work on OC-24: Plan hosting and infrastructure. " +
+				"Let me first examine the current state of the project and task.",
+			want: "generic recovery reply",
 		},
 		{
 			name: "rejects full context acceptance criteria placeholder narration",
