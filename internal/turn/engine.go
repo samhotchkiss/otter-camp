@@ -13210,18 +13210,26 @@ func (e *TurnEngine) resolveTaskScopeReviewAgent(ctx context.Context, taskRecord
 	}
 
 	preferred := uuid.Nil
+	reviewer := uuid.Nil
 	fallback := uuid.Nil
 	for _, assignment := range assignments {
 		if !assignment.IsActive || assignment.AgentID == uuid.Nil || assignment.AgentID == assignedID {
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(assignment.Role), "reviewer") {
+			reviewer = assignment.AgentID
+			break
+		}
 		if strings.EqualFold(strings.TrimSpace(assignment.Role), "project_manager") {
 			preferred = assignment.AgentID
-			break
+			continue
 		}
 		if fallback == uuid.Nil {
 			fallback = assignment.AgentID
 		}
+	}
+	if reviewer != uuid.Nil {
+		return reviewer, true, nil
 	}
 	if preferred != uuid.Nil {
 		return preferred, true, nil

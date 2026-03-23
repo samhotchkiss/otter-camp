@@ -2311,6 +2311,7 @@ func TestResolveSessionAgentForSessionRoutesReviewTaskToDistinctReviewer(t *test
 	taskID := uuid.New()
 	projectID := uuid.New()
 	workerID := uuid.New()
+	reviewerID := uuid.New()
 	pmID := uuid.New()
 
 	fixture.session.ScopeType = "project_task"
@@ -2329,6 +2330,7 @@ func TestResolveSessionAgentForSessionRoutesReviewTaskToDistinctReviewer(t *test
 	fixture.engine.assignments = &fakeAssignmentRepo{
 		list: []repo.AgentProjectAssignment{
 			{ProjectID: projectID, AgentID: workerID, IsActive: true, Role: "worker"},
+			{ProjectID: projectID, AgentID: reviewerID, IsActive: true, Role: "reviewer"},
 			{ProjectID: projectID, AgentID: pmID, IsActive: true, Role: "project_manager"},
 		},
 	}
@@ -2337,8 +2339,8 @@ func TestResolveSessionAgentForSessionRoutesReviewTaskToDistinctReviewer(t *test
 	if err != nil {
 		t.Fatalf("resolveSessionAgentForSession: %v", err)
 	}
-	if agentID != pmID {
-		t.Fatalf("agent_id = %s, want reviewer/PM %s", agentID, pmID)
+	if agentID != reviewerID {
+		t.Fatalf("agent_id = %s, want reviewer %s", agentID, reviewerID)
 	}
 }
 
