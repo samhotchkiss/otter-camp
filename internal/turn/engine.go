@@ -8646,6 +8646,9 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return "", "", false
 	}
+	if draft, ok := e.latestSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
+		return draft, "", true
+	}
 	draft, ok := e.latestRecoveryAssistantDraftContent(ctx, rt)
 	if ok {
 		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" {
@@ -8693,6 +8696,21 @@ func (e *TurnEngine) latestRecoveryAssistantDraftContent(ctx context.Context, rt
 	return draft.Content, true
 }
 
+func (e *TurnEngine) latestSubstantiveAssistantDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", false
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return "", false
+	}
+	draft := latestSubstantiveAssistantFinalForTurn(messages, rt.turn.ID, targetPath)
+	if draft == nil {
+		return "", false
+	}
+	return draft.Content, true
+}
+
 func latestNonEmptyAssistantFinalForTurn(messages []repo.ChatMessage, turnID uuid.UUID) *repo.ChatMessage {
 	var latest *repo.ChatMessage
 	for i := range messages {
@@ -8707,6 +8725,37 @@ func latestNonEmptyAssistantFinalForTurn(messages []repo.ChatMessage, turnID uui
 			continue
 		}
 		if strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		if latest == nil || message.SequenceNumber > latest.SequenceNumber {
+			copyMessage := message
+			latest = &copyMessage
+		}
+	}
+	return latest
+}
+
+func latestSubstantiveAssistantFinalForTurn(messages []repo.ChatMessage, turnID uuid.UUID, targetPath string) *repo.ChatMessage {
+	var latest *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Status), "final") {
+			continue
+		}
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		if reason := recoveryFileWriteDraftRejectReason(content, targetPath); reason != "" {
+			continue
+		}
+		if !looksLikeRecoveryFileDraft(content) {
 			continue
 		}
 		if latest == nil || message.SequenceNumber > latest.SequenceNumber {

@@ -8013,6 +8013,42 @@ func TestCompleteTurnNoOpForFailedTurn(t *testing.T) {
 	}
 }
 
+func TestLatestSubstantiveAssistantFinalForTurnSkipsLaterIntentPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	turnID := uuid.New()
+	messages := []repo.ChatMessage{
+		{
+			ID:             uuid.New(),
+			TurnID:         &turnID,
+			Role:           "assistant",
+			Status:         "final",
+			SequenceNumber: 10,
+			Content: strings.TrimSpace(`# Deliverable
+
+## Section
+Real file body content that should be reused for the write fallback.
+`),
+		},
+		{
+			ID:             uuid.New(),
+			TurnID:         &turnID,
+			Role:           "assistant",
+			Status:         "final",
+			SequenceNumber: 11,
+			Content:        "Now I'll create the acceptance criteria:",
+		},
+	}
+
+	got := latestSubstantiveAssistantFinalForTurn(messages, turnID, "docs/target.md")
+	if got == nil {
+		t.Fatal("expected substantive assistant draft")
+	}
+	if got.SequenceNumber != 10 {
+		t.Fatalf("sequence_number = %d, want 10", got.SequenceNumber)
+	}
+}
+
 func mustRawJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)
