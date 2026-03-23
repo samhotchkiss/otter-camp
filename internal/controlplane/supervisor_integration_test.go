@@ -18,6 +18,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectfailure"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -834,8 +835,8 @@ func TestSupervisor_StrandedActiveExecutionSkipsUnresolvedRecoveryCheckpoint(t *
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus != "in_progress" {
-		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus != "queued" {
+		t.Fatalf("task work_status = %q, want queued", updatedTask.WorkStatus)
 	}
 
 	updatedExecution, err := repo.NewFlowNodeExecutionRepo(pool).GetByID(ctx, execution.ID)
@@ -1865,6 +1866,131 @@ func TestSupervisor_UnpausedLegacyImpossibleLiveProjectGetsPaused(t *testing.T) 
 	}
 	if !strings.Contains(failureState.FailureReason, "impossible live task state") {
 		t.Fatalf("automatic failure reason = %q, want impossible live task detail", failureState.FailureReason)
+	}
+}
+
+func TestSupervisor_ResumableBlockedTaskGetsAutoResumed(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord, _ := seedRunProjectTaskWithPM(t, ctx, pool, org.ID)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Resumable Blocked Worker")
+	template := seedTaskQueueFlowTemplate(t, ctx, pool, org.ID, projectRecord.ID)
+	if template.StartNodeID == nil || *template.StartNodeID == uuid.Nil {
+		t.Fatal("expected executable flow template start node")
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	taskRecord, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         projectRecord.ID,
+		Title:             "Auto-resume validation blocked task",
+		WorkStatus:        "in_progress",
+		FlowTemplateID:    &template.ID,
+		CurrentFlowNodeID: template.StartNodeID,
+		AssignedAgentID:   &worker.ID,
+		CreatedByType:     "system",
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     pool,
+		EventBus: eventbus.New(pool, newDiscardLogger(), eventbus.Config{}),
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if _, err := taskService.MarkBlocked(ctx, taskRecord.ID, "deterministic tool validation loop blocked after 3 identical failures: file.write (content_required)", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	blockedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID blocked task: %v", err)
+	}
+	guardedMetadata, err := tasksvc.MergeValidationGuardMetadata(blockedTask.Metadata, tasksvc.ValidationGuardState{
+		InitialMessageID:   uuid.NewString(),
+		Fingerprint:        "file.write:content_required",
+		AttemptFingerprint: "file.write:content_required:attempt",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "content_required",
+		FailureReason:      "file.write requires content",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	blockedTask.Metadata = guardedMetadata
+	if _, err := taskRepo.Update(ctx, blockedTask); err != nil {
+		t.Fatalf("update guarded task: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE project_task SET updated_at = $2 WHERE id = $1`, taskRecord.ID, time.Now().UTC().Add(-2*time.Minute)); err != nil {
+		t.Fatalf("backdate blocked task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:       pool,
+		RunService: runService,
+		EventBus:   bus,
+		Logger:     newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectResumableBlockedTasks(ctx); err != nil {
+		t.Fatalf("detectResumableBlockedTasks: %v", err)
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "queued" {
+		t.Fatalf("task work_status = %q, want queued", updatedTask.WorkStatus)
+	}
+	if _, ok := tasksvc.ParseValidationGuard(updatedTask.Metadata); ok {
+		t.Fatalf("expected validation guard to be cleared, metadata=%s", string(updatedTask.Metadata))
+	}
+
+	var eventType string
+	var payload json.RawMessage
+	if err := pool.QueryRow(ctx, `
+		SELECT event_type, payload
+		FROM project_task_event
+		WHERE task_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, taskRecord.ID).Scan(&eventType, &payload); err != nil {
+		t.Fatalf("load latest task event: %v", err)
+	}
+	if eventType != "status.changed" {
+		t.Fatalf("latest event_type = %q, want status.changed", eventType)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal latest payload: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", decoded["recovery_action"])); got != tasksvc.RecoveryActionResumeBlockedTask {
+		t.Fatalf("recovery_action = %q, want %q", got, tasksvc.RecoveryActionResumeBlockedTask)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", decoded["validation_failure_code"])); got != "content_required" {
+		t.Fatalf("validation_failure_code = %q, want content_required", got)
 	}
 }
 

@@ -895,8 +895,6 @@ func resumeBlockedTaskTargetStatus(ctx context.Context, flowNodes flowNodeReposi
 	switch expectedTaskRuntimeStatusForNode(currentNode) {
 	case "review":
 		return "review"
-	case "in_progress":
-		return "in_progress"
 	default:
 		return "queued"
 	}

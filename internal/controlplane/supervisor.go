@@ -24,17 +24,18 @@ import (
 )
 
 const (
-	defaultSupervisorPollInterval = 60 * time.Second
-	syncHeartbeatSilenceThreshold = 90 * time.Second
-	asyncHeartbeatSilenceLimit    = 5 * time.Minute
-	createdRunStaleLimit          = 5 * time.Minute
-	orphanedEventSilenceLimit     = 10 * time.Minute
-	pausedTimeoutLimit            = 24 * time.Hour
-	strandedExecutionGraceLimit   = 30 * time.Second
-	impossibleLiveTaskGraceLimit  = 15 * time.Minute
-	urgentBlockerEscalationAfter  = 4 * time.Hour
-	normalBlockerEscalationAfter  = 24 * time.Hour
-	supervisorRecoveryMaxAttempts = 3
+	defaultSupervisorPollInterval  = 60 * time.Second
+	syncHeartbeatSilenceThreshold  = 90 * time.Second
+	asyncHeartbeatSilenceLimit     = 5 * time.Minute
+	createdRunStaleLimit           = 5 * time.Minute
+	orphanedEventSilenceLimit      = 10 * time.Minute
+	pausedTimeoutLimit             = 24 * time.Hour
+	strandedExecutionGraceLimit    = 30 * time.Second
+	impossibleLiveTaskGraceLimit   = 15 * time.Minute
+	resumableBlockedTaskGraceLimit = 30 * time.Second
+	urgentBlockerEscalationAfter   = 4 * time.Hour
+	normalBlockerEscalationAfter   = 24 * time.Hour
+	supervisorRecoveryMaxAttempts  = 3
 )
 
 type supervisorRunRepository interface {
@@ -66,6 +67,7 @@ type supervisorChatService interface {
 type supervisorTaskService interface {
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 	TransitionStatusWithPayload(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error)
+	ResumeValidationBlockedTask(ctx context.Context, taskID uuid.UUID, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 }
 
 type supervisorProjectService interface {
@@ -75,11 +77,11 @@ type supervisorProjectService interface {
 type SupervisorOptions struct {
 	Pool *pgxpool.Pool
 
-	RunService  RunService
-	Runs        supervisorRunRepository
-	RunEvents   supervisorRunEventRepository
-	ChatService supervisorChatService
-	TaskService supervisorTaskService
+	RunService     RunService
+	Runs           supervisorRunRepository
+	RunEvents      supervisorRunEventRepository
+	ChatService    supervisorChatService
+	TaskService    supervisorTaskService
 	ProjectService supervisorProjectService
 
 	EventBus eventbus.EventBus
@@ -92,16 +94,16 @@ type SupervisorOptions struct {
 type Supervisor struct {
 	pool *pgxpool.Pool
 
-	runService  RunService
-	runs        supervisorRunRepository
-	events      supervisorRunEventRepository
-	notifier    deadLetterNotifier
-	chatService supervisorChatService
-	taskService supervisorTaskService
+	runService     RunService
+	runs           supervisorRunRepository
+	events         supervisorRunEventRepository
+	notifier       deadLetterNotifier
+	chatService    supervisorChatService
+	taskService    supervisorTaskService
 	projectService supervisorProjectService
-	eventBus    eventbus.EventBus
-	clock       clock.Clock
-	logger      *slog.Logger
+	eventBus       eventbus.EventBus
+	clock          clock.Clock
+	logger         *slog.Logger
 
 	pollInterval time.Duration
 
@@ -270,6 +272,9 @@ func (s *Supervisor) tick(ctx context.Context) error {
 	if err := s.detectStrandedActiveExecutions(ctx); err != nil {
 		return err
 	}
+	if err := s.detectResumableBlockedTasks(ctx); err != nil {
+		return err
+	}
 	if err := s.detectImpossibleLiveTasks(ctx); err != nil {
 		return err
 	}
@@ -280,6 +285,60 @@ func (s *Supervisor) tick(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Supervisor) detectResumableBlockedTasks(ctx context.Context) error {
+	if s.pool == nil || s.taskService == nil {
+		return nil
+	}
+
+	cutoff := s.clock.Now().UTC().Add(-resumableBlockedTaskGraceLimit)
+	rows, err := s.pool.Query(ctx, `
+		SELECT t.id
+		FROM project_task t
+		JOIN project p
+		  ON p.id = t.project_id
+		LEFT JOIN runtime_state rs
+		  ON rs.scope_type = 'task'
+		 AND rs.scope_id = t.id
+		 AND rs.active_run_id IS NOT NULL
+		LEFT JOIN flow_node_execution e
+		  ON e.task_id = t.id
+		 AND e.status = 'active'
+		LEFT JOIN chat_session s
+		  ON s.scope_type = 'project_task'
+		 AND s.scope_id = t.id
+		 AND s.status = 'active'
+		 AND s.current_turn_id IS NOT NULL
+		WHERE p.status = 'active'
+		  AND COALESCE((p.settings->'pause'->>'is_paused')::boolean, false) = false
+		  AND t.work_status = 'blocked'
+		  AND t.updated_at < $1
+		  AND rs.id IS NULL
+		  AND e.id IS NULL
+		  AND s.id IS NULL
+		ORDER BY t.updated_at ASC, t.id ASC
+	`, cutoff)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	actor := tasksvc.Actor{Type: "supervisor", AllowFlowRuntimeBypass: true}
+	for rows.Next() {
+		var taskID uuid.UUID
+		if scanErr := rows.Scan(&taskID); scanErr != nil {
+			return scanErr
+		}
+		if _, resumeErr := s.taskService.ResumeValidationBlockedTask(ctx, taskID, actor); resumeErr != nil {
+			var stateErr tasksvc.TaskResumeBlockedStateError
+			if errors.As(resumeErr, &stateErr) {
+				continue
+			}
+			return resumeErr
+		}
+	}
+	return rows.Err()
 }
 
 func (s *Supervisor) detectImpossibleLiveTasks(ctx context.Context) error {
@@ -310,7 +369,7 @@ func (s *Supervisor) detectImpossibleLiveTasks(ctx context.Context) error {
 	defer rows.Close()
 
 	actor := tasksvc.Actor{
-		Type:                  "supervisor",
+		Type:                   "supervisor",
 		AllowFlowRuntimeBypass: true,
 	}
 	const impossibleLiveTaskReason = "supervisor detected impossible live task state: task remained in_progress without a runtime owner or active flow execution"

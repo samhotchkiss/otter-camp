@@ -1813,8 +1813,8 @@ func newUnitService(taskRepo *fakeTaskRepo) *service {
 }
 
 type fakeTaskRepo struct {
-	tasks        map[uuid.UUID]repo.ProjectTask
-	createdTasks []repo.ProjectTask
+	tasks           map[uuid.UUID]repo.ProjectTask
+	createdTasks    []repo.ProjectTask
 	conflictUpdates int
 	updateCalls     int
 }
