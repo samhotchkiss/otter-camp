@@ -7943,6 +7943,9 @@ func (e *TurnEngine) taskContinuationDraftContent(ctx context.Context, rt *turnR
 			return draft, true
 		}
 	}
+	if draft, ok := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
+		return draft, true
+	}
 	if draft, rejectReason, ok := e.recoveryPersistedDraftContent(ctx, rt, targetPath); ok && strings.TrimSpace(rejectReason) == "" && looksLikeRecoveryFileDraft(draft) {
 		return draft, true
 	}
@@ -9032,6 +9035,9 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 	draft, ok := e.latestRecoveryAssistantDraftContent(ctx, rt)
 	if ok {
 		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" {
+			if priorDraft, priorOK := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); priorOK {
+				return priorDraft, "", true
+			}
 			if persistedDraft, persistedRejectReason, persistedOK := e.recoveryPersistedDraftContent(ctx, rt, targetPath); persistedOK && strings.TrimSpace(persistedRejectReason) == "" {
 				return persistedDraft, "", true
 			}
@@ -9040,6 +9046,9 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 		if looksLikeRecoveryFileDraft(draft) {
 			return draft, "", true
 		}
+	}
+	if draft, ok := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
+		return draft, "", true
 	}
 	return e.recoveryPersistedDraftContent(ctx, rt, targetPath)
 }
@@ -9090,6 +9099,20 @@ func (e *TurnEngine) latestRecoveryArtifactDraftContent(ctx context.Context, rt 
 	return latestRecoveryArtifactDraftForTurn(messages, rt.turn.ID, targetPath)
 }
 
+func (e *TurnEngine) latestPriorSubstantiveAssistantDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", false
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return "", false
+	}
+	if draft := latestPriorSubstantiveAssistantFinal(messages, rt.turn.ID, targetPath); draft != nil {
+		return draft.Content, true
+	}
+	return "", false
+}
+
 func (e *TurnEngine) latestSubstantiveAssistantDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return "", false
@@ -9103,6 +9126,37 @@ func (e *TurnEngine) latestSubstantiveAssistantDraftContent(ctx context.Context,
 		return "", false
 	}
 	return draft.Content, true
+}
+
+func latestPriorSubstantiveAssistantFinal(messages []repo.ChatMessage, currentTurnID uuid.UUID, targetPath string) *repo.ChatMessage {
+	var latest *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if message.TurnID == nil || *message.TurnID == currentTurnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Status), "final") {
+			continue
+		}
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		if reason := recoveryFileWriteDraftRejectReason(content, targetPath); reason != "" {
+			continue
+		}
+		if !looksLikeRecoveryFileDraft(content) {
+			continue
+		}
+		if latest == nil || message.SequenceNumber > latest.SequenceNumber {
+			copyMessage := message
+			latest = &copyMessage
+		}
+	}
+	return latest
 }
 
 func latestRecoveryArtifactDraftForTurn(messages []repo.ChatMessage, turnID uuid.UUID, targetPath string) (string, bool) {

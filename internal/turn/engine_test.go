@@ -8687,6 +8687,59 @@ Generated: 2026-03-23T06:21:48Z
 	}
 }
 
+func TestRecoveryFileWriteDraftContentUsesPriorTurnDraftAfterCurrentNarration(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	priorTurnID := uuid.New()
+	currentTurnID := uuid.New()
+	targetPath := "design-system/03-accessibility-standards.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content: strings.TrimSpace(`# Accessibility Standards
+
+## Keyboard Navigation
+- Every interactive control must be reachable without a mouse.
+- Skip links must be visible on focus.
+`),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &currentTurnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Excellent. Now I have all the context needed and will write the document.",
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	draft, rejectReason, ok := fixture.engine.recoveryFileWriteDraftContent(context.Background(), rt, targetPath)
+	if !ok {
+		t.Fatal("expected recovery file write draft")
+	}
+	if rejectReason != "" {
+		t.Fatalf("rejectReason = %q, want empty", rejectReason)
+	}
+	if !strings.Contains(draft, "## Keyboard Navigation") {
+		t.Fatalf("draft = %q, want prior substantive draft", draft)
+	}
+}
+
 func mustRawJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)
