@@ -4585,6 +4585,99 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryTurnStopsAfterDurableRecoveredWrite(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	const targetPath = "docs/content-strategy.md"
+	const durableDraft = "# Content Strategy\n\nRecovered body.\n"
+	workspaceRoot := mustProjectWorkspaceRoot(t, ctx, fixture, project.ID)
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	artifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
+	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir recovery artifact dir: %v", err)
+	}
+	if err := os.WriteFile(artifactAbs, []byte(durableDraft), 0o644); err != nil {
+		t.Fatalf("write recovery artifact: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	updatedTask, err := taskRepo.UpdateMetadata(ctx, taskRecord.ID, taskcheckpoint.ApplyRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		Version:      1,
+		TargetPath:   targetPath,
+		ArtifactPath: artifactRel,
+		UpdatedAt:    time.Now().UTC(),
+	}))
+	if err != nil {
+		t.Fatalf("Update task with recovery checkpoint: %v", err)
+	}
+	taskRecord = updatedTask
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls > 1 {
+			return ModelResponse{}, fmt.Errorf("unexpected extra model call after durable recovery write")
+		}
+		return ModelResponse{
+			Content: "Recovered document body follows.",
+			ToolCalls: []ModelToolCall{{
+				ID:   "recovery-write",
+				Name: "file_write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path":    targetPath,
+					"content": durableDraft,
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		if err := os.WriteFile(filepath.Join(workspaceRoot, filepath.FromSlash(targetPath)), []byte(durableDraft), 0o644); err != nil {
+			t.Fatalf("write target file: %v", err)
+		}
+		runID := uuid.New()
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      targetPath,
+				"byte_size": len(durableDraft),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+
+	finalTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after durable recovery write: %v", err)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(finalTask.Metadata); ok {
+		t.Fatal("expected recovery checkpoint to clear after durable recovery write")
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnHaltsWhenRecoveredFileWriteDoesNotLandDurablyEX319(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

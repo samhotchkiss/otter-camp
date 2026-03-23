@@ -505,6 +505,7 @@ type turnRuntime struct {
 	recoveryCLIFixes    int
 	recoveryFileFixes   int
 	recoveryFileWrites  map[string]recoveryPopulatedFileWriteState
+	recoveryWriteDone   bool
 	recoveryBlockReason string
 	recoveryQueuedTurn  bool
 }
@@ -7066,6 +7067,10 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if err := e.appendToolResults(ctx, rt, []ToolResult{result}); err != nil {
 			return false, err
 		}
+		if rt.recoveryTurn && rt.recoveryWriteDone {
+			rt.toolCallsUsed++
+			return true, nil
+		}
 		failedBootstrap, err := e.handleProjectBootstrapChildTaskFailure(ctx, rt, []ToolResult{result})
 		if err != nil {
 			return false, err
@@ -9756,6 +9761,9 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 			return clearErr
 		} else if cleared {
 			rt.historyStartID = nil
+			if rt.recoveryTurn {
+				rt.recoveryWriteDone = true
+			}
 		}
 	}
 	return nil
