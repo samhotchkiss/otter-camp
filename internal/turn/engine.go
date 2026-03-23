@@ -7033,6 +7033,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return false, nil
 		}
+		handled, stop, err = e.handleTaskMalformedFileEditWithoutPath(ctx, rt, &call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 		handled, stop, err = e.handleTaskFileWriteWithoutContent(ctx, rt, &call)
 		if err != nil {
 			return false, err
@@ -7874,6 +7884,45 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 	}
 	call.Arguments = normalized
 	e.logger.Info("task continuation: populated file.write from assistant draft",
+		"session_id", rt.session.ID,
+		"turn_id", rt.turn.ID,
+		"path", targetPath,
+	)
+	return false, false, nil
+}
+
+func (e *TurnEngine) handleTaskMalformedFileEditWithoutPath(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
+	if rt == nil || call == nil || rt.turn == nil || rt.session == nil || rt.recoveryTurn {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.edit") {
+		return false, false, nil
+	}
+
+	normalized := toolargs.Normalize("file.edit", call.Arguments)
+	if strings.TrimSpace(stringValue(normalized["path"])) != "" {
+		return false, false, nil
+	}
+
+	targetPath, _, ok := e.recoveryFileOutputContext(ctx, rt)
+	if !ok || strings.TrimSpace(targetPath) == "" {
+		return false, false, nil
+	}
+	draft, ok := e.latestSubstantiveAssistantDraftContent(ctx, rt, targetPath)
+	if !ok {
+		return false, false, nil
+	}
+
+	call.Name = "file.write"
+	call.Arguments = map[string]any{
+		"path":        strings.TrimSpace(targetPath),
+		"content":     draft,
+		"create_dirs": true,
+	}
+	e.logger.Info("task continuation: rewrote pathless file.edit to file.write",
 		"session_id", rt.session.ID,
 		"turn_id", rt.turn.ID,
 		"path", targetPath,

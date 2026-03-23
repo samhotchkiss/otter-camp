@@ -3476,6 +3476,140 @@ func TestTurnEngineIntegrationRecoveryTurnRewritesPathlessFileWriteToPersistedDr
 	}
 }
 
+func TestTurnEngineIntegrationTaskTurnRewritesPathlessFileEditToFileWrite(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "write the deliverable")
+
+	const targetPath = "docs/migration-plan.md"
+	const existingStub = "# Migration Plan\n\nStub.\n"
+	const durableDraft = `# Migration Plan
+
+## Goals
+- Migrate the current SAM.blog corpus into the new structure without losing metadata.
+
+## Approach
+- Inventory the source content, define transformation rules, and validate redirects before cutover.
+`
+
+	workspaceRoot := mustProjectWorkspaceRoot(t, ctx, fixture, project.ID)
+	targetAbs := filepath.Join(workspaceRoot, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(existingStub), 0o644); err != nil {
+		t.Fatalf("write stub target: %v", err)
+	}
+
+	priorTurn, err := fixture.chatService.CreateTurn(ctx, taskSession.ID, fixture.agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn prior context: %v", err)
+	}
+	if err := fixture.chatService.StartTurn(ctx, priorTurn.ID); err != nil {
+		t.Fatalf("StartTurn prior context: %v", err)
+	}
+	toolResult, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: taskSession.ID,
+		TurnID:    &priorTurn.ID,
+		Role:      "tool_result",
+		Content:   string(mustJSON(t, map[string]any{"tool_name": "file.read", "output": map[string]any{"path": targetPath, "content": existingStub, "encoding": "utf8", "truncated": false, "byte_size": len(existingStub)}})),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage prior file.read tool_result: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, toolResult.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus prior tool_result: %v", err)
+	}
+	if err := fixture.chatService.CompleteTurn(ctx, priorTurn.ID); err != nil {
+		t.Fatalf("CompleteTurn prior context: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "file.edit", Tier: "tier2"},
+		{Name: "file.write", Tier: "tier2"},
+	}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls != 1 {
+			t.Fatalf("unexpected extra model call: %d", modelCalls)
+		}
+		return ModelResponse{
+			Content: durableDraft,
+			ToolCalls: []ModelToolCall{{
+				ID:   "pathless-edit",
+				Name: "file_edit",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"_raw": "{\"old_string\":\"Stub.\"}",
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		if call.Name != "file.write" {
+			t.Fatalf("call.Name = %q, want file.write", call.Name)
+		}
+		if got := stringValue(call.Arguments["path"]); got != targetPath {
+			t.Fatalf("path = %q, want %q", got, targetPath)
+		}
+		if got := stringValue(call.Arguments["content"]); got != durableDraft {
+			t.Fatalf("content = %q, want durable draft", got)
+		}
+		if err := os.WriteFile(targetAbs, []byte(durableDraft), 0o644); err != nil {
+			t.Fatalf("write target file: %v", err)
+		}
+		runID := uuid.New()
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      targetPath,
+				"byte_size": len(durableDraft),
+				"created":   false,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+
+	body, err := os.ReadFile(targetAbs)
+	if err != nil {
+		t.Fatalf("read target file: %v", err)
+	}
+	if string(body) != durableDraft {
+		t.Fatalf("target file body = %q, want durable draft", string(body))
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"path_required"`) {
+			t.Fatalf("unexpected path_required tool_result: %s", item.Content)
+		}
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnMirrorsArtifactIntoLegacyWorkspaceRootEX322(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
