@@ -7946,6 +7946,9 @@ func (e *TurnEngine) taskContinuationDraftContent(ctx context.Context, rt *turnR
 	if draft, ok := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
 		return draft, true
 	}
+	if draft, ok := e.latestTaskHistoricalSubstantiveDraftContent(ctx, rt, targetPath); ok {
+		return draft, true
+	}
 	if draft, rejectReason, ok := e.recoveryPersistedDraftContent(ctx, rt, targetPath); ok && strings.TrimSpace(rejectReason) == "" && looksLikeRecoveryFileDraft(draft) {
 		return draft, true
 	}
@@ -9038,6 +9041,9 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 			if priorDraft, priorOK := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); priorOK {
 				return priorDraft, "", true
 			}
+			if historicalDraft, historicalOK := e.latestTaskHistoricalSubstantiveDraftContent(ctx, rt, targetPath); historicalOK {
+				return historicalDraft, "", true
+			}
 			if persistedDraft, persistedRejectReason, persistedOK := e.recoveryPersistedDraftContent(ctx, rt, targetPath); persistedOK && strings.TrimSpace(persistedRejectReason) == "" {
 				return persistedDraft, "", true
 			}
@@ -9048,6 +9054,9 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 		}
 	}
 	if draft, ok := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
+		return draft, "", true
+	}
+	if draft, ok := e.latestTaskHistoricalSubstantiveDraftContent(ctx, rt, targetPath); ok {
 		return draft, "", true
 	}
 	return e.recoveryPersistedDraftContent(ctx, rt, targetPath)
@@ -9109,6 +9118,51 @@ func (e *TurnEngine) latestPriorSubstantiveAssistantDraftContent(ctx context.Con
 	}
 	if draft := latestPriorSubstantiveAssistantFinal(messages, rt.turn.ID, targetPath); draft != nil {
 		return draft.Content, true
+	}
+	return "", false
+}
+
+func (e *TurnEngine) latestTaskHistoricalSubstantiveDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	if e == nil || e.pool == nil || rt == nil || rt.session == nil || rt.session.ScopeID == uuid.Nil {
+		return "", false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return "", false
+	}
+
+	rows, err := e.pool.Query(ctx, `
+		SELECT m.content
+		FROM chat_session cs
+		JOIN chat_message m ON m.session_id = cs.id
+		WHERE cs.scope_type = 'project_task'
+		  AND cs.scope_id = $1
+		  AND cs.id <> $2
+		  AND m.role = 'assistant'
+		  AND m.status = 'final'
+		ORDER BY m.created_at DESC
+		LIMIT 100
+	`, rt.session.ScopeID, rt.session.ID)
+	if err != nil {
+		return "", false
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return "", false
+		}
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
+		if reason := recoveryFileWriteDraftRejectReason(content, targetPath); reason != "" {
+			continue
+		}
+		if !looksLikeRecoveryFileDraft(content) {
+			continue
+		}
+		return content, true
 	}
 	return "", false
 }
