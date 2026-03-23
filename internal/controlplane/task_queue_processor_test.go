@@ -319,6 +319,33 @@ func TestSelectNextQueuedTaskUnderProjectGateBlocksQueuedChildrenBehindBootstrap
 	}
 }
 
+func TestSelectNextQueuedTaskUnderProjectGateIgnoresInvalidDraftGateWithoutExecutionPath(t *testing.T) {
+	projectID := uuid.New()
+	assignedAgentID := uuid.New()
+	invalidGate := repo.ProjectTask{
+		ID:          uuid.New(),
+		ProjectID:   projectID,
+		TaskNumber:  38,
+		Title:       "Late impossible gate",
+		WorkStatus:  "draft",
+		BlocksScope: "all",
+	}
+	queued := repo.ProjectTask{
+		ID:              uuid.New(),
+		ProjectID:       projectID,
+		TaskNumber:      15,
+		Title:           "Queued work",
+		WorkStatus:      "queued",
+		BlocksScope:     "none",
+		AssignedAgentID: &assignedAgentID,
+	}
+
+	selected := selectNextQueuedTaskUnderProjectGate([]repo.ProjectTask{invalidGate, queued})
+	if selected == nil || selected.ID != queued.ID {
+		t.Fatalf("selected queued task = %v, want queued task %s", selected, queued.ID)
+	}
+}
+
 func TestSelectNextQueuedTaskUnderProjectGateIgnoresSupersededBootstrapGateCopies(t *testing.T) {
 	projectID := uuid.New()
 	doneGate := repo.ProjectTask{

@@ -23,6 +23,7 @@ func TestStatusTransitionMatrix(t *testing.T) {
 		{"draft", "queued"},
 		{"draft", "cancelled"},
 		{"queued", "in_progress"},
+		{"queued", "review"},
 		{"queued", "on_hold"},
 		{"queued", "cancelled"},
 		{"in_progress", "blocked"},
@@ -32,6 +33,7 @@ func TestStatusTransitionMatrix(t *testing.T) {
 		{"in_progress", "cancelled"},
 		{"blocked", "queued"},
 		{"blocked", "in_progress"},
+		{"blocked", "review"},
 		{"blocked", "on_hold"},
 		{"blocked", "cancelled"},
 		{"on_hold", "queued"},
@@ -55,8 +57,6 @@ func TestStatusTransitionMatrix(t *testing.T) {
 		{"draft", "in_progress"},
 		{"draft", "review"},
 		{"queued", "done"},
-		{"queued", "review"},
-		{"blocked", "review"},
 		{"on_hold", "in_progress"},
 		{"on_hold", "done"},
 		{"review", "queued"},
@@ -222,6 +222,37 @@ func TestTransitionStatusRejectsBootstrapAutoCompleteForNonBootstrapTask(t *test
 	}
 	if transitionErr.From != "draft" || transitionErr.To != "done" {
 		t.Fatalf("transition error = %+v, want from=draft to=done", transitionErr)
+	}
+}
+
+func TestValidateProjectGateTaskRejectsNonBootstrapGateWithoutExecutionPath(t *testing.T) {
+	err := ValidateProjectGateTask(repo.ProjectTask{
+		ID:             uuid.New(),
+		OrganizationID: uuid.New(),
+		ProjectID:      uuid.New(),
+		Title:          "Impossible gate",
+		BlocksScope:    "all",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+	})
+	if !errors.Is(err, ErrProjectGateExecutionPathRequired) {
+		t.Fatalf("ValidateProjectGateTask err = %v, want ErrProjectGateExecutionPathRequired", err)
+	}
+}
+
+func TestValidateProjectGateTaskAllowsHumanReviewGateWithoutFlow(t *testing.T) {
+	err := ValidateProjectGateTask(repo.ProjectTask{
+		ID:                  uuid.New(),
+		OrganizationID:      uuid.New(),
+		ProjectID:           uuid.New(),
+		Title:               "Review gate",
+		BlocksScope:         "all",
+		WorkStatus:          "draft",
+		RequiresHumanReview: true,
+		CreatedByType:       "system",
+	})
+	if err != nil {
+		t.Fatalf("ValidateProjectGateTask err = %v, want nil", err)
 	}
 }
 

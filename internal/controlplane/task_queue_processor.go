@@ -514,6 +514,11 @@ func lowestOutstandingGateTask(tasks []repo.ProjectTask) *repo.ProjectTask {
 		if status == "done" || status == "cancelled" {
 			continue
 		}
+		if status == "draft" && !taskIsBootstrapGate(taskRecord) {
+			if err := tasksvc.ValidateProjectGateTask(taskRecord); err != nil {
+				continue
+			}
+		}
 		if selected == nil || taskRecord.TaskNumber < selected.TaskNumber {
 			clone := taskRecord
 			selected = &clone

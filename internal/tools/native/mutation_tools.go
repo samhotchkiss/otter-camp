@@ -1834,6 +1834,9 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			planning = syncedPlan
 		}
 	}
+	if gateErr := tasksvc.ValidateProjectGateTask(current); gateErr != nil {
+		return map[string]any{"error": gateErr.Error()}, nil
+	}
 	var updated repo.ProjectTask
 	if statusChanged && e.taskService != nil {
 		current.WorkStatus = previousStatus

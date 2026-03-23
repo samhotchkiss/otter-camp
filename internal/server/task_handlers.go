@@ -835,6 +835,10 @@ func (h taskHandlers) patchTask(w http.ResponseWriter, r *http.Request) {
 			taskRecord.AssignedAgentID = req.AssignedAgentID
 		}
 	}
+	if err := tasksvc.ValidateProjectGateTask(taskRecord); err != nil {
+		h.respondTaskError(responder, w, err)
+		return
+	}
 
 	if h.tasks == nil {
 		responder.Error(w, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "task service unavailable")
@@ -2883,6 +2887,7 @@ func mapTaskError(err error) (int, string, string) {
 		errors.Is(err, tasksvc.ErrFlowTemplateRequired),
 		errors.Is(err, tasksvc.ErrFlowTemplateReviewRequired),
 		errors.Is(err, tasksvc.ErrProjectGateBlockingQueue),
+		errors.Is(err, tasksvc.ErrProjectGateExecutionPathRequired),
 		errors.Is(err, tasksvc.ErrInvalidBlocksScope),
 		errors.Is(err, tasksvc.ErrPMNotAssigned),
 		errors.Is(err, tasksvc.ErrActiveFlowRequired),

@@ -384,6 +384,46 @@ func TestTaskServiceIntegrationRejectsCreateWhenOutstandingProjectGateExists(t *
 	}
 }
 
+func TestTaskServiceIntegrationRejectsNonBootstrapGateWithoutExecutionPath(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+
+	_, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:     project.ID,
+		Title:         "Late impossible gate",
+		BlocksScope:   "all",
+		CreatedByType: "system",
+	})
+	if !errors.Is(err, ErrProjectGateExecutionPathRequired) {
+		t.Fatalf("CreateTask err = %v, want ErrProjectGateExecutionPathRequired", err)
+	}
+
+	allTasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	if len(allTasks) != 0 {
+		t.Fatalf("task count = %d, want 0 after rejected invalid gate", len(allTasks))
+	}
+
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Review gate",
+		BlocksScope:    "all",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask with flow-backed gate: %v", err)
+	}
+	if created.BlocksScope != "all" {
+		t.Fatalf("blocks_scope = %q, want all", created.BlocksScope)
+	}
+}
+
 func TestTaskServiceIntegrationHumanApprovalGate(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

@@ -20,6 +20,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
@@ -981,6 +982,36 @@ func TestTaskUpdateRejectsBootstrapGovernanceGateMutation(t *testing.T) {
 	}
 	if out["error"] != bootstrapGateManagedMessage {
 		t.Fatalf("error = %v, want bootstrap gate managed message", out["error"])
+	}
+	if tasks.updateCalls != 0 {
+		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateRejectsImpossibleProjectGateMutation(t *testing.T) {
+	taskID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			Title:          "Regular task",
+			WorkStatus:     "draft",
+			BlocksScope:    "none",
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":      taskID.String(),
+		"blocks_scope": "all",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); got != tasksvc.ErrProjectGateExecutionPathRequired.Error() {
+		t.Fatalf("error = %q, want %q", got, tasksvc.ErrProjectGateExecutionPathRequired.Error())
 	}
 	if tasks.updateCalls != 0 {
 		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)

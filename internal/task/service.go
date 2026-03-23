@@ -46,6 +46,7 @@ var (
 	ErrFlowTemplateReviewRequired          = errors.New("flow template must define a work -> review -> completion path")
 	ErrProjectGateBlockingQueue            = errors.New("task is blocked by an outstanding project gate and cannot be queued yet")
 	ErrProjectGateBlockingCreate           = errors.New("task is blocked by an outstanding project gate and cannot be created yet")
+	ErrProjectGateExecutionPathRequired    = errors.New("non-bootstrap tasks with blocks_scope=all must include an assigned agent, executable flow template, or human review path")
 	ErrInvalidBlocksScope                  = errors.New("blocks_scope must be one of: none, all")
 	ErrDoneRequiresTerminalFlow            = errors.New("task can only be marked done when its flow reaches a terminal node")
 	ErrTransitionTargetRequired            = errors.New("target status is required")
@@ -530,7 +531,7 @@ assignedAgentValidated:
 	if req.RequiresHumanReview != nil {
 		requiresHumanReview = *req.RequiresHumanReview
 	}
-	created, err := s.tasks.Create(ctx, repo.ProjectTask{
+	taskRecord := repo.ProjectTask{
 		OrganizationID:      projectRecord.OrganizationID,
 		ProjectID:           req.ProjectID,
 		Title:               strings.TrimSpace(req.Title),
@@ -545,7 +546,11 @@ assignedAgentValidated:
 		CreatedByID:         createdByID,
 		AssignedAgentID:     req.AssignedAgentID,
 		Metadata:            normalizedMetadata,
-	})
+	}
+	if err := ValidateProjectGateTask(taskRecord); err != nil {
+		return nil, err
+	}
+	created, err := s.tasks.Create(ctx, taskRecord)
 	if err != nil {
 		return nil, err
 	}
@@ -667,6 +672,9 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		taskRecord.Metadata = applyParentIntegrationFeedback(taskRecord.Metadata, feedback, s.clock.Now().UTC())
 	}
 	if target == "queued" {
+		if err := ValidateProjectGateTask(taskRecord); err != nil {
+			return nil, err
+		}
 		if err := s.ensureQueueEligible(ctx, taskRecord, actor); err != nil {
 			return nil, err
 		}
@@ -2117,6 +2125,38 @@ func allowsBootstrapGateAutoComplete(taskRecord repo.ProjectTask, from, target s
 	metadata := taskMetadataMap(taskRecord.Metadata)
 	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
 	return bootstrapGate
+}
+
+func ValidateProjectGateTask(taskRecord repo.ProjectTask) error {
+	if !projectGateNeedsExecutionPath(taskRecord) {
+		return nil
+	}
+	if projectGateHasExecutionPath(taskRecord) {
+		return nil
+	}
+	return ErrProjectGateExecutionPathRequired
+}
+
+func projectGateNeedsExecutionPath(taskRecord repo.ProjectTask) bool {
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.BlocksScope), "all") {
+		return false
+	}
+	metadata := taskMetadataMap(taskRecord.Metadata)
+	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
+	return !bootstrapGate
+}
+
+func projectGateHasExecutionPath(taskRecord repo.ProjectTask) bool {
+	if taskRecord.FlowTemplateID != nil && *taskRecord.FlowTemplateID != uuid.Nil {
+		return true
+	}
+	if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
+		return true
+	}
+	if taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID != uuid.Nil {
+		return true
+	}
+	return taskRecord.RequiresHumanReview
 }
 
 func bootstrapPlanningCreateAllowed(taskRecord repo.ProjectTask) bool {
