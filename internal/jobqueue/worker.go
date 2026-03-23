@@ -2203,6 +2203,15 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			      JOIN chat_turn current_turn ON current_turn.id = cs.current_turn_id
 			      WHERE cs.id = (job_queue.payload->>'session_id')::uuid
 			        AND (
+			          cs.scope_type <> 'project_task'
+			          OR EXISTS (
+			            SELECT 1
+			            FROM flow_node_execution e
+			            WHERE e.session_id = cs.id
+			              AND e.status = 'active'
+			          )
+			        )
+			        AND (
 			          current_turn.status = 'in_progress'
 			          OR (
 			            current_turn.status = 'pending'
