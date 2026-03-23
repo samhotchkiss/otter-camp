@@ -831,8 +831,21 @@ func (w *Worker) RequeueStrandedUserMessageTurns(ctx context.Context) (int64, er
 
 func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, error) {
 	rows, err := w.pool.Query(ctx, `
-		SELECT DISTINCT cs.id, ct.trigger_message_id
+		SELECT DISTINCT cs.id, COALESCE(live_turn.trigger_message_id, ct.trigger_message_id)
 		FROM chat_session cs
+		LEFT JOIN LATERAL (
+			SELECT e.metadata
+			FROM flow_node_execution e
+			WHERE e.session_id = cs.id
+			  AND e.status = 'active'
+			ORDER BY e.started_at DESC, e.id DESC
+			LIMIT 1
+		) execution_owner ON cs.scope_type = 'project_task'
+		LEFT JOIN chat_turn live_turn ON live_turn.id = CASE
+			WHEN COALESCE(execution_owner.metadata->>'live_turn_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			THEN (execution_owner.metadata->>'live_turn_id')::uuid
+			ELSE NULL
+		END
 		LEFT JOIN project_task pt
 		  ON cs.scope_type = 'project_task'
 		 AND pt.id = cs.scope_id
@@ -845,11 +858,11 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 		       cs.scope_type = 'project_task'
 		   AND p.id = pt.project_id
 		  )
-		JOIN chat_turn ct ON ct.id = cs.current_turn_id
+		LEFT JOIN chat_turn ct ON ct.id = cs.current_turn_id
 		WHERE cs.mode = 'async'
 		  AND cs.status = 'active'
-		  AND ct.status = 'pending'
-		  AND ct.trigger_message_id IS NOT NULL
+		  AND COALESCE(live_turn.status, ct.status, '') = 'pending'
+		  AND COALESCE(live_turn.trigger_message_id, ct.trigger_message_id) IS NOT NULL
 		  AND (
 		    cs.scope_type NOT IN ('project', 'project_task')
 		    OR (
