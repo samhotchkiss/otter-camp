@@ -11480,19 +11480,27 @@ func (e *TurnEngine) resolveTaskScopeAgentForSession(ctx context.Context, sessio
 		return uuid.Nil, repo.ErrNotFound
 	}
 	if strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
-		return e.resolveTaskScopeAssignedAgent(ctx, session.OrganizationID, session.ScopeID)
+		return e.resolveTaskScopeAssignedAgent(ctx, session)
 	}
 	return e.resolveTaskScopeDiscussionAgent(ctx, session.OrganizationID, session.ScopeID)
 }
 
 func (e *TurnEngine) resolveTaskScopeAgent(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {
-	return e.resolveTaskScopeAssignedAgent(ctx, organizationID, taskID)
+	return e.resolveTaskScopeAssignedAgent(ctx, &chat.ChatSession{
+		OrganizationID: organizationID,
+		ScopeID:        taskID,
+	})
 }
 
-func (e *TurnEngine) resolveTaskScopeAssignedAgent(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {
+func (e *TurnEngine) resolveTaskScopeAssignedAgent(ctx context.Context, session *chat.ChatSession) (uuid.UUID, error) {
 	if e.tasks == nil {
 		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing task repository")
 	}
+	if session == nil {
+		return uuid.Nil, repo.ErrNotFound
+	}
+	organizationID := session.OrganizationID
+	taskID := session.ScopeID
 	if taskID == uuid.Nil {
 		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing task_id")
 	}
@@ -11507,9 +11515,77 @@ func (e *TurnEngine) resolveTaskScopeAssignedAgent(ctx context.Context, organiza
 		return uuid.Nil, repo.ErrNotFound
 	}
 	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID == uuid.Nil {
+		recoveredAgentID, recovered, recoverErr := e.recoverMissingTaskAssigneeFromSession(ctx, session, taskRecord)
+		if recoverErr != nil {
+			return uuid.Nil, recoverErr
+		}
+		if recovered {
+			return recoveredAgentID, nil
+		}
 		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing assigned agent")
 	}
 	return *taskRecord.AssignedAgentID, nil
+}
+
+func (e *TurnEngine) recoverMissingTaskAssigneeFromSession(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask) (uuid.UUID, bool, error) {
+	if e == nil || session == nil || e.chat == nil || e.assignments == nil || e.tasks == nil {
+		return uuid.Nil, false, nil
+	}
+	if session.ID == uuid.Nil || taskRecord.ProjectID == uuid.Nil {
+		return uuid.Nil, false, nil
+	}
+
+	participants, err := e.chat.ListParticipants(ctx, session.ID)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	candidateIDs := make([]uuid.UUID, 0, 1)
+	seen := make(map[uuid.UUID]struct{})
+	for _, participant := range participants {
+		if participant == nil || participant.ParticipantID == uuid.Nil || participant.RemovedAt != nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(participant.ParticipantType), "agent") {
+			continue
+		}
+		if _, ok := seen[participant.ParticipantID]; ok {
+			continue
+		}
+		seen[participant.ParticipantID] = struct{}{}
+		candidateIDs = append(candidateIDs, participant.ParticipantID)
+	}
+	if len(candidateIDs) != 1 {
+		return uuid.Nil, false, nil
+	}
+
+	assignments, err := e.assignments.ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	candidateID := candidateIDs[0]
+	active := false
+	for _, assignment := range assignments {
+		if assignment.AgentID == candidateID && assignment.IsActive {
+			active = true
+			break
+		}
+	}
+	if !active {
+		return uuid.Nil, false, nil
+	}
+
+	taskRecord.AssignedAgentID = &candidateID
+	if _, err := e.tasks.Update(ctx, taskRecord); err != nil {
+		return uuid.Nil, false, err
+	}
+	if e.logger != nil {
+		e.logger.Info("recovered missing task assignee from active session participant",
+			"session_id", session.ID,
+			"task_id", taskRecord.ID,
+			"agent_id", candidateID,
+		)
+	}
+	return candidateID, true, nil
 }
 
 func (e *TurnEngine) resolveTaskScopeDiscussionAgent(ctx context.Context, organizationID, taskID uuid.UUID) (uuid.UUID, error) {

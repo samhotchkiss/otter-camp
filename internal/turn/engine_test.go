@@ -1758,6 +1758,56 @@ func TestHandleUserMessageTaskScopeRequiresAssignedAgent(t *testing.T) {
 	}
 }
 
+func TestResolveSessionAgentForSessionRecoversMissingTaskAssigneeFromSessionParticipant(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	workerID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.participants = []*chat.ChatParticipant{{
+		ID:              uuid.New(),
+		SessionID:       fixture.session.ID,
+		ParticipantType: "agent",
+		ParticipantID:   workerID,
+	}}
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{{
+			ProjectID: projectID,
+			AgentID:   workerID,
+			IsActive:  true,
+			Role:      "worker",
+		}},
+	}
+
+	agentID, err := fixture.engine.resolveSessionAgentForSession(context.Background(), fixture.session)
+	if err != nil {
+		t.Fatalf("resolveSessionAgentForSession: %v", err)
+	}
+	if agentID != workerID {
+		t.Fatalf("agent_id = %s, want %s", agentID, workerID)
+	}
+
+	updatedTask, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if updatedTask.AssignedAgentID == nil || *updatedTask.AssignedAgentID != workerID {
+		t.Fatalf("assigned_agent_id = %v, want %s", updatedTask.AssignedAgentID, workerID)
+	}
+}
+
 func TestHandleUserMessageProjectScopeRoutesToProjectPMAndAddsParticipant(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

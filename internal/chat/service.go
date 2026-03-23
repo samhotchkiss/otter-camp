@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1858,6 +1859,7 @@ func (s *service) appendMessageAndUpdateSession(ctx context.Context, session rep
 	}
 
 	metadata := normalizeJSON(input.Metadata, json.RawMessage(`{}`))
+	content := sanitizeMessageContentText(input.Content)
 	var messageID uuid.UUID
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO chat_message (
@@ -1875,7 +1877,7 @@ func (s *service) appendMessageAndUpdateSession(ctx context.Context, session rep
 		)
 		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, 'pending', $9, $10::jsonb)
 		RETURNING id
-	`, session.ID, input.TurnID, sequenceNumber, authorType, authorID, role, input.Content, contentFormat, trimStringPointer(input.ToolCallID), metadata).Scan(&messageID); err != nil {
+	`, session.ID, input.TurnID, sequenceNumber, authorType, authorID, role, content, contentFormat, trimStringPointer(input.ToolCallID), metadata).Scan(&messageID); err != nil {
 		return nil, mapDBError(err)
 	}
 
@@ -2144,6 +2146,13 @@ func normalizeMessageRole(value string) string {
 	default:
 		return ""
 	}
+}
+
+func sanitizeMessageContentText(value string) string {
+	if value == "" {
+		return ""
+	}
+	return string(bytes.ToValidUTF8([]byte(value), []byte("\uFFFD")))
 }
 
 func normalizeContentFormat(value string) string {

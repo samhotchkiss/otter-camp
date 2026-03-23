@@ -94,6 +94,63 @@ func TestMessage_StateMachine_Failed(t *testing.T) {
 	}
 }
 
+func TestMessage_SanitizesInvalidUTF8OnWrite(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	user := seedChatServiceUser(t, ctx, pool, org.ID, "sanitize-invalid-utf8", "member")
+	svc := newIntegrationService(t, pool, nil)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+
+	authorType := "human_user"
+	invalid := string([]byte("bad\xe2\x80\ntext"))
+	want := "bad\uFFFD\ntext"
+
+	message, err := svc.AppendMessage(ctx, AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &user.ID,
+		Role:       "user",
+		Content:    invalid,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if message.Content != want {
+		t.Fatalf("appended content = %q, want %q", message.Content, want)
+	}
+
+	if err := svc.EditQueuedMessage(ctx, message.ID, invalid); err != nil {
+		t.Fatalf("EditQueuedMessage: %v", err)
+	}
+	got, err := svc.GetMessage(ctx, message.ID)
+	if err != nil {
+		t.Fatalf("GetMessage after edit: %v", err)
+	}
+	if got.Content != want {
+		t.Fatalf("edited content = %q, want %q", got.Content, want)
+	}
+
+	if err := svc.UpdateMessageStatus(ctx, message.ID, "streaming", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus streaming: %v", err)
+	}
+	failure := "provider " + invalid
+	if err := svc.UpdateMessageStatus(ctx, message.ID, "failed", failure); err != nil {
+		t.Fatalf("UpdateMessageStatus failed: %v", err)
+	}
+
+	got, err = svc.GetMessage(ctx, message.ID)
+	if err != nil {
+		t.Fatalf("GetMessage after failure: %v", err)
+	}
+	if got.ErrorMessage == nil {
+		t.Fatal("error_message is nil, want sanitized text")
+	}
+	if *got.ErrorMessage != "provider "+want {
+		t.Fatalf("error_message = %q, want %q", *got.ErrorMessage, "provider "+want)
+	}
+}
+
 func TestMessage_Redaction(t *testing.T) {
 	baseCtx := context.Background()
 	pool := testdb.New(t)

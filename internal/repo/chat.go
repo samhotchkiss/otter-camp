@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,8 @@ import (
 )
 
 var ErrMessageContentImmutable = errors.New("repo: message content immutable")
+
+var invalidUTF8Replacement = []byte("\uFFFD")
 
 type chatExecutor interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
@@ -1098,6 +1101,9 @@ func (r *ChatMessageRepo) Create(ctx context.Context, message ChatMessage) (Chat
 		}
 	}
 
+	message.Content = sanitizeChatMessageText(message.Content)
+	message.ErrorMessage = trimStringPointer(sanitizeOptionalChatMessageText(message.ErrorMessage))
+
 	row := tx.QueryRow(ctx, `
 		INSERT INTO chat_message (
 			session_id,
@@ -1131,7 +1137,7 @@ func (r *ChatMessageRepo) Create(ctx context.Context, message ChatMessage) (Chat
 		message.IsRedacted,
 		message.RedactedAt,
 		trimStringPointer(message.ToolCallID),
-		trimStringPointer(message.ErrorMessage),
+		message.ErrorMessage,
 		normalizeChatJSON(message.Metadata, json.RawMessage(`{}`)),
 	)
 
@@ -1233,7 +1239,7 @@ func (r *ChatMessageRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status
 		WHERE id = $1
 		RETURNING id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
 		          is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
-	`, id, normalizedStatus, strings.TrimSpace(errorMessage))
+	`, id, normalizedStatus, sanitizeChatMessageText(strings.TrimSpace(errorMessage)))
 	return scanChatMessageWithNotFound(row)
 }
 
@@ -1266,8 +1272,23 @@ func (r *ChatMessageRepo) UpdateContent(ctx context.Context, id uuid.UUID, conte
 		WHERE id = $1
 		RETURNING id, session_id, turn_id, sequence_number, author_type, author_id, role, content, content_format, status,
 		          is_redacted, redacted_at, tool_call_id, error_message, metadata, created_at, updated_at
-	`, id, content)
+	`, id, sanitizeChatMessageText(content))
 	return scanChatMessageWithNotFound(row)
+}
+
+func sanitizeChatMessageText(value string) string {
+	if value == "" {
+		return ""
+	}
+	return string(bytes.ToValidUTF8([]byte(value), invalidUTF8Replacement))
+}
+
+func sanitizeOptionalChatMessageText(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	sanitized := sanitizeChatMessageText(*value)
+	return &sanitized
 }
 
 func (r *ChatMessageRepo) Redact(ctx context.Context, id uuid.UUID) (ChatMessage, error) {
