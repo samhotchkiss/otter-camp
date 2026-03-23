@@ -4555,6 +4555,34 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForUnassignedWaveParent(t 
 	}
 }
 
+func TestBuildProjectBootstrapValidationRecoveryPromptForApprovalGatedFirstWaveTask(t *testing.T) {
+	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 12 (Generate analytics report script) requires human approval before queueing, so bootstrap cannot materialize autonomous runnable execution",
+	})
+	if !strings.Contains(prompt, "requires human approval before queueing") {
+		t.Fatalf("prompt = %q, want validation reason detail", prompt)
+	}
+	if !strings.Contains(prompt, "Do not ask for manual approval") {
+		t.Fatalf("prompt = %q, want no-manual-approval guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Remove the approval gate from that exact task or replace it in the selected first wave") {
+		t.Fatalf("prompt = %q, want direct repair guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with project.list, project.get, task.list, flow.list_templates, agent.list, inbox reads, or staffing discovery") {
+		t.Fatalf("prompt = %q, want no broad reread guidance", prompt)
+	}
+}
+
+func TestProjectBootstrapRecoverableMaxToolCallFailureForApprovalGatedFirstWaveTask(t *testing.T) {
+	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 12 (Generate analytics report script) requires human approval before queueing, so bootstrap cannot materialize autonomous runnable execution",
+	}) {
+		t.Fatal("approval-gated first-wave execution failure should be recoverable")
+	}
+}
+
 func TestBuildProjectBootstrapValidationRecoveryPromptForPartialFirstWaveMaterialization(t *testing.T) {
 	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,

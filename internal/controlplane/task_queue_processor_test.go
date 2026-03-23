@@ -489,6 +489,64 @@ func TestProcessQueuedTaskSuppressesStaleQueuedConflict(t *testing.T) {
 	}
 }
 
+func TestProcessQueuedTaskRequestsHumanApprovalAndHoldsLegacyApprovalGatedTask(t *testing.T) {
+	ctx := context.Background()
+	projectID := uuid.New()
+	taskID := uuid.New()
+
+	taskRepo := &fakeTaskQueueTaskRepository{
+		taskLookupSequence: []repo.ProjectTask{
+			{
+				ID:                  taskID,
+				ProjectID:           projectID,
+				WorkStatus:          "queued",
+				RequiresHumanReview: true,
+			},
+			{
+				ID:                  taskID,
+				ProjectID:           projectID,
+				WorkStatus:          "on_hold",
+				RequiresHumanReview: true,
+			},
+		},
+	}
+	taskService := &fakeTaskQueueStatusTransitioner{
+		onTransition: func(_ uuid.UUID, toStatus string, _ tasksvc.Actor) error {
+			if toStatus == "in_progress" {
+				return tasksvc.ErrRequiresHumanApproval
+			}
+			return nil
+		},
+	}
+	runService := &fakeTaskQueueRunStarter{}
+	processor := &TaskQueueProcessor{
+		tasks:       taskRepo,
+		projects:    &fakeTaskQueueProjectRepository{items: map[uuid.UUID]repo.Project{projectID: {ID: projectID}}},
+		taskService: taskService,
+		flow:        &fakeTaskQueueFlowStarter{},
+		runs:        runService,
+	}
+
+	if err := processor.processQueuedTask(ctx, eventbus.DomainEvent{ID: uuid.New()}, taskID); err != nil {
+		t.Fatalf("processQueuedTask: %v", err)
+	}
+	if len(taskService.approvalCalls) != 1 || taskService.approvalCalls[0] != taskID {
+		t.Fatalf("RequestHumanApproval calls = %v, want [%s]", taskService.approvalCalls, taskID)
+	}
+	if len(taskService.transitionCalls) != 2 {
+		t.Fatalf("TransitionStatus calls = %d, want 2", len(taskService.transitionCalls))
+	}
+	if taskService.transitionCalls[0].toStatus != "in_progress" {
+		t.Fatalf("first TransitionStatus = %q, want in_progress", taskService.transitionCalls[0].toStatus)
+	}
+	if taskService.transitionCalls[1].toStatus != "on_hold" {
+		t.Fatalf("second TransitionStatus = %q, want on_hold", taskService.transitionCalls[1].toStatus)
+	}
+	if len(runService.createRunInputs) != 0 {
+		t.Fatalf("CreateRun calls = %d, want 0 for approval-gated queued task", len(runService.createRunInputs))
+	}
+}
+
 func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -2138,6 +2196,8 @@ type fakeTaskQueueStatusTransitioner struct {
 	transitionTask  *tasksvc.ProjectTask
 	transitionErr   error
 	onTransition    func(taskID uuid.UUID, toStatus string, actor tasksvc.Actor) error
+	approvalCalls   []uuid.UUID
+	approvalErr     error
 }
 
 func (f *fakeTaskQueueStatusTransitioner) TransitionStatus(_ context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
@@ -2161,6 +2221,14 @@ func (f *fakeTaskQueueStatusTransitioner) TransitionStatus(_ context.Context, ta
 }
 
 func (f *fakeTaskQueueStatusTransitioner) CreateInboxItem(context.Context, tasksvc.CreateInboxItemRequest) (*tasksvc.InboxItem, error) {
+	return &tasksvc.InboxItem{}, nil
+}
+
+func (f *fakeTaskQueueStatusTransitioner) RequestHumanApproval(_ context.Context, taskID uuid.UUID) (*tasksvc.InboxItem, error) {
+	f.approvalCalls = append(f.approvalCalls, taskID)
+	if f.approvalErr != nil {
+		return nil, f.approvalErr
+	}
 	return &tasksvc.InboxItem{}, nil
 }
 

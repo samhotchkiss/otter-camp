@@ -49,6 +49,7 @@ type taskQueueProjectRepository interface {
 type taskQueueStatusTransitioner interface {
 	TransitionStatus(ctx context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error)
 	CreateInboxItem(ctx context.Context, req tasksvc.CreateInboxItemRequest) (*tasksvc.InboxItem, error)
+	RequestHumanApproval(ctx context.Context, taskID uuid.UUID) (*tasksvc.InboxItem, error)
 }
 
 type taskQueueFlowStarter interface {
@@ -306,9 +307,21 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 			return err
 		}
 		if _, err := p.taskService.TransitionStatus(ctx, taskID, targetStatus, tasksvc.Actor{Type: "system", ExpectedFromStatus: "queued"}); err != nil {
-			var transitionErr tasksvc.ErrInvalidStatusTransition
-			if !errors.As(err, &transitionErr) && !errors.Is(err, repo.ErrConflict) {
-				return err
+			if errors.Is(err, tasksvc.ErrRequiresHumanApproval) {
+				if _, approvalErr := p.taskService.RequestHumanApproval(ctx, taskID); approvalErr != nil && !errors.Is(approvalErr, tasksvc.ErrHumanReviewNotRequired) {
+					return approvalErr
+				}
+				if _, holdErr := p.taskService.TransitionStatus(ctx, taskID, "on_hold", tasksvc.Actor{Type: "system", ExpectedFromStatus: "queued"}); holdErr != nil {
+					var holdTransitionErr tasksvc.ErrInvalidStatusTransition
+					if !errors.As(holdErr, &holdTransitionErr) && !errors.Is(holdErr, repo.ErrConflict) {
+						return holdErr
+					}
+				}
+			} else {
+				var transitionErr tasksvc.ErrInvalidStatusTransition
+				if !errors.As(err, &transitionErr) && !errors.Is(err, repo.ErrConflict) {
+					return err
+				}
 			}
 		}
 		taskRecord, err = p.tasks.GetByID(ctx, taskID)

@@ -3136,6 +3136,9 @@ func (e *TurnEngine) validateProjectBootstrapFirstWaveTasks(ctx context.Context,
 		if task.AssignedAgentID == nil || *task.AssignedAgentID == uuid.Nil {
 			return projectBootstrapFailureFirstWaveExecution, buildProjectBootstrapFirstWaveAssignmentFailureReason(task), nil
 		}
+		if task.RequiresHumanReview {
+			return projectBootstrapFailureFirstWaveExecution, buildProjectBootstrapFirstWaveApprovalFailureReason(task), nil
+		}
 		if task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {
 			return projectBootstrapFailureFirstWaveFlow, buildProjectBootstrapFirstWaveFlowFailureReason(task, "no flow template is attached"), nil
 		}
@@ -3338,6 +3341,10 @@ func buildProjectBootstrapFirstWaveFlowFailureReason(task repo.ProjectTask, deta
 
 func buildProjectBootstrapFirstWaveAssignmentFailureReason(task repo.ProjectTask) string {
 	return fmt.Sprintf("kickoff validation failed: first-wave %s has no assigned agent, so bootstrap cannot queue runnable execution", projectBootstrapTaskLabel(task))
+}
+
+func buildProjectBootstrapFirstWaveApprovalFailureReason(task repo.ProjectTask) string {
+	return fmt.Sprintf("kickoff validation failed: first-wave %s requires human approval before queueing, so bootstrap cannot materialize autonomous runnable execution", projectBootstrapTaskLabel(task))
 }
 
 func buildProjectBootstrapFirstWaveExecutionFailureReason(progress projectBootstrapProgress) string {
@@ -3615,6 +3622,10 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 		if progress.PlannedFlowTemplateCount > 0 || progress.BootstrapSetupDoneCount > 0 || progress.BootstrapTaskOutstanding {
 			nextActionHint += " Once that direct repair is complete, do not go back to flow.list_templates or other broad rereads just to finish the checklist. The persisted bootstrap state already contains staffed tasks, flow attachments, and setup progress; return straight to bootstrap.setup.persist with canonical step slugs such as attach-validate-flow-templates, select-first-wave, and record-frank-sign-off if those steps are already satisfied."
 		}
+	}
+	if strings.Contains(lowerReason, "requires human approval before queueing") {
+		recoveryHint = "Repair the named persisted first-wave task directly so it can run autonomously. Do not ask for manual approval and do not keep that task in the first wave while it still requires human approval. Remove the approval gate from that exact task or replace it in the selected first wave with an already-created autonomous child task that can queue immediately."
+		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task can queue without human approval. Your next assistant action should be a direct task mutation tool call on the named task or the selected first-wave set, not a narrative reply. Do not begin with project.list, project.get, task.list, flow.list_templates, agent.list, inbox reads, or staffing discovery. Work directly from the persisted task ids already present in the bootstrap resume state."
 	}
 	if strings.Contains(lowerReason, "bounded task-size policy") || strings.Contains(lowerReason, "bounded size policy") {
 		recoveryHint += " Your next assistant action should be a tool call, not a narrative reply. Do not call task.get on the named oversized task first when the blocked task id is already present in the bootstrap resume message; keep that task orchestration-only and go straight to task.update plus bounded child-task creation."
@@ -6715,6 +6726,7 @@ func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProg
 		reason := strings.ToLower(strings.TrimSpace(progress.ValidationFailureReason))
 		return strings.Contains(reason, "bounded size policy") ||
 			strings.Contains(reason, "has no assigned agent") ||
+			strings.Contains(reason, "requires human approval before queueing") ||
 			(strings.Contains(reason, "only ") &&
 				(strings.Contains(reason, "selected first-wave child tasks created flow_node_execution rows") ||
 					strings.Contains(reason, "selected first-wave child tasks produced runnable agent_turn jobs") ||
