@@ -10266,6 +10266,37 @@ func TestCompletedWorkSignalFromMessagesIgnoresPlanningArtifactWriteForExecution
 	}
 }
 
+func TestExplicitExecutionDeliverableWriteCompleted(t *testing.T) {
+	t.Parallel()
+
+	description := "Create Python script to generate reports. Deliverable: src/generate_reports.py with report templates and example outputs."
+	plan := taskplan.Analyze("Build reporting and pipeline analytics script", &description)
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+
+	if !explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "src/generate_reports.py",
+			"byte_size": 14277,
+		},
+	}) {
+		t.Fatal("expected explicit deliverable write to count as completed work")
+	}
+
+	if explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "planning/metrics-framework/oc-16-instrumentation-plan.md",
+			"byte_size": 7020,
+		},
+	}) {
+		t.Fatal("unexpected completion from planning artifact write")
+	}
+}
+
 func mustRawJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)

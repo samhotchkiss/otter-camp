@@ -7270,6 +7270,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			rt.toolCallsUsed++
 			return true, nil
 		}
+		stopAfterDeliverableWrite, err := e.shouldStopAfterExecutionDeliverableWrite(ctx, rt, result)
+		if err != nil {
+			return false, err
+		}
+		if stopAfterDeliverableWrite {
+			rt.toolCallsUsed++
+			return true, nil
+		}
 		blocked, err := e.handleToolValidationResults(ctx, rt, []ToolCall{call}, []ToolResult{result})
 		if err != nil {
 			return false, err
@@ -7321,6 +7329,24 @@ func (e *TurnEngine) shouldStopAfterBootstrapPersist(ctx context.Context, rt *tu
 	}
 	state := projectBootstrapProjectStateFromSettings(projectRecord.Settings)
 	return strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusCompleted), nil
+}
+
+func (e *TurnEngine) shouldStopAfterExecutionDeliverableWrite(ctx context.Context, rt *turnRuntime, result ToolResult) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.write") || strings.TrimSpace(result.Error) != "" {
+		return false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	return explicitExecutionDeliverableWriteCompleted(taskRecord, result), nil
 }
 
 func bootstrapPersistChecklistComplete(results []ToolResult) bool {
@@ -14052,8 +14078,6 @@ func buildGenericRecoveryReplyBlockedReason(reply string, attempts int) string {
 func completedWorkSignalFromMessages(taskRecord repo.ProjectTask, messages []repo.ChatMessage, turnID uuid.UUID) (workCompletionSignal, bool) {
 	var latest workCompletionSignal
 	found := false
-	plan, hasPlan := taskplan.Parse(taskRecord.Metadata)
-	deliverablePath := explicitDeliverablePath(taskRecord)
 	for _, message := range messages {
 		if message.TurnID == nil || *message.TurnID != turnID {
 			continue
@@ -14066,21 +14090,7 @@ func completedWorkSignalFromMessages(taskRecord repo.ProjectTask, messages []rep
 			continue
 		}
 		if !strings.EqualFold(toolName, "git.commit") {
-			if !strings.EqualFold(toolName, "file.write") {
-				continue
-			}
-			if !hasPlan || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
-				continue
-			}
-			if deliverablePath == "" {
-				continue
-			}
-			writtenPath := normalizeWorkspaceRelativePath(anyString(output["path"]))
-			if writtenPath == "" || !sameWorkspaceRelativePath(writtenPath, deliverablePath) {
-				continue
-			}
-			byteSize := anyInt(output["byte_size"])
-			if byteSize < 1 {
+			if !explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{Name: toolName, Output: output}) {
 				continue
 			}
 			latest = workCompletionSignal{filesCommitted: 1}
@@ -14113,6 +14123,25 @@ func explicitDeliverablePath(taskRecord repo.ProjectTask) string {
 		return ""
 	}
 	return normalizeWorkspaceRelativePath(matches[1])
+}
+
+func explicitExecutionDeliverableWriteCompleted(taskRecord repo.ProjectTask, result ToolResult) bool {
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.write") || strings.TrimSpace(result.Error) != "" {
+		return false
+	}
+	plan, hasPlan := taskplan.Parse(taskRecord.Metadata)
+	if !hasPlan || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
+		return false
+	}
+	deliverablePath := explicitDeliverablePath(taskRecord)
+	if deliverablePath == "" {
+		return false
+	}
+	writtenPath := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
+	if writtenPath == "" || !sameWorkspaceRelativePath(writtenPath, deliverablePath) {
+		return false
+	}
+	return anyInt(result.Output["byte_size"]) > 0
 }
 
 func normalizeWorkspaceRelativePath(value string) string {
