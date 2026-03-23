@@ -176,7 +176,7 @@ func (e *NativeToolExecutor) rejectReviewTaskMutation(ctx context.Context, scope
 	normalizedPath := normalizeWorkspacePath(relativePath)
 	return map[string]any{
 		"error":   "review_action_required",
-		"message": fmt.Sprintf("This task is currently in review. Do not modify `%s` from the review lane. Inspect the existing deliverables and either approve/advance the review or reject it with concrete findings.", normalizedPath),
+		"message": fmt.Sprintf("This task is currently in review. Do not modify `%s` from the review lane. Inspect the existing deliverables, then call `flow.review_decision` with the active `flow_node_execution_id` and `decision=approve` or `decision=reject`. Put concrete rejection findings in the review decision itself, not in a new workspace file.", normalizedPath),
 	}, true, nil
 }
 

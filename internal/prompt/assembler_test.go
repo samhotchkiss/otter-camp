@@ -225,6 +225,12 @@ func TestPromptAssemblerTaskContextIncludesReviewModeGuidance(t *testing.T) {
 	if !strings.Contains(assembled.SystemPrompt, "Do not continue implementation or modify deliverable files in this session.") {
 		t.Fatalf("system prompt missing review mutation guard:\n%s", assembled.SystemPrompt)
 	}
+	if !strings.Contains(assembled.SystemPrompt, "flow.review_decision") {
+		t.Fatalf("system prompt missing explicit review decision guidance:\n%s", assembled.SystemPrompt)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "flow_node_execution_id") {
+		t.Fatalf("system prompt missing flow node execution guidance:\n%s", assembled.SystemPrompt)
+	}
 }
 
 func TestPromptAssemblerProjectContextIncludesLinkedPlanningArtifacts(t *testing.T) {

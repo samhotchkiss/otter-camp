@@ -379,6 +379,9 @@ func TestFileWriteRejectsMutationForReviewTask(t *testing.T) {
 	if !strings.Contains(message, "currently in review") {
 		t.Fatalf("message = %q, want review guidance", message)
 	}
+	if !strings.Contains(message, "flow.review_decision") {
+		t.Fatalf("message = %q, want explicit review decision guidance", message)
+	}
 	if _, err := os.Stat(filepath.Join(root, "src", "generate_reports.py")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("review task deliverable should not be written, stat err = %v", err)
 	}
@@ -429,6 +432,10 @@ func TestFileEditRejectsMutationForReviewTask(t *testing.T) {
 	}
 	if out["error"] != "review_action_required" {
 		t.Fatalf("error = %v, want review_action_required", out["error"])
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "flow.review_decision") {
+		t.Fatalf("message = %q, want explicit review decision guidance", message)
 	}
 	body, err := os.ReadFile(target)
 	if err != nil {
