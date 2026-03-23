@@ -8305,6 +8305,33 @@ func TestLooksLikeRecoveryFileDraftRejectsLongConversationalLeadIn(t *testing.T)
 	}
 }
 
+func TestEnsureProjectBootstrapFirstWaveExecutionsStarted(t *testing.T) {
+	t.Parallel()
+
+	queuedID := uuid.New()
+	inProgressID := uuid.New()
+	reviewID := uuid.New()
+	doneID := uuid.New()
+	draftID := uuid.New()
+
+	flowAdvancer := &fakeFlowAdvancer{}
+	engine := &TurnEngine{flowAdvancer: flowAdvancer}
+
+	err := engine.ensureProjectBootstrapFirstWaveExecutionsStarted(context.Background(), []repo.ProjectTask{
+		{ID: queuedID, WorkStatus: "queued"},
+		{ID: inProgressID, WorkStatus: "in_progress"},
+		{ID: reviewID, WorkStatus: "review"},
+		{ID: doneID, WorkStatus: "done"},
+		{ID: draftID, WorkStatus: "draft"},
+	})
+	if err != nil {
+		t.Fatalf("ensureProjectBootstrapFirstWaveExecutionsStarted: %v", err)
+	}
+	if flowAdvancer.ensureActiveCalls != 3 {
+		t.Fatalf("ensure active execution calls = %d, want 3", flowAdvancer.ensureActiveCalls)
+	}
+}
+
 func TestLooksLikeRecoveryFileDraftRejectsLongImperativeNarration(t *testing.T) {
 	t.Parallel()
 
@@ -9418,10 +9445,16 @@ func (f *fakeFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNo
 
 type fakeFlowAdvancer struct {
 	tasks                 *fakeTaskRepo
+	ensureActiveCalls     int
 	recordNodeCommitCalls int
 	advanceFlowCalls      int
 	lastCommitSHA         string
 	lastAdvanceActor      flowsvc.Actor
+}
+
+func (f *fakeFlowAdvancer) EnsureActiveExecution(_ context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error) {
+	f.ensureActiveCalls++
+	return &repo.FlowNodeExecution{TaskID: taskID, Status: "active"}, nil
 }
 
 func (f *fakeFlowAdvancer) RecordNodeCommit(_ context.Context, taskID uuid.UUID, commitSHA, _ string) (*repo.FlowNodeExecution, error) {

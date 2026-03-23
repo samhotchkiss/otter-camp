@@ -361,6 +361,7 @@ type flowNodeRepository interface {
 
 type flowAdvancer interface {
 	AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error)
+	EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
 	RecordNodeCommit(ctx context.Context, taskID uuid.UUID, commitSHA, branchName string) (*repo.FlowNodeExecution, error)
 }
 
@@ -2197,6 +2198,15 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 	if err != nil {
 		return progress, err
 	}
+	if err := e.ensureProjectBootstrapFirstWaveExecutionsStarted(ctx, updated.FirstWaveTasks); err != nil {
+		return progress, err
+	}
+	if e.flowAdvancer != nil {
+		updated, err = e.loadProjectBootstrapProgress(ctx, projectID)
+		if err != nil {
+			return progress, err
+		}
+	}
 	if updated.FirstWavePromotedCount == 0 && updated.FirstWaveExecutionCount == 0 && updated.FirstWaveJobCount == 0 {
 		updated.ValidationStatus = projectBootstrapValidationFailed
 		updated.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
@@ -2229,6 +2239,21 @@ func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecution(ctx context.Contex
 			return progress, err
 		}
 	}
+}
+
+func (e *TurnEngine) ensureProjectBootstrapFirstWaveExecutionsStarted(ctx context.Context, tasks []repo.ProjectTask) error {
+	if e == nil || e.flowAdvancer == nil || len(tasks) == 0 {
+		return nil
+	}
+	for _, task := range tasks {
+		if task.ID == uuid.Nil || !bootstrapTaskNeedsActiveExecution(task.WorkStatus) {
+			continue
+		}
+		if _, err := e.flowAdvancer.EnsureActiveExecution(ctx, task.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isAlreadyQueuedTaskTransition(err error) bool {
@@ -3122,6 +3147,15 @@ func (e *TurnEngine) projectBootstrapRuntimeManaged(ctx context.Context, session
 func projectBootstrapTaskEnteredExecution(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "queued", "in_progress", "review", "done":
+		return true
+	default:
+		return false
+	}
+}
+
+func bootstrapTaskNeedsActiveExecution(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "in_progress", "review":
 		return true
 	default:
 		return false
