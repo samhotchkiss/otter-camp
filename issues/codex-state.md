@@ -25,7 +25,8 @@ Current observed task state on the active fresh Speaker Pipeline canary:
 
 - bootstrap tasks `1-8` are all `done`
 - parent task `9` remains `draft`
-- tasks `10-15` are all `in_progress`
+- task `10` is `done`
+- tasks `11`, `12`, `13`, and `15` are currently `in_progress`
 - project session `2eeaf2ad-4db3-4878-bf7c-7e91cb3d8309` is still active after bootstrap completion and task-session startup
 
 The active fresh canary has already validated these product expectations under the latest build:
@@ -40,6 +41,9 @@ The active fresh canary has already validated these product expectations under t
 
 Most recent shipped commits relevant to the current validation run:
 
+- pending local slice: legacy `assigned_task` wakeups now no-op for any task already owned by a flow execution, trimming another shadow dispatch path from issue `370`
+- pending local slice: recovery draft rejection now treats the live OC-12 `Current State Summary ... let me start by ...` scaffold and the live OC-15 `Now I have a clear picture ... let me check the flow execution ...` scaffold as non-substantive recovery placeholders
+- pending local slice: task recovery checkpoint reconciliation and historical substantive-output fallback now both reject cross-task `OC-*` drafts so a blocked lane cannot inherit another task's recovery target or deliverable body
 - pending local slice: `memory_extract_turn` is now classified with reserved low-priority background work so it cannot consume the final worker slot ahead of active `agent_turn` execution
 - pending local slice: recovery draft rejection now treats the exact live task-13 “Good. Now I have a clear understanding...” deliverable preface as non-substantive, so that 413-byte placeholder stops being reused from `[Recovery resume state]`
 - pending local slice: task-scoped `file.write` now rejects narrated placeholder content such as “Let me create the deliverable...” instead of persisting junk markdown into deliverable files
@@ -173,6 +177,9 @@ The current next thing to watch on the fresh canary is narrower:
 - bootstrap is completed and first-wave executions exist
 - the PM/bootstrap turn is still open after bootstrap completion and has already tried a couple of invalid post-bootstrap task mutations (`draft -> assigned`, `draft -> in_progress`) before the canonical state settled
 - if that turn does not unwind cleanly on its own, the next fix is in post-bootstrap project-session behavior: once canonical bootstrap state is completed and first-wave executions exist, the PM session should stop trying bootstrap-era direct task transitions inside the same turn and hand off cleanly to execution/review lanes
+- the newest live execution blockers shifted back into recovery draft quality on OC-12 and OC-15: both lanes were blocked by structured placeholder drafts that narrated the current state instead of writing the deliverable body
+- those blocked rows have now been resumed under the latest local recovery-draft classifier, so the next live check is whether they stay in execution without reusing those two placeholder shapes again
+- the newest deeper bug surfaced immediately after that: OC-15's fresh recovery lane could still inherit OC-13's `agents/speaker-validation-agent.md` through poisoned checkpoint/history fallback, so the latest local slice now rejects cross-task `OC-*` contamination in both checkpoint reconciliation and historical draft selection
 
 The standing rule from Sam is:
 

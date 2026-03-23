@@ -748,6 +748,9 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 }
 
 func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask) error {
+	if taskOwnedByFlowExecution(taskRecord) {
+		return nil
+	}
 	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID == uuid.Nil {
 		return nil
 	}
@@ -872,6 +875,9 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 
 	switch strings.TrimSpace(executionWakeupKind(runRecord.Metadata)) {
 	case "assigned_task":
+		if taskOwnedByFlowExecution(taskRecord) {
+			return nil
+		}
 		session, err := p.ensureCanonicalTaskAsyncSession(ctx, taskRecord)
 		if err != nil {
 			return err
@@ -1028,6 +1034,13 @@ func (p *TaskQueueProcessor) appendWakeupKickoff(ctx context.Context, runRecord 
 		Metadata:  metadata,
 	})
 	return err
+}
+
+func taskOwnedByFlowExecution(taskRecord repo.ProjectTask) bool {
+	if taskRecord.FlowTemplateID != nil && *taskRecord.FlowTemplateID != uuid.Nil {
+		return true
+	}
+	return taskRecord.CurrentFlowNodeID != nil && *taskRecord.CurrentFlowNodeID != uuid.Nil
 }
 
 func buildQueueKickoffMessage(taskRecord repo.ProjectTask) string {

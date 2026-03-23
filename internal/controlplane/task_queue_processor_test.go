@@ -1510,6 +1510,42 @@ func TestEnsureAssignedAgentRunIgnoresDuplicateParticipant(t *testing.T) {
 	}
 }
 
+func TestEnsureAssignedAgentRunSkipsFlowOwnedTask(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{}
+	chatService := &fakeTaskQueueChatService{}
+	processor := &TaskQueueProcessor{
+		runs:  runService,
+		chats: chatService,
+	}
+
+	err := processor.ensureAssignedAgentRun(ctx, eventbus.DomainEvent{ID: uuid.New()}, repo.ProjectTask{
+		ID:                taskID,
+		OrganizationID:    orgID,
+		ProjectID:         projectID,
+		Title:             "Flow-owned task",
+		AssignedAgentID:   &agentID,
+		FlowTemplateID:    &flowTemplateID,
+		CurrentFlowNodeID: &flowNodeID,
+	})
+	if err != nil {
+		t.Fatalf("ensureAssignedAgentRun() error = %v", err)
+	}
+	if len(runService.createRunInputs) != 0 {
+		t.Fatalf("CreateExecutionWakeup calls = %d, want 0", len(runService.createRunInputs))
+	}
+	if len(chatService.appendMessages) != 0 {
+		t.Fatalf("AppendMessage calls = %d, want 0", len(chatService.appendMessages))
+	}
+}
+
 func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -1583,6 +1619,67 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 	liveOwner := repo.FlowExecutionLiveOwnerFromMetadata(flowRepo.execution.Metadata)
 	if liveOwner.RunID == nil || *liveOwner.RunID != runID {
 		t.Fatalf("flow execution live_run_id = %v, want %s", liveOwner.RunID, runID)
+	}
+}
+
+func TestDispatchTaskQueueWakeupSkipsAssignedTaskForFlowOwnedTask(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	runID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	sessionID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{
+		session: &chat.ChatSession{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				Title:             "Flow-owned task",
+				AssignedAgentID:   &agentID,
+				FlowTemplateID:    &flowTemplateID,
+				CurrentFlowNodeID: &flowNodeID,
+			},
+		},
+		chats: chatService,
+	}
+
+	err := processor.dispatchTaskQueueWakeup(ctx, Run{
+		ID:             runID,
+		OrganizationID: orgID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+		PrincipalType:  "agent",
+		PrincipalID:    agentID,
+		Status:         "in_progress",
+		TriggerType:    taskQueueTriggerType,
+		Metadata: buildExecutionWakeupMetadata(nil, executionScope{Type: "task", ID: taskID}, "task_queue_processor", "assigned_task", map[string]any{
+			"source":   "task_queue_processor",
+			"run_mode": "async",
+		}, "started", nil),
+	})
+	if err != nil {
+		t.Fatalf("dispatchTaskQueueWakeup() error = %v", err)
+	}
+	if len(chatService.addParticipantCalls) != 0 {
+		t.Fatalf("addParticipant calls = %d, want 0", len(chatService.addParticipantCalls))
+	}
+	if len(chatService.appendMessages) != 0 {
+		t.Fatalf("AppendMessage calls = %d, want 0", len(chatService.appendMessages))
 	}
 }
 

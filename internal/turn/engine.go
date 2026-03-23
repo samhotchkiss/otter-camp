@@ -142,6 +142,7 @@ var (
 	errContextCompressionContinuationDepthExceeded = errors.New("context compression continuation depth exceeded")
 	errAgentTurnPromptGuardrailDepthExceeded       = errors.New("agent turn prompt exceeded guardrail continuation depth")
 	explicitDeliverablePathPattern                 = regexp.MustCompile(`(?i)\bdeliverable:\s*([^\s,;]+)`)
+	recoveryCheckpointTaskNumberPattern            = regexp.MustCompile(`\boc[- ]?0*([1-9][0-9]*)\b`)
 )
 
 const (
@@ -8505,6 +8506,12 @@ func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, r
 	if e == nil || rt == nil {
 		return checkpoint
 	}
+	if taskRecord, ok := e.recoveryCheckpointTaskRecord(ctx, rt); ok {
+		if e.recoveryCheckpointClearlyBelongsToDifferentTask(ctx, rt, taskRecord, checkpoint) {
+			checkpoint.TargetPath = ""
+			checkpoint.ArtifactPath = ""
+		}
+	}
 	historicalTarget, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt)
 	historicalTarget = strings.TrimSpace(historicalTarget)
 	if !ok || historicalTarget == "" {
@@ -8549,11 +8556,15 @@ func (e *TurnEngine) recoveryFileWriteCheckpointCandidate(ctx context.Context, r
 			candidate.FailureReason = strings.TrimSpace(fallbackReason)
 		}
 		candidate = e.reconcileRecoveryCheckpointCandidate(ctx, rt, candidate)
-		return &candidate, true
+		if hasRecoveryFileWriteCheckpointState(candidate) && (strings.TrimSpace(candidate.TargetPath) != "" || strings.TrimSpace(candidate.ArtifactPath) != "") {
+			return &candidate, true
+		}
 	}
 	if checkpoint, ok := e.recoveryCheckpointFromInitialMessageMetadata(ctx, rt, fallbackReason); ok {
 		reconciled := e.reconcileRecoveryCheckpointCandidate(ctx, rt, *checkpoint)
-		return &reconciled, true
+		if hasRecoveryFileWriteCheckpointState(reconciled) && (strings.TrimSpace(reconciled.TargetPath) != "" || strings.TrimSpace(reconciled.ArtifactPath) != "") {
+			return &reconciled, true
+		}
 	}
 	if targetPath, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt); ok && strings.TrimSpace(targetPath) != "" {
 		checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
@@ -8571,6 +8582,114 @@ func (e *TurnEngine) recoveryFileWriteCheckpointCandidate(ctx context.Context, r
 		FailureReason: strings.TrimSpace(fallbackReason),
 	}
 	return &checkpoint, true
+}
+
+func (e *TurnEngine) recoveryCheckpointTaskRecord(ctx context.Context, rt *turnRuntime) (repo.ProjectTask, bool) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return repo.ProjectTask{}, false
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return repo.ProjectTask{}, false
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return repo.ProjectTask{}, false
+	}
+	return taskRecord, true
+}
+
+func (e *TurnEngine) recoveryCheckpointClearlyBelongsToDifferentTask(ctx context.Context, rt *turnRuntime, taskRecord repo.ProjectTask, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) bool {
+	if recoveryDraftClearlyBelongsToDifferentTask(taskRecord, strings.TrimSpace(checkpoint.TargetPath), "") {
+		return true
+	}
+	if recoveryDraftClearlyBelongsToDifferentTask(taskRecord, strings.TrimSpace(checkpoint.ArtifactPath), "") {
+		return true
+	}
+	for _, candidate := range []struct {
+		path    string
+		content string
+	}{
+		{path: strings.TrimSpace(checkpoint.TargetPath), content: e.recoveryCheckpointDraftPreview(ctx, rt, strings.TrimSpace(checkpoint.TargetPath))},
+		{path: strings.TrimSpace(checkpoint.ArtifactPath), content: e.recoveryCheckpointDraftPreview(ctx, rt, strings.TrimSpace(checkpoint.ArtifactPath))},
+	} {
+		if recoveryDraftClearlyBelongsToDifferentTask(taskRecord, candidate.path, candidate.content) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *TurnEngine) recoveryCheckpointDraftPreview(ctx context.Context, rt *turnRuntime, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	content, ok := e.readRecoveryWorkspaceText(ctx, rt, path)
+	if !ok {
+		return ""
+	}
+	if len(content) > 1200 {
+		return content[:1200]
+	}
+	return content
+}
+
+func recoveryCheckpointTaskNumberHint(content string) (int, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(content))
+	if normalized == "" {
+		return 0, false
+	}
+	matches := recoveryCheckpointTaskNumberPattern.FindStringSubmatch(normalized)
+	if len(matches) != 2 {
+		return 0, false
+	}
+	value, err := strconv.Atoi(matches[1])
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+func recoveryDraftClearlyBelongsToDifferentTask(taskRecord repo.ProjectTask, path, content string) bool {
+	expected := taskRecord.TaskNumber
+	if expected <= 0 {
+		return false
+	}
+	for _, candidate := range []string{strings.TrimSpace(path), strings.TrimSpace(content)} {
+		if candidate == "" {
+			continue
+		}
+		if taskNumber, ok := recoveryCheckpointTaskNumberHint(candidate); ok && taskNumber != expected {
+			return true
+		}
+	}
+	return false
+}
+
+func recoveryTaskDeliverableMatchScore(taskRecord repo.ProjectTask, targetPath, draft string) int {
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.TrimSpace(*taskRecord.Description)
+	}
+	taskTokens := deliverableMatchTokens(strings.TrimSpace(taskRecord.Title) + " " + description)
+	if len(taskTokens) == 0 {
+		return 0
+	}
+	score := 0
+	for token := range deliverableMatchTokens(filepath.Base(strings.TrimSpace(targetPath))) {
+		if _, ok := taskTokens[token]; ok {
+			score += 2
+		}
+	}
+	if heading := leadingMarkdownHeading(strings.TrimSpace(draft)); heading != "" {
+		for token := range deliverableMatchTokens(heading) {
+			if _, ok := taskTokens[token]; ok {
+				score++
+			}
+		}
+	}
+	return score
 }
 
 type recoveryResumeState struct {
@@ -9139,6 +9258,7 @@ func (e *TurnEngine) recoveryHistoricalSubstantiveOutputContext(ctx context.Cont
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return "", "", false
 	}
+	taskRecord, haveTaskRecord := e.recoveryCheckpointTaskRecord(ctx, rt)
 	sessionIDs := []uuid.UUID{rt.session.ID}
 	bestPath := ""
 	bestDraft := ""
@@ -9195,17 +9315,33 @@ func (e *TurnEngine) recoveryHistoricalSubstantiveOutputContext(ctx context.Cont
 			}
 			if strings.EqualFold(strings.TrimSpace(toolName), "file.read") && !usedArtifactPath {
 				draft := strings.TrimSpace(anyString(output["content"]))
-				if score, ok := recoveryHistoricalDraftCandidateScore(strings.TrimSpace(toolName), targetPath, draft); ok && score > bestScore {
-					bestPath = targetPath
-					bestDraft = draft
-					bestScore = score
+				if haveTaskRecord && recoveryDraftClearlyBelongsToDifferentTask(taskRecord, targetPath, draft) {
+					continue
+				}
+				if score, ok := recoveryHistoricalDraftCandidateScore(strings.TrimSpace(toolName), targetPath, draft); ok {
+					if haveTaskRecord {
+						score += recoveryTaskDeliverableMatchScore(taskRecord, targetPath, draft)
+					}
+					if score > bestScore {
+						bestPath = targetPath
+						bestDraft = draft
+						bestScore = score
+					}
 				}
 			}
 			if workspaceDraft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
-				if score, ok := recoveryHistoricalDraftCandidateScore(strings.TrimSpace(toolName), targetPath, workspaceDraft); ok && score > bestScore {
-					bestPath = targetPath
-					bestDraft = workspaceDraft
-					bestScore = score
+				if haveTaskRecord && recoveryDraftClearlyBelongsToDifferentTask(taskRecord, targetPath, workspaceDraft) {
+					continue
+				}
+				if score, ok := recoveryHistoricalDraftCandidateScore(strings.TrimSpace(toolName), targetPath, workspaceDraft); ok {
+					if haveTaskRecord {
+						score += recoveryTaskDeliverableMatchScore(taskRecord, targetPath, workspaceDraft)
+					}
+					if score > bestScore {
+						bestPath = targetPath
+						bestDraft = workspaceDraft
+						bestScore = score
+					}
 				}
 			}
 		}
@@ -10258,8 +10394,10 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"now i have the complete context",
 		"strategy phase for",
 		"resume execution by creating the actual",
+		"now i have a clear picture",
 	) && containsAny(lower,
 		"migration plan",
+		"validation report",
 		"document",
 		"deliverable",
 	) {
@@ -10327,6 +10465,7 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"i now have a complete picture",
 		"i now have the complete picture",
 		"i have what i need",
+		"now i have a clear picture",
 		"now that i have",
 		"i now have the full",
 		"i now have complete context",
@@ -10353,6 +10492,13 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"let me check what's in the workspace",
 		"let me check the acceptance criteria",
 		"let me check the dependency log",
+		"let me check the flow execution",
+		"let me check the task details",
+		"let me locate the actual",
+		"begin working on the validation task",
+		"based on my review",
+		"current state summary",
+		"let me start by populating",
 		"let me first examine the current state of the project and task",
 		"let me examine the current state of the project and task",
 		"let me read the strategy artifacts that are already locked",
@@ -10437,6 +10583,9 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		"good. now i have a clear understanding of the requirements",
 		"now i have a clear understanding of the requirements",
 		"i have a clear understanding of the requirements",
+		"now i have a clear picture",
+		"current state summary",
+		"based on my review",
 		"now i have enough context",
 		"i have enough context",
 		"i can see:",
@@ -10490,6 +10639,10 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		"let me check what flow template is assigned",
 		"let me check the full file",
 		"let me check the file",
+		"let me check the flow execution",
+		"let me check the task details",
+		"let me locate the actual",
+		"let me start by populating",
 	)
 	hasStructuredLeadIn := strings.Count(trimmed, "\n") >= 2 && hasStructuredRecoveryFileDraftMarkers(trimmed)
 	return hasStructuredLeadIn && hasContextCue && hasIntentCue

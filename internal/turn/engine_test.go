@@ -7982,6 +7982,25 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects current state summary validation placeholder",
+			content: "Now let me understand the current state and begin working on the validation task. Based on my review:\n\n" +
+				"**Current State Summary:**\n" +
+				"- OC-12 (this task) is in \"Intake & Planning\" phase\n" +
+				"- I need to validate OC-10 schema against acceptance criteria\n" +
+				"- Planning artifacts are well-defined\n\n" +
+				"Let me start by populating the implementation plan and dependency log, then proceed to the validation work:",
+			targetPath: "planning/prd-spec/oc-12-validation-report.md",
+			want:       "intent to write the deliverable",
+		},
+		{
+			name: "rejects clear picture flow execution placeholder",
+			content: "Now I have a clear picture. The task OC-15 is to generate the validation report and recommendations. " +
+				"The planning artifacts are currently scaffolds, but I have actual validation testing work and implementation specs.\n\n" +
+				"Let me check the flow execution to see where we are in the process:",
+			targetPath: "deliverables/oc-15-validation-report.md",
+			want:       "intent to write the deliverable",
+		},
+		{
 			name:    "rejects short imperative write stub",
 			content: "Now write the full migration plan:",
 			want:    "intent to write the deliverable",
@@ -10079,6 +10098,93 @@ This migration plan operationalizes the staged cutover and validation strategy.
 	}
 }
 
+func TestRecoveryFileWriteCheckpointCandidateRejectsCheckpointFromDifferentTaskContent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	poisonedInitialID := uuid.New()
+	oldTurnID := uuid.New()
+	currentTurnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				TaskNumber: 15,
+				WorkStatus: "blocked",
+			},
+		},
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		ID:        poisonedInitialID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "supervisor recovery: resume task",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                             "supervisor",
+			"recovery_action":                    "resume",
+			"recovery_checkpoint_target_path":    "agents/speaker-validation-agent.md",
+			"recovery_checkpoint_failure_reason": "placeholder",
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "deliverables/oc-15-validation-report.md",
+				"content": strings.TrimSpace(`# Validation Report
+
+## Executive Summary
+This report synthesizes the speaker pipeline validation findings and recommendations.
+`),
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "agents/speaker-validation-agent.md",
+				"content": strings.TrimSpace(`# Speaker Validation Agent Specification
+
+**Task**: OC-13
+`),
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: poisonedInitialID,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	checkpoint, ok := fixture.engine.recoveryFileWriteCheckpointCandidate(context.Background(), rt, "placeholder")
+	if !ok {
+		t.Fatal("expected recovery checkpoint candidate")
+	}
+	if checkpoint.TargetPath != "deliverables/oc-15-validation-report.md" {
+		t.Fatalf("TargetPath = %q, want current-task substantive path", checkpoint.TargetPath)
+	}
+}
+
 func TestRecoveryHistoricalSubstantiveOutputContextPrefersWriteTargetOverPlanningRead(t *testing.T) {
 	t.Parallel()
 
@@ -10170,6 +10276,160 @@ func TestRecoveryHistoricalSubstantiveOutputContextPrefersWriteTargetOverPlannin
 	}
 	if !strings.Contains(draft, "def generate_pipeline_report") {
 		t.Fatalf("draft = %q, want substantive code draft", draft)
+	}
+}
+
+func TestRecoveryHistoricalSubstantiveOutputContextSkipsDifferentTaskDrafts(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	oldTurnID := uuid.New()
+	currentTurnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				TaskNumber: 15,
+				WorkStatus: "in_progress",
+			},
+		},
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "agents/speaker-validation-agent.md",
+				"content": strings.TrimSpace(`# Speaker Validation Agent Specification
+
+**Task**: OC-13
+`),
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "deliverables/oc-15-validation-report.md",
+				"content": strings.TrimSpace(`# Validation Report
+
+## Executive Summary
+This report synthesizes findings, gaps, and recommendations for the speaker pipeline validation run.
+`),
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	targetPath, draft, ok := fixture.engine.recoveryHistoricalSubstantiveOutputContext(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected historical substantive output context")
+	}
+	if targetPath != "deliverables/oc-15-validation-report.md" {
+		t.Fatalf("targetPath = %q, want current-task deliverable", targetPath)
+	}
+	if !strings.Contains(draft, "Executive Summary") {
+		t.Fatalf("draft = %q, want current-task deliverable draft", draft)
+	}
+}
+
+func TestRecoveryHistoricalSubstantiveOutputContextPrefersTaskMatchingDeliverable(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	oldTurnID := uuid.New()
+	currentTurnID := uuid.New()
+	description := "Synthesize all validation testing results into a comprehensive validation report."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  15,
+				WorkStatus:  "blocked",
+				Title:       "Generate Validation Report & Recommendations",
+				Description: &description,
+			},
+		},
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "deliverables/oc-15-validation-workflow.md",
+				"content": strings.TrimSpace(`# Validation Workflow
+
+## Overview
+This document describes the intake workflow.
+`),
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "deliverables/oc-15-validation-report.md",
+				"content": strings.TrimSpace(`# Validation Report
+
+## Findings
+The speaker pipeline validation run passed core scenarios and identified follow-up recommendations.
+`),
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	targetPath, draft, ok := fixture.engine.recoveryHistoricalSubstantiveOutputContext(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected historical substantive output context")
+	}
+	if targetPath != "deliverables/oc-15-validation-report.md" {
+		t.Fatalf("targetPath = %q, want report deliverable", targetPath)
+	}
+	if !strings.Contains(draft, "## Findings") {
+		t.Fatalf("draft = %q, want report draft", draft)
 	}
 }
 

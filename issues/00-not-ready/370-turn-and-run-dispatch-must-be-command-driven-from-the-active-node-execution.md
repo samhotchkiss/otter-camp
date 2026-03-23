@@ -131,3 +131,6 @@ Latest slice completed:
 - Focused jobqueue integration coverage now asserts a stale failed `live_turn_id` can no longer mask a real pending `current_turn_id`.
 - terminal `project_task` async session cleanup now runs in the worker’s periodic maintenance loop, not only on startup.
 - Focused worker integration coverage now asserts a terminal task session closes automatically during steady-state worker operation.
+- legacy `assigned_task` dispatch now no-ops for any task that already has a `flow_template_id` or `current_flow_node_id`.
+- that trims another shadow control-plane path where a stale generic task-session wakeup could still be emitted or dispatched even though the lane already belonged to a `flow_node_execution`.
+- focused control-plane unit coverage now asserts both the producer (`ensureAssignedAgentRun`) and dispatcher (`dispatchTaskQueueWakeup`) skip `assigned_task` for flow-owned tasks.
