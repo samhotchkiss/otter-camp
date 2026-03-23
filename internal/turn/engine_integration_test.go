@@ -3704,6 +3704,88 @@ func TestTurnEngineIntegrationTaskTurnRewritesPathlessFileEditToFileWrite(t *tes
 	}
 }
 
+func TestTurnEngineIntegrationTaskTurnPopulatesEmptyFileWriteFromSubstantiveDraft(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "write the final deliverable")
+
+	const targetPath = "docs/migration-plan.md"
+	const durableDraft = `# Migration Plan
+
+## Scope
+- Map legacy content into the new SAM.blog information model.
+
+## Execution
+- Extract source posts, normalize metadata, validate transformed output, and cut over in stages.
+`
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls == 1 {
+			return ModelResponse{
+				Content: durableDraft,
+				ToolCalls: []ModelToolCall{{
+					ID:   "empty-write",
+					Name: "file.write",
+					Tier: "tier2",
+					Arguments: map[string]any{
+						"path": targetPath,
+					},
+				}},
+			}, nil
+		}
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		if call.Name != "file.write" {
+			t.Fatalf("call.Name = %q, want file.write", call.Name)
+		}
+		if got := stringValue(call.Arguments["path"]); got != targetPath {
+			t.Fatalf("path = %q, want %q", got, targetPath)
+		}
+		if got := stringValue(call.Arguments["content"]); got != durableDraft {
+			t.Fatalf("content = %q, want substantive draft", got)
+		}
+		runID := uuid.New()
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      targetPath,
+				"byte_size": len(durableDraft),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok && guard.Count > 0 {
+		t.Fatalf("unexpected validation guard after populated write: %+v", guard)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnMirrorsArtifactIntoLegacyWorkspaceRootEX322(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

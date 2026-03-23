@@ -7868,12 +7868,15 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 		return false, false, nil
 	}
 
-	draft, ok := e.latestRecoveryAssistantDraftContent(ctx, rt)
+	draft, ok := e.latestSubstantiveAssistantDraftContent(ctx, rt, targetPath)
 	if !ok {
-		var rejectReason string
-		draft, rejectReason, ok = e.recoveryPersistedDraftContent(ctx, rt, targetPath)
-		if !ok || strings.TrimSpace(rejectReason) != "" {
-			return false, false, nil
+		draft, ok = e.latestRecoveryAssistantDraftContent(ctx, rt)
+		if !ok {
+			var rejectReason string
+			draft, rejectReason, ok = e.recoveryPersistedDraftContent(ctx, rt, targetPath)
+			if !ok || strings.TrimSpace(rejectReason) != "" {
+				return false, false, nil
+			}
 		}
 	}
 	if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" {
