@@ -330,6 +330,69 @@ func TestJobWorkerReservesSlotsForAgentTurnsOverBackgroundJobs(t *testing.T) {
 	}
 }
 
+func TestJobWorkerPrefersNonMaintenanceBackgroundJobsOverMaintenance(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		BatchSize:            6,
+		PollInterval:         20 * time.Millisecond,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	maintenanceRelease := make(chan struct{})
+	foregroundStarted := make(chan struct{}, 1)
+	maintenanceStarted := make(chan struct{}, 8)
+
+	worker.Register("test.foreground", func(context.Context, Job) error {
+		select {
+		case foregroundStarted <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	worker.Register(rollupUpdateJobType, func(context.Context, Job) error {
+		select {
+		case maintenanceStarted <- struct{}{}:
+		default:
+		}
+		<-maintenanceRelease
+		return nil
+	})
+
+	orgID := uuid.New()
+	for i := 0; i < 5; i++ {
+		if _, err := worker.Enqueue(context.Background(), nil, rollupUpdateJobType, 60, map[string]any{
+			"org_id":      orgID,
+			"rollup_date": fmt.Sprintf("2026-03-%02d", i+1),
+		}, nil); err != nil {
+			t.Fatalf("enqueue maintenance %d failed: %v", i+1, err)
+		}
+	}
+	if _, err := worker.Enqueue(context.Background(), nil, "test.foreground", 50, map[string]any{"n": 1}, nil); err != nil {
+		t.Fatalf("enqueue foreground failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startWorker(worker, ctx)
+	maintenanceClosed := false
+	defer func() {
+		cancel()
+		if !maintenanceClosed {
+			close(maintenanceRelease)
+		}
+		_ = worker.Stop()
+	}()
+
+	select {
+	case <-foregroundStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("foreground job did not start while maintenance jobs were pending")
+	}
+
+	close(maintenanceRelease)
+	maintenanceClosed = true
+}
+
 func TestJobWorkerClaimPendingLimitClaimsSingleJobEvenWhenBatchSizeIsLarger(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

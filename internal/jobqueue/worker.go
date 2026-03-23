@@ -27,6 +27,10 @@ const (
 	jobEnqueuedChannel                    = "job_enqueued"
 	idempotencyCleanupJob                 = "idempotency.cleanup"
 	agentTurnJobType                      = "agent_turn"
+	rollupUpdateJobType                   = "rollup_update"
+	modelUsageRollupDailyJobType          = "model_usage_rollup_daily"
+	retentionEnforceJobType               = "retention_enforce"
+	traceSpanPartitionCreateJobType       = "trace_span_partition_create"
 	defaultBatchSize                      = 10
 	defaultPollInterval                   = 5 * time.Second
 	defaultStaleScanInterval              = 60 * time.Second
@@ -1569,10 +1573,10 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 				backgroundSlots = min(backgroundSlots, w.availableBackgroundSlots())
 			}
 			if backgroundSlots > 0 {
-				backgroundJobs, err := w.claimPendingNonAgentJobs(ctx, backgroundSlots)
+				backgroundJobs, err := w.claimPendingNonMaintenanceJobs(ctx, backgroundSlots)
 				if err != nil {
 					if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-						w.logger.Error("job queue: claim failed", "job_class", "background", "error", err)
+						w.logger.Error("job queue: claim failed", "job_class", "background_non_maintenance", "error", err)
 					}
 					return err
 				}
@@ -1580,6 +1584,20 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 					claimedAny = true
 					w.logClaimedJobs(backgroundJobs)
 					w.launchClaimedJobs(ctx, backgroundJobs)
+					continue
+				}
+
+				maintenanceJobs, err := w.claimPendingMaintenanceJobs(ctx, backgroundSlots)
+				if err != nil {
+					if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+						w.logger.Error("job queue: claim failed", "job_class", "background_maintenance", "error", err)
+					}
+					return err
+				}
+				if len(maintenanceJobs) > 0 {
+					claimedAny = true
+					w.logClaimedJobs(maintenanceJobs)
+					w.launchClaimedJobs(ctx, maintenanceJobs)
 					continue
 				}
 			}
@@ -1699,6 +1717,34 @@ func (w *Worker) claimPendingAgentTurns(ctx context.Context, limit int) ([]Job, 
 
 func (w *Worker) claimPendingNonAgentJobs(ctx context.Context, limit int) ([]Job, error) {
 	return w.claimPendingByFilter(ctx, limit, "job_type <> $3")
+}
+
+func (w *Worker) claimPendingNonMaintenanceJobs(ctx context.Context, limit int) ([]Job, error) {
+	return w.claimPendingByFilter(ctx, limit, nonMaintenanceBackgroundJobFilter())
+}
+
+func (w *Worker) claimPendingMaintenanceJobs(ctx context.Context, limit int) ([]Job, error) {
+	return w.claimPendingByFilter(ctx, limit, maintenanceBackgroundJobFilter())
+}
+
+func maintenanceBackgroundJobFilter() string {
+	return fmt.Sprintf(
+		"job_type <> $3 AND job_type IN ('%s', '%s', '%s', '%s')",
+		rollupUpdateJobType,
+		modelUsageRollupDailyJobType,
+		retentionEnforceJobType,
+		traceSpanPartitionCreateJobType,
+	)
+}
+
+func nonMaintenanceBackgroundJobFilter() string {
+	return fmt.Sprintf(
+		"job_type <> $3 AND job_type NOT IN ('%s', '%s', '%s', '%s')",
+		rollupUpdateJobType,
+		modelUsageRollupDailyJobType,
+		retentionEnforceJobType,
+		traceSpanPartitionCreateJobType,
+	)
 }
 
 func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter string) ([]Job, error) {
