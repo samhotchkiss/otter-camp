@@ -9714,9 +9714,31 @@ func looksLikeRecoveryFileDraft(content string) bool {
 			return false
 		}
 	}
+	if containsAny(lower,
+		"let me write the comprehensive",
+		"let me write the full",
+		"let me write the complete",
+		"let me now write",
+		"let me check the workspace structure",
+		"i now have all four locked strategy artifacts",
+		"the immediate directive is clear",
+		"i see there are already stub files",
+		"production-ready migration plan",
+		"target file:",
+	) && containsAny(lower,
+		"migration plan",
+		"plan",
+		"document",
+		"strategy artifacts",
+		"stub files",
+	) {
+		return false
+	}
 	if len(trimmed) >= 180 && !hasStructuredRecoveryFileDraftMarkers(trimmed) && containsAny(firstLine,
 		"let me ",
 		"good.",
+		"excellent.",
+		"got it.",
 		"perfect.",
 		"i need to provide",
 		"i need to write",

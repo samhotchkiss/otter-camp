@@ -7755,6 +7755,15 @@ func TestLooksLikeRecoveryFileDraftRejectsLongConversationalLeadIn(t *testing.T)
 	}
 }
 
+func TestLooksLikeRecoveryFileDraftRejectsLongImperativeNarration(t *testing.T) {
+	t.Parallel()
+
+	content := "Excellent. I now have all four locked strategy artifacts for OC-15. The immediate directive is clear: write at least one migrated output file before expanding the plan.\n\nBased on the strategy, I need to write the Content Migration Plan (target file: docs/migration-plan/oc-15-content-migration-plan.md). This is the operative document that translates the locked decisions into a step-by-step execution guide.\n\nLet me write the comprehensive migration plan:"
+	if looksLikeRecoveryFileDraft(content) {
+		t.Fatalf("looksLikeRecoveryFileDraft(%q) = true, want false", content)
+	}
+}
+
 type unitFixture struct {
 	engine        *TurnEngine
 	events        *fakeEventBus
