@@ -3875,6 +3875,23 @@ func TestJobWorkerFailStaleModelInvocationsFailsOrphanedLiveTurnsWithoutClaimedJ
 	if storedInvocation.CompletedAt == nil {
 		t.Fatal("invocation completed_at = nil, want set")
 	}
+	storedTurn, err := repo.NewChatTurnRepo(pool).GetByID(ctx, turn.ID)
+	if err != nil {
+		t.Fatalf("reload turn: %v", err)
+	}
+	if storedTurn.Status != "failed" {
+		t.Fatalf("turn status = %q, want failed", storedTurn.Status)
+	}
+	if storedTurn.CompletedAt == nil {
+		t.Fatal("turn completed_at = nil, want set")
+	}
+	refreshedSession, err := repo.NewChatSessionRepo(pool).GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if refreshedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil", refreshedSession.CurrentTurnID)
+	}
 }
 
 func TestJobWorkerRecoverStaleInProgressContinuationTurns(t *testing.T) {

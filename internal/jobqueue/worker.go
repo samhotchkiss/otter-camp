@@ -993,13 +993,11 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 }
 
 func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
-	ct, err := w.pool.Exec(ctx, `
-		UPDATE model_invocation mi
-		SET status = 'failed',
-		    failure_class = 'product_runtime',
-		    error_code = 'stale_model_invocation',
-		    error_message = 'worker cleanup failed stale in_flight model invocation without live in-progress turn',
-		    completed_at = COALESCE(completed_at, now())
+	rows, err := w.pool.Query(ctx, `
+		SELECT mi.id,
+		       mi.turn_id,
+		       mi.session_id
+		FROM model_invocation mi
 		WHERE mi.status = 'in_flight'
 		  AND (
 		    (
@@ -1036,9 +1034,82 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		  )
 	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second))
 	if err != nil {
-		return 0, fmt.Errorf("fail stale model invocations: %w", err)
+		return 0, fmt.Errorf("list stale model invocations: %w", err)
 	}
-	return ct.RowsAffected(), nil
+	defer rows.Close()
+
+	type staleInvocationCandidate struct {
+		invocationID uuid.UUID
+		turnID       *uuid.UUID
+		sessionID    *uuid.UUID
+	}
+	var candidates []staleInvocationCandidate
+	for rows.Next() {
+		var item staleInvocationCandidate
+		if err := rows.Scan(&item.invocationID, &item.turnID, &item.sessionID); err != nil {
+			return 0, fmt.Errorf("scan stale model invocation: %w", err)
+		}
+		candidates = append(candidates, item)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate stale model invocations: %w", err)
+	}
+
+	const failureReason = "worker cleanup failed stale in_flight model invocation without live in-progress turn"
+	var repaired int64
+	for _, item := range candidates {
+		ct, err := w.pool.Exec(ctx, `
+			UPDATE model_invocation
+			SET status = 'failed',
+			    failure_class = 'product_runtime',
+			    error_code = 'stale_model_invocation',
+			    error_message = $2,
+			    completed_at = COALESCE(completed_at, now())
+			WHERE id = $1
+			  AND status = 'in_flight'
+		`, item.invocationID, failureReason)
+		if err != nil {
+			return repaired, fmt.Errorf("fail stale model invocation %s: %w", item.invocationID, err)
+		}
+		if ct.RowsAffected() == 0 {
+			continue
+		}
+		repaired++
+		if item.turnID == nil || *item.turnID == uuid.Nil {
+			continue
+		}
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE chat_message
+			SET status = 'failed',
+			    error_message = $2
+			WHERE turn_id = $1
+			  AND role = 'assistant'
+			  AND status IN ('pending', 'streaming')
+		`, *item.turnID, failureReason); err != nil {
+			return repaired, fmt.Errorf("fail assistant messages for stale model invocation turn %s: %w", *item.turnID, err)
+		}
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE chat_turn
+			SET status = 'failed',
+			    error_message = $2,
+			    completed_at = COALESCE(completed_at, now())
+			WHERE id = $1
+			  AND status = 'in_progress'
+		`, *item.turnID, failureReason); err != nil {
+			return repaired, fmt.Errorf("fail stale model invocation turn %s: %w", *item.turnID, err)
+		}
+		if item.sessionID != nil && *item.sessionID != uuid.Nil {
+			if _, err := w.pool.Exec(ctx, `
+				UPDATE chat_session
+				SET current_turn_id = NULL
+				WHERE id = $1
+				  AND current_turn_id = $2
+			`, *item.sessionID, *item.turnID); err != nil {
+				return repaired, fmt.Errorf("clear current turn for stale model invocation session %s: %w", *item.sessionID, err)
+			}
+		}
+	}
+	return repaired, nil
 }
 
 func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (int64, error) {
