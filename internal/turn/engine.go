@@ -7003,6 +7003,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return false, nil
 		}
+		handled, stop, err = e.handleRecoveryFileWriteWithoutPath(ctx, rt, &call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 		handled, stop, err = e.handleRecoveryFileWriteWithoutContent(ctx, rt, &call)
 		if err != nil {
 			return false, err
@@ -7660,6 +7670,67 @@ func (e *TurnEngine) handleRecoveryRejectedFileWriteContent(ctx context.Context,
 	}
 	call.Arguments = normalized
 	return e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
+}
+
+func (e *TurnEngine) handleRecoveryFileWriteWithoutPath(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
+	if rt == nil || call == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.write") {
+		return false, false, nil
+	}
+
+	normalized := toolargs.Normalize("file.write", call.Arguments)
+	if strings.TrimSpace(stringValue(normalized["path"])) != "" {
+		return false, false, nil
+	}
+
+	targetPath, _, ok := e.recoveryFileOutputContext(ctx, rt)
+	if !ok || strings.TrimSpace(targetPath) == "" {
+		return false, false, nil
+	}
+
+	normalized["path"] = strings.TrimSpace(targetPath)
+	if _, exists := normalized["create_dirs"]; !exists {
+		normalized["create_dirs"] = true
+	}
+	call.Arguments = normalized
+
+	if strings.TrimSpace(stringValue(normalized["content"])) != "" {
+		e.logger.Info("recovery: populated file.write path from recovery context",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+		)
+		return false, false, nil
+	}
+
+	if draft, rejectReason, ok := e.recoveryFileWriteDraftContent(ctx, rt, targetPath); ok {
+		normalized["content"] = draft
+		call.Arguments = normalized
+		if rt.recoveryFileWrites == nil {
+			rt.recoveryFileWrites = make(map[string]recoveryPopulatedFileWriteState)
+		}
+		rt.recoveryFileWrites[strings.TrimSpace(call.ID)] = recoveryPopulatedFileWriteState{
+			TargetPath: strings.TrimSpace(targetPath),
+			Draft:      draft,
+		}
+		e.logger.Info("recovery: populated pathless file.write from recovery context",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+		)
+		return false, false, nil
+	} else if strings.TrimSpace(rejectReason) != "" {
+		return e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
+	}
+
+	e.logger.Info("recovery: injected missing file.write path from recovery context",
+		"session_id", rt.session.ID,
+		"turn_id", rt.turn.ID,
+		"path", targetPath,
+	)
+	return false, false, nil
 }
 
 func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {

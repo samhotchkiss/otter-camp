@@ -3376,6 +3376,106 @@ func TestTurnEngineIntegrationRecoveryTurnRewritesEmptyCLIExecuteToPersistedFile
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryTurnRewritesPathlessFileWriteToPersistedDraft(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, recoveryMessage.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls != 1 {
+			t.Fatalf("unexpected extra model call: %d", modelCalls)
+		}
+		return ModelResponse{
+			Content: "Let me write the recovered deliverable directly.",
+			ToolCalls: []ModelToolCall{{
+				ID:   "pathless-write",
+				Name: "file_write",
+				Tier: "tier2",
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		if call.Name != "file.write" {
+			t.Fatalf("call.Name = %q, want file.write", call.Name)
+		}
+		if got := stringValue(call.Arguments["path"]); got != seed.targetPath {
+			t.Fatalf("path = %q, want %q", got, seed.targetPath)
+		}
+		if got := stringValue(call.Arguments["content"]); got != seed.artifactDraft {
+			t.Fatalf("content = %q, want persisted artifact draft", got)
+		}
+		if got, _ := call.Arguments["create_dirs"].(bool); !got {
+			t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
+		}
+		if err := os.WriteFile(seed.targetAbs, []byte(seed.artifactDraft), 0o644); err != nil {
+			t.Fatalf("write target file: %v", err)
+		}
+		runID := uuid.New()
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      seed.targetPath,
+				"byte_size": len(seed.artifactDraft),
+				"created":   false,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+
+	body, err := os.ReadFile(seed.targetAbs)
+	if err != nil {
+		t.Fatalf("read target file: %v", err)
+	}
+	if string(body) != seed.artifactDraft {
+		t.Fatalf("target file body = %q, want persisted artifact draft", string(body))
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after recovery rewrite: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want not blocked", updatedTask.WorkStatus)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"path_required"`) {
+			t.Fatalf("unexpected path_required tool_result: %s", item.Content)
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: file.write") {
+			t.Fatalf("unexpected recovery correction after direct rewrite: %s", item.Content)
+		}
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnMirrorsArtifactIntoLegacyWorkspaceRootEX322(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
