@@ -66,6 +66,7 @@ const (
 	maxTransientInfraBackoff                  = 5 * time.Minute
 	maxTransientInfraRetries                  = 5
 	maxConsecutiveAutoTurns                   = 10
+	maxGenericRecoveryReplyRetries            = defaultModelRetryBudget - 1
 	maxProjectBootstrapAutoTurns              = 3
 	defaultSummarizeLayerBudget               = 0
 	chunkPollSteerEveryNChunks                = 10
@@ -1094,6 +1095,16 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	}
 	assistant := latestAssistantFinalForTurn(messages, payload.TurnID)
 	if assistant == nil {
+		if handled, handleErr := e.handleCompletedRecoveryTurnWithoutUsableAssistant(ctx, session, taskRecord, latestCompleted, latestUser, ""); handleErr != nil {
+			return handleErr
+		} else if handled {
+			return nil
+		}
+		return nil
+	}
+	if handled, handleErr := e.handleCompletedRecoveryTurnWithoutUsableAssistant(ctx, session, taskRecord, latestCompleted, latestUser, assistant.Content); handleErr != nil {
+		return handleErr
+	} else if handled {
 		return nil
 	}
 	if latestUser.SequenceNumber > assistant.SequenceNumber {
@@ -1135,6 +1146,52 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 		return nil
 	}
 	return nil
+}
+
+func (e *TurnEngine) handleCompletedRecoveryTurnWithoutUsableAssistant(
+	ctx context.Context,
+	session *chat.ChatSession,
+	taskRecord repo.ProjectTask,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+	assistantContent string,
+) (bool, error) {
+	if session == nil || latestCompleted == nil || latestUser == nil || !isRecoveryResumeMessage(*latestUser) {
+		return false, nil
+	}
+	if strings.TrimSpace(assistantContent) != "" && !looksLikeGenericTaskRecoveryReply(assistantContent) {
+		return false, nil
+	}
+
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		reason := buildGenericRecoveryReplyBlockedReason(assistantContent, latestCompleted.RetryCount+1)
+		if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, "[Recovery turn halted: "+reason+"]"); err != nil {
+			return true, err
+		}
+		if e.taskTransitions == nil {
+			return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+		}
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  latestUser.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if latestCompleted.RespondingID != uuid.Nil {
+		agentID := latestCompleted.RespondingID
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return true, err
+	}
+	return enqueued, nil
 }
 
 func (e *TurnEngine) HandleTurnCancelledEvent(ctx context.Context, event eventbus.DomainEvent) error {
@@ -12453,6 +12510,36 @@ func indicatesTaskCompletion(content string) bool {
 		}
 	}
 	return false
+}
+
+func looksLikeGenericTaskRecoveryReply(content string) bool {
+	normalized := strings.ToLower(normalizeInstructionText(content))
+	if normalized == "" {
+		return false
+	}
+	patterns := []string{
+		"i'm ready to help",
+		"i am ready to help",
+		"i'm ready to assist",
+		"i am ready to assist",
+		"what do you need",
+		"what would you like me to do",
+		"how can i help",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(normalized, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildGenericRecoveryReplyBlockedReason(reply string, attempts int) string {
+	trimmed := strings.TrimSpace(reply)
+	if trimmed == "" {
+		return fmt.Sprintf("recovery halted after %d retries without a usable assistant response; re-queue only when the next attempt can continue the task directly", attempts)
+	}
+	return fmt.Sprintf("recovery halted after %d generic non-action replies; latest reply=%q", attempts, trimmed)
 }
 
 func completedWorkSignalFromMessages(messages []repo.ChatMessage, turnID uuid.UUID) (workCompletionSignal, bool) {
