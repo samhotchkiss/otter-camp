@@ -100,6 +100,7 @@ type projectTaskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
 	SetFlowNode(ctx context.Context, id uuid.UUID, flowNodeID *uuid.UUID) (repo.ProjectTask, error)
 	SetBranch(ctx context.Context, id uuid.UUID, branchName *string) (repo.ProjectTask, error)
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error)
 }
 
 type projectTaskRepositoryTx interface {
@@ -520,7 +521,29 @@ func (s *service) AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor Actor
 	if err != nil {
 		return nil, err
 	}
+	if strings.EqualFold(strings.TrimSpace(nextNode.NodeType), "review") || nextNode.RequiresHumanReview {
+		if enrichedTask, enrichErr := s.hydrateReviewPlanningEvidence(ctx, taskRecord); enrichErr != nil {
+			return nil, enrichErr
+		} else {
+			taskRecord = enrichedTask
+		}
+	}
 	return s.advanceNextFlowTx(ctx, taskRecord, currentNode, activeExecution, nextNode, actor)
+}
+
+func (s *service) hydrateReviewPlanningEvidence(ctx context.Context, taskRecord repo.ProjectTask) (repo.ProjectTask, error) {
+	updatedMetadata, _, report := enrichReviewPlanningEvidence(taskRecord.Metadata)
+	if !report.Enforced || report.HasMissingRequirements() && string(updatedMetadata) == string(taskRecord.Metadata) {
+		return taskRecord, nil
+	}
+	if string(updatedMetadata) == string(taskRecord.Metadata) {
+		return taskRecord, nil
+	}
+	updated, err := s.tasks.UpdateMetadata(ctx, taskRecord.ID, updatedMetadata)
+	if err != nil {
+		return taskRecord, err
+	}
+	return updated, nil
 }
 
 func (s *service) advanceTerminalFlowTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, actor Actor) (*repo.FlowNodeExecution, error) {
@@ -750,6 +773,9 @@ func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.Pro
 }
 
 func (s *service) createTaskReviewInboxTx(ctx context.Context, tx pgx.Tx, taskRecord repo.ProjectTask, flowNodeID uuid.UUID, actor Actor) error {
+	if s == nil || s.inbox == nil {
+		return nil
+	}
 	title := "Task review required"
 	body := "Flow advancement paused pending human review."
 	payload, _ := json.Marshal(map[string]any{
@@ -758,7 +784,7 @@ func (s *service) createTaskReviewInboxTx(ctx context.Context, tx pgx.Tx, taskRe
 	})
 	if plan, ok := taskplan.Parse(taskRecord.Metadata); ok {
 		report := taskplan.Evaluate(plan)
-		plan, report = enrichReviewPlanningEvidence(taskRecord.Metadata, plan)
+		_, plan, report = enrichReviewPlanningEvidence(taskRecord.Metadata)
 		if plan.RequiresReviewAndRefinement() || report.Enforced {
 			if s.planningAssets != nil && s.environments != nil {
 				syncedPlan, syncErr := planningasset.New(planningasset.Options{
@@ -773,7 +799,7 @@ func (s *service) createTaskReviewInboxTx(ctx context.Context, tx pgx.Tx, taskRe
 					report = taskplan.Evaluate(plan)
 				}
 			}
-			plan, report = enrichReviewPlanningEvidence(taskRecord.Metadata, plan)
+			_, plan, report = enrichReviewPlanningEvidence(taskRecord.Metadata)
 			if report.Enforced && report.HasMissingRequirements() {
 				return taskplan.ContractError{Report: report}
 			}
@@ -895,15 +921,19 @@ func actorUUIDPtr(actor Actor) *uuid.UUID {
 	return &id
 }
 
-func enrichReviewPlanningEvidence(metadata json.RawMessage, plan taskplan.Plan) (taskplan.Plan, taskplan.ValidationReport) {
+func enrichReviewPlanningEvidence(metadata json.RawMessage) (json.RawMessage, taskplan.Plan, taskplan.ValidationReport) {
+	plan, ok := taskplan.Parse(metadata)
+	if !ok {
+		return metadata, taskplan.Plan{}, taskplan.ValidationReport{}
+	}
 	report := taskplan.Evaluate(plan)
-	if !report.Enforced || !report.HasMissingRequirements() || len(plan.ArtifactEvidence) > 0 || len(plan.Artifacts) == 0 {
-		return plan, report
+	if !report.Enforced || !report.HasMissingRequirements() || len(plan.Artifacts) == 0 {
+		return metadata, plan, report
 	}
 
 	contracts := taskplan.ArtifactContractForPlan(plan)
 	if len(contracts) == 0 {
-		return plan, report
+		return metadata, plan, report
 	}
 	artifactsBySlug := make(map[string]taskplan.PlannedArtifact, len(plan.Artifacts))
 	for _, artifact := range plan.Artifacts {
@@ -913,8 +943,19 @@ func enrichReviewPlanningEvidence(metadata json.RawMessage, plan taskplan.Plan) 
 		}
 		artifactsBySlug[slug] = artifact
 	}
+	evidenceBySlug := make(map[string]taskplan.ArtifactEvidence, len(plan.ArtifactEvidence))
+	for _, evidence := range plan.ArtifactEvidence {
+		slug := strings.TrimSpace(evidence.Slug)
+		if slug == "" {
+			continue
+		}
+		evidenceBySlug[slug] = evidence
+	}
 	updates := make([]taskplan.ArtifactEvidence, 0, len(contracts))
 	for _, contract := range contracts {
+		if _, exists := evidenceBySlug[strings.TrimSpace(contract.Slug)]; exists {
+			continue
+		}
 		artifact, ok := artifactsBySlug[strings.TrimSpace(contract.Slug)]
 		if !ok || (strings.TrimSpace(artifact.ArtifactID) == "" && strings.TrimSpace(artifact.ContentSHA256) == "") {
 			continue
@@ -936,7 +977,7 @@ func enrichReviewPlanningEvidence(metadata json.RawMessage, plan taskplan.Plan) 
 		})
 	}
 	if len(updates) == 0 {
-		return plan, report
+		return metadata, plan, report
 	}
 	updatedMetadata, updatedPlan, updatedReport, err := taskplan.ApplyProcessUpdate(metadata, taskplan.ProcessUpdate{
 		Artifacts:          updates,
@@ -945,10 +986,9 @@ func enrichReviewPlanningEvidence(metadata json.RawMessage, plan taskplan.Plan) 
 		RecordedAt:         time.Now().UTC(),
 	})
 	if err != nil {
-		return plan, report
+		return metadata, plan, report
 	}
-	_ = updatedMetadata
-	return updatedPlan, updatedReport
+	return updatedMetadata, updatedPlan, updatedReport
 }
 
 func reviewArtifactSummaries(artifacts []taskplan.PlannedArtifact) []string {

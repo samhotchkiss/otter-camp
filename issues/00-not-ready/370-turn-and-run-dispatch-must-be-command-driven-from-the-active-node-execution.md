@@ -141,3 +141,10 @@ Latest slice completed:
 - live validation on `speaker-pipeline-ops-validation-fresh-5` confirmed the new behavior:
   - task `11` resumed from `blocked` and retargeted onto `deliverables/oc-11-validation-workflow-spec.md`
   - task `12` completed its work lane and advanced into `review` after the fresh session reused `planning/prd-spec/oc-12-validation-report.md` instead of the old acceptance-criteria checkpoint
+- `AdvanceFlow(...)` now hydrates missing required planning evidence before entering review by persisting synthesized `planning.artifact_evidence` back onto the task record when partial evidence already exists.
+- focused `internal/flow` integration coverage now reproduces the live task-15 failure shape:
+  - enforced discovery plan
+  - all required discovery artifacts already persisted with `artifact_id` / `content_sha256`
+  - one unrelated extra evidence entry already present
+  - flow advance must still succeed and persist the four missing required evidence rows before moving to review
+- live validation on `speaker-pipeline-ops-validation-fresh-5` confirmed task `15` no longer blocks on `planning artifact contract is incomplete` once the review-boundary hydration slice is deployed.

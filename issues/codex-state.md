@@ -26,9 +26,10 @@ Current observed task state on the active fresh Speaker Pipeline canary:
 - bootstrap tasks `1-8` are all `done`
 - parent task `9` remains `draft`
 - task `10` is `done`
-- tasks `11`, `13`, and `15` are currently `in_progress`
-- task `12` is currently `review`
-- there are no currently blocked tasks on the project
+- task `11` is currently `blocked`
+- tasks `13` and `15` are currently `in_progress`
+- task `12` is currently `done`
+- there are no queued tasks on the project
 
 The active fresh canary has already validated these product expectations under the latest build:
 
@@ -42,10 +43,11 @@ The active fresh canary has already validated these product expectations under t
 
 Most recent shipped commits relevant to the current validation run:
 
-- pending local slice: recovery checkpoint reconciliation now prefers task-local historical target-path hints even when the prior content on that path was unusable, so poisoned checkpoint targets do not win just because only the path survived
+- pending local slice: flow advance into review now backfills missing required `planning.artifact_evidence` entries when partial evidence already exists, so enforced discovery/research tasks do not block with false missing-artifact errors
 - pending local slice: `memory_extract_turn` is now classified with reserved low-priority background work so it cannot consume the final worker slot ahead of active `agent_turn` execution
 - pending local slice: recovery draft rejection now treats the exact live task-13 “Good. Now I have a clear understanding...” deliverable preface as non-substantive, so that 413-byte placeholder stops being reused from `[Recovery resume state]`
 - pending local slice: task-scoped `file.write` now rejects narrated placeholder content such as “Let me create the deliverable...” instead of persisting junk markdown into deliverable files
+- `1238acd4` `Prefer historical recovery target paths`
 - `53dbe137` `Tighten task execution recovery ownership`
 - `14512df6` `Prefer task-matched recovery deliverables`
 - `525ddd13` `Guard project sessions during bootstrap execution`
@@ -113,6 +115,7 @@ What those changed:
 - task-scoped `file.write` is being hardened against imperative first-person placeholder prose after live `fresh-5` task `13` persisted a 413-byte “Let me create the deliverable...” stub into `deliverables/oc-13-speaker-validation-agent.md` before falling into `cli.execute command_required`
 - worker execution-slot reservation is being widened beyond rollups: live `fresh-5` showed repeated `memory_extract_turn` claims consuming the last slot while active task lanes were waiting, and the local integration reproducer now covers that starvation case explicitly
 - recovery draft rejection is being widened to drop the exact task-13 “clear understanding of the requirements” preface so the stale placeholder no longer survives as a durable draft candidate
+- flow advance into review is being hardened to synthesize missing required `planning.artifact_evidence` entries even when a task already has unrelated evidence entries; the live task-15 repro had all four enforced discovery artifacts persisted with IDs and SHAs, but review advance still blocked because only a single extra `validation-report` evidence entry existed
 
 Current live cleanup result:
 
@@ -132,6 +135,7 @@ Current live cleanup result:
   - task `11` resumed from `blocked` and is back `in_progress` on the workflow-spec path
   - task `12` completed its work lane and advanced into `review`
 - current next bug to watch: review-lane usability and completion quality. The reviewer path still tends to inspect execution/repo state (`flow.get_execution`, `git.status`) instead of going straight to `flow.review_decision`.
+- current next bug to watch: task `11` is blocked on recovery quality, not queue ownership or planning-contract state. Its persisted target draft for `deliverables/oc-11-validation-workflow-spec.md` is still a clarification placeholder ("I'm ready to execute task OC-11 ... What is the target deliverable ..."), and recovery keeps reusing that poisoned file draft on `file.write` fallback.
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 

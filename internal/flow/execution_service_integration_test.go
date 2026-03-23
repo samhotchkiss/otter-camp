@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -246,6 +247,77 @@ func TestFlowExecutionServiceRejectsPlanningReviewWhenArtifactsRemainScaffolds(t
 	}
 	if executions[0].Status != "active" || executions[0].FlowNodeID != nodes[0].ID {
 		t.Fatalf("execution[0] = %+v, want active work execution", executions[0])
+	}
+}
+
+func TestFlowExecutionServiceAdvanceFlowBackfillsMissingPlanningEvidenceWhenPartialEvidenceExists(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Validation report synthesis", "in_progress", &template.ID)
+	taskRecord.Metadata = json.RawMessage(`{
+		"planning": {
+			"mode": "execution_first",
+			"playbook": "discovery",
+			"work_type": "generic",
+			"project_stage": "validation",
+			"evidence_maturity": "unknown",
+			"risk_level": "low",
+			"discovery_mode": "new_product",
+			"process_enforced": true,
+			"artifacts": [
+				{"slug":"problem-brief","title":"Problem brief","kind":"discovery_plan","repo_path":"planning/discovery-plan/oc-99-problem-brief.md","artifact_id":"a1","content_sha256":"sha1"},
+				{"slug":"research-plan","title":"Research plan","kind":"discovery_plan","repo_path":"planning/discovery-plan/oc-99-research-plan.md","artifact_id":"a2","content_sha256":"sha2"},
+				{"slug":"assumption-log","title":"Assumption log","kind":"discovery_plan","repo_path":"planning/discovery-plan/oc-99-assumption-log.md","artifact_id":"a3","content_sha256":"sha3"},
+				{"slug":"validation-plan","title":"Validation plan","kind":"discovery_plan","repo_path":"planning/discovery-plan/oc-99-validation-plan.md","artifact_id":"a4","content_sha256":"sha4"}
+			],
+			"artifact_evidence": [
+				{"slug":"validation-report","title":"Validation report","summary":"Extra non-contract artifact evidence","sections":["Executive Summary"],"asset_refs":["deliverables/oc-99-validation-report.md"]}
+			]
+		}
+	}`)
+	if _, err := fixture.taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update task metadata: %v", err)
+	}
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review: %v", err)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[1].ID {
+		t.Fatalf("current_flow_node_id = %v, want review node %s", updatedTask.CurrentFlowNodeID, nodes[1].ID)
+	}
+
+	plan, ok := taskplan.Parse(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected planning metadata")
+	}
+	if len(plan.ArtifactEvidence) != 5 {
+		t.Fatalf("artifact evidence len = %d, want 5", len(plan.ArtifactEvidence))
+	}
+	for _, slug := range []string{"problem-brief", "research-plan", "assumption-log", "validation-plan"} {
+		found := false
+		for _, evidence := range plan.ArtifactEvidence {
+			if strings.EqualFold(strings.TrimSpace(evidence.Slug), slug) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing synthesized artifact evidence for %s", slug)
+		}
 	}
 }
 

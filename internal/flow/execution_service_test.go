@@ -966,6 +966,15 @@ func (f *fakeTaskRepo) SetBranch(_ context.Context, id uuid.UUID, branchName *st
 	f.items[id] = item
 	return item, nil
 }
+func (f *fakeTaskRepo) UpdateMetadata(_ context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ProjectTask, error) {
+	item, ok := f.items[id]
+	if !ok {
+		return repo.ProjectTask{}, repo.ErrNotFound
+	}
+	item.Metadata = metadata
+	f.items[id] = item
+	return item, nil
+}
 
 type fakeNodeRepo struct {
 	items map[uuid.UUID]repo.FlowNode
