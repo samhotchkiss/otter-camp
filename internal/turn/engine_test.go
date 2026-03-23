@@ -7421,6 +7421,12 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects resume by completing placeholder narration",
+			content: "Perfect. Now I have full context. Let me resume the task by completing the migration plan document. " +
+				"Based on the strategy artifacts and the checkpoint directive, I need to write a comprehensive migration plan that operationalizes these decisions.",
+			want: "intent to write the deliverable",
+		},
+		{
 			name: "rejects recovered full context planning placeholder narration",
 			content: "Perfect. I have recovered the full context. The planning artifacts are complete and comprehensive. " +
 				"Now I need to create the infrastructure spec and deployment checklist. Let me draft the comprehensive infrastructure specification:",
