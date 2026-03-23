@@ -1325,6 +1325,26 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		}
 		enrichedMetadata = taskdecomp.ApplyChildMetadata(enrichedMetadata, parentTask.ID, nextManualChildWorkstreamIndex(*parentTask, children))
 	}
+	if parentTask == nil && scope.sessionID != nil && *scope.sessionID != uuid.Nil && scope.projectID != nil && *scope.projectID == projectID {
+		projectTasks, listErr := e.tasks.ListByProject(ctx, projectID)
+		if listErr != nil {
+			return nil, listErr
+		}
+		if bootstrapSetupStillActive(projectTasks) {
+			_, decompErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+				ParentTaskID: uuid.Nil,
+				Title:        title,
+				Description:  description,
+				Metadata:     enrichedMetadata,
+			})
+			if decompErr != nil {
+				if errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) {
+					return boundedTaskTooLargeResponse(title, description, decompErr), nil
+				}
+				return nil, decompErr
+			}
+		}
+	}
 	desiredTask := repo.ProjectTask{
 		OrganizationID:      scope.organizationID,
 		ProjectID:           projectID,
@@ -1455,19 +1475,7 @@ func (e *NativeToolExecutor) resolveBootstrapWorkstreamFlowTemplate(ctx context.
 	if err != nil {
 		return nil, err
 	}
-	bootstrapActive := false
-	for _, taskRecord := range projectTasks {
-		metadata := metadataObject(taskRecord.Metadata)
-		setupTask, _ := metadata["bootstrap_setup_task"].(bool)
-		if !setupTask {
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
-			bootstrapActive = true
-			break
-		}
-	}
-	if !bootstrapActive {
+	if !bootstrapSetupStillActive(projectTasks) {
 		return nil, nil
 	}
 
@@ -2886,6 +2894,20 @@ func taskMetadataMarksOrchestrationOnly(metadata json.RawMessage) bool {
 	}
 	orchestrationOnly, _ := decomp["orchestration_only"].(bool)
 	return orchestrationOnly
+}
+
+func bootstrapSetupStillActive(projectTasks []repo.ProjectTask) bool {
+	for _, taskRecord := range projectTasks {
+		metadata := metadataObject(taskRecord.Metadata)
+		setupTask, _ := metadata["bootstrap_setup_task"].(bool)
+		if !setupTask {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *NativeToolExecutor) findReusableScopedSession(ctx context.Context, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID, mode string) (*repo.ChatSession, error) {

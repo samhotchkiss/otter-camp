@@ -4138,6 +4138,64 @@ func TestIntegrationBootstrapGateAllowsPlanningTaskCreateBeforeGateClears(t *tes
 	}
 }
 
+func TestIntegrationBootstrapPlanningTaskCreateRejectsOversizedTopLevelTask(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	dataDir := t.TempDir()
+	seedReviewRefinementSystemTemplate(t, ctx, pool)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Oversized Rejection",
+		"slug":        "bootstrap-oversized-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap task.create rejects oversized top-level executable work.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap oversized planning",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	beforeTasks, err := taskRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list project tasks before create: %v", err)
+	}
+
+	out, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":  projectID.String(),
+		"title":       "Create operating manual and runbooks",
+		"description": "Synthesize all frameworks and automation into a comprehensive operating manual. Include: weekly review checklist, scoring walkthrough, outreach decision tree, troubleshooting guide, examples. Deliverable: OPERATING-MANUAL.md and templates/ folder. Target 45min.",
+	})
+	if err != nil {
+		t.Fatalf("task.create oversized top-level bootstrap task: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", out["error"])); !strings.Contains(got, "task exceeds bounded size policy") {
+		t.Fatalf("task.create error = %q, want bounded size policy rejection", got)
+	}
+
+	afterTasks, err := taskRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list project tasks after create: %v", err)
+	}
+	if len(afterTasks) != len(beforeTasks) {
+		t.Fatalf("project task count = %d, want %d after rejected oversized bootstrap task", len(afterTasks), len(beforeTasks))
+	}
+}
+
 func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreamsInSameProjectSession(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
