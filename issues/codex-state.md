@@ -237,16 +237,24 @@ Sam.blog run artifacts:
 
 ## Current repo state at time of writing
 
-As of 2026-03-22 16:25 MDT:
+As of 2026-03-22 21:10 MDT:
 
 - branch is `main`
-- recent pushed `main` work includes the SAM.blog clean-run fixes:
-  - `dede48bd` `Auto-complete orchestration parent tasks`
-  - `1d20cda2` `Hydrate planning evidence for parent auto-complete`
-  - `952fc150` `Auto-complete bootstrap planning tasks`
-- the live `sam-blog` project (`424bd0d3-dace-46ef-99fc-f21b817cdfc3`) now has `36` tasks and all `36` are `done`
-- `oc-svc` and `oc-worker` are running from the latest pushed build; `oc-recover` was intentionally removed because the product paths it was compensating for are now fixed
-- queue directories outside `05-completed` are nearly empty; the repo should not be treated as “actively queued” unless new issues are added
+- `HEAD` and `origin/main` are `b72127e0` `Recover queued sessions behind stale live turns`
+- the latest queue/runtime hardening on top of the earlier SAM.blog clean-run work is:
+  - `ad358ee0` `Reject impossible draft project gates`
+  - `c50e9ae2` `Deduplicate rollup update jobs by org and day`
+  - `6c30b325` `Prioritize non-maintenance background jobs`
+  - `b72127e0` `Recover queued sessions behind stale live turns`
+- the current live validation project is again `sam-blog`, but this is a new clean rerun, not the earlier fully-complete run
+  - current live status is `38` tasks total
+  - current task counts are `done=8`, `draft=12`, `in_progress=6`, `review=12`
+  - the active work/review lanes now exist without blocked tasks
+- `oc-svc` and `oc-worker` are running from the latest pushed build in tmux
+- live queue state is materially healthier than earlier in the day:
+  - pending `agent_turn` backlog dropped from `92` to `18`
+  - the earlier `67`-job pile behind task session `b337060e-faf3-4c88-8bc3-b65408d632af` was reduced after stale-live-turn recovery shipped
+  - maintenance jobs no longer monopolize fresh claims, but `rollup_update` backlog is still large and remains a secondary cleanup target
 - the remaining untracked local artifacts are workspace/support files, not active tracked product edits:
   - `.oc.db`
   - `data/objects/`
@@ -347,6 +355,18 @@ The goal is that a fresh Codex instance can start from this file, inspect the re
     - `5b589b51` `Cover reject flow runtime mismatch guards`
     - `3c0cee91` `Test oldest deferred wakeup promotion`
   - Confirmed `task_review` reject/resume semantics already have coverage in both task-service unit tests and control-plane integration wakeup tests, so that area does not currently look like the next missing invariant.
+- 2026-03-22 21:10 MDT
+  - Refreshed this handoff to match the new live rerun instead of the earlier fully-complete SAM.blog state.
+  - Recorded the latest pushed queue/runtime hardening commits:
+    - `ad358ee0` `Reject impossible draft project gates`
+    - `c50e9ae2` `Deduplicate rollup update jobs by org and day`
+    - `6c30b325` `Prioritize non-maintenance background jobs`
+    - `b72127e0` `Recover queued sessions behind stale live turns`
+  - Captured the current live `sam-blog` counts and the fact that blocked-task deadlocks have been replaced by active in-progress/review work.
+  - Noted the remaining operational truth:
+    - pending `agent_turn` backlog is down substantially
+    - stale live-turn recovery is now repairing queued task sessions without operator intervention
+    - `rollup_update` backlog still exists but no longer monopolizes fresh non-agent claims
 
 ## How to resume intelligently
 
