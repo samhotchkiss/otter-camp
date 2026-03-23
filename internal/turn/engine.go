@@ -105,6 +105,7 @@ const (
 	projectBootstrapFailureGuardrail          = "guardrail_loop"
 	projectBootstrapFailureMissingAssignments = "missing_assignments"
 	projectBootstrapFailureMissingPM          = "pm_assignment_missing"
+	projectBootstrapFailureMissingReviewer    = "reviewer_assignment_missing"
 	projectBootstrapFailureRepoBinding        = "project_repo_binding_missing"
 	projectBootstrapFailureCompoundParent     = "compound_parent_missing_children"
 	projectBootstrapFailureSetupTaskScope     = "bootstrap_setup_task_unbounded"
@@ -2945,6 +2946,12 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		if pmErr != nil {
 			return projectBootstrapProgress{}, pmErr
 		}
+		if !e.bootstrapHasMaterializedProjectRole(ctx, assignments, "reviewer") {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = projectBootstrapFailureMissingReviewer
+			progress.ValidationFailureReason = "kickoff validation failed: staffed project persisted executable work but did not assign an active reviewer"
+			return progress, nil
+		}
 	case !repoBindingKnown:
 		return progress, nil
 	case !repoBindingPresent:
@@ -3220,6 +3227,33 @@ func (e *TurnEngine) countBootstrapMaterializedAssignments(ctx context.Context, 
 		count++
 	}
 	return count
+}
+
+func (e *TurnEngine) bootstrapHasMaterializedProjectRole(ctx context.Context, assignments []repo.AgentProjectAssignment, role string) bool {
+	role = strings.TrimSpace(strings.ToLower(role))
+	if role == "" {
+		return false
+	}
+	for _, assignment := range assignments {
+		if !assignment.IsActive || assignment.AgentID == uuid.Nil {
+			continue
+		}
+		if strings.TrimSpace(strings.ToLower(assignment.Role)) != role {
+			continue
+		}
+		if e == nil || e.agents == nil {
+			return true
+		}
+		agentRecord, err := e.agents.GetByID(ctx, assignment.AgentID)
+		if err != nil {
+			return true
+		}
+		if agentRecord.IsStarterTrio {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (e *TurnEngine) countProjectBootstrapFirstWaveJobs(ctx context.Context, taskIDs []uuid.UUID) (int, error) {
@@ -3761,7 +3795,7 @@ func formatBootstrapCheckpoint(checkpoint string) string {
 
 func projectBootstrapFailureCheckpoint(progress projectBootstrapProgress, failureClass string) string {
 	switch strings.TrimSpace(failureClass) {
-	case projectBootstrapFailureMissingAssignments, projectBootstrapFailureMissingPM:
+	case projectBootstrapFailureMissingAssignments, projectBootstrapFailureMissingPM, projectBootstrapFailureMissingReviewer:
 		if progress.PlannedTaskCount > 0 {
 			return projectBootstrapCheckpointTaskTree
 		}
@@ -12322,7 +12356,7 @@ func shouldBlockProjectBootstrapRestaffingTool(rt *turnRuntime, toolName string)
 	}
 	if strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
 		switch strings.TrimSpace(state.ValidationFailureClass) {
-		case projectBootstrapFailureMissingAssignments, projectBootstrapFailureMissingPM:
+		case projectBootstrapFailureMissingAssignments, projectBootstrapFailureMissingPM, projectBootstrapFailureMissingReviewer:
 			return false
 		}
 	}

@@ -10303,6 +10303,66 @@ func TestTurnEngineIntegrationProjectBootstrapCountsCompletedExecutionRows(t *te
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapFailsWhenReviewerAssignmentMissing(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	worker := mustCreateAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	assignments := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+	if _, err := assignments.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        pmAgent.ID,
+		ProjectID:      project.ID,
+		Role:           "project_manager",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("assign PM: %v", err)
+	}
+	if _, err := assignments.Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        worker.ID,
+		ProjectID:      project.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &lori.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	description := "Create Python script to generate reports. Deliverable: src/generate_reports.py with report templates and example outputs."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Build reporting and pipeline analytics script",
+		Description:     &description,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &worker.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+	}); err != nil {
+		t.Fatalf("create first-wave task: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if progress.ValidationStatus != projectBootstrapValidationFailed {
+		t.Fatalf("validation_status = %q, want %q", progress.ValidationStatus, projectBootstrapValidationFailed)
+	}
+	if progress.ValidationFailureClass != projectBootstrapFailureMissingReviewer {
+		t.Fatalf("validation_failure_class = %q, want %q", progress.ValidationFailureClass, projectBootstrapFailureMissingReviewer)
+	}
+	if !strings.Contains(progress.ValidationFailureReason, "did not assign an active reviewer") {
+		t.Fatalf("validation_failure_reason = %q, want reviewer guidance", progress.ValidationFailureReason)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapExactV7DraftOnlyShapeWaitsForBootstrapGate(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
