@@ -134,3 +134,10 @@ Latest slice completed:
 - legacy `assigned_task` dispatch now no-ops for any task that already has a `flow_template_id` or `current_flow_node_id`.
 - that trims another shadow control-plane path where a stale generic task-session wakeup could still be emitted or dispatched even though the lane already belonged to a `flow_node_execution`.
 - focused control-plane unit coverage now asserts both the producer (`ensureAssignedAgentRun`) and dispatcher (`dispatchTaskQueueWakeup`) skip `assigned_task` for flow-owned tasks.
+- recovery checkpoint reconciliation now prefers task-local historical target-path hints even when the earlier draft content was unusable, instead of only preferring historical targets when a substantive draft survived.
+- focused turn-engine coverage now asserts:
+  - a generic poisoned checkpoint like `deliverables/oc-11-task-summary.md` is overridden by the task-local historical workflow-spec target path
+  - a poisoned planning-artifact checkpoint like `planning/prd-spec/oc-12-acceptance-criteria.md` is overridden by the task-local historical validation-report target path
+- live validation on `speaker-pipeline-ops-validation-fresh-5` confirmed the new behavior:
+  - task `11` resumed from `blocked` and retargeted onto `deliverables/oc-11-validation-workflow-spec.md`
+  - task `12` completed its work lane and advanced into `review` after the fresh session reused `planning/prd-spec/oc-12-validation-report.md` instead of the old acceptance-criteria checkpoint

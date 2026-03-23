@@ -26,8 +26,9 @@ Current observed task state on the active fresh Speaker Pipeline canary:
 - bootstrap tasks `1-8` are all `done`
 - parent task `9` remains `draft`
 - task `10` is `done`
-- tasks `11`, `12`, `13`, and `15` are currently `in_progress`
-- project session `2eeaf2ad-4db3-4878-bf7c-7e91cb3d8309` is still active after bootstrap completion and task-session startup
+- tasks `11`, `13`, and `15` are currently `in_progress`
+- task `12` is currently `review`
+- there are no currently blocked tasks on the project
 
 The active fresh canary has already validated these product expectations under the latest build:
 
@@ -41,12 +42,12 @@ The active fresh canary has already validated these product expectations under t
 
 Most recent shipped commits relevant to the current validation run:
 
-- pending local slice: legacy `assigned_task` wakeups now no-op for any task already owned by a flow execution, trimming another shadow dispatch path from issue `370`
-- pending local slice: recovery draft rejection now treats the live OC-12 `Current State Summary ... let me start by ...` scaffold and the live OC-15 `Now I have a clear picture ... let me check the flow execution ...` scaffold as non-substantive recovery placeholders
-- pending local slice: task recovery checkpoint reconciliation and historical substantive-output fallback now both reject cross-task `OC-*` drafts so a blocked lane cannot inherit another task's recovery target or deliverable body
+- pending local slice: recovery checkpoint reconciliation now prefers task-local historical target-path hints even when the prior content on that path was unusable, so poisoned checkpoint targets do not win just because only the path survived
 - pending local slice: `memory_extract_turn` is now classified with reserved low-priority background work so it cannot consume the final worker slot ahead of active `agent_turn` execution
 - pending local slice: recovery draft rejection now treats the exact live task-13 “Good. Now I have a clear understanding...” deliverable preface as non-substantive, so that 413-byte placeholder stops being reused from `[Recovery resume state]`
 - pending local slice: task-scoped `file.write` now rejects narrated placeholder content such as “Let me create the deliverable...” instead of persisting junk markdown into deliverable files
+- `53dbe137` `Tighten task execution recovery ownership`
+- `14512df6` `Prefer task-matched recovery deliverables`
 - `525ddd13` `Guard project sessions during bootstrap execution`
 - `6f6a1f25` `Harden bootstrap recovery and draft settlement`
 - `a64dd6c8` `Handle approval-gated bootstrap tasks cleanly`
@@ -125,8 +126,12 @@ Current live cleanup result:
 - the first real execution wave is running under task sessions, not the project session
 - there are currently no blocked tasks on the project
 - the next bug to watch is task-lane completion/review quality, not PM/bootstrap queue ownership
-- live repro just before the latest local slice: task `13` wrote narrated placeholder prose directly into its deliverable file and then blocked on repeated empty `cli.execute`; the local validator now rejects that content pattern before write
-- live repro after that: worker capacity still let `memory_extract_turn` fill the last free slot, which delayed active task sessions despite the earlier maintenance reservation work; the new local fix classifies memory extraction into the reserved low-priority lane too
+- latest fixed repro: task `11` previously recovered onto `deliverables/oc-11-task-summary.md` even though the task-local workflow-spec path already existed in session history; the latest local slice now prefers `deliverables/oc-11-validation-workflow-spec.md`
+- latest fixed repro: task `12` previously recovered onto `planning/prd-spec/oc-12-acceptance-criteria.md` even though the task-local validation-report path already existed in session history; the latest local slice now prefers `planning/prd-spec/oc-12-validation-report.md`
+- live validation after redeploy confirmed both retargets:
+  - task `11` resumed from `blocked` and is back `in_progress` on the workflow-spec path
+  - task `12` completed its work lane and advanced into `review`
+- current next bug to watch: review-lane usability and completion quality. The reviewer path still tends to inspect execution/repo state (`flow.get_execution`, `git.status`) instead of going straight to `flow.review_decision`.
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 

@@ -10524,6 +10524,148 @@ The report captures validation results, recommendations, and next steps.
 	}
 }
 
+func TestRecoveryFileWriteCheckpointCandidatePrefersHistoricalTargetHintOverGenericSummary(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	poisonedInitialID := uuid.New()
+	oldTurnID := uuid.New()
+	currentTurnID := uuid.New()
+	description := "Document as workflow specification."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  11,
+				WorkStatus:  "blocked",
+				Title:       "Document as workflow specification.",
+				Description: &description,
+			},
+		},
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		ID:        poisonedInitialID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "supervisor recovery: resume task",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                             "supervisor",
+			"recovery_action":                    "resume",
+			"recovery_checkpoint_target_path":    "deliverables/oc-11-task-summary.md",
+			"recovery_checkpoint_failure_reason": "placeholder",
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"path":      "deliverables/oc-11-validation-workflow-spec.md",
+				"byte_size": 788,
+				"created":   true,
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: poisonedInitialID,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	checkpoint, ok := fixture.engine.recoveryFileWriteCheckpointCandidate(context.Background(), rt, "placeholder")
+	if !ok {
+		t.Fatal("expected recovery checkpoint candidate")
+	}
+	if checkpoint.TargetPath != "deliverables/oc-11-validation-workflow-spec.md" {
+		t.Fatalf("TargetPath = %q, want workflow spec target", checkpoint.TargetPath)
+	}
+}
+
+func TestRecoveryFileWriteCheckpointCandidatePrefersHistoricalTargetHintOverPlanningCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	poisonedInitialID := uuid.New()
+	oldTurnID := uuid.New()
+	currentTurnID := uuid.New()
+	description := "Verify the speaker pipeline data model, schema, and integration points."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  12,
+				WorkStatus:  "blocked",
+				Title:       "Validate Speaker Pipeline Data Model",
+				Description: &description,
+			},
+		},
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		ID:        poisonedInitialID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "supervisor recovery: resume task",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                             "supervisor",
+			"recovery_action":                    "resume",
+			"recovery_checkpoint_target_path":    "planning/prd-spec/oc-12-acceptance-criteria.md",
+			"recovery_checkpoint_failure_reason": "placeholder",
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"path":      "planning/prd-spec/oc-12-validation-report.md",
+				"byte_size": 8192,
+				"created":   true,
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: poisonedInitialID,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	checkpoint, ok := fixture.engine.recoveryFileWriteCheckpointCandidate(context.Background(), rt, "placeholder")
+	if !ok {
+		t.Fatal("expected recovery checkpoint candidate")
+	}
+	if checkpoint.TargetPath != "planning/prd-spec/oc-12-validation-report.md" {
+		t.Fatalf("TargetPath = %q, want validation report target", checkpoint.TargetPath)
+	}
+}
+
 func TestPersistRecoveryFileWriteCheckpointKeepsExistingSubstantiveTargetPath(t *testing.T) {
 	t.Parallel()
 

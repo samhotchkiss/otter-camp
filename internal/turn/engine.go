@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -8517,8 +8518,13 @@ func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, r
 			checkpoint.ArtifactPath = ""
 		}
 	}
+	historicalHintTarget, hintOK := e.recoveryHistoricalTargetPathHint(ctx, rt)
 	historicalTarget, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt)
 	historicalTarget = strings.TrimSpace(historicalTarget)
+	if (!ok || historicalTarget == "") && hintOK {
+		historicalTarget = strings.TrimSpace(historicalHintTarget)
+		ok = historicalTarget != ""
+	}
 	if !ok || historicalTarget == "" {
 		return checkpoint
 	}
@@ -8538,7 +8544,7 @@ func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, r
 	if haveTaskRecord {
 		candidateDraft := e.recoveryCheckpointDraftPreview(ctx, rt, candidateTarget)
 		historicalDraft := e.recoveryCheckpointDraftPreview(ctx, rt, historicalTarget)
-		if recoveryTaskDeliverableMatchScore(taskRecord, historicalTarget, historicalDraft) > recoveryTaskDeliverableMatchScore(taskRecord, candidateTarget, candidateDraft) {
+		if recoveryTaskTargetPathScore(taskRecord, historicalTarget, historicalDraft) > recoveryTaskTargetPathScore(taskRecord, candidateTarget, candidateDraft) {
 			checkpoint.TargetPath = historicalTarget
 			if checkpoint.ArtifactPath != "" {
 				if recoveredTarget, targetOK := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); !targetOK || !sameWorkspaceRelativePath(recoveredTarget, historicalTarget) {
@@ -8585,6 +8591,13 @@ func (e *TurnEngine) recoveryFileWriteCheckpointCandidate(ctx context.Context, r
 		}
 	}
 	if targetPath, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt); ok && strings.TrimSpace(targetPath) != "" {
+		checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+			TargetPath:    strings.TrimSpace(targetPath),
+			FailureReason: strings.TrimSpace(fallbackReason),
+		}
+		return &checkpoint, true
+	}
+	if targetPath, ok := e.recoveryHistoricalTargetPathHint(ctx, rt); ok && strings.TrimSpace(targetPath) != "" {
 		checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
 			TargetPath:    strings.TrimSpace(targetPath),
 			FailureReason: strings.TrimSpace(fallbackReason),
@@ -8706,6 +8719,24 @@ func recoveryTaskDeliverableMatchScore(taskRecord repo.ProjectTask, targetPath, 
 				score++
 			}
 		}
+	}
+	return score
+}
+
+func recoveryTaskTargetPathScore(taskRecord repo.ProjectTask, targetPath, draft string) int {
+	score := recoveryTaskDeliverableMatchScore(taskRecord, targetPath, draft)
+	if explicit := explicitDeliverablePath(taskRecord); explicit != "" && sameWorkspaceRelativePath(explicit, targetPath) {
+		score += 8
+	}
+	if recoveryHistoricalDraftPathLooksLikeDeliverable(targetPath) {
+		score += 2
+	}
+	if recoveryHistoricalReadPathShouldFallback(targetPath) {
+		score -= 2
+	}
+	base := strings.ToLower(strings.TrimSuffix(filepath.Base(strings.TrimSpace(targetPath)), filepath.Ext(strings.TrimSpace(targetPath))))
+	if strings.Contains(base, "task-summary") || strings.Contains(base, "summary") {
+		score -= 3
 	}
 	return score
 }
@@ -9368,6 +9399,94 @@ func (e *TurnEngine) recoveryHistoricalSubstantiveOutputContext(ctx context.Cont
 		return bestPath, bestDraft, true
 	}
 	return "", "", false
+}
+
+func (e *TurnEngine) recoveryHistoricalTargetPathHint(ctx context.Context, rt *turnRuntime) (string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", false
+	}
+	taskRecord, haveTaskRecord := e.recoveryCheckpointTaskRecord(ctx, rt)
+	sessionIDs := []uuid.UUID{rt.session.ID}
+	if e.pool != nil && strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") && rt.session.ScopeID != uuid.Nil {
+		rows, err := e.pool.Query(ctx, `
+			SELECT id
+			FROM chat_session
+			WHERE scope_type = 'project_task'
+			  AND scope_id = $1
+			ORDER BY created_at DESC
+		`, rt.session.ScopeID)
+		if err == nil {
+			defer rows.Close()
+			sessionIDs = sessionIDs[:0]
+			for rows.Next() {
+				var sessionID uuid.UUID
+				if scanErr := rows.Scan(&sessionID); scanErr != nil {
+					sessionIDs = []uuid.UUID{rt.session.ID}
+					break
+				}
+				sessionIDs = append(sessionIDs, sessionID)
+			}
+			if rows.Err() != nil || len(sessionIDs) == 0 {
+				sessionIDs = []uuid.UUID{rt.session.ID}
+			}
+		}
+	}
+	bestPath := ""
+	bestScore := math.MinInt
+	for _, sessionID := range sessionIDs {
+		messages, err := e.messages.ListBySession(ctx, sessionID)
+		if err != nil {
+			continue
+		}
+		for i := len(messages) - 1; i >= 0; i-- {
+			message := messages[i]
+			if sessionID == rt.session.ID && message.TurnID != nil && *message.TurnID == rt.turn.ID {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+				continue
+			}
+			toolName, output, errText, ok := parseToolResultMessage(message.Content)
+			if !ok || strings.TrimSpace(errText) != "" {
+				continue
+			}
+			switch strings.ToLower(strings.TrimSpace(toolName)) {
+			case "file.read", "file.write", "cli.execute":
+			default:
+				continue
+			}
+			targetPath, _ := recoveryTargetPathFromToolOutput(output)
+			targetPath = strings.TrimSpace(targetPath)
+			if targetPath == "" {
+				continue
+			}
+			if haveTaskRecord && recoveryDraftClearlyBelongsToDifferentTask(taskRecord, targetPath, "") {
+				continue
+			}
+			score := 0
+			if haveTaskRecord {
+				score += recoveryTaskTargetPathScore(taskRecord, targetPath, "")
+			} else if recoveryHistoricalDraftPathLooksLikeDeliverable(targetPath) {
+				score += 2
+			}
+			switch strings.ToLower(strings.TrimSpace(toolName)) {
+			case "file.write":
+				score += 3
+			case "cli.execute":
+				score += 1
+			default:
+				score += 1
+			}
+			if score > bestScore {
+				bestPath = targetPath
+				bestScore = score
+			}
+		}
+	}
+	if bestPath == "" {
+		return "", false
+	}
+	return bestPath, true
 }
 
 func recoveryHistoricalDraftPathLooksLikeDeliverable(targetPath string) bool {
