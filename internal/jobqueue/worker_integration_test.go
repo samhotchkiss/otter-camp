@@ -1720,6 +1720,156 @@ func TestJobWorkerRequeueStrandedSupervisorRecoveryTurns(t *testing.T) {
 	}
 }
 
+func TestJobWorkerPurgeStaleAgentTurnJobsRemovesTerminalMessageAttemptDispatches(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-terminal-message-attempt-dispatch",
+		DisplayName: "Purge Terminal Message Attempt Dispatch",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Terminal Dispatch Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You handle stale dispatch cleanup.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        uuid.New(),
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "resume task",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("Create message: %v", err)
+	}
+
+	if _, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &message.ID,
+		RetryCount:       1,
+	}); err != nil {
+		t.Fatalf("Create completed turn: %v", err)
+	}
+
+	liveMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "current live task turn",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("Create live message: %v", err)
+	}
+	liveTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       2,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "pending",
+		TriggerMessageID: &liveMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("Create live turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &liveTurn.ID); err != nil {
+		t.Fatalf("UpdateCurrentTurn: %v", err)
+	}
+
+	var staleJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":1}`, session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 1),
+	).Scan(&staleJobID); err != nil {
+		t.Fatalf("insert stale job: %v", err)
+	}
+
+	var liveJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":2}`, session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 2),
+	).Scan(&liveJobID); err != nil {
+		t.Fatalf("insert live job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged jobs = %d, want 1", purged)
+	}
+
+	var staleStatus, liveStatus string
+	var staleError, liveError *string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, last_error
+		FROM job_queue
+		WHERE id = $1
+	`, staleJobID).Scan(&staleStatus, &staleError); err != nil {
+		t.Fatalf("query stale job: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT status, last_error
+		FROM job_queue
+		WHERE id = $1
+	`, liveJobID).Scan(&liveStatus, &liveError); err != nil {
+		t.Fatalf("query live job: %v", err)
+	}
+	staleErrorValue := "<nil>"
+	if staleError != nil {
+		staleErrorValue = *staleError
+	}
+	if staleStatus != "dead_letter" || staleError == nil || *staleError != "purged stale terminal message-attempt dispatch" {
+		t.Fatalf("stale job = (%q, %q), want dead_letter/purged stale terminal message-attempt dispatch", staleStatus, staleErrorValue)
+	}
+	if liveStatus != "pending" || liveError != nil {
+		t.Fatalf("live job = (%q, %v), want pending/<nil>", liveStatus, liveError)
+	}
+}
+
 func TestJobWorkerRequeueStrandedSupervisorRecoveryTurnsSkipsPausedAndArchivedProjects(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

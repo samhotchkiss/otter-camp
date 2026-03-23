@@ -592,7 +592,30 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (superseded project_task continuations): %w", err)
 	}
 
-	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected()
+	// Condition 5: if the exact session/message/retry attempt already has a
+	// terminal turn recorded, any leftover pending dispatch job for that same
+	// attempt is stale and should not consume execution slots.
+	ct5, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    last_error = 'purged stale terminal message-attempt dispatch',
+		    updated_at = now()
+		WHERE jq.status = 'pending'
+		  AND jq.job_type = 'agent_turn'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = (jq.payload->>'session_id')::uuid
+		      AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+		      AND ct.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+		      AND ct.status IN ('completed', 'cancelled', 'failed')
+		  )
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("purge stale agent_turn jobs (terminal message attempts): %w", err)
+	}
+
+	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected()
 	return total, nil
 }
 
