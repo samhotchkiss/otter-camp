@@ -5373,6 +5373,9 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		summary = "Continuation summary unavailable."
 	}
 	summary = compactContinuationSummary(summary)
+	if shouldAppendProjectContinuationActionPrompt(rt.session) && continuationSummaryLooksUnavailable(summary) {
+		summary = projectExecutionContinuationFallbackSummary()
+	}
 	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Continuation summary] "+summary)
 	if err != nil {
 		return err
@@ -8170,6 +8173,10 @@ func buildProjectContinuationActionPrompt(summary string) string {
 		)
 	}
 	return strings.Join(lines, " ")
+}
+
+func projectExecutionContinuationFallbackSummary() string {
+	return "Project execution is already underway. Reuse the existing project task tree, workspace artifacts, planning files, and recent tool results from this session to keep the active work moving forward."
 }
 
 func continuationSummaryLooksLikeDraft(summary string) bool {

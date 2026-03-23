@@ -4764,6 +4764,17 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	}
 }
 
+func TestProjectExecutionContinuationFallbackSummary(t *testing.T) {
+	summary := projectExecutionContinuationFallbackSummary()
+
+	if !strings.Contains(summary, "Project execution is already underway.") {
+		t.Fatalf("summary = %q, want execution-underway guidance", summary)
+	}
+	if !strings.Contains(summary, "Reuse the existing project task tree, workspace artifacts, planning files, and recent tool results") {
+		t.Fatalf("summary = %q, want concrete project-state reuse guidance", summary)
+	}
+}
+
 func TestRecoveryTurnAppendsDirectActionPromptForAsyncProjectTaskWithoutCheckpoint(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
