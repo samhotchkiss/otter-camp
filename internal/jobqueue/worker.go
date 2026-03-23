@@ -718,14 +718,27 @@ func (w *Worker) RequeueStrandedSupervisorRecoveryTurns(ctx context.Context) (in
 		FROM chat_session cs
 		JOIN project_task pt ON pt.id = cs.scope_id
 		JOIN project p ON p.id = pt.project_id
-		JOIN chat_turn ct ON ct.id = cs.current_turn_id
-		JOIN chat_message cm ON cm.id = ct.trigger_message_id
-		LEFT JOIN model_invocation mi ON mi.turn_id = ct.id
+		LEFT JOIN LATERAL (
+			SELECT e.metadata
+			FROM flow_node_execution e
+			WHERE e.session_id = cs.id
+			  AND e.status = 'active'
+			ORDER BY e.started_at DESC, e.id DESC
+			LIMIT 1
+		) execution_owner ON true
+		LEFT JOIN chat_turn ct ON ct.id = cs.current_turn_id
+		LEFT JOIN chat_turn live_turn ON live_turn.id = CASE
+			WHEN COALESCE(execution_owner.metadata->>'live_turn_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			THEN (execution_owner.metadata->>'live_turn_id')::uuid
+			ELSE NULL
+		END
+		JOIN chat_message cm ON cm.id = COALESCE(live_turn.trigger_message_id, ct.trigger_message_id)
+		LEFT JOIN model_invocation mi ON mi.turn_id = COALESCE(live_turn.id, ct.id)
 		WHERE cs.scope_type = 'project_task'
 		  AND cs.status = 'active'
 		  AND p.status = 'active'
 		  AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
-		  AND ct.status = 'pending'
+		  AND COALESCE(live_turn.status, ct.status, '') = 'pending'
 		  AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
 		  AND mi.id IS NULL
 		  AND NOT EXISTS (
