@@ -3570,6 +3570,68 @@ func TestTurnEngineIntegrationRecoveryTurnRewritesPathlessFileWriteToPersistedDr
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryTurnRewritePreservesExecutionContext(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, recoveryMessage.ID)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "cli.execute", Tier: "tier2"},
+		{Name: "file.write", Tier: "tier2"},
+	}}
+
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		return ModelResponse{
+			Content: "I'll write the recovered file.",
+			ToolCalls: []ModelToolCall{{
+				ID:   "rewrite-cli",
+				Name: "cli_execute",
+				Tier: "tier2",
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		if call.Name != "file.write" {
+			t.Fatalf("call.Name = %q, want file.write", call.Name)
+		}
+		if strings.TrimSpace(stringValue(call.Arguments["agent_id"])) == "" {
+			t.Fatal("expected rewritten file.write to preserve agent_id")
+		}
+		if strings.TrimSpace(stringValue(call.Arguments["session_id"])) == "" {
+			t.Fatal("expected rewritten file.write to preserve session_id")
+		}
+		if strings.TrimSpace(stringValue(call.Arguments["turn_id"])) == "" {
+			t.Fatal("expected rewritten file.write to preserve turn_id")
+		}
+		runID := uuid.New()
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      seed.targetPath,
+				"byte_size": len(seed.artifactDraft),
+				"created":   false,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+}
+
 func TestTurnEngineIntegrationTaskTurnRewritesPathlessFileEditToFileWrite(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

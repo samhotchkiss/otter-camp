@@ -7539,11 +7539,11 @@ func (e *TurnEngine) rewriteRecoveryCLIExecuteWithoutCommandToFileWrite(ctx cont
 	}
 
 	call.Name = "file.write"
-	call.Arguments = map[string]any{
+	call.Arguments = mergeRewrittenFileWriteArguments(call.Arguments, map[string]any{
 		"path":        strings.TrimSpace(targetPath),
 		"content":     draft,
 		"create_dirs": true,
-	}
+	})
 	if rt.recoveryFileWrites == nil {
 		rt.recoveryFileWrites = make(map[string]recoveryPopulatedFileWriteState)
 	}
@@ -7830,11 +7830,11 @@ func (e *TurnEngine) handleRecoveryMalformedFileEditWithoutPath(ctx context.Cont
 	draft, rejectReason, ok := e.recoveryFileWriteDraftContent(ctx, rt, targetPath)
 	if ok {
 		call.Name = "file.write"
-		call.Arguments = map[string]any{
+		call.Arguments = mergeRewrittenFileWriteArguments(call.Arguments, map[string]any{
 			"path":        targetPath,
 			"content":     draft,
 			"create_dirs": true,
-		}
+		})
 		if rt.recoveryFileWrites == nil {
 			rt.recoveryFileWrites = make(map[string]recoveryPopulatedFileWriteState)
 		}
@@ -7925,17 +7925,33 @@ func (e *TurnEngine) handleTaskMalformedFileEditWithoutPath(ctx context.Context,
 	}
 
 	call.Name = "file.write"
-	call.Arguments = map[string]any{
+	call.Arguments = mergeRewrittenFileWriteArguments(call.Arguments, map[string]any{
 		"path":        strings.TrimSpace(targetPath),
 		"content":     draft,
 		"create_dirs": true,
-	}
+	})
 	e.logger.Info("task continuation: rewrote pathless file.edit to file.write",
 		"session_id", rt.session.ID,
 		"turn_id", rt.turn.ID,
 		"path", targetPath,
 	)
 	return false, false, nil
+}
+
+func mergeRewrittenFileWriteArguments(existing, overrides map[string]any) map[string]any {
+	merged := cloneMap(existing)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	for _, key := range []string{"organization_id", "session_id", "turn_id", "agent_id", "project_id", "task_id"} {
+		if _, ok := merged[key]; !ok {
+			continue
+		}
+	}
+	for key, value := range overrides {
+		merged[key] = value
+	}
+	return merged
 }
 
 func (e *TurnEngine) haltRejectedRecoveryFileWrite(ctx context.Context, rt *turnRuntime, targetPath, draft, failureReason string) (bool, bool, error) {
