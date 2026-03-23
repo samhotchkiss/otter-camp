@@ -125,7 +125,7 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 		LEFT JOIN chat_session s ON s.id = e.session_id
 		LEFT JOIN chat_turn turn_row ON turn_row.id = s.current_turn_id
 		LEFT JOIN LATERAL (
-			SELECT ct.id, ct.status
+			SELECT ct.id, ct.status, ct.stop_reason
 			FROM chat_turn ct
 			WHERE ct.session_id = s.id
 			ORDER BY ct.turn_number DESC, ct.created_at DESC, ct.id DESC
@@ -168,12 +168,15 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 			)
 		  )
 		  AND COALESCE(s.last_message_at, s.updated_at, t.updated_at, e.started_at) < $1
-	`
+		`
 	query += `
 		  AND NOT (
 			latest_turn.id IS NOT NULL
 			AND COALESCE(latest_turn.status, '') = 'completed'
-			AND COALESCE(t.metadata->'` + taskcheckpoint.RecoveryFileWriteMetadataKey + `'->>'halt_turn_id', '') = latest_turn.id::text
+			AND (
+				COALESCE(t.metadata->'` + taskcheckpoint.RecoveryFileWriteMetadataKey + `'->>'halt_turn_id', '') = latest_turn.id::text
+				OR COALESCE(latest_turn.stop_reason, '') = 'recovery_content_required'
+			)
 		  )
 	`
 
