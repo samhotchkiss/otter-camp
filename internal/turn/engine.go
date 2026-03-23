@@ -3856,6 +3856,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		e.logPausedTurnSkip("skipping agent turn for paused project", session, reason, messageID)
 		return nil
 	}
+	effectiveRoutedAgentID := normalizeRoutedAgentForSession(session, routedAgentID)
 	if blocked, guard, blockErr := e.validationLoopBlockerForSession(ctx, session); blockErr != nil {
 		return blockErr
 	} else if blocked {
@@ -3894,8 +3895,8 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	}
 
 	agentID := uuid.Nil
-	if routedAgentID != nil && *routedAgentID != uuid.Nil {
-		agentID = *routedAgentID
+	if effectiveRoutedAgentID != nil && *effectiveRoutedAgentID != uuid.Nil {
+		agentID = *effectiveRoutedAgentID
 	}
 	if agentID == uuid.Nil {
 		var resolveErr error
@@ -4034,7 +4035,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		}
 	}
 	if errors.Is(err, ErrRateLimited) {
-		handled, handleErr := e.handleRateLimitedTurnFailure(ctx, runtime, messageID, routedAgentID, retryCount, err)
+		handled, handleErr := e.handleRateLimitedTurnFailure(ctx, runtime, messageID, effectiveRoutedAgentID, retryCount, err)
 		if handleErr != nil {
 			return handleErr
 		}
@@ -4043,7 +4044,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		}
 	}
 	if isTransientInfrastructureError(err) {
-		handled, handleErr := e.handleTransientInfrastructureTurnFailure(ctx, runtime, messageID, routedAgentID, retryCount, err)
+		handled, handleErr := e.handleTransientInfrastructureTurnFailure(ctx, runtime, messageID, effectiveRoutedAgentID, retryCount, err)
 		if handleErr != nil {
 			return handleErr
 		}
@@ -4051,7 +4052,7 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 			return nil
 		}
 	}
-	if handled, handleErr := e.handleTaskContinuationDepthTurnFailure(ctx, runtime, messageID, routedAgentID, err); handleErr != nil {
+	if handled, handleErr := e.handleTaskContinuationDepthTurnFailure(ctx, runtime, messageID, effectiveRoutedAgentID, err); handleErr != nil {
 		return handleErr
 	} else if handled {
 		return nil
@@ -9919,6 +9920,16 @@ func messageRequestsFreshKickoff(session *chat.ChatSession, message repo.ChatMes
 	return fresh
 }
 
+func normalizeRoutedAgentForSession(session *chat.ChatSession, routedAgentID *uuid.UUID) *uuid.UUID {
+	if session == nil || routedAgentID == nil || *routedAgentID == uuid.Nil {
+		return routedAgentID
+	}
+	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") && strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return nil
+	}
+	return routedAgentID
+}
+
 func isRecoveryResumeMessage(message repo.ChatMessage) bool {
 	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 		return false
@@ -11578,6 +11589,11 @@ func (e *TurnEngine) resolveTaskScopeAssignedAgent(ctx context.Context, session 
 	if taskRecord.OrganizationID != uuid.Nil && taskRecord.OrganizationID != organizationID {
 		return uuid.Nil, repo.ErrNotFound
 	}
+	if reviewAgentID, ok, reviewErr := e.resolveTaskScopeReviewAgent(ctx, taskRecord); reviewErr != nil {
+		return uuid.Nil, reviewErr
+	} else if ok {
+		return reviewAgentID, nil
+	}
 	if taskRecord.AssignedAgentID == nil || *taskRecord.AssignedAgentID == uuid.Nil {
 		recoveredAgentID, recovered, recoverErr := e.recoverMissingTaskAssigneeFromSession(ctx, session, taskRecord)
 		if recoverErr != nil {
@@ -11589,6 +11605,44 @@ func (e *TurnEngine) resolveTaskScopeAssignedAgent(ctx context.Context, session 
 		return uuid.Nil, fmt.Errorf("internal invariant: task-scoped session is missing assigned agent")
 	}
 	return *taskRecord.AssignedAgentID, nil
+}
+
+func (e *TurnEngine) resolveTaskScopeReviewAgent(ctx context.Context, taskRecord repo.ProjectTask) (uuid.UUID, bool, error) {
+	if e == nil || e.assignments == nil || !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") || taskRecord.ProjectID == uuid.Nil {
+		return uuid.Nil, false, nil
+	}
+
+	assignedID := uuid.Nil
+	if taskRecord.AssignedAgentID != nil {
+		assignedID = *taskRecord.AssignedAgentID
+	}
+
+	assignments, err := e.assignments.ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+
+	preferred := uuid.Nil
+	fallback := uuid.Nil
+	for _, assignment := range assignments {
+		if !assignment.IsActive || assignment.AgentID == uuid.Nil || assignment.AgentID == assignedID {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(assignment.Role), "project_manager") {
+			preferred = assignment.AgentID
+			break
+		}
+		if fallback == uuid.Nil {
+			fallback = assignment.AgentID
+		}
+	}
+	if preferred != uuid.Nil {
+		return preferred, true, nil
+	}
+	if fallback != uuid.Nil {
+		return fallback, true, nil
+	}
+	return uuid.Nil, false, nil
 }
 
 func (e *TurnEngine) recoverMissingTaskAssigneeFromSession(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask) (uuid.UUID, bool, error) {

@@ -1808,6 +1808,42 @@ func TestResolveSessionAgentForSessionRecoversMissingTaskAssigneeFromSessionPart
 	}
 }
 
+func TestResolveSessionAgentForSessionRoutesReviewTaskToDistinctReviewer(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	workerID := uuid.New()
+	pmID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				WorkStatus:      "review",
+				AssignedAgentID: &workerID,
+			},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{
+			{ProjectID: projectID, AgentID: workerID, IsActive: true, Role: "worker"},
+			{ProjectID: projectID, AgentID: pmID, IsActive: true, Role: "project_manager"},
+		},
+	}
+
+	agentID, err := fixture.engine.resolveSessionAgentForSession(context.Background(), fixture.session)
+	if err != nil {
+		t.Fatalf("resolveSessionAgentForSession: %v", err)
+	}
+	if agentID != pmID {
+		t.Fatalf("agent_id = %s, want reviewer/PM %s", agentID, pmID)
+	}
+}
+
 func TestShouldAppendSyntheticUserPromptSkipsDuplicatePendingSource(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.messages.create(repo.ChatMessage{
@@ -1824,6 +1860,14 @@ func TestShouldAppendSyntheticUserPromptSkipsDuplicatePendingSource(t *testing.T
 	}
 	if shouldAppend {
 		t.Fatal("shouldAppendSyntheticUserPrompt = true, want false for duplicate pending synthetic prompt")
+	}
+}
+
+func TestNormalizeRoutedAgentForSessionDropsStaleAsyncTaskOverride(t *testing.T) {
+	agentID := uuid.New()
+	session := &chat.ChatSession{ScopeType: "project_task", Mode: "async"}
+	if got := normalizeRoutedAgentForSession(session, &agentID); got != nil {
+		t.Fatalf("normalizeRoutedAgentForSession returned %v, want nil for async task session", *got)
 	}
 }
 
