@@ -5466,11 +5466,36 @@ func TestBuildRecoveryResumeActionPromptHardensIntentOnlyCheckpointWithoutDraft(
 	}
 }
 
+func TestBuildRecoveryResumeActionPromptUsesAvailableDraftDirectly(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:    "planning/prd-spec/oc-24-infrastructure-spec.md",
+		artifactDraft: "# Infrastructure Specification\n\n## Hosting\nConcrete content.",
+	})
+
+	if !strings.Contains(prompt, "A substantive durable draft is already available above. Reuse that draft body directly") {
+		t.Fatalf("prompt = %q, want substantive-draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "your next assistant message should begin with the first line of the best available draft") {
+		t.Fatalf("prompt = %q, want first-line draft guidance", prompt)
+	}
+}
+
 func TestLooksLikeRecoveryIntentNarrationPlaceholderDetectsNowIllWritePreface(t *testing.T) {
 	t.Parallel()
 
 	if !looksLikeRecoveryIntentNarrationPlaceholder("Now I'll write the substantive blog post template design specification:") {
 		t.Fatal("expected now-I'll-write preface to be rejected as intent narration")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsContextSummaryReadyReply(t *testing.T) {
+	t.Parallel()
+
+	content := "I'm ready to help. I'm Alex, Technical Lead for the SAM.blog rebuild. Based on the context, I can see the target file and current blocker."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected context-summary ready reply to be treated as generic recovery output")
 	}
 }
 

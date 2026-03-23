@@ -8523,6 +8523,12 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 	if target := strings.TrimSpace(state.targetPath); target != "" {
 		lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
 	}
+	if strings.TrimSpace(state.targetDraft) != "" || strings.TrimSpace(state.artifactDraft) != "" {
+		lines = append(lines,
+			"A substantive durable draft is already available above. Reuse that draft body directly instead of introducing yourself, summarizing the task, or describing what you are about to do.",
+			"If you need to repair the target file, your next assistant message should begin with the first line of the best available draft rather than a sentence about context or readiness.",
+		)
+	}
 	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
 		target := strings.TrimSpace(state.targetPath)
 		if target == "" {
@@ -12943,11 +12949,17 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"i am ready to help",
 		"i'm ready to assist",
 		"i am ready to assist",
+		"i'm ready. i'm",
+		"i am ready. i am",
 		"what do you need",
 		"what would you like me to help with",
 		"what would you like me to help",
 		"what would you like me to do",
 		"how can i help",
+		"based on the context, i can see",
+		"based on the context i can see",
+		"i'm currently working on",
+		"my task is to create",
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(normalized, pattern) {
