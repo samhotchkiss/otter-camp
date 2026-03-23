@@ -7587,6 +7587,15 @@ Sam.blog should publish one durable operating system for thoughtful parents buil
 	}
 }
 
+func TestLooksLikeRecoveryFileDraftRejectsLongConversationalLeadIn(t *testing.T) {
+	t.Parallel()
+
+	content := "I now have the strategy artifacts. These define the migration approach: staged cutover, extraction strategy, transformation to Markdown+YAML, validation gates, redirects, and rollback. I'll write the complete migration plan to the target file next."
+	if looksLikeRecoveryFileDraft(content) {
+		t.Fatalf("looksLikeRecoveryFileDraft(%q) = true, want false", content)
+	}
+}
+
 type unitFixture struct {
 	engine        *TurnEngine
 	events        *fakeEventBus

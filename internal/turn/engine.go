@@ -9621,6 +9621,10 @@ func looksLikeRecoveryFileDraft(content string) bool {
 		return false
 	}
 	lower := strings.ToLower(trimmed)
+	firstLine := lower
+	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+		firstLine = strings.TrimSpace(firstLine[:idx])
+	}
 	for _, prefix := range []string{
 		"i'll ",
 		"i will ",
@@ -9633,6 +9637,24 @@ func looksLikeRecoveryFileDraft(content string) bool {
 		if strings.HasPrefix(lower, prefix) && len(trimmed) < 240 {
 			return false
 		}
+	}
+	if len(trimmed) >= 180 && !hasStructuredRecoveryFileDraftMarkers(trimmed) && containsAny(firstLine,
+		"let me ",
+		"good.",
+		"perfect.",
+		"i need to provide",
+		"i need to write",
+		"i need to create",
+		"i need to complete",
+		"i now have the strategy artifacts",
+		"i now have the full strategy context",
+		"i see the issue",
+		"i apologize for the error",
+		"i'll begin recovery",
+		"i'm ready to work",
+		"i'm ready to help",
+	) {
+		return false
 	}
 	if len(trimmed) >= 180 {
 		return true
