@@ -5859,6 +5859,25 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
+	task := repo.ProjectTask{TaskNumber: 11, Title: "Document what persisted correctly"}
+
+	prompt := buildProjectExecutionContinuationPrompt(task, 4)
+
+	if !strings.Contains(prompt, "Continue the active project execution now.") {
+		t.Fatalf("prompt = %q, want continuation lead-in", prompt)
+	}
+	if !strings.Contains(prompt, "The latest completed task was task 11 (Document what persisted correctly).") {
+		t.Fatalf("prompt = %q, want completed task context", prompt)
+	}
+	if !strings.Contains(prompt, "There are 4 remaining draft project tasks") {
+		t.Fatalf("prompt = %q, want remaining draft count guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Your next response must take direct project action instead of generic chat.") {
+		t.Fatalf("prompt = %q, want direct project action guidance", prompt)
+	}
+}
+
 func TestProjectExecutionContinuationFallbackSummary(t *testing.T) {
 	summary := projectExecutionContinuationFallbackSummary()
 

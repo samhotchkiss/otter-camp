@@ -133,6 +133,7 @@ const (
 	projectFailureClassProviderRateLimit      = projectBootstrapFailureProviderRateLimit
 	projectFailureClassProviderTransient      = projectBootstrapFailureProviderTransient
 	projectBootstrapSource                    = "project_bootstrap"
+	projectExecutionContinuationSource        = "project_execution_continuation"
 	projectBootstrapTemplateSlug              = "bootstrap-governance-gate"
 	bootstrapFrankSignOffStepSlug             = "record-frank-sign-off"
 	bootstrapChildTaskBoundednessError        = "parent integration follow-on tasks must already be bounded before they are created"
@@ -1479,7 +1480,7 @@ func (e *TurnEngine) HandleTaskStatusChangedEvent(ctx context.Context, event eve
 	metadata := messageMetadataMap(taskRecord.Metadata)
 	if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); !bootstrapGate {
 		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
-			return nil
+			return e.maybeContinueProjectExecutionAfterTaskCompletion(ctx, projectID, taskRecord)
 		}
 	}
 
@@ -1507,6 +1508,149 @@ func (e *TurnEngine) HandleTaskStatusChangedEvent(ctx context.Context, event eve
 		return err
 	}
 	return e.refreshProjectBootstrapSessionState(ctx, session, progress)
+}
+
+func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx context.Context, projectID uuid.UUID, completedTask repo.ProjectTask) error {
+	if e == nil || e.pool == nil || e.chat == nil || e.enqueuer == nil || projectID == uuid.Nil {
+		return nil
+	}
+
+	session, err := repo.NewChatSessionRepo(e.pool).GetByScopeAndMode(ctx, "project", projectID, "async")
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+		return nil
+	}
+
+	state := projectBootstrapStateFromMetadata(session.Metadata)
+	switch strings.TrimSpace(state.Status) {
+	case projectBootstrapStatusActive, projectBootstrapStatusFailed:
+		return nil
+	}
+
+	if session.CurrentTurnID != nil {
+		return nil
+	}
+	if queued, err := e.hasQueuedAgentTurnForSession(ctx, session.ID, nil); err != nil {
+		return err
+	} else if queued {
+		return nil
+	}
+
+	var remainingDraftTasks int
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task
+		WHERE project_id = $1
+		  AND work_status = 'draft'
+		  AND NOT COALESCE((metadata->>'bootstrap_gate')::boolean, false)
+		  AND NOT COALESCE((metadata->>'bootstrap_setup_task')::boolean, false)
+	`, projectID).Scan(&remainingDraftTasks); err != nil {
+		return err
+	}
+	if remainingDraftTasks == 0 {
+		return nil
+	}
+
+	var activeTaskWork int
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task
+		WHERE project_id = $1
+		  AND work_status IN ('queued', 'in_progress', 'review', 'blocked')
+	`, projectID).Scan(&activeTaskWork); err != nil {
+		return err
+	}
+	if activeTaskWork > 0 {
+		return nil
+	}
+
+	var activeTaskExecutions int
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_node_execution e
+		JOIN project_task t ON t.id = e.task_id
+		WHERE t.project_id = $1
+		  AND e.status = 'active'
+	`, projectID).Scan(&activeTaskExecutions); err != nil {
+		return err
+	}
+	if activeTaskExecutions > 0 {
+		return nil
+	}
+
+	var activeTaskSessions int
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_session cs
+		JOIN project_task t ON t.id = cs.scope_id
+		WHERE cs.scope_type = 'project_task'
+		  AND cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND t.project_id = $1
+	`, projectID).Scan(&activeTaskSessions); err != nil {
+		return err
+	}
+	if activeTaskSessions > 0 {
+		return nil
+	}
+
+	var pendingContinuationMessages int
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message m
+		WHERE m.session_id = $1
+		  AND m.role = 'user'
+		  AND COALESCE(NULLIF(m.metadata->>'source', ''), '') = $2
+		  AND (
+			NOT EXISTS (
+				SELECT 1
+				FROM chat_turn ct
+				WHERE ct.trigger_message_id = m.id
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM chat_turn ct
+				WHERE ct.trigger_message_id = m.id
+				  AND ct.status IN ('pending', 'in_progress')
+			)
+		  )
+	`, session.ID, projectExecutionContinuationSource).Scan(&pendingContinuationMessages); err != nil {
+		return err
+	}
+	if pendingContinuationMessages > 0 {
+		return nil
+	}
+
+	agentID, err := e.resolveSessionAgentForSession(ctx, session)
+	if err != nil && !errors.Is(err, repo.ErrNotFound) {
+		return err
+	}
+
+	message, err := e.appendProjectExecutionContinuationMessage(
+		ctx,
+		session.ID,
+		agentID,
+		completedTask.ID,
+		buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks),
+	)
+	if err != nil {
+		return err
+	}
+
+	payload := AgentTurnPayload{
+		SessionID: session.ID,
+		MessageID: message.ID,
+	}
+	if agentID != uuid.Nil {
+		payload.AgentID = &agentID
+	}
+	_, err = e.enqueueAgentTurnIfActive(ctx, session, payload, nil)
+	return err
 }
 
 func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventbus.DomainEvent) error {
@@ -3783,11 +3927,63 @@ func (e *TurnEngine) appendProjectBootstrapContinuationMessageWithContent(ctx co
 	})
 }
 
+func (e *TurnEngine) appendProjectExecutionContinuationMessage(ctx context.Context, sessionID, authorAgentID, completedTaskID uuid.UUID, content string) (*chat.ChatMessage, error) {
+	if e == nil || sessionID == uuid.Nil {
+		return nil, repo.ErrNotFound
+	}
+	metadataMap := map[string]any{
+		"source":        projectExecutionContinuationSource,
+		"auto_continue": true,
+	}
+	if completedTaskID != uuid.Nil {
+		metadataMap["completed_task_id"] = completedTaskID.String()
+	}
+	metadata, err := json.Marshal(metadataMap)
+	if err != nil {
+		return nil, err
+	}
+	var authorType *string
+	var authorID *uuid.UUID
+	if authorAgentID != uuid.Nil {
+		agentType := "agent"
+		authorType = &agentType
+		authorID = &authorAgentID
+	}
+	return e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  sessionID,
+		AuthorType: authorType,
+		AuthorID:   authorID,
+		Role:       "user",
+		Content:    content,
+		Metadata:   metadata,
+	})
+}
+
 func buildProjectBootstrapContinuationPrompt(autoTurnCount int) string {
 	return fmt.Sprintf(
 		"Continue the bounded project bootstrap setup workflow now. This is automatic follow-on bootstrap turn %d. Do not stop at acknowledgement. Persist project assignments, scoped tasks, and flow templates if the handoff already contains enough information. Every task.create or subtask.create call must include a concrete non-empty title. The bootstrap governance gate task is system-managed: do not edit it, do not try to assign it, and do not try to queue or complete it manually. Keep first-wave execution tasks in draft until the gate auto-completes after validation passes. Frank, Lori, and Ellie are starter-trio governance agents, not project staff, so do not assign them to project roles. The project manager must be a staff PM agent, not a temp agent. Assign every executable non-bootstrap task to an existing active project assignee before first-wave selection or promotion. Treat bind-repo-environment as confirming the canonical repo/workspace binding and environment records already present for the project; do not use git.commit or ad hoc cli.execute commands just to satisfy the bootstrap checklist. If setup truly cannot continue, explain the concrete blocker so the session can mark bootstrap failure instead of idling.",
 		autoTurnCount,
 	)
+}
+
+func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, remainingDraftTasks int) string {
+	lines := []string{
+		"Continue the active project execution now.",
+		"Recently completed work may have unlocked the next wave of bounded tasks.",
+	}
+	if completedTask.TaskNumber > 0 || strings.TrimSpace(completedTask.Title) != "" {
+		lines = append(lines, fmt.Sprintf("The latest completed task was %s.", projectBootstrapTaskLabel(completedTask)))
+	}
+	if remainingDraftTasks > 0 {
+		lines = append(lines, fmt.Sprintf("There are %d remaining draft project tasks that still need selection, orchestration, or promotion.", remainingDraftTasks))
+	}
+	lines = append(lines,
+		"Your next response must take direct project action instead of generic chat.",
+		"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
+		"Inspect the current task tree and immediately move the next bounded work forward by selecting, decomposing, assigning, or queueing the correct tasks.",
+		"If the remaining work is blocked on a concrete prerequisite, report that blocker in one sentence instead of narrating intent.",
+	)
+	return strings.Join(lines, " ")
 }
 
 func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress projectBootstrapProgress) string {
