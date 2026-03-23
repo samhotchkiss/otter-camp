@@ -9719,6 +9719,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"do you want me to complete the deployment checklist",
 		"or do you need me to start fresh on the full infrastructure specification",
 		"should confirm whether that's the priority",
+		"i now have the recovery context",
+		"let me check the strategy artifacts to understand the locked decisions before proceeding",
+		"let me first check the current state of the target file and recovery artifacts",
 	) {
 		return fmt.Sprintf("assistant draft for %s asked the operator to choose the next step instead of the file body", path)
 	}

@@ -7581,6 +7581,11 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "asked the operator to choose the next step instead of the file body",
 		},
 		{
+			name:    "rejects recovery context reread placeholder",
+			content: "Perfect. I now have the recovery context. Let me check the strategy artifacts to understand the locked decisions before proceeding:",
+			want:    "asked the operator to choose the next step instead of the file body",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
