@@ -45,6 +45,7 @@ const (
 	taskOrchestrationOnlyMessage  = "task must remain orchestration-only while executable child tasks exist"
 	taskNeedsChildTasksMessage    = "task must remain orchestration-only until bounded child tasks are created"
 	bootstrapGateManagedMessage   = "bootstrap governance gate is system-managed; do not edit, assign, queue, or complete it manually"
+	bootstrapSetupManagedMessage  = "bootstrap setup checklist tasks are system-managed during bootstrap; use bootstrap.setup.persist instead of raw task.update mutations"
 	flowTemplateValidationMessage = "flow template must define a work -> review -> completion path"
 	memoryRecordEmbeddingDims     = 1536
 	memoryRecordDefaultConfidence = 0.85
@@ -1634,6 +1635,12 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			"message": "Leave the bootstrap governance gate unchanged. Keep executable first-wave tasks in draft and continue bootstrap setup until the system auto-completes the gate after validation passes.",
 		}, nil
 	}
+	if bootstrapSetupTask(current) {
+		return map[string]any{
+			"error":   bootstrapSetupManagedMessage,
+			"message": "Bootstrap setup checklist tasks are system-managed while the bootstrap governance gate is active. Do not edit, reassign, or complete them through task.update. Record completed setup steps through bootstrap.setup.persist using canonical step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off.",
+		}, nil
+	}
 	if title, ok := readString(input, "title"); ok && title != "" {
 		current.Title = title
 	}
@@ -1930,6 +1937,12 @@ func bootstrapGateTask(task repo.ProjectTask) bool {
 	metadata := metadataObject(task.Metadata)
 	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
 	return bootstrapGate
+}
+
+func bootstrapSetupTask(task repo.ProjectTask) bool {
+	metadata := metadataObject(task.Metadata)
+	setupTask, _ := metadata["bootstrap_setup_task"].(bool)
+	return setupTask
 }
 
 func (e *NativeToolExecutor) activeProjectBootstrapSession(ctx context.Context, scope workspaceScope, projectID uuid.UUID) bool {

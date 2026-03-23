@@ -4792,6 +4792,73 @@ func TestIntegrationProjectSessionTaskUpdateRejectsDraftOpenPromotionWithBootstr
 	}
 }
 
+func TestIntegrationProjectSessionTaskUpdateRejectsBootstrapSetupMutationWithPersistGuidance(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Done Guidance",
+		"slug":        "bootstrap-done-guidance-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap setup tasks redirect to bootstrap.setup.persist.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+
+	projectTasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListByProject bootstrap setup tasks: %v", err)
+	}
+	var setupTask repo.ProjectTask
+	for _, taskRecord := range projectTasks {
+		metadata := metadataObject(taskRecord.Metadata)
+		setupFlag, _ := metadata["bootstrap_setup_task"].(bool)
+		if !setupFlag {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprintf("%v", metadata["bootstrap_step_slug"])), "staff-project") {
+			setupTask = taskRecord
+			break
+		}
+	}
+	if setupTask.ID == uuid.Nil {
+		t.Fatal("expected bootstrap setup task with slug staff-project")
+	}
+
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+	out, err := executor.Execute(projectCtx, "task.update", map[string]any{
+		"task_id":     setupTask.ID.String(),
+		"description": "Expanded bootstrap setup description that should be recorded through bootstrap.setup.persist instead of task.update.",
+	})
+	if err != nil {
+		t.Fatalf("task.update unexpected err: %v", err)
+	}
+	if out == nil {
+		t.Fatal("task.update output = nil, want structured bootstrap setup error")
+	}
+	got := strings.TrimSpace(fmt.Sprintf("%v", out["error"]))
+	if !strings.Contains(got, "bootstrap.setup.persist") {
+		t.Fatalf("task.update error = %q, want setup persist guidance", got)
+	}
+	if !strings.Contains(got, "system-managed during bootstrap") {
+		t.Fatalf("task.update error = %q, want bootstrap setup checklist guidance", got)
+	}
+}
+
 func TestIntegrationProjectSessionTaskUpdateRejectsInProgressPromotionWithoutCanonicalExecution(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
