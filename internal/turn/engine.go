@@ -5384,25 +5384,37 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		return err
 	}
 	if shouldAppendTaskContinuationActionPrompt(rt.session) {
-		if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
-			SessionID: rt.session.ID,
-			TurnID:    &rt.turn.ID,
-			Role:      "user",
-			Content:   buildTaskContinuationActionPrompt(summary),
-			Metadata:  syntheticContinuationActionMessageMetadata(taskContinuationResumeMessageSource),
-		}); err != nil {
-			return err
+		shouldAppend, appendErr := e.shouldAppendSyntheticUserPrompt(ctx, rt.session.ID, taskContinuationResumeMessageSource)
+		if appendErr != nil {
+			return appendErr
+		}
+		if shouldAppend {
+			if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+				SessionID: rt.session.ID,
+				TurnID:    &rt.turn.ID,
+				Role:      "user",
+				Content:   buildTaskContinuationActionPrompt(summary),
+				Metadata:  syntheticContinuationActionMessageMetadata(taskContinuationResumeMessageSource),
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	if shouldAppendProjectContinuationActionPrompt(rt.session) {
-		if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
-			SessionID: rt.session.ID,
-			TurnID:    &rt.turn.ID,
-			Role:      "user",
-			Content:   buildProjectContinuationActionPrompt(summary),
-			Metadata:  syntheticContinuationActionMessageMetadata("project_continuation_resume"),
-		}); err != nil {
-			return err
+		shouldAppend, appendErr := e.shouldAppendSyntheticUserPrompt(ctx, rt.session.ID, "project_continuation_resume")
+		if appendErr != nil {
+			return appendErr
+		}
+		if shouldAppend {
+			if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+				SessionID: rt.session.ID,
+				TurnID:    &rt.turn.ID,
+				Role:      "user",
+				Content:   buildProjectContinuationActionPrompt(summary),
+				Metadata:  syntheticContinuationActionMessageMetadata("project_continuation_resume"),
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	rt.historyStartID = &message.ID
@@ -7908,15 +7920,23 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 		if !shouldAppendTaskRecoveryActionPrompt(rt.session) {
 			return false, nil
 		}
-		actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
-			SessionID: rt.session.ID,
-			TurnID:    &rt.turn.ID,
-			Role:      "user",
-			Content:   buildTaskRecoveryActionPrompt(),
-			Metadata:  syntheticContinuationActionMessageMetadata("task_recovery_action"),
-		})
-		if err != nil {
-			return false, err
+		shouldAppend, appendErr := e.shouldAppendSyntheticUserPrompt(ctx, rt.session.ID, "task_recovery_action")
+		if appendErr != nil {
+			return false, appendErr
+		}
+		var actionMessage *chat.ChatMessage
+		var err error
+		if shouldAppend {
+			actionMessage, err = e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+				SessionID: rt.session.ID,
+				TurnID:    &rt.turn.ID,
+				Role:      "user",
+				Content:   buildTaskRecoveryActionPrompt(),
+				Metadata:  syntheticContinuationActionMessageMetadata("task_recovery_action"),
+			})
+			if err != nil {
+				return false, err
+			}
 		}
 		if preserveInitialMessage && rt.initialMessageID != uuid.Nil {
 			initial := rt.initialMessageID
@@ -7926,9 +7946,11 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 			}
 			return true, nil
 		}
-		rt.historyStartID = &actionMessage.ID
-		if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
-			return false, err
+		if actionMessage != nil {
+			rt.historyStartID = &actionMessage.ID
+			if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
+				return false, err
+			}
 		}
 		return true, nil
 	}
@@ -7936,15 +7958,23 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 	if err != nil {
 		return false, err
 	}
-	actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
-		SessionID: rt.session.ID,
-		TurnID:    &rt.turn.ID,
-		Role:      "user",
-		Content:   buildRecoveryResumeActionPrompt(state),
-		Metadata:  syntheticContinuationActionMessageMetadata("task_recovery_resume"),
-	})
-	if err != nil {
-		return false, err
+	shouldAppend, appendErr := e.shouldAppendSyntheticUserPrompt(ctx, rt.session.ID, "task_recovery_resume")
+	if appendErr != nil {
+		return false, appendErr
+	}
+	var actionMessage *chat.ChatMessage
+	var actionErr error
+	if shouldAppend {
+		actionMessage, actionErr = e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+			SessionID: rt.session.ID,
+			TurnID:    &rt.turn.ID,
+			Role:      "user",
+			Content:   buildRecoveryResumeActionPrompt(state),
+			Metadata:  syntheticContinuationActionMessageMetadata("task_recovery_resume"),
+		})
+		if actionErr != nil {
+			return false, actionErr
+		}
 	}
 	if preserveInitialMessage && rt.initialMessageID != uuid.Nil {
 		initial := rt.initialMessageID
@@ -7954,9 +7984,15 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 		}
 		return true, nil
 	}
-	_ = message
-	rt.historyStartID = &actionMessage.ID
-	if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
+	if actionMessage != nil {
+		rt.historyStartID = &actionMessage.ID
+		if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	rt.historyStartID = &message.ID
+	if err := e.persistTurnHistoryStart(ctx, rt, message.ID); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -9930,6 +9966,34 @@ func syntheticContinuationActionMessageMetadata(source string) json.RawMessage {
 		"source":                 strings.TrimSpace(source),
 		"synthetic_user_message": true,
 	})
+}
+
+func (e *TurnEngine) shouldAppendSyntheticUserPrompt(ctx context.Context, sessionID uuid.UUID, source string) (bool, error) {
+	if e == nil || e.messages == nil || sessionID == uuid.Nil {
+		return true, nil
+	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return true, nil
+	}
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") || !strings.EqualFold(strings.TrimSpace(message.Status), "pending") {
+			continue
+		}
+		metadata := messageMetadataMap(message.Metadata)
+		synthetic, _ := metadata["synthetic_user_message"].(bool)
+		if !synthetic {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), source) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) taskContinuationResumeAttempt(ctx context.Context, messageID uuid.UUID) int {

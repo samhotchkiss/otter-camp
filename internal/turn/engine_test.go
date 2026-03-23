@@ -1808,6 +1808,25 @@ func TestResolveSessionAgentForSessionRecoversMissingTaskAssigneeFromSessionPart
 	}
 }
 
+func TestShouldAppendSyntheticUserPromptSkipsDuplicatePendingSource(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Continue the active task now from the continuation summary above.",
+		Metadata:  syntheticContinuationActionMessageMetadata(taskContinuationResumeMessageSource),
+	})
+
+	shouldAppend, err := fixture.engine.shouldAppendSyntheticUserPrompt(context.Background(), fixture.session.ID, taskContinuationResumeMessageSource)
+	if err != nil {
+		t.Fatalf("shouldAppendSyntheticUserPrompt: %v", err)
+	}
+	if shouldAppend {
+		t.Fatal("shouldAppendSyntheticUserPrompt = true, want false for duplicate pending synthetic prompt")
+	}
+}
+
 func TestHandleUserMessageProjectScopeRoutesToProjectPMAndAddsParticipant(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	projectID := uuid.New()

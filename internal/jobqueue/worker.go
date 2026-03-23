@@ -645,7 +645,41 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (live message attempts): %w", err)
 	}
 
-	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected() + ct6.RowsAffected()
+	// Condition 7: synthetic continuation/recovery prompts should retain only
+	// one live dispatch per session/source. Older pending copies are
+	// superseded once a newer pending/claimed synthetic dispatch exists.
+	ct7, err := w.pool.Exec(ctx, `
+		WITH ranked AS (
+			SELECT jq.id,
+			       jq.status,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY jq.payload->>'session_id', COALESCE(cm.metadata->>'source', '')
+			           ORDER BY CASE WHEN jq.status = 'claimed' THEN 0 ELSE 1 END,
+			                    jq.created_at DESC,
+			                    jq.id DESC
+			       ) AS rn
+			FROM job_queue jq
+			JOIN chat_message cm ON cm.id = (jq.payload->>'message_id')::uuid
+			WHERE jq.status IN ('pending', 'claimed')
+			  AND jq.job_type = 'agent_turn'
+			  AND cm.role = 'user'
+			  AND COALESCE(cm.metadata->>'synthetic_user_message', 'false') = 'true'
+			  AND COALESCE(cm.metadata->>'source', '') <> ''
+		)
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    last_error = 'purged duplicate synthetic continuation dispatch',
+		    updated_at = now()
+		FROM ranked
+		WHERE jq.id = ranked.id
+		  AND ranked.status = 'pending'
+		  AND ranked.rn > 1
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("purge stale agent_turn jobs (duplicate synthetic dispatches): %w", err)
+	}
+
+	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected() + ct6.RowsAffected() + ct7.RowsAffected()
 	return total, nil
 }
 
