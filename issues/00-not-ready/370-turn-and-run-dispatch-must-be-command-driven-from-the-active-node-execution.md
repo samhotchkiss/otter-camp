@@ -96,3 +96,21 @@ After the first cut lands, at least these worker paths should no longer enqueue 
 - `RecoverStaleInProgressTriggeredTurns(...)`
 
 Those should become command reissuers against the active `flow_node_execution`, with message/session lookup only as supporting data instead of the primary dispatch identity.
+
+### Current progress
+
+This issue is partially underway, but not complete:
+
+- worker recovery/requeue paths now stamp `flow_node_execution_id` into reissued task-lane `agent_turn` payloads
+- claim-time suppression now uses active execution presence to distinguish valid live ownership from stale `chat_session.current_turn_id`
+- turn-engine-created retries and auto-continuations now also stamp `flow_node_execution_id` from task-session metadata before enqueue
+
+That means execution identity now survives:
+
+- worker stale triggered-turn recovery
+- worker stale continuation-turn recovery
+- worker pending-turn requeue
+- worker stranded supervisor-recovery requeue
+- turn-engine task retries / auto-continuations
+
+The remaining gap is that several primary dispatch producers still create task-lane work from message/session state without routing through one execution-scoped command helper. The next slice should eliminate those remaining raw producers rather than adding another generation of suppression heuristics.

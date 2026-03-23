@@ -7723,6 +7723,68 @@ func TestEnqueueAgentTurnIfActiveSuppressesRepeatedRecoveryRetryForSameMessage(t
 	}
 }
 
+func TestEnqueueAgentTurnIfActiveAddsFlowNodeExecutionIDFromSessionMetadata(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	executionID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+
+	enqueued, err := fixture.engine.enqueueAgentTurnIfActive(context.Background(), fixture.session, AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueueAgentTurnIfActive: %v", err)
+	}
+	if !enqueued {
+		t.Fatal("expected enqueue to succeed")
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.FlowNodeExecutionID == nil || *jobs[0].payload.FlowNodeExecutionID != executionID {
+		t.Fatalf("enqueued flow_node_execution_id = %v, want %s", jobs[0].payload, executionID)
+	}
+}
+
+func TestEnqueueAgentTurnIfActivePreservesProvidedFlowNodeExecutionID(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	sessionExecutionID := uuid.New()
+	providedExecutionID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": sessionExecutionID.String(),
+	})
+
+	enqueued, err := fixture.engine.enqueueAgentTurnIfActive(context.Background(), fixture.session, AgentTurnPayload{
+		SessionID:           fixture.session.ID,
+		MessageID:           fixture.userMessageID,
+		FlowNodeExecutionID: &providedExecutionID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueueAgentTurnIfActive: %v", err)
+	}
+	if !enqueued {
+		t.Fatal("expected enqueue to succeed")
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.FlowNodeExecutionID == nil || *jobs[0].payload.FlowNodeExecutionID != providedExecutionID {
+		t.Fatalf("enqueued flow_node_execution_id = %v, want %s", jobs[0].payload, providedExecutionID)
+	}
+}
+
 func TestCancelRecoveryResumeDispatchMarksInitialMessageCancelled(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 

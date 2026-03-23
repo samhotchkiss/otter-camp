@@ -24,10 +24,10 @@ As of 2026-03-23 morning local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9b
 Current observed task counts on the active Speaker Pipeline canary:
 
 - `queued=0`
-- `in_progress=8`
-- `review=5`
-- `done=11`
-- `draft=2`
+- `in_progress=2`
+- `review=1`
+- `done=22`
+- `draft=1`
 - `blocked=2`
 
 The active canary has already validated these product expectations under the latest build:
@@ -50,7 +50,14 @@ Most recent shipped commits relevant to the current validation run:
 - `374d4ec2` `Track live execution ownership on flow nodes`
 - `3f01d75a` `Prefer execution-owned live task ownership`
 - `6c6b40cb` `Expose active flow execution in task prompts`
-- pending local slice: claim-time agent-turn suppression now ignores stale pending `chat_session.current_turn_id` on `project_task` sessions when no active `flow_node_execution` still owns that session; targeted integration coverage passes and this should be committed next if the worktree is otherwise clean
+- `0f088327` `Recover stale task turns from execution ownership`
+- `814e7941` `Recover stale continuation turns from execution ownership`
+- `0189761f` `Requeue pending task turns from execution ownership`
+- `3e6bd3d6` `Requeue supervisor task turns from execution ownership`
+- `23c22ab4` `Preserve live continuation dispatches from execution ownership`
+- `6ccc00d9` `Bind worker task dispatches to active executions`
+- `425fd775` `Ignore stale task turns during claim suppression`
+- pending local slice: turn-engine-created retries and continuations now stamp `flow_node_execution_id` from bound task-session metadata before enqueue; targeted `internal/turn` coverage passes and this should be committed next if the worktree is otherwise clean
 
 What those changed:
 
@@ -71,6 +78,7 @@ What those changed:
 - worker startup purge for superseded project-task continuations now also uses execution-owned live turns, so valid continuation dispatches do not get dead-lettered just because the session pointer drifted
 - worker task-lane requeue/recovery paths now also stamp `flow_node_execution_id` into `agent_turn` payloads, which is the first concrete code slice toward issue `370`’s execution-bound dispatch model
 - claim-time `agent_turn` suppression no longer lets stale pending `current_turn_id` rows from abandoned task executions block fresh task dispatch claims
+- turn-engine-created retries and auto-continuations now also stamp `flow_node_execution_id` from task-session metadata before enqueue, so engine-side task dispatch no longer drops execution ownership after worker/control-plane already established it
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
@@ -111,14 +119,14 @@ The current implementation work is already underway against that plan:
 - worker startup purge for live project-task continuations now follows the same ownership source
 - worker reissued task-lane dispatches now carry the active `flow_node_execution_id` in payload, instead of treating `session_id/message_id/retry_count` as the entire dispatch identity
 - claim-time worker suppression now also respects execution ownership: stale pending session turns only block claims when an active `flow_node_execution` still exists for that task lane
+- turn-engine requeues/retries/auto-continuations now preserve the bound `flow_node_execution_id` too, so execution ownership survives task-session continuation inside the engine rather than only in worker repair paths
 
 The next likely slices after committing the current worker change are:
 
-- keep collapsing worker recovery/cleanup queries away from session-owned task execution inference
-- reduce task-lane cleanup/requeue queries that still treat `chat_session.current_turn_id` as the live owner instead of `flow_node_execution.metadata.live_turn_id`, especially stranded user-message requeue and the still-unresolved supervisor-purge path
-- begin routing worker recovery/requeue through an execution-scoped dispatch helper instead of raw `Enqueue(... agent_turn ...)` calls
-- verify the live canary clears the remaining blocked lanes under the new claim-time rule before taking the next command-model slice
-- then revisit live review-lane behavior once fresh turns are running under the newer prompt/runtime ownership model
+- remove remaining raw `agent_turn` producers that still do not carry execution identity, especially control-plane/chat-triggered task-session paths that enqueue from message state
+- begin routing those producers through a single execution-scoped dispatch helper instead of parallel ad hoc enqueue logic in worker and turn-engine
+- use the active canary to verify newly created task-session jobs now consistently carry `flow_node_execution_id`, not just worker-recovered ones
+- then revisit the two still-blocked Speaker Pipeline tasks, which are now blocked on deterministic tool-validation guards (`cli.execute command_required`, `file.write content_required`) rather than queue-ownership deadlock
 
 The standing rule from Sam is:
 

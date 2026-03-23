@@ -163,6 +163,7 @@ type AgentTurnPayload struct {
 	SessionID              uuid.UUID  `json:"session_id"`
 	MessageID              uuid.UUID  `json:"message_id"`
 	AgentID                *uuid.UUID `json:"agent_id,omitempty"`
+	FlowNodeExecutionID    *uuid.UUID `json:"flow_node_execution_id,omitempty"`
 	RetryCount             int        `json:"retry_count,omitempty"`
 	RateLimitJitterApplied bool       `json:"rate_limit_jitter_applied,omitempty"`
 }
@@ -14571,6 +14572,9 @@ func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat
 	if cancelled {
 		e.logger.Info("skipping enqueue after logical message cancellation", "session_id", payload.SessionID, "message_id", payload.MessageID)
 		return false, nil
+	}
+	if payload.FlowNodeExecutionID == nil && session != nil {
+		payload.FlowNodeExecutionID = cloneUUIDPointer(flowNodeExecutionIDFromSessionMetadata(session))
 	}
 	if suppressed, err := e.suppressRecoveryRetryForCompletedTurn(ctx, session, payload.MessageID); err != nil {
 		return false, err
