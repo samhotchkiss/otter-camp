@@ -7225,6 +7225,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return false, nil
 		}
+		handled, stop, err = e.handleTaskCLIExecuteWithoutCommand(ctx, rt, &call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 		handled, stop, err = e.handleRecoveryRejectedFileWriteContent(ctx, rt, &call)
 		if err != nil {
 			return false, err
@@ -8147,6 +8157,40 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 	}
 	call.Arguments = normalized
 	e.logger.Info("task continuation: populated file.write from assistant draft",
+		"session_id", rt.session.ID,
+		"turn_id", rt.turn.ID,
+		"path", targetPath,
+	)
+	return false, false, nil
+}
+
+func (e *TurnEngine) handleTaskCLIExecuteWithoutCommand(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
+	if rt == nil || call == nil || rt.turn == nil || rt.session == nil || rt.recoveryTurn {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false, false, nil
+	}
+	if !isRecoveryCLIExecuteWithoutCommand(*call) {
+		return false, false, nil
+	}
+
+	targetPath, _, ok := e.recoveryFileOutputContext(ctx, rt)
+	if !ok || strings.TrimSpace(targetPath) == "" {
+		return false, false, nil
+	}
+	draft, ok := e.taskContinuationDraftContent(ctx, rt, targetPath)
+	if !ok || strings.TrimSpace(draft) == "" {
+		return false, false, nil
+	}
+
+	call.Name = "file.write"
+	call.Arguments = mergeRewrittenFileWriteArguments(call.Arguments, map[string]any{
+		"path":        strings.TrimSpace(targetPath),
+		"content":     draft,
+		"create_dirs": true,
+	})
+	e.logger.Info("task continuation: rewrote empty cli.execute to file.write from draft",
 		"session_id", rt.session.ID,
 		"turn_id", rt.turn.ID,
 		"path", targetPath,
@@ -10372,6 +10416,32 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
 	if containsAny(lower,
+		"the target file currently contains placeholder narrative",
+		"instead of the substantive workflow specification",
+		"target size 13.3 kb",
+		"i need to write the actual workflow specification content now",
+	) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
+	}
+	if containsAny(lower,
+		"i need to check what the current state of the target file is",
+		"then read the planning artifacts",
+		"understand the workflow specification requirements before writing the deliverable",
+	) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
+	}
+	if containsAny(lower,
+		"**status**: task oc-",
+		"the target deliverable file is just a placeholder",
+		"based on the planning artifacts, i understand that oc-",
+	) && containsAny(lower,
+		"let me now create the complete workflow specification",
+		"11 comprehensive sections",
+		"the main deliverable",
+	) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
+	}
+	if containsAny(lower,
 		"let me assess the quality against the task's acceptance criteria",
 		"let me prepare a detailed review now",
 		"## review assessment:",
@@ -10400,6 +10470,11 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"the function signature isn't accepting my input",
 		"the function signature is not accepting my input",
 		"i need to provide the content parameter for",
+		"i need to provide the content parameter for the file write",
+		"i need to provide the content parameter for file_write",
+		"i need to provide the complete content for the file",
+		"i need to provide the actual content",
+		"i see the file_write failed due to missing content parameter",
 		"let me ",
 		"i need to ",
 		"my `file_write`",

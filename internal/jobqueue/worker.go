@@ -1162,6 +1162,16 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		          AND ct.status = 'in_progress'
 		          AND cs.status = 'active'
 		          AND cs.current_turn_id = ct.id
+		          AND (
+		            cs.scope_type <> 'project_task'
+		            OR NOT EXISTS (
+		              SELECT 1
+		              FROM flow_node_execution e
+		              WHERE e.session_id = cs.id
+		                AND e.status = 'active'
+		            )
+		            OR mi.created_at < $3
+		          )
 		          AND NOT EXISTS (
 		            SELECT 1
 		            FROM job_queue jq
@@ -1172,7 +1182,7 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		      )
 		    )
 		  )
-	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second))
+	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-2*time.Minute))
 	if err != nil {
 		return 0, fmt.Errorf("list stale model invocations: %w", err)
 	}

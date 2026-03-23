@@ -26,9 +26,9 @@ Current observed task state on the active fresh Speaker Pipeline canary:
 - bootstrap tasks `1-8` are all `done`
 - parent task `9` remains `draft`
 - task `10` is `done`
-- task `11` is currently `blocked`
+- task `11` is currently `review`
 - tasks `12`, `13`, `14`, and `15` are currently `done`
-- there are no queued tasks on the project
+- there are no blocked or queued tasks on the project
 
 The active fresh canary has already validated these product expectations under the latest build:
 
@@ -42,12 +42,8 @@ The active fresh canary has already validated these product expectations under t
 
 Most recent shipped commits relevant to the current validation run:
 
-- pending local slice: flow advance into review now backfills missing required `planning.artifact_evidence` entries when partial evidence already exists, so enforced discovery/research tasks do not block with false missing-artifact errors
-- pending local slice: recovery draft rejection now catches the live OC-11 role-introduction/proceed questionnaire, the OC-11 “now I understand the situation / let me check the planned deliverables” placeholder, and the OC-13 review-assessment placeholder so those narrated drafts stop surviving as durable recovery inputs
-- pending local slice: `taskplan` section normalization now treats heading aliases like `Primary Scenarios` and `Verification Methods` as satisfying required `scenarios` / `verification`, so valid execution-spec acceptance criteria do not fail contract checks on heading phrasing alone
-- pending local slice: `memory_extract_turn` is now classified with reserved low-priority background work so it cannot consume the final worker slot ahead of active `agent_turn` execution
-- pending local slice: recovery draft rejection now treats the exact live task-13 “Good. Now I have a clear understanding...” deliverable preface as non-substantive, so that 413-byte placeholder stops being reused from `[Recovery resume state]`
-- pending local slice: task-scoped `file.write` now rejects narrated placeholder content such as “Let me create the deliverable...” instead of persisting junk markdown into deliverable files
+- pending local slice: task-continuation `cli.execute` without `command` now rewrites to `file.write` from the substantive draft when the task already has a concrete target output path
+- pending local slice: stale `model_invocation` cleanup now uses a split threshold for execution-owned task sessions, so live `project_task` turns are not killed after 15 seconds just because the claimed `agent_turn` job is gone, but genuinely hung executions are still failed and retried after 2 minutes
 - `1238acd4` `Prefer historical recovery target paths`
 - `53dbe137` `Tighten task execution recovery ownership`
 - `14512df6` `Prefer task-matched recovery deliverables`
@@ -110,6 +106,8 @@ What those changed:
 - execution-first planning tasks now stop churning after the first successful declared-artifact write, even without an explicit single `Deliverable:` path in the task description
 - metadata-only task completion no longer requires a separate remembered `task.update work_status=done` when the task already carries complete planning evidence and a satisfied outcome assessment
 - stale project-session turns recovered by worker stale-model-invocation cleanup now requeue from the original trigger message instead of silently dying after `current_turn_id` is cleared
+- task-continuation turns can now rewrite empty `cli.execute` calls into `file.write` when a substantive task-local deliverable draft already exists, closing the live task-11 post-write fallback loop
+- stale `model_invocation` cleanup now treats execution-owned task sessions differently from generic sessions: the old 15-second no-claimed-job rule no longer kills healthy live executions, but old hung execution-owned invocations are still failed and retried on a longer threshold
 - satisfied draft auto-complete now requires the task to be non-decomposable under `taskdecomp.PrepareQueueDecomposition`, so broad bootstrap workstreams stay draft and must actually be split before bootstrap can pass
 - project sessions now get a hard tool-layer rejection if they attempt to mutate a task that already has `CurrentFlowNodeID` set, so active task lanes remain owned by their `project_task` session instead of being re-mutated by the PM lane
 - bootstrap-active project sessions now get a hard tool-layer rejection if they call `git.commit`, forcing canonical bootstrap persistence through `bootstrap.setup.persist` instead of ad hoc repo commits
@@ -130,18 +128,17 @@ Current live cleanup result:
 
 - bootstrap is complete and the governance gate is `done`
 - the first real execution wave is running under task sessions, not the project session
-- task `11` is the only blocked execution lane
-- the next bug to watch is task-lane completion/review quality, not PM/bootstrap queue ownership
+- task `11` is now the only active review lane
+- the next bug to watch is review-lane completion quality, not PM/bootstrap queue ownership
 - latest fixed repro: task `11` previously recovered onto `deliverables/oc-11-task-summary.md` even though the task-local workflow-spec path already existed in session history; the latest local slice now prefers `deliverables/oc-11-validation-workflow-spec.md`
 - latest fixed repro: task `12` previously recovered onto `planning/prd-spec/oc-12-acceptance-criteria.md` even though the task-local validation-report path already existed in session history; the latest local slice now prefers `planning/prd-spec/oc-12-validation-report.md`
 - live validation after redeploy confirmed both retargets:
   - task `11` resumed from `blocked` and moved onto task-local workflow-spec targets instead of generic summaries
   - task `12` completed its work lane and is now `done`
   - task `13` is now `done`, which confirmed the newer placeholder-draft rejection slices are working on a real execution lane
-- current next bug to watch: task `11` is blocked on recovery quality, not queue ownership. Its current checkpoint is `deliverables/oc-11-workflow-specification.md`, and the live failure pattern is:
-  - narrated placeholder draft (`Now I understand the situation... let me check the planned deliverables...`)
-  - repeated empty or malformed `cli.execute`
-  - hardened recovery checkpoint after bounded correction
+- latest fixed repro: task `11` survived the old one-minute stale-model-invocation kill path after the 15-second cleanup rule was removed for active execution-owned task sessions
+- latest fixed repro: task `11` later exposed the opposite problem, an actually hung execution-owned `model_invocation`; the current local slice now fails those only after a longer 2-minute threshold, and the live lane was reclaimed into review after restart
+- current next bug to watch: task `11` is no longer blocked on recovery write quality. It is now in `review`, but the reviewer lane keeps rereading planning/execution context until it hits prompt guardrails and continuation churn instead of using `flow.review_decision` promptly.
 - there is also a stale `turn-engine.turn-completed` replay for old turn `38a49ec0-0194-45c8-bc61-07b9328ae037` that still logs `Acceptance criteria missing sections: scenarios`; once a newer successful task-11 completion supersedes that turn, the replay should stop. If it does not, the next bug is in the completed-turn replay path rather than the planning contract itself.
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
@@ -191,11 +188,17 @@ The current implementation work is already underway against that plan:
 The current next thing to watch on the fresh canary is narrower:
 
 - bootstrap is completed and first-wave executions exist
-- the PM/bootstrap turn is still open after bootstrap completion and has already tried a couple of invalid post-bootstrap task mutations (`draft -> assigned`, `draft -> in_progress`) before the canonical state settled
-- if that turn does not unwind cleanly on its own, the next fix is in post-bootstrap project-session behavior: once canonical bootstrap state is completed and first-wave executions exist, the PM session should stop trying bootstrap-era direct task transitions inside the same turn and hand off cleanly to execution/review lanes
-- the newest live execution blockers shifted back into recovery draft quality on OC-12 and OC-15: both lanes were blocked by structured placeholder drafts that narrated the current state instead of writing the deliverable body
-- those blocked rows have now been resumed under the latest local recovery-draft classifier, so the next live check is whether they stay in execution without reusing those two placeholder shapes again
-- the newest deeper bug surfaced immediately after that: OC-15's fresh recovery lane could still inherit OC-13's `agents/speaker-validation-agent.md` through poisoned checkpoint/history fallback, so the latest local slice now rejects cross-task `OC-*` contamination in both checkpoint reconciliation and historical draft selection
+- the deepest queue/runtime ownership bug from this run was the stale `model_invocation` cleanup rule: execution-owned task turns were being failed after 15 seconds because there was no longer a claimed `agent_turn` job, even though the model call was still legitimately active
+- that is now split correctly in local code:
+  - healthy execution-owned turns are no longer failed on the 15-second path
+  - genuinely hung execution-owned turns are still failed on a 2-minute path and retried
+- the newest active bug is now review-lane behavior:
+  - reviewer sessions keep rereading planning artifacts, deliverables, and `flow.get_execution`
+  - prompt input eventually exceeds the 64k guardrail
+  - the lane continues instead of issuing `flow.review_decision`
+- the next fix should likely be mode-enforced rather than prompt-only:
+  - either block redundant review-session reads of execution/planning tools once the review packet and deliverable are already present
+  - or hard-direct review sessions toward `flow.review_decision` once the active execution ID and required artifacts are already in context
 
 The standing rule from Sam is:
 

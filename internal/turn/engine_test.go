@@ -8106,6 +8106,46 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "intent to write the deliverable",
 		},
 		{
+			name: "rejects target file placeholder narrative",
+			content: "The target file currently contains placeholder narrative (366 bytes) instead of the substantive workflow specification. The acceptance criteria document confirms the deliverable should be a comprehensive 11-section workflow specification for speaker pipeline validation discovery (target size 13.3 KB). I need to write the actual workflow specification content now.",
+			targetPath: "deliverables/oc-11-workflow-specification.md",
+			want:       "intent to write the deliverable",
+		},
+		{
+			name: "rejects current state and planning reread placeholder",
+			content: "I need to check what the current state of the target file is, then read the planning artifacts to understand the workflow specification requirements before writing the deliverable.",
+			targetPath: "deliverables/oc-11-workflow-specification.md",
+			want:       "intent to write the deliverable",
+		},
+		{
+			name: "rejects bold status workflow summary placeholder",
+			content: "**Status**: Task OC-11 is currently **in_progress** at the **Work** flow step. The target deliverable file is just a placeholder (180 bytes). I need to create the complete workflow specification.\n\n" +
+				"Based on the planning artifacts, I understand that OC-11 requires:\n\n" +
+				"1. **oc-11-workflow-specification.md** (13.3 KB, 11 comprehensive sections) - The main deliverable\n" +
+				"2. A formal specification covering validation workflow, data model, quality gates, and decision framework\n\n" +
+				"Let me now create the complete workflow specification:",
+			targetPath: "deliverables/oc-11-workflow-specification.md",
+			want:       "intent to write the deliverable",
+		},
+		{
+			name: "rejects file write failed due to missing content narration",
+			content: "I see the file_write failed due to missing content parameter. Let me create the comprehensive workflow specification now:",
+			targetPath: "deliverables/oc-11-workflow-specification.md",
+			want:       "intent to write the deliverable",
+		},
+		{
+			name: "rejects content parameter complete specification narration",
+			content: "I need to provide the content parameter for the file write. Let me create the complete workflow specification:",
+			targetPath: "deliverables/oc-11-workflow-specification.md",
+			want:       "intent to write the deliverable",
+		},
+		{
+			name: "rejects actual content let me write specification narration",
+			content: "I need to provide the actual content. Let me write the complete workflow specification:",
+			targetPath: "deliverables/oc-11-workflow-specification.md",
+			want:       "intent to write the deliverable",
+		},
+		{
 			name:    "rejects recovery context reread placeholder",
 			content: "Perfect. I now have the recovery context. Let me check the strategy artifacts to understand the locked decisions before proceeding:",
 			want:    "asked the operator to choose the next step instead of the file body",
@@ -9802,6 +9842,83 @@ func TestHandleTaskFileWriteWithoutContentPrefersPriorSubstantiveDraftOverIntent
 	}
 	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "## Hosting") {
 		t.Fatalf("content = %q, want prior substantive draft", got)
+	}
+}
+
+func TestHandleTaskCLIExecuteWithoutCommandRewritesToFileWriteFromDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	priorTurnID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "deliverables/oc-11-workflow-specification.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"path":    targetPath,
+				"content": "# Workflow Specification\n\n## Overview\n- Concrete workflow body.\n",
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content: "# Workflow Specification\n\n## Overview\n- Concrete workflow body.\n",
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Let me write the complete workflow specification file using a heredoc:",
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "cli-1",
+		Name: "cli.execute",
+		Arguments: map[string]any{
+			"command": "",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskCLIExecuteWithoutCommand(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskCLIExecuteWithoutCommand: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if call.Name != "file.write" {
+		t.Fatalf("call.Name = %q, want file.write", call.Name)
+	}
+	if got := stringValue(call.Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "## Overview") {
+		t.Fatalf("content = %q, want rewritten substantive draft", got)
+	}
+	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
+		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
 	}
 }
 
