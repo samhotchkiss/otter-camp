@@ -3413,6 +3413,167 @@ func TestJobWorkerRecoverStaleInProgressContinuationTurns(t *testing.T) {
 	}
 }
 
+func TestJobWorkerRecoverStaleInProgressContinuationTurnsKeepsQueuedRetry(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "recover-stale-continuation-queued-retry-org",
+		DisplayName: "Recover Stale Continuation Queued Retry Org",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Continuation Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover leaked continuation turns.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "recover-stale-continuation-queued-retry-project",
+		DisplayName:    "Recover Stale Continuation Queued Retry Project",
+		Description:    "Project for stale continuation retry reuse",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "recover-stale-continuation-queued-retry-template",
+		DisplayName:    "Recover Stale Continuation Queued Retry Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover stale continuation turn with queued retry",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue task work from the last checkpoint.",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("create trigger message: %v", err)
+	}
+	completedAt := time.Now().UTC().Add(-2 * time.Hour)
+	if _, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &message.ID,
+		CompletedAt:      &completedAt,
+	}); err != nil {
+		t.Fatalf("create completed prior turn: %v", err)
+	}
+	startedAt := time.Now().UTC().Add(-1 * time.Hour)
+	continuationTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     2,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "in_progress",
+		StartedAt:      &startedAt,
+	})
+	if err != nil {
+		t.Fatalf("create continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &continuationTurn.ID); err != nil {
+		t.Fatalf("set current continuation turn: %v", err)
+	}
+	if _, err := worker.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+		SessionID:  session.ID,
+		MessageID:  message.ID,
+		RetryCount: 1,
+	}, nil); err != nil {
+		t.Fatalf("enqueue queued retry job: %v", err)
+	}
+
+	repaired, err := worker.RecoverStaleInProgressContinuationTurns(ctx)
+	if err != nil {
+		t.Fatalf("RecoverStaleInProgressContinuationTurns: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired continuation turns = %d, want 1", repaired)
+	}
+
+	storedTurn, err := repo.NewChatTurnRepo(pool).GetByID(ctx, continuationTurn.ID)
+	if err != nil {
+		t.Fatalf("reload continuation turn: %v", err)
+	}
+	if storedTurn.Status != "failed" {
+		t.Fatalf("continuation turn status = %q, want failed", storedTurn.Status)
+	}
+
+	refreshedSession, err := repo.NewChatSessionRepo(pool).GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if refreshedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil", *refreshedSession.CurrentTurnID)
+	}
+
+	var pendingJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending queued retry jobs: %v", err)
+	}
+	if pendingJobs != 1 {
+		t.Fatalf("pending queued retry jobs = %d, want 1", pendingJobs)
+	}
+}
+
 func TestJobWorkerRecoverStaleInProgressTriggeredTurns(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

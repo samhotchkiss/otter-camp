@@ -943,7 +943,7 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 		  AND ct.status = 'in_progress'
 		  AND ct.trigger_message_id IS NULL
 		  AND ct.started_at IS NOT NULL
-		  AND ct.started_at < $2
+		  AND ct.started_at < $1
 		  AND (
 		    cs.scope_type NOT IN ('project', 'project_task')
 		    OR (
@@ -959,14 +959,7 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 		      AND r.turn_id = ct.id
 		      AND r.status IN ('created', 'in_progress')
 		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM job_queue jq
-		    WHERE jq.job_type = $1
-		      AND jq.status IN ('pending', 'claimed')
-		      AND (jq.payload->>'session_id')::uuid = cs.id
-		  )
-	`, agentTurnJobType, w.clock.Now().UTC().Add(-staleContinuationThreshold))
+	`, w.clock.Now().UTC().Add(-staleContinuationThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("list stale in-progress continuation turns: %w", err)
 	}
@@ -1037,12 +1030,18 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 		`, item.sessionID, item.turnID); err != nil {
 			return repaired, fmt.Errorf("clear stale continuation current turn for session %s: %w", item.sessionID, err)
 		}
-		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
-			SessionID:  item.sessionID,
-			MessageID:  item.messageID,
-			RetryCount: item.retryCount,
-		}, nil); err != nil {
-			return repaired, fmt.Errorf("enqueue recovered stale continuation retry for session %s: %w", item.sessionID, err)
+		hasQueued, err := w.sessionHasQueuedOrClaimedAgentTurn(ctx, item.sessionID)
+		if err != nil {
+			return repaired, fmt.Errorf("check queued recovered continuation retry for session %s: %w", item.sessionID, err)
+		}
+		if !hasQueued {
+			if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+				SessionID:  item.sessionID,
+				MessageID:  item.messageID,
+				RetryCount: item.retryCount,
+			}, nil); err != nil {
+				return repaired, fmt.Errorf("enqueue recovered stale continuation retry for session %s: %w", item.sessionID, err)
+			}
 		}
 		repaired++
 	}
@@ -1079,7 +1078,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		  AND ct.status = 'in_progress'
 		  AND ct.trigger_message_id IS NOT NULL
 		  AND ct.started_at IS NOT NULL
-		  AND ct.started_at < $2
+		  AND ct.started_at < $1
 		  AND (
 		    cs.scope_type NOT IN ('project', 'project_task')
 		    OR (
@@ -1095,14 +1094,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		      AND r.turn_id = ct.id
 		      AND r.status IN ('created', 'in_progress')
 		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM job_queue jq
-		    WHERE jq.job_type = $1
-		      AND jq.status IN ('pending', 'claimed')
-		      AND (jq.payload->>'session_id')::uuid = cs.id
-		  )
-	`, agentTurnJobType, w.clock.Now().UTC().Add(-staleContinuationThreshold))
+	`, w.clock.Now().UTC().Add(-staleContinuationThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("list stale in-progress triggered turns: %w", err)
 	}
@@ -1173,16 +1165,42 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		`, item.sessionID, item.turnID); err != nil {
 			return repaired, fmt.Errorf("clear stale triggered current turn for session %s: %w", item.sessionID, err)
 		}
-		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
-			SessionID:  item.sessionID,
-			MessageID:  item.messageID,
-			RetryCount: item.retryCount,
-		}, nil); err != nil {
-			return repaired, fmt.Errorf("enqueue recovered stale triggered retry for session %s: %w", item.sessionID, err)
+		hasQueued, err := w.sessionHasQueuedOrClaimedAgentTurn(ctx, item.sessionID)
+		if err != nil {
+			return repaired, fmt.Errorf("check queued recovered triggered retry for session %s: %w", item.sessionID, err)
+		}
+		if !hasQueued {
+			if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+				SessionID:  item.sessionID,
+				MessageID:  item.messageID,
+				RetryCount: item.retryCount,
+			}, nil); err != nil {
+				return repaired, fmt.Errorf("enqueue recovered stale triggered retry for session %s: %w", item.sessionID, err)
+			}
 		}
 		repaired++
 	}
 	return repaired, nil
+}
+
+func (w *Worker) sessionHasQueuedOrClaimedAgentTurn(ctx context.Context, sessionID uuid.UUID) (bool, error) {
+	if sessionID == uuid.Nil {
+		return false, nil
+	}
+
+	var exists bool
+	if err := w.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM job_queue jq
+			WHERE jq.job_type = $1
+			  AND jq.status IN ('pending', 'claimed')
+			  AND (jq.payload->>'session_id')::uuid = $2
+		)
+	`, agentTurnJobType, sessionID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func (w *Worker) RejitterPendingRateLimitedAgentTurns(ctx context.Context) (int64, error) {
