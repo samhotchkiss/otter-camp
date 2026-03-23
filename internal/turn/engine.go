@@ -6350,7 +6350,14 @@ func (e *TurnEngine) requireTurnInProgress(ctx context.Context, rt *turnRuntime)
 	if strings.EqualFold(strings.TrimSpace(current.Status), "in_progress") {
 		return nil
 	}
-	if strings.EqualFold(strings.TrimSpace(current.Status), "cancelled") {
+	if isTerminalTurnStatus(current.Status) {
+		if !strings.EqualFold(strings.TrimSpace(current.Status), "cancelled") {
+			e.logger.Warn("runTurn preflight skipping terminal turn",
+				"session_id", rt.session.ID,
+				"turn_id", rt.turn.ID,
+				"turn_status", strings.ToLower(strings.TrimSpace(current.Status)),
+			)
+		}
 		return errTurnCancelled
 	}
 	return fmt.Errorf(

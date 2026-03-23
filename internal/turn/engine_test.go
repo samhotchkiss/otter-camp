@@ -2545,6 +2545,34 @@ func TestRequireTurnInProgressReturnsCancelledSentinel(t *testing.T) {
 	}
 }
 
+func TestRequireTurnInProgressReturnsCancelledForOtherTerminalStatuses(t *testing.T) {
+	for _, status := range []string{"failed", "completed"} {
+		t.Run(status, func(t *testing.T) {
+			turnID := uuid.New()
+			engine := &TurnEngine{
+				logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				chat: &fakeChatService{
+					turns: map[uuid.UUID]*chat.ChatTurn{
+						turnID: {
+							ID:     turnID,
+							Status: status,
+						},
+					},
+				},
+			}
+			rt := &turnRuntime{
+				session: &chat.ChatSession{ID: uuid.New()},
+				turn:    &chat.ChatTurn{ID: turnID},
+			}
+
+			err := engine.requireTurnInProgress(context.Background(), rt)
+			if !errors.Is(err, errTurnCancelled) {
+				t.Fatalf("requireTurnInProgress error = %v, want errTurnCancelled", err)
+			}
+		})
+	}
+}
+
 func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksNamedTaskListImmediately(t *testing.T) {
 	now := time.Now().UTC()
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
