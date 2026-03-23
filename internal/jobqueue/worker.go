@@ -2732,6 +2732,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 			} else if repaired > 0 {
 				w.logger.Info("job queue: cleared completed session current turns", "count", repaired)
 			}
+			if repaired, err := w.CloseTerminalProjectTaskAsyncSessions(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("terminal project_task session cleanup failed", "error", err)
+			} else if repaired > 0 {
+				w.logger.Info("job queue: closed terminal project_task async sessions", "count", repaired)
+			}
 			if repaired, err := w.FailStaleModelInvocations(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("stale model invocation cleanup failed", "error", err)
 			} else if repaired > 0 {

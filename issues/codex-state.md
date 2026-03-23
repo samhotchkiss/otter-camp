@@ -65,6 +65,7 @@ Most recent shipped commits relevant to the current validation run:
 - pending local slice: `chat.SteerTurn(...)` now also includes `flow_node_execution_id` in replacement task-session `chat.message.user_sent` events; focused chat integration coverage is green
 - pending local slice: synthetic task continuation/recovery user prompts appended by the turn engine now also inherit `flow_node_execution_id` from session metadata; focused turn-engine coverage is green
 - pending local slice: worker pending-turn repair now ignores failed execution `live_turn_id` pointers when deciding whether a task lane still has a real pending turn to requeue; focused jobqueue integration coverage is green
+- pending local slice: terminal `project_task` async session cleanup now runs during periodic worker maintenance, not only on startup; focused worker integration coverage is green
 
 What those changed:
 
@@ -93,6 +94,7 @@ What those changed:
 - steer/recovery-style replacement user messages for bound task sessions now also keep `flow_node_execution_id`, so operator/session steering no longer drops task-lane execution identity at the chat-event boundary
 - synthetic continuation-root and recovery-action user prompts now also keep `flow_node_execution_id`, closing another task-lane path that previously kept execution identity only in the queue payload and not in the message metadata itself
 - worker pending-turn repair no longer lets a failed execution-owned `live_turn_id` hide a real pending `chat_session.current_turn_id`, which was the live task-20 stall signature on Speaker Pipeline
+- terminal done/cancelled task sessions no longer have to wait for a worker restart to close; the periodic stale-scan loop now cleans them up during steady-state execution too
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 

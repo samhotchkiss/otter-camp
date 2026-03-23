@@ -129,3 +129,5 @@ Latest slice completed:
 - Focused turn-engine coverage now asserts both continuation-root and synthetic recovery metadata keep execution ownership when present.
 - worker pending-turn repair now ignores failed execution `live_turn_id` pointers when selecting the authoritative pending turn to requeue.
 - Focused jobqueue integration coverage now asserts a stale failed `live_turn_id` can no longer mask a real pending `current_turn_id`.
+- terminal `project_task` async session cleanup now runs in the worker’s periodic maintenance loop, not only on startup.
+- Focused worker integration coverage now asserts a terminal task session closes automatically during steady-state worker operation.
