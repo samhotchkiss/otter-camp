@@ -920,6 +920,9 @@ func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.
 		}
 		return nil
 	}
+	if payload.FlowNodeExecutionID != nil && *payload.FlowNodeExecutionID != uuid.Nil {
+		return nil
+	}
 	_, err = e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, payload, nil)
 	return err
 }

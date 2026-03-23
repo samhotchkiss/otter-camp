@@ -117,3 +117,9 @@ That means execution identity now survives:
 - normal task-lane message-trigger dispatch from `chat.message.user_sent`
 
 The remaining gap is that several primary dispatch producers still create task-lane work from message/session state without routing through one execution-scoped command helper. The next slice should eliminate those remaining raw producers rather than adding another generation of suppression heuristics.
+
+Latest slice completed:
+
+- `HandleUserMessageEvent(...)` now refuses the legacy raw `agent_turn` fallback for execution-owned task events when the session cannot be loaded.
+- That removes another shadow dispatch path where `project_task` work could be recreated from `session_id/message_id` alone even though the event already carried `flow_node_execution_id`.
+- Focused turn-engine coverage now asserts that execution-owned task events with a missing session no-op instead of enqueueing an orphan job.

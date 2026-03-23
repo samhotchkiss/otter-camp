@@ -1955,6 +1955,32 @@ func TestHandleUserMessageEventSkipsClosedSession(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageEventSkipsLegacyFallbackForExecutionOwnedTaskEventWithoutSession(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	sessionID := fixture.session.ID
+	executionID := uuid.New()
+	fixture.chat.session.ID = uuid.New()
+
+	event := eventbus.DomainEvent{
+		EventType: "chat.message.user_sent",
+	}
+	payload, err := json.Marshal(map[string]any{
+		"session_id":             sessionID.String(),
+		"message_id":             fixture.userMessageID.String(),
+		"flow_node_execution_id": executionID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event.Payload = payload
+	if err := fixture.engine.HandleUserMessageEvent(context.Background(), event); err != nil {
+		t.Fatalf("HandleUserMessageEvent: %v", err)
+	}
+	if got := len(fixture.enqueuer.agentTurnJobs()); got != 0 {
+		t.Fatalf("agent turn jobs = %d, want 0 when execution-owned task session is missing", got)
+	}
+}
+
 func TestHandleUserMessageProjectBootstrapWatchdogCancelsBlockedChunkPersistence(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 

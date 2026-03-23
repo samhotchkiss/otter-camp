@@ -24,11 +24,11 @@ As of 2026-03-23 morning local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9b
 Current observed task counts on the active Speaker Pipeline canary:
 
 - `queued=0`
-- `in_progress=1`
-- `review=1`
+- `in_progress=4`
+- `review=0`
 - `done=23`
 - `draft=1`
-- `blocked=3`
+- `blocked=0`
 
 The active canary has already validated these product expectations under the latest build:
 
@@ -59,8 +59,9 @@ Most recent shipped commits relevant to the current validation run:
 - `425fd775` `Ignore stale task turns during claim suppression`
 - `25215b30` `Bind task continuations to active executions`
 - `6992ab10` `Purge legacy task dispatch without execution ownership`
-- pending local slice: worker requeue paths now skip blocked task lanes for both `RequeueStrandedSupervisorRecoveryTurns` and `RequeuePendingTurnsWithoutJobs`; targeted integration coverage passes and live restart confirmed tasks 12/26 no longer get requeued into `agent_turn` churn on startup
-- pending local slice: `chat.message.user_sent` for bound task sessions now includes `flow_node_execution_id` directly in the event payload; targeted chat coverage passes and the live queue now shows execution-owned `agent_turn` jobs without needing a worker recovery path first
+- `9d8ed49e` `Publish execution-owned task message dispatch`
+- `ed694196` `Skip blocked task lanes during worker requeue`
+- pending local slice: execution-owned task `chat.message.user_sent` events no longer fall back to legacy raw enqueue in `HandleUserMessageEvent(...)` when the session cannot be loaded; targeted turn-engine tests are green
 
 What those changed:
 
@@ -85,6 +86,7 @@ What those changed:
 - worker startup purge now also retires legacy task-session `agent_turn` rows with no execution identity when a newer execution-owned live turn already exists, so pre-rework queue rows no longer shadow an active lane after restart
 - chat-layer `chat.message.user_sent` events for bound task sessions now publish `flow_node_execution_id` directly, so downstream dispatch does not need to rediscover execution identity from session state for the common message-trigger path
 - worker blocked-task recovery no longer requeues blocked validation-loop sessions through supervisor or pending-turn startup repair, so blocked tasks stay blocked instead of generating repeated startup churn
+- turn-event handling no longer recreates execution-owned `project_task` dispatch from raw `session_id/message_id` when the bound session cannot be loaded, which removes another message-state escape hatch from issue `370`
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
@@ -98,7 +100,7 @@ Task `38` there is intentionally `cancelled`, not `done`: it was an impossible l
 
 The main priority is still core-system reliability for unattended end-to-end project execution. SAM.blog proved cleanup and closeout. The active Speaker Pipeline run is now the sharper canary for fresh-bootstrap correctness, reviewer staffing, queue fairness, and live execution churn.
 
-The immediate priority is still to keep using the Speaker Pipeline canary to find the next deterministic runtime bug inside task/review execution itself, not to hand-steer the project.
+The immediate priority is still to keep using the Speaker Pipeline canary to find the next deterministic runtime bug inside task/review execution itself while continuing the execution-ownership rework. The canary is no longer blocked: tasks `12` and `26` both resumed successfully through the shipped `/v1/tasks/{id}/resume` path, which rebuilt durable recovery checkpoints and moved them back into live execution.
 
 That priority is now subordinate to a broader execution-architecture rework. The current codebase has enough evidence that the repeated stalls are structural:
 
@@ -128,18 +130,24 @@ The current implementation work is already underway against that plan:
 - turn-engine requeues/retries/auto-continuations now preserve the bound `flow_node_execution_id` too, so execution ownership survives task-session continuation inside the engine rather than only in worker repair paths
 - startup cleanup now drops legacy task-session dispatch rows that have no `flow_node_execution_id` once the lane already has an active execution-owned live turn, which removes another pre-command-model source of stale queue identity
 - message-triggered task dispatch now carries execution identity directly from the chat layer, and the current live claimed `agent_turn` row on Speaker Pipeline includes `flow_node_execution_id` as expected
-- blocked validation-loop tasks no longer re-enter queue churn on worker restart; tasks `12` and `26` remain blocked, but they no longer consume startup repair cycles
+- blocked validation-loop tasks no longer re-enter queue churn on worker restart
+- tasks `12` and `26` were then resumed through the real product path and both rebuilt durable recovery checkpoints successfully:
+  - task `12` checkpoint target: `planning/sourcing-framework/oc-12-qualification-checklist.md`
+  - task `26` checkpoint target: `planning/metrics-framework/oc-22-dashboard-spec.md`
+- that confirms the remaining issue on this canary is no longer blocked-task resumability; it is post-resume execution quality/runtime behavior
 
 The next likely slices after committing the current worker change are:
 
-- remove remaining raw `agent_turn` producers that still do not carry execution identity, especially any fallback paths that enqueue after session lookup failure or create task-lane dispatch outside the normal message/wakeup path
-- after the queue-ownership cleanup, shift back to the underlying product blockers on the remaining blocked tasks: `cli.execute command_required` and `file.write content_required`
+- remove remaining raw `agent_turn` producers that still do not carry execution identity or still infer task-lane dispatch from message/session state outside the execution-owned helper path
+- after that queue-ownership cleanup, shift back to the next deterministic runtime blocker that appears on the live Speaker Pipeline tasks now that the previous blocked lanes have resumed
 - begin routing those producers through a single execution-scoped dispatch helper instead of parallel ad hoc enqueue logic in worker and turn-engine
 - use the active canary to verify newly created task-session jobs now consistently carry `flow_node_execution_id`, not just worker-recovered ones
-- then revisit the three still-blocked Speaker Pipeline tasks, which are now blocked on deterministic tool-validation guards rather than queue-ownership deadlock:
-  - task `12`: `cli.execute command_required`
-  - task `26`: `file.write content_required`
-  - task `19`: newly blocked in the automation-design lane after the ownership/drain fixes
+- then revisit the active non-done Speaker Pipeline tasks under that tighter model:
+  - task `10`: `draft`
+  - task `12`: `in_progress`
+  - task `19`: `in_progress`
+  - task `20`: `in_progress`
+  - task `26`: `in_progress`
 
 The standing rule from Sam is:
 
