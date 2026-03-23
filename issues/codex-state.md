@@ -17,6 +17,34 @@ OtterCamp is a multi-agent project execution system with:
 
 The product goal is not just to generate plans or chats. It must reliably create projects, staff them, break work into bounded tasks, run the work, review it, and complete it with minimal operator intervention.
 
+## Current live state
+
+As of 2026-03-22 evening local time, the active validation run is still `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`).
+
+Current observed task counts after the latest recovery fixes:
+
+- `done=17`
+- `in_progress=4`
+- `review=6`
+- `blocked=0`
+- `draft=11`
+
+The system is no longer wedged on the earlier recovery/runtime bugs. Remaining work is normal execution/review drain plus parent/draft cleanup, not a hard deadlock.
+
+Most recent shipped commits relevant to the current run:
+
+- `ed373d24` `Trim dangling task mutation quotes`
+- `44d8a609` `Recover malformed file edits from persisted drafts`
+- `0f23721f` `Reuse persisted drafts after recovery intent loops`
+- `cf44e6ea` `Sanitize malformed task mutation text`
+
+What those changed:
+
+- task titles/descriptions now strip malformed `<parameter ...>` echoes and dangling trailing quotes at mutation time
+- recovery turns can reuse durable drafts even after another intent-only assistant response
+- recovery turns can rewrite malformed `file.edit` calls with no path into concrete `file.write` calls when a checkpoint already has the target path and durable draft
+- the live SAM.blog rows carrying old task-text corruption were repaired in-place after those guards shipped
+
 ## Current product priorities
 
 The main priority is core-system reliability for unattended end-to-end project execution, followed immediately by making completed projects settle cleanly without operator cleanup.
