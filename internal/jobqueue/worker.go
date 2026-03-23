@@ -263,6 +263,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: backfilled cancelled turn stop reasons on startup", "count", repaired)
 	}
+	if repaired, err := w.FailStaleModelInvocations(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup stale model invocation cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: failed stale model invocations on startup", "count", repaired)
+	}
 	if repaired, err := w.RecoverStaleInProgressContinuationTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup stale continuation recovery failed", "error", err)
@@ -936,6 +943,32 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		return repaired, fmt.Errorf("iterate active execution sessions without turns: %w", err)
 	}
 	return repaired, nil
+}
+
+func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
+	ct, err := w.pool.Exec(ctx, `
+		UPDATE model_invocation mi
+		SET status = 'failed',
+		    failure_class = 'product_runtime',
+		    error_code = 'stale_model_invocation',
+		    error_message = 'worker cleanup failed stale in_flight model invocation without live in-progress turn',
+		    completed_at = COALESCE(completed_at, now())
+		WHERE mi.status = 'in_flight'
+		  AND mi.created_at < $1
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    JOIN chat_session cs ON cs.id = ct.session_id
+		    WHERE ct.id = mi.turn_id
+		      AND ct.status = 'in_progress'
+		      AND cs.status = 'active'
+		      AND cs.current_turn_id = ct.id
+		  )
+	`, w.clock.Now().UTC().Add(-30*time.Minute))
+	if err != nil {
+		return 0, fmt.Errorf("fail stale model invocations: %w", err)
+	}
+	return ct.RowsAffected(), nil
 }
 
 func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (int64, error) {
@@ -2309,6 +2342,11 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 				w.logger.Error("stale agent_turn purge failed", "error", err)
 			} else if purged > 0 {
 				w.logger.Info("job queue: purged stale agent_turn jobs", "count", purged)
+			}
+			if repaired, err := w.FailStaleModelInvocations(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("stale model invocation cleanup failed", "error", err)
+			} else if repaired > 0 {
+				w.logger.Info("job queue: failed stale model invocations", "count", repaired)
 			}
 			if requeued, err := w.RequeuePendingTurnsWithoutJobs(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("pending turn repair failed", "error", err)
