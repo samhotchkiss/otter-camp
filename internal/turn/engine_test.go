@@ -9944,6 +9944,100 @@ This migration plan operationalizes the staged cutover and validation strategy.
 	}
 }
 
+func TestRecoveryHistoricalSubstantiveOutputContextPrefersWriteTargetOverPlanningRead(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	oldTurnID := uuid.New()
+	currentTurnID := uuid.New()
+	dataDir := t.TempDir()
+	projectID := uuid.New()
+	projectSlug := "speaker-pipeline-ops-fresh-restart"
+	orgSlug := "default"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.dataDir = dataDir
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				ProjectID:      projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				WorkStatus:     "in_progress",
+			},
+		},
+	}
+
+	workspaceRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	generateReportsPath := filepath.Join(workspaceRoot, "src", "generate_reports.py")
+	if err := os.MkdirAll(filepath.Dir(generateReportsPath), 0o755); err != nil {
+		t.Fatalf("mkdir generate_reports.py: %v", err)
+	}
+	if err := os.WriteFile(generateReportsPath, []byte("def generate_pipeline_report(data):\n    return {'count': len(data)}\n"), 0o644); err != nil {
+		t.Fatalf("write generate_reports.py: %v", err)
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "planning/metrics-framework/oc-16-instrumentation-plan.md",
+				"content": strings.TrimSpace(`# Instrumentation plan
+
+- Kind: metrics_framework
+- Source task: OC-16
+`),
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"path":      "src/generate_reports.py",
+				"byte_size": 68,
+				"created":   false,
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	targetPath, draft, ok := fixture.engine.recoveryHistoricalSubstantiveOutputContext(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected historical substantive output context")
+	}
+	if targetPath != "src/generate_reports.py" {
+		t.Fatalf("targetPath = %q, want src/generate_reports.py", targetPath)
+	}
+	if !strings.Contains(draft, "def generate_pipeline_report") {
+		t.Fatalf("draft = %q, want substantive code draft", draft)
+	}
+}
+
 func TestPersistRecoveryFileWriteCheckpointKeepsExistingSubstantiveTargetPath(t *testing.T) {
 	t.Parallel()
 

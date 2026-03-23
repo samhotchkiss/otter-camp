@@ -9056,8 +9056,9 @@ func (e *TurnEngine) recoveryHistoricalSubstantiveOutputContext(ctx context.Cont
 		return "", "", false
 	}
 	sessionIDs := []uuid.UUID{rt.session.ID}
-	fallbackPath := ""
-	fallbackDraft := ""
+	bestPath := ""
+	bestDraft := ""
+	bestScore := -1
 	if e.pool != nil && strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") && rt.session.ScopeID != uuid.Nil {
 		rows, err := e.pool.Query(ctx, `
 			SELECT id
@@ -9110,31 +9111,23 @@ func (e *TurnEngine) recoveryHistoricalSubstantiveOutputContext(ctx context.Cont
 			}
 			if strings.EqualFold(strings.TrimSpace(toolName), "file.read") && !usedArtifactPath {
 				draft := strings.TrimSpace(anyString(output["content"]))
-				if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason == "" && looksLikeRecoveryFileDraft(draft) {
-					if recoveryHistoricalDraftPathLooksLikeDeliverable(targetPath) {
-						return targetPath, draft, true
-					}
-					if fallbackPath == "" {
-						fallbackPath = targetPath
-						fallbackDraft = draft
-					}
+				if score, ok := recoveryHistoricalDraftCandidateScore(strings.TrimSpace(toolName), targetPath, draft); ok && score > bestScore {
+					bestPath = targetPath
+					bestDraft = draft
+					bestScore = score
 				}
 			}
 			if workspaceDraft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
-				if reason := recoveryFileWriteDraftRejectReason(workspaceDraft, targetPath); reason == "" && looksLikeRecoveryFileDraft(workspaceDraft) {
-					if recoveryHistoricalDraftPathLooksLikeDeliverable(targetPath) {
-						return targetPath, workspaceDraft, true
-					}
-					if fallbackPath == "" {
-						fallbackPath = targetPath
-						fallbackDraft = workspaceDraft
-					}
+				if score, ok := recoveryHistoricalDraftCandidateScore(strings.TrimSpace(toolName), targetPath, workspaceDraft); ok && score > bestScore {
+					bestPath = targetPath
+					bestDraft = workspaceDraft
+					bestScore = score
 				}
 			}
 		}
 	}
-	if fallbackPath != "" {
-		return fallbackPath, fallbackDraft, true
+	if bestScore >= 0 {
+		return bestPath, bestDraft, true
 	}
 	return "", "", false
 }
@@ -9156,6 +9149,48 @@ func recoveryHistoricalDraftPathLooksLikeDeliverable(targetPath string) bool {
 		return false
 	}
 	return true
+}
+
+func recoveryHistoricalReadPathShouldFallback(targetPath string) bool {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(targetPath, "\\", "/"))
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "planning/")
+}
+
+func recoveryHistoricalDraftCandidateScore(toolName, targetPath, draft string) (int, bool) {
+	trimmedDraft := strings.TrimSpace(draft)
+	if trimmedDraft == "" {
+		return 0, false
+	}
+	if reason := recoveryFileWriteDraftRejectReason(trimmedDraft, targetPath); reason != "" {
+		return 0, false
+	}
+	if !looksLikeRecoveryFileDraft(trimmedDraft) && !recoveryHistoricalSourceDraftLooksSubstantive(targetPath, trimmedDraft) {
+		return 0, false
+	}
+	if !recoveryHistoricalDraftPathLooksLikeDeliverable(targetPath) {
+		return 1, true
+	}
+	if strings.EqualFold(strings.TrimSpace(toolName), "file.read") && recoveryHistoricalReadPathShouldFallback(targetPath) {
+		return 2, true
+	}
+	return 3, true
+}
+
+func recoveryHistoricalSourceDraftLooksSubstantive(targetPath, draft string) bool {
+	trimmedDraft := strings.TrimSpace(draft)
+	if trimmedDraft == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(filepath.Ext(targetPath))) {
+	case ".py", ".go", ".js", ".ts", ".tsx", ".jsx", ".rb", ".sh", ".bash", ".zsh", ".sql", ".json", ".yaml", ".yml", ".toml", ".html", ".css":
+		return len(trimmedDraft) >= 40
+	default:
+		return false
+	}
 }
 
 func recoveryTargetPathFromToolOutput(output map[string]any) (string, bool) {
