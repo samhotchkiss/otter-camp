@@ -6930,6 +6930,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return false, nil
 		}
+		handled, stop, err = e.handleTaskFileWriteWithoutContent(ctx, rt, &call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 
 		var runID *uuid.UUID
 		result, err := e.dispatcher.DispatchTier2(ctx, call, func(id uuid.UUID) {
@@ -7561,6 +7571,43 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 		return true, false, err
 	}
 	return true, false, nil
+}
+
+func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
+	if rt == nil || call == nil || rt.turn == nil || rt.session == nil || rt.recoveryTurn {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false, false, nil
+	}
+
+	normalized, targetPath, ok := recoveryFileWriteMissingContent(*call)
+	if !ok {
+		return false, false, nil
+	}
+
+	draft, ok := e.latestRecoveryAssistantDraftContent(ctx, rt)
+	if !ok {
+		return false, false, nil
+	}
+	if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" {
+		return false, false, nil
+	}
+	if !looksLikeRecoveryFileDraft(draft) {
+		return false, false, nil
+	}
+
+	normalized["content"] = draft
+	if _, exists := normalized["create_dirs"]; !exists {
+		normalized["create_dirs"] = true
+	}
+	call.Arguments = normalized
+	e.logger.Info("task continuation: populated file.write from assistant draft",
+		"session_id", rt.session.ID,
+		"turn_id", rt.turn.ID,
+		"path", targetPath,
+	)
+	return false, false, nil
 }
 
 func (e *TurnEngine) haltRejectedRecoveryFileWrite(ctx context.Context, rt *turnRuntime, targetPath, draft, failureReason string) (bool, bool, error) {
