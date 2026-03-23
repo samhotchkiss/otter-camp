@@ -8177,6 +8177,17 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "intent to write the deliverable",
 		},
 		{
+			name: "rejects task-list structure placeholder narration",
+			content: "Perfect! I can now see the structure. Looking at the task list, there are 5 test cases (OC-9 through OC-14 would give me the parent and child test cases). " +
+				"The five test cases appear to be:\n" +
+				"- OC-9: Parent-Child Task Persistence Validation\n" +
+				"- OC-12, OC-13, OC-14: Child test cases\n" +
+				"- OC-11 (already completed): Persistence validation report which analyzed these\n\n" +
+				"Let me read the task for OC-9 (parent test) to understand the scope:",
+			targetPath: "deliverables/oc-10-test-synthesis-report.md",
+			want:       "intent to write the deliverable",
+		},
+		{
 			name: "rejects bold status workflow summary placeholder",
 			content: "**Status**: Task OC-11 is currently **in_progress** at the **Work** flow step. The target deliverable file is just a placeholder (180 bytes). I need to create the complete workflow specification.\n\n" +
 				"Based on the planning artifacts, I understand that OC-11 requires:\n\n" +

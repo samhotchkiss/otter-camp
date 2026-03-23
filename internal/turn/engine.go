@@ -10615,6 +10615,17 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
 	if containsAny(lower,
+		"perfect! i can now see the structure",
+		"looking at the task list",
+		"the five test cases appear to be",
+	) && containsAny(lower,
+		"let me read the task for",
+		"understand the scope",
+		"parent and child test cases",
+	) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
+	}
+	if containsAny(lower,
 		"the target file currently contains placeholder narrative",
 		"instead of the substantive workflow specification",
 		"target size 13.3 kb",
