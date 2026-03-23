@@ -19,34 +19,54 @@ The product goal is not just to generate plans or chats. It must reliably create
 
 ## Current live state
 
-As of 2026-03-23 morning local time, the clean validation run `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`) is operationally drained.
+As of 2026-03-23 morning local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`) remains the completed reference validation run, but the active canary is now `speaker-pipeline-ops-reviewer-validation-fresh-2` (`4a12463c-eef4-4863-a93e-9bcd723b82a6`).
 
-Current observed task counts:
+Current observed task counts on the active Speaker Pipeline canary:
+
+- `queued=2`
+- `in_progress=11`
+- `review=2`
+- `done=8`
+- `draft=5`
+- `blocked=0`
+
+The active canary has already validated these product expectations under the latest build:
+
+- fresh bootstrap materially staffs a PM, worker, and reviewer in-turn
+- bootstrap no longer accepts approval-gated first-wave tasks
+- review execution is routed to a reviewer principal, not just left on the worker lane
+- maintenance floods no longer monopolize worker slots ahead of `agent_turn` work
+- pending `agent_turn` jobs for closed sessions no longer get claimed and waste live worker slots
+
+Most recent shipped commits relevant to the current validation run:
+
+- `a64dd6c8` `Handle approval-gated bootstrap tasks cleanly`
+- `a23ba8d4` `Stabilize archived and approval-gated recovery`
+- `04ddf053` `Force fresh bootstrap staffing to act in-turn`
+- `fbf8dec4` `Reserve worker slots from maintenance floods`
+- `ca83abea` `Skip closed-session agent turn claims`
+
+What those changed:
+
+- bootstrap first-wave validation now rejects tasks that require human approval before queueing
+- archived project recovery paths no longer throw supervisor/archive races back into the live worker loop
+- fresh bootstrap kickoff guidance now forces same-turn staffing persistence instead of profile-browsing narration
+- maintenance jobs can no longer occupy all worker slots when live execution work is waiting
+- stale pending `agent_turn` jobs for closed sessions are skipped at claim time and purged on startup/recovery instead of stealing slots
+
+`sam-blog` is still the proof that the core project flow can drain cleanly:
 
 - `done=37`
 - `cancelled=1`
 - `open=0`
 
-Task `38` is intentionally `cancelled`, not `done`: it was an impossible legacy draft project gate (`blocks_scope=all` with no executable path). That row no longer blocks queueing and is now retired automatically at worker startup.
-
-Most recent shipped commits relevant to the current run:
-
-- `5a62c385` `Harden task cleanup and execution guardrails`
-- `c44cce47` `Block scaffold planning artifacts from review`
-- `845abf64` `Reject mismatched fallback drafts for file writes`
-- `54c9865e` `Ignore invalid draft project gates in task service`
-
-What those changed:
-
-- async `project_task` turns can no longer burn work on `planning/recovery-state`, checkpoint files, or targetless `message.send` status chatter
-- dormant orchestration-only draft parents are auto-completed through the real task service, including catch-up on worker startup
-- impossible legacy draft project gates are auto-cancelled on worker startup
-- stale draft-parent/project cleanup now works even when there are no remaining natural task-completion events to trigger it
-- the live SAM.blog project was verified after these fixes: all real work is complete, no tasks remain `draft`/`review`/`in_progress`/`blocked`
+Task `38` there is intentionally `cancelled`, not `done`: it was an impossible legacy draft project gate (`blocks_scope=all` with no executable path). That row no longer blocks queueing and is now retired automatically at worker startup.
 
 ## Current product priorities
 
-The main priority is still core-system reliability for unattended end-to-end project execution. The SAM.blog cleanup class is materially improved; the next priority is reducing the remaining need for operator review/approval and stale runtime cleanup during new validation projects.
+The main priority is still core-system reliability for unattended end-to-end project execution. SAM.blog proved cleanup and closeout. The active Speaker Pipeline run is now the sharper canary for fresh-bootstrap correctness, reviewer staffing, queue fairness, and live execution churn.
+
+The immediate priority after the two latest queue fixes is to keep using the Speaker Pipeline canary to find the next deterministic runtime bug inside task execution itself, not to hand-steer the project.
 
 The standing rule from Sam is:
 
@@ -126,8 +146,9 @@ These are not tentative.
 ### Next validation project after Sam.blog
 
 - Default next hard validation candidate: `Speaker Pipeline Ops`
-- This should be a mixed operational project, not another site rebuild.
-- It should exercise research, scoring/schema design, structured docs, automation/scripts, and reporting/review loops.
+- This is now active as `speaker-pipeline-ops-reviewer-validation-fresh-2`.
+- It should remain a mixed operational project, not another site rebuild.
+- It exercises research, scoring/schema design, structured docs, automation/scripts, and reporting/review loops.
 
 ## Operational rules for Codex
 
@@ -184,7 +205,7 @@ There was also earlier experimentation with cron/tmux message injection. The imp
 
 ## Current failure themes
 
-These were the repeated classes of failures that cost time during the SAM.blog validation run and should still inform future hardening:
+These were the repeated classes of failures that cost time during the SAM.blog and Speaker Pipeline validation runs and should still inform future hardening:
 
 - bootstrap persisted planning/setup artifacts without creating runnable first-wave execution
 - session or summary text claimed success when DB/runtime truth did not
@@ -194,8 +215,10 @@ These were the repeated classes of failures that cost time during the SAM.blog v
 - orchestration parent tasks and bootstrap planning shells could finish their real work but still remain stuck in `draft`
 - impossible legacy draft project gates could survive indefinitely unless some later product path retired them
 - provider/API failures were not surfaced clearly enough to distinguish external outages from OtterCamp bugs
+- worker capacity could be monopolized by maintenance floods even while project execution was waiting
+- stale pending `agent_turn` jobs on closed sessions could still consume live worker slots before cleanup
 
-The first of those two cleanup issues is now fixed in product and verified live. The second is also fixed at worker startup for dormant legacy gates.
+The latest queue/runtime issues in that list are now fixed in product and verified live on the Speaker Pipeline canary.
 
 When debugging, assume the real problem is usually one of:
 
