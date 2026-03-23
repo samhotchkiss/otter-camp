@@ -48,6 +48,7 @@ Most recent shipped commits relevant to the current validation run:
 - `b787978e` `Direct review lanes to flow review decisions`
 - `04c08223` `Plan flow execution architecture rework`
 - `374d4ec2` `Track live execution ownership on flow nodes`
+- `3f01d75a` `Prefer execution-owned live task ownership`
 
 What those changed:
 
@@ -59,6 +60,7 @@ What those changed:
 - review-lane prompts and mutation rejections now explicitly direct reviewer sessions to `flow.review_decision`
 - the architecture rework is now committed into docs/issues/reports instead of living only in transient conversation state
 - first issue `369` has started: active flow executions now persist `live_run_id` in `flow_node_execution.metadata` from the queue wakeup path, and task-scoped execution sessions now persist/clear `live_turn_id` around real turn execution
+- the supervisor now prefers `flow_node_execution.metadata.live_turn_id` / `live_run_id` over broader session/runtime fallback when detecting stranded active executions
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
@@ -256,7 +258,9 @@ Current implementation status of the rework:
 
 - architecture plan committed and pushed in `04c08223`
 - first `369` slice committed and pushed in `374d4ec2`
+- second `369` slice committed and pushed in `3f01d75a`
 - that slice does not complete the ownership refactor; it only gives `flow_node_execution` a persisted view of the live run/turn owner so later slices can stop inferring ownership purely from runtime_state/session/job drift
+- the current next step inside `369` is to keep replacing task-lane ownership inference with execution-owned state in queue/dispatch/resume paths, not just in supervisor recovery
 
 Local repo note for restart safety:
 
