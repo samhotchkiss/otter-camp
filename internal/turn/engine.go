@@ -1166,6 +1166,16 @@ func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 	if !isRecoveryResumeMessage(*latestUser) && !taskContinuationResumeMessageRootsHistory(*latestUser) {
 		return false, nil
 	}
+	sessionMessages := messagesFromTaskSession(ctx, e, session)
+	if recoveryTurnProducedDurableWrite(messagesForTurn(sessionMessages, latestCompleted.ID), taskRecord.Metadata) {
+		if e.flowAdvancer != nil && latestCompleted.RespondingID != uuid.Nil {
+			if _, err := e.flowAdvancer.AdvanceFlow(ctx, taskRecord.ID, flowsvc.Actor{Type: "agent", ID: latestCompleted.RespondingID}); err != nil {
+				return true, err
+			}
+			return true, nil
+		}
+		return true, nil
+	}
 	if strings.TrimSpace(assistantContent) != "" && !looksLikeGenericTaskRecoveryReply(assistantContent) {
 		return false, nil
 	}
@@ -1216,6 +1226,53 @@ func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 		return true, err
 	}
 	return enqueued, nil
+}
+
+func messagesFromTaskSession(ctx context.Context, e *TurnEngine, session *chat.ChatSession) []repo.ChatMessage {
+	if e == nil || e.messages == nil || session == nil {
+		return nil
+	}
+	messages, err := e.messages.ListBySession(ctx, session.ID)
+	if err != nil {
+		return nil
+	}
+	return messages
+}
+
+func messagesForTurn(messages []repo.ChatMessage, turnID uuid.UUID) []repo.ChatMessage {
+	if turnID == uuid.Nil || len(messages) == 0 {
+		return nil
+	}
+	filtered := make([]repo.ChatMessage, 0, len(messages))
+	for _, message := range messages {
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		filtered = append(filtered, message)
+	}
+	return filtered
+}
+
+func recoveryTurnProducedDurableWrite(messages []repo.ChatMessage, metadata json.RawMessage) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(metadata); ok {
+		return false
+	}
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, _, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(toolName), "file.write") {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *TurnEngine) HandleTurnCancelledEvent(ctx context.Context, event eventbus.DomainEvent) error {
