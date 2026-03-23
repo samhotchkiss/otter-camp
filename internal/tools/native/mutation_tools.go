@@ -91,6 +91,25 @@ func updateTaskMetadataOnly(ctx context.Context, tasks taskReader, taskRecord re
 	return tasks.UpdateMetadata(ctx, taskRecord.ID, taskRecord.Metadata)
 }
 
+func autoCompleteSatisfiedDraftTask(taskRecord repo.ProjectTask) (taskplan.ValidationReport, bool) {
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "draft") {
+		return taskplan.ValidationReport{}, false
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok || len(plan.ArtifactEvidence) == 0 {
+		return taskplan.ValidationReport{}, false
+	}
+	state, ok := taskorchestration.Parse(taskRecord.Metadata)
+	if !ok || state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
+		return taskplan.ValidationReport{}, false
+	}
+	report, err := taskplan.CompletionReport(taskRecord.Metadata)
+	if err != nil {
+		return taskplan.ValidationReport{}, false
+	}
+	return report, true
+}
+
 func derefString(value *string) string {
 	if value == nil {
 		return ""
@@ -1972,6 +1991,19 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			planning = syncedPlan
 		}
 	}
+	if !statusChanged {
+		if report, ok := autoCompleteSatisfiedDraftTask(current); ok {
+			desiredStatus = "done"
+			statusChanged = true
+			if extraStatusPayload == nil {
+				extraStatusPayload = map[string]any{}
+			}
+			for key, value := range report.Payload() {
+				extraStatusPayload[key] = value
+			}
+			extraStatusPayload["auto_completed_from_metadata"] = true
+		}
+	}
 	if gateErr := tasksvc.ValidateProjectGateTask(current); gateErr != nil {
 		return map[string]any{"error": gateErr.Error()}, nil
 	}
@@ -1984,6 +2016,9 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		}
 		transitionActor := taskActorFromExecutionActor(actor)
 		transitionActor.ExpectedFromStatus = previousStatus
+		if autoCompleted, _ := extraStatusPayload["auto_completed_from_metadata"].(bool); autoCompleted && strings.EqualFold(strings.TrimSpace(desiredStatus), "done") {
+			transitionActor.AllowDoneBypass = true
+		}
 		if extraStatusPayload != nil {
 			if _, hasFeedback := extraStatusPayload["parent_integration_feedback"]; hasFeedback {
 				transitionActor.AllowCompletedChildReopen = true

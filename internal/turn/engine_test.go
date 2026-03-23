@@ -10421,6 +10421,61 @@ func TestExplicitExecutionDeliverableWriteCompleted(t *testing.T) {
 	}
 }
 
+func TestShouldStopAfterExecutionArtifactWriteForPlannedArtifact(t *testing.T) {
+	t.Parallel()
+
+	description := "Document findings on sourcing channels, qualification criteria, and intake workflows."
+	plan := taskplan.Plan{
+		Mode:     taskplan.ModeExecutionFirst,
+		Playbook: taskplan.PlaybookExecutionSpec,
+		Artifacts: []taskplan.PlannedArtifact{
+			{Slug: "oc-21-prd", Title: "OC-21 PRD", RepoPath: "planning/prd-spec/oc-21-prd.md"},
+			{Slug: "oc-21-implementation-plan", Title: "OC-21 Implementation Plan", RepoPath: "planning/prd-spec/oc-21-implementation-plan.md"},
+		},
+	}
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+
+	if !shouldStopAfterExecutionArtifactWrite(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "planning/prd-spec/oc-21-prd.md",
+			"byte_size": 10245,
+		},
+	}) {
+		t.Fatal("expected stop signal from planned execution artifact write")
+	}
+}
+
+func TestShouldStopAfterExecutionArtifactWriteIgnoresUndeclaredPath(t *testing.T) {
+	t.Parallel()
+
+	description := "Document findings on sourcing channels, qualification criteria, and intake workflows."
+	plan := taskplan.Plan{
+		Mode:     taskplan.ModeExecutionFirst,
+		Playbook: taskplan.PlaybookExecutionSpec,
+		Artifacts: []taskplan.PlannedArtifact{
+			{Slug: "oc-21-prd", Title: "OC-21 PRD", RepoPath: "planning/prd-spec/oc-21-prd.md"},
+		},
+	}
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+
+	if shouldStopAfterExecutionArtifactWrite(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "research/oc-21-extra-notes.md",
+			"byte_size": 2048,
+		},
+	}) {
+		t.Fatal("unexpected stop signal from undeclared path")
+	}
+}
+
 func TestFlowNodeExecutionIDFromSessionMetadata(t *testing.T) {
 	t.Parallel()
 

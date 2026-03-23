@@ -7402,7 +7402,7 @@ func (e *TurnEngine) shouldStopAfterExecutionDeliverableWrite(ctx context.Contex
 	if err != nil {
 		return false, err
 	}
-	return explicitExecutionDeliverableWriteCompleted(taskRecord, result), nil
+	return shouldStopAfterExecutionArtifactWrite(taskRecord, result), nil
 }
 
 func bootstrapPersistChecklistComplete(results []ToolResult) bool {
@@ -14214,6 +14214,36 @@ func explicitExecutionDeliverableWriteCompleted(taskRecord repo.ProjectTask, res
 		return false
 	}
 	return anyInt(result.Output["byte_size"]) > 0
+}
+
+func shouldStopAfterExecutionArtifactWrite(taskRecord repo.ProjectTask, result ToolResult) bool {
+	if explicitExecutionDeliverableWriteCompleted(taskRecord, result) {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.write") || strings.TrimSpace(result.Error) != "" {
+		return false
+	}
+	plan, hasPlan := taskplan.Parse(taskRecord.Metadata)
+	if !hasPlan || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
+		return false
+	}
+	if explicitDeliverablePath(taskRecord) != "" {
+		return false
+	}
+	writtenPath := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
+	if writtenPath == "" || anyInt(result.Output["byte_size"]) <= 0 {
+		return false
+	}
+	for _, artifact := range plan.Artifacts {
+		artifactPath := normalizeWorkspaceRelativePath(artifact.RepoPath)
+		if artifactPath == "" {
+			continue
+		}
+		if sameWorkspaceRelativePath(writtenPath, artifactPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeWorkspaceRelativePath(value string) string {

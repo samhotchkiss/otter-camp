@@ -23,9 +23,9 @@ As of 2026-03-23 afternoon local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c
 
 Current observed task counts on the active fresh Speaker Pipeline canary:
 
-- `done=9`
-- `in_progress=1`
+- `done=10`
 - `draft=18`
+- `in_progress=0`
 - `blocked=0`
 - `queued=0`
 
@@ -56,15 +56,13 @@ Most recent shipped commits relevant to the current validation run:
 - `6ccc00d9` `Bind worker task dispatches to active executions`
 - `425fd775` `Ignore stale task turns during claim suppression`
 - `25215b30` `Bind task continuations to active executions`
+- `3dd80309` `Scope stale task recovery to active executions`
 - `6992ab10` `Purge legacy task dispatch without execution ownership`
 - `9d8ed49e` `Publish execution-owned task message dispatch`
 - `ed694196` `Skip blocked task lanes during worker requeue`
-- pending local slice: worker recovery now checks queued/claimed `agent_turn` jobs by active `flow_node_execution_id`, not merely `session_id`, so stale queued jobs for older executions cannot block a retry for the active task lane; focused jobqueue unit/integration coverage is green
-- pending local slice: execution-owned task `chat.message.user_sent` events no longer fall back to legacy raw enqueue in `HandleUserMessageEvent(...)` when the session cannot be loaded; targeted turn-engine tests are green
-- pending local slice: `chat.SteerTurn(...)` now also includes `flow_node_execution_id` in replacement task-session `chat.message.user_sent` events; focused chat integration coverage is green
-- pending local slice: synthetic task continuation/recovery user prompts appended by the turn engine now also inherit `flow_node_execution_id` from session metadata; focused turn-engine coverage is green
-- pending local slice: worker pending-turn repair now ignores failed execution `live_turn_id` pointers when deciding whether a task lane still has a real pending turn to requeue; focused jobqueue integration coverage is green
-- pending local slice: terminal `project_task` async session cleanup now runs during periodic worker maintenance, not only on startup; focused worker integration coverage is green
+- pending local slice: execution-first task turns now stop after a successful write to a declared planning artifact path, not just an explicit `Deliverable:` path; full `internal/turn` is green and task `21` is now `done`
+- pending local slice: `task.update` now auto-completes draft tasks that already have a satisfied outcome assessment plus a complete planning report, instead of waiting for the model to remember a separate `work_status=done` transition; full `internal/tools/native` is green
+- pending local slice: worker startup cleanup now also attempts to auto-complete satisfied draft tasks through the canonical task service; full `internal/worker` is green
 
 What those changed:
 
@@ -95,6 +93,8 @@ What those changed:
 - worker pending-turn repair no longer lets a failed execution-owned `live_turn_id` hide a real pending `chat_session.current_turn_id`, which was the live task-20 stall signature on Speaker Pipeline
 - terminal done/cancelled task sessions no longer have to wait for a worker restart to close; the periodic stale-scan loop now cleans them up during steady-state execution too
 - worker stale-turn recovery no longer treats an older queued dispatch for the same task session but a different execution as proof that the active execution already has a live retry queued
+- execution-first planning tasks now stop churning after the first successful declared-artifact write, even without an explicit single `Deliverable:` path in the task description
+- metadata-only task completion no longer requires a separate remembered `task.update work_status=done` when the task already carries complete planning evidence and a satisfied outcome assessment
 
 Current live cleanup result:
 
@@ -152,11 +152,22 @@ The current implementation work is already underway against that plan:
   - task `26` checkpoint target: `planning/metrics-framework/oc-22-dashboard-spec.md`
 - that confirms the remaining issue on this canary is no longer blocked-task resumability; it is the next deterministic execution/runtime failure the fresh canary exposes
 
-The next likely slices after committing the current worker change are:
+The next active bug on the fresh canary is no longer turn ownership. The system is now idle because follow-on child tasks `22-28` were created as `draft` rows with no active flow or queue debt even though some already carry:
 
-- remove remaining raw `agent_turn` producers that still do not carry execution identity or still infer task-lane dispatch from message/session state outside the execution-owned helper path
-- continue collapsing runtime cleanup heuristics into execution-scoped command handling where practical
-- keep `speaker-pipeline-ops-validation-fresh-3` running as the active canary and patch the next deterministic runtime bug it exposes
+- a satisfied `parent_orchestration.outcome_assessment`
+- partial planning artifact evidence
+- a decomposition parent task id
+
+Those rows only have `task.created` events, not real queue/status transitions. The current product gap is therefore:
+
+- task creation / metadata sync can still leave already-satisfied or partially-satisfied child tasks stranded in `draft`
+- some of those tasks also carry planning metadata that does not match the actual artifact evidence shape, so the new satisfied-draft auto-complete path does not fire
+
+The next slice should focus on task creation/settlement semantics rather than more queue ownership work:
+
+- trace where `task.create` + planning sync + outcome metadata can produce an inert child task with only `task.created`
+- decide whether those tasks should auto-complete, auto-queue, or be rejected as inconsistent at creation time
+- keep `speaker-pipeline-ops-validation-fresh-3` as the canary for that next deterministic creation/settlement bug
 
 The standing rule from Sam is:
 

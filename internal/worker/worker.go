@@ -45,6 +45,7 @@ import (
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
@@ -122,11 +123,14 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker task service setup: %w", err)
 	}
-	if parentRepaired, gatesCancelled, err := startupProjectCleanup(ctx, pool.Raw(), tasks); err != nil {
+	if parentRepaired, draftSettled, gatesCancelled, err := startupProjectCleanup(ctx, pool.Raw(), tasks); err != nil {
 		return fmt.Errorf("worker startup project cleanup: %w", err)
 	} else {
 		if parentRepaired > 0 {
 			logger.Info("worker startup: auto-completed dormant orchestration parents", "count", parentRepaired)
+		}
+		if draftSettled > 0 {
+			logger.Info("worker startup: auto-completed satisfied draft tasks", "count", draftSettled)
 		}
 		if gatesCancelled > 0 {
 			logger.Info("worker startup: cancelled impossible draft project gates", "count", gatesCancelled)
@@ -699,9 +703,9 @@ func (deterministicQueryEmbedder) Embed(_ context.Context, _ uuid.UUID, _ string
 	return vectors, nil
 }
 
-func startupProjectCleanup(ctx context.Context, pool *pgxpool.Pool, tasks tasksvc.TaskService) (int, int, error) {
+func startupProjectCleanup(ctx context.Context, pool *pgxpool.Pool, tasks tasksvc.TaskService) (int, int, int, error) {
 	if pool == nil || tasks == nil {
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
 	orgRepo := repo.NewOrgRepo(pool)
 	projectRepo := repo.NewProjectRepo(pool)
@@ -709,34 +713,37 @@ func startupProjectCleanup(ctx context.Context, pool *pgxpool.Pool, tasks tasksv
 
 	orgs, err := orgRepo.List(ctx)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	parentRepaired := 0
+	draftSettled := 0
 	gatesCancelled := 0
 	for _, org := range orgs {
 		projects, err := projectRepo.List(ctx, org.ID)
 		if err != nil {
-			return parentRepaired, gatesCancelled, err
+			return parentRepaired, draftSettled, gatesCancelled, err
 		}
 		for _, project := range projects {
-			repaired, cancelled, err := startupCleanupProjectDrafts(ctx, taskRepo, tasks, project.ID)
+			repaired, settled, cancelled, err := startupCleanupProjectDrafts(ctx, taskRepo, tasks, project.ID)
 			if err != nil {
-				return parentRepaired, gatesCancelled, err
+				return parentRepaired, draftSettled, gatesCancelled, err
 			}
 			parentRepaired += repaired
+			draftSettled += settled
 			gatesCancelled += cancelled
 		}
 	}
-	return parentRepaired, gatesCancelled, nil
+	return parentRepaired, draftSettled, gatesCancelled, nil
 }
 
-func startupCleanupProjectDrafts(ctx context.Context, taskRepo *repo.ProjectTaskRepo, tasks tasksvc.TaskService, projectID uuid.UUID) (int, int, error) {
+func startupCleanupProjectDrafts(ctx context.Context, taskRepo *repo.ProjectTaskRepo, tasks tasksvc.TaskService, projectID uuid.UUID) (int, int, int, error) {
 	parentRepaired := 0
+	draftSettled := 0
 	gatesCancelled := 0
 	for pass := 0; pass < 4; pass++ {
 		drafts, err := taskRepo.ListByProject(ctx, projectID, "draft")
 		if err != nil {
-			return parentRepaired, gatesCancelled, err
+			return parentRepaired, draftSettled, gatesCancelled, err
 		}
 		progressed := false
 		for _, task := range drafts {
@@ -758,7 +765,25 @@ func startupCleanupProjectDrafts(ctx context.Context, taskRepo *repo.ProjectTask
 				if errors.As(err, &invalidTransition) {
 					continue
 				}
-				return parentRepaired, gatesCancelled, err
+				return parentRepaired, draftSettled, gatesCancelled, err
+			case draftTaskAutoCompletes(task):
+				_, err := tasks.TransitionStatus(ctx, task.ID, "done", tasksvc.Actor{
+					Type:            "system",
+					AllowDoneBypass: true,
+				})
+				if err == nil {
+					draftSettled++
+					progressed = true
+					continue
+				}
+				if errors.Is(err, repo.ErrConflict) {
+					continue
+				}
+				var invalidTransition tasksvc.ErrInvalidStatusTransition
+				if errors.As(err, &invalidTransition) {
+					continue
+				}
+				return parentRepaired, draftSettled, gatesCancelled, err
 			case strings.EqualFold(strings.TrimSpace(task.BlocksScope), "all") && tasksvc.ValidateProjectGateTask(task) != nil:
 				_, err := tasks.TransitionStatus(ctx, task.ID, "cancelled", tasksvc.Actor{Type: "system"})
 				if err == nil {
@@ -773,12 +798,28 @@ func startupCleanupProjectDrafts(ctx context.Context, taskRepo *repo.ProjectTask
 				if errors.As(err, &invalidTransition) {
 					continue
 				}
-				return parentRepaired, gatesCancelled, err
+				return parentRepaired, draftSettled, gatesCancelled, err
 			}
 		}
 		if !progressed {
 			break
 		}
 	}
-	return parentRepaired, gatesCancelled, nil
+	return parentRepaired, draftSettled, gatesCancelled, nil
+}
+
+func draftTaskAutoCompletes(task repo.ProjectTask) bool {
+	if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+		return false
+	}
+	plan, ok := taskplan.Parse(task.Metadata)
+	if !ok || len(plan.ArtifactEvidence) == 0 {
+		return false
+	}
+	state, ok := taskorchestration.Parse(task.Metadata)
+	if !ok || state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
+		return false
+	}
+	_, err := taskplan.CompletionReport(task.Metadata)
+	return err == nil
 }

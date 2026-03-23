@@ -885,6 +885,47 @@ func (m *mockTaskRepo) storeTask(task repo.ProjectTask) {
 	}
 }
 
+type mockTaskTransitionService struct {
+	transitioned        repo.ProjectTask
+	transitionCalls     int
+	lastTaskID          uuid.UUID
+	lastStatus          string
+	lastActor           tasksvc.Actor
+	lastExtraPayload    map[string]any
+	transitionStatusErr error
+}
+
+func (m *mockTaskTransitionService) CreateTask(_ context.Context, _ tasksvc.CreateTaskRequest) (*tasksvc.ProjectTask, error) {
+	return nil, errors.New("unexpected CreateTask call")
+}
+
+func (m *mockTaskTransitionService) TransitionStatus(_ context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
+	return m.TransitionStatusWithPayload(context.Background(), taskID, toStatus, actor, nil)
+}
+
+func (m *mockTaskTransitionService) TransitionStatusWithPayload(_ context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor, extraPayload map[string]any) (*tasksvc.ProjectTask, error) {
+	m.transitionCalls++
+	m.lastTaskID = taskID
+	m.lastStatus = toStatus
+	m.lastActor = actor
+	if extraPayload != nil {
+		m.lastExtraPayload = make(map[string]any, len(extraPayload))
+		for key, value := range extraPayload {
+			m.lastExtraPayload[key] = value
+		}
+	} else {
+		m.lastExtraPayload = nil
+	}
+	if m.transitionStatusErr != nil {
+		return nil, m.transitionStatusErr
+	}
+	updated := m.transitioned
+	updated.ID = taskID
+	updated.WorkStatus = toStatus
+	taskOut := tasksvc.ProjectTask(updated)
+	return &taskOut, nil
+}
+
 type mockFlowNodeRepo struct {
 	nodes         map[uuid.UUID]repo.FlowNode
 	templateNodes map[uuid.UUID][]repo.FlowNode
@@ -3009,6 +3050,83 @@ func TestTaskUpdateHydratesPlanningMetadataBeforePersistingArtifacts(t *testing.
 	}
 	if planningOut["playbook"] != taskplan.PlaybookExecutionSpec {
 		t.Fatalf("planning.playbook = %v, want %s", planningOut["playbook"], taskplan.PlaybookExecutionSpec)
+	}
+}
+
+func TestTaskUpdateAutoCompletesSatisfiedDraftTaskFromMetadata(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	orgID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := "Document findings on sourcing channels, qualification criteria, and intake workflows."
+	plan := taskplan.Analyze("Document sourcing findings", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Document sourcing findings",
+			Description:    &description,
+			WorkStatus:     "draft",
+			FlowTemplateID: &flowTemplateID,
+			Metadata:       metadata,
+		},
+	}
+	taskService := &mockTaskTransitionService{
+		transitioned: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Document sourcing findings",
+			WorkStatus:     "done",
+			FlowTemplateID: &flowTemplateID,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		TaskService:   taskService,
+	})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id": taskID.String(),
+		"planning_artifacts": []map[string]any{
+			{"slug": "prd", "summary": "Scope, goals, non-goals, constraints, success metrics, and open questions.", "sections": []string{"goals", "non-goals", "scope", "constraints", "success metrics", "open questions"}},
+			{"slug": "implementation-plan", "summary": "Milestones, phasing, owners, and rollout plan.", "sections": []string{"milestones", "phasing", "owners", "rollout"}},
+			{"slug": "acceptance-criteria", "summary": "Scenarios, edge cases, and verification checks.", "sections": []string{"scenarios", "edge cases", "verification"}},
+			{"slug": "dependency-log", "summary": "Dependencies, risks, and mitigations.", "sections": []string{"dependencies", "risks", "mitigations"}},
+		},
+		"outcome_assessment": map[string]any{
+			"satisfied": true,
+			"summary":   "The sourcing findings package is complete and ready for handoff.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update error = %v, want nil", out["error"])
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if taskOut["work_status"] != "done" {
+		t.Fatalf("work_status = %v, want done", taskOut["work_status"])
+	}
+	if taskService.transitionCalls != 1 {
+		t.Fatalf("transition calls = %d, want 1", taskService.transitionCalls)
+	}
+	if taskService.lastStatus != "done" {
+		t.Fatalf("transition status = %q, want done", taskService.lastStatus)
+	}
+	if !taskService.lastActor.AllowDoneBypass {
+		t.Fatal("expected auto-complete transition to allow done bypass")
+	}
+	if autoCompleted, _ := taskService.lastExtraPayload["auto_completed_from_metadata"].(bool); !autoCompleted {
+		t.Fatalf("auto_completed_from_metadata = %v, want true", taskService.lastExtraPayload["auto_completed_from_metadata"])
 	}
 }
 
