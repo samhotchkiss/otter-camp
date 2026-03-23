@@ -7534,6 +7534,25 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:    "intent to write the deliverable",
 		},
 		{
+			name: "rejects structured checkpoint list placeholder",
+			content: "Good. I have the context. OC-15 (content migration) is in the **Work** node and needs execution. The checkpoint indicates I should:\n\n" +
+				"1. **Not** re-list workspace state or create helper scripts (they exist)\n" +
+				"2. **Read** persisted artifacts directly\n" +
+				"3. **Write at least one migrated output file** before expanding\n" +
+				"4. Start from the recovery checkpoints and target file draft\n\n" +
+				"Let me read the OC-15 strategy artifacts to understand the editorial direction, then write the first complete output file: the migration plan.",
+			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects structured locked decisions placeholder",
+			content: "Perfect. I have all four strategy artifacts. The decisions are **locked and clear**:\n\n" +
+				"- **Hosting:** Vercel Pro\n" +
+				"- **CDN:** Vercel's integrated global CDN\n" +
+				"- **DNS:** Vercel DNS\n\n" +
+				"Now I need to move forward to the **infrastructure spec** deliverable. Let me check the task flow and understand what step we're on:",
+			want: "instead of the file body",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",

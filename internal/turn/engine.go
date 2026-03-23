@@ -9912,6 +9912,7 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		return false
 	}
 	hasContextCue := containsAny(lower,
+		"good. i have the context",
 		"now i have enough context",
 		"i have enough context",
 		"i can see:",
@@ -9927,6 +9928,8 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		"the planning artifacts are complete",
 		"the planning artifacts are locked",
 		"the strategy artifacts are complete",
+		"the decisions are locked and clear",
+		"the checkpoint indicates i should",
 		"this is a durable recovery checkpoint",
 		"success narrative partially drafted",
 		"current flow node:",
@@ -9936,6 +9939,7 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		"target file:",
 	)
 	hasIntentCue := containsAny(lower,
+		"now i need to move forward to the",
 		"now i'll write",
 		"now i will write",
 		"now let me write",
@@ -9950,6 +9954,9 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		"translates strategy into executability",
 		"write the comprehensive",
 		"draft the comprehensive",
+		"let me read the oc-15 strategy artifacts",
+		"let me read the strategy artifacts",
+		"let me check the task flow and understand what step we're on",
 		"let me check the full file",
 		"let me check the file",
 	)
