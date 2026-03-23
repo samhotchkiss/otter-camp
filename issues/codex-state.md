@@ -24,11 +24,11 @@ As of 2026-03-23 morning local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9b
 Current observed task counts on the active Speaker Pipeline canary:
 
 - `queued=0`
-- `in_progress=2`
+- `in_progress=1`
 - `review=1`
-- `done=22`
+- `done=23`
 - `draft=1`
-- `blocked=2`
+- `blocked=3`
 
 The active canary has already validated these product expectations under the latest build:
 
@@ -126,7 +126,10 @@ The next likely slices after committing the current worker change are:
 - remove remaining raw `agent_turn` producers that still do not carry execution identity, especially control-plane/chat-triggered task-session paths that enqueue from message state
 - begin routing those producers through a single execution-scoped dispatch helper instead of parallel ad hoc enqueue logic in worker and turn-engine
 - use the active canary to verify newly created task-session jobs now consistently carry `flow_node_execution_id`, not just worker-recovered ones
-- then revisit the two still-blocked Speaker Pipeline tasks, which are now blocked on deterministic tool-validation guards (`cli.execute command_required`, `file.write content_required`) rather than queue-ownership deadlock
+- then revisit the three still-blocked Speaker Pipeline tasks, which are now blocked on deterministic tool-validation guards rather than queue-ownership deadlock:
+  - task `12`: `cli.execute command_required`
+  - task `26`: `file.write content_required`
+  - task `19`: newly blocked in the automation-design lane after the ownership/drain fixes
 
 The standing rule from Sam is:
 
