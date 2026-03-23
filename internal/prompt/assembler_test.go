@@ -146,6 +146,108 @@ func TestPromptAssemblerTaskContextBlockFormat(t *testing.T) {
 	}
 }
 
+func TestPromptAssemblerTaskContextIncludesParentAndSiblingTasksForChildTask(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	taskID := uuid.New()
+	siblingTaskID := uuid.New()
+	flowTemplateID := uuid.New()
+	nodeImplementID := uuid.New()
+	activeExecutionID := uuid.New()
+
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session: repo.ChatSession{
+			ID:             uuid.New(),
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+		},
+		agent: repo.Agent{
+			ID:             uuid.New(),
+			OrganizationID: orgID,
+			SystemPrompt:   "Agent",
+		},
+		messages: []repo.ChatMessage{
+			{SequenceNumber: 1, Role: "user", Content: "continue"},
+		},
+	})
+
+	assembler.projects = &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {ID: projectID, OrganizationID: orgID, DisplayName: "Speaker Pipeline"},
+		},
+	}
+	assembler.tasks = &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:             parentTaskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     9,
+				Title:          "Parent-Child Task Persistence Validation",
+				WorkStatus:     "draft",
+			},
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				TaskNumber:        10,
+				Title:             "Synthesize results from all five test cases",
+				Description:       strPtr("Summarize the decomposed validation cases."),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeImplementID,
+				FlowTemplateID:    &flowTemplateID,
+				Metadata:          mustPromptJSON(t, map[string]any{"decomposition_parent_task_id": parentTaskID.String()}),
+			},
+			siblingTaskID: {
+				ID:             siblingTaskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     11,
+				Title:          "Document what persisted correctly",
+				WorkStatus:     "draft",
+				Metadata:       mustPromptJSON(t, map[string]any{"decomposition_parent_task_id": parentTaskID.String()}),
+			},
+		},
+	}
+	assembler.flowNodes = &fakeFlowNodeRepo{
+		nodesByID: map[uuid.UUID]repo.FlowNode{
+			nodeImplementID: {ID: nodeImplementID, FlowTemplateID: flowTemplateID, DisplayName: "Implement"},
+		},
+		nodesByTemplate: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: {
+				{ID: nodeImplementID, FlowTemplateID: flowTemplateID, DisplayName: "Implement", Position: 1},
+			},
+		},
+	}
+	assembler.flowExecutions = &fakeFlowExecutionRepo{
+		activeByTaskAndNode: map[string]repo.FlowNodeExecution{
+			taskID.String() + "|" + nodeImplementID.String(): {
+				ID:         activeExecutionID,
+				TaskID:     taskID,
+				FlowNodeID: nodeImplementID,
+				Status:     "active",
+			},
+		},
+	}
+
+	assembled, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID: assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:   assembler.agents.(*fakeAgentRepo).agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("Assemble error = %v", err)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Parent Task: OC-9: Parent-Child Task Persistence Validation") {
+		t.Fatalf("system prompt missing parent task context:\n%s", assembled.SystemPrompt)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Sibling Tasks:\n- [draft] OC-11: Document what persisted correctly") {
+		t.Fatalf("system prompt missing sibling task context:\n%s", assembled.SystemPrompt)
+	}
+}
+
 func TestPromptAssemblerTaskContextIncludesReviewModeGuidance(t *testing.T) {
 	orgID := uuid.New()
 	projectID := uuid.New()
@@ -722,6 +824,15 @@ func containsTool(items []tools.ToolDescriptor, name string) bool {
 	return false
 }
 
+func mustPromptJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal prompt json: %v", err)
+	}
+	return encoded
+}
+
 type unitAssemblerConfig struct {
 	session             repo.ChatSession
 	agent               repo.Agent
@@ -838,6 +949,17 @@ func (f *fakeTaskRepo) GetByID(_ context.Context, id uuid.UUID) (repo.ProjectTas
 		return item, nil
 	}
 	return repo.ProjectTask{}, repo.ErrNotFound
+}
+
+func (f *fakeTaskRepo) ListByProject(_ context.Context, projectID uuid.UUID, _ ...string) ([]repo.ProjectTask, error) {
+	items := make([]repo.ProjectTask, 0)
+	for _, item := range f.tasks {
+		if projectID != uuid.Nil && item.ProjectID != projectID {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
 }
 
 type fakeFlowTemplateRepo struct{}

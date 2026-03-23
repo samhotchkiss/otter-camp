@@ -120,6 +120,7 @@ type projectRepository interface {
 
 type taskRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+	ListByProject(ctx context.Context, projectID uuid.UUID, statuses ...string) ([]repo.ProjectTask, error)
 }
 
 type flowTemplateRepository interface {
@@ -761,6 +762,9 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 		if strings.TrimSpace(taskCtx.taskDescription) != "" {
 			lines = append(lines, "Description: "+strings.TrimSpace(taskCtx.taskDescription))
 		}
+		if strings.TrimSpace(taskCtx.parentTaskLabel) != "" {
+			lines = append(lines, "Parent Task: "+strings.TrimSpace(taskCtx.parentTaskLabel))
+		}
 		if len(taskCtx.planningArtifacts) > 0 {
 			lines = append(lines, "Relevant Planning Artifacts:")
 			for _, artifact := range taskCtx.planningArtifacts {
@@ -819,6 +823,19 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 					line += " (verified)"
 				}
 				lines = append(lines, line)
+			}
+		}
+		if len(taskCtx.siblingTasks) > 0 {
+			lines = append(lines, "Sibling Tasks:")
+			for _, item := range taskCtx.siblingTasks {
+				if strings.TrimSpace(item.title) == "" {
+					continue
+				}
+				status := strings.TrimSpace(item.status)
+				if status == "" {
+					status = "draft"
+				}
+				lines = append(lines, fmt.Sprintf("- [%s] %s", status, strings.TrimSpace(item.title)))
 			}
 		}
 		if len(taskCtx.parentGate) > 0 {
@@ -911,27 +928,34 @@ type taskContextChildTask struct {
 	verified bool
 }
 
+type taskContextRelatedTask struct {
+	title  string
+	status string
+}
+
 type projectTaskContext struct {
-	projectName         string
-	taskTitle           string
-	taskNumber          int
-	taskStatus          string
-	taskDescription     string
-	contentMigration    bool
-	migrationCheckpoint *taskcheckpoint.ContentMigrationCheckpoint
-	recoveryCheckpoint  *taskcheckpoint.RecoveryFileWriteCheckpoint
-	planningArtifacts   []taskplan.PlannedArtifact
-	acceptanceCriteria  []string
+	projectName          string
+	taskTitle            string
+	taskNumber           int
+	taskStatus           string
+	taskDescription      string
+	parentTaskLabel      string
+	contentMigration     bool
+	migrationCheckpoint  *taskcheckpoint.ContentMigrationCheckpoint
+	recoveryCheckpoint   *taskcheckpoint.RecoveryFileWriteCheckpoint
+	planningArtifacts    []taskplan.PlannedArtifact
+	acceptanceCriteria   []string
 	currentFlowStep       string
 	currentFlowStatus     string
 	currentFlowExecutionID *uuid.UUID
-	completedFlowSteps  []string
-	pendingFlowSteps    []string
-	childTasks          []taskContextChildTask
-	parentGate          []string
-	subtasks            []taskContextSubtask
-	dependencies        []string
-	flowNodeID          *uuid.UUID
+	completedFlowSteps   []string
+	pendingFlowSteps     []string
+	childTasks           []taskContextChildTask
+	siblingTasks         []taskContextRelatedTask
+	parentGate           []string
+	subtasks             []taskContextSubtask
+	dependencies         []string
+	flowNodeID           *uuid.UUID
 }
 
 func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uuid.UUID) (projectTaskContext, error) {
@@ -957,6 +981,7 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 		completedFlowSteps: make([]string, 0),
 		pendingFlowSteps:   make([]string, 0),
 		childTasks:         make([]taskContextChildTask, 0),
+		siblingTasks:       make([]taskContextRelatedTask, 0),
 		parentGate:         make([]string, 0),
 		subtasks:           make([]taskContextSubtask, 0),
 		dependencies:       make([]string, 0),
@@ -1018,6 +1043,46 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 			})
 		}
 		out.parentGate = append(out.parentGate, parentStatus.Missing...)
+	}
+	if parentTaskID := taskdecomp.ParseParentTaskID(taskRecord.Metadata); parentTaskID != uuid.Nil && a.tasks != nil {
+		if parentTask, parentErr := a.tasks.GetByID(ctx, parentTaskID); parentErr == nil {
+			parentLabel := strings.TrimSpace(parentTask.Title)
+			if parentTask.TaskNumber > 0 {
+				parentLabel = fmt.Sprintf("OC-%d: %s", parentTask.TaskNumber, parentLabel)
+			}
+			if strings.TrimSpace(parentLabel) == "" {
+				parentLabel = parentTask.ID.String()
+			}
+			out.parentTaskLabel = parentLabel
+		}
+		if siblings, listErr := a.tasks.ListByProject(ctx, taskRecord.ProjectID); listErr == nil {
+			for _, sibling := range siblings {
+				if sibling.ID == taskRecord.ID {
+					continue
+				}
+				if taskdecomp.ParseParentTaskID(sibling.Metadata) != parentTaskID {
+					continue
+				}
+				title := strings.TrimSpace(sibling.Title)
+				if sibling.TaskNumber > 0 {
+					title = fmt.Sprintf("OC-%d: %s", sibling.TaskNumber, title)
+				}
+				if strings.TrimSpace(title) == "" {
+					title = sibling.ID.String()
+				}
+				status := strings.TrimSpace(sibling.WorkStatus)
+				if status == "" {
+					status = "draft"
+				}
+				out.siblingTasks = append(out.siblingTasks, taskContextRelatedTask{
+					title:  title,
+					status: status,
+				})
+			}
+			sort.Slice(out.siblingTasks, func(i, j int) bool {
+				return out.siblingTasks[i].title < out.siblingTasks[j].title
+			})
+		}
 	}
 
 	executionStatusByNode := map[uuid.UUID]string{}
