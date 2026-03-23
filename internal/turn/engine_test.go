@@ -7697,6 +7697,21 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects migration plan status placeholder",
+			content: "Perfect! Now I see the situation clearly:\n\n1. **OC-15 has strategy artifacts already locked** (strategy brief, decision log, tradeoff matrix, success narrative)\n2. **The migration plan file is stubbed but incomplete**\n3. **I need to deliver the full migration plan** based on the locked strategy\n\nLet me read the strategy artifacts first, then write the complete migration plan:",
+			want: "asked the operator to choose the next step instead of the file body",
+		},
+		{
+			name:    "rejects replace stub imperative",
+			content: "Now let me replace it with the complete migration plan:",
+			want:    "asked the operator to choose the next step instead of the file body",
+		},
+		{
+			name:    "rejects delete recreate imperative",
+			content: "Let me try a different approach - delete and recreate:",
+			want:    "intent to write the deliverable",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
