@@ -120,10 +120,26 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 			e.flow_node_id,
 			COALESCE(e.session_id, '00000000-0000-0000-0000-000000000000'::uuid) AS session_id,
 			COALESCE(s.status, '') AS session_status,
-			COALESCE(s.current_turn_id, '00000000-0000-0000-0000-000000000000'::uuid) AS current_turn_id,
-			COALESCE(turn_row.status, '') AS current_turn_status,
-			COALESCE(rs.active_run_id, '00000000-0000-0000-0000-000000000000'::uuid) AS active_run_id,
-			COALESCE(r.status, '') AS active_run_status,
+			COALESCE(
+				CASE
+					WHEN COALESCE(e.metadata->>'live_turn_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+					THEN (e.metadata->>'live_turn_id')::uuid
+					ELSE NULL
+				END,
+				s.current_turn_id,
+				'00000000-0000-0000-0000-000000000000'::uuid
+			) AS current_turn_id,
+			COALESCE(live_turn_row.status, turn_row.status, '') AS current_turn_status,
+			COALESCE(
+				CASE
+					WHEN COALESCE(e.metadata->>'live_run_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+					THEN (e.metadata->>'live_run_id')::uuid
+					ELSE NULL
+				END,
+				rs.active_run_id,
+				'00000000-0000-0000-0000-000000000000'::uuid
+			) AS active_run_id,
+			COALESCE(live_run.status, r.status, '') AS active_run_status,
 			COALESCE(recovery_agent.agent_id, '00000000-0000-0000-0000-000000000000'::uuid) AS recovery_agent_id,
 			COALESCE(t.assigned_agent_id, '00000000-0000-0000-0000-000000000000'::uuid) AS assigned_agent_id,
 			COALESCE(s.last_message_at, s.updated_at, t.updated_at, e.started_at) AS last_activity_at
@@ -132,6 +148,11 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 		JOIN project p ON p.id = t.project_id
 		LEFT JOIN chat_session s ON s.id = e.session_id
 		LEFT JOIN chat_turn turn_row ON turn_row.id = s.current_turn_id
+		LEFT JOIN chat_turn live_turn_row ON live_turn_row.id = CASE
+			WHEN COALESCE(e.metadata->>'live_turn_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			THEN (e.metadata->>'live_turn_id')::uuid
+			ELSE NULL
+		END
 		LEFT JOIN LATERAL (
 			SELECT ct.id, ct.status, ct.stop_reason
 			FROM chat_turn ct
@@ -143,6 +164,11 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 		  ON rs.scope_type = 'task'
 		 AND rs.scope_id = t.id
 		LEFT JOIN run r ON r.id = rs.active_run_id
+		LEFT JOIN run live_run ON live_run.id = CASE
+			WHEN COALESCE(e.metadata->>'live_run_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			THEN (e.metadata->>'live_run_id')::uuid
+			ELSE NULL
+		END
 		LEFT JOIN LATERAL (
 			SELECT cp.participant_id AS agent_id
 			FROM chat_participant cp
