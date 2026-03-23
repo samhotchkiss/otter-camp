@@ -9772,6 +9772,17 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 	) {
 		return true
 	}
+	if containsAny(lower,
+		"now i have the complete context",
+		"strategy phase for",
+		"resume execution by creating the actual",
+	) && containsAny(lower,
+		"migration plan",
+		"document",
+		"deliverable",
+	) {
+		return true
+	}
 	hasWriteIntent := containsAny(lower,
 		"let me write",
 		"let me draft",
@@ -9818,6 +9829,8 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 	hasSetupCue := containsAny(lower,
 		"good. i have the context",
 		"i have the context",
+		"now i have the complete context",
+		"i have the complete context",
 		"now i have everything i need",
 		"i now have everything i need",
 		"i have everything i need",
@@ -9865,6 +9878,7 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"i need to confirm",
 		"the draft document exists but is incomplete",
 		"continue from where it was cut off",
+		"resume execution by creating the actual",
 	)
 	hasDeliverableCue := containsAny(lower,
 		"deliverable",

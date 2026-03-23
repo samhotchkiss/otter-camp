@@ -7553,6 +7553,12 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "instead of the file body",
 		},
 		{
+			name: "rejects complete context execution placeholder",
+			content: "Excellent. Now I have the complete context. The strategy phase for OC-15 is complete with all 4 artifacts locked. " +
+				"Now I need to read the tradeoff matrix to understand the full decision context, then resume execution by creating the actual migration plan document.",
+			want: "intent to write the deliverable",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
