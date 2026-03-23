@@ -137,6 +137,64 @@ func TestFileWriteAllowsExplicitEmptyStringContent(t *testing.T) {
 	}
 }
 
+func TestFileWriteRejectsNarratedTaskPlaceholderContent(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "deliverables/oc-13-speaker-validation-agent.md",
+		"content": "Good. Now I have a clear understanding of the requirements. Let me create the Speaker Validation Agent with:\n" +
+			"1. Comprehensive system prompt defining the agent's role and behavior\n" +
+			"2. Validation logic implementation covering all criteria\n" +
+			"3. Structured validation report format\n" +
+			"4. Implementation details and testing guidance\n\n" +
+			"I'll create the deliverable as a production-ready Python module with the validation agent:",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "deliverables", "oc-13-speaker-validation-agent.md")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("deliverable file should not be written for placeholder content, stat err = %v", statErr)
+	}
+}
+
 func TestFileEditAmbiguousMatchDoesNotModifyFile(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "dup.txt")

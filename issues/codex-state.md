@@ -25,8 +25,7 @@ Current observed task state on the active fresh Speaker Pipeline canary:
 
 - bootstrap tasks `1-8` are all `done`
 - parent task `9` remains `draft`
-- task `10` is `queued`
-- tasks `11-15` are all `in_progress`
+- tasks `10-15` are all `in_progress`
 - project session `2eeaf2ad-4db3-4878-bf7c-7e91cb3d8309` is still active after bootstrap completion and task-session startup
 
 The active fresh canary has already validated these product expectations under the latest build:
@@ -41,9 +40,9 @@ The active fresh canary has already validated these product expectations under t
 
 Most recent shipped commits relevant to the current validation run:
 
+- `525ddd13` `Guard project sessions during bootstrap execution`
+- pending local slice: task-scoped `file.write` now rejects narrated placeholder content such as “Let me create the deliverable...” instead of persisting junk markdown into deliverable files
 - `6f6a1f25` `Harden bootstrap recovery and draft settlement`
-- pending local slice: project-session `task.update` now hard-rejects any direct mutation of an already-active task lane (`task_lane_owned_by_project_task_session`)
-- pending local slice: bootstrap-active project sessions now hard-reject `git.commit` with `bootstrap.setup.persist` guidance instead of wasting turns on repo commits
 - `a64dd6c8` `Handle approval-gated bootstrap tasks cleanly`
 - `a23ba8d4` `Stabilize archived and approval-gated recovery`
 - `04ddf053` `Force fresh bootstrap staffing to act in-turn`
@@ -104,6 +103,7 @@ What those changed:
 - satisfied draft auto-complete now requires the task to be non-decomposable under `taskdecomp.PrepareQueueDecomposition`, so broad bootstrap workstreams stay draft and must actually be split before bootstrap can pass
 - project sessions now get a hard tool-layer rejection if they attempt to mutate a task that already has `CurrentFlowNodeID` set, so active task lanes remain owned by their `project_task` session instead of being re-mutated by the PM lane
 - bootstrap-active project sessions now get a hard tool-layer rejection if they call `git.commit`, forcing canonical bootstrap persistence through `bootstrap.setup.persist` instead of ad hoc repo commits
+- task-scoped `file.write` is being hardened against imperative first-person placeholder prose after live `fresh-5` task `13` persisted a 413-byte “Let me create the deliverable...” stub into `deliverables/oc-13-speaker-validation-agent.md` before falling into `cli.execute command_required`
 
 Current live cleanup result:
 
@@ -117,6 +117,7 @@ Current live cleanup result:
 - the first real execution wave is running under task sessions, not the project session
 - there are currently no blocked tasks on the project
 - the next bug to watch is task-lane completion/review quality, not PM/bootstrap queue ownership
+- live repro just before the latest local slice: task `13` wrote narrated placeholder prose directly into its deliverable file and then blocked on repeated empty `cli.execute`; the local validator now rejects that content pattern before write
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 

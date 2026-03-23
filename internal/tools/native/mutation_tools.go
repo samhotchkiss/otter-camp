@@ -186,6 +186,75 @@ func sameOrNestedWorkspacePath(path, root string) bool {
 	return normalizedPath == normalizedRoot || strings.HasPrefix(normalizedPath, normalizedRoot+"/")
 }
 
+func looksLikeNarratedTaskFileWritePlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) > 1600 {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	firstLine := lower
+	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+		firstLine = strings.TrimSpace(firstLine[:idx])
+	}
+	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "package ") || strings.HasPrefix(trimmed, "import ") {
+		return false
+	}
+	if !containsAnySubstring(firstLine,
+		"good.",
+		"great.",
+		"excellent.",
+		"perfect.",
+		"now i have",
+		"i now have",
+		"let me ",
+		"i'll ",
+		"i will ",
+	) {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"let me create",
+		"let me write",
+		"let me use",
+		"let me try",
+		"i'll create",
+		"i will create",
+		"i'll write",
+		"i will write",
+		"i'll begin by",
+		"i will begin by",
+	) {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"deliverable",
+		"document",
+		"specification",
+		"requirements",
+		"implementation details",
+		"validation logic",
+		"system prompt",
+		"with:\n1.",
+		"with:\r\n1.",
+		"1. ",
+		"2. ",
+		"3. ",
+		"4. ",
+	)
+}
+
+func containsAnySubstring(content string, needles ...string) bool {
+	for _, needle := range needles {
+		if needle == "" {
+			continue
+		}
+		if strings.Contains(content, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func containsFold(values []string, needle string) bool {
 	target := strings.TrimSpace(needle)
 	if target == "" {
@@ -834,6 +903,12 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 	}
 
 	content, _ := readString(normalizedInput, "content")
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeNarratedTaskFileWritePlaceholder(content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
+		}, nil
+	}
 	encoding := "utf8"
 	payload := []byte(content)
 	if rawEncoding, ok := readString(normalizedInput, "encoding"); ok && strings.EqualFold(rawEncoding, "base64") {
