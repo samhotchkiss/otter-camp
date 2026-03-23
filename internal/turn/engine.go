@@ -910,6 +910,11 @@ func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.
 			e.logPausedTurnSkip("skipping agent turn enqueue for paused project", session, reason, payload.MessageID)
 			return nil
 		}
+		if seeded, seedErr := e.maybeSeedProjectBootstrapKickoffFromHumanMessage(ctx, session, payload, event); seedErr != nil {
+			return seedErr
+		} else if seeded {
+			return nil
+		}
 		if responderID, resolveErr := e.resolveSessionAgentForSession(ctx, session); resolveErr == nil && responderID != uuid.Nil {
 			responderID = e.resolveNonSelfLoopResponder(ctx, session, event, responderID)
 			payload.AgentID = &responderID
@@ -928,6 +933,127 @@ func (e *TurnEngine) HandleUserMessageEvent(ctx context.Context, event eventbus.
 	}
 	_, err = e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, payload, nil)
 	return err
+}
+
+func (e *TurnEngine) maybeSeedProjectBootstrapKickoffFromHumanMessage(ctx context.Context, session *chat.ChatSession, payload AgentTurnPayload, event eventbus.DomainEvent) (bool, error) {
+	if e == nil || e.chat == nil || e.messages == nil || session == nil || payload.MessageID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(session.Mode), "async") ||
+		session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(event.ActorType), "agent") {
+		return false, nil
+	}
+	if projectBootstrapStateActive(projectBootstrapStateFromMetadata(session.Metadata)) {
+		return false, nil
+	}
+	if !e.shouldRouteScaffoldedProjectSessionToLori(ctx, session) {
+		return false, nil
+	}
+
+	messages, err := e.messages.ListBySession(ctx, session.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, message := range messages {
+		if message.ID == payload.MessageID {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+			return false, nil
+		}
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") &&
+			message.AuthorID != nil && *message.AuthorID != uuid.Nil &&
+			strings.EqualFold(strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["source"])), projectBootstrapSource) {
+			return false, nil
+		}
+	}
+
+	triggerMessage, err := e.messages.GetByID(ctx, payload.MessageID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(triggerMessage.Role), "user") {
+		return false, nil
+	}
+
+	frankID, err := e.resolveFrankStarterID(ctx, session.OrganizationID)
+	if err != nil || frankID == uuid.Nil {
+		return false, err
+	}
+	loriID, loriErr := e.resolveLoriStarterID(ctx, session.OrganizationID)
+	if loriErr != nil {
+		return false, loriErr
+	}
+	if err := e.ensureAgentParticipant(ctx, session.ID, frankID); err != nil {
+		return false, err
+	}
+	if loriID != uuid.Nil {
+		if err := e.ensureAgentParticipant(ctx, session.ID, loriID); err != nil {
+			return false, err
+		}
+	}
+
+	projectSlug := ""
+	if e.projects != nil {
+		if projectRecord, projectErr := e.projects.GetByID(ctx, session.ScopeID); projectErr == nil {
+			projectSlug = strings.TrimSpace(projectRecord.Slug)
+		} else if !errors.Is(projectErr, repo.ErrNotFound) {
+			return false, projectErr
+		}
+	}
+
+	handoff, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: stringPtr("agent"),
+		AuthorID:   &frankID,
+		Role:       "user",
+		Content:    buildSyntheticProjectKickoffHandoffFromRequest(session.ScopeID, projectSlug, triggerMessage.Content),
+		Metadata: mustJSONRaw(map[string]any{
+			"source": projectBootstrapSource,
+		}),
+	})
+	if err != nil {
+		return false, err
+	}
+
+	now := e.now().UTC()
+	state := projectBootstrapStateFromMetadata(session.Metadata)
+	state.Status = projectBootstrapStatusActive
+	state.CurrentPhase = "kickoff_handoff"
+	state.InitialMessageID = projectBootstrapWorkflowMessageID(handoff).String()
+	state.LastTurnID = ""
+	state.AutoTurnCount = 0
+	state.StartedAt = &now
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = nil
+	state.FailureCategory = ""
+	state.FailureClass = ""
+	state.FailurePhase = ""
+	state.FailureReason = ""
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
+	if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
+		return false, err
+	}
+
+	nextAgentID := frankID
+	if loriID != uuid.Nil {
+		nextAgentID = loriID
+	}
+	_, err = e.enqueueAgentTurnIfActive(ctx, session, AgentTurnPayload{
+		SessionID: session.ID,
+		MessageID: handoff.ID,
+		AgentID:   &nextAgentID,
+	}, nil)
+	return true, err
 }
 
 func (e *TurnEngine) resolveNonSelfLoopResponder(ctx context.Context, session *chat.ChatSession, event eventbus.DomainEvent, responderID uuid.UUID) uuid.UUID {
@@ -5492,12 +5618,16 @@ func (e *TurnEngine) buildSyntheticProjectKickoffHandoff(ctx context.Context, rt
 			originatingRequest = normalizeInstructionText(source.Content)
 		}
 	}
+	return buildSyntheticProjectKickoffHandoffFromRequest(rt.projectIdentity.id, strings.TrimSpace(rt.projectIdentity.slug), originatingRequest)
+}
+
+func buildSyntheticProjectKickoffHandoffFromRequest(projectID uuid.UUID, projectSlug, originatingRequest string) string {
 	lines := []string{
 		"Frank handoff: create the initial staffed bootstrap for this project.",
-		fmt.Sprintf("Created project: slug=%s project_id=%s.", strings.TrimSpace(rt.projectIdentity.slug), rt.projectIdentity.id),
+		fmt.Sprintf("Created project: slug=%s project_id=%s.", strings.TrimSpace(projectSlug), projectID),
 	}
-	if originatingRequest != "" {
-		lines = append(lines, fmt.Sprintf("Originating user request: %s", originatingRequest))
+	if normalizedRequest := normalizeInstructionText(originatingRequest); normalizedRequest != "" {
+		lines = append(lines, fmt.Sprintf("Originating user request: %s", normalizedRequest))
 	}
 	lines = append(lines, "Treat this as a fresh project bootstrap. Do not assume architecture, CMS choice, or workflow from archived/restart chains or org memory unless the originating user request explicitly asks for reuse. Prefer the current project description and live tool results over prior-project memory.")
 	lines = append(lines, "Do not call memory.query, memory.list, or other memory tools during this bootstrap handoff unless the originating user request explicitly asks to reuse prior project work.")
