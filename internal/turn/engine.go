@@ -7503,12 +7503,33 @@ func (e *TurnEngine) handleRecoveryRejectedFileWriteContent(ctx context.Context,
 	if !ok {
 		return false, false, nil
 	}
-	call.Arguments = normalized
 
 	rejectReason := recoveryFileWriteDraftRejectReason(draft, targetPath)
 	if strings.TrimSpace(rejectReason) == "" {
+		call.Arguments = normalized
 		return false, false, nil
 	}
+	if persistedDraft, persistedRejectReason, persistedOK := e.recoveryPersistedDraftContent(ctx, rt, targetPath); persistedOK && strings.TrimSpace(persistedRejectReason) == "" {
+		normalized["content"] = persistedDraft
+		if _, exists := normalized["create_dirs"]; !exists {
+			normalized["create_dirs"] = true
+		}
+		call.Arguments = normalized
+		if rt.recoveryFileWrites == nil {
+			rt.recoveryFileWrites = make(map[string]recoveryPopulatedFileWriteState)
+		}
+		rt.recoveryFileWrites[strings.TrimSpace(call.ID)] = recoveryPopulatedFileWriteState{
+			TargetPath: strings.TrimSpace(targetPath),
+			Draft:      persistedDraft,
+		}
+		e.logger.Info("recovery: replaced rejected file.write content from persisted draft",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+		)
+		return false, false, nil
+	}
+	call.Arguments = normalized
 	return e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
 }
 
