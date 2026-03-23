@@ -5059,7 +5059,7 @@ func (e *TurnEngine) handleTaskContinuationDepthTurnFailure(
 		TurnID:    &runtime.turn.ID,
 		Role:      "user",
 		Content:   buildTaskContinuationActionPrompt(""),
-		Metadata:  taskContinuationResumeMessageMetadata(retryAttempt),
+		Metadata:  taskContinuationResumeMessageMetadata(runtime.session, retryAttempt),
 	})
 	if err != nil {
 		return true, err
@@ -5665,7 +5665,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 				TurnID:    &rt.turn.ID,
 				Role:      "user",
 				Content:   buildTaskContinuationActionPrompt(summary),
-				Metadata:  syntheticContinuationActionMessageMetadata(taskContinuationResumeMessageSource),
+				Metadata:  syntheticContinuationActionMessageMetadata(rt.session, taskContinuationResumeMessageSource),
 			}); err != nil {
 				return err
 			}
@@ -5682,7 +5682,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 				TurnID:    &rt.turn.ID,
 				Role:      "user",
 				Content:   buildProjectContinuationActionPrompt(summary),
-				Metadata:  syntheticContinuationActionMessageMetadata("project_continuation_resume"),
+				Metadata:  syntheticContinuationActionMessageMetadata(rt.session, "project_continuation_resume"),
 			}); err != nil {
 				return err
 			}
@@ -8608,7 +8608,7 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 				TurnID:    &rt.turn.ID,
 				Role:      "user",
 				Content:   buildTaskRecoveryActionPrompt(),
-				Metadata:  syntheticContinuationActionMessageMetadata("task_recovery_action"),
+				Metadata:  syntheticContinuationActionMessageMetadata(rt.session, "task_recovery_action"),
 			})
 			if err != nil {
 				return false, err
@@ -8646,7 +8646,7 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 			TurnID:    &rt.turn.ID,
 			Role:      "user",
 			Content:   buildRecoveryResumeActionPrompt(state),
-			Metadata:  syntheticContinuationActionMessageMetadata("task_recovery_resume"),
+			Metadata:  syntheticContinuationActionMessageMetadata(rt.session, "task_recovery_resume"),
 		})
 		if actionErr != nil {
 			return false, actionErr
@@ -11527,23 +11527,31 @@ func taskContinuationResumeMessageRootsHistory(message repo.ChatMessage) bool {
 	return rooted
 }
 
-func taskContinuationResumeMessageMetadata(attempt int) json.RawMessage {
+func taskContinuationResumeMessageMetadata(session *chat.ChatSession, attempt int) json.RawMessage {
 	if attempt < 1 {
 		attempt = 1
 	}
-	return mustJSONRaw(map[string]any{
+	payload := map[string]any{
 		"source":                 taskContinuationResumeMessageSource,
 		"continuation_root":      true,
 		"continuation_attempt":   attempt,
 		"synthetic_user_message": true,
-	})
+	}
+	if executionID := flowNodeExecutionIDFromSessionMetadata(session); executionID != nil && *executionID != uuid.Nil {
+		payload["flow_node_execution_id"] = executionID.String()
+	}
+	return mustJSONRaw(payload)
 }
 
-func syntheticContinuationActionMessageMetadata(source string) json.RawMessage {
-	return mustJSONRaw(map[string]any{
+func syntheticContinuationActionMessageMetadata(session *chat.ChatSession, source string) json.RawMessage {
+	payload := map[string]any{
 		"source":                 strings.TrimSpace(source),
 		"synthetic_user_message": true,
-	})
+	}
+	if executionID := flowNodeExecutionIDFromSessionMetadata(session); executionID != nil && *executionID != uuid.Nil {
+		payload["flow_node_execution_id"] = executionID.String()
+	}
+	return mustJSONRaw(payload)
 }
 
 func (e *TurnEngine) shouldAppendSyntheticUserPrompt(ctx context.Context, sessionID uuid.UUID, source string) (bool, error) {

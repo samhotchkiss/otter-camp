@@ -1512,7 +1512,7 @@ func TestHandleTurnCompletedEventRetriesGenericTaskContinuationReply(t *testing.
 		t.Fatalf("GetByID user message: %v", err)
 	}
 	message.Content = "Continue the active task now from the continuation summary above."
-	message.Metadata = taskContinuationResumeMessageMetadata(1)
+	message.Metadata = taskContinuationResumeMessageMetadata(nil, 1)
 	fixture.messages.upsert(message)
 
 	agentID := fixture.chat.participants[0].ParticipantID
@@ -1587,7 +1587,7 @@ func TestHandleTurnCompletedEventBlocksRepeatedGenericTaskContinuationReply(t *t
 		t.Fatalf("GetByID user message: %v", err)
 	}
 	message.Content = "Continue the active task now from the continuation summary above."
-	message.Metadata = taskContinuationResumeMessageMetadata(1)
+	message.Metadata = taskContinuationResumeMessageMetadata(nil, 1)
 	fixture.messages.upsert(message)
 
 	agentID := fixture.chat.participants[0].ParticipantID
@@ -2377,7 +2377,7 @@ func TestShouldAppendSyntheticUserPromptSkipsDuplicatePendingSource(t *testing.T
 		Role:      "user",
 		Status:    "pending",
 		Content:   "Continue the active task now from the continuation summary above.",
-		Metadata:  syntheticContinuationActionMessageMetadata(taskContinuationResumeMessageSource),
+		Metadata:  syntheticContinuationActionMessageMetadata(nil, taskContinuationResumeMessageSource),
 	})
 
 	shouldAppend, err := fixture.engine.shouldAppendSyntheticUserPrompt(context.Background(), fixture.session.ID, taskContinuationResumeMessageSource)
@@ -5479,7 +5479,7 @@ func TestTaskContinuationRootMessageStartsAssemblyAtTriggerMessage(t *testing.T)
 		Role:      "user",
 		Status:    "pending",
 		Content:   buildTaskContinuationActionPrompt(""),
-		Metadata:  taskContinuationResumeMessageMetadata(1),
+		Metadata:  taskContinuationResumeMessageMetadata(nil, 1),
 	})
 
 	var assembledHistoryStart *uuid.UUID
@@ -10439,6 +10439,50 @@ func TestFlowNodeExecutionIDFromSessionMetadata(t *testing.T) {
 	session.Metadata = json.RawMessage(`{"flow_node_execution_id":"not-a-uuid"}`)
 	if got := flowNodeExecutionIDFromSessionMetadata(session); got != nil {
 		t.Fatalf("flowNodeExecutionIDFromSessionMetadata() invalid = %v, want nil", got)
+	}
+}
+
+func TestTaskContinuationResumeMessageMetadataIncludesFlowNodeExecutionID(t *testing.T) {
+	t.Parallel()
+
+	executionID := uuid.New()
+	session := &chat.ChatSession{
+		Metadata: mustRawJSON(t, map[string]any{
+			"flow_node_execution_id": executionID.String(),
+		}),
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(taskContinuationResumeMessageMetadata(session, 2), &payload); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if payload["flow_node_execution_id"] != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %v, want %s", payload["flow_node_execution_id"], executionID)
+	}
+	if payload["continuation_attempt"] != float64(2) {
+		t.Fatalf("continuation_attempt = %v, want 2", payload["continuation_attempt"])
+	}
+}
+
+func TestSyntheticContinuationActionMessageMetadataIncludesFlowNodeExecutionID(t *testing.T) {
+	t.Parallel()
+
+	executionID := uuid.New()
+	session := &chat.ChatSession{
+		Metadata: mustRawJSON(t, map[string]any{
+			"flow_node_execution_id": executionID.String(),
+		}),
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(syntheticContinuationActionMessageMetadata(session, "task_recovery_resume"), &payload); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if payload["flow_node_execution_id"] != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %v, want %s", payload["flow_node_execution_id"], executionID)
+	}
+	if payload["source"] != "task_recovery_resume" {
+		t.Fatalf("source = %v, want task_recovery_resume", payload["source"])
 	}
 }
 

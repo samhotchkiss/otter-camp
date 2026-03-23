@@ -125,3 +125,5 @@ Latest slice completed:
 - Focused turn-engine coverage now asserts that execution-owned task events with a missing session no-op instead of enqueueing an orphan job.
 - `chat.SteerTurn(...)` now also includes `flow_node_execution_id` in the replacement `chat.message.user_sent` payload for bound task sessions.
 - Focused chat integration coverage now asserts steered task-session user events remain execution-owned instead of falling back to message-only dispatch identity.
+- synthetic continuation/recovery user prompts appended by the turn engine now also inherit `flow_node_execution_id` from the bound task session metadata.
+- Focused turn-engine coverage now asserts both continuation-root and synthetic recovery metadata keep execution ownership when present.

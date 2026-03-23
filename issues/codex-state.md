@@ -63,6 +63,7 @@ Most recent shipped commits relevant to the current validation run:
 - `ed694196` `Skip blocked task lanes during worker requeue`
 - pending local slice: execution-owned task `chat.message.user_sent` events no longer fall back to legacy raw enqueue in `HandleUserMessageEvent(...)` when the session cannot be loaded; targeted turn-engine tests are green
 - pending local slice: `chat.SteerTurn(...)` now also includes `flow_node_execution_id` in replacement task-session `chat.message.user_sent` events; focused chat integration coverage is green
+- pending local slice: synthetic task continuation/recovery user prompts appended by the turn engine now also inherit `flow_node_execution_id` from session metadata; focused turn-engine coverage is green
 
 What those changed:
 
@@ -89,6 +90,7 @@ What those changed:
 - worker blocked-task recovery no longer requeues blocked validation-loop sessions through supervisor or pending-turn startup repair, so blocked tasks stay blocked instead of generating repeated startup churn
 - turn-event handling no longer recreates execution-owned `project_task` dispatch from raw `session_id/message_id` when the bound session cannot be loaded, which removes another message-state escape hatch from issue `370`
 - steer/recovery-style replacement user messages for bound task sessions now also keep `flow_node_execution_id`, so operator/session steering no longer drops task-lane execution identity at the chat-event boundary
+- synthetic continuation-root and recovery-action user prompts now also keep `flow_node_execution_id`, closing another task-lane path that previously kept execution identity only in the queue payload and not in the message metadata itself
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
