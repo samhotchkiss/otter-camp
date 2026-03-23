@@ -9968,16 +9968,70 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	) {
 		return fmt.Sprintf("assistant draft for %s described tool-recovery troubleshooting instead of the file body", path)
 	}
+	if containsAny(lower,
+		"`file_write`",
+		"`file.write`",
+		"file_write",
+		"file.write",
+	) && containsAny(lower,
+		"content parameter",
+		"path parameter",
+		"requires a non-empty `content`",
+		"requires a non-empty `path`",
+		"requires a non-empty content",
+		"requires a non-empty path",
+		"passing it in the `content` field",
+		"passing it in the content field",
+		"cannot proceed without drafting the complete",
+	) {
+		return fmt.Sprintf("assistant draft for %s described tool-recovery troubleshooting instead of the file body", path)
+	}
 	if looksLikeRecoveryIntentNarrationPlaceholder(trimmed) {
 		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
 	if looksLikeStructuredRecoveryIntentPlaceholder(trimmed) {
 		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
+	if statusPath, ok := leadingToolStatusTargetPath(trimmed); ok {
+		if strings.TrimSpace(targetPath) != "" && !sameWorkspaceRelativePath(statusPath, targetPath) {
+			return fmt.Sprintf("assistant draft for %s appears to belong to a different deliverable than the target file body", path)
+		}
+		return fmt.Sprintf("assistant draft for %s repeated wrapped tool status instead of the file body", path)
+	}
 	if heading := leadingMarkdownHeading(trimmed); heading != "" && headingClearlyMismatchesTargetPath(heading, targetPath) {
 		return fmt.Sprintf("assistant draft for %s appears to belong to a different deliverable than the target file body", path)
 	}
 	return ""
+}
+
+func leadingToolStatusTargetPath(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return "", false
+	}
+	firstLine := trimmed
+	if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+		firstLine = strings.TrimSpace(firstLine[:idx])
+	}
+	lower := strings.ToLower(firstLine)
+	for _, prefix := range []string{"file written:", "file edited:", "file updated:", "file created:"} {
+		if !strings.HasPrefix(lower, prefix) {
+			continue
+		}
+		remaining := strings.TrimSpace(firstLine[len(prefix):])
+		if strings.HasPrefix(remaining, "`") {
+			remaining = strings.TrimPrefix(remaining, "`")
+			if idx := strings.Index(remaining, "`"); idx >= 0 {
+				remaining = remaining[:idx]
+			}
+		}
+		remaining = strings.TrimSpace(remaining)
+		if remaining == "" {
+			return "", false
+		}
+		return remaining, true
+	}
+	return "", false
 }
 
 func leadingMarkdownHeading(content string) string {

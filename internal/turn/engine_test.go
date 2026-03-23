@@ -7948,6 +7948,27 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "implementation plan instead of the file body",
 		},
 		{
+			name: "rejects wrapped tool status for different file",
+			content: "File written: `planning/metrics-framework/oc-16-review-cadence.md` (5.9 KB).\n\n" +
+				"The metrics review cadence is now durable and operationalized. It defines weekly and monthly reviews.",
+			targetPath: "src/generate_reports.py",
+			want:       "different deliverable",
+		},
+		{
+			name: "rejects wrapped tool status for same file",
+			content: "File written: `src/generate_reports.py` (5.9 KB).\n\n" +
+				"The reporting script is now durable and operationalized.",
+			targetPath: "src/generate_reports.py",
+			want:       "wrapped tool status instead of the file body",
+		},
+		{
+			name: "rejects file write parameter troubleshooting without let-me phrasing",
+			content: "`file_write` without `content` parameter is causing a placeholder to be written. I must provide the full Python script as the content parameter.\n\n" +
+				"The concrete blocker: `file_write` requires a non-empty `content` parameter; I cannot proceed without drafting the complete generate_reports.py body and passing it in the `content` field.",
+			targetPath: "src/generate_reports.py",
+			want:       "tool-recovery troubleshooting",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
