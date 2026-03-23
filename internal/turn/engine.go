@@ -9789,10 +9789,13 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	failures := collectToolValidationFailures(calls, results)
 	current, ok := parseTaskValidationGuard(taskRecord.Metadata)
 	if len(failures) == 0 {
-		if !ok || current.Blocked || current.Count == 0 || current.InitialMessageID != rt.initialMessageID.String() {
+		if !ok || current.Blocked || current.Count == 0 {
 			return false, nil
 		}
-		if len(calls) > 0 && current.AttemptFingerprint != "" && !toolCallsContainAttemptFingerprint(calls, current.AttemptFingerprint) {
+		if len(calls) == 0 {
+			return false, nil
+		}
+		if current.InitialMessageID == rt.initialMessageID.String() && current.AttemptFingerprint != "" && !toolCallsContainAttemptFingerprint(calls, current.AttemptFingerprint) {
 			return false, nil
 		}
 		cleared, clearErr := clearTaskValidationGuardMetadata(taskRecord.Metadata)

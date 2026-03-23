@@ -1684,6 +1684,100 @@ func TestTurnEngineIntegrationResumeValidationBlockedTaskStopsSuppression(t *tes
 	}
 }
 
+func TestTurnEngineIntegrationSuccessfulLaterTurnClearsStaleNonBlockedValidationGuard(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, initialMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "old failing kickoff")
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	guardedMetadata, err := tasksvc.MergeValidationGuardMetadata(currentTask.Metadata, tasksvc.ValidationGuardState{
+		InitialMessageID:   initialMessage.ID.String(),
+		Fingerprint:        "file.edit:malformed_arguments_raw",
+		AttemptFingerprint: "file.edit",
+		ToolName:           "file.edit",
+		FailureClass:       "tool_validation",
+		FailureCode:        "malformed_arguments_raw",
+		FailureReason:      "malformed _raw arguments (path_required)",
+		Count:              2,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	currentTask.Metadata = guardedMetadata
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update guarded task: %v", err)
+	}
+
+	authorType := "human_user"
+	laterMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "new attempt with corrected write",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage later kickoff: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls != 1 {
+			t.Fatalf("unexpected extra model call: %d", modelCalls)
+		}
+		return ModelResponse{
+			Content: "write corrected file",
+			ToolCalls: []ModelToolCall{{
+				ID:   "good-write",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path":    "docs/fixed.md",
+					"content": "# Fixed\n",
+				},
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      "docs/fixed.md",
+				"byte_size": 8,
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, laterMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID updated task: %v", err)
+	}
+	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
+		t.Fatalf("unexpected stale validation guard persisted: %+v", guard)
+	}
+}
+
 func TestTurnEngineIntegrationFileWriteRecoverRawArgumentsAcrossRepeatedWrites(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
