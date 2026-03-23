@@ -424,6 +424,46 @@ func TestTaskServiceIntegrationRejectsNonBootstrapGateWithoutExecutionPath(t *te
 	}
 }
 
+func TestTaskServiceIntegrationIgnoresLegacyInvalidDraftGateWhenQueueing(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     38,
+		Title:          "Late impossible gate",
+		WorkStatus:     "draft",
+		BlocksScope:    "all",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("seed legacy invalid gate: %v", err)
+	}
+
+	child, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Regular queued task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask child: %v", err)
+	}
+
+	queued, err := svc.TransitionStatus(ctx, child.ID, "queued", Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if queued.WorkStatus != "queued" {
+		t.Fatalf("work_status = %q, want queued", queued.WorkStatus)
+	}
+}
+
 func TestTaskServiceIntegrationHumanApprovalGate(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

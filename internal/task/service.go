@@ -1123,14 +1123,23 @@ func (s *service) lowestOutstandingProjectGate(ctx context.Context, projectID uu
 		return nil, err
 	}
 
+	canonicalBootstrapGateID, hasCanonicalBootstrapGate := canonicalBootstrapGateTaskID(projectTasks)
 	var selected *repo.ProjectTask
 	for _, taskRecord := range projectTasks {
 		if !strings.EqualFold(strings.TrimSpace(taskRecord.BlocksScope), "all") {
 			continue
 		}
+		if taskIsBootstrapGate(taskRecord) && hasCanonicalBootstrapGate && taskRecord.ID != canonicalBootstrapGateID {
+			continue
+		}
 		status := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
 		if status == "done" || status == "cancelled" {
 			continue
+		}
+		if status == "draft" && !taskIsBootstrapGate(taskRecord) {
+			if err := ValidateProjectGateTask(taskRecord); err != nil {
+				continue
+			}
 		}
 		if selected == nil || taskRecord.TaskNumber < selected.TaskNumber {
 			clone := taskRecord
@@ -1138,6 +1147,106 @@ func (s *service) lowestOutstandingProjectGate(ctx context.Context, projectID uu
 		}
 	}
 	return selected, nil
+}
+
+func canonicalBootstrapGateTaskID(tasks []repo.ProjectTask) (uuid.UUID, bool) {
+	bootstrapGates := make([]repo.ProjectTask, 0)
+	canonicalSetupBySlug := make(map[string]repo.ProjectTask)
+	earliestCompletedSetupNumber := 0
+
+	for _, taskRecord := range tasks {
+		if taskIsBootstrapGate(taskRecord) {
+			bootstrapGates = append(bootstrapGates, taskRecord)
+		}
+		stepSlug := bootstrapStepSlug(taskRecord)
+		if stepSlug == "" {
+			continue
+		}
+		current, ok := canonicalSetupBySlug[stepSlug]
+		if !ok || shouldPreferCanonicalBootstrapScaffoldTask(taskRecord, current) {
+			canonicalSetupBySlug[stepSlug] = taskRecord
+		}
+	}
+	if len(bootstrapGates) == 0 {
+		return uuid.Nil, false
+	}
+
+	for _, taskRecord := range canonicalSetupBySlug {
+		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
+			continue
+		}
+		if earliestCompletedSetupNumber == 0 || taskRecord.TaskNumber < earliestCompletedSetupNumber {
+			earliestCompletedSetupNumber = taskRecord.TaskNumber
+		}
+	}
+
+	var selected repo.ProjectTask
+	selectedSet := false
+	if earliestCompletedSetupNumber > 0 {
+		for _, taskRecord := range bootstrapGates {
+			if taskRecord.TaskNumber >= earliestCompletedSetupNumber {
+				continue
+			}
+			if !selectedSet || taskRecord.TaskNumber > selected.TaskNumber {
+				selected = taskRecord
+				selectedSet = true
+			}
+		}
+	}
+	if selectedSet {
+		return selected.ID, true
+	}
+
+	for _, taskRecord := range bootstrapGates {
+		if !selectedSet || taskRecord.TaskNumber < selected.TaskNumber {
+			selected = taskRecord
+			selectedSet = true
+		}
+	}
+	if !selectedSet {
+		return uuid.Nil, false
+	}
+	return selected.ID, true
+}
+
+func taskIsBootstrapGate(taskRecord repo.ProjectTask) bool {
+	if len(taskRecord.Metadata) == 0 || !json.Valid(taskRecord.Metadata) {
+		return false
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &metadata); err != nil {
+		return false
+	}
+	raw, ok := metadata["bootstrap_gate"].(bool)
+	return ok && raw
+}
+
+func bootstrapStepSlug(taskRecord repo.ProjectTask) string {
+	if len(taskRecord.Metadata) == 0 || !json.Valid(taskRecord.Metadata) {
+		return ""
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(taskRecord.Metadata, &metadata); err != nil {
+		return ""
+	}
+	raw, ok := metadata["bootstrap_step_slug"]
+	if !ok {
+		return ""
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func shouldPreferCanonicalBootstrapScaffoldTask(candidate, current repo.ProjectTask) bool {
+	candidateDone := strings.EqualFold(strings.TrimSpace(candidate.WorkStatus), "done")
+	currentDone := strings.EqualFold(strings.TrimSpace(current.WorkStatus), "done")
+	if candidateDone != currentDone {
+		return candidateDone
+	}
+	return candidate.TaskNumber < current.TaskNumber
 }
 
 func projectRequiresPMBeforeQueueSetting(settings json.RawMessage) bool {

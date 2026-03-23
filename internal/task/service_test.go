@@ -256,6 +256,44 @@ func TestValidateProjectGateTaskAllowsHumanReviewGateWithoutFlow(t *testing.T) {
 	}
 }
 
+func TestLowestOutstandingProjectGateIgnoresInvalidDraftGateWithoutExecutionPath(t *testing.T) {
+	projectID := uuid.New()
+	queuedTaskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			uuid.New(): {
+				ID:             uuid.New(),
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     38,
+				Title:          "Impossible gate",
+				WorkStatus:     "draft",
+				BlocksScope:    "all",
+				CreatedByType:  "system",
+			},
+			queuedTaskID: {
+				ID:             queuedTaskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     17,
+				Title:          "Queued child",
+				WorkStatus:     "queued",
+				BlocksScope:    "none",
+				CreatedByType:  "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	gateTask, err := svc.lowestOutstandingProjectGate(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("lowestOutstandingProjectGate: %v", err)
+	}
+	if gateTask != nil {
+		t.Fatalf("lowestOutstandingProjectGate = %+v, want nil", gateTask)
+	}
+}
+
 func TestTransitionStatusAllowsCompletedChildReopenToQueued(t *testing.T) {
 	taskID := uuid.New()
 	parentID := uuid.New()
