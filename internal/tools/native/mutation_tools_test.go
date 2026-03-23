@@ -228,6 +228,114 @@ func TestFileEditMissingPathReturnsActionableError(t *testing.T) {
 	}
 }
 
+func TestFileWriteRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplicitDeliverable(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	description := "Create Python script to generate reports. Deliverable: src/generate_reports.py with report templates and example outputs."
+	plan := taskplan.Analyze("Build reporting and pipeline analytics script", &description)
+
+	taskRepo := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Build reporting and pipeline analytics script",
+			Description:    &description,
+			Metadata:       taskplan.ApplyMetadata(nil, plan),
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = taskRepo
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		TaskID:         &taskID,
+	})
+
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/metrics-framework/oc-16-instrumentation-plan.md",
+		"content":     "# Instrumentation plan\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "deliverable_path_required" {
+		t.Fatalf("error = %v, want deliverable_path_required", out["error"])
+	}
+	if got := out["deliverable_path"]; got != "src/generate_reports.py" {
+		t.Fatalf("deliverable_path = %v, want src/generate_reports.py", got)
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "src/generate_reports.py") {
+		t.Fatalf("message = %q, want explicit deliverable path guidance", message)
+	}
+	if _, err := os.Stat(filepath.Join(root, "planning", "metrics-framework", "oc-16-instrumentation-plan.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("planning artifact should not be written, stat err = %v", err)
+	}
+}
+
+func TestFileEditRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplicitDeliverable(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	target := filepath.Join(root, "planning", "metrics-framework", "oc-16-instrumentation-plan.md")
+	description := "Create Python script to generate reports. Deliverable: src/generate_reports.py with report templates and example outputs."
+	plan := taskplan.Analyze("Build reporting and pipeline analytics script", &description)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("mkdir planning artifact: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("# Instrumentation plan\n"), 0o644); err != nil {
+		t.Fatalf("write planning artifact: %v", err)
+	}
+
+	taskRepo := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Build reporting and pipeline analytics script",
+			Description:    &description,
+			Metadata:       taskplan.ApplyMetadata(nil, plan),
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = taskRepo
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		TaskID:         &taskID,
+	})
+
+	out, err := executor.Execute(ctx, "file.edit", map[string]any{
+		"path":       "planning/metrics-framework/oc-16-instrumentation-plan.md",
+		"old_string": "Instrumentation",
+		"new_string": "Telemetry",
+	})
+	if err != nil {
+		t.Fatalf("file.edit: %v", err)
+	}
+	if out["error"] != "deliverable_path_required" {
+		t.Fatalf("error = %v, want deliverable_path_required", out["error"])
+	}
+	body, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read planning artifact: %v", err)
+	}
+	if string(body) != "# Instrumentation plan\n" {
+		t.Fatalf("planning artifact mutated unexpectedly: %q", string(body))
+	}
+}
+
 func TestFileEditDirectoryReturnsPayloadError(t *testing.T) {
 	root := t.TempDir()
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})

@@ -38,6 +38,7 @@ import (
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
 var parentChildOrdinalTitlePattern = regexp.MustCompile(`^([a-z]+)\s+(\d+)\s*:`)
 var malformedParameterEchoPattern = regexp.MustCompile(`(?is)<parameter\s+name\s*=\s*"[^"]+"\s*>`)
+var explicitDeliverablePathPattern = regexp.MustCompile(`(?i)\bdeliverable:\s*([^\s,;]+)`)
 
 var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
 
@@ -95,6 +96,67 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func normalizeWorkspacePath(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(trimmed)))
+}
+
+func parseExplicitDeliverablePath(taskRecord repo.ProjectTask) string {
+	if taskRecord.Description == nil {
+		return ""
+	}
+	matches := explicitDeliverablePathPattern.FindStringSubmatch(strings.TrimSpace(*taskRecord.Description))
+	if len(matches) < 2 {
+		return ""
+	}
+	return normalizeWorkspacePath(matches[1])
+}
+
+func sameOrNestedWorkspacePath(path, root string) bool {
+	normalizedPath := normalizeWorkspacePath(path)
+	normalizedRoot := normalizeWorkspacePath(root)
+	if normalizedPath == "" || normalizedRoot == "" {
+		return false
+	}
+	return normalizedPath == normalizedRoot || strings.HasPrefix(normalizedPath, normalizedRoot+"/")
+}
+
+func (e *NativeToolExecutor) rejectExecutionFirstPlanningMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
+	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return nil, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
+		return nil, false, nil
+	}
+	deliverablePath := parseExplicitDeliverablePath(taskRecord)
+	if deliverablePath == "" || strings.HasPrefix(strings.ToLower(deliverablePath), "planning/") {
+		return nil, false, nil
+	}
+	normalizedPath := normalizeWorkspacePath(relativePath)
+	if normalizedPath == "" || !strings.HasPrefix(strings.ToLower(normalizedPath), "planning/") {
+		return nil, false, nil
+	}
+	if sameOrNestedWorkspacePath(normalizedPath, deliverablePath) {
+		return nil, false, nil
+	}
+	return map[string]any{
+		"error":            "deliverable_path_required",
+		"deliverable_path": deliverablePath,
+		"message":          fmt.Sprintf("This execution-first task already has an explicit deliverable path `%s`. Do not write planning artifacts like `%s` during task execution. Continue the concrete deliverable instead.", deliverablePath, normalizedPath),
+	}, true, nil
 }
 
 func normalizeSlug(value string) string {
@@ -608,6 +670,12 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 			"message": "file.write requires a non-empty path. Provide a workspace-relative file path in `path`.",
 		}, nil
 	}
+	renderedPath := renderPath(wd.Root(), resolved)
+	if blocked, reject, rejectErr := e.rejectExecutionFirstPlanningMutation(ctx, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if reject {
+		return blocked, nil
+	}
 	if !hasNonNilKey(normalizedInput, "content") {
 		return map[string]any{
 			"error":   "content_required",
@@ -655,7 +723,7 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 			TargetType:     &targetType,
 			TargetID:       &targetID,
 			Metadata: map[string]any{
-				"path":      renderPath(wd.Root(), resolved),
+				"path":      renderedPath,
 				"byte_size": len(payload),
 				"created":   created,
 			},
@@ -663,14 +731,14 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 	}
 
 	return map[string]any{
-		"path":      renderPath(wd.Root(), resolved),
+		"path":      renderedPath,
 		"byte_size": len(payload),
 		"created":   created,
 	}, nil
 }
 
 func (e *NativeToolExecutor) handleFileEdit(ctx context.Context, input map[string]any) (map[string]any, error) {
-	wd, _, resolved, err := e.resolveInputPath(ctx, input, "path")
+	wd, scope, resolved, err := e.resolveInputPath(ctx, input, "path")
 	if err != nil {
 		if errors.Is(err, ErrPathTraversal) {
 			return map[string]any{"error": "path_traversal"}, nil
@@ -683,6 +751,12 @@ func (e *NativeToolExecutor) handleFileEdit(ctx context.Context, input map[strin
 			"error":   "path_required",
 			"message": "file.edit requires a non-empty path. Provide a workspace-relative file path in `path`.",
 		}, nil
+	}
+	renderedPath := renderPath(wd.Root(), resolved)
+	if blocked, reject, rejectErr := e.rejectExecutionFirstPlanningMutation(ctx, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if reject {
+		return blocked, nil
 	}
 	oldString, okOld := readString(input, "old_string")
 	newString, _ := readString(input, "new_string")
@@ -724,7 +798,7 @@ func (e *NativeToolExecutor) handleFileEdit(ctx context.Context, input map[strin
 		return nil, err
 	}
 	return map[string]any{
-		"path":              renderPath(wd.Root(), resolved),
+		"path":              renderedPath,
 		"replacements_made": replacements,
 	}, nil
 }
@@ -4659,7 +4733,7 @@ func (e *NativeToolExecutor) handleMessageSend(ctx context.Context, input map[st
 		if currentSession, sessionErr := e.chatSessions.GetByID(ctx, sessionID); sessionErr == nil &&
 			strings.EqualFold(strings.TrimSpace(currentSession.ScopeType), "project") {
 			return map[string]any{
-				"error": "same_session_project_handoff_disallowed",
+				"error":   "same_session_project_handoff_disallowed",
 				"message": "Do not use message.send to inject a user handoff back into the current project session. Treat the existing project session as the handoff channel and continue the bootstrap or execution workflow directly in this turn instead.",
 			}, nil
 		}
