@@ -10307,6 +10307,11 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	}
 	if containsAny(lower,
 		"what is the current state you need me to continue from",
+		"what is the target deliverable for",
+		"once you confirm the correct target file path",
+		"once you confirm the correct target file path and scope",
+		"should i create `deliverables/",
+		"or is oc-",
 		"do you want me to complete the deployment checklist",
 		"or do you need me to start fresh on the full infrastructure specification",
 		"should confirm whether that's the priority",
@@ -10322,8 +10327,57 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"let me first check the current state of the target file and recovery artifacts",
 		"using the durable draft above",
 		"using the substantive draft provided above",
+		"what i need to proceed:",
+		"should i inspect the planning artifacts",
+		"should i start drafting",
+		"who should review the completed",
 	) {
 		return fmt.Sprintf("assistant draft for %s asked the operator to choose the next step instead of the file body", path)
+	}
+	if containsAny(lower,
+		"i'm lina farooqi",
+		"ready to execute **oc-",
+		"ready to execute task oc-",
+		"current status:",
+	) && containsAny(lower,
+		"what i need to proceed:",
+		"should i inspect the planning artifacts",
+		"should i start drafting",
+	) {
+		return fmt.Sprintf("assistant draft for %s asked the operator to choose the next step instead of the file body", path)
+	}
+	if containsAny(lower,
+		"now i understand the context:",
+		"i'm in the **execute & build** phase",
+		"planning artifacts are complete and approved",
+		"this file should contain the system prompt",
+	) && containsAny(lower,
+		"let me now create",
+		"i need to create the actual deliverable",
+		"acceptance criteria",
+		"deliverable:",
+	) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
+	}
+	if containsAny(lower,
+		"now i understand the situation",
+		"the task oc-",
+		"the deliverable file currently at",
+		"is incomplete (",
+	) && containsAny(lower,
+		"let me check what the planned deliverables are",
+		"complete the actual workflow specification document",
+		"reference files",
+	) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
+	}
+	if containsAny(lower,
+		"let me assess the quality against the task's acceptance criteria",
+		"let me prepare a detailed review now",
+		"## review assessment:",
+		"i am now conducting a **quality review**",
+	) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
 	if (containsAny(lower,
 		"i'll build:",
@@ -10341,6 +10395,11 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if containsAny(lower,
 		"i understand the problem",
 		"i can see the problem",
+		"i'm encountering a tool parameter validation issue",
+		"i am encountering a tool parameter validation issue",
+		"the function signature isn't accepting my input",
+		"the function signature is not accepting my input",
+		"i need to provide the content parameter for",
 		"let me ",
 		"i need to ",
 		"my `file_write`",

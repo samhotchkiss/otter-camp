@@ -27,8 +27,7 @@ Current observed task state on the active fresh Speaker Pipeline canary:
 - parent task `9` remains `draft`
 - task `10` is `done`
 - task `11` is currently `blocked`
-- tasks `13` and `15` are currently `in_progress`
-- task `12` is currently `done`
+- tasks `12`, `13`, `14`, and `15` are currently `done`
 - there are no queued tasks on the project
 
 The active fresh canary has already validated these product expectations under the latest build:
@@ -44,6 +43,8 @@ The active fresh canary has already validated these product expectations under t
 Most recent shipped commits relevant to the current validation run:
 
 - pending local slice: flow advance into review now backfills missing required `planning.artifact_evidence` entries when partial evidence already exists, so enforced discovery/research tasks do not block with false missing-artifact errors
+- pending local slice: recovery draft rejection now catches the live OC-11 role-introduction/proceed questionnaire, the OC-11 “now I understand the situation / let me check the planned deliverables” placeholder, and the OC-13 review-assessment placeholder so those narrated drafts stop surviving as durable recovery inputs
+- pending local slice: `taskplan` section normalization now treats heading aliases like `Primary Scenarios` and `Verification Methods` as satisfying required `scenarios` / `verification`, so valid execution-spec acceptance criteria do not fail contract checks on heading phrasing alone
 - pending local slice: `memory_extract_turn` is now classified with reserved low-priority background work so it cannot consume the final worker slot ahead of active `agent_turn` execution
 - pending local slice: recovery draft rejection now treats the exact live task-13 “Good. Now I have a clear understanding...” deliverable preface as non-substantive, so that 413-byte placeholder stops being reused from `[Recovery resume state]`
 - pending local slice: task-scoped `file.write` now rejects narrated placeholder content such as “Let me create the deliverable...” instead of persisting junk markdown into deliverable files
@@ -116,6 +117,8 @@ What those changed:
 - worker execution-slot reservation is being widened beyond rollups: live `fresh-5` showed repeated `memory_extract_turn` claims consuming the last slot while active task lanes were waiting, and the local integration reproducer now covers that starvation case explicitly
 - recovery draft rejection is being widened to drop the exact task-13 “clear understanding of the requirements” preface so the stale placeholder no longer survives as a durable draft candidate
 - flow advance into review is being hardened to synthesize missing required `planning.artifact_evidence` entries even when a task already has unrelated evidence entries; the live task-15 repro had all four enforced discovery artifacts persisted with IDs and SHAs, but review advance still blocked because only a single extra `validation-report` evidence entry existed
+- recovery draft rejection is being widened again for fresh-5 task `11`: the live lane is now poisoning itself with narrated “Now I understand the situation... let me check the planned deliverables...” placeholders and then retrying empty `cli.execute`, so those exact bodies are now covered by focused turn-engine tests
+- taskplan section normalization is being widened so live acceptance-criteria evidence with headings like `Primary Scenarios` no longer fails contract validation that requires `scenarios`
 
 Current live cleanup result:
 
@@ -127,15 +130,19 @@ Current live cleanup result:
 
 - bootstrap is complete and the governance gate is `done`
 - the first real execution wave is running under task sessions, not the project session
-- there are currently no blocked tasks on the project
+- task `11` is the only blocked execution lane
 - the next bug to watch is task-lane completion/review quality, not PM/bootstrap queue ownership
 - latest fixed repro: task `11` previously recovered onto `deliverables/oc-11-task-summary.md` even though the task-local workflow-spec path already existed in session history; the latest local slice now prefers `deliverables/oc-11-validation-workflow-spec.md`
 - latest fixed repro: task `12` previously recovered onto `planning/prd-spec/oc-12-acceptance-criteria.md` even though the task-local validation-report path already existed in session history; the latest local slice now prefers `planning/prd-spec/oc-12-validation-report.md`
 - live validation after redeploy confirmed both retargets:
-  - task `11` resumed from `blocked` and is back `in_progress` on the workflow-spec path
-  - task `12` completed its work lane and advanced into `review`
-- current next bug to watch: review-lane usability and completion quality. The reviewer path still tends to inspect execution/repo state (`flow.get_execution`, `git.status`) instead of going straight to `flow.review_decision`.
-- current next bug to watch: task `11` is blocked on recovery quality, not queue ownership or planning-contract state. Its persisted target draft for `deliverables/oc-11-validation-workflow-spec.md` is still a clarification placeholder ("I'm ready to execute task OC-11 ... What is the target deliverable ..."), and recovery keeps reusing that poisoned file draft on `file.write` fallback.
+  - task `11` resumed from `blocked` and moved onto task-local workflow-spec targets instead of generic summaries
+  - task `12` completed its work lane and is now `done`
+  - task `13` is now `done`, which confirmed the newer placeholder-draft rejection slices are working on a real execution lane
+- current next bug to watch: task `11` is blocked on recovery quality, not queue ownership. Its current checkpoint is `deliverables/oc-11-workflow-specification.md`, and the live failure pattern is:
+  - narrated placeholder draft (`Now I understand the situation... let me check the planned deliverables...`)
+  - repeated empty or malformed `cli.execute`
+  - hardened recovery checkpoint after bounded correction
+- there is also a stale `turn-engine.turn-completed` replay for old turn `38a49ec0-0194-45c8-bc61-07b9328ae037` that still logs `Acceptance criteria missing sections: scenarios`; once a newer successful task-11 completion supersedes that turn, the replay should stop. If it does not, the next bug is in the completed-turn replay path rather than the planning contract itself.
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 

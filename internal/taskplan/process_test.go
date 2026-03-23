@@ -127,6 +127,49 @@ func TestCompletionReportRejectsSpecWithoutNonGoalsMetricsAndPhasing(t *testing.
 	}
 }
 
+func TestCompletionReportAcceptsPrimaryScenariosAlias(t *testing.T) {
+	description := "Write the PRD, requirements, implementation plan, and acceptance criteria for the billing migration."
+	plan := Analyze("PRD for billing migration", &description)
+	metadata := ApplyMetadata(json.RawMessage(`{}`), plan)
+
+	metadata, _, _, err := ApplyProcessUpdate(metadata, ProcessUpdate{
+		Artifacts: []ArtifactEvidence{
+			{
+				Slug:     "prd",
+				Summary:  "Billing migration scope and requirements.",
+				Sections: []string{"goals", "non-goals", "scope", "constraints", "success metrics", "open questions"},
+			},
+			{
+				Slug:     "implementation-plan",
+				Summary:  "Delivery sequencing and ownership.",
+				Sections: []string{"milestones", "phasing", "owners", "rollout"},
+			},
+			{
+				Slug:     "acceptance-criteria",
+				Summary:  "Acceptance scenarios and verification checks.",
+				Sections: []string{"primary scenarios", "edge cases", "verification"},
+			},
+			{
+				Slug:     "dependency-log",
+				Summary:  "Dependencies and mitigations.",
+				Sections: []string{"dependencies", "risks", "mitigations"},
+			},
+		},
+		HasArtifactChanges: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+
+	report, err := CompletionReport(metadata)
+	if err != nil {
+		t.Fatalf("CompletionReport: %v", err)
+	}
+	if report.ProcessStatus != ProcessStatusFollowed {
+		t.Fatalf("ProcessStatus = %q, want %q", report.ProcessStatus, ProcessStatusFollowed)
+	}
+}
+
 func TestCompletionReportRejectsMetricsWithoutInputHealthAndCadence(t *testing.T) {
 	description := "Define the north-star metric, input metrics, health metrics, dashboard spec, and weekly review cadence for activation."
 	plan := Analyze("Metric tree and instrumentation plan", &description)

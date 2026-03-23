@@ -8016,6 +8016,25 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects structured execute context placeholder",
+			content: "Excellent. Now I understand the context:\n" +
+				"- I'm in the **Execute & Build** phase (active)\n" +
+				"- Planning artifacts are complete and approved\n" +
+				"- I need to create the actual deliverable: **deliverables/oc-13-speaker-validation-agent.md**\n" +
+				"- This file should contain the system prompt, validation logic, report schema, test cases, and integration guidance\n\n" +
+				"Let me now create a comprehensive Speaker Validation Agent deliverable that meets all acceptance criteria:",
+			targetPath: "deliverables/oc-13-speaker-validation-agent.md",
+			want:       "intent to write the deliverable",
+		},
+		{
+			name: "rejects review assessment placeholder",
+			content: "Perfect. Now I have a comprehensive understanding of the deliverables. Let me assess the quality against the task's acceptance criteria. Let me prepare a detailed review now.\n\n" +
+				"## Review Assessment: OC-13 Build Speaker Validation Agent\n\n" +
+				"I am now conducting a **Quality Review** of the deliverable set against the task requirements.",
+			targetPath: "deliverables/oc-13-speaker-validation-agent.md",
+			want:       "intent to write the deliverable",
+		},
+		{
 			name: "rejects structured locked decisions placeholder",
 			content: "Perfect. I have all four strategy artifacts. The decisions are **locked and clear**:\n\n" +
 				"- **Hosting:** Vercel Pro\n" +
@@ -8051,6 +8070,40 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 				"- Or do you need me to start fresh on the full infrastructure specification?\n\n" +
 				"The recovery context shows the deployment checklist draft exists, but I should confirm whether that's the priority.",
 			want: "asked the operator to choose the next step instead of the file body",
+		},
+		{
+			name: "rejects target deliverable clarification placeholder",
+			content: "I'm ready to execute task OC-11 (Document as workflow specification). Based on the recovery checkpoint, I need to:\n\n" +
+				"1. **Create the main workflow specification** in `deliverables/oc-15-validation-workflow.md`\n" +
+				"2. **Copy/reference the schema** from planning to deliverables\n\n" +
+				"However, I notice the recovery context references **OC-15** (validation workflow) but the active task is **OC-11** (document as workflow specification). Let me clarify:\n\n" +
+				"**What is the target deliverable for OC-11?**\n" +
+				"- Should I create `deliverables/oc-11-workflow-specification.md`?\n" +
+				"- Or is OC-11 supposed to document OC-15's workflow?\n\n" +
+				"Once you confirm the correct target file path and scope, I'll immediately execute the workflow specification documentation with all required sections from the implementation plan.",
+			targetPath: "deliverables/oc-11-validation-workflow-spec.md",
+			want:       "asked the operator to choose the next step instead of the file body",
+		},
+		{
+			name: "rejects role introduction proceed questionnaire placeholder",
+			content: "I'm Lina Farooqi, AI Workflow Designer, ready to execute **OC-11: Document as workflow specification** for Speaker Pipeline Ops Validation Fresh 5.\n\n" +
+				"**Current Status:**\n" +
+				"- Task in `in_progress` at Work flow node\n" +
+				"- Active execution ID: 90b4601c-7605-4874-8470-2dbd0f89a168\n" +
+				"- Pending: Internal Review -> Merge\n\n" +
+				"**What I need to proceed:**\n" +
+				"1. Should I inspect the planning artifacts (PRD, acceptance criteria, implementation plan, dependency log) to understand the specification scope?\n" +
+				"2. Should I start drafting the workflow specification document, or do you have specific requirements/constraints?\n" +
+				"3. Who should review the completed specification once drafted?",
+			targetPath: "deliverables/oc-11-validation-workflow-spec.md",
+			want:       "generic recovery reply",
+		},
+		{
+			name: "rejects task situation reread placeholder",
+			content: "Now I understand the situation. The task OC-11 is meant to document the workflow specification. The deliverable file currently at `deliverables/oc-11-validation-workflow-spec.md` is incomplete (788 bytes, just a question).\n\n" +
+				"Let me check what the planned deliverables are according to the reference files and then complete the actual workflow specification document:",
+			targetPath: "deliverables/oc-11-workflow-specification.md",
+			want:       "intent to write the deliverable",
 		},
 		{
 			name:    "rejects recovery context reread placeholder",
@@ -8132,6 +8185,18 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			content: "`file_write` without `content` parameter is causing a placeholder to be written. I must provide the full Python script as the content parameter.\n\n" +
 				"The concrete blocker: `file_write` requires a non-empty `content` parameter; I cannot proceed without drafting the complete generate_reports.py body and passing it in the `content` field.",
 			targetPath: "src/generate_reports.py",
+			want:       "tool-recovery troubleshooting",
+		},
+		{
+			name: "rejects file write function signature troubleshooting",
+			content: "I'm encountering a tool parameter validation issue with file_write-it requires the `content` parameter but the function signature isn't accepting my input correctly. Let me use file_edit instead to replace the placeholder with the full specification:",
+			targetPath: "deliverables/oc-11-validation-workflow-spec.md",
+			want:       "tool-recovery troubleshooting",
+		},
+		{
+			name: "rejects file write content parameter narration",
+			content: "I need to provide the content parameter for file_write. Here is the complete workflow specification:",
+			targetPath: "deliverables/oc-11-validation-workflow-spec.md",
 			want:       "tool-recovery troubleshooting",
 		},
 		{

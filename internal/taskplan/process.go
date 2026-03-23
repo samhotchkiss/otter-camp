@@ -735,6 +735,12 @@ func normalizeContractKey(value string) string {
 	trimmed = strings.ReplaceAll(trimmed, "_", " ")
 	trimmed = strings.ReplaceAll(trimmed, "-", " ")
 	trimmed = strings.Join(strings.Fields(trimmed), " ")
+	switch trimmed {
+	case "primary scenarios":
+		return "scenarios"
+	case "verification methods":
+		return "verification"
+	}
 	return trimmed
 }
 
