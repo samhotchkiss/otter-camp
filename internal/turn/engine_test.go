@@ -7489,6 +7489,7 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 	cases := []struct {
 		name    string
 		content string
+		targetPath string
 		want    string
 	}{
 		{
@@ -7725,11 +7726,33 @@ Sam.blog should publish one durable operating system for thoughtful parents buil
 `,
 			want: "",
 		},
+		{
+			name: "rejects mismatched deliverable heading",
+			content: `# Core Page Structure Specification
+
+## Overview
+This specification defines the global page shell for the site.`,
+			targetPath: "design/06-search-discovery-wireframes.md",
+			want:       "different deliverable",
+		},
+		{
+			name: "accepts matching deliverable heading",
+			content: `# Search and Discovery Wireframes
+
+## Overview
+This document defines archive, results, and related-post wireframes.`,
+			targetPath: "design/06-search-discovery-wireframes.md",
+			want:       "",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := recoveryFileWriteDraftRejectReason(tc.content, targetPath)
+			caseTargetPath := targetPath
+			if strings.TrimSpace(tc.targetPath) != "" {
+				caseTargetPath = tc.targetPath
+			}
+			got := recoveryFileWriteDraftRejectReason(tc.content, caseTargetPath)
 			if tc.want == "" {
 				if got != "" {
 					t.Fatalf("recoveryFileWriteDraftRejectReason() = %q, want empty", got)
@@ -7739,7 +7762,7 @@ Sam.blog should publish one durable operating system for thoughtful parents buil
 			if !strings.Contains(got, tc.want) {
 				t.Fatalf("recoveryFileWriteDraftRejectReason() = %q, want contains %q", got, tc.want)
 			}
-			if !strings.Contains(got, targetPath) {
+			if !strings.Contains(got, caseTargetPath) {
 				t.Fatalf("recoveryFileWriteDraftRejectReason() = %q, want target path", got)
 			}
 		})

@@ -9873,7 +9873,68 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeStructuredRecoveryIntentPlaceholder(trimmed) {
 		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
+	if heading := leadingMarkdownHeading(trimmed); heading != "" && headingClearlyMismatchesTargetPath(heading, targetPath) {
+		return fmt.Sprintf("assistant draft for %s appears to belong to a different deliverable than the target file body", path)
+	}
 	return ""
+}
+
+func leadingMarkdownHeading(content string) string {
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			return strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+		}
+		break
+	}
+	return ""
+}
+
+func headingClearlyMismatchesTargetPath(heading, targetPath string) bool {
+	targetTokens := deliverableMatchTokens(filepath.Base(strings.TrimSpace(targetPath)))
+	headingTokens := deliverableMatchTokens(heading)
+	if len(targetTokens) < 2 || len(headingTokens) < 2 {
+		return false
+	}
+	for token := range headingTokens {
+		if _, ok := targetTokens[token]; ok {
+			return false
+		}
+	}
+	return true
+}
+
+func deliverableMatchTokens(raw string) map[string]struct{} {
+	cleaned := strings.ToLower(strings.TrimSpace(raw))
+	cleaned = strings.TrimSuffix(cleaned, filepath.Ext(cleaned))
+	replacer := strings.NewReplacer("-", " ", "_", " ", "/", " ", ".", " ", ":", " ")
+	cleaned = replacer.Replace(cleaned)
+	fields := strings.Fields(cleaned)
+	tokens := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		if strings.HasPrefix(field, "oc") && len(field) > 2 {
+			if _, err := strconv.Atoi(strings.TrimLeft(field[2:], "0")); err == nil {
+				continue
+			}
+		}
+		switch field {
+		case "md", "spec", "specification", "document", "draft", "deliverable", "complete", "final", "the", "and":
+			continue
+		}
+		if len(field) < 3 {
+			continue
+		}
+		tokens[field] = struct{}{}
+	}
+	return tokens
 }
 
 func hasStructuredRecoveryFileDraftMarkers(trimmed string) bool {
