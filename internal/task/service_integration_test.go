@@ -464,6 +464,61 @@ func TestTaskServiceIntegrationIgnoresLegacyInvalidDraftGateWhenQueueing(t *test
 	}
 }
 
+func TestTaskServiceIntegrationNormalizesParentOrchestrationOutOfGlobalGate(t *testing.T) {
+	for _, title := range []string{
+		"Speaker Pipeline Ops Validation - Parent Orchestration",
+		"Speaker Pipeline Ops Validation - Master Orchestration",
+		"Speaker Pipeline Ops Validation - Parent Workstream",
+	} {
+		t.Run(title, func(t *testing.T) {
+			ctx := context.Background()
+			pool := testdb.New(t)
+			org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+			svc := newTaskIntegrationService(t, pool)
+			template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+			if strings.Contains(title, "Parent Workstream") {
+				if _, err := pool.Exec(ctx, `
+					UPDATE flow_template
+					SET slug = 'orchestration-flow', display_name = 'Orchestration Flow'
+					WHERE id = $1
+				`, template.ID); err != nil {
+					t.Fatalf("update flow template orchestration signal: %v", err)
+				}
+			}
+
+			metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), taskplan.Plan{
+				Mode:            taskplan.ModeExecutionFirst,
+				Playbook:        "strategy",
+				WorkType:        "strategy",
+				ProcessEnforced: true,
+			})
+			created, err := svc.CreateTask(ctx, CreateTaskRequest{
+				ProjectID:      project.ID,
+				Title:          title,
+				BlocksScope:    "all",
+				FlowTemplateID: &template.ID,
+				CreatedByType:  "system",
+				Metadata:       metadata,
+			})
+			if err != nil {
+				t.Fatalf("CreateTask parent orchestration: %v", err)
+			}
+			if created.BlocksScope != "none" {
+				t.Fatalf("blocks_scope = %q, want none", created.BlocksScope)
+			}
+			if !taskdecomp.QueueDecompositionRequested(created.Metadata) {
+				t.Fatal("expected decomposition mode for orchestration parent")
+			}
+			payload := taskMetadataMap(created.Metadata)
+			decomp, _ := payload["decomposition"].(map[string]any)
+			orchestrationOnly, _ := decomp["orchestration_only"].(bool)
+			if !orchestrationOnly {
+				t.Fatalf("orchestration_only = %v, want true", decomp["orchestration_only"])
+			}
+		})
+	}
+}
+
 func TestTaskServiceIntegrationHumanApprovalGate(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -1308,6 +1363,9 @@ func TestTaskServiceIntegrationQueueKeepsParentDraftAndQueuesChildWorkUnits(t *t
 	}
 	if queued.WorkStatus != "draft" {
 		t.Fatalf("queued work_status = %q, want draft parent orchestration-only state", queued.WorkStatus)
+	}
+	if queued.BlocksScope != "none" {
+		t.Fatalf("queued blocks_scope = %q, want none for orchestration-only parent", queued.BlocksScope)
 	}
 	if queued.Description == nil || !strings.Contains(*queued.Description, "Migrate all legacy markdown posts") {
 		t.Fatalf("queued description = %v, want focused primary deliverable", queued.Description)

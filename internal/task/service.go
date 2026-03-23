@@ -513,6 +513,12 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 		return nil, ErrInvalidBlocksScope
 	}
 	normalizedMetadata := normalizeJSON(req.Metadata)
+	if s.shouldNormalizeOrchestrationParentTask(ctx, req.Title, normalizedMetadata, req.FlowTemplateID) {
+		normalizedMetadata = taskdecomp.ApplyOrchestrationOnlyMetadata(normalizedMetadata)
+		if blocksScope == "all" {
+			blocksScope = "none"
+		}
+	}
 	if err := s.ensureCreateEligible(ctx, req.ProjectID, normalizedMetadata); err != nil {
 		return nil, err
 	}
@@ -998,6 +1004,7 @@ func (s *service) applyQueueDecomposition(ctx context.Context, taskRecord *repo.
 
 	taskRecord.Description = pointerString(prepared.Plan.PrimaryDeliverable)
 	taskRecord.Metadata = taskdecomp.ApplyMetadata(taskRecord.Metadata, prepared.Plan, prepared.SourceDescription, childTaskIDs)
+	taskRecord.BlocksScope = "none"
 
 	return queueDecompositionResult{
 		applied:      true,
@@ -2498,6 +2505,31 @@ func normalizeBlocksScope(value string) string {
 	default:
 		return ""
 	}
+}
+
+func (s *service) shouldNormalizeOrchestrationParentTask(ctx context.Context, title string, metadata json.RawMessage, flowTemplateID *uuid.UUID) bool {
+	normalizedTitle := strings.ToLower(strings.TrimSpace(title))
+	if strings.Contains(normalizedTitle, "parent orchestration") ||
+		strings.Contains(normalizedTitle, "master orchestration") ||
+		strings.Contains(normalizedTitle, "parent workstream") {
+		return true
+	}
+	if flowTemplateID != nil && *flowTemplateID != uuid.Nil && s.flowTemplates != nil {
+		template, err := s.flowTemplates.GetByID(ctx, *flowTemplateID)
+		if err == nil {
+			slug := strings.ToLower(strings.TrimSpace(template.Slug))
+			displayName := strings.ToLower(strings.TrimSpace(template.DisplayName))
+			if strings.Contains(slug, "orchestration") || strings.Contains(displayName, "orchestration") {
+				return true
+			}
+		}
+	}
+	plan, ok := taskplan.Parse(metadata)
+	if !ok {
+		return false
+	}
+	stopReason := strings.ToLower(strings.TrimSpace(plan.FollowOnStopReason))
+	return strings.Contains(stopReason, "parent task is orchestration-only")
 }
 
 func extractReason(payload json.RawMessage) string {

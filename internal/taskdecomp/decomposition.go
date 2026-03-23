@@ -633,6 +633,33 @@ func ApplyQueueDecompositionMode(existing json.RawMessage, mode string) json.Raw
 	return normalizeJSON(encoded)
 }
 
+func ApplyOrchestrationOnlyMetadata(existing json.RawMessage) json.RawMessage {
+	payload := metadataObject(existing)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+
+	decomp, _ := payload[metadataKeyDecomposition].(map[string]any)
+	if decomp == nil {
+		decomp = map[string]any{}
+	}
+
+	decomp["applied"] = true
+	decomp["orchestration_only"] = true
+	if normalized := normalizeQueueDecompositionMode(fmt.Sprintf("%v", decomp["mode"])); normalized != "" {
+		decomp["mode"] = normalized
+	} else {
+		decomp["mode"] = QueueDecompositionModeParallelChildren
+	}
+	payload[metadataKeyDecomposition] = decomp
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return normalizeJSON(existing)
+	}
+	return normalizeJSON(encoded)
+}
+
 func extractDeliverables(description string) []string {
 	description = strings.ReplaceAll(description, "\\n", "\n")
 	candidates := make([]string, 0)

@@ -1937,6 +1937,7 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 		parentTask.Metadata = taskdecomp.AppendChildTaskID(parentTask.Metadata, childTaskID)
 	}
 	parentTask.Metadata = taskdecomp.ApplyMetadata(parentTask.Metadata, prepared.Plan, prepared.SourceDescription, childTaskIDs)
+	parentTask.BlocksScope = "none"
 	if _, err := updateTaskMetadataOnly(ctx, e.tasks, parentTask); err != nil {
 		return nil, err
 	}
@@ -3602,6 +3603,7 @@ func (e *NativeToolExecutor) applyQueueDecomposition(ctx context.Context, taskRe
 		taskRecord.Description = &primary
 	}
 	taskRecord.Metadata = taskdecomp.ApplyMetadata(taskRecord.Metadata, prepared.Plan, prepared.SourceDescription, childTaskIDs)
+	taskRecord.BlocksScope = "none"
 
 	return queueDecompositionResult{
 		applied:      true,
