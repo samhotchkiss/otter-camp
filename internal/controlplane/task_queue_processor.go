@@ -61,6 +61,8 @@ type taskQueueFlowStarter interface {
 type taskQueueFlowExecutionRepository interface {
 	GetActive(ctx context.Context, taskID, flowNodeID uuid.UUID) (repo.FlowNodeExecution, error)
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
+	ListByTask(ctx context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error)
+	Abandon(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
 }
 
 type taskQueueFlowNodeRepository interface {
@@ -1090,6 +1092,17 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 		}
 	}
 	if toStatus == "blocked" {
+		if err := p.abandonActiveFlowExecutionsForTask(ctx, payload.TaskID); err != nil {
+			return err
+		}
+		if err := p.runs.RetireRuntimeStateForTask(ctx, payload.TaskID, toStatus); err != nil {
+			return err
+		}
+		if payload.ProjectID != uuid.Nil {
+			if err := p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if toStatus == "done" {
@@ -1105,6 +1118,28 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 	}
 	if payload.ProjectID != uuid.Nil {
 		if err := p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *TaskQueueProcessor) abandonActiveFlowExecutionsForTask(ctx context.Context, taskID uuid.UUID) error {
+	if p.flowExecutions == nil || taskID == uuid.Nil {
+		return nil
+	}
+	executions, err := p.flowExecutions.ListByTask(ctx, taskID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, execution := range executions {
+		if !strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
+			continue
+		}
+		if _, err := p.flowExecutions.Abandon(ctx, execution.ID); err != nil && !errors.Is(err, repo.ErrNotFound) {
 			return err
 		}
 	}

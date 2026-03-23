@@ -1929,6 +1929,15 @@ func TestSupervisor_ResumableBlockedTaskGetsAutoResumed(t *testing.T) {
 	if _, err := taskRepo.Update(ctx, blockedTask); err != nil {
 		t.Fatalf("update guarded task: %v", err)
 	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  *template.StartNodeID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create stale active execution: %v", err)
+	}
 	if _, err := pool.Exec(ctx, `UPDATE project_task SET updated_at = $2 WHERE id = $1`, taskRecord.ID, time.Now().UTC().Add(-2*time.Minute)); err != nil {
 		t.Fatalf("backdate blocked task: %v", err)
 	}
@@ -1966,6 +1975,13 @@ func TestSupervisor_ResumableBlockedTaskGetsAutoResumed(t *testing.T) {
 	}
 	if _, ok := tasksvc.ParseValidationGuard(updatedTask.Metadata); ok {
 		t.Fatalf("expected validation guard to be cleared, metadata=%s", string(updatedTask.Metadata))
+	}
+	updatedExecution, err := repo.NewFlowNodeExecutionRepo(pool).GetByID(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("GetByID execution: %v", err)
+	}
+	if updatedExecution.Status != "abandoned" {
+		t.Fatalf("execution status = %q, want abandoned", updatedExecution.Status)
 	}
 
 	var eventType string

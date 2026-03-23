@@ -294,7 +294,7 @@ func (s *Supervisor) detectResumableBlockedTasks(ctx context.Context) error {
 
 	cutoff := s.clock.Now().UTC().Add(-resumableBlockedTaskGraceLimit)
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.id
+		SELECT t.id, COALESCE(e.id, '00000000-0000-0000-0000-000000000000'::uuid) AS execution_id
 		FROM project_task t
 		JOIN project p
 		  ON p.id = t.project_id
@@ -302,9 +302,14 @@ func (s *Supervisor) detectResumableBlockedTasks(ctx context.Context) error {
 		  ON rs.scope_type = 'task'
 		 AND rs.scope_id = t.id
 		 AND rs.active_run_id IS NOT NULL
-		LEFT JOIN flow_node_execution e
-		  ON e.task_id = t.id
-		 AND e.status = 'active'
+		LEFT JOIN LATERAL (
+			SELECT fe.id
+			FROM flow_node_execution fe
+			WHERE fe.task_id = t.id
+			  AND fe.status = 'active'
+			ORDER BY fe.started_at ASC, fe.id ASC
+			LIMIT 1
+		) e ON true
 		LEFT JOIN chat_session s
 		  ON s.scope_type = 'project_task'
 		 AND s.scope_id = t.id
@@ -315,7 +320,6 @@ func (s *Supervisor) detectResumableBlockedTasks(ctx context.Context) error {
 		  AND t.work_status = 'blocked'
 		  AND t.updated_at < $1
 		  AND rs.id IS NULL
-		  AND e.id IS NULL
 		  AND s.id IS NULL
 		ORDER BY t.updated_at ASC, t.id ASC
 	`, cutoff)
@@ -326,9 +330,14 @@ func (s *Supervisor) detectResumableBlockedTasks(ctx context.Context) error {
 
 	actor := tasksvc.Actor{Type: "supervisor", AllowFlowRuntimeBypass: true}
 	for rows.Next() {
-		var taskID uuid.UUID
-		if scanErr := rows.Scan(&taskID); scanErr != nil {
+		var taskID, executionID uuid.UUID
+		if scanErr := rows.Scan(&taskID, &executionID); scanErr != nil {
 			return scanErr
+		}
+		if executionID != uuid.Nil {
+			if err := s.abandonActiveExecution(ctx, executionID); err != nil {
+				return err
+			}
 		}
 		if _, resumeErr := s.taskService.ResumeValidationBlockedTask(ctx, taskID, actor); resumeErr != nil {
 			var stateErr tasksvc.TaskResumeBlockedStateError

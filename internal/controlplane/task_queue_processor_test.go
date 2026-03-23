@@ -877,7 +877,16 @@ func TestTaskQueueProcessorHandleTaskCompletedEventConfirmsCancellingSchedulerRu
 			},
 		},
 	}
-	processor := &TaskQueueProcessor{runs: runService}
+	activeExecutionID := uuid.New()
+	flowExecutions := &fakeTaskQueueFlowExecutionRepository{
+		executionsByTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: activeExecutionID, TaskID: taskID, FlowNodeID: uuid.New(), Status: "active"},
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: uuid.New(), Status: "completed"},
+			},
+		},
+	}
+	processor := &TaskQueueProcessor{runs: runService, flowExecutions: flowExecutions}
 
 	payload, err := json.Marshal(map[string]any{
 		"task_id":   taskID,
@@ -920,7 +929,16 @@ func TestTaskQueueProcessorHandleTaskCompletedEventCompletesSupervisorAndCancell
 			},
 		},
 	}
-	processor := &TaskQueueProcessor{runs: runService}
+	activeExecutionID := uuid.New()
+	flowExecutions := &fakeTaskQueueFlowExecutionRepository{
+		executionsByTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: activeExecutionID, TaskID: taskID, FlowNodeID: uuid.New(), Status: "active"},
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: uuid.New(), Status: "completed"},
+			},
+		},
+	}
+	processor := &TaskQueueProcessor{runs: runService, flowExecutions: flowExecutions}
 
 	payload, err := json.Marshal(map[string]any{
 		"task_id":   taskID,
@@ -980,7 +998,19 @@ func TestTaskQueueProcessorHandleTaskCompletedEventFailsBlockedTrackingRuns(t *t
 			},
 		},
 	}
-	processor := &TaskQueueProcessor{runs: runService}
+	activeExecutionID := uuid.New()
+	flowExecutions := &fakeTaskQueueFlowExecutionRepository{
+		executionsByTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: activeExecutionID, TaskID: taskID, FlowNodeID: uuid.New(), Status: "active"},
+				{ID: uuid.New(), TaskID: taskID, FlowNodeID: uuid.New(), Status: "completed"},
+			},
+		},
+	}
+	processor := &TaskQueueProcessor{
+		runs:           runService,
+		flowExecutions: flowExecutions,
+	}
 
 	payload, err := json.Marshal(map[string]any{
 		"task_id":        taskID,
@@ -1016,8 +1046,11 @@ func TestTaskQueueProcessorHandleTaskCompletedEventFailsBlockedTrackingRuns(t *t
 	if len(runService.confirmCancelledCalls) != 1 || runService.confirmCancelledCalls[0] != cancellingRunID {
 		t.Fatalf("ConfirmCancelled calls = %+v, want run %s", runService.confirmCancelledCalls, cancellingRunID)
 	}
-	if len(runService.retireRuntimeTaskCalls) != 0 {
-		t.Fatalf("RetireRuntimeStateForTask calls = %+v, want none for blocked task", runService.retireRuntimeTaskCalls)
+	if len(runService.retireRuntimeTaskCalls) != 1 || runService.retireRuntimeTaskCalls[0].taskID != taskID || runService.retireRuntimeTaskCalls[0].reason != "blocked" {
+		t.Fatalf("RetireRuntimeStateForTask calls = %+v, want blocked task retirement", runService.retireRuntimeTaskCalls)
+	}
+	if len(flowExecutions.abandonCalls) != 1 || flowExecutions.abandonCalls[0] != activeExecutionID {
+		t.Fatalf("Abandon calls = %+v, want execution %s", flowExecutions.abandonCalls, activeExecutionID)
 	}
 }
 
@@ -2275,8 +2308,10 @@ func (f *fakeTaskQueueRunStarter) RetireRuntimeStateForProject(_ context.Context
 }
 
 type fakeTaskQueueFlowExecutionRepository struct {
-	execution repo.FlowNodeExecution
-	err       error
+	execution        repo.FlowNodeExecution
+	executionsByTask map[uuid.UUID][]repo.FlowNodeExecution
+	abandonCalls     []uuid.UUID
+	err              error
 }
 
 func (f *fakeTaskQueueFlowExecutionRepository) GetActive(context.Context, uuid.UUID, uuid.UUID) (repo.FlowNodeExecution, error) {
@@ -2291,6 +2326,42 @@ func (f *fakeTaskQueueFlowExecutionRepository) GetByID(context.Context, uuid.UUI
 		return repo.FlowNodeExecution{}, f.err
 	}
 	return f.execution, nil
+}
+
+func (f *fakeTaskQueueFlowExecutionRepository) ListByTask(_ context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.executionsByTask != nil {
+		return append([]repo.FlowNodeExecution(nil), f.executionsByTask[taskID]...), nil
+	}
+	if f.execution.ID == uuid.Nil {
+		return nil, nil
+	}
+	return []repo.FlowNodeExecution{f.execution}, nil
+}
+
+func (f *fakeTaskQueueFlowExecutionRepository) Abandon(_ context.Context, id uuid.UUID) (repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return repo.FlowNodeExecution{}, f.err
+	}
+	f.abandonCalls = append(f.abandonCalls, id)
+	if f.execution.ID == id {
+		f.execution.Status = "abandoned"
+		return f.execution, nil
+	}
+	if f.executionsByTask != nil {
+		for taskID, executions := range f.executionsByTask {
+			for i := range executions {
+				if executions[i].ID == id {
+					executions[i].Status = "abandoned"
+					f.executionsByTask[taskID] = executions
+					return executions[i], nil
+				}
+			}
+		}
+	}
+	return repo.FlowNodeExecution{ID: id, Status: "abandoned"}, nil
 }
 
 type fakeTaskQueueFlowNodeRepository struct {
