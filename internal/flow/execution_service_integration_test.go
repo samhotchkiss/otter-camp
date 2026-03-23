@@ -17,6 +17,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
@@ -185,6 +186,66 @@ func TestFlowExecutionServiceAllowsHumanReviewAfterManualHumanAdvance(t *testing
 	}
 	if updatedTask.WorkStatus != "done" {
 		t.Fatalf("task work_status = %q, want done", updatedTask.WorkStatus)
+	}
+}
+
+func TestFlowExecutionServiceRejectsPlanningReviewWhenArtifactsRemainScaffolds(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, nodes := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Planning scaffold review guard", "in_progress", &template.ID)
+	taskRecord.Metadata = json.RawMessage(`{
+		"planning": {
+			"mode": "execution_first",
+			"playbook": "execution_spec",
+			"work_type": "execution_spec",
+			"project_stage": "delivery",
+			"evidence_maturity": "validated",
+			"risk_level": "low",
+			"process_enforced": true,
+			"artifacts": [
+				{"slug":"prd","title":"PRD / requirements spec","kind":"prd_spec","repo_path":"planning/prd-spec/oc-99-prd.md"},
+				{"slug":"implementation-plan","title":"Implementation plan","kind":"prd_spec","repo_path":"planning/prd-spec/oc-99-implementation-plan.md"},
+				{"slug":"acceptance-criteria","title":"Acceptance criteria","kind":"prd_spec","repo_path":"planning/prd-spec/oc-99-acceptance-criteria.md"},
+				{"slug":"dependency-log","title":"Dependency log","kind":"prd_spec","repo_path":"planning/prd-spec/oc-99-dependency-log.md"}
+			]
+		}
+	}`)
+	if _, err := fixture.taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update task metadata: %v", err)
+	}
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	_, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID})
+	var contractErr taskplan.ContractError
+	if !errors.As(err, &contractErr) {
+		t.Fatalf("AdvanceFlow err = %v, want taskplan.ContractError", err)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[0].ID {
+		t.Fatalf("current_flow_node_id = %v, want work node %s", updatedTask.CurrentFlowNodeID, nodes[0].ID)
+	}
+
+	executions, err := fixture.executionRepo.ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByTask executions: %v", err)
+	}
+	if len(executions) != 1 {
+		t.Fatalf("execution row count = %d, want 1", len(executions))
+	}
+	if executions[0].Status != "active" || executions[0].FlowNodeID != nodes[0].ID {
+		t.Fatalf("execution[0] = %+v, want active work execution", executions[0])
 	}
 }
 

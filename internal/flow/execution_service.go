@@ -648,7 +648,7 @@ func (s *service) advanceNextFlowTx(ctx context.Context, taskRecord repo.Project
 		}
 		taskRecord.WorkStatus = transitionedTask.WorkStatus
 	}
-	if nextNode.RequiresHumanReview {
+	if strings.EqualFold(strings.TrimSpace(nextNode.NodeType), "review") || nextNode.RequiresHumanReview {
 		if err := s.createTaskReviewInboxTx(ctx, tx, taskRecord, nextNode.ID, actor); err != nil {
 			return nil, err
 		}
@@ -713,7 +713,7 @@ func (s *service) advanceNextFlowNonTx(ctx context.Context, taskRecord repo.Proj
 		}
 		taskRecord.WorkStatus = targetStatus
 	}
-	if nextNode.RequiresHumanReview {
+	if strings.EqualFold(strings.TrimSpace(nextNode.NodeType), "review") || nextNode.RequiresHumanReview {
 		if err := s.createTaskReviewInbox(ctx, taskRecord, nextNode.ID, actor); err != nil {
 			return nil, err
 		}
@@ -770,6 +770,9 @@ func (s *service) createTaskReviewInboxTx(ctx context.Context, tx pgx.Tx, taskRe
 					plan = syncedPlan
 					report = taskplan.Evaluate(plan)
 				}
+			}
+			if report.Enforced && report.HasMissingRequirements() {
+				return taskplan.ContractError{Report: report}
 			}
 			artifactSummaries := reviewArtifactSummaries(plan.Artifacts)
 			if plan.RequiresReviewAndRefinement() {
