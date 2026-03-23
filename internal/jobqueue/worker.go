@@ -1566,6 +1566,27 @@ func (w *Worker) sessionHasQueuedOrClaimedAgentTurn(ctx context.Context, session
 		return false, nil
 	}
 
+	executionID, err := w.lookupActiveFlowExecutionForSession(ctx, nil, sessionID)
+	if err != nil {
+		return false, err
+	}
+	if executionID != nil && *executionID != uuid.Nil {
+		var exists bool
+		if err := w.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM job_queue jq
+				WHERE jq.job_type = $1
+				  AND jq.status IN ('pending', 'claimed')
+				  AND (jq.payload->>'session_id')::uuid = $2
+				  AND COALESCE(jq.payload->>'flow_node_execution_id', '') = $3
+			)
+		`, agentTurnJobType, sessionID, executionID.String()).Scan(&exists); err != nil {
+			return false, err
+		}
+		return exists, nil
+	}
+
 	var exists bool
 	if err := w.pool.QueryRow(ctx, `
 		SELECT EXISTS (

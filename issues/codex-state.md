@@ -19,21 +19,22 @@ The product goal is not just to generate plans or chats. It must reliably create
 
 ## Current live state
 
-As of 2026-03-23 morning local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`) remains the completed reference validation run, but the active canary is now `speaker-pipeline-ops-reviewer-validation-fresh-2` (`4a12463c-eef4-4863-a93e-9bcd723b82a6`).
+As of 2026-03-23 afternoon local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`) remains the completed reference validation run, `speaker-pipeline-ops-reviewer-validation-fresh-2` (`4a12463c-eef4-4863-a93e-9bcd723b82a6`) remains the completed execution-ownership canary, and the active fresh canary is now `speaker-pipeline-ops-validation-fresh-3` (`e2f2ac35-6fa6-4b18-bfea-0e23c1e3068a`).
 
-Current observed task counts on the active Speaker Pipeline canary:
+Current observed task counts on the active fresh Speaker Pipeline canary:
 
-- `done=28`
-- `open=0`
+- `done=9`
+- `in_progress=1`
+- `draft=18`
 - `blocked=0`
+- `queued=0`
 
-The active canary has already validated these product expectations under the latest build:
+The active fresh canary has already validated these product expectations under the latest build:
 
-- fresh bootstrap materially staffs a PM, worker, and reviewer in-turn
-- bootstrap no longer accepts approval-gated first-wave tasks
-- review execution is routed to a reviewer principal, not just left on the worker lane
-- maintenance floods no longer monopolize worker slots ahead of `agent_turn` work
-- pending `agent_turn` jobs for closed sessions no longer get claimed and waste live worker slots
+- fresh kickoff/bootstrap can create dedicated PM, worker, and reviewer staff in-turn
+- bootstrap setup persists through canonical setup tasks and auto-completes the bootstrap gate
+- first executable child task lanes can start under execution-owned task sessions
+- stale task-lane redispatch continues to preserve `flow_node_execution_id` across worker and turn-engine retries
 
 Most recent shipped commits relevant to the current validation run:
 
@@ -58,6 +59,7 @@ Most recent shipped commits relevant to the current validation run:
 - `6992ab10` `Purge legacy task dispatch without execution ownership`
 - `9d8ed49e` `Publish execution-owned task message dispatch`
 - `ed694196` `Skip blocked task lanes during worker requeue`
+- pending local slice: worker recovery now checks queued/claimed `agent_turn` jobs by active `flow_node_execution_id`, not merely `session_id`, so stale queued jobs for older executions cannot block a retry for the active task lane; focused jobqueue unit/integration coverage is green
 - pending local slice: execution-owned task `chat.message.user_sent` events no longer fall back to legacy raw enqueue in `HandleUserMessageEvent(...)` when the session cannot be loaded; targeted turn-engine tests are green
 - pending local slice: `chat.SteerTurn(...)` now also includes `flow_node_execution_id` in replacement task-session `chat.message.user_sent` events; focused chat integration coverage is green
 - pending local slice: synthetic task continuation/recovery user prompts appended by the turn engine now also inherit `flow_node_execution_id` from session metadata; focused turn-engine coverage is green
@@ -92,6 +94,7 @@ What those changed:
 - synthetic continuation-root and recovery-action user prompts now also keep `flow_node_execution_id`, closing another task-lane path that previously kept execution identity only in the queue payload and not in the message metadata itself
 - worker pending-turn repair no longer lets a failed execution-owned `live_turn_id` hide a real pending `chat_session.current_turn_id`, which was the live task-20 stall signature on Speaker Pipeline
 - terminal done/cancelled task sessions no longer have to wait for a worker restart to close; the periodic stale-scan loop now cleans them up during steady-state execution too
+- worker stale-turn recovery no longer treats an older queued dispatch for the same task session but a different execution as proof that the active execution already has a live retry queued
 
 Current live cleanup result:
 
@@ -112,7 +115,7 @@ Task `38` there is intentionally `cancelled`, not `done`: it was an impossible l
 
 The main priority is still core-system reliability for unattended end-to-end project execution. SAM.blog proved cleanup and closeout. The active Speaker Pipeline run is now the sharper canary for fresh-bootstrap correctness, reviewer staffing, queue fairness, and live execution churn.
 
-The immediate priority is now to choose the next validation target and continue the execution-ownership rework against a fresh canary. Speaker Pipeline has finished cleanly under the latest build.
+The immediate priority is now to continue the execution-ownership rework against the fresh Speaker Pipeline canary until it also drains cleanly without the older stale-dispatch/recovery loops.
 
 That priority is now subordinate to a broader execution-architecture rework. The current codebase has enough evidence that the repeated stalls are structural:
 
@@ -143,16 +146,17 @@ The current implementation work is already underway against that plan:
 - startup cleanup now drops legacy task-session dispatch rows that have no `flow_node_execution_id` once the lane already has an active execution-owned live turn, which removes another pre-command-model source of stale queue identity
 - message-triggered task dispatch now carries execution identity directly from the chat layer, and the current live claimed `agent_turn` row on Speaker Pipeline includes `flow_node_execution_id` as expected
 - blocked validation-loop tasks no longer re-enter queue churn on worker restart
+- worker stale-turn recovery now also checks queued/claimed dispatch presence at the active execution boundary, so stale queued jobs for a different execution no longer suppress requeue for the current lane
 - tasks `12` and `26` were then resumed through the real product path and both rebuilt durable recovery checkpoints successfully:
   - task `12` checkpoint target: `planning/sourcing-framework/oc-12-qualification-checklist.md`
   - task `26` checkpoint target: `planning/metrics-framework/oc-22-dashboard-spec.md`
-- that confirms the remaining issue on this canary is no longer blocked-task resumability; it is post-resume execution quality/runtime behavior
+- that confirms the remaining issue on this canary is no longer blocked-task resumability; it is the next deterministic execution/runtime failure the fresh canary exposes
 
 The next likely slices after committing the current worker change are:
 
 - remove remaining raw `agent_turn` producers that still do not carry execution identity or still infer task-lane dispatch from message/session state outside the execution-owned helper path
 - continue collapsing runtime cleanup heuristics into execution-scoped command handling where practical
-- choose the next fresh validation project/canary and verify the newer execution-owned dispatch model from bootstrap through project closeout
+- keep `speaker-pipeline-ops-validation-fresh-3` running as the active canary and patch the next deterministic runtime bug it exposes
 
 The standing rule from Sam is:
 
