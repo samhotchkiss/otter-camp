@@ -9121,6 +9121,69 @@ func TestRecoveryFileWriteDraftContentUsesContinuationSummaryDraft(t *testing.T)
 	}
 }
 
+func TestRecoveryFileOutputContextPrefersOlderSubstantiveReadOverNewerStubPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	oldTurnID := uuid.New()
+	newTurnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &oldTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "docs/migration-plan/oc-15-content-migration-plan.md",
+				"content": strings.TrimSpace(`# OC-15: Content Migration Plan
+
+## Executive Summary
+This migration plan operationalizes the staged cutover and validation strategy.
+`),
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &newTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":    "docs/migration-plan/oc-15-complete-migration-plan.md",
+				"content": "Perfect. Now I have full context. Let me resume the task by completing the migration plan document.",
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	targetPath, draft, ok := fixture.engine.recoveryFileOutputContext(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery file output context")
+	}
+	if targetPath != "docs/migration-plan/oc-15-content-migration-plan.md" {
+		t.Fatalf("targetPath = %q, want older substantive path", targetPath)
+	}
+	if !strings.Contains(draft, "## Executive Summary") {
+		t.Fatalf("draft = %q, want substantive draft", draft)
+	}
+}
+
 func TestRewriteRecoveryCLIExecuteWithoutCommandToFileWriteUsesPriorTurnDraft(t *testing.T) {
 	t.Parallel()
 

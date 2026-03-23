@@ -8740,6 +8740,8 @@ func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRunt
 	if err != nil {
 		return "", "", false
 	}
+	fallbackPath := ""
+	fallbackDraft := ""
 	for i := len(messages) - 1; i >= 0; i-- {
 		message := messages[i]
 		if message.TurnID != nil && *message.TurnID == rt.turn.ID {
@@ -8764,8 +8766,29 @@ func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRunt
 		draft := ""
 		if strings.EqualFold(strings.TrimSpace(toolName), "file.read") && !usedArtifactPath {
 			draft = strings.TrimSpace(anyString(output["content"]))
+			if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason == "" && looksLikeRecoveryFileDraft(draft) {
+				return targetPath, draft, true
+			}
 		}
-		return targetPath, draft, true
+		if draft == "" {
+			if workspaceDraft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
+				if reason := recoveryFileWriteDraftRejectReason(workspaceDraft, targetPath); reason == "" && looksLikeRecoveryFileDraft(workspaceDraft) {
+					return targetPath, workspaceDraft, true
+				}
+				if fallbackPath == "" {
+					fallbackPath = targetPath
+					fallbackDraft = workspaceDraft
+				}
+				continue
+			}
+		}
+		if fallbackPath == "" {
+			fallbackPath = targetPath
+			fallbackDraft = draft
+		}
+	}
+	if fallbackPath != "" {
+		return fallbackPath, fallbackDraft, true
 	}
 	return "", "", false
 }
