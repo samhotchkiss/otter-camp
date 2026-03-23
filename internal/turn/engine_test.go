@@ -7591,6 +7591,17 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:    "asked the operator to choose the next step instead of the file body",
 		},
 		{
+			name: "rejects continuation summary spec preface",
+			content: "I'll continue the OC-24 infrastructure planning task by writing the concrete deliverables directly based on the continuation summary draft.\n\n" +
+				"Let me write the infrastructure specification first:",
+			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects deployment checklist progress preface",
+			content: "Good. The spec file is partially complete. Now I need to write the complete deployment checklist, which is the critical missing deliverable. Let me create that:",
+			want: "intent to write the deliverable",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
