@@ -9715,6 +9715,14 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return fmt.Sprintf("assistant draft for %s asked for runtime control-plane input instead of the file body", path)
 	}
 	if containsAny(lower,
+		"what is the current state you need me to continue from",
+		"do you want me to complete the deployment checklist",
+		"or do you need me to start fresh on the full infrastructure specification",
+		"should confirm whether that's the priority",
+	) {
+		return fmt.Sprintf("assistant draft for %s asked the operator to choose the next step instead of the file body", path)
+	}
+	if containsAny(lower,
 		"i understand the problem",
 		"i can see the problem",
 		"let me ",

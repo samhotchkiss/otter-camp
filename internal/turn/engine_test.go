@@ -7572,6 +7572,15 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "runtime control-plane input instead of the file body",
 		},
 		{
+			name: "rejects operator choice question placeholder",
+			content: "I'm Alex, Technical Lead for the SAM.blog rebuild. I'm actively working on **OC-24: Plan hosting and infrastructure**, currently in the Work phase.\n\n" +
+				"What is the current state you need me to continue from?\n\n" +
+				"- Do you want me to complete the deployment checklist that was partially drafted?\n" +
+				"- Or do you need me to start fresh on the full infrastructure specification?\n\n" +
+				"The recovery context shows the deployment checklist draft exists, but I should confirm whether that's the priority.",
+			want: "asked the operator to choose the next step instead of the file body",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
