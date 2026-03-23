@@ -6956,6 +6956,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return false, nil
 		}
+		handled, stop, err = e.handleRecoveryMalformedFileEditWithoutPath(ctx, rt, &call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 		handled, stop, err = e.handleTaskFileWriteWithoutContent(ctx, rt, &call)
 		if err != nil {
 			return false, err
@@ -7618,6 +7628,51 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 		return true, false, err
 	}
 	return true, false, nil
+}
+
+func (e *TurnEngine) handleRecoveryMalformedFileEditWithoutPath(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
+	if rt == nil || call == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.edit") {
+		return false, false, nil
+	}
+
+	normalized := toolargs.Normalize("file.edit", call.Arguments)
+	if strings.TrimSpace(stringValue(normalized["path"])) != "" {
+		return false, false, nil
+	}
+
+	targetPath, _, ok := e.recoveryFileOutputContext(ctx, rt)
+	if !ok {
+		return false, false, nil
+	}
+	draft, rejectReason, ok := e.recoveryFileWriteDraftContent(ctx, rt, targetPath)
+	if ok {
+		call.Name = "file.write"
+		call.Arguments = map[string]any{
+			"path":        targetPath,
+			"content":     draft,
+			"create_dirs": true,
+		}
+		if rt.recoveryFileWrites == nil {
+			rt.recoveryFileWrites = make(map[string]recoveryPopulatedFileWriteState)
+		}
+		rt.recoveryFileWrites[strings.TrimSpace(call.ID)] = recoveryPopulatedFileWriteState{
+			TargetPath: strings.TrimSpace(targetPath),
+			Draft:      draft,
+		}
+		e.logger.Info("recovery: rewrote malformed file.edit to persisted draft write",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+		)
+		return false, false, nil
+	}
+	if strings.TrimSpace(rejectReason) != "" {
+		return e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
+	}
+	return false, false, nil
 }
 
 func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
