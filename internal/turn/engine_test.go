@@ -5542,6 +5542,19 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsFocusQuestionMenu(t *testing.T)
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsMoveForwardStatusReply(t *testing.T) {
+	t.Parallel()
+
+	content := "I'm Alex, Technical Lead for the SAM.blog rebuild. I'm ready to help you move forward on OC-24: Plan Hosting and Infrastructure.\n\n" +
+		"Current Status:\n" +
+		"- Strategy phase is complete\n" +
+		"- Task is in progress\n" +
+		"- Next deliverable is the infrastructure spec"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected move-forward status reply to be treated as generic recovery output")
+	}
+}
+
 func TestLooksLikeRecoveryQuestionEchoDetectsClarificationMenu(t *testing.T) {
 	t.Parallel()
 
