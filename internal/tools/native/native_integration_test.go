@@ -4696,6 +4696,9 @@ func TestIntegrationTaskUpdateRejectsQueuedPromotionForOrchestrationParentWithou
 	if out["error"] != taskNeedsChildTasksMessage {
 		t.Fatalf("task.update error = %v, want %q", out["error"], taskNeedsChildTasksMessage)
 	}
+	if got := fmt.Sprintf("%v", out["message"]); got != taskQueueChildrenDirectlyHint {
+		t.Fatalf("task.update guidance = %q, want %q", got, taskQueueChildrenDirectlyHint)
+	}
 
 	storedTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, parentTask.ID)
 	if err != nil {
@@ -4711,6 +4714,56 @@ func TestIntegrationTaskUpdateRejectsQueuedPromotionForOrchestrationParentWithou
 	}
 	if len(projectTasks) != 1 {
 		t.Fatalf("project task count = %d, want 1 with no synthesized children", len(projectTasks))
+	}
+}
+
+func TestIntegrationTaskUpdateDraftToInProgressReturnsQueueGuidance(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
+
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		ProjectID:      project.ID,
+		AgentID:        agent.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &agent.ID,
+	}); err != nil {
+		t.Fatalf("assign project agent: %v", err)
+	}
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:   orgID,
+		ProjectID:        project.ID,
+		Title:            "Write content audit brief",
+		WorkStatus:       "draft",
+		BlocksScope:      "none",
+		AssignedAgentID:  &agent.ID,
+		FlowTemplateID:   &template.ID,
+		CreatedByType:    "agent",
+		CreatedByID:      &agent.ID,
+		RequiresHumanReview: false,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.update", map[string]any{
+		"task_id":     taskRecord.ID.String(),
+		"work_status": "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("task.update draft to in_progress: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); !strings.Contains(got, `invalid status transition from "draft" to "in_progress"`) {
+		t.Fatalf("task.update error = %q, want invalid draft->in_progress transition", got)
+	}
+	if got := fmt.Sprintf("%v", out["message"]); got != taskQueueDraftChildFirstHint {
+		t.Fatalf("task.update guidance = %q, want %q", got, taskQueueDraftChildFirstHint)
 	}
 }
 

@@ -44,6 +44,8 @@ const (
 	taskDoneTerminalNodeMessage   = "task can only be marked done when its flow reaches a terminal node"
 	taskOrchestrationOnlyMessage  = "task must remain orchestration-only while executable child tasks exist"
 	taskNeedsChildTasksMessage    = "task must remain orchestration-only until bounded child tasks are created"
+	taskQueueChildrenDirectlyHint = "Do not activate the orchestration parent directly. Create or queue bounded executable child tasks instead, and leave the parent task in draft/integration mode."
+	taskQueueDraftChildFirstHint  = "Draft execution tasks cannot move directly to in_progress. Queue the bounded child task first with work_status=\"queued\" and let normal execution promote it from there."
 	bootstrapGateManagedMessage   = "bootstrap governance gate is system-managed; do not edit, assign, queue, or complete it manually"
 	bootstrapSetupManagedMessage  = "bootstrap setup checklist tasks are system-managed during bootstrap; use bootstrap.setup.persist instead of raw task.update mutations"
 	flowTemplateValidationMessage = "flow template must define a work -> review -> completion path"
@@ -1775,7 +1777,10 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		if (strings.EqualFold(desiredStatus, "queued") || strings.EqualFold(desiredStatus, "in_progress")) &&
 			requiresChildren &&
 			len(executableChildren) == 0 {
-			return map[string]any{"error": taskNeedsChildTasksMessage}, nil
+			return map[string]any{
+				"error":   taskNeedsChildTasksMessage,
+				"message": taskQueueChildrenDirectlyHint,
+			}, nil
 		}
 		if strings.EqualFold(desiredStatus, "queued") && len(executableChildren) > 0 {
 			if err := e.queueDecompositionChildren(ctx, current, executableChildren); err != nil {
@@ -1784,7 +1789,10 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			desiredStatus = previousStatus
 		}
 		if strings.EqualFold(desiredStatus, "in_progress") && len(executableChildren) > 0 {
-			return map[string]any{"error": taskOrchestrationOnlyMessage}, nil
+			return map[string]any{
+				"error":   taskOrchestrationOnlyMessage,
+				"message": taskQueueChildrenDirectlyHint,
+			}, nil
 		}
 		if parentTaskID := taskdecomp.ParseParentTaskID(current.Metadata); parentTaskID != uuid.Nil &&
 			strings.EqualFold(strings.TrimSpace(previousStatus), "done") &&
@@ -1848,6 +1856,14 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 				bootstrapDraftExecutionPromotion(desiredStatus) &&
 				e.activeProjectBootstrapSession(ctx, scope, current.ProjectID) {
 				return nil, fmt.Errorf("task is still in draft during active project bootstrap. Keep first-wave execution tasks in draft until setup is persisted through bootstrap.setup.persist")
+			}
+			if errors.As(transitionErr, &invalidTransition) &&
+				strings.EqualFold(strings.TrimSpace(previousStatus), "draft") &&
+				strings.EqualFold(strings.TrimSpace(desiredStatus), "in_progress") {
+				return map[string]any{
+					"error":   transitionErr.Error(),
+					"message": taskQueueDraftChildFirstHint,
+				}, nil
 			}
 			return nil, transitionErr
 		}
