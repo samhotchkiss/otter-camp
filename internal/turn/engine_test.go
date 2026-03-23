@@ -7367,6 +7367,24 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects full context workspace check placeholder narration",
+			content: "Perfect. Now I have the full context. The OC-15 strategy work is complete with four locked artifacts. " +
+				"Now I need to create the actual content migration plan deliverable. Let me check what's in the workspace currently and then write the migration plan document:",
+			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects recovered full context planning placeholder narration",
+			content: "Perfect. I have recovered the full context. The planning artifacts are complete and comprehensive. " +
+				"Now I need to create the infrastructure spec and deployment checklist. Let me draft the comprehensive infrastructure specification:",
+			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects full context acceptance criteria placeholder narration",
+			content: "Excellent! Now I understand the full context. I need to complete OC-28 by writing the comprehensive accessibility standards document. " +
+				"Let me check the acceptance criteria and dependency log as well:",
+			want: "intent to write the deliverable",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
