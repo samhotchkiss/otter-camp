@@ -771,7 +771,7 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 				extraPayload[key] = value
 			}
 		}
-		if err := s.validateDoneTransition(ctx, taskRecord, orchestrationAutoComplete || bootstrapPlanningAutoComplete); err != nil {
+		if err := s.validateDoneTransition(ctx, taskRecord, orchestrationAutoComplete || bootstrapPlanningAutoComplete || actor.AllowFlowRuntimeBypass); err != nil {
 			return nil, err
 		}
 	}
@@ -1306,7 +1306,7 @@ func allowsBootstrapPlanningAutoComplete(taskRecord repo.ProjectTask, from, targ
 	}
 }
 
-func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.ProjectTask, allowOrchestrationAutoComplete bool) error {
+func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.ProjectTask, allowFlowCompletionBypass bool) error {
 	children, err := s.listDecompositionChildren(ctx, taskRecord)
 	if err != nil {
 		return err
@@ -1314,7 +1314,7 @@ func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.Pr
 	if err := taskorchestration.ValidateCompletion(taskRecord, children); err != nil {
 		return err
 	}
-	if allowOrchestrationAutoComplete && (isOrchestrationOnlyParentTask(taskRecord, children) || isBootstrapPlanningTask(taskRecord)) {
+	if allowFlowCompletionBypass {
 		return nil
 	}
 	if taskRecord.FlowTemplateID == nil || taskRecord.CurrentFlowNodeID == nil {

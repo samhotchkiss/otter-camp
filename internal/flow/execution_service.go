@@ -555,7 +555,7 @@ func (s *service) advanceTerminalFlowTx(ctx context.Context, taskRecord repo.Pro
 		return nil, err
 	}
 	doneActor := toTaskActor(actor)
-	doneActor.AllowDoneBypass = true
+	doneActor.AllowFlowRuntimeBypass = true
 	if _, err := taskServiceTx.TransitionStatusWithPayloadTx(ctx, tx, taskRecord, "done", doneActor, nil); err != nil {
 		return nil, err
 	}
