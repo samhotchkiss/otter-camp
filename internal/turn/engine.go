@@ -3288,9 +3288,30 @@ func bootstrapTaskNeedsActiveExecution(status string) bool {
 	}
 }
 
+func projectBootstrapFirstWaveProjectGateConflict(tasks []repo.ProjectTask) (repo.ProjectTask, bool) {
+	if len(tasks) <= 1 {
+		return repo.ProjectTask{}, false
+	}
+	for _, task := range tasks {
+		if !strings.EqualFold(strings.TrimSpace(task.BlocksScope), "all") {
+			continue
+		}
+		metadata := messageMetadataMap(task.Metadata)
+		bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
+		if bootstrapGate {
+			continue
+		}
+		return task, true
+	}
+	return repo.ProjectTask{}, false
+}
+
 func (e *TurnEngine) validateProjectBootstrapFirstWaveTasks(ctx context.Context, tasks []repo.ProjectTask) (string, string, error) {
 	if e == nil || e.pool == nil {
 		return "", "", nil
+	}
+	if gateTask, conflicted := projectBootstrapFirstWaveProjectGateConflict(tasks); conflicted {
+		return projectBootstrapFailureFirstWaveExecution, buildProjectBootstrapFirstWaveProjectGateFailureReason(gateTask), nil
 	}
 
 	templateRepo := repo.NewFlowTemplateRepo(e.pool)
@@ -3511,6 +3532,10 @@ func buildProjectBootstrapFirstWaveAssignmentFailureReason(task repo.ProjectTask
 
 func buildProjectBootstrapFirstWaveApprovalFailureReason(task repo.ProjectTask) string {
 	return fmt.Sprintf("kickoff validation failed: first-wave %s requires human approval before queueing, so bootstrap cannot materialize autonomous runnable execution", projectBootstrapTaskLabel(task))
+}
+
+func buildProjectBootstrapFirstWaveProjectGateFailureReason(task repo.ProjectTask) string {
+	return fmt.Sprintf("kickoff validation failed: first-wave %s is a project-wide gate (blocks_scope=all), so it cannot be selected alongside other first-wave tasks because it will block the rest of the wave from entering runnable execution", projectBootstrapTaskLabel(task))
 }
 
 func buildProjectBootstrapFirstWaveExecutionFailureReason(progress projectBootstrapProgress) string {
@@ -3792,6 +3817,10 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 	if strings.Contains(lowerReason, "requires human approval before queueing") {
 		recoveryHint = "Repair the named persisted first-wave task directly so it can run autonomously. Do not ask for manual approval and do not keep that task in the first wave while it still requires human approval. Remove the approval gate from that exact task or replace it in the selected first wave with an already-created autonomous child task that can queue immediately."
 		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task can queue without human approval. Your next assistant action should be a direct task mutation tool call on the named task or the selected first-wave set, not a narrative reply. Do not begin with project.list, project.get, task.list, flow.list_templates, agent.list, inbox reads, or staffing discovery. Work directly from the persisted task ids already present in the bootstrap resume state."
+	}
+	if strings.Contains(lowerReason, "project-wide gate (blocks_scope=all)") {
+		recoveryHint = "Repair the named persisted first-wave task directly so the selected wave becomes runnable together. Do not keep that task as a project-wide gate while it remains in a multi-task first wave. Either drop that exact task from the selected first wave and leave it in draft for later, or update it so it no longer blocks the entire project before you persist the corrected first-wave selection."
+		nextActionHint = "Do not call bootstrap.setup.persist again until the selected first wave no longer includes a project-wide gate that blocks the rest of the wave. Your next assistant action should be a direct task mutation on the named task or the selected first-wave set, not a narrative reply. Do not begin with project.list, project.get, task.list, flow.list_templates, flow.get_execution, file.read, file.write, agent.list, or staffing discovery. Work directly from the persisted task ids already present in the bootstrap resume state."
 	}
 	if strings.Contains(lowerReason, "bounded task-size policy") || strings.Contains(lowerReason, "bounded size policy") {
 		recoveryHint += " Your next assistant action should be a tool call, not a narrative reply. Do not call task.get on the named oversized task first when the blocked task id is already present in the bootstrap resume message; keep that task orchestration-only and go straight to task.update plus bounded child-task creation."
@@ -6687,6 +6716,11 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string
 				lines = append(lines, "If the named task is a broad wave/workstream parent, do not read planning artifacts first. Keep the parent orchestration-only and create bounded executable child tasks directly beneath it using the persisted task title and current task tree.")
 			}
 		}
+		if strings.Contains(lowerReason, "project-wide gate (blocks_scope=all)") {
+			lines = append(lines, "This validation failure already names the exact first-wave task that is blocking the rest of the selected wave. Repair that persisted task directly instead of gathering more context. Do not start with project.get, task.list, flow.list_templates, flow.get_execution, agent.list, or scaffold rereads.")
+			lines = append(lines, "Do not keep that named task as a project-wide gate while it remains in a multi-task first wave. Either remove it from the selected first wave and leave it in draft for later, or update that exact task so it no longer blocks the entire project before you persist the corrected first-wave selection.")
+			lines = append(lines, "Your next assistant action should be a tool call, not a narrative reply. Work directly from the exact task id already present in the bootstrap resume state above.")
+		}
 		lines = append(lines, "When the named blocker is fixed, resume with bootstrap.setup.persist using only canonical bootstrap setup step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off. Current phase names like first_wave_executions_created are not valid completed_step_slugs.")
 		lines = append(lines, "If first-wave selection is already persisted, do not use raw task.update to force draft first-wave tasks into queued or in_progress. Leave those tasks in draft and let bootstrap.setup.persist plus the bootstrap governance gate handle promotion after validation passes.")
 		lines = append(lines, "Only after the named blocker is repaired should you call bootstrap.setup.persist to record the corrected setup state.")
@@ -6903,6 +6937,7 @@ func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProg
 		return strings.Contains(reason, "bounded size policy") ||
 			strings.Contains(reason, "has no assigned agent") ||
 			strings.Contains(reason, "requires human approval before queueing") ||
+			strings.Contains(reason, "project-wide gate (blocks_scope=all)") ||
 			(strings.Contains(reason, "only ") &&
 				(strings.Contains(reason, "selected first-wave child tasks created flow_node_execution rows") ||
 					strings.Contains(reason, "selected first-wave child tasks produced runnable agent_turn jobs") ||

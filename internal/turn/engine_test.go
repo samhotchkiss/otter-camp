@@ -4615,6 +4615,15 @@ func TestProjectBootstrapRecoverableMaxToolCallFailureForApprovalGatedFirstWaveT
 	}
 }
 
+func TestProjectBootstrapRecoverableMaxToolCallFailureForProjectGateFirstWaveTask(t *testing.T) {
+	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 15 (Create flow template) is a project-wide gate (blocks_scope=all), so it cannot be selected alongside other first-wave tasks because it will block the rest of the wave from entering runnable execution",
+	}) {
+		t.Fatal("project-gated first-wave execution failure should be recoverable")
+	}
+}
+
 func TestBuildProjectBootstrapValidationRecoveryPromptForPartialFirstWaveMaterialization(t *testing.T) {
 	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
@@ -4631,6 +4640,56 @@ func TestBuildProjectBootstrapValidationRecoveryPromptForPartialFirstWaveMateria
 	}
 	if !strings.Contains(prompt, "repair the selected runnable subset with direct task and flow mutations only") {
 		t.Fatalf("prompt = %q, want direct repair guidance", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapValidationRecoveryPromptForProjectGateFirstWaveTask(t *testing.T) {
+	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 15 (Create flow template with work/review/merge nodes) is a project-wide gate (blocks_scope=all), so it cannot be selected alongside other first-wave tasks because it will block the rest of the wave from entering runnable execution",
+	})
+	if !strings.Contains(prompt, "project-wide gate (blocks_scope=all)") {
+		t.Fatalf("prompt = %q, want gate validation reason detail", prompt)
+	}
+	if !strings.Contains(prompt, "Either drop that exact task from the selected first wave and leave it in draft for later, or update it so it no longer blocks the entire project") {
+		t.Fatalf("prompt = %q, want direct gate repair guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with project.list, project.get, task.list, flow.list_templates, flow.get_execution, file.read, file.write, agent.list, or staffing discovery") {
+		t.Fatalf("prompt = %q, want no broad reread guidance", prompt)
+	}
+}
+
+func TestBuildProjectBootstrapResumeActionPromptForProjectGateFirstWaveTask(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: "kickoff validation failed: first-wave task 15 (Create flow template with work/review/merge nodes) is a project-wide gate (blocks_scope=all), so it cannot be selected alongside other first-wave tasks because it will block the rest of the wave from entering runnable execution",
+	})
+	if !strings.Contains(prompt, "Do not keep that named task as a project-wide gate while it remains in a multi-task first wave") {
+		t.Fatalf("prompt = %q, want project-gate repair guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Your next assistant action should be a tool call, not a narrative reply") {
+		t.Fatalf("prompt = %q, want direct tool-call guidance", prompt)
+	}
+}
+
+func TestProjectBootstrapFirstWaveProjectGateConflict(t *testing.T) {
+	tasks := []repo.ProjectTask{
+		{TaskNumber: 10, Title: "Runnable slice", BlocksScope: "none"},
+		{TaskNumber: 15, Title: "Gate slice", BlocksScope: "all"},
+	}
+	taskRecord, conflicted := projectBootstrapFirstWaveProjectGateConflict(tasks)
+	if !conflicted {
+		t.Fatal("expected conflict when multi-task first wave contains project gate")
+	}
+	if taskRecord.TaskNumber != 15 {
+		t.Fatalf("conflicting task number = %d, want 15", taskRecord.TaskNumber)
+	}
+	if buildProjectBootstrapFirstWaveProjectGateFailureReason(taskRecord) == "" {
+		t.Fatal("expected non-empty first-wave project gate failure reason")
+	}
+	if _, conflicted := projectBootstrapFirstWaveProjectGateConflict([]repo.ProjectTask{{TaskNumber: 15, BlocksScope: "all"}}); conflicted {
+		t.Fatal("single-task first wave should allow a project gate")
 	}
 }
 
