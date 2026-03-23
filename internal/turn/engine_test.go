@@ -2793,6 +2793,12 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	if !strings.Contains(handoff, "Once enough candidates are known, do not emit another assistant planning summary about staffing.") {
 		t.Fatalf("handoff = %q, want direct-tool-action staffing guidance", handoff)
 	}
+	if !strings.Contains(handoff, "Fresh bootstrap staffing must materially advance in this turn.") {
+		t.Fatalf("handoff = %q, want same-turn staffing progress guidance", handoff)
+	}
+	if !strings.Contains(handoff, "Do not interleave extra assistant summaries between staffing lookups.") {
+		t.Fatalf("handoff = %q, want no-interleaved-staffing-summary guidance", handoff)
+	}
 	if !strings.Contains(handoff, "If you need project docs, files, planning artifacts, or current task state during bootstrap, inspect them directly with tools.") {
 		t.Fatalf("handoff = %q, want direct-doc-inspection guidance", handoff)
 	}
