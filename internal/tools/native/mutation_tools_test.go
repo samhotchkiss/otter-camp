@@ -522,6 +522,67 @@ func TestGitCommitMainBranchReturnsPayloadError(t *testing.T) {
 	}
 }
 
+func TestGitCommitRejectsActiveBootstrapProjectSession(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+	calls := 0
+
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		Command: func(_ context.Context, _ string, _ ...string) *exec.Cmd {
+			calls++
+			return nil
+		},
+	})
+	executor.tasks = &mockTaskRepo{
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             uuid.New(),
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Bootstrap governance gate",
+				WorkStatus:     "draft",
+				Metadata:       json.RawMessage(`{"bootstrap_gate":true}`),
+			},
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+				Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	out, err := executor.Execute(ctx, "git.commit", map[string]any{"message": "bootstrap snapshot"})
+	if err != nil {
+		t.Fatalf("git.commit: %v", err)
+	}
+	if out["error"] != "bootstrap_git_commit_blocked" {
+		t.Fatalf("error = %v, want bootstrap_git_commit_blocked", out["error"])
+	}
+	if !strings.Contains(fmt.Sprintf("%v", out["message"]), "bootstrap.setup.persist") {
+		t.Fatalf("message = %v, want bootstrap.setup.persist guidance", out["message"])
+	}
+	if calls != 0 {
+		t.Fatalf("git command calls = %d, want 0", calls)
+	}
+}
+
 func TestGitPushForceProtectedBranchDeniedWithoutGitInvocation(t *testing.T) {
 	calls := 0
 	executor := NewExecutor(ExecutorOptions{
@@ -3231,6 +3292,63 @@ func TestTaskUpdateDoesNotAutoCompleteBroadSatisfiedDraftTask(t *testing.T) {
 	}
 	if taskService.transitionCalls != 0 {
 		t.Fatalf("transition calls = %d, want 0", taskService.transitionCalls)
+	}
+}
+
+func TestTaskUpdateRejectsProjectSessionDirectAdvanceOfActiveTaskLane(t *testing.T) {
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	flowNodeID := uuid.New()
+	flowTemplateID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:                taskID,
+			OrganizationID:    orgID,
+			ProjectID:         projectID,
+			Title:             "Identify and evaluate available speaker databases",
+			WorkStatus:        "in_progress",
+			FlowTemplateID:    &flowTemplateID,
+			CurrentFlowNodeID: &flowNodeID,
+		},
+	}
+	sessions := &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.chatSessions = sessions
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	out, err := executor.Execute(ctx, "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"work_status": "done",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != "task_lane_owned_by_project_task_session" {
+		t.Fatalf("error = %v, want task_lane_owned_by_project_task_session", out["error"])
+	}
+	if tasks.updateCalls != 0 {
+		t.Fatalf("update calls = %d, want 0", tasks.updateCalls)
 	}
 }
 

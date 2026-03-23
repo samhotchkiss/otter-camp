@@ -199,6 +199,51 @@ func containsFold(values []string, needle string) bool {
 	return false
 }
 
+func (e *NativeToolExecutor) projectSessionDirectTaskMutationBlocked(ctx context.Context, scope workspaceScope, taskRecord repo.ProjectTask) (map[string]any, bool, error) {
+	if e == nil || e.chatSessions == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil {
+		return nil, false, nil
+	}
+	if taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {
+		return nil, false, nil
+	}
+	session, err := e.chatSessions.GetByID(ctx, *scope.sessionID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
+		return nil, false, nil
+	}
+	return map[string]any{
+		"error": "task_lane_owned_by_project_task_session",
+		"message": "This task already has an active execution lane. Do not mutate it from the project session. Let the project_task session advance the flow and write deliverables, or use flow.review_decision from the task's review lane when that lane is active.",
+	}, true, nil
+}
+
+func (e *NativeToolExecutor) projectSessionBootstrapGitCommitBlocked(ctx context.Context, scope workspaceScope) (map[string]any, bool, error) {
+	if e == nil || e.chatSessions == nil || e.tasks == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil || scope.projectID == nil || *scope.projectID == uuid.Nil {
+		return nil, false, nil
+	}
+	if !e.activeProjectBootstrapSession(ctx, scope, *scope.projectID) {
+		return nil, false, nil
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, *scope.projectID)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, taskRecord := range projectTasks {
+		if bootstrapGateTask(taskRecord) && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
+			return map[string]any{
+				"error":   "bootstrap_git_commit_blocked",
+				"message": "Bootstrap is still active for this project session. Do not use git.commit to satisfy bootstrap steps. Persist bootstrap progress through bootstrap.setup.persist using canonical completed_step_slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off.",
+			}, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
 func (e *NativeToolExecutor) rejectExecutionFirstPlanningMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
 	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
 		return nil, false, nil
@@ -935,6 +980,15 @@ func (e *NativeToolExecutor) handleFileDelete(ctx context.Context, input map[str
 }
 
 func (e *NativeToolExecutor) handleGitCommit(ctx context.Context, input map[string]any) (map[string]any, error) {
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if blocked, reject, guardErr := e.projectSessionBootstrapGitCommitBlocked(ctx, scope); guardErr != nil {
+		return nil, guardErr
+	} else if reject {
+		return blocked, nil
+	}
 	wd, _, dir, err := e.resolveInputPath(ctx, input, "path")
 	if err != nil {
 		if errors.Is(err, ErrPathTraversal) {
@@ -1851,6 +1905,11 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			"error":   bootstrapSetupManagedMessage,
 			"message": "Bootstrap setup checklist tasks are system-managed while the bootstrap governance gate is active. Do not edit, reassign, or complete them through task.update. Record completed setup steps through bootstrap.setup.persist using canonical step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off.",
 		}, nil
+	}
+	if blocked, reject, guardErr := e.projectSessionDirectTaskMutationBlocked(ctx, scope, current); guardErr != nil {
+		return nil, guardErr
+	} else if reject {
+		return blocked, nil
 	}
 	if title, ok := readString(input, "title"); ok && title != "" {
 		title = sanitizeStructuredTaskText(title)

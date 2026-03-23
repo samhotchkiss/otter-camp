@@ -19,14 +19,15 @@ The product goal is not just to generate plans or chats. It must reliably create
 
 ## Current live state
 
-As of 2026-03-23 afternoon local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`) remains the completed reference validation run, `speaker-pipeline-ops-reviewer-validation-fresh-2` (`4a12463c-eef4-4863-a93e-9bcd723b82a6`) remains the completed execution-ownership canary, `speaker-pipeline-ops-validation-fresh-3` (`e2f2ac35-6fa6-4b18-bfea-0e23c1e3068a`) is archived after exposing a stale bootstrap-state / broad-task auto-complete bug, and the active fresh canary is now `speaker-pipeline-ops-validation-fresh-4` (`a2a74356-d222-4e9e-b0d4-97680e741ebb`).
+As of 2026-03-23 evening local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`) remains the completed reference validation run, `speaker-pipeline-ops-reviewer-validation-fresh-2` (`4a12463c-eef4-4863-a93e-9bcd723b82a6`) remains the completed execution-ownership canary, `speaker-pipeline-ops-validation-fresh-3` (`e2f2ac35-6fa6-4b18-bfea-0e23c1e3068a`) and `speaker-pipeline-ops-validation-fresh-4` (`a2a74356-d222-4e9e-b0d4-97680e741ebb`) are archived after exposing stale bootstrap-state / broad-task auto-complete / PM-lane mutation bugs, and the active fresh canary is now `speaker-pipeline-ops-validation-fresh-5` (`bb3f1b98-b6e4-443e-be79-2caf79fa3eb4`).
 
 Current observed task state on the active fresh Speaker Pipeline canary:
 
 - bootstrap tasks `1-8` are all `done`
-- top-level project tasks `9-13` remain `draft`
-- first-wave child tasks `14-16` are `in_progress`
-- bootstrap session `b7cf19b7-649b-472a-995a-bf78a4d9c4a9` records `project_bootstrap.status=completed`
+- parent task `9` remains `draft`
+- task `10` is `queued`
+- tasks `11-15` are all `in_progress`
+- project session `2eeaf2ad-4db3-4878-bf7c-7e91cb3d8309` is still active after bootstrap completion and task-session startup
 
 The active fresh canary has already validated these product expectations under the latest build:
 
@@ -35,9 +36,14 @@ The active fresh canary has already validated these product expectations under t
 - first executable child task lanes can start under execution-owned task sessions
 - stale project-session model-invocation cleanup no longer leaves the PM lane inert without a retry path
 - broad top-level bootstrap tasks no longer auto-complete themselves to `done` just because planning metadata and outcome assessment were written
+- project-session `task.update` can no longer mutate a task that already belongs to an active `project_task` execution lane
+- bootstrap-active project sessions can now be blocked from burning turns on `git.commit` and redirected to `bootstrap.setup.persist`
 
 Most recent shipped commits relevant to the current validation run:
 
+- `6f6a1f25` `Harden bootstrap recovery and draft settlement`
+- pending local slice: project-session `task.update` now hard-rejects any direct mutation of an already-active task lane (`task_lane_owned_by_project_task_session`)
+- pending local slice: bootstrap-active project sessions now hard-reject `git.commit` with `bootstrap.setup.persist` guidance instead of wasting turns on repo commits
 - `a64dd6c8` `Handle approval-gated bootstrap tasks cleanly`
 - `a23ba8d4` `Stabilize archived and approval-gated recovery`
 - `04ddf053` `Force fresh bootstrap staffing to act in-turn`
@@ -61,8 +67,7 @@ Most recent shipped commits relevant to the current validation run:
 - `9d8ed49e` `Publish execution-owned task message dispatch`
 - `ed694196` `Skip blocked task lanes during worker requeue`
 - `43979cee` `Stop churn after artifact writes`
-- pending local slice: stale model-invocation cleanup now re-enqueues trigger-owned project/session retries after failing the dead turn, instead of clearing `current_turn_id` and leaving the session inert
-- pending local slice: satisfied-draft auto-complete is now blocked for broad/decomposable tasks, so bootstrap parents cannot self-complete into an impossible `done but still needs child decomposition` state
+- `05b55454` `Guard satisfied draft auto-completion`
 
 What those changed:
 
@@ -97,13 +102,21 @@ What those changed:
 - metadata-only task completion no longer requires a separate remembered `task.update work_status=done` when the task already carries complete planning evidence and a satisfied outcome assessment
 - stale project-session turns recovered by worker stale-model-invocation cleanup now requeue from the original trigger message instead of silently dying after `current_turn_id` is cleared
 - satisfied draft auto-complete now requires the task to be non-decomposable under `taskdecomp.PrepareQueueDecomposition`, so broad bootstrap workstreams stay draft and must actually be split before bootstrap can pass
+- project sessions now get a hard tool-layer rejection if they attempt to mutate a task that already has `CurrentFlowNodeID` set, so active task lanes remain owned by their `project_task` session instead of being re-mutated by the PM lane
+- bootstrap-active project sessions now get a hard tool-layer rejection if they call `git.commit`, forcing canonical bootstrap persistence through `bootstrap.setup.persist` instead of ad hoc repo commits
 
 Current live cleanup result:
 
-- `speaker-pipeline-ops-reviewer-validation-fresh-2` now drains cleanly
+- `speaker-pipeline-ops-reviewer-validation-fresh-2` still drains cleanly
 - all `28` tasks are `done`
-- `project_task` async sessions for that project are now fully closed (`active_sessions=0`, `closed_sessions=121`)
-- the worker is idle with no live execution backlog after the latest restart
+- `project_task` async sessions for that project are fully closed (`active_sessions=0`, `closed_sessions=121`)
+
+`speaker-pipeline-ops-validation-fresh-5` is the active bootstrap/execution canary:
+
+- bootstrap is complete and the governance gate is `done`
+- the first real execution wave is running under task sessions, not the project session
+- there are currently no blocked tasks on the project
+- the next bug to watch is task-lane completion/review quality, not PM/bootstrap queue ownership
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
@@ -117,7 +130,7 @@ Task `38` there is intentionally `cancelled`, not `done`: it was an impossible l
 
 The main priority is still core-system reliability for unattended end-to-end project execution. SAM.blog proved cleanup and closeout. The active Speaker Pipeline run is now the sharper canary for fresh-bootstrap correctness, reviewer staffing, queue fairness, and live execution churn.
 
-The immediate priority is now to continue the execution-ownership rework against the fresh Speaker Pipeline canary until it also drains cleanly without the older stale-dispatch/recovery loops.
+The immediate priority is now to continue the execution-ownership rework against the fresh Speaker Pipeline canary until it also drains cleanly without PM-lane interference or stale session/execution drift.
 
 That priority is now subordinate to a broader execution-architecture rework. The current codebase has enough evidence that the repeated stalls are structural:
 
