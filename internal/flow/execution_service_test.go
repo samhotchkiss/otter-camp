@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -185,6 +186,90 @@ func TestEnsureActiveExecutionRejectsTaskRuntimeStatusMismatch(t *testing.T) {
 	}
 	if executions.createCalls != 0 {
 		t.Fatalf("create calls = %d, want 0", executions.createCalls)
+	}
+}
+
+func TestEnsureActiveExecutionSerializesConcurrentFlowStarts(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	currentNodeID := uuid.New()
+
+	executions := &fakeExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {},
+		},
+	}
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:             taskID,
+					ProjectID:      uuid.New(),
+					OrganizationID: uuid.New(),
+					FlowTemplateID: &flowTemplateID,
+					WorkStatus:     "queued",
+				},
+			},
+		},
+		flowTemplates: &fakeFlowTemplateRepo{
+			items: map[uuid.UUID]repo.FlowTemplate{
+				flowTemplateID: {ID: flowTemplateID, StartNodeID: &currentNodeID},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				currentNodeID: {ID: currentNodeID, FlowTemplateID: flowTemplateID, NodeType: "work"},
+			},
+		},
+		executions: executions,
+		events:     &fakeEventBus{},
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	results := make(chan *repo.FlowNodeExecution, 2)
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			execution, err := svc.EnsureActiveExecution(context.Background(), taskID)
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- execution
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	close(results)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("EnsureActiveExecution concurrent err = %v", err)
+		}
+	}
+	if executions.createCalls != 1 {
+		t.Fatalf("create calls = %d, want 1", executions.createCalls)
+	}
+	var executionID uuid.UUID
+	count := 0
+	for execution := range results {
+		if execution == nil {
+			t.Fatal("nil execution returned")
+		}
+		if executionID == uuid.Nil {
+			executionID = execution.ID
+		} else if execution.ID != executionID {
+			t.Fatalf("execution id = %s, want shared %s", execution.ID, executionID)
+		}
+		count++
+	}
+	if count != 2 {
+		t.Fatalf("result count = %d, want 2", count)
 	}
 }
 
@@ -811,6 +896,7 @@ func TestAdvanceFlowTerminalRequiresReviewedWorkBeforeMutatingExecution(t *testi
 }
 
 type fakeExecutionRepo struct {
+	mu                  sync.Mutex
 	active              repo.FlowNodeExecution
 	byTask              map[uuid.UUID][]repo.FlowNodeExecution
 	byID                map[uuid.UUID]repo.FlowNodeExecution
@@ -832,6 +918,8 @@ func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project
 }
 
 func (f *fakeExecutionRepo) Create(_ context.Context, execution repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.createCalls++
 	created := execution
 	if created.ID == uuid.Nil {
@@ -848,32 +936,51 @@ func (f *fakeExecutionRepo) Create(_ context.Context, execution repo.FlowNodeExe
 	return created, nil
 }
 func (f *fakeExecutionRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNodeExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if item, ok := f.byID[id]; ok {
 		return item, nil
 	}
 	return repo.FlowNodeExecution{}, repo.ErrNotFound
 }
 func (f *fakeExecutionRepo) GetActive(_ context.Context, taskID, flowNodeID uuid.UUID) (repo.FlowNodeExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.active.TaskID == taskID && f.active.FlowNodeID == flowNodeID {
 		return f.active, nil
+	}
+	for _, item := range f.byTask[taskID] {
+		if item.FlowNodeID == flowNodeID && item.Status == "active" {
+			return item, nil
+		}
 	}
 	return repo.FlowNodeExecution{}, repo.ErrNotFound
 }
 func (f *fakeExecutionRepo) ListByTask(_ context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.byTask[taskID], nil
 }
 func (f *fakeExecutionRepo) Complete(_ context.Context, _ uuid.UUID) (repo.FlowNodeExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.completeCalls++
 	return f.active, nil
 }
 func (f *fakeExecutionRepo) Reject(_ context.Context, _ uuid.UUID) (repo.FlowNodeExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.rejectCalls++
 	return f.active, nil
 }
 func (f *fakeExecutionRepo) RecordCommitSHA(_ context.Context, _ uuid.UUID, _ string) (repo.FlowNodeExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.active, nil
 }
 func (f *fakeExecutionRepo) UpdateMetadata(_ context.Context, _ uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.updateMetadataCalls++
 	f.active.Metadata = metadata
 	return f.active, nil
@@ -978,6 +1085,18 @@ func (f *fakeTaskRepo) UpdateMetadata(_ context.Context, id uuid.UUID, metadata 
 
 type fakeNodeRepo struct {
 	items map[uuid.UUID]repo.FlowNode
+}
+
+type fakeFlowTemplateRepo struct {
+	items map[uuid.UUID]repo.FlowTemplate
+}
+
+func (f *fakeFlowTemplateRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowTemplate, error) {
+	item, ok := f.items[id]
+	if !ok {
+		return repo.FlowTemplate{}, repo.ErrNotFound
+	}
+	return item, nil
 }
 
 func (f *fakeNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNode, error) {

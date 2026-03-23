@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -228,6 +229,7 @@ type service struct {
 	sessionBridge  flowSessionBridge
 	environments   projectEnvironmentRepository
 	planningAssets planningArtifactRepository
+	executionLocks sync.Map
 }
 
 type taskReviewFlowAdapter struct {
@@ -342,7 +344,23 @@ func NewService(opts Options) (FlowExecutionService, error) {
 	return svc, nil
 }
 
+func (s *service) lockTaskExecution(taskID uuid.UUID) func() {
+	if taskID == uuid.Nil {
+		return func() {}
+	}
+	lockValue, _ := s.executionLocks.LoadOrStore(taskID, &sync.Mutex{})
+	mu := lockValue.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 func (s *service) StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error) {
+	unlock := s.lockTaskExecution(taskID)
+	defer unlock()
+	return s.startFlowUnlocked(ctx, taskID)
+}
+
+func (s *service) startFlowUnlocked(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error) {
 	if taskID == uuid.Nil {
 		return nil, ErrTaskIDRequired
 	}
@@ -397,6 +415,9 @@ func (s *service) StartFlow(ctx context.Context, taskID uuid.UUID) (*repo.FlowNo
 }
 
 func (s *service) EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error) {
+	unlock := s.lockTaskExecution(taskID)
+	defer unlock()
+
 	if taskID == uuid.Nil {
 		return nil, ErrTaskIDRequired
 	}
@@ -1524,7 +1545,7 @@ func (s *service) loadActiveFlowState(ctx context.Context, taskID uuid.UUID) (re
 		if taskRecord.FlowTemplateID == nil {
 			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, ErrFlowNotStarted
 		}
-		if _, err := s.StartFlow(ctx, taskRecord.ID); err != nil {
+		if _, err := s.startFlowUnlocked(ctx, taskRecord.ID); err != nil {
 			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
 		}
 		taskRecord, err = s.tasks.GetByID(ctx, taskID)
