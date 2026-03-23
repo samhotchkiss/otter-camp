@@ -45,7 +45,6 @@ import (
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
-	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
@@ -813,14 +812,5 @@ func draftTaskAutoCompletes(task repo.ProjectTask) bool {
 	if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
 		return false
 	}
-	plan, ok := taskplan.Parse(task.Metadata)
-	if !ok || len(plan.ArtifactEvidence) == 0 {
-		return false
-	}
-	state, ok := taskorchestration.Parse(task.Metadata)
-	if !ok || state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
-		return false
-	}
-	_, err := taskplan.CompletionReport(task.Metadata)
-	return err == nil
+	return tasksvc.SatisfiedDraftAutoCompletable(task)
 }

@@ -19,22 +19,22 @@ The product goal is not just to generate plans or chats. It must reliably create
 
 ## Current live state
 
-As of 2026-03-23 afternoon local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`) remains the completed reference validation run, `speaker-pipeline-ops-reviewer-validation-fresh-2` (`4a12463c-eef4-4863-a93e-9bcd723b82a6`) remains the completed execution-ownership canary, and the active fresh canary is now `speaker-pipeline-ops-validation-fresh-3` (`e2f2ac35-6fa6-4b18-bfea-0e23c1e3068a`).
+As of 2026-03-23 afternoon local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`) remains the completed reference validation run, `speaker-pipeline-ops-reviewer-validation-fresh-2` (`4a12463c-eef4-4863-a93e-9bcd723b82a6`) remains the completed execution-ownership canary, `speaker-pipeline-ops-validation-fresh-3` (`e2f2ac35-6fa6-4b18-bfea-0e23c1e3068a`) is archived after exposing a stale bootstrap-state / broad-task auto-complete bug, and the active fresh canary is now `speaker-pipeline-ops-validation-fresh-4` (`a2a74356-d222-4e9e-b0d4-97680e741ebb`).
 
-Current observed task counts on the active fresh Speaker Pipeline canary:
+Current observed task state on the active fresh Speaker Pipeline canary:
 
-- `done=10`
-- `draft=18`
-- `in_progress=0`
-- `blocked=0`
-- `queued=0`
+- bootstrap tasks `1-8` are all `done`
+- top-level project tasks `9-13` remain `draft`
+- first-wave child tasks `14-16` are `in_progress`
+- bootstrap session `b7cf19b7-649b-472a-995a-bf78a4d9c4a9` records `project_bootstrap.status=completed`
 
 The active fresh canary has already validated these product expectations under the latest build:
 
 - fresh kickoff/bootstrap can create dedicated PM, worker, and reviewer staff in-turn
 - bootstrap setup persists through canonical setup tasks and auto-completes the bootstrap gate
 - first executable child task lanes can start under execution-owned task sessions
-- stale task-lane redispatch continues to preserve `flow_node_execution_id` across worker and turn-engine retries
+- stale project-session model-invocation cleanup no longer leaves the PM lane inert without a retry path
+- broad top-level bootstrap tasks no longer auto-complete themselves to `done` just because planning metadata and outcome assessment were written
 
 Most recent shipped commits relevant to the current validation run:
 
@@ -60,9 +60,9 @@ Most recent shipped commits relevant to the current validation run:
 - `6992ab10` `Purge legacy task dispatch without execution ownership`
 - `9d8ed49e` `Publish execution-owned task message dispatch`
 - `ed694196` `Skip blocked task lanes during worker requeue`
-- pending local slice: execution-first task turns now stop after a successful write to a declared planning artifact path, not just an explicit `Deliverable:` path; full `internal/turn` is green and task `21` is now `done`
-- pending local slice: `task.update` now auto-completes draft tasks that already have a satisfied outcome assessment plus a complete planning report, instead of waiting for the model to remember a separate `work_status=done` transition; full `internal/tools/native` is green
-- pending local slice: worker startup cleanup now also attempts to auto-complete satisfied draft tasks through the canonical task service; full `internal/worker` is green
+- `43979cee` `Stop churn after artifact writes`
+- pending local slice: stale model-invocation cleanup now re-enqueues trigger-owned project/session retries after failing the dead turn, instead of clearing `current_turn_id` and leaving the session inert
+- pending local slice: satisfied-draft auto-complete is now blocked for broad/decomposable tasks, so bootstrap parents cannot self-complete into an impossible `done but still needs child decomposition` state
 
 What those changed:
 
@@ -95,6 +95,8 @@ What those changed:
 - worker stale-turn recovery no longer treats an older queued dispatch for the same task session but a different execution as proof that the active execution already has a live retry queued
 - execution-first planning tasks now stop churning after the first successful declared-artifact write, even without an explicit single `Deliverable:` path in the task description
 - metadata-only task completion no longer requires a separate remembered `task.update work_status=done` when the task already carries complete planning evidence and a satisfied outcome assessment
+- stale project-session turns recovered by worker stale-model-invocation cleanup now requeue from the original trigger message instead of silently dying after `current_turn_id` is cleared
+- satisfied draft auto-complete now requires the task to be non-decomposable under `taskdecomp.PrepareQueueDecomposition`, so broad bootstrap workstreams stay draft and must actually be split before bootstrap can pass
 
 Current live cleanup result:
 
@@ -147,27 +149,11 @@ The current implementation work is already underway against that plan:
 - message-triggered task dispatch now carries execution identity directly from the chat layer, and the current live claimed `agent_turn` row on Speaker Pipeline includes `flow_node_execution_id` as expected
 - blocked validation-loop tasks no longer re-enter queue churn on worker restart
 - worker stale-turn recovery now also checks queued/claimed dispatch presence at the active execution boundary, so stale queued jobs for a different execution no longer suppress requeue for the current lane
-- tasks `12` and `26` were then resumed through the real product path and both rebuilt durable recovery checkpoints successfully:
-  - task `12` checkpoint target: `planning/sourcing-framework/oc-12-qualification-checklist.md`
-  - task `26` checkpoint target: `planning/metrics-framework/oc-22-dashboard-spec.md`
-- that confirms the remaining issue on this canary is no longer blocked-task resumability; it is the next deterministic execution/runtime failure the fresh canary exposes
+The current next thing to watch on the fresh canary is narrower:
 
-The next active bug on the fresh canary is no longer turn ownership. The system is now idle because follow-on child tasks `22-28` were created as `draft` rows with no active flow or queue debt even though some already carry:
-
-- a satisfied `parent_orchestration.outcome_assessment`
-- partial planning artifact evidence
-- a decomposition parent task id
-
-Those rows only have `task.created` events, not real queue/status transitions. The current product gap is therefore:
-
-- task creation / metadata sync can still leave already-satisfied or partially-satisfied child tasks stranded in `draft`
-- some of those tasks also carry planning metadata that does not match the actual artifact evidence shape, so the new satisfied-draft auto-complete path does not fire
-
-The next slice should focus on task creation/settlement semantics rather than more queue ownership work:
-
-- trace where `task.create` + planning sync + outcome metadata can produce an inert child task with only `task.created`
-- decide whether those tasks should auto-complete, auto-queue, or be rejected as inconsistent at creation time
-- keep `speaker-pipeline-ops-validation-fresh-3` as the canary for that next deterministic creation/settlement bug
+- bootstrap is completed and first-wave executions exist
+- the PM/bootstrap turn is still open after bootstrap completion and has already tried a couple of invalid post-bootstrap task mutations (`draft -> assigned`, `draft -> in_progress`) before the canonical state settled
+- if that turn does not unwind cleanly on its own, the next fix is in post-bootstrap project-session behavior: once canonical bootstrap state is completed and first-wave executions exist, the PM session should stop trying bootstrap-era direct task transitions inside the same turn and hand off cleanly to execution/review lanes
 
 The standing rule from Sam is:
 

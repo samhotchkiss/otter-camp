@@ -1308,13 +1308,7 @@ func allowsBootstrapPlanningAutoComplete(taskRecord repo.ProjectTask, from, targ
 	}
 }
 
-func allowsSatisfiedDraftAutoComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
-	if !actor.AllowSatisfiedDraftAutoComplete {
-		return false
-	}
-	if normalizeStatus(from) != "draft" || normalizeStatus(target) != "done" {
-		return false
-	}
+func SatisfiedDraftAutoCompletable(taskRecord repo.ProjectTask) bool {
 	state, ok := taskorchestration.Parse(taskRecord.Metadata)
 	if !ok || state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
 		return false
@@ -1323,8 +1317,29 @@ func allowsSatisfiedDraftAutoComplete(taskRecord repo.ProjectTask, from, target 
 	if !ok || len(plan.ArtifactEvidence) == 0 {
 		return false
 	}
-	_, err := taskplan.CompletionReport(taskRecord.Metadata)
-	return err == nil
+	if _, err := taskplan.CompletionReport(taskRecord.Metadata); err != nil {
+		return false
+	}
+	prepared, err := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+		ParentTaskID: taskRecord.ID,
+		Title:        taskRecord.Title,
+		Description:  taskRecord.Description,
+		Metadata:     taskRecord.Metadata,
+	})
+	if err != nil {
+		return false
+	}
+	return !prepared.Applied
+}
+
+func allowsSatisfiedDraftAutoComplete(taskRecord repo.ProjectTask, from, target string, actor Actor) bool {
+	if !actor.AllowSatisfiedDraftAutoComplete {
+		return false
+	}
+	if normalizeStatus(from) != "draft" || normalizeStatus(target) != "done" {
+		return false
+	}
+	return SatisfiedDraftAutoCompletable(taskRecord)
 }
 
 func (s *service) validateDoneTransition(ctx context.Context, taskRecord repo.ProjectTask, allowFlowCompletionBypass bool) error {

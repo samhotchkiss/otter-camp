@@ -3169,6 +3169,71 @@ func TestTaskUpdateRejectsSatisfiedDraftTaskWithIncompletePlanningContract(t *te
 	}
 }
 
+func TestTaskUpdateDoesNotAutoCompleteBroadSatisfiedDraftTask(t *testing.T) {
+	taskID := uuid.New()
+	description := strings.Join([]string{
+		"- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.",
+		"- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.",
+		"- Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots.",
+	}, "\n")
+	plan := taskplan.Analyze("Migration task", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+	contracts := taskplan.ArtifactContractForPlan(plan)
+	artifacts := make([]taskplan.ArtifactEvidence, 0, len(contracts))
+	for _, contract := range contracts {
+		artifacts = append(artifacts, taskplan.ArtifactEvidence{
+			Slug:     contract.Slug,
+			Summary:  contract.Title + " complete.",
+			Sections: append([]string(nil), contract.RequiredSections...),
+		})
+	}
+	var err error
+	metadata, _, _, err = taskplan.ApplyProcessUpdate(metadata, taskplan.ProcessUpdate{
+		HasArtifactChanges: true,
+		Artifacts:          artifacts,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:          taskID,
+			Title:       "Migration task",
+			Description: &description,
+			WorkStatus:  "draft",
+			Metadata:    metadata,
+		},
+	}
+	taskService := &mockTaskTransitionService{}
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		TaskService:   taskService,
+	})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id": taskID.String(),
+		"outcome_assessment": map[string]any{
+			"satisfied": true,
+			"summary":   "The mapping work is complete.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if taskOut["work_status"] != "draft" {
+		t.Fatalf("work_status = %v, want draft", taskOut["work_status"])
+	}
+	if taskService.transitionCalls != 0 {
+		t.Fatalf("transition calls = %d, want 0", taskService.transitionCalls)
+	}
+}
+
 func TestTaskUpdatePersistsPlanningFollowOnStopReason(t *testing.T) {
 	taskID := uuid.New()
 	description := "Run customer interviews, document assumptions, and build a validation plan for this new product idea before we commit scope."

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/db"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
@@ -116,6 +117,44 @@ func TestDraftTaskAutoCompletesWhenPlanningAndOutcomeAreSatisfied(t *testing.T) 
 
 	if !draftTaskAutoCompletes(repo.ProjectTask{WorkStatus: "draft", Metadata: updated}) {
 		t.Fatal("draftTaskAutoCompletes = false, want true")
+	}
+}
+
+func TestDraftTaskAutoCompletesRejectsBroadTask(t *testing.T) {
+	description := "- Migrate all legacy markdown posts into the new CMS schema with canonical slug preservation and author mapping.\n- Rewrite and validate all media URLs while uploading assets into object storage with stable redirect coverage.\n- Rebuild taxonomy/tag mappings and verify inbound URL parity against production analytics snapshots."
+	plan := taskplan.Analyze("Migration task", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+	contracts := taskplan.ArtifactContractForPlan(plan)
+	artifacts := make([]taskplan.ArtifactEvidence, 0, len(contracts))
+	for _, contract := range contracts {
+		artifacts = append(artifacts, taskplan.ArtifactEvidence{
+			Slug:     contract.Slug,
+			Summary:  contract.Title + " complete.",
+			Sections: append([]string(nil), contract.RequiredSections...),
+		})
+	}
+	updated, _, _, err := taskplan.ApplyProcessUpdate(metadata, taskplan.ProcessUpdate{
+		HasArtifactChanges: true,
+		Artifacts:          artifacts,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+	updated, err = taskorchestration.Apply(updated, taskorchestration.Update{
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "The deliverable is complete.", mustTime(t)),
+	})
+	if err != nil {
+		t.Fatalf("taskorchestration.Apply: %v", err)
+	}
+
+	if draftTaskAutoCompletes(repo.ProjectTask{
+		ID:          uuid.New(),
+		Title:       "Migration task",
+		Description: &description,
+		WorkStatus:  "draft",
+		Metadata:    updated,
+	}) {
+		t.Fatal("draftTaskAutoCompletes = true, want false for broad task")
 	}
 }
 

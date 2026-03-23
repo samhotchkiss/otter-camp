@@ -95,12 +95,7 @@ func autoCompleteSatisfiedDraftTask(taskRecord repo.ProjectTask) (taskplan.Valid
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "draft") {
 		return taskplan.ValidationReport{}, false
 	}
-	plan, ok := taskplan.Parse(taskRecord.Metadata)
-	if !ok || len(plan.ArtifactEvidence) == 0 {
-		return taskplan.ValidationReport{}, false
-	}
-	state, ok := taskorchestration.Parse(taskRecord.Metadata)
-	if !ok || state.OutcomeAssessment == nil || !state.OutcomeAssessment.Satisfied {
+	if !tasksvc.SatisfiedDraftAutoCompletable(taskRecord) {
 		return taskplan.ValidationReport{}, false
 	}
 	report, err := taskplan.CompletionReport(taskRecord.Metadata)

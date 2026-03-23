@@ -1124,8 +1124,19 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 	rows, err := w.pool.Query(ctx, `
 		SELECT mi.id,
 		       mi.turn_id,
-		       mi.session_id
+		       mi.session_id,
+		       ct.trigger_message_id,
+		       CASE
+		         WHEN mi.session_id IS NULL OR ct.trigger_message_id IS NULL THEN 0
+		         ELSE COALESCE((
+		           SELECT MAX(retry_turn.retry_count)
+		           FROM chat_turn retry_turn
+		           WHERE retry_turn.session_id = mi.session_id
+		             AND retry_turn.trigger_message_id = ct.trigger_message_id
+		         ), 0) + 1
+		       END AS next_retry_count
 		FROM model_invocation mi
+		LEFT JOIN chat_turn ct ON ct.id = mi.turn_id
 		WHERE mi.status = 'in_flight'
 		  AND (
 		    (
@@ -1170,11 +1181,13 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		invocationID uuid.UUID
 		turnID       *uuid.UUID
 		sessionID    *uuid.UUID
+		messageID    *uuid.UUID
+		retryCount   int
 	}
 	var candidates []staleInvocationCandidate
 	for rows.Next() {
 		var item staleInvocationCandidate
-		if err := rows.Scan(&item.invocationID, &item.turnID, &item.sessionID); err != nil {
+		if err := rows.Scan(&item.invocationID, &item.turnID, &item.sessionID, &item.messageID, &item.retryCount); err != nil {
 			return 0, fmt.Errorf("scan stale model invocation: %w", err)
 		}
 		candidates = append(candidates, item)
@@ -1234,6 +1247,21 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 				  AND current_turn_id = $2
 			`, *item.sessionID, *item.turnID); err != nil {
 				return repaired, fmt.Errorf("clear current turn for stale model invocation session %s: %w", *item.sessionID, err)
+			}
+			if item.messageID != nil && *item.messageID != uuid.Nil {
+				hasQueued, err := w.sessionHasQueuedOrClaimedAgentTurn(ctx, *item.sessionID)
+				if err != nil {
+					return repaired, fmt.Errorf("check queued recovered stale model invocation retry for session %s: %w", *item.sessionID, err)
+				}
+				if !hasQueued {
+					if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
+						SessionID:  *item.sessionID,
+						MessageID:  *item.messageID,
+						RetryCount: item.retryCount,
+					}, nil); err != nil {
+						return repaired, fmt.Errorf("enqueue recovered stale model invocation retry for session %s: %w", *item.sessionID, err)
+					}
+				}
 			}
 		}
 	}
