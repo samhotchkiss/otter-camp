@@ -9099,6 +9099,60 @@ func TestHandleTaskFileWriteWithoutContentPrefersPriorSubstantiveDraftOverIntent
 	}
 }
 
+func TestHandleTaskRejectedFileWriteContentRewritesPlaceholderFromPriorDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	priorTurnID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "docs/migration-plan/oc-15-content-migration-plan.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content: strings.TrimSpace(`# Content Migration Plan
+
+## Migration Strategy
+- Audit and classify all legacy posts.
+- Migrate Tier 1 before Tier 2.
+`),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    targetPath,
+			"content": "Now write the full migration plan:",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskRejectedFileWriteContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskRejectedFileWriteContent: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "## Migration Strategy") {
+		t.Fatalf("content = %q, want prior substantive draft", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftContentUsesPriorTurnDraftAfterCurrentNarration(t *testing.T) {
 	t.Parallel()
 

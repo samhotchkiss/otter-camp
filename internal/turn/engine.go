@@ -7050,6 +7050,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return false, nil
 		}
+		handled, stop, err = e.handleTaskRejectedFileWriteContent(ctx, rt, &call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 		handled, stop, err = e.handleTaskFileWriteWithoutContent(ctx, rt, &call)
 		if err != nil {
 			return false, err
@@ -7891,6 +7901,38 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 		"path", targetPath,
 	)
 	return false, false, nil
+}
+
+func (e *TurnEngine) handleTaskRejectedFileWriteContent(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
+	if rt == nil || call == nil || rt.turn == nil || rt.session == nil || rt.recoveryTurn {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false, false, nil
+	}
+
+	normalized, targetPath, draft, ok := recoveryFileWriteWithContent(*call)
+	if !ok {
+		return false, false, nil
+	}
+	rejectReason := recoveryFileWriteDraftRejectReason(draft, targetPath)
+	if strings.TrimSpace(rejectReason) == "" {
+		return false, false, nil
+	}
+	if replacement, replacementOK := e.taskContinuationDraftContent(ctx, rt, targetPath); replacementOK && strings.TrimSpace(replacement) != strings.TrimSpace(draft) {
+		normalized["content"] = replacement
+		if _, exists := normalized["create_dirs"]; !exists {
+			normalized["create_dirs"] = true
+		}
+		call.Arguments = normalized
+		e.logger.Info("task continuation: replaced non-substantive file.write content from substantive draft",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+		)
+		return false, false, nil
+	}
+	return e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
 }
 
 func (e *TurnEngine) handleTaskMalformedFileEditWithoutPath(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
