@@ -5295,6 +5295,11 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			return err
 		}
 	}
+	if rt != nil && rt.historyStartID == nil {
+		if _, err := e.appendReviewActionState(ctx, rt, false); err != nil {
+			return err
+		}
+	}
 
 	continuations := 0
 	listeningChecked := false
@@ -5500,6 +5505,55 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			return nil
 		}
 	}
+}
+
+func (e *TurnEngine) appendReviewActionState(ctx context.Context, rt *turnRuntime, preserveInitialMessage bool) (bool, error) {
+	if e == nil || e.tasks == nil || e.chat == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return false, nil
+	}
+	shouldAppend, appendErr := e.shouldAppendSyntheticUserPrompt(ctx, rt.session.ID, "task_review_action")
+	if appendErr != nil {
+		return false, appendErr
+	}
+	if !shouldAppend {
+		return false, nil
+	}
+	actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: rt.session.ID,
+		TurnID:    &rt.turn.ID,
+		Role:      "user",
+		Content:   buildTaskReviewActionPrompt(rt.session),
+		Metadata:  syntheticContinuationActionMessageMetadata(rt.session, "task_review_action"),
+	})
+	if err != nil {
+		return false, err
+	}
+	if preserveInitialMessage && rt.initialMessageID != uuid.Nil {
+		initial := rt.initialMessageID
+		rt.historyStartID = &initial
+		if err := e.persistTurnHistoryStart(ctx, rt, initial); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	rt.historyStartID = &actionMessage.ID
+	if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) completeTurn(ctx context.Context, rt *turnRuntime) error {
@@ -12192,6 +12246,17 @@ func syntheticContinuationActionMessageMetadata(session *chat.ChatSession, sourc
 		payload["flow_node_execution_id"] = executionID.String()
 	}
 	return mustJSONRaw(payload)
+}
+
+func buildTaskReviewActionPrompt(session *chat.ChatSession) string {
+	lines := []string{
+		"Review only. Inspect the current deliverables and use flow.review_decision to approve or reject this review step.",
+		"Do not continue implementation, do not write deliverable files, and do not summarize what you plan to review.",
+	}
+	if executionID := flowNodeExecutionIDFromSessionMetadata(session); executionID != nil && *executionID != uuid.Nil {
+		lines = append(lines, "Use flow_node_execution_id "+executionID.String()+" in flow.review_decision.")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (e *TurnEngine) shouldAppendSyntheticUserPrompt(ctx context.Context, sessionID uuid.UUID, source string) (bool, error) {

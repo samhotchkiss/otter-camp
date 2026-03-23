@@ -1015,6 +1015,61 @@ func TestHandleTurnCompletedEventEnqueuesAutoContinuation(t *testing.T) {
 	}
 }
 
+func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				ProjectID:  uuid.New(),
+				WorkStatus: "review",
+			},
+		},
+	}
+	turn := &chat.ChatTurn{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   fixture.chat.participants[0].ParticipantID,
+		Status:         "in_progress",
+	}
+	fixture.chat.turns[turn.ID] = turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turn.ID)
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn:    turn,
+	}
+
+	appended, err := fixture.engine.appendReviewActionState(context.Background(), rt, false)
+	if err != nil {
+		t.Fatalf("appendReviewActionState: %v", err)
+	}
+	if !appended {
+		t.Fatal("appendReviewActionState = false, want true")
+	}
+	if rt.historyStartID == nil {
+		t.Fatal("historyStartID = nil, want synthetic review action message")
+	}
+	message, getErr := fixture.messages.GetByID(context.Background(), *rt.historyStartID)
+	if getErr != nil {
+		t.Fatalf("GetByID historyStartID: %v", getErr)
+	}
+	if !strings.Contains(message.Content, "flow.review_decision") {
+		t.Fatalf("review action prompt = %q, want flow.review_decision guidance", message.Content)
+	}
+	if !strings.Contains(message.Content, executionID.String()) {
+		t.Fatalf("review action prompt = %q, want execution id %s", message.Content, executionID)
+	}
+}
+
 func TestHandleTurnCompletedEventSkipsWhenCompletionMessagePresent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 
