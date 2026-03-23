@@ -313,6 +313,64 @@ func (e *NativeToolExecutor) projectSessionBootstrapGitCommitBlocked(ctx context
 	return nil, false, nil
 }
 
+func (e *NativeToolExecutor) rejectProjectSessionExecutionMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
+	if e == nil || e.chatSessions == nil || e.tasks == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil || scope.projectID == nil || *scope.projectID == uuid.Nil {
+		return nil, false, nil
+	}
+	session, err := e.chatSessions.GetByID(ctx, *scope.sessionID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
+		return nil, false, nil
+	}
+
+	normalizedPath := strings.ToLower(normalizeWorkspacePath(relativePath))
+	if normalizedPath == "" {
+		return nil, false, nil
+	}
+	if strings.HasPrefix(normalizedPath, "bootstrap/") || strings.HasPrefix(normalizedPath, "planning/") {
+		return nil, false, nil
+	}
+
+	projectTasks, err := e.tasks.ListByProject(ctx, *scope.projectID)
+	if err != nil {
+		return nil, false, err
+	}
+	hasExecutableTask := false
+	bootstrapActive := false
+	for _, taskRecord := range projectTasks {
+		if bootstrapGateTask(taskRecord) && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
+			bootstrapActive = true
+			continue
+		}
+		metadata := metadataObject(taskRecord.Metadata)
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); setupTask {
+			continue
+		}
+		if isTaskTerminal(taskRecord.WorkStatus) {
+			continue
+		}
+		hasExecutableTask = true
+		break
+	}
+	if !hasExecutableTask {
+		return nil, false, nil
+	}
+
+	message := fmt.Sprintf("Executable project tasks already exist for this project. Do not write deliverable files like `%s` from the project session. Queue or advance the specific task and let the bound project_task session write the deliverable.", normalizeWorkspacePath(relativePath))
+	if bootstrapActive {
+		message = fmt.Sprintf("Bootstrap has already materialized executable project tasks. Do not write deliverable files like `%s` from the project session. Keep bootstrap moving with task, assignment, flow, and bootstrap.setup.persist actions, and let project_task sessions write the deliverables.", normalizeWorkspacePath(relativePath))
+	}
+	return map[string]any{
+		"error":   "task_execution_required",
+		"message": message,
+	}, true, nil
+}
+
 func (e *NativeToolExecutor) rejectExecutionFirstPlanningMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
 	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
 		return nil, false, nil
@@ -879,6 +937,11 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 		}, nil
 	}
 	renderedPath := renderPath(wd.Root(), resolved)
+	if blocked, reject, rejectErr := e.rejectProjectSessionExecutionMutation(ctx, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if reject {
+		return blocked, nil
+	}
 	if blocked, reject, rejectErr := e.rejectReviewTaskMutation(ctx, scope, renderedPath); rejectErr != nil {
 		return nil, rejectErr
 	} else if reject {
@@ -972,6 +1035,11 @@ func (e *NativeToolExecutor) handleFileEdit(ctx context.Context, input map[strin
 		}, nil
 	}
 	renderedPath := renderPath(wd.Root(), resolved)
+	if blocked, reject, rejectErr := e.rejectProjectSessionExecutionMutation(ctx, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if reject {
+		return blocked, nil
+	}
 	if blocked, reject, rejectErr := e.rejectReviewTaskMutation(ctx, scope, renderedPath); rejectErr != nil {
 		return nil, rejectErr
 	} else if reject {

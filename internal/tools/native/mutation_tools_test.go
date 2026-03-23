@@ -195,6 +195,72 @@ func TestFileWriteRejectsNarratedTaskPlaceholderContent(t *testing.T) {
 	}
 }
 
+func TestFileWriteRejectsProjectSessionExecutionDeliverableMutation(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	bootstrapGateID := uuid.New()
+	executableTaskID := uuid.New()
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             bootstrapGateID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "Bootstrap governance gate",
+				WorkStatus:     "draft",
+				BlocksScope:    "all",
+				Metadata:       json.RawMessage(`{"bootstrap_gate":true}`),
+			},
+			{
+				ID:             executableTaskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				Title:          "OC-10: Define Validation Rules",
+				WorkStatus:     "draft",
+				AssignedAgentID: &agentID,
+			},
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "validation-rules.md",
+		"content":     "# Validation Rules\n\nReal deliverable content.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "task_execution_required" {
+		t.Fatalf("error = %v, want task_execution_required", out["error"])
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "validation-rules.md")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("deliverable file should not be written from project session, stat err = %v", statErr)
+	}
+}
+
 func TestFileEditAmbiguousMatchDoesNotModifyFile(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "dup.txt")
