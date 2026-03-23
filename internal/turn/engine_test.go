@@ -7197,6 +7197,14 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects complete picture placeholder narration",
+			content: "Excellent! Now I have a complete picture. " +
+				"The draft document exists but is incomplete. " +
+				"Let me resume work by completing the accessibility standards document. " +
+				"I'll continue from where it was cut off and finish all remaining sections:",
+			want: "intent to write the deliverable",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",

@@ -9418,7 +9418,12 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"now i have everything i need",
 		"i now have everything i need",
 		"i have everything i need",
+		"now i have all the context needed",
+		"i have all the context needed",
 		"i have enough context",
+		"i have a complete picture",
+		"i now have a complete picture",
+		"i now have the complete picture",
 		"i have what i need",
 		"now that i have",
 		"i now have the full",
@@ -9426,6 +9431,8 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"i now have the full strategy context",
 		"i now have the full recovery context",
 		"the recovery state indicates",
+		"the draft document exists but is incomplete",
+		"continue from where it was cut off",
 	)
 	hasDeliverableCue := containsAny(lower,
 		"deliverable",
@@ -9440,6 +9447,20 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"strategic foundation",
 	)
 	if hasWriteIntent && (hasSetupCue || (wordCount <= 80 && hasDeliverableCue)) {
+		return true
+	}
+	if containsAny(lower,
+		"i have a complete picture",
+		"i now have a complete picture",
+		"the draft document exists but is incomplete",
+		"continue from where it was cut off",
+	) && containsAny(lower,
+		"let me ",
+		"i'll continue",
+		"i will continue",
+		"write the",
+		"draft the",
+	) && hasDeliverableCue {
 		return true
 	}
 	if wordCount <= 80 && containsAny(lower,
