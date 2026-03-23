@@ -10677,6 +10677,9 @@ func (e *TurnEngine) handleRecoveryPopulatedFileWriteOutcome(ctx context.Context
 
 	durable, failureReason := e.recoveryPopulatedFileWriteDurableOutcome(ctx, rt, targetPath, result)
 	if durable {
+		if rt.recoveryTurn {
+			rt.recoveryWriteDone = true
+		}
 		return false, nil
 	}
 
