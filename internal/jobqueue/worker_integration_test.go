@@ -3933,6 +3933,186 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	}
 }
 
+func TestJobWorkerPurgeStaleAgentTurnJobsDropsLegacyTaskDispatchWithoutExecutionOwnership(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-legacy-task-dispatch-without-execution-ownership",
+		DisplayName: "Purge Legacy Task Dispatch Without Execution Ownership",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "legacy-task-dispatch-project",
+		DisplayName:    "Legacy Task Dispatch Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Execution Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Execute task work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "legacy-task-dispatch-template",
+		DisplayName:    "Legacy Task Dispatch Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work Node",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:      org.ID,
+		ProjectID:           project.ID,
+		TaskNumber:          1,
+		Title:               "Active task",
+		WorkStatus:          "in_progress",
+		FlowTemplateID:      &template.ID,
+		CurrentFlowNodeID:   &flowNode.ID,
+		CreatedByType:       "system",
+		CreatedByID:         func() *uuid.UUID { id := uuid.New(); return &id }(),
+		RequiresHumanReview: false,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+		Metadata:    json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+	liveMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "current execution message",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_queue_processor","flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create live message: %v", err)
+	}
+	liveTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "pending",
+		TriggerMessageID: &liveMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create live turn: %v", err)
+	}
+	if _, err := repo.NewFlowNodeExecutionRepo(pool).UpdateMetadata(ctx, execution.ID, repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{
+		TurnID: &liveTurn.ID,
+	})); err != nil {
+		t.Fatalf("update execution metadata: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &liveTurn.ID); err != nil {
+		t.Fatalf("update current turn: %v", err)
+	}
+
+	legacyMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "legacy retry",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"supervisor"}`),
+	})
+	if err != nil {
+		t.Fatalf("create legacy message: %v", err)
+	}
+	legacyPayload := map[string]any{
+		"session_id":  session.ID.String(),
+		"message_id":  legacyMessage.ID.String(),
+		"retry_count": 1,
+	}
+	if _, err := worker.Enqueue(ctx, nil, agentTurnJobType, 70, legacyPayload, nil); err != nil {
+		t.Fatalf("enqueue legacy agent_turn: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged < 1 {
+		t.Fatalf("purged jobs = %d, want at least 1", purged)
+	}
+
+	var (
+		status    string
+		lastError string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		  AND (payload->>'message_id')::uuid = $2
+	`, session.ID, legacyMessage.ID).Scan(&status, &lastError); err != nil {
+		t.Fatalf("query purged legacy job: %v", err)
+	}
+	if status != "dead_letter" {
+		t.Fatalf("legacy job status = %q, want dead_letter", status)
+	}
+	if !strings.Contains(lastError, "legacy task dispatch without execution ownership") {
+		t.Fatalf("legacy job last_error = %q, want purge marker", lastError)
+	}
+}
+
 func TestJobWorkerClearCompletedSessionCurrentTurnsEnablesRequeue(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

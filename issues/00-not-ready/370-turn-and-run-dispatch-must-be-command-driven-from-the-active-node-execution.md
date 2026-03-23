@@ -112,5 +112,6 @@ That means execution identity now survives:
 - worker pending-turn requeue
 - worker stranded supervisor-recovery requeue
 - turn-engine task retries / auto-continuations
+- worker startup purge of legacy task-lane queue rows that predate execution-bound payloads
 
 The remaining gap is that several primary dispatch producers still create task-lane work from message/session state without routing through one execution-scoped command helper. The next slice should eliminate those remaining raw producers rather than adding another generation of suppression heuristics.

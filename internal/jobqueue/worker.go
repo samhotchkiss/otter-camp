@@ -759,7 +759,43 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (duplicate synthetic dispatches): %w", err)
 	}
 
-	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected() + ct6.RowsAffected() + ct7.RowsAffected()
+	// Condition 8: legacy task-lane dispatches with no execution identity are
+	// stale once the bound session already has an active execution with a
+	// newer live turn. Keep execution-owned dispatches; drop only pre-rework
+	// queue rows that no longer represent the live lane.
+	ct8, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    last_error = 'purged stale legacy task dispatch without execution ownership',
+		    updated_at = now()
+		WHERE jq.status = 'pending'
+		  AND jq.job_type = 'agent_turn'
+		  AND COALESCE(jq.payload->>'flow_node_execution_id', '') = ''
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    JOIN flow_node_execution e
+		      ON e.session_id = cs.id
+		     AND e.status = 'active'
+		    JOIN chat_turn live_turn ON live_turn.id = CASE
+		      WHEN COALESCE(e.metadata->>'live_turn_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+		      THEN (e.metadata->>'live_turn_id')::uuid
+		      ELSE NULL
+		    END
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.scope_type = 'project_task'
+		      AND cs.status = 'active'
+		      AND (
+		        live_turn.trigger_message_id IS DISTINCT FROM (jq.payload->>'message_id')::uuid
+		        OR live_turn.retry_count <> COALESCE((jq.payload->>'retry_count')::int, 0)
+		      )
+		  )
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("purge stale agent_turn jobs (legacy task dispatches): %w", err)
+	}
+
+	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected() + ct6.RowsAffected() + ct7.RowsAffected() + ct8.RowsAffected()
 	return total, nil
 }
 

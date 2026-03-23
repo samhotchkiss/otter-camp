@@ -57,7 +57,8 @@ Most recent shipped commits relevant to the current validation run:
 - `23c22ab4` `Preserve live continuation dispatches from execution ownership`
 - `6ccc00d9` `Bind worker task dispatches to active executions`
 - `425fd775` `Ignore stale task turns during claim suppression`
-- pending local slice: turn-engine-created retries and continuations now stamp `flow_node_execution_id` from bound task-session metadata before enqueue; targeted `internal/turn` coverage passes and this should be committed next if the worktree is otherwise clean
+- `25215b30` `Bind task continuations to active executions`
+- pending local slice: worker startup now purges legacy task-session `agent_turn` rows with no `flow_node_execution_id` once an active execution-owned live turn exists for that lane; targeted integration coverage passes and live restart verified the old orphan queue row for task 20 was dead-lettered instead of lingering
 
 What those changed:
 
@@ -79,6 +80,7 @@ What those changed:
 - worker task-lane requeue/recovery paths now also stamp `flow_node_execution_id` into `agent_turn` payloads, which is the first concrete code slice toward issue `370`’s execution-bound dispatch model
 - claim-time `agent_turn` suppression no longer lets stale pending `current_turn_id` rows from abandoned task executions block fresh task dispatch claims
 - turn-engine-created retries and auto-continuations now also stamp `flow_node_execution_id` from task-session metadata before enqueue, so engine-side task dispatch no longer drops execution ownership after worker/control-plane already established it
+- worker startup purge now also retires legacy task-session `agent_turn` rows with no execution identity when a newer execution-owned live turn already exists, so pre-rework queue rows no longer shadow an active lane after restart
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
@@ -120,6 +122,7 @@ The current implementation work is already underway against that plan:
 - worker reissued task-lane dispatches now carry the active `flow_node_execution_id` in payload, instead of treating `session_id/message_id/retry_count` as the entire dispatch identity
 - claim-time worker suppression now also respects execution ownership: stale pending session turns only block claims when an active `flow_node_execution` still exists for that task lane
 - turn-engine requeues/retries/auto-continuations now preserve the bound `flow_node_execution_id` too, so execution ownership survives task-session continuation inside the engine rather than only in worker repair paths
+- startup cleanup now drops legacy task-session dispatch rows that have no `flow_node_execution_id` once the lane already has an active execution-owned live turn, which removes another pre-command-model source of stale queue identity
 
 The next likely slices after committing the current worker change are:
 
