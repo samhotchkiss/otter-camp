@@ -3511,7 +3511,7 @@ func TestJobWorkerRecoverStaleInProgressContinuationTurns(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `
 		UPDATE chat_turn
-		SET started_at = now() - interval '1 hour'
+		SET started_at = now() - interval '6 minutes'
 		WHERE id = $1
 	`, continuationTurn.ID); err != nil {
 		t.Fatalf("age continuation turn: %v", err)

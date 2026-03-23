@@ -56,6 +56,13 @@ func staleTriggeredTurnThreshold(scopeType string) time.Duration {
 	return staleContinuationThreshold
 }
 
+func staleContinuationThresholdForScope(scopeType string) time.Duration {
+	if strings.EqualFold(strings.TrimSpace(scopeType), "project_task") {
+		return defaultStaleThreshold
+	}
+	return staleContinuationThreshold
+}
+
 type JobWorker interface {
 	Start(ctx context.Context) error
 	Stop() error
@@ -1026,7 +1033,10 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 		  AND ct.status = 'in_progress'
 		  AND ct.trigger_message_id IS NULL
 		  AND ct.started_at IS NOT NULL
-		  AND ct.started_at < $1
+		  AND ct.started_at < CASE
+		    WHEN cs.scope_type = 'project_task' THEN $1::timestamptz
+		    ELSE $2::timestamptz
+		  END
 		  AND (
 		    cs.scope_type NOT IN ('project', 'project_task')
 		    OR (
@@ -1042,7 +1052,7 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 		      AND r.turn_id = ct.id
 		      AND r.status IN ('created', 'in_progress')
 		  )
-	`, w.clock.Now().UTC().Add(-staleContinuationThreshold))
+	`, w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("list stale in-progress continuation turns: %w", err)
 	}
