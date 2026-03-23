@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
+	"log/slog"
 )
 
 func TestListeningEvalSkippedForSyncSinglePending(t *testing.T) {
@@ -7965,6 +7967,49 @@ func TestShouldSuppressAutoContinuationForStopReasonIncludesRecoveryFallback(t *
 				t.Fatalf("shouldSuppressAutoContinuationForStopReason(%v) = %t, want %t", tc.stopReason, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCompleteTurnNoOpForFailedTurn(t *testing.T) {
+	t.Parallel()
+
+	turnID := uuid.New()
+	sessionID := uuid.New()
+	taskID := uuid.New()
+	fakeChat := &fakeChatService{
+		enforceStatus: true,
+		session: &chat.ChatSession{
+			ID:        sessionID,
+			ScopeType: "project_task",
+			ScopeID:   taskID,
+			Status:    "active",
+		},
+		turns: map[uuid.UUID]*chat.ChatTurn{
+			turnID: {
+				ID:        turnID,
+				SessionID: sessionID,
+				Status:    "failed",
+			},
+		},
+	}
+	engine := &TurnEngine{
+		chat:   fakeChat,
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	rt := &turnRuntime{
+		session: fakeChat.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: sessionID,
+			Status:    "in_progress",
+		},
+	}
+
+	if err := engine.completeTurn(context.Background(), rt); err != nil {
+		t.Fatalf("completeTurn failed terminal no-op: %v", err)
+	}
+	if rt.turn == nil || !strings.EqualFold(strings.TrimSpace(rt.turn.Status), "failed") {
+		t.Fatalf("rt.turn status = %v, want failed", rt.turn)
 	}
 }
 
