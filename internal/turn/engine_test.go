@@ -7444,6 +7444,16 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "generic recovery reply",
 		},
 		{
+			name: "rejects structured status report placeholder narration",
+			content: "Perfect! I can see:\n" +
+				"- **Current flow node:** 8cc3df4d (Work)\n" +
+				"- **Status:** in_progress\n" +
+				"- **Strategy artifacts:** All 4 required artifacts are present and locked\n" +
+				"- **Target file:** planning/prd-spec/oc-24-infrastructure-spec.md (partially drafted)\n\n" +
+				"The task is in the **Work phase**. I need to complete the infrastructure spec file. Let me check the full file to see what sections still need content:",
+			want: "intent to write the deliverable",
+		},
+		{
 			name: "rejects full context acceptance criteria placeholder narration",
 			content: "Excellent! Now I understand the full context. I need to complete OC-28 by writing the comprehensive accessibility standards document. " +
 				"Let me check the acceptance criteria and dependency log as well:",
