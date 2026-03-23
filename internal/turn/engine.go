@@ -2837,6 +2837,12 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 			firstWaveTemplateIDs[*task.FlowTemplateID] = struct{}{}
 		}
 	}
+	if len(firstWaveTasks) > 0 && len(assignedFirstWaveTasks) == 0 {
+		progress.ValidationStatus = projectBootstrapValidationFailed
+		progress.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
+		progress.ValidationFailureReason = buildProjectBootstrapFirstWaveAssignmentFailureReason(firstWaveTasks[0])
+		return progress, nil
+	}
 	if len(assignedFirstWaveTasks) > 0 {
 		firstWaveTasks = assignedFirstWaveTasks
 	} else if unassignedLeafFailureClass != "" {
