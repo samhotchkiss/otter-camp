@@ -1184,9 +1184,26 @@ func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 		return true, nil
 	}
 
+	nextMessageID := latestUser.ID
+	if e.chat != nil {
+		retryMessage, appendErr := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+			SessionID: session.ID,
+			TurnID:    &latestCompleted.ID,
+			Role:      "user",
+			Content:   latestUser.Content,
+			Metadata:  latestUser.Metadata,
+		})
+		if appendErr != nil {
+			return true, appendErr
+		}
+		if retryMessage != nil && retryMessage.ID != uuid.Nil {
+			nextMessageID = retryMessage.ID
+		}
+	}
+
 	nextPayload := AgentTurnPayload{
 		SessionID:  session.ID,
-		MessageID:  latestUser.ID,
+		MessageID:  nextMessageID,
 		RetryCount: latestCompleted.RetryCount + 1,
 	}
 	if latestCompleted.RespondingID != uuid.Nil {

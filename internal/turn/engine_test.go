@@ -1463,8 +1463,25 @@ func TestHandleTurnCompletedEventRetriesGenericTaskContinuationReply(t *testing.
 	if jobs[0].payload == nil || jobs[0].payload.RetryCount != 1 {
 		t.Fatalf("payload.retry_count = %#v, want 1", jobs[0].payload)
 	}
+	if jobs[0].payload.MessageID == fixture.userMessageID {
+		t.Fatalf("payload.message_id = %s, want fresh retry prompt message", jobs[0].payload.MessageID)
+	}
 	if jobs[0].runAfter == nil || !jobs[0].runAfter.Equal(base.Add(defaultAutoContinueDelay)) {
 		t.Fatalf("run_after = %v, want %s", jobs[0].runAfter, base.Add(defaultAutoContinueDelay))
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	latest := messages[len(messages)-1]
+	if latest.ID != jobs[0].payload.MessageID {
+		t.Fatalf("latest message id = %s, want %s", latest.ID, jobs[0].payload.MessageID)
+	}
+	if latest.Role != "user" {
+		t.Fatalf("latest role = %q, want user", latest.Role)
+	}
+	if latest.Content != message.Content {
+		t.Fatalf("latest content = %q, want retry prompt copy", latest.Content)
 	}
 }
 
