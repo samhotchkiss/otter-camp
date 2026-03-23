@@ -1437,7 +1437,76 @@ func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventb
 			return err
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	pendingMessageRows, err := e.pool.Query(ctx, `
+		SELECT DISTINCT cs.id, cm.id
+		FROM chat_session cs
+		LEFT JOIN project_task pt
+		  ON cs.scope_type = 'project_task'
+		 AND pt.id = cs.scope_id
+		JOIN chat_message cm
+		  ON cm.session_id = cs.id
+		 AND cm.role = 'user'
+		 AND cm.status = 'pending'
+		LEFT JOIN chat_turn current_ct
+		  ON current_ct.id = cs.current_turn_id
+		WHERE cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND (
+		    (cs.scope_type = 'project' AND cs.scope_id = $1)
+		    OR
+		    (cs.scope_type = 'project_task' AND pt.project_id = $1)
+		  )
+		  AND (
+		    cs.current_turn_id IS NULL
+		    OR current_ct.id IS NULL
+		    OR current_ct.status IN ('completed', 'cancelled', 'failed')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = cs.id
+		      AND ct.trigger_message_id = cm.id
+		      AND ct.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $2
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		      AND (jq.payload->>'message_id')::uuid = cm.id
+		  )
+	`, payload.ProjectID, AgentTurnJobType)
+	if err != nil {
+		return err
+	}
+	defer pendingMessageRows.Close()
+
+	for pendingMessageRows.Next() {
+		var sessionID uuid.UUID
+		var messageID uuid.UUID
+		if err := pendingMessageRows.Scan(&sessionID, &messageID); err != nil {
+			return err
+		}
+		session, err := e.chat.GetSession(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				continue
+			}
+			return err
+		}
+		if _, err := e.enqueueAgentTurnIfActive(ctx, session, AgentTurnPayload{
+			SessionID: sessionID,
+			MessageID: messageID,
+		}, nil); err != nil {
+			return err
+		}
+	}
+	return pendingMessageRows.Err()
 }
 
 func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, session *chat.ChatSession, turnID uuid.UUID) error {
