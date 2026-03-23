@@ -13132,10 +13132,45 @@ func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat
 		e.logger.Info("skipping enqueue after logical message cancellation", "session_id", payload.SessionID, "message_id", payload.MessageID)
 		return false, nil
 	}
+	if suppressed, err := e.suppressRecoveryRetryForCompletedTurn(ctx, session, payload.MessageID); err != nil {
+		return false, err
+	} else if suppressed {
+		e.logger.Info("skipping enqueue after completed recovery halt for message",
+			"session_id", payload.SessionID,
+			"message_id", payload.MessageID,
+		)
+		return false, nil
+	}
 	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, payload, runAfter); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func (e *TurnEngine) suppressRecoveryRetryForCompletedTurn(ctx context.Context, session *chat.ChatSession, messageID uuid.UUID) (bool, error) {
+	if e == nil || e.turns == nil || session == nil || messageID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+		return false, nil
+	}
+	turns, err := e.turns.ListBySession(ctx, session.ID)
+	if err != nil {
+		return false, err
+	}
+	for i := range turns {
+		turn := turns[i]
+		if turn.TriggerMessageID == nil || *turn.TriggerMessageID != messageID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(turn.Status), "completed") {
+			continue
+		}
+		if shouldSuppressAutoContinuationForStopReason(turn.StopReason) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (e *TurnEngine) logValidationLoopSuppressed(message string, session *chat.ChatSession, messageID uuid.UUID, guard taskValidationGuardState) {

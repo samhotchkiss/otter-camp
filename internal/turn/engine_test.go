@@ -6994,6 +6994,55 @@ func TestEnsureRecoveryTurnDurableTaskStateFailsWithoutTaskTransitions(t *testin
 	}
 }
 
+func TestEnqueueAgentTurnIfActiveSuppressesRepeatedRecoveryRetryForSameMessage(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      uuid.New(),
+				WorkStatus:     "review",
+				Metadata:       json.RawMessage(`{}`),
+			},
+		},
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnRecord, _, err := fixture.engine.turns.CreateForMessageAttempt(context.Background(), fixture.session.ID, agentID, fixture.userMessageID, 4)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), turnRecord.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	stopReason := stopReasonRecoveryFileRejected
+	if _, err := fixture.engine.turns.SetStopReason(context.Background(), turnRecord.ID, &stopReason); err != nil {
+		t.Fatalf("SetStopReason: %v", err)
+	}
+	if err := fixture.chat.CompleteTurn(context.Background(), turnRecord.ID); err != nil {
+		t.Fatalf("CompleteTurn: %v", err)
+	}
+
+	enqueued, err := fixture.engine.enqueueAgentTurnIfActive(context.Background(), fixture.session, AgentTurnPayload{
+		SessionID:  fixture.session.ID,
+		MessageID:  fixture.userMessageID,
+		RetryCount: 5,
+	}, nil)
+	if err != nil {
+		t.Fatalf("enqueueAgentTurnIfActive: %v", err)
+	}
+	if enqueued {
+		t.Fatal("expected enqueue to be suppressed for completed recovery halt")
+	}
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent turn jobs = %d, want 0", len(jobs))
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 	const targetPath = "docs/content-strategy.md"
 
