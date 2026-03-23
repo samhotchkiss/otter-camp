@@ -1713,12 +1713,16 @@ func (s *service) SteerTurn(ctx context.Context, sessionID, messageID uuid.UUID,
 	}
 
 	actorType, actorID := actorFromContext(ctx)
-	if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.user_sent", actorType, actorID, map[string]any{
+	payload := map[string]any{
 		"session_id":      session.ID,
 		"message_id":      steerMessage.ID,
 		"sequence_number": steerMessage.SequenceNumber,
 		"status":          steerMessage.Status,
-	}); err != nil {
+	}
+	if executionID := flowNodeExecutionIDFromSessionMetadata(*session); executionID != nil && *executionID != uuid.Nil {
+		payload["flow_node_execution_id"] = executionID.String()
+	}
+	if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.user_sent", actorType, actorID, payload); err != nil {
 		return err
 	}
 	if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.finalized", actorType, actorID, map[string]any{

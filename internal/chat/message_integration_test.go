@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/middleware"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
@@ -727,6 +729,113 @@ func TestTurn_SteerPublishesUserSentAndBindsTriggerMessage(t *testing.T) {
 	steer := messages[len(messages)-1]
 	if *pendingTurn.TriggerMessageID != steer.ID {
 		t.Fatalf("pending steer turn trigger_message_id = %s, want %s", *pendingTurn.TriggerMessageID, steer.ID)
+	}
+}
+
+func TestTurn_SteerPublishesExecutionOwnedUserSentForTaskSession(t *testing.T) {
+	baseCtx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, baseCtx, pool)
+	user := seedChatServiceUser(t, baseCtx, pool, org.ID, "steer-task-events-author", "member")
+	agent := seedChatServiceAgent(t, baseCtx, pool, org.ID)
+	project, err := repo.NewProjectRepo(pool).Create(baseCtx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "steer-task-" + uuid.NewString()[:8],
+		DisplayName:    "Steer Task Project",
+		Description:    "integration test project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    user.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(baseCtx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Task-scoped steer event",
+		CreatedByType:  "system",
+		CreatedByID:    &user.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	executionID := uuid.New()
+
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	session, err := sessionRepo.Create(baseCtx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(fmt.Sprintf(`{"flow_node_execution_id":"%s"}`, executionID)),
+	})
+	if err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+
+	bus := newIntegrationEventBus(pool)
+	svc := newIntegrationService(t, pool, bus)
+	ctx := principalContext(baseCtx, org.ID, user.ID, "member")
+
+	events := make(chan eventbus.DomainEvent, 8)
+	sub := bus.Subscribe("chat-steer-task-user-sent-"+uuid.NewString(), &org.ID, func(_ context.Context, event eventbus.DomainEvent) error {
+		if event.EventType == "chat.message.user_sent" {
+			events <- event
+		}
+		return nil
+	})
+	defer bus.Unsubscribe(sub)
+
+	authorType := "human_user"
+	original, err := svc.AppendMessage(ctx, AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &user.ID,
+		Role:       "user",
+		Content:    "initial direction",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage original: %v", err)
+	}
+	turn, err := svc.CreateTurn(baseCtx, session.ID, agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := svc.StartTurn(baseCtx, turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	if err := svc.SteerTurn(ctx, session.ID, original.ID, "new direction"); err != nil {
+		t.Fatalf("SteerTurn: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case event := <-events:
+			var payload map[string]any
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatalf("unmarshal user_sent payload: %v", err)
+			}
+			if payload["message_id"] == original.ID.String() {
+				continue
+			}
+			if payload["session_id"] != session.ID.String() {
+				t.Fatalf("user_sent session_id = %v, want %s", payload["session_id"], session.ID)
+			}
+			if payload["flow_node_execution_id"] != executionID.String() {
+				t.Fatalf("user_sent flow_node_execution_id = %v, want %s", payload["flow_node_execution_id"], executionID)
+			}
+			return
+		case <-time.After(25 * time.Millisecond):
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for steer task-session chat.message.user_sent")
+			}
+		}
 	}
 }
 

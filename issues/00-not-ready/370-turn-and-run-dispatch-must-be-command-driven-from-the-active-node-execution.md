@@ -123,3 +123,5 @@ Latest slice completed:
 - `HandleUserMessageEvent(...)` now refuses the legacy raw `agent_turn` fallback for execution-owned task events when the session cannot be loaded.
 - That removes another shadow dispatch path where `project_task` work could be recreated from `session_id/message_id` alone even though the event already carried `flow_node_execution_id`.
 - Focused turn-engine coverage now asserts that execution-owned task events with a missing session no-op instead of enqueueing an orphan job.
+- `chat.SteerTurn(...)` now also includes `flow_node_execution_id` in the replacement `chat.message.user_sent` payload for bound task sessions.
+- Focused chat integration coverage now asserts steered task-session user events remain execution-owned instead of falling back to message-only dispatch identity.
