@@ -46,6 +46,8 @@ Most recent shipped commits relevant to the current validation run:
 - `fbf8dec4` `Reserve worker slots from maintenance floods`
 - `ca83abea` `Skip closed-session agent turn claims`
 - `b787978e` `Direct review lanes to flow review decisions`
+- `04c08223` `Plan flow execution architecture rework`
+- `374d4ec2` `Track live execution ownership on flow nodes`
 
 What those changed:
 
@@ -55,6 +57,8 @@ What those changed:
 - maintenance jobs can no longer occupy all worker slots when live execution work is waiting
 - stale pending `agent_turn` jobs for closed sessions are skipped at claim time and purged on startup/recovery instead of stealing slots
 - review-lane prompts and mutation rejections now explicitly direct reviewer sessions to `flow.review_decision`
+- the architecture rework is now committed into docs/issues/reports instead of living only in transient conversation state
+- first issue `369` has started: active flow executions now persist `live_run_id` in `flow_node_execution.metadata` from the queue wakeup path, and task-scoped execution sessions now persist/clear `live_turn_id` around real turn execution
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
@@ -247,6 +251,12 @@ That prompt-context fix is still a valid short-term cleanup, but it should not d
 - `issues/00-not-ready/369-flow-node-execution-must-be-the-single-runtime-owner-for-task-lanes.md`
 - `issues/00-not-ready/370-turn-and-run-dispatch-must-be-command-driven-from-the-active-node-execution.md`
 - `issues/00-not-ready/371-task-recovery-must-resume-from-structured-checkpoints-not-draft-heuristics.md`
+
+Current implementation status of the rework:
+
+- architecture plan committed and pushed in `04c08223`
+- first `369` slice committed and pushed in `374d4ec2`
+- that slice does not complete the ownership refactor; it only gives `flow_node_execution` a persisted view of the live run/turn owner so later slices can stop inferring ownership purely from runtime_state/session/job drift
 
 Local repo note for restart safety:
 
