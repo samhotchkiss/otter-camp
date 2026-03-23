@@ -9611,6 +9611,30 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeGenericTaskRecoveryReply(trimmed) || looksLikeRecoveryQuestionEcho(trimmed) {
 		return fmt.Sprintf("assistant draft for %s repeated a generic recovery reply instead of the file body", path)
 	}
+	if len(trimmed) < 240 && containsAny(lower,
+		"now write",
+		"now let me write",
+		"let me write",
+		"let me create",
+		"let me use",
+		"let me try",
+		"let me check",
+	) && containsAny(lower,
+		"migration plan",
+		"infrastructure spec",
+		"specification",
+		"document",
+		"deliverable",
+		"full content",
+		"full file",
+		"full draft",
+		"file_write",
+		"file.write",
+		"directory",
+		"approach",
+	) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
+	}
 	if containsAny(lower,
 		"i understand the problem",
 		"i can see the problem",
