@@ -6857,6 +6857,123 @@ func TestTurnEngineIntegrationRecoveryResumeReplacesIntentOnlyFileWriteContentFr
 	}
 }
 
+func TestTurnEngineIntegrationTaskTurnAutopopulatesFileWriteFromPersistedArtifactDraft(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, initialUserMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
+	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, initialUserMessage.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	currentTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task before in-progress update: %v", err)
+	}
+	currentTask.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update task in_progress: %v", err)
+	}
+
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "Continue the active task and write the deliverable.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage task kickoff: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.write", Tier: "tier2"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls > 2 {
+			t.Fatalf("unexpected extra model call after task persisted-draft autopopulation: %d", modelCalls)
+		}
+		if modelCalls == 2 {
+			return ModelResponse{Content: "task persisted draft applied"}, nil
+		}
+		return ModelResponse{
+			Content: "",
+			ToolCalls: []ModelToolCall{{
+				ID:   "task-write",
+				Name: "file.write",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path": seed.targetPath,
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		dispatched++
+		path := stringValue(call.Arguments["path"])
+		content := stringValue(call.Arguments["content"])
+		if path != seed.targetPath {
+			t.Fatalf("path = %q, want %q", path, seed.targetPath)
+		}
+		if content != seed.artifactDraft {
+			t.Fatalf("content = %q, want persisted artifact draft", content)
+		}
+		if err := os.WriteFile(seed.targetAbs, []byte(content), 0o644); err != nil {
+			t.Fatalf("write target file: %v", err)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      path,
+				"byte_size": len(content),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage task persisted recovery draft autopopulation: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2 after task persisted-draft autopopulation", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+
+	body, err := os.ReadFile(seed.targetAbs)
+	if err != nil {
+		t.Fatalf("read target file: %v", err)
+	}
+	if string(body) != seed.artifactDraft {
+		t.Fatalf("target file body = %q, want persisted artifact draft", string(body))
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	for _, item := range messages {
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"error":"content_required"`) {
+			t.Fatalf("unexpected content_required tool_result: %s", item.Content)
+		}
+	}
+}
+
 func TestTurnEngineIntegrationRepeatedIntentRecoveryLegacyStopReasonFallbackStillPersistsHardenedBlockerEX330(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
