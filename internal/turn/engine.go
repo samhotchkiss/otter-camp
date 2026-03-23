@@ -9700,6 +9700,13 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
 	if containsAny(lower,
+		"current_flow_node_id",
+		"execution doesn't exist yet",
+		"task shows current_flow_node_id",
+	) {
+		return fmt.Sprintf("assistant draft for %s described runtime status analysis instead of the file body", path)
+	}
+	if containsAny(lower,
 		"i understand the problem",
 		"i can see the problem",
 		"let me ",
@@ -9969,6 +9976,9 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		"this is a durable recovery checkpoint",
 		"success narrative partially drafted",
 		"current flow node:",
+		"current_flow_node_id:",
+		"execution doesn't exist yet",
+		"task shows current_flow_node_id",
 		"is in the work node",
 		"needs execution",
 		"strategy artifacts:",
@@ -9993,6 +10003,7 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		"let me read the oc-15 strategy artifacts",
 		"let me read the strategy artifacts",
 		"let me check the task flow and understand what step we're on",
+		"let me check what flow template is assigned",
 		"let me check the full file",
 		"let me check the file",
 	)

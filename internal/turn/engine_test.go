@@ -7559,6 +7559,13 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects flow state status placeholder",
+			content: "The task shows `current_flow_node_id: 8cc3df4d-91c3-4af7-9b45-a15adf0054dc` but the execution doesn't exist yet. " +
+				"This means the task is in progress but hasn't yet entered the active flow node execution state.\n\n" +
+				"Let me check what flow template is assigned:",
+			want: "runtime status analysis instead of the file body",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
