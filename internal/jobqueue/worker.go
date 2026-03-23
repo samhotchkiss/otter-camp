@@ -824,6 +824,7 @@ func (w *Worker) RequeueStrandedSupervisorRecoveryTurns(ctx context.Context) (in
 		WHERE cs.scope_type = 'project_task'
 		  AND cs.status = 'active'
 		  AND p.status = 'active'
+		  AND pt.work_status <> 'blocked'
 		  AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
 		  AND COALESCE(live_turn.status, ct.status, '') = 'pending'
 		  AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
@@ -963,6 +964,10 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 		  AND cs.status = 'active'
 		  AND COALESCE(live_turn.status, ct.status, '') = 'pending'
 		  AND COALESCE(live_turn.trigger_message_id, ct.trigger_message_id) IS NOT NULL
+		  AND (
+		    cs.scope_type <> 'project_task'
+		    OR COALESCE(pt.work_status, '') <> 'blocked'
+		  )
 		  AND (
 		    cs.scope_type NOT IN ('project', 'project_task')
 		    OR (
