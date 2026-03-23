@@ -7446,6 +7446,16 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name:    "rejects placeholder file reread narration",
+			content: "The target file contains only a placeholder stub. I need to read the checkpoint artifacts to understand what content model and editorial structure has been defined, then write the substantive migration plan.",
+			want:    "intent to write the deliverable",
+		},
+		{
+			name:    "rejects recovery artifact reread narration",
+			content: "I'll read the target file and recovery artifact to assess the current state, then write the substantive migration plan content.",
+			want:    "intent to write the deliverable",
+		},
+		{
 			name: "rejects structured context summary placeholder narration",
 			content: "Excellent. Now I have enough context. The strategy for OC-15 is locked with:\n" +
 				"- **Staged cutover** (Tier 1 -> Tier 2 -> Archives)\n" +
