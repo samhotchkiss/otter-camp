@@ -4230,6 +4230,232 @@ func TestJobWorkerRecoverStaleInProgressContinuationTurns(t *testing.T) {
 	}
 }
 
+func TestJobWorkerRecoverStaleInProgressContinuationTurnsUsesExecutionMetadataLiveTurn(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "recover-stale-continuation-live-owner",
+		DisplayName: "Recover Stale Continuation Live Owner",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Continuation Live Owner Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover leaked continuation turns.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "recover-stale-continuation-live-owner-project",
+		DisplayName:    "Recover Stale Continuation Live Owner Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "recover-stale-continuation-live-owner-template",
+		DisplayName:    "Recover Stale Continuation Live Owner Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover stale continuation turn from execution owner metadata",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	rootMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the task from the compressed context.",
+		Status:    "final",
+	})
+	if err != nil {
+		t.Fatalf("create root message: %v", err)
+	}
+	cycleID := uuid.New()
+	rootTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		CycleID:          &cycleID,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &rootMessage.ID,
+	})
+	if err != nil {
+		t.Fatalf("create root turn: %v", err)
+	}
+	continuationTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     2,
+		CycleID:        &cycleID,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("create continuation turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET started_at = now() - interval '6 minutes'
+		WHERE id = $1
+	`, continuationTurn.ID); err != nil {
+		t.Fatalf("age continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, nil); err != nil {
+		t.Fatalf("clear current continuation turn: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+	metadata := repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{TurnID: &continuationTurn.ID})
+	if _, err := repo.NewFlowNodeExecutionRepo(pool).UpdateMetadata(ctx, execution.ID, metadata); err != nil {
+		t.Fatalf("set live turn metadata: %v", err)
+	}
+
+	provider, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
+		Slug:        "recover-stale-continuation-live-owner-provider",
+		DisplayName: "Recover Stale Continuation Live Owner Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create model provider: %v", err)
+	}
+	invocation, err := repo.NewModelInvocationRepo(pool).Create(ctx, repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   provider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "in_flight",
+		ModelName:         "test-model",
+		AgentID:           &agent.ID,
+		ProjectID:         &project.ID,
+		ProjectTaskID:     &taskRecord.ID,
+		SessionID:         &session.ID,
+		TurnID:            &continuationTurn.ID,
+	})
+	if err != nil {
+		t.Fatalf("create in-flight invocation: %v", err)
+	}
+	assistantMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &continuationTurn.ID,
+		Role:      "assistant",
+		Content:   "",
+		Status:    "streaming",
+	})
+	if err != nil {
+		t.Fatalf("create streaming assistant message: %v", err)
+	}
+	if rootTurn.TriggerMessageID == nil || *rootTurn.TriggerMessageID != rootMessage.ID {
+		t.Fatalf("root turn trigger_message_id = %v, want %s", rootTurn.TriggerMessageID, rootMessage.ID)
+	}
+
+	repaired, err := worker.RecoverStaleInProgressContinuationTurns(ctx)
+	if err != nil {
+		t.Fatalf("RecoverStaleInProgressContinuationTurns: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired continuations = %d, want 1", repaired)
+	}
+
+	storedTurn, err := repo.NewChatTurnRepo(pool).GetByID(ctx, continuationTurn.ID)
+	if err != nil {
+		t.Fatalf("reload continuation turn: %v", err)
+	}
+	if storedTurn.Status != "failed" {
+		t.Fatalf("continuation turn status = %q, want failed", storedTurn.Status)
+	}
+
+	refreshedSession, err := repo.NewChatSessionRepo(pool).GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if refreshedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil", refreshedSession.CurrentTurnID)
+	}
+
+	refreshedInvocation, err := repo.NewModelInvocationRepo(pool).GetByID(ctx, invocation.ID)
+	if err != nil {
+		t.Fatalf("reload invocation: %v", err)
+	}
+	if refreshedInvocation.Status != "failed" {
+		t.Fatalf("invocation status = %q, want failed", refreshedInvocation.Status)
+	}
+
+	refreshedAssistant, err := repo.NewChatMessageRepo(pool).GetByID(ctx, assistantMessage.ID)
+	if err != nil {
+		t.Fatalf("reload assistant message: %v", err)
+	}
+	if refreshedAssistant.Status != "failed" {
+		t.Fatalf("assistant message status = %q, want failed", refreshedAssistant.Status)
+	}
+}
+
 func TestJobWorkerRecoverStaleInProgressContinuationTurnsKeepsQueuedRetry(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

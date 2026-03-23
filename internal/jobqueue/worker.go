@@ -1116,7 +1116,7 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (int64, error) {
 	rows, err := w.pool.Query(ctx, `
 		SELECT cs.id,
-		       ct.id,
+		       COALESCE(live_turn.id, ct.id) AS turn_id,
 		       prior.trigger_message_id,
 		       COALESCE((
 		         SELECT MAX(retry_turn.retry_count)
@@ -1125,12 +1125,25 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 		           AND retry_turn.trigger_message_id = prior.trigger_message_id
 		       ), 0) + 1 AS next_retry_count
 		FROM chat_session cs
-		JOIN chat_turn ct ON ct.id = cs.current_turn_id
+		LEFT JOIN chat_turn ct ON ct.id = cs.current_turn_id
+		LEFT JOIN LATERAL (
+			SELECT e.metadata
+			FROM flow_node_execution e
+			WHERE e.session_id = cs.id
+			  AND e.status = 'active'
+			ORDER BY e.started_at DESC, e.id DESC
+			LIMIT 1
+		) execution_owner ON cs.scope_type = 'project_task'
+		LEFT JOIN chat_turn live_turn ON live_turn.id = CASE
+			WHEN COALESCE(execution_owner.metadata->>'live_turn_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			THEN (execution_owner.metadata->>'live_turn_id')::uuid
+			ELSE NULL
+		END
 		JOIN LATERAL (
 			SELECT prior_turn.trigger_message_id
 			FROM chat_turn prior_turn
 			WHERE prior_turn.session_id = cs.id
-			  AND prior_turn.turn_number < ct.turn_number
+			  AND prior_turn.turn_number < COALESCE(live_turn.turn_number, ct.turn_number)
 			  AND prior_turn.trigger_message_id IS NOT NULL
 			ORDER BY prior_turn.turn_number DESC
 			LIMIT 1
@@ -1149,10 +1162,10 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 		  )
 		WHERE cs.mode = 'async'
 		  AND cs.status = 'active'
-		  AND ct.status = 'in_progress'
-		  AND ct.trigger_message_id IS NULL
-		  AND ct.started_at IS NOT NULL
-		  AND ct.started_at < CASE
+		  AND COALESCE(live_turn.status, ct.status, '') = 'in_progress'
+		  AND COALESCE(live_turn.trigger_message_id, ct.trigger_message_id) IS NULL
+		  AND COALESCE(live_turn.started_at, ct.started_at) IS NOT NULL
+		  AND COALESCE(live_turn.started_at, ct.started_at) < CASE
 		    WHEN cs.scope_type = 'project_task' THEN $1::timestamptz
 		    ELSE $2::timestamptz
 		  END
@@ -1168,7 +1181,7 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 		    SELECT 1
 		    FROM run r
 		    WHERE r.session_id = cs.id
-		      AND r.turn_id = ct.id
+		      AND r.turn_id = COALESCE(live_turn.id, ct.id)
 		      AND r.status IN ('created', 'in_progress')
 		  )
 	`, w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold))

@@ -50,7 +50,7 @@ Most recent shipped commits relevant to the current validation run:
 - `374d4ec2` `Track live execution ownership on flow nodes`
 - `3f01d75a` `Prefer execution-owned live task ownership`
 - `6c6b40cb` `Expose active flow execution in task prompts`
-- pending local slice: worker stale triggered-turn recovery now honors `flow_node_execution.metadata.live_turn_id` when `chat_session.current_turn_id` has drifted away; focused integration coverage passes and this should be committed next if the worktree is otherwise clean
+- pending local slice: worker stale continuation-turn recovery now honors `flow_node_execution.metadata.live_turn_id` when `chat_session.current_turn_id` has drifted away; focused integration coverage passes and this should be committed next if the worktree is otherwise clean
 
 What those changed:
 
@@ -64,7 +64,8 @@ What those changed:
 - first issue `369` has started: active flow executions now persist `live_run_id` in `flow_node_execution.metadata` from the queue wakeup path, and task-scoped execution sessions now persist/clear `live_turn_id` around real turn execution
 - the supervisor now prefers `flow_node_execution.metadata.live_turn_id` / `live_run_id` over broader session/runtime fallback when detecting stranded active executions
 - review/task prompts now surface `Active Flow Execution ID: ...` directly in task context so reviewer lanes have the concrete execution handle they need for `flow.review_decision`
-- the worker’s stale triggered-turn recovery path now also prefers execution-owned live turn metadata over `chat_session.current_turn_id` for `project_task` sessions, which is the next committed slice of issue `369`
+- the worker’s stale triggered-turn recovery path now also prefers execution-owned live turn metadata over `chat_session.current_turn_id` for `project_task` sessions
+- the worker’s stale continuation-turn recovery path now does the same, reducing another task-lane recovery branch that used session state as the primary owner
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
@@ -99,11 +100,12 @@ The current implementation work is already underway against that plan:
 - real turn execution persists execution-owned `live_turn_id`
 - supervisor stranded-execution detection prefers execution-owned live run/turn ownership
 - worker stale triggered-turn recovery now follows the same ownership source
+- worker stale continuation-turn recovery now follows the same ownership source
 
 The next likely slices after committing the current worker change are:
 
-- move stale continuation-turn recovery off `chat_session.current_turn_id` and onto execution-owned live-turn metadata
 - keep collapsing worker recovery/cleanup queries away from session-owned task execution inference
+- reduce task-lane cleanup/requeue queries that still treat `chat_session.current_turn_id` as the live owner instead of `flow_node_execution.metadata.live_turn_id`
 - then revisit live review-lane behavior once fresh turns are running under the newer prompt/runtime ownership model
 
 The standing rule from Sam is:
