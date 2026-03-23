@@ -8910,6 +8910,91 @@ func TestRecoveryFileWriteDraftContentUsesPriorTurnDraftAfterCurrentNarration(t 
 	}
 }
 
+func TestRewriteRecoveryCLIExecuteWithoutCommandToFileWriteUsesPriorTurnDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	targetPath := "docs/content-strategy.md"
+	priorTurnID := uuid.New()
+	currentTurnID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {ID: taskID, ProjectID: projectID, WorkStatus: "in_progress", AssignedAgentID: &assignedAgentID},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content: strings.TrimSpace(`# Content Strategy
+
+## Migration Approach
+- Audit legacy content types before import.
+- Map each retained post to the new information architecture.
+`),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"path":      targetPath,
+				"byte_size": 128,
+				"created":   false,
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		recoveryTurn: true,
+		session:      fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:        "cli-1",
+		Name:      "cli.execute",
+		Arguments: map[string]any{},
+	}
+
+	rewritten, err := fixture.engine.rewriteRecoveryCLIExecuteWithoutCommandToFileWrite(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("rewriteRecoveryCLIExecuteWithoutCommandToFileWrite: %v", err)
+	}
+	if rewritten {
+		t.Fatal("expected rewrite helper to continue with mutated call")
+	}
+	if call.Name != "file.write" {
+		t.Fatalf("call.Name = %q, want file.write", call.Name)
+	}
+	if got := stringValue(call.Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(call.Arguments["content"]); !strings.Contains(got, "## Migration Approach") {
+		t.Fatalf("content = %q, want prior substantive draft", got)
+	}
+	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
+		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
+	}
+}
+
 func mustRawJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)

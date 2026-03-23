@@ -7539,7 +7539,7 @@ func (e *TurnEngine) rewriteRecoveryCLIExecuteWithoutCommandToFileWrite(ctx cont
 	if !ok || strings.TrimSpace(targetPath) == "" {
 		return false, nil
 	}
-	draft, rejectReason, draftOK := e.recoveryPersistedDraftContent(ctx, rt, targetPath)
+	draft, rejectReason, draftOK := e.recoveryFileWriteDraftContent(ctx, rt, targetPath)
 	if !draftOK || strings.TrimSpace(rejectReason) != "" || strings.TrimSpace(draft) == "" {
 		return false, nil
 	}
