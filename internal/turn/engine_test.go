@@ -5499,6 +5499,9 @@ func TestBuildRecoveryResumeActionPromptUsesContinuationSummaryDraftDirectly(t *
 	if !strings.Contains(prompt, "Do not browse .ottercamp/recovery broadly or read recovery artifacts for other tasks") {
 		t.Fatalf("prompt = %q, want same-task recovery scope guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Do not reread strategy artifacts, planning files, or workspace listings before writing") {
+		t.Fatalf("prompt = %q, want anti-reread draft guidance", prompt)
+	}
 }
 
 func TestLooksLikeRecoveryIntentNarrationPlaceholderDetectsNowIllWritePreface(t *testing.T) {

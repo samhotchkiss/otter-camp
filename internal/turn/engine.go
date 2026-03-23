@@ -8560,6 +8560,8 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 		lines = append(lines,
 			"A substantive durable draft is already available above. Reuse that draft body directly instead of introducing yourself, summarizing the task, or describing what you are about to do.",
 			"If you need to repair the target file, your next assistant message should begin with the first line of the best available draft rather than a sentence about context or readiness.",
+			"Do not reread strategy artifacts, planning files, or workspace listings before writing when the substantive draft is already present above.",
+			"Your next tool action should be the concrete file mutation for the target file, not another discovery read.",
 		)
 	}
 	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) {
