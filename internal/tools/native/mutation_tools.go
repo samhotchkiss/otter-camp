@@ -37,6 +37,7 @@ import (
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
 var parentChildOrdinalTitlePattern = regexp.MustCompile(`^([a-z]+)\s+(\d+)\s*:`)
+var malformedParameterEchoPattern = regexp.MustCompile(`(?is)<parameter\s+name\s*=\s*"[^"]+"\s*>`)
 
 var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
 
@@ -297,6 +298,20 @@ func readStringValue(value any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", value))
 	}
+}
+
+func sanitizeStructuredTaskText(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	loc := malformedParameterEchoPattern.FindStringIndex(trimmed)
+	if loc == nil {
+		return trimmed
+	}
+	sanitized := strings.TrimSpace(trimmed[:loc[0]])
+	sanitized = strings.TrimRight(sanitized, " \t\r\n,;\"'")
+	return strings.TrimSpace(sanitized)
 }
 
 func applyPlanningProcessInput(existing json.RawMessage, input map[string]any, actor executionActor) (json.RawMessage, planningProcessInputResult, error) {
@@ -1169,11 +1184,16 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	if !ok || title == "" {
 		return map[string]any{"error": "title_required"}, nil
 	}
+	title = sanitizeStructuredTaskText(title)
+	if title == "" {
+		return map[string]any{"error": "title_required"}, nil
+	}
 	if _, err := e.ensureProjectRepoBinding(ctx, projectID); err != nil {
 		return nil, err
 	}
 	var description *string
 	if value, ok := readString(input, "description"); ok {
+		value = sanitizeStructuredTaskText(value)
 		description = &value
 	}
 	var parentTask *repo.ProjectTask
@@ -1644,9 +1664,11 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		}, nil
 	}
 	if title, ok := readString(input, "title"); ok && title != "" {
+		title = sanitizeStructuredTaskText(title)
 		current.Title = title
 	}
 	if description, ok := readString(input, "description"); ok {
+		description = sanitizeStructuredTaskText(description)
 		current.Description = &description
 	}
 	if flowTemplateID, ok := readUUID(input, "flow_template_id"); ok && flowTemplateID != uuid.Nil {

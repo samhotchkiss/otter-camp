@@ -1689,6 +1689,50 @@ func TestTaskCreateSubjectiveMultiOptionAutoAssignsReviewRefinementTemplate(t *t
 	}
 }
 
+func TestTaskCreateSanitizesMalformedParameterEchoes(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+	tasks := &mockTaskRepo{}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "sam-blog",
+				DisplayName:    "SAM.blog",
+			},
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+
+	out, err := executor.Execute(testExecCtx(), "task.create", map[string]any{
+		"project_id": projectID.String(),
+		"title":      "Audit existing SAM.blog content and voice\",\n<parameter name=\"assigned_agent_id\">561a095a-9320-4c8b-90f8-1ad8f186d037",
+		"description": "Audit existing SAM.blog and samhotchkiss.com content, voice, and metadata.\",\n" +
+			"<parameter name=\"work_status\">queued",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.create error = %v, want nil", out["error"])
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
+	}
+	if got := tasks.createdTasks[0].Title; got != "Audit existing SAM.blog content and voice" {
+		t.Fatalf("created title = %q, want sanitized title", got)
+	}
+	if tasks.createdTasks[0].Description == nil {
+		t.Fatal("description = nil, want sanitized description")
+	}
+	if got := *tasks.createdTasks[0].Description; got != "Audit existing SAM.blog and samhotchkiss.com content, voice, and metadata." {
+		t.Fatalf("created description = %q, want sanitized description", got)
+	}
+}
+
 func TestTaskCreateDelegatedCreativePolicyUsesInternalReviewTemplate(t *testing.T) {
 	projectID := uuid.New()
 	orgID := uuid.New()
@@ -2220,6 +2264,44 @@ func TestTaskUpdateSetsAssignedAgentID(t *testing.T) {
 	}
 	if tasks.updateCalls != 1 {
 		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+}
+
+func TestTaskUpdateSanitizesMalformedParameterEchoes(t *testing.T) {
+	taskID := uuid.New()
+	description := "Original description"
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      uuid.New(),
+			Title:          "Original title",
+			Description:    &description,
+			WorkStatus:     "draft",
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":     taskID.String(),
+		"title":       "Define the core information architecture for SAM.blog\",\n<parameter name=\"work_status\">queued",
+		"description": "Audit the technical architecture of the existing SAM.blog.\",\n<parameter name=\"assigned_agent_id\">04ed130a-ccdc-45da-ac13-001cdf9f6200",
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update error = %v, want nil", out["error"])
+	}
+	if got := tasks.task.Title; got != "Define the core information architecture for SAM.blog" {
+		t.Fatalf("updated title = %q, want sanitized title", got)
+	}
+	if tasks.task.Description == nil {
+		t.Fatal("description = nil, want sanitized description")
+	}
+	if got := *tasks.task.Description; got != "Audit the technical architecture of the existing SAM.blog." {
+		t.Fatalf("updated description = %q, want sanitized description", got)
 	}
 }
 
