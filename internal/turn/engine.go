@@ -4264,7 +4264,7 @@ func (e *TurnEngine) recoverRetriedAgentTurnLeak(
 		nextAgentID := agentID
 		nextPayload.AgentID = &nextAgentID
 	}
-	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, nil); err != nil {
+	if _, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, nil); err != nil {
 		return false, fmt.Errorf("enqueue recovered stale-turn retry: %w", err)
 	}
 	return true, nil
@@ -4324,7 +4324,7 @@ func (e *TurnEngine) recoverProjectTaskStaleInboundTurnWithoutRun(
 		nextAgentID := agentID
 		nextPayload.AgentID = &nextAgentID
 	}
-	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, nil); err != nil {
+	if _, err := e.enqueueAgentTurnIfActive(ctx, currentSession, nextPayload, nil); err != nil {
 		return false, fmt.Errorf("enqueue recovered stale project_task retry: %w", err)
 	}
 	return true, nil
@@ -4385,7 +4385,7 @@ func (e *TurnEngine) recoverRetriedSessionCurrentTurnLeak(
 		nextAgentID := agentID
 		nextPayload.AgentID = &nextAgentID
 	}
-	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, nextPayload, nil); err != nil {
+	if _, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, nil); err != nil {
 		return false, fmt.Errorf("enqueue recovered stale continuation retry: %w", err)
 	}
 	return true, nil
