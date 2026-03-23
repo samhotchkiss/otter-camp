@@ -7935,6 +7935,19 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:    "intent to write the deliverable",
 		},
 		{
+			name: "rejects implementation preface with build list",
+			content: "Since the prior tasks are still in draft and I don't have the data schema yet, I'll design the reporting script based on the task description requirements and best practices for pipeline analytics. Let me create a comprehensive, well-structured reporting script that's ready to integrate with upstream data pipelines.\n\n" +
+				"I'll build:\n" +
+				"1. **Core reporting module** with data validation\n" +
+				"2. **Report generators** for each metric type\n" +
+				"3. **HTML and Markdown templates** with styling\n" +
+				"4. **Example outputs** demonstrating all report types\n" +
+				"5. **Clear documentation** for operators\n\n" +
+				"Let me start:",
+			targetPath: "src/generate_reports.py",
+			want:       "implementation plan instead of the file body",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
