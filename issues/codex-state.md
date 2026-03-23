@@ -49,6 +49,7 @@ Most recent shipped commits relevant to the current validation run:
 - `04c08223` `Plan flow execution architecture rework`
 - `374d4ec2` `Track live execution ownership on flow nodes`
 - `3f01d75a` `Prefer execution-owned live task ownership`
+- `6c6b40cb` `Expose active flow execution in task prompts`
 
 What those changed:
 
@@ -61,6 +62,7 @@ What those changed:
 - the architecture rework is now committed into docs/issues/reports instead of living only in transient conversation state
 - first issue `369` has started: active flow executions now persist `live_run_id` in `flow_node_execution.metadata` from the queue wakeup path, and task-scoped execution sessions now persist/clear `live_turn_id` around real turn execution
 - the supervisor now prefers `flow_node_execution.metadata.live_turn_id` / `live_run_id` over broader session/runtime fallback when detecting stranded active executions
+- review/task prompts now surface `Active Flow Execution ID: ...` directly in task context so reviewer lanes have the concrete execution handle they need for `flow.review_decision`
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
@@ -245,7 +247,8 @@ The current live bug is narrower and review-specific:
 
 - reviewer lanes now run under the right principal and have `flow.review_decision` in the tool set
 - but the model still spends turns probing `flow.get_execution` or narrating the rejection instead of acting
-- the next intended fix is to surface the active `flow_node_execution_id` directly in task prompt context so review sessions can call `flow.review_decision` without first searching for execution state
+- the prompt-context half of that fix is now shipped
+- the next thing to verify is live behavior under canary traffic: whether reviewers now call `flow.review_decision` directly instead of first probing `flow.get_execution`
 
 That prompt-context fix is still a valid short-term cleanup, but it should not distract from the broader rework above. The architectural review and planned rework slices are now captured in:
 
@@ -259,14 +262,13 @@ Current implementation status of the rework:
 - architecture plan committed and pushed in `04c08223`
 - first `369` slice committed and pushed in `374d4ec2`
 - second `369` slice committed and pushed in `3f01d75a`
+- review prompt-context fix committed and pushed in `6c6b40cb`
 - that slice does not complete the ownership refactor; it only gives `flow_node_execution` a persisted view of the live run/turn owner so later slices can stop inferring ownership purely from runtime_state/session/job drift
 - the current next step inside `369` is to keep replacing task-lane ownership inference with execution-owned state in queue/dispatch/resume paths, not just in supervisor recovery
 
 Local repo note for restart safety:
 
-- tracked worktree currently has one intentional in-progress edit in `internal/prompt/assembler.go`
-- that edit started the `flow_node_execution_id` prompt-context patch by adding `currentFlowExecutionID *uuid.UUID` to `projectTaskContext`
-- the patch is not finished, committed, or pushed yet
+- tracked worktree is now clean except for the long-standing ignored/untracked local artifacts outside git
 
 When debugging, assume the real problem is usually one of:
 
