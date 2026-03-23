@@ -1344,6 +1344,72 @@ func TestHandleTurnCompletedEventBlocksRepeatedGenericRecoveryReply(t *testing.T
 	}
 }
 
+func TestHandleTurnCompletedEventBlocksRepeatedGenericRecoveryReplyHelpWithVariant(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Metadata = mustRawJSON(t, map[string]any{"recovery_action": recoveryActionValidationResume})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "I'm ready. What would you like me to help with for this task?")
+	fixture.chat.mu.Lock()
+	fixture.chat.turns[turnID].RetryCount = maxGenericRecoveryReplyRetries
+	fixture.chat.mu.Unlock()
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "generic non-action replies") {
+		t.Fatalf("blocked reason = %q, want generic non-action reply reason", blocker.calls[0].reason)
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
+	}
+}
+
 func TestHandleTurnCompletedEventSkipsWhenProjectPaused(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 

@@ -12710,6 +12710,8 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"i'm ready to assist",
 		"i am ready to assist",
 		"what do you need",
+		"what would you like me to help with",
+		"what would you like me to help",
 		"what would you like me to do",
 		"how can i help",
 	}
