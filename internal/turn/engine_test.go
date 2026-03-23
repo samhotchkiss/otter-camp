@@ -1410,6 +1410,105 @@ func TestHandleTurnCompletedEventBlocksRepeatedGenericRecoveryReplyHelpWithVaria
 	}
 }
 
+func TestHandleTurnCompletedEventSkipsAutoContinuationForRecoveryHaltMessage(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+				Metadata:          json.RawMessage(`{}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+
+	authorType := "human_user"
+	userMessage, err := fixture.chat.AppendMessage(context.Background(), chat.AppendMessageInput{
+		SessionID:  fixture.session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.session.OrganizationID,
+		Role:       "user",
+		Content:    "supervisor recovery: resume task",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	recoveryMetadata := mustRawJSON(t, map[string]any{"recovery_action": recoveryActionValidationResume})
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), userMessage.ID, recoveryMetadata); err != nil {
+		t.Fatalf("UpdateMetadata: %v", err)
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnRecord, _, err := fixture.engine.turns.CreateForMessageAttempt(context.Background(), fixture.session.ID, agentID, userMessage.ID, 3)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), turnRecord.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	if err := fixture.chat.CompleteTurn(context.Background(), turnRecord.ID); err != nil {
+		t.Fatalf("CompleteTurn: %v", err)
+	}
+
+	authorType = "agent"
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:  fixture.session.ID,
+		TurnID:     &turnRecord.ID,
+		AuthorType: &authorType,
+		AuthorID:   &agentID,
+		Role:       "assistant",
+		Status:     "final",
+		Content:    "Perfect. I have the substantive draft and now I'll write it to the target file.",
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnRecord.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Recovery turn halted: recovered file.write for `docs/target.md` produced another non-substantive draft after the prior checkpoint already rejected placeholder narration.]",
+	})
+
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRepo.items[taskID].Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "docs/target.md",
+		ArtifactPath:  ".ottercamp/recovery/docs/target.md",
+		FailureReason: "repeated non-substantive recovery drafts for docs/target.md across explicit resume attempts; latest assistant draft for docs/target.md described intent to write the deliverable instead of the file body",
+		HaltTurnID:    turnRecord.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	record := taskRepo.items[taskID]
+	record.Metadata = metadata
+	taskRepo.items[taskID] = record
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnRecord.ID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+}
+
 func TestHandleTurnCompletedEventSkipsWhenProjectPaused(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 

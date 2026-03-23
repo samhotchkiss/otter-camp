@@ -1090,6 +1090,9 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	if err != nil {
 		return err
 	}
+	if shouldSuppressAutoContinuationForRecoveryHalt(messages, payload.TurnID, taskRecord.Metadata) {
+		return nil
+	}
 	latestUser := latestUserMessage(messages)
 	if latestUser == nil {
 		return nil
@@ -12570,6 +12573,30 @@ func shouldSuppressAutoContinuationForStopReason(stopReason *string) bool {
 	default:
 		return false
 	}
+}
+
+func shouldSuppressAutoContinuationForRecoveryHalt(messages []repo.ChatMessage, turnID uuid.UUID, metadata json.RawMessage) bool {
+	if turnID == uuid.Nil {
+		return false
+	}
+	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(metadata); ok {
+		if strings.EqualFold(strings.TrimSpace(checkpoint.HaltTurnID), turnID.String()) {
+			return true
+		}
+	}
+	for _, message := range messages {
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		content := strings.ToLower(strings.TrimSpace(message.Content))
+		if strings.HasPrefix(content, "[recovery turn halted:") {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *TurnEngine) ensureRecoveryTurnDurableTaskState(ctx context.Context, rt *turnRuntime) error {
