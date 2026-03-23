@@ -12881,6 +12881,18 @@ func (e *TurnEngine) resolveSessionAgentForSession(ctx context.Context, session 
 			}
 		}
 
+		// If the project already has the canonical bootstrap scaffold, treat the
+		// session as active bootstrap work and route straight to Lori instead of
+		// requiring a fresh Frank handoff turn.
+		if loriID, loriErr := e.resolveLoriStarterID(ctx, session.OrganizationID); loriErr == nil && loriID != uuid.Nil {
+			if e.shouldRouteScaffoldedProjectSessionToLori(ctx, session) {
+				if err := e.ensureAgentParticipant(ctx, session.ID, loriID); err != nil {
+					return uuid.Nil, err
+				}
+				return loriID, nil
+			}
+		}
+
 		// During early kickoff (before a PM is assigned), route the first turn to
 		// Frank and then hand off to Lori for staffing/scoping follow-up.
 		frankID, err := e.resolveFrankStarterID(ctx, session.OrganizationID)
@@ -13179,6 +13191,29 @@ func (e *TurnEngine) shouldRouteProjectKickoffToLori(ctx context.Context, sessio
 		return true
 	}
 	return false
+}
+
+func (e *TurnEngine) shouldRouteScaffoldedProjectSessionToLori(ctx context.Context, session *chat.ChatSession) bool {
+	if e == nil || e.tasks == nil || session == nil || session.ScopeID == uuid.Nil {
+		return false
+	}
+	tasks, err := e.tasks.ListByProject(ctx, session.ScopeID)
+	if err != nil || len(tasks) == 0 {
+		return false
+	}
+
+	hasBootstrapGate := false
+	setupCount := 0
+	for _, task := range tasks {
+		metadata := messageMetadataMap(task.Metadata)
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			hasBootstrapGate = true
+		}
+		if bootstrapSetupTask, _ := metadata["bootstrap_setup_task"].(bool); bootstrapSetupTask {
+			setupCount++
+		}
+	}
+	return hasBootstrapGate && setupCount >= 3
 }
 
 func (e *TurnEngine) resolveFirstAgentParticipant(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {

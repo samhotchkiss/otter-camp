@@ -2562,6 +2562,54 @@ func TestHandleUserMessageProjectScopeKickoffStartsWithFrank(t *testing.T) {
 	}
 }
 
+func TestHandleUserMessageProjectScopeBootstrapScaffoldStartsWithLori(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	frankID := uuid.New()
+	loriID := uuid.New()
+
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.engine.assignments = &fakeAssignmentRepo{err: repo.ErrNotFound}
+	fixture.engine.agents = &fakeAgentRepo{
+		items: map[uuid.UUID]repo.Agent{
+			frankID: {ID: frankID, OrganizationID: fixture.session.OrganizationID},
+			loriID:  {ID: loriID, OrganizationID: fixture.session.OrganizationID},
+		},
+		starter: []repo.Agent{
+			{ID: loriID, DisplayName: "Lori", AgentType: "pm"},
+			{ID: frankID, DisplayName: "Frank", AgentType: "general"},
+		},
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			uuid.New(): {ProjectID: projectID, Metadata: json.RawMessage(`{"bootstrap_gate":true}`)},
+			uuid.New(): {ProjectID: projectID, Metadata: json.RawMessage(`{"bootstrap_setup_task":true,"bootstrap_step_slug":"bind-repo-environment"}`)},
+			uuid.New(): {ProjectID: projectID, Metadata: json.RawMessage(`{"bootstrap_setup_task":true,"bootstrap_step_slug":"staff-project"}`)},
+			uuid.New(): {ProjectID: projectID, Metadata: json.RawMessage(`{"bootstrap_setup_task":true,"bootstrap_step_slug":"decompose-workstreams"}`)},
+		},
+	}
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	turnID := fixture.chat.waitForTurnID(t)
+	turn := fixture.chat.turnByID(turnID)
+	if turn == nil {
+		t.Fatal("expected created turn")
+	}
+	if turn.RespondingID != loriID {
+		t.Fatalf("turn responding_id = %s, want Lori %s", turn.RespondingID, loriID)
+	}
+}
+
 func TestShouldBlockFreshKickoffPreCreateTool(t *testing.T) {
 	rt := &turnRuntime{
 		freshKickoff: true,
