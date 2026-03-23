@@ -2334,6 +2334,76 @@ func TestJobWorkerClaimPendingAgentTurnsClaimsOnlyOneJobPerSession(t *testing.T)
 	}
 }
 
+func TestJobWorkerClaimPendingAgentTurnsSkipsClosedSessions(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-skip-closed-session",
+		DisplayName: "Claim Skip Closed Session",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        uuid.New(),
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "stale pending continuation",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("Create message: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).Close(ctx, session.ID); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, message.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 0),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert closed-session job: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 10)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns: %v", err)
+	}
+	if len(claimed) != 0 {
+		t.Fatalf("claimed jobs = %d, want 0 for closed session", len(claimed))
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, jobID).Scan(&status); err != nil {
+		t.Fatalf("query closed-session job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("closed-session job status = %q, want pending for later purge", status)
+	}
+}
+
 func TestJobWorkerClaimPendingAgentTurnsAllowsMatchingPendingCurrentTurn(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

@@ -2074,6 +2074,15 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			  AND run_after <= now()
 			  AND (
 			    job_type <> '%s'
+			    OR EXISTS (
+			      SELECT 1
+			      FROM chat_session cs
+			      WHERE cs.id = (job_queue.payload->>'session_id')::uuid
+			        AND cs.status = 'active'
+			    )
+			  )
+			  AND (
+			    job_type <> '%s'
 			    OR NOT EXISTS (
 			      SELECT 1
 			      FROM chat_turn ct
@@ -2122,7 +2131,7 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 		WHERE jq.id = claimable.id
 		RETURNING jq.id, jq.job_type, jq.priority, jq.payload, jq.status, jq.claimed_by, jq.claimed_at,
 		          jq.attempts, jq.max_attempts, jq.last_error, jq.run_after, jq.created_at, jq.updated_at
-	`, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
+	`, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
 	if err != nil {
 		return nil, fmt.Errorf("claim pending jobs: %w", err)
 	}
