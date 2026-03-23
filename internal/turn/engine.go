@@ -8432,12 +8432,12 @@ func recoveryResumeDraftForPrompt(failureReason, targetPath, draft string) (stri
 	if trimmed == "" {
 		return "", ""
 	}
-	if !taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(failureReason) {
-		return trimmed, ""
-	}
 	rejectReason := strings.TrimSpace(recoveryFileWriteDraftRejectReason(trimmed, targetPath))
 	if rejectReason == "" {
 		return trimmed, ""
+	}
+	if !taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(failureReason) {
+		return "", rejectReason
 	}
 	return "", rejectReason
 }
@@ -9302,13 +9302,13 @@ func (e *TurnEngine) recoveryPersistedDraftContent(ctx context.Context, rt *turn
 	if checkpointTarget := strings.TrimSpace(state.targetPath); checkpointTarget != "" && checkpointTarget != strings.TrimSpace(targetPath) {
 		return "", "", false
 	}
-	if draft := strings.TrimSpace(state.targetDraft); draft != "" {
+	if draft := strings.TrimSpace(state.targetDraft); draft != "" && strings.TrimSpace(state.targetDraftRejectedReason) == "" {
 		return draft, "", true
 	}
-	if draft := strings.TrimSpace(state.artifactDraft); draft != "" {
+	if draft := strings.TrimSpace(state.artifactDraft); draft != "" && strings.TrimSpace(state.artifactDraftRejectedReason) == "" {
 		return draft, "", true
 	}
-	if draft := strings.TrimSpace(state.summaryDraft); draft != "" {
+	if draft := strings.TrimSpace(state.summaryDraft); draft != "" && strings.TrimSpace(state.summaryDraftRejectedReason) == "" {
 		return draft, "", true
 	}
 	return "", "", false
@@ -9672,6 +9672,18 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 	if containsAny(lower, "the single deliverable", "final deliverable") {
 		return true
 	}
+	if containsAny(lower,
+		"i have the context",
+		"is in the work node",
+		"needs execution",
+	) && containsAny(lower,
+		"now write",
+		"write the",
+		"write a",
+		"write this",
+	) {
+		return true
+	}
 	hasWriteIntent := containsAny(lower,
 		"let me write",
 		"let me draft",
@@ -9693,6 +9705,7 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"let me now write",
 		"i'll write",
 		"i will write",
+		"now write",
 		"i'll draft",
 		"i will draft",
 		"i'll create",
@@ -9715,6 +9728,8 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"should draft",
 	)
 	hasSetupCue := containsAny(lower,
+		"good. i have the context",
+		"i have the context",
 		"now i have everything i need",
 		"i now have everything i need",
 		"i have everything i need",
@@ -9849,6 +9864,8 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		"this is a durable recovery checkpoint",
 		"success narrative partially drafted",
 		"current flow node:",
+		"is in the work node",
+		"needs execution",
 		"strategy artifacts:",
 		"target file:",
 	)

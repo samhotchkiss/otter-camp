@@ -7523,6 +7523,12 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects work node execution placeholder narration",
+			content: "Good. I have the context. OC-15 (content migration) is in the Work node and needs execution. " +
+				"Now write the migration plan:",
+			want: "intent to write the deliverable",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
