@@ -1013,7 +1013,7 @@ func (s *service) AppendMessage(ctx context.Context, input AppendMessageInput) (
 	}); err != nil {
 		return nil, err
 	}
-	if message.Role == "user" && !isSteerMetadata(message.Metadata) {
+	if message.Role == "user" && !isDispatchSuppressedUserMetadata(message.Metadata) {
 		if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.user_sent", actorType, actorID, map[string]any{
 			"session_id":      session.ID,
 			"message_id":      message.ID,
@@ -2324,7 +2324,7 @@ func mapDBError(err error) error {
 	return err
 }
 
-func isSteerMetadata(metadata json.RawMessage) bool {
+func isDispatchSuppressedUserMetadata(metadata json.RawMessage) bool {
 	if len(metadata) == 0 {
 		return false
 	}
@@ -2336,6 +2336,12 @@ func isSteerMetadata(metadata json.RawMessage) bool {
 		return true
 	}
 	if _, ok := payload["steer_message_id"]; ok {
+		return true
+	}
+	if suppressed, _ := payload["synthetic_user_message"].(bool); suppressed {
+		return true
+	}
+	if rooted, _ := payload["continuation_root"].(bool); rooted {
 		return true
 	}
 	return false

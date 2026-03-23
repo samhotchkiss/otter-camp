@@ -673,6 +673,44 @@ func TestTurn_SteerPublishesUserSentAndBindsTriggerMessage(t *testing.T) {
 	}
 }
 
+func TestAppendMessage_SyntheticUserMetadataSkipsUserSentEvent(t *testing.T) {
+	baseCtx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, baseCtx, pool)
+	user := seedChatServiceUser(t, baseCtx, pool, org.ID, "synthetic-user-message-author", "member")
+	bus := newIntegrationEventBus(pool)
+	svc := newIntegrationService(t, pool, bus)
+	session := mustCreateSession(t, baseCtx, svc, org.ID)
+	ctx := principalContext(baseCtx, org.ID, user.ID, "member")
+
+	events := make(chan eventbus.DomainEvent, 8)
+	sub := bus.Subscribe("chat-synthetic-user-sent-"+uuid.NewString(), &org.ID, func(_ context.Context, event eventbus.DomainEvent) error {
+		if event.EventType == "chat.message.user_sent" {
+			events <- event
+		}
+		return nil
+	})
+	defer bus.Unsubscribe(sub)
+
+	authorType := "human_user"
+	if _, err := svc.AppendMessage(ctx, AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &user.ID,
+		Role:       "user",
+		Content:    "synthetic continuation prompt",
+		Metadata:   json.RawMessage(`{"synthetic_user_message":true,"continuation_root":true}`),
+	}); err != nil {
+		t.Fatalf("AppendMessage synthetic: %v", err)
+	}
+
+	select {
+	case event := <-events:
+		t.Fatalf("unexpected chat.message.user_sent event: %s", event.EventType)
+	case <-time.After(600 * time.Millisecond):
+	}
+}
+
 func TestMultiHuman_MessageQueue(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

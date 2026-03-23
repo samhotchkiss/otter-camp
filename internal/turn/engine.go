@@ -5389,6 +5389,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 			TurnID:    &rt.turn.ID,
 			Role:      "user",
 			Content:   buildTaskContinuationActionPrompt(summary),
+			Metadata:  syntheticContinuationActionMessageMetadata(taskContinuationResumeMessageSource),
 		}); err != nil {
 			return err
 		}
@@ -5399,6 +5400,7 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 			TurnID:    &rt.turn.ID,
 			Role:      "user",
 			Content:   buildProjectContinuationActionPrompt(summary),
+			Metadata:  syntheticContinuationActionMessageMetadata("project_continuation_resume"),
 		}); err != nil {
 			return err
 		}
@@ -7911,6 +7913,7 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 			TurnID:    &rt.turn.ID,
 			Role:      "user",
 			Content:   buildTaskRecoveryActionPrompt(),
+			Metadata:  syntheticContinuationActionMessageMetadata("task_recovery_action"),
 		})
 		if err != nil {
 			return false, err
@@ -7938,6 +7941,7 @@ func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRunt
 		TurnID:    &rt.turn.ID,
 		Role:      "user",
 		Content:   buildRecoveryResumeActionPrompt(state),
+		Metadata:  syntheticContinuationActionMessageMetadata("task_recovery_resume"),
 	})
 	if err != nil {
 		return false, err
@@ -9914,9 +9918,17 @@ func taskContinuationResumeMessageMetadata(attempt int) json.RawMessage {
 		attempt = 1
 	}
 	return mustJSONRaw(map[string]any{
-		"source":               taskContinuationResumeMessageSource,
-		"continuation_root":    true,
-		"continuation_attempt": attempt,
+		"source":                 taskContinuationResumeMessageSource,
+		"continuation_root":      true,
+		"continuation_attempt":   attempt,
+		"synthetic_user_message": true,
+	})
+}
+
+func syntheticContinuationActionMessageMetadata(source string) json.RawMessage {
+	return mustJSONRaw(map[string]any{
+		"source":                 strings.TrimSpace(source),
+		"synthetic_user_message": true,
 	})
 }
 
