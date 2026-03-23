@@ -1144,6 +1144,10 @@ create index on runtime_state (organization_id, scope_type, scope_id);
 
 `runtime_state` is not the historical record; it is the mutable coordination row that tells the broker who currently owns execution for a task/session boundary and how to resume it safely when there is no active owner. The `metadata` contract carries the bound task/session/flow execution ids, provider/runtime session identifiers when relevant, last progress timestamp/event, deferred wakeup details, failure disposition (`resumable`, `terminal`, or `stranded` when an active execution lost its live task turn and could not be recovered), and retirement reason/time. Historical wakeup decisions live in `run_event` and deferred work lives in ordinary `run` rows.
 
+`runtime_state` must remain a coordination cache over the authoritative flow/runtime contract, not a parallel source of task truth. For task-lane execution, the active `flow_node_execution` owns the runtime boundary. Session identity, live turn identity, active run identity, and resumable checkpoint state must all resolve from that execution boundary. `runtime_state` may coordinate ownership and deferred promotion, but it must not become a second independent execution state machine that can disagree with `flow_node_execution`.
+
+Recovery follows the same rule. The control plane should resume a blocked task lane from a structured checkpoint bound to the active `flow_node_execution`, not from heuristic selection across historical drafts, summaries, or loosely-related workspace files. If the checkpoint needed to resume a lane is missing or malformed, the product should fail closed and surface that as a runtime bug rather than inventing the next write from broad historical context.
+
 ### capability_policy
 
 ```sql

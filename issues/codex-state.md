@@ -23,12 +23,12 @@ As of 2026-03-23 morning local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9b
 
 Current observed task counts on the active Speaker Pipeline canary:
 
-- `queued=2`
-- `in_progress=11`
-- `review=2`
-- `done=8`
-- `draft=5`
-- `blocked=0`
+- `queued=0`
+- `in_progress=8`
+- `review=5`
+- `done=11`
+- `draft=2`
+- `blocked=2`
 
 The active canary has already validated these product expectations under the latest build:
 
@@ -45,6 +45,7 @@ Most recent shipped commits relevant to the current validation run:
 - `04ddf053` `Force fresh bootstrap staffing to act in-turn`
 - `fbf8dec4` `Reserve worker slots from maintenance floods`
 - `ca83abea` `Skip closed-session agent turn claims`
+- `b787978e` `Direct review lanes to flow review decisions`
 
 What those changed:
 
@@ -53,6 +54,7 @@ What those changed:
 - fresh bootstrap kickoff guidance now forces same-turn staffing persistence instead of profile-browsing narration
 - maintenance jobs can no longer occupy all worker slots when live execution work is waiting
 - stale pending `agent_turn` jobs for closed sessions are skipped at claim time and purged on startup/recovery instead of stealing slots
+- review-lane prompts and mutation rejections now explicitly direct reviewer sessions to `flow.review_decision`
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
@@ -66,7 +68,20 @@ Task `38` there is intentionally `cancelled`, not `done`: it was an impossible l
 
 The main priority is still core-system reliability for unattended end-to-end project execution. SAM.blog proved cleanup and closeout. The active Speaker Pipeline run is now the sharper canary for fresh-bootstrap correctness, reviewer staffing, queue fairness, and live execution churn.
 
-The immediate priority after the two latest queue fixes is to keep using the Speaker Pipeline canary to find the next deterministic runtime bug inside task execution itself, not to hand-steer the project.
+The immediate priority is still to keep using the Speaker Pipeline canary to find the next deterministic runtime bug inside task/review execution itself, not to hand-steer the project.
+
+That priority is now subordinate to a broader execution-architecture rework. The current codebase has enough evidence that the repeated stalls are structural:
+
+- runtime ownership is still split across task status, flow execution, sessions, turns, runs, runtime_state, and queued jobs
+- recovery still depends too heavily on draft heuristics
+- worker/supervisor repair logic is doing too much after-the-fact reconciliation
+
+The next phase should tighten the implementation around the model already described in the specs:
+
+- `flow_node_execution` must become the single runtime owner for a task lane
+- session/turn/run ownership should hang off that execution boundary
+- dispatch should be command-driven from the active node execution
+- recovery should resume from structured checkpoints, not historical-draft guesswork
 
 The standing rule from Sam is:
 
@@ -219,6 +234,25 @@ These were the repeated classes of failures that cost time during the SAM.blog a
 - stale pending `agent_turn` jobs on closed sessions could still consume live worker slots before cleanup
 
 The latest queue/runtime issues in that list are now fixed in product and verified live on the Speaker Pipeline canary.
+
+The current live bug is narrower and review-specific:
+
+- reviewer lanes now run under the right principal and have `flow.review_decision` in the tool set
+- but the model still spends turns probing `flow.get_execution` or narrating the rejection instead of acting
+- the next intended fix is to surface the active `flow_node_execution_id` directly in task prompt context so review sessions can call `flow.review_decision` without first searching for execution state
+
+That prompt-context fix is still a valid short-term cleanup, but it should not distract from the broader rework above. The architectural review and planned rework slices are now captured in:
+
+- `reports/2026-03-23-flow-execution-architecture-review.md`
+- `issues/00-not-ready/369-flow-node-execution-must-be-the-single-runtime-owner-for-task-lanes.md`
+- `issues/00-not-ready/370-turn-and-run-dispatch-must-be-command-driven-from-the-active-node-execution.md`
+- `issues/00-not-ready/371-task-recovery-must-resume-from-structured-checkpoints-not-draft-heuristics.md`
+
+Local repo note for restart safety:
+
+- tracked worktree currently has one intentional in-progress edit in `internal/prompt/assembler.go`
+- that edit started the `flow_node_execution_id` prompt-context patch by adding `currentFlowExecutionID *uuid.UUID` to `projectTaskContext`
+- the patch is not finished, committed, or pushed yet
 
 When debugging, assume the real problem is usually one of:
 
