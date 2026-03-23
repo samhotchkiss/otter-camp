@@ -7948,6 +7948,18 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "implementation plan instead of the file body",
 		},
 		{
+			name: "rejects reporting scope summary preface",
+			content: "Perfect. Now I understand the full scope. Based on the task description and the planning artifacts, I need to build `src/generate_reports.py` that generates reports for:\n" +
+				"- Pipeline health\n" +
+				"- Scoring distribution\n" +
+				"- Outreach status\n" +
+				"- Top-ranked opportunities\n" +
+				"- Funnel metrics\n\n" +
+				"Let me create a comprehensive, production-ready reporting script:",
+			targetPath: "src/generate_reports.py",
+			want:       "implementation plan instead of the file body",
+		},
+		{
 			name: "rejects wrapped tool status for different file",
 			content: "File written: `planning/metrics-framework/oc-16-review-cadence.md` (5.9 KB).\n\n" +
 				"The metrics review cadence is now durable and operationalized. It defines weekly and monthly reviews.",

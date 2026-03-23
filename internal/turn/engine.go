@@ -9939,8 +9939,11 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"let me start:",
 		"let me create a comprehensive",
 		"let me create the comprehensive",
+		"based on the task description and the planning artifacts",
+		"i need to build `",
+		"production-ready reporting script",
 	) || strings.Contains(lower, "ready to integrate with upstream data pipelines")) &&
-		(strings.Contains(trimmed, "1. **") || strings.Contains(trimmed, "2. **") || strings.Contains(trimmed, "\n1. ") || strings.Contains(trimmed, "\n2. ")) {
+		(strings.Contains(trimmed, "1. **") || strings.Contains(trimmed, "2. **") || strings.Contains(trimmed, "\n1. ") || strings.Contains(trimmed, "\n2. ") || strings.Contains(trimmed, "\n- ")) {
 		return fmt.Sprintf("assistant draft for %s described the implementation plan instead of the file body", path)
 	}
 	if containsAny(lower,
