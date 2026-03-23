@@ -4744,6 +4744,26 @@ func TestBuildTaskContinuationActionPromptTreatsDocumentSummaryAsDraft(t *testin
 	}
 }
 
+func TestBuildProjectContinuationActionPrompt(t *testing.T) {
+	prompt := buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.")
+
+	if !strings.Contains(prompt, "Continue the active project execution now from the continuation summary above.") {
+		t.Fatalf("prompt = %q, want project continuation lead-in", prompt)
+	}
+	if !strings.Contains(prompt, "Your next response must take direct project action instead of generic chat.") {
+		t.Fatalf("prompt = %q, want direct project action guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not say that you are ready, ask what to do next, or ask the user what they need.") {
+		t.Fatalf("prompt = %q, want anti-ready guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not say that you lack context or ask the user to restate the project when this continuation turn already includes the project session history and continuation summary.") {
+		t.Fatalf("prompt = %q, want anti-restatement guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Use the existing task tree, workspace state, planning artifacts, and recent tool results to continue execution directly.") {
+		t.Fatalf("prompt = %q, want direct execution guidance", prompt)
+	}
+}
+
 func TestRecoveryTurnAppendsDirectActionPromptForAsyncProjectTaskWithoutCheckpoint(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

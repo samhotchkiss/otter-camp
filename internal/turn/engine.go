@@ -5387,6 +5387,16 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 			return err
 		}
 	}
+	if shouldAppendProjectContinuationActionPrompt(rt.session) {
+		if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+			SessionID: rt.session.ID,
+			TurnID:    &rt.turn.ID,
+			Role:      "user",
+			Content:   buildProjectContinuationActionPrompt(summary),
+		}); err != nil {
+			return err
+		}
+	}
 	rt.historyStartID = &message.ID
 	if err := e.persistTurnHistoryStart(ctx, rt, message.ID); err != nil {
 		return err
@@ -8093,6 +8103,16 @@ func shouldAppendTaskContinuationActionPrompt(session *chat.ChatSession) bool {
 	return strings.EqualFold(strings.TrimSpace(session.Mode), "async")
 }
 
+func shouldAppendProjectContinuationActionPrompt(session *chat.ChatSession) bool {
+	if session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(session.Mode), "async")
+}
+
 func shouldAppendTaskRecoveryActionPrompt(session *chat.ChatSession) bool {
 	return shouldAppendTaskContinuationActionPrompt(session)
 }
@@ -8127,6 +8147,26 @@ func buildTaskContinuationActionPrompt(summary string) string {
 			"The continuation summary above already contains draft deliverable content. Treat it as the working artifact draft for this turn.",
 			"Do not reopen broad workspace context or search for more source material before using that draft.",
 			"If a target file is in scope, revise the draft directly and write the file with concrete content instead of re-deriving the document from scratch.",
+		)
+	}
+	return strings.Join(lines, " ")
+}
+
+func buildProjectContinuationActionPrompt(summary string) string {
+	lines := []string{
+		"Continue the active project execution now from the continuation summary above.",
+		"Your next response must take direct project action instead of generic chat.",
+		"Do not say that you are ready, ask what to do next, or ask the user what they need.",
+		"Do not say that you lack context or ask the user to restate the project when this continuation turn already includes the project session history and continuation summary.",
+		"Do not restate the project state or reread broad project context before acting.",
+		"Use the existing task tree, workspace state, planning artifacts, and recent tool results to continue execution directly.",
+		"Prefer direct task.create, task.update, bootstrap.setup.persist, flow, assignment, or file actions over more narration whenever the next step is already clear.",
+		"If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.",
+	}
+	if continuationSummaryLooksLikeDraft(summary) {
+		lines = append(lines,
+			"The continuation summary above already contains draft project deliverable content. Treat it as the working draft for this turn.",
+			"Do not reopen broad workspace context or re-derive the same planning document before using that draft.",
 		)
 	}
 	return strings.Join(lines, " ")
