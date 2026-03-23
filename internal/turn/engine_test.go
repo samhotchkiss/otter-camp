@@ -2441,6 +2441,39 @@ func TestBuildProjectBootstrapRecoveryRereadToolGuardErrorLateCompactResume(t *t
 	}
 }
 
+func TestBuildProjectBootstrapRecoveryRereadToolGuardErrorScaffoldOnlyRecovery(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AssignmentCount:          3,
+		PlannedTaskCount:         0,
+		CurrentPhase:             projectBootstrapCheckpointTaskTreePersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointStaffingPersisted,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureRuntime,
+		ValidationFailureReason:  buildProjectBootstrapScaffoldOnlyFailureReason(),
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	msg := buildProjectBootstrapRecoveryRereadToolGuardError(rt, "project.list")
+	if !strings.Contains(msg, "direct task.create or subtask.create calls") {
+		t.Fatalf("guard error = %q, want direct task creation guidance", msg)
+	}
+	if !strings.Contains(msg, "Do not reread project state first") {
+		t.Fatalf("guard error = %q, want no-reread guidance", msg)
+	}
+}
+
 func TestShouldRequireDirectBootstrapRepairActionForBoundedSizeFailure(t *testing.T) {
 	state := projectBootstrapState{
 		ValidationStatus:        projectBootstrapValidationFailed,
@@ -2650,6 +2683,36 @@ func TestShouldStopAfterBlockedProjectBootstrapRecoveryReread(t *testing.T) {
 	rt.session.ScopeType = "organization"
 	if shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt, true) {
 		t.Fatal("unexpected stop outside project scope")
+	}
+}
+
+func TestShouldNotStopAfterBlockedProjectBootstrapRecoveryRereadScaffoldOnlyRecovery(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AssignmentCount:          3,
+		PlannedTaskCount:         0,
+		CurrentPhase:             projectBootstrapCheckpointTaskTreePersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointStaffingPersisted,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureRuntime,
+		ValidationFailureReason:  buildProjectBootstrapScaffoldOnlyFailureReason(),
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		initialMessageText: buildProjectBootstrapScaffoldOnlyFailureReason(),
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt, true) {
+		t.Fatal("expected scaffold-only recovery reread block to continue the current turn")
 	}
 }
 

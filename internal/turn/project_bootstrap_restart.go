@@ -1112,7 +1112,7 @@ func (e *TurnEngine) seedBootstrapRestartScaffold(ctx context.Context, sourcePro
 		createdTasks[i] = updatedTask
 	}
 
-	return true, nil
+	return seedTaskTree && len(createdTasks) > 0, nil
 }
 
 func seededBootstrapRestartAssignedAgentID(taskRecord repo.ProjectTask) *uuid.UUID {

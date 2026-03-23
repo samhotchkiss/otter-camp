@@ -2348,9 +2348,15 @@ func buildProjectBootstrapRestartScaffoldFailureReason() string {
 	return "kickoff validation failed: automatic bootstrap restart recreated only the canonical bootstrap scaffold and never persisted staffed executable work, so the restart was archived instead of remaining active"
 }
 
+func buildProjectBootstrapScaffoldOnlyFailureReason() string {
+	return "kickoff validation failed: bootstrap setup persisted staffing but did not yet materialize any executable non-bootstrap project tasks"
+}
+
 func projectBootstrapRestartScaffoldFailureReason(reason string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(reason))
-	return strings.Contains(normalized, "automatic bootstrap restart recreated only the canonical bootstrap scaffold")
+	return strings.Contains(normalized, "automatic bootstrap restart recreated only the canonical bootstrap scaffold") ||
+		strings.Contains(normalized, "did not yet materialize any executable non-bootstrap project tasks") ||
+		strings.Contains(normalized, "did not emit any executable non-bootstrap project tasks for the first wave")
 }
 
 func projectBootstrapLastCheckpoint(progress projectBootstrapProgress) string {
@@ -2565,8 +2571,8 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		}
 		if progress.AssignmentCount > 0 || progress.PlannedFlowTemplateCount > 0 {
 			progress.ValidationStatus = projectBootstrapValidationFailed
-			progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
-			progress.ValidationFailureReason = "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave"
+			progress.ValidationFailureClass = projectBootstrapFailureRuntime
+			progress.ValidationFailureReason = buildProjectBootstrapScaffoldOnlyFailureReason()
 		}
 		return progress, nil
 	}
@@ -3134,8 +3140,8 @@ func normalizeProjectBootstrapValidationFailure(progress *projectBootstrapProgre
 		progress.ValidationFailureClass = projectBootstrapFailureFirstWaveExecution
 		progress.ValidationFailureReason = buildProjectBootstrapFirstWaveExecutionFailureReason(*progress)
 	case progress.PlannedTaskCount == 0 && progress.AssignmentCount > 0:
-		progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
-		progress.ValidationFailureReason = "kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable non-bootstrap project tasks for the first wave"
+		progress.ValidationFailureClass = projectBootstrapFailureRuntime
+		progress.ValidationFailureReason = buildProjectBootstrapScaffoldOnlyFailureReason()
 	default:
 		progress.ValidationFailureClass = projectBootstrapFailureRuntime
 		progress.ValidationFailureReason = "kickoff validation failed: bootstrap transitioned to a failed state without recording a machine-readable reason"
@@ -3366,7 +3372,7 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 		nextActionHint += " Do not start by rereading the oversized parent task; use the exact blocked task id from the bootstrap resume message and repair it directly."
 	}
 	if projectBootstrapRestartScaffoldFailureReason(reason) {
-		recoveryHint = "This restart already created staff drafts but did not materialize staffed executable project work. Do not begin with project.get, task.list, flow.list_templates, file.list, git.log, or other broad rereads. Reuse the dedicated project staff already created in this session, assign them to the project if that assignment step is still incomplete, then immediately create bounded executable workstream tasks and child tasks so bootstrap moves past scaffold-only state."
+		recoveryHint = "This bootstrap state already has staffing but did not materialize staffed executable project work. Do not begin with project.get, task.list, flow.list_templates, file.list, git.log, or other broad rereads. Reuse the dedicated project staff already created in this session, assign them to the project if that assignment step is still incomplete, then immediately create bounded executable workstream tasks and child tasks so bootstrap moves past scaffold-only state."
 		nextActionHint = "Do not spend this turn rediscovering repo state or profile catalogs. Your first repair step should be to persist staffed executable work using the existing project staff and then continue bootstrap from that materialized task tree. Do not answer with a standalone acknowledgement or status note. This turn should contain the concrete staffing/task mutation tool calls needed to move past scaffold-only state; if you cannot make those tool calls, explain the concrete blocker instead."
 	}
 	if strings.Contains(lowerReason, "only ") &&
@@ -6051,6 +6057,13 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 		default:
 			lines = append(lines, "The next acceptable bootstrap action is a direct task.update on the named blocked task id above using one of the active assignee ids above. Do not answer with narrative, recollection, or a state summary. If you do not take that direct repair action or report a concrete blocker, bootstrap will be treated as failed.")
 		}
+	}
+	scaffoldOnlyRecovery := (state.AssignmentCount > 0 && state.PlannedTaskCount == 0 &&
+		(strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointTaskTreePersisted ||
+			strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointStaffingPersisted)) ||
+		projectBootstrapRestartScaffoldFailureReason(state.ValidationFailureReason)
+	if scaffoldOnlyRecovery {
+		lines = append(lines, "The next acceptable bootstrap action is direct task.create or subtask.create calls that materialize bounded non-bootstrap project work using the existing staffed roster above. Do not answer with narrative, recollection, or a project summary. Do not call project.get, project.list, task.list, flow.list_templates, or scaffold file reads before those task-creation mutations.")
 	}
 	flowTemplatesReady := state.PlannedFlowTemplateCount > 0 ||
 		strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointFlowTemplatesPersisted ||
@@ -10723,8 +10736,24 @@ func buildProjectBootstrapExcessStaffingDiscoveryGuardError() string {
 
 func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName string) string {
 	state := projectBootstrapState{}
+	initialMessage := ""
 	if rt != nil && rt.session != nil {
 		state = projectBootstrapStateFromMetadata(rt.session.Metadata)
+	}
+	if rt != nil {
+		initialMessage = strings.ToLower(strings.TrimSpace(rt.initialMessageText))
+	}
+	scaffoldOnlyRecovery := (state.AssignmentCount > 0 && state.PlannedTaskCount == 0 &&
+		(strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointTaskTreePersisted ||
+			strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointStaffingPersisted)) ||
+		strings.Contains(initialMessage, "did not yet materialize any executable non-bootstrap project tasks") ||
+		strings.Contains(initialMessage, "did not emit any executable non-bootstrap project tasks for the first wave") ||
+		projectBootstrapRestartScaffoldFailureReason(state.ValidationFailureReason)
+	if scaffoldOnlyRecovery {
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "project.list", "project.get", "task.list", "flow.list_templates", "file.read", "file.search":
+			return "bootstrap scaffold-only recovery already has the active project scope and persisted staffing roster. Do not reread project state first. Your next action must be direct task.create or subtask.create calls that materialize bounded non-bootstrap project work using the existing assignee roster from the bootstrap resume message."
+		}
 	}
 	if projectBootstrapResumeUsesCompactRoster(state) && projectBootstrapResumeShouldStartWithPersist(state) {
 		switch strings.ToLower(strings.TrimSpace(toolName)) {
@@ -10751,6 +10780,17 @@ func shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt *turnRuntime, block
 		return false
 	}
 	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
+		return false
+	}
+	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
+	initialMessage := strings.ToLower(strings.TrimSpace(rt.initialMessageText))
+	scaffoldOnlyRecovery := (state.AssignmentCount > 0 && state.PlannedTaskCount == 0 &&
+		(strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointTaskTreePersisted ||
+			strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointStaffingPersisted)) ||
+		strings.Contains(initialMessage, "did not yet materialize any executable non-bootstrap project tasks") ||
+		strings.Contains(initialMessage, "did not emit any executable non-bootstrap project tasks for the first wave") ||
+		projectBootstrapRestartScaffoldFailureReason(state.ValidationFailureReason)
+	if scaffoldOnlyRecovery {
 		return false
 	}
 	return true
