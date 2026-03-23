@@ -7586,6 +7586,11 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:    "asked the operator to choose the next step instead of the file body",
 		},
 		{
+			name:    "rejects durable draft preface placeholder",
+			content: "I'll write the deployment checklist to the target file now using the substantive draft provided above.",
+			want:    "asked the operator to choose the next step instead of the file body",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",

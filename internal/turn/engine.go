@@ -9722,6 +9722,8 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"i now have the recovery context",
 		"let me check the strategy artifacts to understand the locked decisions before proceeding",
 		"let me first check the current state of the target file and recovery artifacts",
+		"using the durable draft above",
+		"using the substantive draft provided above",
 	) {
 		return fmt.Sprintf("assistant draft for %s asked the operator to choose the next step instead of the file body", path)
 	}
