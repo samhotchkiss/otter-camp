@@ -845,8 +845,11 @@ func (s *service) releaseArchivedProjectSlug(ctx context.Context, projectRecord 
 		return nil
 	}
 	projectRecord.Slug = nextSlug
-	_, err = s.projects.Update(ctx, projectRecord)
-	return err
+	updated, err := s.projects.Update(ctx, projectRecord)
+	if err != nil {
+		return err
+	}
+	return RelocateProjectWorkspace(ctx, s.environments, s.dataDir, updated, currentSlug)
 }
 
 func archivedProjectSlug(base string, projectID uuid.UUID) (string, error) {
@@ -909,6 +912,11 @@ func (s *service) Update(ctx context.Context, orgID, projectID uuid.UUID, req Up
 	}
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(current.Slug) != strings.TrimSpace(stored.Slug) {
+		if err := RelocateProjectWorkspace(ctx, s.environments, s.dataDir, stored, current.Slug); err != nil {
+			return nil, err
+		}
 	}
 
 	updatedByType, updatedByID, _ := normalizeActor(req.UpdatedByType, req.UpdatedByID)

@@ -24,6 +24,11 @@ type RepoBindingEnvironmentRepository interface {
 	ListByProject(ctx context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error)
 }
 
+type RepoBindingEnvironmentMutableRepository interface {
+	RepoBindingEnvironmentRepository
+	Update(ctx context.Context, environment repo.ProjectEnvironment) (repo.ProjectEnvironment, error)
+}
+
 func EnsureCanonicalRepoBinding(ctx context.Context, environments RepoBindingEnvironmentRepository, dataDir string, projectRecord repo.Project) (repo.ProjectEnvironment, bool, error) {
 	if environments == nil || projectRecord.ID == uuid.Nil {
 		return repo.ProjectEnvironment{}, false, nil
@@ -70,6 +75,72 @@ func EnsureRepoBindingAtPath(ctx context.Context, environments RepoBindingEnviro
 		return repo.ProjectEnvironment{}, false, err
 	}
 	return created, true, nil
+}
+
+func RelocateProjectWorkspace(ctx context.Context, environments RepoBindingEnvironmentRepository, dataDir string, projectRecord repo.Project, previousSlug string) error {
+	if environments == nil || projectRecord.ID == uuid.Nil {
+		return nil
+	}
+	previous := strings.TrimSpace(previousSlug)
+	current := strings.TrimSpace(projectRecord.Slug)
+	if previous == "" || current == "" || previous == current {
+		return nil
+	}
+
+	previousPath, err := workspace.ProjectRoot(dataDir, previous)
+	if err != nil {
+		return err
+	}
+	currentPath, err := workspace.ProjectRoot(dataDir, current)
+	if err != nil {
+		return err
+	}
+	if err := moveProjectWorkspace(previousPath, currentPath); err != nil {
+		return err
+	}
+
+	mutableEnvironments, ok := environments.(RepoBindingEnvironmentMutableRepository)
+	if !ok {
+		return nil
+	}
+	projectEnvironments, err := environments.ListByProject(ctx, projectRecord.ID)
+	if err != nil {
+		return err
+	}
+	for _, environment := range projectEnvironments {
+		if !sameProjectRepoPath(environment.RepoPath, previousPath) {
+			continue
+		}
+		updated := environment
+		updated.RepoPath = stringPointer(currentPath)
+		if _, err := mutableEnvironments.Update(ctx, updated); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func moveProjectWorkspace(previousPath, currentPath string) error {
+	previous := strings.TrimSpace(previousPath)
+	current := strings.TrimSpace(currentPath)
+	if previous == "" || current == "" || sameProjectRepoPath(stringPointer(previous), current) {
+		return nil
+	}
+	if !workspaceDirectoryExists(previous) {
+		return nil
+	}
+	if workspaceDirectoryExists(current) {
+		return fmt.Errorf("workspace destination already exists: %s", current)
+	}
+	if err := os.MkdirAll(filepath.Dir(current), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(previous, current)
+}
+
+func workspaceDirectoryExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func ensureGitWorkspace(repoPath string) error {

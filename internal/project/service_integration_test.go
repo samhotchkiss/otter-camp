@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -82,8 +84,10 @@ func TestProjectServiceCreateGetBySlugAndUniqueness(t *testing.T) {
 func TestProjectServiceCreateAllowsArchivedSlugReuseWithCanonicalSlug(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
-	svc := newIntegrationService(t, pool)
+	dataDir := t.TempDir()
+	svc := newIntegrationServiceWithDataDir(t, pool, dataDir)
 	orgRepo := repo.NewOrgRepo(pool)
+	environmentRepo := repo.NewProjectEnvironmentRepo(pool)
 
 	org, err := orgRepo.Create(ctx, repo.Organization{Slug: "proj-svc-archived-slug-" + uuid.NewString()[:8], DisplayName: "Archived Slug Org"})
 	if err != nil {
@@ -99,6 +103,24 @@ func TestProjectServiceCreateAllowsArchivedSlugReuseWithCanonicalSlug(t *testing
 	})
 	if err != nil {
 		t.Fatalf("Create first: %v", err)
+	}
+	firstEnvironments, err := environmentRepo.ListByProject(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("ListByProject first environments: %v", err)
+	}
+	if len(firstEnvironments) != 1 {
+		t.Fatalf("first environment count = %d, want 1", len(firstEnvironments))
+	}
+	canonicalRoot, err := workspace.ProjectRoot(dataDir, "alpha")
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot canonical: %v", err)
+	}
+	legacyArtifactPath := filepath.Join(canonicalRoot, "planning", "legacy-notes.md")
+	if err := os.MkdirAll(filepath.Dir(legacyArtifactPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll legacy artifact dir: %v", err)
+	}
+	if err := os.WriteFile(legacyArtifactPath, []byte("legacy archived project notes\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile legacy artifact: %v", err)
 	}
 
 	archived, err := svc.Archive(ctx, org.ID, first.ID)
@@ -128,6 +150,36 @@ func TestProjectServiceCreateAllowsArchivedSlugReuseWithCanonicalSlug(t *testing
 	}
 	if updatedArchived.Slug == "alpha" {
 		t.Fatalf("archived project slug = %q, want archived record moved off canonical slug", updatedArchived.Slug)
+	}
+	archivedEnvironments, err := environmentRepo.ListByProject(ctx, archived.ID)
+	if err != nil {
+		t.Fatalf("ListByProject archived environments: %v", err)
+	}
+	if len(archivedEnvironments) != 1 {
+		t.Fatalf("archived environment count = %d, want 1", len(archivedEnvironments))
+	}
+	archivedRoot, err := workspace.ProjectRoot(dataDir, updatedArchived.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot archived: %v", err)
+	}
+	if got := strings.TrimSpace(pointerValue(archivedEnvironments[0].RepoPath)); got != archivedRoot {
+		t.Fatalf("archived repo_path = %q, want %q", got, archivedRoot)
+	}
+	if _, err := os.Stat(filepath.Join(archivedRoot, "planning", "legacy-notes.md")); err != nil {
+		t.Fatalf("expected archived workspace artifact moved to archived root: %v", err)
+	}
+	secondEnvironments, err := environmentRepo.ListByProject(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("ListByProject second environments: %v", err)
+	}
+	if len(secondEnvironments) != 1 {
+		t.Fatalf("second environment count = %d, want 1", len(secondEnvironments))
+	}
+	if got := strings.TrimSpace(pointerValue(secondEnvironments[0].RepoPath)); got != canonicalRoot {
+		t.Fatalf("second repo_path = %q, want %q", got, canonicalRoot)
+	}
+	if _, err := os.Stat(legacyArtifactPath); !os.IsNotExist(err) {
+		t.Fatalf("canonical workspace retained archived artifact err=%v, want not exists", err)
 	}
 }
 
@@ -1029,8 +1081,13 @@ func TestProjectServiceEnableDisableSchedule(t *testing.T) {
 
 func newIntegrationService(t *testing.T, pool *pgxpool.Pool) ProjectService {
 	t.Helper()
+	return newIntegrationServiceWithDataDir(t, pool, "")
+}
+
+func newIntegrationServiceWithDataDir(t *testing.T, pool *pgxpool.Pool, dataDir string) ProjectService {
+	t.Helper()
 	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
-	svc, err := NewService(Options{Pool: pool, Events: bus})
+	svc, err := NewService(Options{Pool: pool, Events: bus, DataDir: dataDir})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
