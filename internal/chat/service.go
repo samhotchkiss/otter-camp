@@ -1015,12 +1015,16 @@ func (s *service) AppendMessage(ctx context.Context, input AppendMessageInput) (
 		return nil, err
 	}
 	if message.Role == "user" && !isDispatchSuppressedUserMetadata(message.Metadata) {
-		if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.user_sent", actorType, actorID, map[string]any{
+		payload := map[string]any{
 			"session_id":      session.ID,
 			"message_id":      message.ID,
 			"sequence_number": message.SequenceNumber,
 			"status":          message.Status,
-		}); err != nil {
+		}
+		if executionID := flowNodeExecutionIDFromSessionMetadata(*session); executionID != nil && *executionID != uuid.Nil {
+			payload["flow_node_execution_id"] = executionID.String()
+		}
+		if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.user_sent", actorType, actorID, payload); err != nil {
 			return nil, err
 		}
 		if err := s.publishEvent(ctx, session.OrganizationID, "chat.message.finalized", actorType, actorID, map[string]any{
@@ -1035,6 +1039,29 @@ func (s *service) AppendMessage(ctx context.Context, input AppendMessageInput) (
 	}
 
 	return message, nil
+}
+
+func flowNodeExecutionIDFromSessionMetadata(session ChatSession) *uuid.UUID {
+	if len(session.Metadata) == 0 || !json.Valid(session.Metadata) {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(session.Metadata, &payload); err != nil {
+		return nil
+	}
+	raw, ok := payload["flow_node_execution_id"]
+	if !ok {
+		return nil
+	}
+	text := strings.TrimSpace(fmt.Sprint(raw))
+	if text == "" {
+		return nil
+	}
+	id, err := uuid.Parse(text)
+	if err != nil || id == uuid.Nil {
+		return nil
+	}
+	return &id
 }
 
 func (s *service) monitorTurnResponse(orgID, sessionID uuid.UUID, msgAt time.Time) {

@@ -104,6 +104,7 @@ This issue is partially underway, but not complete:
 - worker recovery/requeue paths now stamp `flow_node_execution_id` into reissued task-lane `agent_turn` payloads
 - claim-time suppression now uses active execution presence to distinguish valid live ownership from stale `chat_session.current_turn_id`
 - turn-engine-created retries and auto-continuations now also stamp `flow_node_execution_id` from task-session metadata before enqueue
+- chat-layer `chat.message.user_sent` events for bound task sessions now also carry `flow_node_execution_id` directly
 
 That means execution identity now survives:
 
@@ -113,5 +114,6 @@ That means execution identity now survives:
 - worker stranded supervisor-recovery requeue
 - turn-engine task retries / auto-continuations
 - worker startup purge of legacy task-lane queue rows that predate execution-bound payloads
+- normal task-lane message-trigger dispatch from `chat.message.user_sent`
 
 The remaining gap is that several primary dispatch producers still create task-lane work from message/session state without routing through one execution-scoped command helper. The next slice should eliminate those remaining raw producers rather than adding another generation of suppression heuristics.

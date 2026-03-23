@@ -58,7 +58,8 @@ Most recent shipped commits relevant to the current validation run:
 - `6ccc00d9` `Bind worker task dispatches to active executions`
 - `425fd775` `Ignore stale task turns during claim suppression`
 - `25215b30` `Bind task continuations to active executions`
-- pending local slice: worker startup now purges legacy task-session `agent_turn` rows with no `flow_node_execution_id` once an active execution-owned live turn exists for that lane; targeted integration coverage passes and live restart verified the old orphan queue row for task 20 was dead-lettered instead of lingering
+- `6992ab10` `Purge legacy task dispatch without execution ownership`
+- pending local slice: `chat.message.user_sent` for bound task sessions now includes `flow_node_execution_id` directly in the event payload; targeted chat coverage passes and the live queue now shows execution-owned `agent_turn` jobs without needing a worker recovery path first
 
 What those changed:
 
@@ -81,6 +82,7 @@ What those changed:
 - claim-time `agent_turn` suppression no longer lets stale pending `current_turn_id` rows from abandoned task executions block fresh task dispatch claims
 - turn-engine-created retries and auto-continuations now also stamp `flow_node_execution_id` from task-session metadata before enqueue, so engine-side task dispatch no longer drops execution ownership after worker/control-plane already established it
 - worker startup purge now also retires legacy task-session `agent_turn` rows with no execution identity when a newer execution-owned live turn already exists, so pre-rework queue rows no longer shadow an active lane after restart
+- chat-layer `chat.message.user_sent` events for bound task sessions now publish `flow_node_execution_id` directly, so downstream dispatch does not need to rediscover execution identity from session state for the common message-trigger path
 
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
@@ -123,10 +125,11 @@ The current implementation work is already underway against that plan:
 - claim-time worker suppression now also respects execution ownership: stale pending session turns only block claims when an active `flow_node_execution` still exists for that task lane
 - turn-engine requeues/retries/auto-continuations now preserve the bound `flow_node_execution_id` too, so execution ownership survives task-session continuation inside the engine rather than only in worker repair paths
 - startup cleanup now drops legacy task-session dispatch rows that have no `flow_node_execution_id` once the lane already has an active execution-owned live turn, which removes another pre-command-model source of stale queue identity
+- message-triggered task dispatch now carries execution identity directly from the chat layer, and the current live claimed `agent_turn` row on Speaker Pipeline includes `flow_node_execution_id` as expected
 
 The next likely slices after committing the current worker change are:
 
-- remove remaining raw `agent_turn` producers that still do not carry execution identity, especially control-plane/chat-triggered task-session paths that enqueue from message state
+- remove remaining raw `agent_turn` producers that still do not carry execution identity, especially any fallback paths that enqueue after session lookup failure or create task-lane dispatch outside the normal message/wakeup path
 - begin routing those producers through a single execution-scoped dispatch helper instead of parallel ad hoc enqueue logic in worker and turn-engine
 - use the active canary to verify newly created task-session jobs now consistently carry `flow_node_execution_id`, not just worker-recovered ones
 - then revisit the three still-blocked Speaker Pipeline tasks, which are now blocked on deterministic tool-validation guards rather than queue-ownership deadlock:

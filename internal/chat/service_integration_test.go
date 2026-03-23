@@ -5,6 +5,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -183,6 +184,125 @@ func TestChatServiceIntegrationAppendMessagePublishesUserSentForUserMessage(t *t
 		if payload["message_id"] != message.ID.String() {
 			t.Fatalf("%s payload message_id = %v, want %s", event.EventType, payload["message_id"], message.ID)
 		}
+	}
+}
+
+func TestChatServiceIntegrationAppendMessagePublishesExecutionIDForTaskSession(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	user := seedChatServiceUser(t, ctx, pool, org.ID, "append-message-task-execution", "member")
+
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "chat-user-sent-execution-id",
+		DisplayName:    "Chat User Sent Execution ID",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "chat-user-sent-execution-id-template",
+		DisplayName:    "Chat User Sent Execution ID Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskCreatedBy := uuid.New()
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		TaskNumber:        1,
+		Title:             "Bound task session",
+		WorkStatus:        "in_progress",
+		FlowTemplateID:    &template.ID,
+		CurrentFlowNodeID: &flowNode.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &taskCreatedBy,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	executionID := uuid.New()
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	session, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(fmt.Sprintf(`{"flow_node_execution_id":"%s"}`, executionID)),
+	})
+	if err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+
+	svc := newIntegrationService(t, pool, newIntegrationEventBus(pool))
+
+	authorType := "human_user"
+	message, err := svc.AppendMessage(ctx, AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: &authorType,
+		AuthorID:   &user.ID,
+		Role:       "user",
+		Content:    "continue the task",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var payloadRaw []byte
+		err := pool.QueryRow(ctx, `
+			SELECT payload
+			FROM domain_event
+			WHERE organization_id = $1
+			  AND event_type = 'chat.message.user_sent'
+			  AND payload->>'message_id' = $2
+			ORDER BY seq DESC
+			LIMIT 1
+		`, org.ID, message.ID.String()).Scan(&payloadRaw)
+		if err == nil {
+			var payload map[string]any
+			if err := json.Unmarshal(payloadRaw, &payload); err != nil {
+				t.Fatalf("unmarshal user_sent payload: %v", err)
+			}
+			if payload["session_id"] != session.ID.String() {
+				t.Fatalf("user_sent session_id = %v, want %s", payload["session_id"], session.ID)
+			}
+			if payload["message_id"] != message.ID.String() {
+				t.Fatalf("user_sent message_id = %v, want %s", payload["message_id"], message.ID)
+			}
+			if payload["flow_node_execution_id"] != executionID.String() {
+				t.Fatalf("user_sent flow_node_execution_id = %v, want %s", payload["flow_node_execution_id"], executionID)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for persisted task-session chat.message.user_sent: %v", err)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
