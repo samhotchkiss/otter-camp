@@ -9707,6 +9707,14 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return fmt.Sprintf("assistant draft for %s described runtime status analysis instead of the file body", path)
 	}
 	if containsAny(lower,
+		"flow_node_execution_id",
+		"can you provide the flow_node_execution_id",
+		"if you'd like me to check the current task state",
+		"determine the active flow node",
+	) {
+		return fmt.Sprintf("assistant draft for %s asked for runtime control-plane input instead of the file body", path)
+	}
+	if containsAny(lower,
 		"i understand the problem",
 		"i can see the problem",
 		"let me ",

@@ -7566,6 +7566,12 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "runtime status analysis instead of the file body",
 		},
 		{
+			name: "rejects flow execution id request placeholder",
+			content: "I need the flow node execution ID to continue. Can you provide the flow_node_execution_id for the current task node?\n\n" +
+				"Alternatively, if you'd like me to check the current task state, I can retrieve OC-24 and determine the active flow node:",
+			want: "runtime control-plane input instead of the file body",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
