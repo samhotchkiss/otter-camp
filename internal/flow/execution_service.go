@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -757,6 +758,7 @@ func (s *service) createTaskReviewInboxTx(ctx context.Context, tx pgx.Tx, taskRe
 	})
 	if plan, ok := taskplan.Parse(taskRecord.Metadata); ok {
 		report := taskplan.Evaluate(plan)
+		plan, report = enrichReviewPlanningEvidence(taskRecord.Metadata, plan)
 		if plan.RequiresReviewAndRefinement() || report.Enforced {
 			if s.planningAssets != nil && s.environments != nil {
 				syncedPlan, syncErr := planningasset.New(planningasset.Options{
@@ -771,6 +773,7 @@ func (s *service) createTaskReviewInboxTx(ctx context.Context, tx pgx.Tx, taskRe
 					report = taskplan.Evaluate(plan)
 				}
 			}
+			plan, report = enrichReviewPlanningEvidence(taskRecord.Metadata, plan)
 			if report.Enforced && report.HasMissingRequirements() {
 				return taskplan.ContractError{Report: report}
 			}
@@ -890,6 +893,62 @@ func actorUUIDPtr(actor Actor) *uuid.UUID {
 	}
 	id := actor.ID
 	return &id
+}
+
+func enrichReviewPlanningEvidence(metadata json.RawMessage, plan taskplan.Plan) (taskplan.Plan, taskplan.ValidationReport) {
+	report := taskplan.Evaluate(plan)
+	if !report.Enforced || !report.HasMissingRequirements() || len(plan.ArtifactEvidence) > 0 || len(plan.Artifacts) == 0 {
+		return plan, report
+	}
+
+	contracts := taskplan.ArtifactContractForPlan(plan)
+	if len(contracts) == 0 {
+		return plan, report
+	}
+	artifactsBySlug := make(map[string]taskplan.PlannedArtifact, len(plan.Artifacts))
+	for _, artifact := range plan.Artifacts {
+		slug := strings.TrimSpace(artifact.Slug)
+		if slug == "" {
+			continue
+		}
+		artifactsBySlug[slug] = artifact
+	}
+	updates := make([]taskplan.ArtifactEvidence, 0, len(contracts))
+	for _, contract := range contracts {
+		artifact, ok := artifactsBySlug[strings.TrimSpace(contract.Slug)]
+		if !ok || (strings.TrimSpace(artifact.ArtifactID) == "" && strings.TrimSpace(artifact.ContentSHA256) == "") {
+			continue
+		}
+		title := strings.TrimSpace(artifact.Title)
+		if title == "" {
+			title = strings.TrimSpace(contract.Title)
+		}
+		summary := "Recorded artifact for review."
+		if path := strings.TrimSpace(artifact.RepoPath); path != "" {
+			summary = "Recorded artifact at " + path + "."
+		}
+		updates = append(updates, taskplan.ArtifactEvidence{
+			Slug:     contract.Slug,
+			Title:    title,
+			Summary:  summary,
+			Sections: append([]string(nil), contract.RequiredSections...),
+			Notes:    "Auto-synthesized from recorded planning artifacts during flow review preparation.",
+		})
+	}
+	if len(updates) == 0 {
+		return plan, report
+	}
+	updatedMetadata, updatedPlan, updatedReport, err := taskplan.ApplyProcessUpdate(metadata, taskplan.ProcessUpdate{
+		Artifacts:          updates,
+		HasArtifactChanges: true,
+		ActorType:          "system",
+		RecordedAt:         time.Now().UTC(),
+	})
+	if err != nil {
+		return plan, report
+	}
+	_ = updatedMetadata
+	return updatedPlan, updatedReport
 }
 
 func reviewArtifactSummaries(artifacts []taskplan.PlannedArtifact) []string {

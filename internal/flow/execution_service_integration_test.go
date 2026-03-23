@@ -249,6 +249,63 @@ func TestFlowExecutionServiceRejectsPlanningReviewWhenArtifactsRemainScaffolds(t
 	}
 }
 
+func TestFlowExecutionServiceTerminalAdvanceSynthesizesPlanningArtifactEvidence(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, _ := seedLinearTemplate(t, ctx, fixture, false, 5)
+	taskRecord := seedFlowTask(t, ctx, fixture, "Metrics reporting script", "in_progress", &template.ID)
+	taskRecord.Metadata = json.RawMessage(`{
+		"planning": {
+			"mode": "execution_first",
+			"playbook": "metrics",
+			"work_type": "metrics",
+			"project_stage": "delivery",
+			"evidence_maturity": "validated",
+			"risk_level": "low",
+			"process_enforced": true,
+			"artifacts": [
+				{"slug":"metric-tree","title":"Metric tree","kind":"metrics_framework","repo_path":"planning/metrics-framework/oc-99-metric-tree.md","artifact_id":"a1","content_sha256":"sha1"},
+				{"slug":"instrumentation-plan","title":"Instrumentation plan","kind":"metrics_framework","repo_path":"planning/metrics-framework/oc-99-instrumentation-plan.md","artifact_id":"a2","content_sha256":"sha2"},
+				{"slug":"dashboard-spec","title":"Dashboard spec","kind":"metrics_framework","repo_path":"planning/metrics-framework/oc-99-dashboard-spec.md","artifact_id":"a3","content_sha256":"sha3"},
+				{"slug":"review-cadence","title":"Metric review cadence","kind":"metrics_framework","repo_path":"planning/metrics-framework/oc-99-review-cadence.md","artifact_id":"a4","content_sha256":"sha4"}
+			]
+		}
+	}`)
+	if _, err := fixture.taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update task metadata: %v", err)
+	}
+
+	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow to review: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow review: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, taskRecord.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow terminal: %v", err)
+	}
+
+	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "done" {
+		t.Fatalf("task work_status = %q, want done", updatedTask.WorkStatus)
+	}
+	plan, ok := taskplan.Parse(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected planning metadata")
+	}
+	if len(plan.ArtifactEvidence) != 4 {
+		t.Fatalf("artifact evidence len = %d, want 4", len(plan.ArtifactEvidence))
+	}
+}
+
 func TestFlowExecutionServiceTerminalAdvanceRequiresCompletedReview(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
