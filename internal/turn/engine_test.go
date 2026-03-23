@@ -5482,6 +5482,12 @@ func TestBuildRecoveryResumeActionPromptUsesAvailableDraftDirectly(t *testing.T)
 	if !strings.Contains(prompt, "your next assistant message should begin with the first line of the best available draft") {
 		t.Fatalf("prompt = %q, want first-line draft guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Your entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence.") {
+		t.Fatalf("prompt = %q, want body-or-blocker guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not ask 'What do you need?', 'What would you like me to do?', or any equivalent recovery question.") {
+		t.Fatalf("prompt = %q, want anti-recovery-question guidance", prompt)
+	}
 }
 
 func TestBuildRecoveryResumeActionPromptUsesContinuationSummaryDraftDirectly(t *testing.T) {
@@ -5503,6 +5509,9 @@ func TestBuildRecoveryResumeActionPromptUsesContinuationSummaryDraftDirectly(t *
 	}
 	if !strings.Contains(prompt, "Do not reread strategy artifacts, planning files, or workspace listings before writing") {
 		t.Fatalf("prompt = %q, want anti-reread draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Your entire next assistant message must be either the concrete file body for the target deliverable or one concrete blocker sentence.") {
+		t.Fatalf("prompt = %q, want body-or-blocker guidance", prompt)
 	}
 }
 
