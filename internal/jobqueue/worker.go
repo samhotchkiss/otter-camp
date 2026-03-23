@@ -2125,6 +2125,19 @@ func deriveJobKeys(jobType string, payload json.RawMessage) (string, string) {
 		}
 		key := fmt.Sprintf("chat_summarize:%s", parsed.SessionID)
 		return key, key
+	case "rollup_update":
+		var parsed struct {
+			OrgID      uuid.UUID `json:"org_id"`
+			RollupDate string    `json:"rollup_date"`
+		}
+		if err := json.Unmarshal(payload, &parsed); err != nil {
+			return "", ""
+		}
+		if parsed.OrgID == uuid.Nil || strings.TrimSpace(parsed.RollupDate) == "" {
+			return "", ""
+		}
+		key := fmt.Sprintf("rollup_update:%s:%s", parsed.OrgID, strings.TrimSpace(parsed.RollupDate))
+		return key, key
 	default:
 		return "", ""
 	}

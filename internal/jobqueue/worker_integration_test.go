@@ -605,6 +605,46 @@ func TestChatSummarizeEnqueueDedupesActiveSession(t *testing.T) {
 	}
 }
 
+func TestRollupUpdateEnqueueDedupesByOrgAndDate(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	orgID := uuid.New()
+	payload := map[string]any{
+		"org_id":      orgID,
+		"rollup_date": "2026-03-22",
+	}
+
+	firstID, err := worker.Enqueue(context.Background(), nil, "rollup_update", 50, payload, nil)
+	if err != nil {
+		t.Fatalf("enqueue first rollup_update: %v", err)
+	}
+	secondID, err := worker.Enqueue(context.Background(), nil, "rollup_update", 50, payload, nil)
+	if err != nil {
+		t.Fatalf("enqueue duplicate rollup_update: %v", err)
+	}
+	if secondID != firstID {
+		t.Fatalf("duplicate enqueue id = %s, want %s", secondID, firstID)
+	}
+
+	var activeRows int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE dedupe_key = $1
+		  AND status IN ('pending', 'claimed')
+	`, "rollup_update:"+orgID.String()+":2026-03-22").Scan(&activeRows); err != nil {
+		t.Fatalf("count active deduped rows: %v", err)
+	}
+	if activeRows != 1 {
+		t.Fatalf("active deduped rows = %d, want 1", activeRows)
+	}
+}
+
 func TestJobWorkerSkipLockedAcrossTwoWorkers(t *testing.T) {
 	pool := testdb.New(t)
 

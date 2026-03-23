@@ -2,9 +2,12 @@ package jobqueue
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestBackoffDelay(t *testing.T) {
@@ -170,6 +173,20 @@ func TestRateLimitRetryAfter(t *testing.T) {
 				t.Fatalf("rateLimitRetryAfter(%v) = (%s, %t), want (%s, %t)", tc.err, gotDelay, gotLimited, tc.wantDelay, tc.wantLimited)
 			}
 		})
+	}
+}
+
+func TestDeriveJobKeysForRollupUpdate(t *testing.T) {
+	orgID := uuid.New()
+	payload := []byte(fmt.Sprintf(`{"org_id":"%s","rollup_date":"2026-03-22"}`, orgID))
+
+	dedupeKey, groupKey := deriveJobKeys("rollup_update", payload)
+	want := "rollup_update:" + orgID.String() + ":2026-03-22"
+	if dedupeKey != want {
+		t.Fatalf("dedupe_key = %q, want %q", dedupeKey, want)
+	}
+	if groupKey != want {
+		t.Fatalf("group_key = %q, want %q", groupKey, want)
 	}
 }
 
