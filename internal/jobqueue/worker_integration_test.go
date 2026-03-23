@@ -3189,7 +3189,9 @@ func TestJobWorkerRequeuePendingTurnsWithoutJobs(t *testing.T) {
 		requeuedSessID uuid.UUID
 	)
 	if err := pool.QueryRow(ctx, `
-		SELECT status, (payload->>'message_id')::uuid, (payload->>'session_id')::uuid
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       (payload->>'session_id')::uuid
 		FROM job_queue
 		WHERE job_type = 'agent_turn'
 		  AND (payload->>'session_id')::uuid = $1
@@ -3464,15 +3466,22 @@ func TestJobWorkerRequeuePendingTurnsWithoutJobsRequeuesAfterProjectResume(t *te
 		status         string
 		requeuedMsgID  uuid.UUID
 		requeuedSessID uuid.UUID
+		requeuedExecID *uuid.UUID
 	)
 	if err := pool.QueryRow(ctx, `
-		SELECT status, (payload->>'message_id')::uuid, (payload->>'session_id')::uuid
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       (payload->>'session_id')::uuid,
+		       CASE
+		         WHEN COALESCE(payload->>'flow_node_execution_id', '') = '' THEN NULL
+		         ELSE (payload->>'flow_node_execution_id')::uuid
+		       END
 		FROM job_queue
 		WHERE job_type = 'agent_turn'
 		  AND (payload->>'session_id')::uuid = $1
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID); err != nil {
+	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID, &requeuedExecID); err != nil {
 		t.Fatalf("query requeued pending turn job: %v", err)
 	}
 	if status != "pending" {
@@ -3624,15 +3633,22 @@ func TestJobWorkerRequeuePendingTurnsWithoutJobsUsesExecutionMetadataLiveTurn(t 
 		status         string
 		requeuedMsgID  uuid.UUID
 		requeuedSessID uuid.UUID
+		requeuedExecID *uuid.UUID
 	)
 	if err := pool.QueryRow(ctx, `
-		SELECT status, (payload->>'message_id')::uuid, (payload->>'session_id')::uuid
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       (payload->>'session_id')::uuid,
+		       CASE
+		         WHEN COALESCE(payload->>'flow_node_execution_id', '') = '' THEN NULL
+		         ELSE (payload->>'flow_node_execution_id')::uuid
+		       END
 		FROM job_queue
 		WHERE job_type = 'agent_turn'
 		  AND (payload->>'session_id')::uuid = $1
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID); err != nil {
+	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID, &requeuedExecID); err != nil {
 		t.Fatalf("query requeued pending turn job: %v", err)
 	}
 	if status != "pending" {
@@ -3643,6 +3659,9 @@ func TestJobWorkerRequeuePendingTurnsWithoutJobsUsesExecutionMetadataLiveTurn(t 
 	}
 	if requeuedMsgID != message.ID {
 		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	}
+	if requeuedExecID == nil || *requeuedExecID != execution.ID {
+		t.Fatalf("requeued flow_node_execution_id = %v, want %s", requeuedExecID, execution.ID)
 	}
 }
 

@@ -72,10 +72,11 @@ type JobWorker interface {
 type JobHandler func(ctx context.Context, job Job) error
 
 type agentTurnKeyPayload struct {
-	SessionID              uuid.UUID `json:"session_id"`
-	MessageID              uuid.UUID `json:"message_id"`
-	RetryCount             int       `json:"retry_count"`
-	RateLimitJitterApplied bool      `json:"rate_limit_jitter_applied,omitempty"`
+	SessionID              uuid.UUID  `json:"session_id"`
+	MessageID              uuid.UUID  `json:"message_id"`
+	RetryCount             int        `json:"retry_count"`
+	FlowNodeExecutionID    *uuid.UUID `json:"flow_node_execution_id,omitempty"`
+	RateLimitJitterApplied bool       `json:"rate_limit_jitter_applied,omitempty"`
 }
 
 type chatSummarizeKeyPayload struct {
@@ -416,6 +417,42 @@ func AgentTurnGroupKey(sessionID, messageID uuid.UUID) string {
 		return ""
 	}
 	return fmt.Sprintf("%s:%s:%s", agentTurnJobType, sessionID, messageID)
+}
+
+func (w *Worker) enqueueAgentTurnDispatch(ctx context.Context, tx pgx.Tx, payload agentTurnKeyPayload, runAfter *time.Time) (uuid.UUID, error) {
+	if payload.FlowNodeExecutionID == nil && payload.SessionID != uuid.Nil {
+		executionID, err := w.lookupActiveFlowExecutionForSession(ctx, tx, payload.SessionID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		payload.FlowNodeExecutionID = executionID
+	}
+	return w.Enqueue(ctx, tx, agentTurnJobType, 70, payload, runAfter)
+}
+
+func (w *Worker) lookupActiveFlowExecutionForSession(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID) (*uuid.UUID, error) {
+	if sessionID == uuid.Nil {
+		return nil, nil
+	}
+	var executor queryExecutor = w.pool
+	if tx != nil {
+		executor = tx
+	}
+	var executionID uuid.UUID
+	if err := executor.QueryRow(ctx, `
+		SELECT id
+		FROM flow_node_execution
+		WHERE session_id = $1
+		  AND status = 'active'
+		ORDER BY started_at DESC, id DESC
+		LIMIT 1
+	`, sessionID).Scan(&executionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load active flow execution for session %s: %w", sessionID, err)
+	}
+	return &executionID, nil
 }
 
 func (w *Worker) Enqueue(ctx context.Context, tx pgx.Tx, jobType string, priority int, payload any, runAfter *time.Time) (uuid.UUID, error) {
@@ -776,7 +813,7 @@ func (w *Worker) RequeueStrandedSupervisorRecoveryTurns(ctx context.Context) (in
 		if err := rows.Scan(&sessionID, &messageID); err != nil {
 			return repaired, fmt.Errorf("scan stranded supervisor recovery turn: %w", err)
 		}
-		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 			SessionID:  sessionID,
 			MessageID:  messageID,
 			RetryCount: 0,
@@ -841,7 +878,7 @@ func (w *Worker) RequeueStrandedUserMessageTurns(ctx context.Context) (int64, er
 		if err := rows.Scan(&sessionID, &messageID); err != nil {
 			return repaired, fmt.Errorf("scan stranded user message turn: %w", err)
 		}
-		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 			SessionID:  sessionID,
 			MessageID:  messageID,
 			RetryCount: 0,
@@ -918,7 +955,7 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 		if err := rows.Scan(&sessionID, &messageID); err != nil {
 			return repaired, fmt.Errorf("scan pending turn without job: %w", err)
 		}
-		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 			SessionID:  sessionID,
 			MessageID:  messageID,
 			RetryCount: 0,
@@ -1018,7 +1055,7 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		if err := rows.Scan(&sessionID, &messageID, &retryCount); err != nil {
 			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
 		}
-		if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 			SessionID:  sessionID,
 			MessageID:  messageID,
 			RetryCount: retryCount,
@@ -1300,7 +1337,7 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 			return repaired, fmt.Errorf("check queued recovered continuation retry for session %s: %w", item.sessionID, err)
 		}
 		if !hasQueued {
-			if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+			if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 				SessionID:  item.sessionID,
 				MessageID:  item.messageID,
 				RetryCount: item.retryCount,
@@ -1453,7 +1490,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 			return repaired, fmt.Errorf("check queued recovered triggered retry for session %s: %w", item.sessionID, err)
 		}
 		if !hasQueued {
-			if _, err := w.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
+			if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 				SessionID:  item.sessionID,
 				MessageID:  item.messageID,
 				RetryCount: item.retryCount,
