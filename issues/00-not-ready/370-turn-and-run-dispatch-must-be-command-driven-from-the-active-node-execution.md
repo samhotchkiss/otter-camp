@@ -56,3 +56,43 @@ That makes dispatch inference-heavy and hard to reason about. The worker often h
 
 - This issue should follow the ownership contract from issue `369`.
 - The target is a command-driven runtime, not another generation of cleanup heuristics.
+
+### Current producer map
+
+The repo currently produces or repairs `agent_turn` dispatch from multiple places:
+
+- `internal/controlplane/task_queue_processor.go`
+  - `ensureFlowRun(...)` creates execution wakeups from task-queued / flow-advanced state
+  - `dispatchWakeupRun(...)` appends kickoff messages that then become `agent_turn` work
+- `internal/jobqueue/worker.go`
+  - `RequeueStrandedSupervisorRecoveryTurns(...)`
+  - `RequeueStrandedUserMessageTurns(...)`
+  - `RequeuePendingTurnsWithoutJobs(...)`
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)`
+  - `RecoverStaleInProgressContinuationTurns(...)`
+  - `RecoverStaleInProgressTriggeredTurns(...)`
+  - startup purge / dedupe paths in `PurgeStaleAgentTurnJobs(...)`
+- `internal/chat/service.go`
+  - async message append / resume flows can enqueue turns from message state
+- `internal/turn/engine.go`
+  - completion/recovery flows still assume synthetic continuation / retry messages are part of the dispatch surface
+
+That means dispatch is still inferred from message/session/job state after the fact, not issued from one explicit execution command boundary.
+
+### First implementation slice
+
+The first cut for this issue should be deliberately narrow:
+
+- define an execution-lane dispatch command record or helper keyed by `flow_node_execution_id`
+- route `task_queue_processor` wakeup dispatch and worker requeue/recovery through that command boundary instead of calling `Enqueue(... agent_turn ...)` ad hoc
+- make worker repair paths reissue `resume current execution` commands, not directly synthesize message-based `agent_turn` jobs
+
+### Success signal for the first cut
+
+After the first cut lands, at least these worker paths should no longer enqueue raw `agent_turn` jobs directly:
+
+- `RequeuePendingTurnsWithoutJobs(...)`
+- `RecoverStaleInProgressContinuationTurns(...)`
+- `RecoverStaleInProgressTriggeredTurns(...)`
+
+Those should become command reissuers against the active `flow_node_execution`, with message/session lookup only as supporting data instead of the primary dispatch identity.
