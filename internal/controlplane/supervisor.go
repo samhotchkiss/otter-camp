@@ -359,6 +359,8 @@ func (s *Supervisor) detectImpossibleLiveTasks(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, `
 		SELECT t.id, t.project_id, t.organization_id
 		FROM project_task t
+		JOIN project p
+		  ON p.id = t.project_id
 		LEFT JOIN runtime_state rs
 		  ON rs.scope_type = 'task'
 		 AND rs.scope_id = t.id
@@ -366,7 +368,9 @@ func (s *Supervisor) detectImpossibleLiveTasks(ctx context.Context) error {
 		LEFT JOIN flow_node_execution e
 		  ON e.task_id = t.id
 		 AND e.status = 'active'
-		WHERE t.work_status = 'in_progress'
+		WHERE p.status = 'active'
+		  AND COALESCE((p.settings->'pause'->>'is_paused')::boolean, false) = false
+		  AND t.work_status = 'in_progress'
 		  AND t.updated_at < $1
 		  AND rs.id IS NULL
 		  AND e.id IS NULL
@@ -504,6 +508,13 @@ func (s *Supervisor) detectStaleCreatedRuns(ctx context.Context) error {
 	}
 
 	for _, runRecord := range staleRuns {
+		skip, skipErr := s.skipArchivedProjectRun(ctx, runRecord)
+		if skipErr != nil {
+			return skipErr
+		}
+		if skip {
+			continue
+		}
 		cancelErr := s.runService.RequestCancel(ctx, runRecord.ID, CancelRequestActor{Type: "supervisor"})
 		if cancelErr != nil && !errors.Is(cancelErr, ErrInvalidTransition) && !errors.Is(cancelErr, ErrTerminalState) {
 			return cancelErr
@@ -532,6 +543,13 @@ func (s *Supervisor) detectStuckRuns(ctx context.Context) error {
 	}
 
 	for _, runRecord := range candidates {
+		skip, skipErr := s.skipArchivedProjectRun(ctx, runRecord)
+		if skipErr != nil {
+			return skipErr
+		}
+		if skip {
+			continue
+		}
 		if runRecord.Status == "paused" {
 			continue
 		}
@@ -558,10 +576,18 @@ func (s *Supervisor) detectStuckRuns(ctx context.Context) error {
 			return appendErr
 		}
 		if publishErr := s.publishRecoveryInitiated(ctx, runRecord, "heartbeat_silence"); publishErr != nil {
+			if errors.Is(publishErr, chat.ErrProjectArchived) {
+				_, _ = s.skipArchivedProjectRun(ctx, runRecord)
+				continue
+			}
 			return publishErr
 		}
 
 		if recoverErr := s.recoverRun(ctx, runRecord, "heartbeat silence exceeded"); recoverErr != nil {
+			if errors.Is(recoverErr, chat.ErrProjectArchived) {
+				_, _ = s.skipArchivedProjectRun(ctx, runRecord)
+				continue
+			}
 			return recoverErr
 		}
 
@@ -582,6 +608,13 @@ func (s *Supervisor) detectOrphanedRuns(ctx context.Context) error {
 	}
 
 	for _, runRecord := range orphanedRuns {
+		skip, skipErr := s.skipArchivedProjectRun(ctx, runRecord)
+		if skipErr != nil {
+			return skipErr
+		}
+		if skip {
+			continue
+		}
 		failErr := s.runService.FailRun(ctx, runRecord.ID, "orphaned: no events for 10 minutes", "transient")
 		if failErr != nil && !errors.Is(failErr, ErrInvalidTransition) {
 			return failErr
@@ -595,6 +628,10 @@ func (s *Supervisor) detectOrphanedRuns(ctx context.Context) error {
 			return appendErr
 		}
 		if recoverErr := s.recoverRun(ctx, runRecord, "orphaned: no events for 10 minutes"); recoverErr != nil {
+			if errors.Is(recoverErr, chat.ErrProjectArchived) {
+				_, _ = s.skipArchivedProjectRun(ctx, runRecord)
+				continue
+			}
 			return recoverErr
 		}
 	}
@@ -609,6 +646,13 @@ func (s *Supervisor) detectStalePaused(ctx context.Context) error {
 	}
 
 	for _, runRecord := range pausedRuns {
+		skip, skipErr := s.skipArchivedProjectRun(ctx, runRecord)
+		if skipErr != nil {
+			return skipErr
+		}
+		if skip {
+			continue
+		}
 		if _, appendErr := s.events.Append(ctx, RunEvent{
 			RunID:     runRecord.ID,
 			EventType: "supervisor_recovery",
@@ -622,6 +666,30 @@ func (s *Supervisor) detectStalePaused(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Supervisor) skipArchivedProjectRun(ctx context.Context, runRecord Run) (bool, error) {
+	if s == nil || s.pool == nil || runRecord.ProjectID == nil || *runRecord.ProjectID == uuid.Nil {
+		return false, nil
+	}
+
+	projectRecord, err := repo.NewProjectRepo(s.pool).GetByID(ctx, *runRecord.ProjectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(projectRecord.Status), "archived") {
+		return false, nil
+	}
+
+	failErr := s.runService.FailRun(ctx, runRecord.ID, "project archived", "permanent")
+	if failErr != nil && !errors.Is(failErr, ErrInvalidTransition) && !errors.Is(failErr, ErrTerminalState) {
+		return false, failErr
+	}
+	s.logger.Info("supervisor: retired archived-project run", "run_id", runRecord.ID, "project_id", *runRecord.ProjectID)
+	return true, nil
 }
 
 func (s *Supervisor) detectExpiredBrowserHandoffs(ctx context.Context) error {

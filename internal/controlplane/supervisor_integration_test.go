@@ -255,6 +255,84 @@ func TestSupervisor_StaleCreatedRun_CancelledAndLogged(t *testing.T) {
 	}
 }
 
+func TestSupervisor_StuckRunOnArchivedProjectIsRetiredWithoutRecovery(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord, taskRecord := seedRunProjectTaskWithPM(t, ctx, pool, org.ID)
+	flowNodeID := seedSupervisorFlowNode(t, ctx, pool, org.ID, projectRecord.ID)
+
+	now := time.Date(2026, 2, 25, 15, 0, 0, 0, time.UTC)
+	fakeClock := clock.NewFake(now)
+	svc := newRunServiceIntegrationWithClock(t, pool, fakeClock)
+
+	runRecord, err := svc.CreateRun(ctx, CreateRunInput{
+		OrganizationID: org.ID,
+		ProjectID:      &projectRecord.ID,
+		TaskID:         &taskRecord.ID,
+		FlowNodeID:     &flowNodeID,
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		TriggerType:    "api",
+		Metadata:       json.RawMessage(`{"run_mode":"sync"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := svc.StartRun(ctx, runRecord.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE run SET updated_at = $2 WHERE id = $1`, runRecord.ID, now.Add(-2*time.Minute)); err != nil {
+		t.Fatalf("backdate run.updated_at: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE project SET status = 'archived' WHERE id = $1`, projectRecord.ID); err != nil {
+		t.Fatalf("archive project: %v", err)
+	}
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:       pool,
+		RunService: svc,
+		EventBus:   eventbus.New(pool, newDiscardLogger(), eventbus.Config{}),
+		Clock:      fakeClock,
+		Logger:     newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectStuckRuns(ctx); err != nil {
+		t.Fatalf("detectStuckRuns: %v", err)
+	}
+
+	updatedRun, err := NewRunRepository(pool).Get(ctx, runRecord.ID)
+	if err != nil {
+		t.Fatalf("Get run: %v", err)
+	}
+	if updatedRun.Status != "failed" {
+		t.Fatalf("run status = %q, want failed", updatedRun.Status)
+	}
+	if updatedRun.FailureReason == nil || *updatedRun.FailureReason != "project archived" {
+		t.Fatalf("run failure_reason = %v, want project archived", updatedRun.FailureReason)
+	}
+
+	if count := countSupervisorEventsForRun(t, ctx, pool, runRecord.ID); count != 0 {
+		t.Fatalf("supervisor event count = %d, want 0 for archived project run", count)
+	}
+
+	var recoveryCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM run
+		WHERE organization_id = $1
+		  AND trigger_type = 'supervisor'
+		  AND metadata->>'supervisor_recovery_from' = $2
+	`, org.ID, runRecord.ID.String()).Scan(&recoveryCount); err != nil {
+		t.Fatalf("count supervisor recovery runs: %v", err)
+	}
+	if recoveryCount != 0 {
+		t.Fatalf("recovery run count = %d, want 0 for archived project", recoveryCount)
+	}
+}
+
 func TestSupervisor_RecoveryUsesRuntimeStateToAvoidDuplicateResume(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -1807,6 +1885,147 @@ func TestSupervisor_StrandedActiveExecutionRepairsClosedExecutionSession(t *test
 	}
 	if !hasSupervisorRecoveryKickoff(messages, recoveryRunID, execution.ID) {
 		t.Fatal("expected supervisor recovery kickoff message on repaired session")
+	}
+}
+
+func TestSupervisor_StrandedActiveExecutionSkipsArchivedProject(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord := seedRunProject(t, ctx, pool, org.ID)
+	template, node := seedSupervisorFlowTemplateNode(t, ctx, pool, org.ID, projectRecord.ID, nil, nil)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Archived Recovery Worker")
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        worker.ID,
+		ProjectID:      projectRecord.ID,
+		Role:           "worker",
+		AssignedByType: "system",
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         projectRecord.ID,
+		Title:             "Archived stranded execution should be skipped",
+		WorkStatus:        "in_progress",
+		CurrentFlowNodeID: &node.ID,
+		FlowTemplateID:    &template.ID,
+		AssignedAgentID:   &worker.ID,
+		CreatedByType:     "system",
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("chat.NewService: %v", err)
+	}
+	session, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"supervisor_integration"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := chatService.AddParticipant(ctx, session.ID, "agent", worker.ID, "responder"); err != nil {
+		t.Fatalf("AddParticipant: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  node.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+	wakeSvc := runService.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+	started, err := wakeSvc.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: org.ID,
+			ProjectID:      &projectRecord.ID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     &node.ID,
+			SessionID:      &session.ID,
+			PrincipalType:  "system",
+			PrincipalID:    uuid.Nil,
+			TriggerType:    "scheduler",
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+		WakeupPayload: map[string]any{
+			"flow_node_execution_id": execution.ID.String(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup: %v", err)
+	}
+
+	staleAt := time.Now().UTC().Add(-5 * time.Minute)
+	backdateStrandedExecutionFixture(t, ctx, pool, taskRecord.ID, session.ID, execution.ID, staleAt)
+	if _, err := pool.Exec(ctx, `UPDATE project SET status = 'archived' WHERE id = $1`, projectRecord.ID); err != nil {
+		t.Fatalf("archive project: %v", err)
+	}
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:        pool,
+		RunService:  runService,
+		ChatService: chatService,
+		EventBus:    bus,
+		Logger:      newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectStrandedActiveExecutions(ctx); err != nil {
+		t.Fatalf("detectStrandedActiveExecutions: %v", err)
+	}
+
+	updatedRun, err := NewRunRepository(pool).Get(ctx, started.Run.ID)
+	if err != nil {
+		t.Fatalf("Get started run: %v", err)
+	}
+	if updatedRun.Status != "in_progress" {
+		t.Fatalf("started run status = %q, want in_progress when archived project is skipped", updatedRun.Status)
+	}
+
+	var recoveryCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM run
+		WHERE task_id = $1
+		  AND trigger_type = 'supervisor'
+		  AND metadata->>'supervisor_recovery_reason' = $2
+	`, taskRecord.ID, strandedExecutionRecoveryReason).Scan(&recoveryCount); err != nil {
+		t.Fatalf("count stranded recovery runs: %v", err)
+	}
+	if recoveryCount != 0 {
+		t.Fatalf("recovery run count = %d, want 0 for archived project", recoveryCount)
 	}
 }
 

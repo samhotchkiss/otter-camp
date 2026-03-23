@@ -73,6 +73,13 @@ func (s *Supervisor) detectStrandedActiveExecutions(ctx context.Context) error {
 		if recoverErr := s.recoverStrandedActiveExecution(ctx, refreshed); recoverErr == nil {
 			continue
 		} else {
+			if errors.Is(recoverErr, chat.ErrProjectArchived) {
+				if refreshed.ActiveRunID != uuid.Nil {
+					_ = s.runService.FailRun(ctx, refreshed.ActiveRunID, "project archived", "permanent")
+				}
+				s.logger.Info("supervisor: skipping stranded execution recovery for archived project", "execution_id", refreshed.ExecutionID, "task_id", refreshed.TaskID, "project_id", refreshed.ProjectID)
+				continue
+			}
 			var unrecoverable errStrandedExecutionUnrecoverable
 			if !errors.As(recoverErr, &unrecoverable) {
 				return recoverErr
@@ -122,6 +129,7 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 			COALESCE(s.last_message_at, s.updated_at, t.updated_at, e.started_at) AS last_activity_at
 		FROM flow_node_execution e
 		JOIN project_task t ON t.id = e.task_id
+		JOIN project p ON p.id = t.project_id
 		LEFT JOIN chat_session s ON s.id = e.session_id
 		LEFT JOIN chat_turn turn_row ON turn_row.id = s.current_turn_id
 		LEFT JOIN LATERAL (
@@ -148,6 +156,8 @@ func (s *Supervisor) listStrandedActiveExecutions(ctx context.Context, cutoff ti
 			LIMIT 1
 		) recovery_agent ON true
 		WHERE e.status = 'active'
+		  AND p.status = 'active'
+		  AND COALESCE((p.settings->'pause'->>'is_paused')::boolean, false) = false
 		  AND t.work_status IN ('in_progress', 'review')
 		  AND (
 			s.id IS NULL
