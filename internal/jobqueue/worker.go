@@ -899,6 +899,7 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		  AND cs.status = 'active'
 		  AND cs.current_turn_id IS NULL
 		  AND cm.role = 'user'
+		  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
 		  AND (
 		    (
 		      cm.content = 'supervisor recovery: resume task'
@@ -914,6 +915,14 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		    FROM chat_turn ct
 		    WHERE ct.session_id = cs.id
 		      AND ct.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn halted
+		    WHERE halted.session_id = cs.id
+		      AND halted.trigger_message_id = cm.id
+		      AND halted.status = 'completed'
+		      AND COALESCE(halted.stop_reason, '') = 'recovery_content_required'
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
