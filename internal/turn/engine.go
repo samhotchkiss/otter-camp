@@ -7936,11 +7936,6 @@ func (e *TurnEngine) taskContinuationDraftContent(ctx context.Context, rt *turnR
 	if draft, ok := e.latestSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
 		return draft, true
 	}
-	if draft, ok := e.latestRecoveryAssistantDraftContent(ctx, rt); ok {
-		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason == "" && looksLikeRecoveryFileDraft(draft) {
-			return draft, true
-		}
-	}
 	if draft, ok := e.latestRecoveryArtifactDraftContent(ctx, rt, targetPath); ok {
 		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason == "" && looksLikeRecoveryFileDraft(draft) {
 			return draft, true
@@ -7949,11 +7944,19 @@ func (e *TurnEngine) taskContinuationDraftContent(ctx context.Context, rt *turnR
 	if draft, ok := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
 		return draft, true
 	}
+	if draft, ok := e.latestContinuationSummaryDraftContent(ctx, rt, targetPath); ok {
+		return draft, true
+	}
 	if draft, ok := e.latestTaskHistoricalSubstantiveDraftContent(ctx, rt, targetPath); ok {
 		return draft, true
 	}
 	if draft, rejectReason, ok := e.recoveryPersistedDraftContent(ctx, rt, targetPath); ok && strings.TrimSpace(rejectReason) == "" && looksLikeRecoveryFileDraft(draft) {
 		return draft, true
+	}
+	if draft, ok := e.latestRecoveryAssistantDraftContent(ctx, rt); ok {
+		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason == "" && looksLikeRecoveryFileDraft(draft) {
+			return draft, true
+		}
 	}
 	return "", false
 }
