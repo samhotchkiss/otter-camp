@@ -27,6 +27,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"log/slog"
 )
@@ -10196,6 +10197,72 @@ func TestRewriteRecoveryCLIExecuteWithoutCommandToFileWriteUsesPriorTurnDraft(t 
 	}
 	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
 		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
+	}
+}
+
+func TestCompletedWorkSignalFromMessagesAcceptsExplicitDeliverableWriteForExecutionFirstTask(t *testing.T) {
+	t.Parallel()
+
+	description := "Create Python script to generate reports. Deliverable: src/generate_reports.py with report templates and example outputs."
+	plan := taskplan.Analyze("Build reporting and pipeline analytics script", &description)
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+	turnID := uuid.New()
+	messages := []repo.ChatMessage{
+		{
+			TurnID: &turnID,
+			Role:   "tool_result",
+			Status: "final",
+			Content: string(mustRawJSON(t, map[string]any{
+				"tool_name": "file.write",
+				"output": map[string]any{
+					"path":      "src/generate_reports.py",
+					"byte_size": 14277,
+					"created":   false,
+				},
+			})),
+		},
+	}
+
+	signal, ok := completedWorkSignalFromMessages(taskRecord, messages, turnID)
+	if !ok {
+		t.Fatal("expected completion signal from explicit deliverable write")
+	}
+	if signal.filesCommitted != 1 {
+		t.Fatalf("filesCommitted = %d, want 1", signal.filesCommitted)
+	}
+}
+
+func TestCompletedWorkSignalFromMessagesIgnoresPlanningArtifactWriteForExecutionFirstTask(t *testing.T) {
+	t.Parallel()
+
+	description := "Create Python script to generate reports. Deliverable: src/generate_reports.py with report templates and example outputs."
+	plan := taskplan.Analyze("Build reporting and pipeline analytics script", &description)
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+	turnID := uuid.New()
+	messages := []repo.ChatMessage{
+		{
+			TurnID: &turnID,
+			Role:   "tool_result",
+			Status: "final",
+			Content: string(mustRawJSON(t, map[string]any{
+				"tool_name": "file.write",
+				"output": map[string]any{
+					"path":      "planning/metrics-framework/oc-16-instrumentation-plan.md",
+					"byte_size": 7020,
+					"created":   false,
+				},
+			})),
+		},
+	}
+
+	if _, ok := completedWorkSignalFromMessages(taskRecord, messages, turnID); ok {
+		t.Fatal("unexpected completion signal from planning artifact write")
 	}
 }
 

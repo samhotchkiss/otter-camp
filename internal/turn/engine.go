@@ -38,6 +38,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
@@ -139,6 +140,7 @@ const (
 var (
 	errContextCompressionContinuationDepthExceeded = errors.New("context compression continuation depth exceeded")
 	errAgentTurnPromptGuardrailDepthExceeded       = errors.New("agent turn prompt exceeded guardrail continuation depth")
+	explicitDeliverablePathPattern                 = regexp.MustCompile(`(?i)\bdeliverable:\s*([^\s,;]+)`)
 )
 
 const (
@@ -3994,7 +3996,7 @@ func (e *TurnEngine) handleCompletedWorkTurn(ctx context.Context, taskRecord rep
 	if e.flowAdvancer == nil || taskRecord.ID == uuid.Nil || agentID == uuid.Nil {
 		return false, nil
 	}
-	signal, ok := completedWorkSignalFromMessages(messages, turnID)
+	signal, ok := completedWorkSignalFromMessages(taskRecord, messages, turnID)
 	if !ok {
 		return false, nil
 	}
@@ -14047,9 +14049,11 @@ func buildGenericRecoveryReplyBlockedReason(reply string, attempts int) string {
 	return fmt.Sprintf("recovery halted after %d generic non-action replies; latest reply=%q", attempts, trimmed)
 }
 
-func completedWorkSignalFromMessages(messages []repo.ChatMessage, turnID uuid.UUID) (workCompletionSignal, bool) {
+func completedWorkSignalFromMessages(taskRecord repo.ProjectTask, messages []repo.ChatMessage, turnID uuid.UUID) (workCompletionSignal, bool) {
 	var latest workCompletionSignal
 	found := false
+	plan, hasPlan := taskplan.Parse(taskRecord.Metadata)
+	deliverablePath := explicitDeliverablePath(taskRecord)
 	for _, message := range messages {
 		if message.TurnID == nil || *message.TurnID != turnID {
 			continue
@@ -14062,6 +14066,25 @@ func completedWorkSignalFromMessages(messages []repo.ChatMessage, turnID uuid.UU
 			continue
 		}
 		if !strings.EqualFold(toolName, "git.commit") {
+			if !strings.EqualFold(toolName, "file.write") {
+				continue
+			}
+			if !hasPlan || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
+				continue
+			}
+			if deliverablePath == "" {
+				continue
+			}
+			writtenPath := normalizeWorkspaceRelativePath(anyString(output["path"]))
+			if writtenPath == "" || !sameWorkspaceRelativePath(writtenPath, deliverablePath) {
+				continue
+			}
+			byteSize := anyInt(output["byte_size"])
+			if byteSize < 1 {
+				continue
+			}
+			latest = workCompletionSignal{filesCommitted: 1}
+			found = true
 			continue
 		}
 		commitSHA := strings.TrimSpace(anyString(output["sha"]))
@@ -14079,6 +14102,25 @@ func completedWorkSignalFromMessages(messages []repo.ChatMessage, turnID uuid.UU
 		found = true
 	}
 	return latest, found
+}
+
+func explicitDeliverablePath(taskRecord repo.ProjectTask) string {
+	if taskRecord.Description == nil {
+		return ""
+	}
+	matches := explicitDeliverablePathPattern.FindStringSubmatch(strings.TrimSpace(*taskRecord.Description))
+	if len(matches) < 2 {
+		return ""
+	}
+	return normalizeWorkspaceRelativePath(matches[1])
+}
+
+func normalizeWorkspaceRelativePath(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(trimmed)))
 }
 
 func parseToolResultMessage(content string) (string, map[string]any, string, bool) {
