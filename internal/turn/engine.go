@@ -8240,6 +8240,8 @@ type recoveryResumeState struct {
 	artifactPath                string
 	artifactDraft               string
 	artifactDraftRejectedReason string
+	summaryDraft                string
+	summaryDraftRejectedReason  string
 	blockerClass                string
 	failureReason               string
 	priorFailureReasons         []string
@@ -8355,12 +8357,19 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 			recoveryArtifactDraftContent(artifactBody),
 		)
 	}
+	if strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == "" {
+		if summaryDraft, ok := e.latestContinuationSummaryDraftContent(ctx, rt, state.targetPath); ok {
+			state.summaryDraft = summaryDraft
+		}
+	}
 	if strings.TrimSpace(state.targetPath) == "" &&
 		strings.TrimSpace(state.targetDraft) == "" &&
 		strings.TrimSpace(state.targetDraftRejectedReason) == "" &&
 		strings.TrimSpace(state.artifactPath) == "" &&
 		strings.TrimSpace(state.artifactDraft) == "" &&
 		strings.TrimSpace(state.artifactDraftRejectedReason) == "" &&
+		strings.TrimSpace(state.summaryDraft) == "" &&
+		strings.TrimSpace(state.summaryDraftRejectedReason) == "" &&
 		strings.TrimSpace(state.failureReason) == "" &&
 		strings.TrimSpace(state.blockerClass) == "" &&
 		len(state.priorFailureReasons) == 0 {
@@ -8495,6 +8504,20 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 			lines = append(lines, "Recovery artifact draft: (not found on disk)")
 		}
 	}
+	if draft := strings.TrimSpace(state.summaryDraft); draft != "" {
+		excerpt, truncated := truncateRecoveryResumeExcerpt(draft, recoveryResumeExcerptChars)
+		lines = append(lines,
+			"Continuation summary draft:",
+			"```text",
+			excerpt,
+			"```",
+		)
+		if truncated {
+			lines = append(lines, "_Continuation summary excerpt truncated for prompt budget._")
+		}
+	} else if strings.TrimSpace(state.summaryDraftRejectedReason) != "" {
+		lines = append(lines, "Continuation summary draft: omitted because it matches the previously rejected non-substantive pattern.")
+	}
 
 	if reason := strings.TrimSpace(state.failureReason); reason != "" {
 		lines = append(lines, "Checkpoint failure reason: "+reason)
@@ -8504,10 +8527,12 @@ func buildRecoveryResumeStateMessage(state recoveryResumeState) string {
 	}
 	if taskcheckpoint.RecoveryFileWriteFailureRejectsDraft(state.failureReason) &&
 		strings.TrimSpace(state.targetDraft) == "" &&
-		strings.TrimSpace(state.artifactDraft) == "" {
+		strings.TrimSpace(state.artifactDraft) == "" &&
+		strings.TrimSpace(state.summaryDraft) == "" {
 		lines = append(lines, "No substantive durable draft is currently available on disk. The next attempt must write the real file body from scratch rather than restating the plan to do so.")
 	}
-	if strings.TrimSpace(state.targetDraft) != "" && strings.TrimSpace(state.artifactDraft) != "" {
+	if strings.TrimSpace(state.targetDraft) != "" &&
+		(strings.TrimSpace(state.artifactDraft) != "" || strings.TrimSpace(state.summaryDraft) != "") {
 		lines = append(lines, "If the target file is only a stub but the recovery artifact is fuller, merge the fuller artifact content into the target before retrying the final write.")
 	}
 	return strings.Join(lines, "\n")
@@ -8523,7 +8548,12 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 	if target := strings.TrimSpace(state.targetPath); target != "" {
 		lines = append(lines, "Treat "+target+" as the target file for this recovery turn.")
 	}
-	if strings.TrimSpace(state.targetDraft) != "" || strings.TrimSpace(state.artifactDraft) != "" {
+	lines = append(lines,
+		"Do not browse .ottercamp/recovery broadly or read recovery artifacts for other tasks during this recovery turn.",
+		"If you need grounding, limit reads to the target file, the named recovery artifact for this task, and same-task planning artifacts only.",
+		"Ignore unrelated OC-* artifacts even if a broad search returns them; they are not valid recovery context for this task.",
+	)
+	if strings.TrimSpace(state.targetDraft) != "" || strings.TrimSpace(state.artifactDraft) != "" || strings.TrimSpace(state.summaryDraft) != "" {
 		lines = append(lines,
 			"A substantive durable draft is already available above. Reuse that draft body directly instead of introducing yourself, summarizing the task, or describing what you are about to do.",
 			"If you need to repair the target file, your next assistant message should begin with the first line of the best available draft rather than a sentence about context or readiness.",
@@ -8540,7 +8570,7 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 			"Do not preface the file body with readiness text, explanations, or intent-to-write filler.",
 			"Do not start with phrases like 'I', 'I'll', 'I will', 'Now I'll', 'Let me', 'Here is', or 'Below is' before the file body.",
 		)
-		if strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == "" {
+		if strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == "" && strings.TrimSpace(state.summaryDraft) == "" {
 			lines = append(lines, "No substantive durable draft is available. Draft the file body from scratch in the assistant message before any file.write. If the target is Markdown, start immediately with a heading and real section content.")
 		}
 		if taskcheckpoint.RecoveryFileWriteFailureIsRepeatedDraftReject(state.failureReason) {
@@ -8550,7 +8580,7 @@ func buildRecoveryResumeActionPrompt(state recoveryResumeState) string {
 	switch strings.TrimSpace(state.blockerClass) {
 	case taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint,
 		taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint:
-		lines = append(lines, "Use the recovered target draft or artifact draft above to write the real file body now. Do not emit placeholder text about intending to write the file.")
+		lines = append(lines, "Use the recovered target draft, artifact draft, or continuation summary draft above to write the real file body now. Do not emit placeholder text about intending to write the file.")
 	default:
 		lines = append(lines, "Act directly from the durable drafts above. Prefer the concrete repair tool call or file output needed to resume execution.")
 	}
@@ -9050,6 +9080,9 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 			if priorDraft, priorOK := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); priorOK {
 				return priorDraft, "", true
 			}
+			if summaryDraft, summaryOK := e.latestContinuationSummaryDraftContent(ctx, rt, targetPath); summaryOK {
+				return summaryDraft, "", true
+			}
 			if historicalDraft, historicalOK := e.latestTaskHistoricalSubstantiveDraftContent(ctx, rt, targetPath); historicalOK {
 				return historicalDraft, "", true
 			}
@@ -9063,6 +9096,9 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 		}
 	}
 	if draft, ok := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
+		return draft, "", true
+	}
+	if draft, ok := e.latestContinuationSummaryDraftContent(ctx, rt, targetPath); ok {
 		return draft, "", true
 	}
 	if draft, ok := e.latestTaskHistoricalSubstantiveDraftContent(ctx, rt, targetPath); ok {
@@ -9086,6 +9122,9 @@ func (e *TurnEngine) recoveryPersistedDraftContent(ctx context.Context, rt *turn
 		return draft, "", true
 	}
 	if draft := strings.TrimSpace(state.artifactDraft); draft != "" {
+		return draft, "", true
+	}
+	if draft := strings.TrimSpace(state.summaryDraft); draft != "" {
 		return draft, "", true
 	}
 	return "", "", false
@@ -9127,6 +9166,37 @@ func (e *TurnEngine) latestPriorSubstantiveAssistantDraftContent(ctx context.Con
 	}
 	if draft := latestPriorSubstantiveAssistantFinal(messages, rt.turn.ID, targetPath); draft != nil {
 		return draft.Content, true
+	}
+	return "", false
+}
+
+func (e *TurnEngine) latestContinuationSummaryDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil {
+		return "", false
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return "", false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Status), "final") {
+			continue
+		}
+		content := continuationSummaryDraftContent(message.Content)
+		if content == "" {
+			continue
+		}
+		if reason := recoveryFileWriteDraftRejectReason(content, targetPath); reason != "" {
+			continue
+		}
+		if !looksLikeRecoveryFileDraft(content) {
+			continue
+		}
+		return content, true
 	}
 	return "", false
 }
@@ -9251,6 +9321,19 @@ func latestRecoveryArtifactDraftForTurn(messages []repo.ChatMessage, turnID uuid
 	return "", false
 }
 
+func continuationSummaryDraftContent(content string) string {
+	trimmed := strings.TrimSpace(content)
+	const prefix = "[Continuation summary]"
+	if !strings.HasPrefix(trimmed, prefix) {
+		return ""
+	}
+	summary := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+	if strings.EqualFold(summary, "Continuation summary unavailable.") {
+		return ""
+	}
+	return summary
+}
+
 func latestNonEmptyAssistantFinalForTurn(messages []repo.ChatMessage, turnID uuid.UUID) *repo.ChatMessage {
 	var latest *repo.ChatMessage
 	for i := range messages {
@@ -9341,6 +9424,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if path == "" {
 		path = "the requested workspace file"
 	}
+	if looksLikeGenericTaskRecoveryReply(trimmed) || looksLikeRecoveryQuestionEcho(trimmed) {
+		return fmt.Sprintf("assistant draft for %s repeated a generic recovery reply instead of the file body", path)
+	}
 	if containsAny(lower,
 		"i understand the problem",
 		"i can see the problem",
@@ -9367,6 +9453,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return fmt.Sprintf("assistant draft for %s described tool-recovery troubleshooting instead of the file body", path)
 	}
 	if looksLikeRecoveryIntentNarrationPlaceholder(trimmed) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
+	}
+	if looksLikeStructuredRecoveryIntentPlaceholder(trimmed) {
 		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
 	return ""
@@ -9527,6 +9616,69 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		return true
 	}
 	return false
+}
+
+func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	wordCount := len(strings.Fields(trimmed))
+	if wordCount < 20 || wordCount > 180 {
+		return false
+	}
+	hasContextCue := containsAny(lower,
+		"now i have enough context",
+		"i have enough context",
+		"now i have the full context",
+		"i have the full context",
+		"i now have the full context",
+		"i now have all the context needed",
+		"i have all the context needed",
+		"the strategy for ",
+		"the strategy work is locked",
+		"the strategy work is complete",
+		"the planning artifacts are complete",
+		"the planning artifacts are locked",
+		"the strategy artifacts are complete",
+		"this is a durable recovery checkpoint",
+		"success narrative partially drafted",
+	)
+	hasIntentCue := containsAny(lower,
+		"now i'll write",
+		"now i will write",
+		"now let me write",
+		"let me write",
+		"let me draft",
+		"i need to create",
+		"i need to complete",
+		"i'll write",
+		"i will write",
+		"this is the deliverable",
+		"this is the deliverable that",
+		"translates strategy into executability",
+		"write the comprehensive",
+		"draft the comprehensive",
+	)
+	hasStructuredLeadIn := strings.Count(trimmed, "\n") >= 2 && hasStructuredRecoveryFileDraftMarkers(trimmed)
+	return hasStructuredLeadIn && hasContextCue && hasIntentCue
+}
+
+func looksLikeRecoveryQuestionEcho(content string) bool {
+	normalized := strings.ToLower(normalizeInstructionText(content))
+	if normalized == "" {
+		return false
+	}
+	return containsAny(normalized,
+		"quick clarification",
+		"what would you like me to do",
+		"what would you like me to help with",
+		"please let me know the most useful next step",
+		"continue drafting the success narrative",
+		"move to the decision log or tradeoff matrix",
+		"read existing planning artifacts to ground the",
+	)
 }
 
 func (e *TurnEngine) strengthenRecoveryDraftRejectFailureReason(ctx context.Context, rt *turnRuntime, targetPath, currentReason string) string {
@@ -12977,17 +13129,23 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"i'll help",
 		"i'm ready to help",
 		"i am ready to help",
+		"i'm ready to work on",
+		"i am ready to work on",
 		"i'm ready to assist",
 		"i am ready to assist",
 		"i'm ready. i'm",
 		"i am ready. i am",
 		"what do you need",
+		"what would you like me to focus on first",
 		"what would you like me to help with",
 		"what would you like me to help",
 		"what would you like me to do",
+		"what should i focus on first",
 		"how can i help",
 		"based on the context, i can see",
 		"based on the context i can see",
+		"i have access to the planning artifacts",
+		"or is there a specific decision or constraint",
 		"i'm currently working on",
 		"my task is to create",
 	}

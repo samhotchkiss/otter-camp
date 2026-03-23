@@ -5482,6 +5482,25 @@ func TestBuildRecoveryResumeActionPromptUsesAvailableDraftDirectly(t *testing.T)
 	}
 }
 
+func TestBuildRecoveryResumeActionPromptUsesContinuationSummaryDraftDirectly(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildRecoveryResumeActionPrompt(recoveryResumeState{
+		targetPath:   "planning/prd-spec/oc-24-infrastructure-spec.md",
+		summaryDraft: "# Infrastructure Specification\n\n## Hosting\nConcrete content.",
+	})
+
+	if !strings.Contains(prompt, "A substantive durable draft is already available above. Reuse that draft body directly") {
+		t.Fatalf("prompt = %q, want substantive-draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "your next assistant message should begin with the first line of the best available draft") {
+		t.Fatalf("prompt = %q, want first-line draft guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not browse .ottercamp/recovery broadly or read recovery artifacts for other tasks") {
+		t.Fatalf("prompt = %q, want same-task recovery scope guidance", prompt)
+	}
+}
+
 func TestLooksLikeRecoveryIntentNarrationPlaceholderDetectsNowIllWritePreface(t *testing.T) {
 	t.Parallel()
 
@@ -5504,6 +5523,30 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsIllHelpStub(t *testing.T) {
 
 	if !looksLikeGenericTaskRecoveryReply("I'll help") {
 		t.Fatal("expected I'll-help stub to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsFocusQuestionMenu(t *testing.T) {
+	t.Parallel()
+
+	content := "I'm Alex, Technical Lead for the SAM.blog rebuild. I'm ready to work on OC-24. " +
+		"I have access to the planning artifacts for this task. What would you like me to focus on first? " +
+		"Or is there a specific decision or constraint I should know about before I start?"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected focus-question menu to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeRecoveryQuestionEchoDetectsClarificationMenu(t *testing.T) {
+	t.Parallel()
+
+	content := "I'm ready to help with the SAM.blog rebuild infrastructure task (OC-24).\n\n" +
+		"**Quick clarification:**\n" +
+		"- Continue drafting the success narrative?\n" +
+		"- Move to the decision log or tradeoff matrix?\n\n" +
+		"Please let me know the most useful next step."
+	if !looksLikeRecoveryQuestionEcho(content) {
+		t.Fatal("expected recovery clarification menu to be treated as a question echo")
 	}
 }
 
@@ -7379,6 +7422,28 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects structured context summary placeholder narration",
+			content: "Excellent. Now I have enough context. The strategy for OC-15 is locked with:\n" +
+				"- **Staged cutover** (Tier 1 -> Tier 2 -> Archives)\n" +
+				"- **Tier classification** based on voice audit (OC-13)\n" +
+				"- **Extraction -> Transformation -> Validation** workflow\n" +
+				"- **Markdown + YAML front-matter** target format\n" +
+				"- **301 redirects** for SEO preservation\n\n" +
+				"Now I'll write the comprehensive migration plan document. This is the deliverable that translates strategy into executability.",
+			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects generic recovery question echo",
+			content: "I'm ready to help with the SAM.blog rebuild infrastructure task (OC-24).\n\n" +
+				"I can see this is a durable recovery checkpoint with the success narrative partially drafted. What would you like me to do?\n\n" +
+				"**Quick clarification:**\n" +
+				"- Continue drafting the success narrative (complete the cutover scenario)?\n" +
+				"- Move to the decision log or tradeoff matrix?\n" +
+				"- Read existing planning artifacts to ground the infrastructure spec?\n\n" +
+				"Please let me know the most useful next step.",
+			want: "generic recovery reply",
+		},
+		{
 			name: "rejects full context acceptance criteria placeholder narration",
 			content: "Excellent! Now I understand the full context. I need to complete OC-28 by writing the comprehensive accessibility standards document. " +
 				"Let me check the acceptance criteria and dependency log as well:",
@@ -8925,6 +8990,61 @@ func TestRecoveryFileWriteDraftContentUsesPriorTurnDraftAfterCurrentNarration(t 
 	}
 	if !strings.Contains(draft, "## Keyboard Navigation") {
 		t.Fatalf("draft = %q, want prior substantive draft", draft)
+	}
+}
+
+func TestRecoveryFileWriteDraftContentUsesContinuationSummaryDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	currentTurnID := uuid.New()
+	targetPath := "planning/prd-spec/oc-24-infrastructure-spec.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &currentTurnID,
+		Role:      "system",
+		Status:    "final",
+		Content: strings.TrimSpace(`[Continuation summary] # Infrastructure Specification
+
+## Hosting Provider Selection
+- Primary platform: Vercel
+- CDN: Edge Network with caching rules
+
+## Monitoring
+- Uptime and error-rate alerts wired to PagerDuty
+`),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &currentTurnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "I'm ready to work on OC-24. What would you like me to focus on first?",
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        currentTurnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	draft, rejectReason, ok := fixture.engine.recoveryFileWriteDraftContent(context.Background(), rt, targetPath)
+	if !ok {
+		t.Fatal("expected recovery file write draft")
+	}
+	if rejectReason != "" {
+		t.Fatalf("rejectReason = %q, want empty", rejectReason)
+	}
+	if !strings.Contains(draft, "## Hosting Provider Selection") {
+		t.Fatalf("draft = %q, want continuation summary draft", draft)
 	}
 }
 
