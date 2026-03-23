@@ -23,11 +23,8 @@ As of 2026-03-23 morning local time, `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9b
 
 Current observed task counts on the active Speaker Pipeline canary:
 
-- `queued=0`
-- `in_progress=4`
-- `review=0`
-- `done=23`
-- `draft=1`
+- `done=28`
+- `open=0`
 - `blocked=0`
 
 The active canary has already validated these product expectations under the latest build:
@@ -96,6 +93,13 @@ What those changed:
 - worker pending-turn repair no longer lets a failed execution-owned `live_turn_id` hide a real pending `chat_session.current_turn_id`, which was the live task-20 stall signature on Speaker Pipeline
 - terminal done/cancelled task sessions no longer have to wait for a worker restart to close; the periodic stale-scan loop now cleans them up during steady-state execution too
 
+Current live cleanup result:
+
+- `speaker-pipeline-ops-reviewer-validation-fresh-2` now drains cleanly
+- all `28` tasks are `done`
+- `project_task` async sessions for that project are now fully closed (`active_sessions=0`, `closed_sessions=121`)
+- the worker is idle with no live execution backlog after the latest restart
+
 `sam-blog` is still the proof that the core project flow can drain cleanly:
 
 - `done=37`
@@ -108,7 +112,7 @@ Task `38` there is intentionally `cancelled`, not `done`: it was an impossible l
 
 The main priority is still core-system reliability for unattended end-to-end project execution. SAM.blog proved cleanup and closeout. The active Speaker Pipeline run is now the sharper canary for fresh-bootstrap correctness, reviewer staffing, queue fairness, and live execution churn.
 
-The immediate priority is still to keep using the Speaker Pipeline canary to find the next deterministic runtime bug inside task/review execution itself while continuing the execution-ownership rework. The canary is no longer blocked: tasks `12` and `26` both resumed successfully through the shipped `/v1/tasks/{id}/resume` path, which rebuilt durable recovery checkpoints and moved them back into live execution.
+The immediate priority is now to choose the next validation target and continue the execution-ownership rework against a fresh canary. Speaker Pipeline has finished cleanly under the latest build.
 
 That priority is now subordinate to a broader execution-architecture rework. The current codebase has enough evidence that the repeated stalls are structural:
 
@@ -147,15 +151,8 @@ The current implementation work is already underway against that plan:
 The next likely slices after committing the current worker change are:
 
 - remove remaining raw `agent_turn` producers that still do not carry execution identity or still infer task-lane dispatch from message/session state outside the execution-owned helper path
-- after that queue-ownership cleanup, shift back to the next deterministic runtime blocker that appears on the live Speaker Pipeline tasks now that the previous blocked lanes have resumed
-- begin routing those producers through a single execution-scoped dispatch helper instead of parallel ad hoc enqueue logic in worker and turn-engine
-- use the active canary to verify newly created task-session jobs now consistently carry `flow_node_execution_id`, not just worker-recovered ones
-- then revisit the active non-done Speaker Pipeline tasks under that tighter model:
-  - task `10`: `draft`
-  - task `12`: `in_progress`
-  - task `19`: `in_progress`
-  - task `20`: `in_progress`
-  - task `26`: `in_progress`
+- continue collapsing runtime cleanup heuristics into execution-scoped command handling where practical
+- choose the next fresh validation project/canary and verify the newer execution-owned dispatch model from bootstrap through project closeout
 
 The standing rule from Sam is:
 
