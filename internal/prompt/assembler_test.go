@@ -152,6 +152,7 @@ func TestPromptAssemblerTaskContextIncludesReviewModeGuidance(t *testing.T) {
 	taskID := uuid.New()
 	reviewNodeID := uuid.New()
 	flowTemplateID := uuid.New()
+	activeExecutionID := uuid.New()
 	assembler := mustUnitAssembler(t, unitAssemblerConfig{
 		session: repo.ChatSession{
 			ID:             uuid.New(),
@@ -204,7 +205,7 @@ func TestPromptAssemblerTaskContextIncludesReviewModeGuidance(t *testing.T) {
 	assembler.flowExecutions = &fakeFlowExecutionRepo{
 		activeByTaskAndNode: map[string]repo.FlowNodeExecution{
 			taskID.String() + "|" + reviewNodeID.String(): {
-				ID:         uuid.New(),
+				ID:         activeExecutionID,
 				TaskID:     taskID,
 				FlowNodeID: reviewNodeID,
 				Status:     "active",
@@ -230,6 +231,9 @@ func TestPromptAssemblerTaskContextIncludesReviewModeGuidance(t *testing.T) {
 	}
 	if !strings.Contains(assembled.SystemPrompt, "flow_node_execution_id") {
 		t.Fatalf("system prompt missing flow node execution guidance:\n%s", assembled.SystemPrompt)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Active Flow Execution ID: "+activeExecutionID.String()) {
+		t.Fatalf("system prompt missing active flow execution id:\n%s", assembled.SystemPrompt)
 	}
 }
 

@@ -783,6 +783,9 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 			}
 			lines = append(lines, line)
 		}
+		if taskCtx.currentFlowExecutionID != nil && *taskCtx.currentFlowExecutionID != uuid.Nil {
+			lines = append(lines, "Active Flow Execution ID: "+taskCtx.currentFlowExecutionID.String())
+		}
 		if len(taskCtx.completedFlowSteps) > 0 {
 			lines = append(lines, "Completed Flow Steps:")
 			for _, step := range taskCtx.completedFlowSteps {
@@ -919,8 +922,9 @@ type projectTaskContext struct {
 	recoveryCheckpoint  *taskcheckpoint.RecoveryFileWriteCheckpoint
 	planningArtifacts   []taskplan.PlannedArtifact
 	acceptanceCriteria  []string
-	currentFlowStep     string
-	currentFlowStatus   string
+	currentFlowStep       string
+	currentFlowStatus     string
+	currentFlowExecutionID *uuid.UUID
 	completedFlowSteps  []string
 	pendingFlowSteps    []string
 	childTasks          []taskContextChildTask
@@ -1052,6 +1056,7 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 		if execution, activeErr := a.flowExecutions.GetActive(ctx, taskRecord.ID, *taskRecord.CurrentFlowNodeID); activeErr == nil {
 			executionID := execution.ID
 			activeExecutionID = &executionID
+			out.currentFlowExecutionID = activeExecutionID
 			if out.currentFlowStatus == "" {
 				out.currentFlowStatus = strings.TrimSpace(execution.Status)
 			}
