@@ -1601,6 +1601,69 @@ func TestTaskServiceIntegrationBootstrapPlanningAutoCompleteSynthesizesPlanningA
 	}
 }
 
+func TestEnrichPlanningArtifactEvidenceSynthesizesPlanningArtifactEvidence(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	description := "Build reporting and pipeline analytics script. Deliverable: src/generate_reports.py with report templates and example outputs."
+	taskRecord, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Build reporting and pipeline analytics script",
+		Description:    &description,
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	stored, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	plan := taskplan.Analyze(stored.Title, &description)
+	plan.ProcessEnforced = true
+	stored.Metadata = taskplan.ApplyMetadata(stored.Metadata, plan)
+	if _, err := taskRepo.Update(ctx, stored); err != nil {
+		t.Fatalf("Update planning metadata: %v", err)
+	}
+	stored, err = taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("Reload task after planning metadata update: %v", err)
+	}
+
+	enriched, err := enrichPlanningArtifactEvidence(stored, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("enrichPlanningArtifactEvidence: %v", err)
+	}
+	if _, err := taskRepo.Update(ctx, enriched); err != nil {
+		t.Fatalf("Update enriched metadata: %v", err)
+	}
+
+	refreshed, err := taskRepo.GetByID(ctx, stored.ID)
+	if err != nil {
+		t.Fatalf("GetByID completed task: %v", err)
+	}
+	plan, ok := taskplan.Parse(refreshed.Metadata)
+	if !ok {
+		t.Fatal("expected planning metadata")
+	}
+	if len(plan.ArtifactEvidence) != 4 {
+		t.Fatalf("artifact evidence len = %d, want 4", len(plan.ArtifactEvidence))
+	}
+	report, reportErr := taskplan.CompletionReport(refreshed.Metadata)
+	if reportErr != nil {
+		t.Fatalf("CompletionReport err = %v", reportErr)
+	}
+	if report.ProcessStatus != taskplan.ProcessStatusFollowed {
+		t.Fatalf("process_status = %q, want %q", report.ProcessStatus, taskplan.ProcessStatusFollowed)
+	}
+}
+
 func seedOrchestrationChildrenForParent(t *testing.T, ctx context.Context, svc TaskService, taskRepo *repo.ProjectTaskRepo, parentID, projectID, flowTemplateID uuid.UUID, titles []string) (repo.ProjectTask, []repo.ProjectTask) {
 	t.Helper()
 

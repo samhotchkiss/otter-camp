@@ -749,12 +749,10 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 		}
 	}
 	if target == "done" && !actor.AllowDoneBypass && !bootstrapGateAutoComplete && !bootstrapSetupComplete {
-		if bootstrapPlanningAutoComplete {
-			if enriched, enrichErr := enrichPlanningArtifactEvidence(taskRecord, s.clock.Now().UTC()); enrichErr != nil {
-				return nil, enrichErr
-			} else {
-				taskRecord = enriched
-			}
+		if enriched, enrichErr := enrichPlanningArtifactEvidence(taskRecord, s.clock.Now().UTC()); enrichErr != nil {
+			return nil, enrichErr
+		} else {
+			taskRecord = enriched
 		}
 		if orchestrationAutoComplete {
 			if enriched, enrichErr := s.enrichOrchestrationAutoCompleteMetadata(ctx, taskRecord); enrichErr != nil {
@@ -1440,7 +1438,7 @@ func enrichPlanningArtifactEvidence(taskRecord repo.ProjectTask, now time.Time) 
 			Title:    title,
 			Summary:  summary,
 			Sections: append([]string(nil), contract.RequiredSections...),
-			Notes:    "Auto-synthesized from recorded planning artifacts during orchestration parent settlement.",
+			Notes:    "Auto-synthesized from recorded planning artifacts during task completion.",
 		})
 	}
 	if len(updates) == 0 {
