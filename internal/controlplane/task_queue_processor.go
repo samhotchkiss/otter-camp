@@ -64,6 +64,7 @@ type taskQueueFlowExecutionRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error)
 	Abandon(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error)
 }
 
 type taskQueueFlowNodeRepository interface {
@@ -732,6 +733,13 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 	})
 	if err != nil {
 		return err
+	}
+	if execution.ID != uuid.Nil {
+		if _, err := p.flowExecutions.UpdateMetadata(ctx, execution.ID, repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{
+			RunID: &result.Run.ID,
+		})); err != nil {
+			return err
+		}
 	}
 	if !result.shouldDispatch() {
 		return nil

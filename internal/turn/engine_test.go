@@ -10333,6 +10333,27 @@ func TestExplicitExecutionDeliverableWriteCompleted(t *testing.T) {
 	}
 }
 
+func TestFlowNodeExecutionIDFromSessionMetadata(t *testing.T) {
+	t.Parallel()
+
+	executionID := uuid.New()
+	session := &chat.ChatSession{
+		Metadata: mustRawJSON(t, map[string]any{
+			"flow_node_execution_id": executionID.String(),
+		}),
+	}
+
+	got := flowNodeExecutionIDFromSessionMetadata(session)
+	if got == nil || *got != executionID {
+		t.Fatalf("flowNodeExecutionIDFromSessionMetadata() = %v, want %s", got, executionID)
+	}
+
+	session.Metadata = json.RawMessage(`{"flow_node_execution_id":"not-a-uuid"}`)
+	if got := flowNodeExecutionIDFromSessionMetadata(session); got != nil {
+		t.Fatalf("flowNodeExecutionIDFromSessionMetadata() invalid = %v, want nil", got)
+	}
+}
+
 func mustRawJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(value)

@@ -4221,6 +4221,10 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		}
 		return nil
 	}
+	if err := e.syncBoundFlowExecutionTurnOwnership(ctx, session, &turn.ID); err != nil {
+		return err
+	}
+	defer e.reconcileBoundFlowExecutionTurnOwnership(context.Background(), session, turn.ID)
 	if retryCount > 0 {
 		if _, err := e.appendSystemMessage(ctx, turn.ID, sessionID, fmt.Sprintf("[Retry attempt %d started.]", retryCount)); err != nil {
 			return err
@@ -14660,6 +14664,75 @@ func resolveTaskID(session *chat.ChatSession) *uuid.UUID {
 	}
 	id := session.ScopeID
 	return &id
+}
+
+func flowNodeExecutionIDFromSessionMetadata(session *chat.ChatSession) *uuid.UUID {
+	if session == nil || len(session.Metadata) == 0 || !json.Valid(session.Metadata) {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(session.Metadata, &payload); err != nil {
+		return nil
+	}
+	executionID, ok := payloadUUID(payload, "flow_node_execution_id")
+	if !ok || executionID == uuid.Nil {
+		return nil
+	}
+	return &executionID
+}
+
+func (e *TurnEngine) syncBoundFlowExecutionTurnOwnership(ctx context.Context, session *chat.ChatSession, turnID *uuid.UUID) error {
+	if e == nil || e.pool == nil || session == nil {
+		return nil
+	}
+	executionID := flowNodeExecutionIDFromSessionMetadata(session)
+	if executionID == nil || *executionID == uuid.Nil {
+		return nil
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(e.pool).GetByID(ctx, *executionID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	updated := repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{
+		RunID:  repo.FlowExecutionLiveOwnerFromMetadata(execution.Metadata).RunID,
+		TurnID: turnID,
+	})
+	_, err = repo.NewFlowNodeExecutionRepo(e.pool).UpdateMetadata(ctx, execution.ID, updated)
+	return err
+}
+
+func (e *TurnEngine) reconcileBoundFlowExecutionTurnOwnership(ctx context.Context, session *chat.ChatSession, turnID uuid.UUID) {
+	if e == nil || e.pool == nil || e.chat == nil || session == nil || turnID == uuid.Nil {
+		return
+	}
+	currentTurn, err := e.chat.GetTurn(ctx, turnID)
+	if err != nil || currentTurn == nil {
+		return
+	}
+	status := strings.ToLower(strings.TrimSpace(currentTurn.Status))
+	if status != "completed" && status != "cancelled" && status != "failed" {
+		return
+	}
+	executionID := flowNodeExecutionIDFromSessionMetadata(session)
+	if executionID == nil || *executionID == uuid.Nil {
+		return
+	}
+	executionRepo := repo.NewFlowNodeExecutionRepo(e.pool)
+	execution, err := executionRepo.GetByID(ctx, *executionID)
+	if err != nil {
+		return
+	}
+	liveOwner := repo.FlowExecutionLiveOwnerFromMetadata(execution.Metadata)
+	if liveOwner.TurnID == nil || *liveOwner.TurnID != turnID {
+		return
+	}
+	_, _ = executionRepo.UpdateMetadata(ctx, execution.ID, repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{
+		RunID:  liveOwner.RunID,
+		TurnID: nil,
+	}))
 }
 
 type toolExecutionBinding struct {

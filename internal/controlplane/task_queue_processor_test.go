@@ -1541,6 +1541,7 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 		},
 		chats: chatService,
 	}
+	flowRepo := processor.flowExecutions.(*fakeTaskQueueFlowExecutionRepository)
 
 	err := processor.ensureFlowRun(ctx, eventbus.DomainEvent{ID: uuid.New()}, repo.ProjectTask{
 		ID:                taskID,
@@ -1575,6 +1576,13 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 	}
 	if !strings.Contains(appended.Content, "Flow node execution: "+executionID.String()) {
 		t.Fatalf("kickoff content = %q, want flow execution id", appended.Content)
+	}
+	if len(flowRepo.updateCalls) != 1 {
+		t.Fatalf("flow execution metadata update calls = %d, want 1", len(flowRepo.updateCalls))
+	}
+	liveOwner := repo.FlowExecutionLiveOwnerFromMetadata(flowRepo.execution.Metadata)
+	if liveOwner.RunID == nil || *liveOwner.RunID != runID {
+		t.Fatalf("flow execution live_run_id = %v, want %s", liveOwner.RunID, runID)
 	}
 }
 
@@ -2534,6 +2542,10 @@ type fakeTaskQueueFlowExecutionRepository struct {
 	execution        repo.FlowNodeExecution
 	executionsByTask map[uuid.UUID][]repo.FlowNodeExecution
 	abandonCalls     []uuid.UUID
+	updateCalls      []struct {
+		id       uuid.UUID
+		metadata json.RawMessage
+	}
 	err              error
 }
 
@@ -2585,6 +2597,32 @@ func (f *fakeTaskQueueFlowExecutionRepository) Abandon(_ context.Context, id uui
 		}
 	}
 	return repo.FlowNodeExecution{ID: id, Status: "abandoned"}, nil
+}
+
+func (f *fakeTaskQueueFlowExecutionRepository) UpdateMetadata(_ context.Context, id uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return repo.FlowNodeExecution{}, f.err
+	}
+	f.updateCalls = append(f.updateCalls, struct {
+		id       uuid.UUID
+		metadata json.RawMessage
+	}{id: id, metadata: metadata})
+	if f.execution.ID == id {
+		f.execution.Metadata = metadata
+		return f.execution, nil
+	}
+	if f.executionsByTask != nil {
+		for taskID, executions := range f.executionsByTask {
+			for i := range executions {
+				if executions[i].ID == id {
+					executions[i].Metadata = metadata
+					f.executionsByTask[taskID] = executions
+					return executions[i], nil
+				}
+			}
+		}
+	}
+	return repo.FlowNodeExecution{ID: id, Metadata: metadata}, nil
 }
 
 type fakeTaskQueueFlowNodeRepository struct {
