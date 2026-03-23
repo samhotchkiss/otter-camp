@@ -1624,6 +1624,9 @@ func TestTaskUpdateQueuedOversizedTaskAutoDecomposesCompoundWork(t *testing.T) {
 	if tasks.task.Description == nil || !strings.Contains(*tasks.task.Description, "Migrate all legacy markdown posts") {
 		t.Fatalf("updated description = %v, want focused primary deliverable", tasks.task.Description)
 	}
+	if tasks.task.BlocksScope != "none" {
+		t.Fatalf("parent blocks_scope = %q, want none after decomposition", tasks.task.BlocksScope)
+	}
 }
 
 func TestTaskUpdateQueuedBroadEnumeratedTitleAutoDecomposesCompoundWork(t *testing.T) {
@@ -1731,6 +1734,59 @@ func TestTaskUpdateQueuedOversizedTaskPublishesTaskCreatedEventsForDecomposedChi
 		if payload["decomposition_parent"] != taskID.String() {
 			t.Fatalf("decomposition_parent = %v, want %s", payload["decomposition_parent"], taskID.String())
 		}
+	}
+}
+
+func TestTaskCreateChildClearsParentProjectGate(t *testing.T) {
+	parentTaskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	description := "Coordinate the validation workstream and delegate executable child tasks."
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             parentTaskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      projectID,
+			Title:          "Validation execution parent",
+			Description:    &description,
+			WorkStatus:     "draft",
+			BlocksScope:    "all",
+			FlowTemplateID: &flowTemplateID,
+		},
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             parentTaskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				Title:          "Validation execution parent",
+				Description:    &description,
+				WorkStatus:     "draft",
+				BlocksScope:    "all",
+				FlowTemplateID: &flowTemplateID,
+			},
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.create", map[string]any{
+		"project_id":     projectID.String(),
+		"parent_task_id": parentTaskID.String(),
+		"title":          "Run bounded simulation check",
+		"description":    "Execute a bounded validation check against the pipeline.",
+	})
+	if err != nil {
+		t.Fatalf("task.create child: %v", err)
+	}
+	if tasks.task.BlocksScope != "none" {
+		t.Fatalf("parent blocks_scope = %q, want none after child creation", tasks.task.BlocksScope)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	if got := taskOut["blocks_scope"]; got != "none" {
+		t.Fatalf("child blocks_scope = %v, want none", got)
 	}
 }
 

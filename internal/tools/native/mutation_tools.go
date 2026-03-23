@@ -1807,7 +1807,8 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	}
 	if parentTask != nil {
 		parentTask.Metadata = taskdecomp.AppendChildTaskID(parentTask.Metadata, created.ID)
-		updatedParent, updateErr := updateTaskMetadataOnly(ctx, e.tasks, *parentTask)
+		parentTask.BlocksScope = "none"
+		updatedParent, updateErr := e.tasks.Update(ctx, *parentTask)
 		if updateErr != nil {
 			return nil, updateErr
 		}
@@ -2006,7 +2007,7 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 	}
 	parentTask.Metadata = taskdecomp.ApplyMetadata(parentTask.Metadata, prepared.Plan, prepared.SourceDescription, childTaskIDs)
 	parentTask.BlocksScope = "none"
-	if _, err := updateTaskMetadataOnly(ctx, e.tasks, parentTask); err != nil {
+	if _, err := e.tasks.Update(ctx, parentTask); err != nil {
 		return nil, err
 	}
 

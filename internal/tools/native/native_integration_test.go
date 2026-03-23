@@ -5655,6 +5655,63 @@ func TestIntegrationParentTaskReusesOverlappingManualChildByCanonicalTitle(t *te
 	}
 }
 
+func TestIntegrationTaskCreateChildClearsParentProjectGate(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Validation execution parent",
+		Description:    stringPtr("Coordinate the validation workstream and delegate executable child tasks."),
+		WorkStatus:     "draft",
+		BlocksScope:    "all",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parentTask.ID.String(),
+		"title":          "Run bounded simulation check",
+		"description":    "Execute a bounded validation check against the pipeline.",
+	})
+	if err != nil {
+		t.Fatalf("task.create child: %v", err)
+	}
+	updatedParent, err := taskRepo.GetByID(ctx, parentTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID updated parent: %v", err)
+	}
+	if updatedParent.BlocksScope != "none" {
+		t.Fatalf("parent blocks_scope = %q, want none after child creation", updatedParent.BlocksScope)
+	}
+	if taskdecomp.ParseParentTaskID(updatedParent.Metadata) != uuid.Nil {
+		t.Fatalf("parent metadata unexpectedly parsed as child task")
+	}
+	if len(taskdecomp.ParseChildTaskIDs(updatedParent.Metadata)) != 1 {
+		t.Fatalf("parent child_task_ids len = %d, want 1", len(taskdecomp.ParseChildTaskIDs(updatedParent.Metadata)))
+	}
+	childID := nestedUUIDPath(t, out, "task", "id")
+	childTask, err := taskRepo.GetByID(ctx, childID)
+	if err != nil {
+		t.Fatalf("GetByID child task: %v", err)
+	}
+	if taskdecomp.ParseParentTaskID(childTask.Metadata) != parentTask.ID {
+		t.Fatalf("child parent_task_id = %s, want %s", taskdecomp.ParseParentTaskID(childTask.Metadata), parentTask.ID)
+	}
+}
+
 func nestedUUIDPath(t *testing.T, raw map[string]any, path ...string) uuid.UUID {
 	t.Helper()
 	var current any = raw
@@ -5797,6 +5854,9 @@ func TestIntegrationParentTaskRepeatedDecompositionRequestReusesExistingChildren
 	updatedParent, err := taskRepo.GetByID(ctx, parentTask.ID)
 	if err != nil {
 		t.Fatalf("GetByID updated parent: %v", err)
+	}
+	if updatedParent.BlocksScope != "none" {
+		t.Fatalf("parent blocks_scope = %q, want none after decomposition", updatedParent.BlocksScope)
 	}
 	if primary := taskdecomp.ParsePrimaryDeliverable(updatedParent.Metadata); strings.TrimSpace(primary) == "" {
 		t.Fatalf("parent primary deliverable missing after decomposition metadata sync")
