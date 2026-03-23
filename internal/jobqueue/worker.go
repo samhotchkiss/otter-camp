@@ -601,16 +601,30 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 			       ) AS rn
 			FROM job_queue jq
 			JOIN chat_session cs ON cs.id = (jq.payload->>'session_id')::uuid
-			LEFT JOIN chat_turn current_turn ON current_turn.id = cs.current_turn_id
 			WHERE jq.status = 'pending'
 			  AND jq.job_type = 'agent_turn'
 			  AND cs.scope_type = 'project_task'
 			  AND cs.mode = 'async'
 			  AND cs.status = 'active'
 			  AND (
-			    cs.current_turn_id IS NULL
-			    OR current_turn.id IS NULL
-			    OR current_turn.status NOT IN ('pending', 'in_progress')
+			    NOT EXISTS (
+			    	SELECT 1
+			    	FROM chat_turn current_turn
+			    	WHERE current_turn.id = cs.current_turn_id
+			    	  AND current_turn.status IN ('pending', 'in_progress')
+			    )
+			    AND NOT EXISTS (
+			    	SELECT 1
+			    	FROM flow_node_execution e
+			    	JOIN chat_turn live_turn ON live_turn.id = CASE
+			    		WHEN COALESCE(e.metadata->>'live_turn_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			    		THEN (e.metadata->>'live_turn_id')::uuid
+			    		ELSE NULL
+			    	END
+			    	WHERE e.session_id = cs.id
+			    	  AND e.status = 'active'
+			    	  AND live_turn.status IN ('pending', 'in_progress')
+			    )
 			  )
 		)
 		UPDATE job_queue jq

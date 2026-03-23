@@ -1642,9 +1642,9 @@ func TestJobWorkerPurgeStaleAgentTurnJobsCollapsesSupersededProjectTaskContinuat
 		runAfter := time.Now().UTC().Add(time.Duration(i+1) * time.Hour)
 		createdAt := time.Now().UTC().Add(time.Duration(i) * time.Minute)
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO chat_message (id, session_id, role, content, status, created_at, updated_at)
-			VALUES ($1, $2, 'system', $3, 'completed', $4, $4)
-		`, messageID, session.ID, fmt.Sprintf("[Continuation %d]", i+1), createdAt); err != nil {
+			INSERT INTO chat_message (id, session_id, sequence_number, role, content, status, created_at, updated_at)
+			VALUES ($1, $2, $3, 'system', $4, 'final', $5, $5)
+		`, messageID, session.ID, i+1, fmt.Sprintf("[Continuation %d]", i+1), createdAt); err != nil {
 			t.Fatalf("insert continuation message %d: %v", i+1, err)
 		}
 		if _, err := pool.Exec(ctx, `
@@ -1702,6 +1702,188 @@ func TestJobWorkerPurgeStaleAgentTurnJobsCollapsesSupersededProjectTaskContinuat
 	}
 	if statuses[2] != "pending" {
 		t.Fatalf("newest job status = %q, want pending", statuses[2])
+	}
+}
+
+func TestJobWorkerPurgeStaleAgentTurnJobsKeepsLiveProjectTaskContinuationFromExecutionMetadata(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-live-project-task-continuation-live-owner",
+		DisplayName: "Purge Live Project Task Continuation Live Owner",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue task work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "purge-live-project-task-continuation-live-owner-project",
+		DisplayName:    "Purge Live Project Task Continuation Live Owner Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "purge-live-project-task-continuation-live-owner-template",
+		DisplayName:    "Purge Live Project Task Continuation Live Owner Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Pending task continuation",
+		WorkStatus:     "in_progress",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	rootMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue from the compressed context.",
+		Status:    "final",
+	})
+	if err != nil {
+		t.Fatalf("create root message: %v", err)
+	}
+	rootTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &rootMessage.ID,
+	})
+	if err != nil {
+		t.Fatalf("create root turn: %v", err)
+	}
+	continuationTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     2,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "pending",
+	})
+	if err != nil {
+		t.Fatalf("create continuation turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, nil); err != nil {
+		t.Fatalf("clear current turn: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+	metadata := repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{TurnID: &continuationTurn.ID})
+	if _, err := repo.NewFlowNodeExecutionRepo(pool).UpdateMetadata(ctx, execution.ID, metadata); err != nil {
+		t.Fatalf("set live turn metadata: %v", err)
+	}
+
+	messageIDs := []uuid.UUID{uuid.New(), uuid.New()}
+	for i, messageID := range messageIDs {
+		runAfter := time.Now().UTC().Add(time.Duration(i+1) * time.Hour)
+		createdAt := time.Now().UTC().Add(time.Duration(i) * time.Minute)
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO chat_message (id, session_id, sequence_number, role, content, status, created_at, updated_at)
+			VALUES ($1, $2, $3, 'system', $4, 'final', $5, $5)
+		`, messageID, session.ID, i+2, fmt.Sprintf("[Continuation %d]", i+1), createdAt); err != nil {
+			t.Fatalf("insert continuation message %d: %v", i+1, err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO job_queue (job_type, status, payload, run_after, priority, created_at, updated_at, group_key, dedupe_key)
+			VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70, $3, $3, $4, $5)
+		`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":1}`, session.ID, messageID), runAfter, createdAt,
+			fmt.Sprintf("agent_turn:%s:%s", session.ID, messageID),
+			fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, messageID, 1),
+		); err != nil {
+			t.Fatalf("insert pending continuation job %d: %v", i+1, err)
+		}
+	}
+	if rootTurn.TriggerMessageID == nil || *rootTurn.TriggerMessageID != rootMessage.ID {
+		t.Fatalf("root turn trigger_message_id = %v, want %s", rootTurn.TriggerMessageID, rootMessage.ID)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 0 {
+		t.Fatalf("purged jobs = %d, want 0", purged)
+	}
+
+	var pendingJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending continuation jobs: %v", err)
+	}
+	if pendingJobs != 2 {
+		t.Fatalf("pending continuation jobs = %d, want 2", pendingJobs)
 	}
 }
 
