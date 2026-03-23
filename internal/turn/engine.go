@@ -7479,6 +7479,9 @@ func (e *TurnEngine) handleRecoveryCLIExecuteWithoutCommand(ctx context.Context,
 	if !isRecoveryCLIExecuteWithoutCommand(call) {
 		return false, false, nil
 	}
+	if rewritten, err := e.rewriteRecoveryCLIExecuteWithoutCommandToFileWrite(ctx, rt, &call); rewritten || err != nil {
+		return rewritten, false, err
+	}
 	if rt.recoveryCLIFixes >= recoveryCLIRepairBudget {
 		if halted, err := e.haltRecoveryCLIExecuteWithoutCommand(ctx, rt); halted {
 			return true, true, err
@@ -7495,6 +7498,40 @@ func (e *TurnEngine) handleRecoveryCLIExecuteWithoutCommand(ctx context.Context,
 		return true, false, err
 	}
 	return true, false, nil
+}
+
+func (e *TurnEngine) rewriteRecoveryCLIExecuteWithoutCommandToFileWrite(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, error) {
+	if rt == nil || call == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	targetPath, _, ok := e.recoveryFileOutputContext(ctx, rt)
+	if !ok || strings.TrimSpace(targetPath) == "" {
+		return false, nil
+	}
+	draft, rejectReason, draftOK := e.recoveryPersistedDraftContent(ctx, rt, targetPath)
+	if !draftOK || strings.TrimSpace(rejectReason) != "" || strings.TrimSpace(draft) == "" {
+		return false, nil
+	}
+
+	call.Name = "file.write"
+	call.Arguments = map[string]any{
+		"path":        strings.TrimSpace(targetPath),
+		"content":     draft,
+		"create_dirs": true,
+	}
+	if rt.recoveryFileWrites == nil {
+		rt.recoveryFileWrites = make(map[string]recoveryPopulatedFileWriteState)
+	}
+	rt.recoveryFileWrites[strings.TrimSpace(call.ID)] = recoveryPopulatedFileWriteState{
+		TargetPath: strings.TrimSpace(targetPath),
+		Draft:      draft,
+	}
+	e.logger.Info("recovery: rewrote empty cli.execute to file.write from persisted draft",
+		"session_id", rt.session.ID,
+		"turn_id", rt.turn.ID,
+		"path", targetPath,
+	)
+	return false, nil
 }
 
 func isRecoveryCLIExecuteWithoutCommand(call ToolCall) bool {

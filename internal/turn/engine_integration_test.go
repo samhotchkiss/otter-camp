@@ -3273,6 +3273,109 @@ func TestTurnEngineIntegrationRecoveryTurnPersistsCheckpointForRepeatedEmptyCLIE
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryTurnRewritesEmptyCLIExecuteToPersistedFileWrite(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, recoveryMessage := mustCreateRecoveredValidationTaskSession(t, ctx, fixture, taskRecord)
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "cli.execute", Tier: "tier2"},
+		{Name: "file.write", Tier: "tier2"},
+	}}
+
+	const targetPath = "docs/content-strategy.md"
+	const durableDraft = "# Content Strategy\n\nConcrete recovered draft body.\n"
+	workspaceRoot := mustProjectWorkspaceRoot(t, ctx, fixture, project.ID)
+	artifactRel := filepath.ToSlash(filepath.Join(recoveryArtifactDir, filepath.FromSlash(targetPath)))
+	artifactAbs := filepath.Join(workspaceRoot, filepath.FromSlash(artifactRel))
+	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir recovery artifact dir: %v", err)
+	}
+	if err := os.WriteFile(artifactAbs, []byte(durableDraft), 0o644); err != nil {
+		t.Fatalf("write recovery artifact: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	updatedTask, err := taskRepo.UpdateMetadata(ctx, taskRecord.ID, taskcheckpoint.ApplyRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		Version:      1,
+		TargetPath:   targetPath,
+		ArtifactPath: artifactRel,
+		UpdatedAt:    time.Now().UTC(),
+	}))
+	if err != nil {
+		t.Fatalf("Update task with recovery checkpoint: %v", err)
+	}
+	taskRecord = updatedTask
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls != 1 {
+			t.Fatalf("unexpected extra model call: %d", modelCalls)
+		}
+		return ModelResponse{
+			Content: "I'll use cli_execute to write the file.",
+			ToolCalls: []ModelToolCall{{
+				ID:   "recovery-cli",
+				Name: "cli_execute",
+				Tier: "tier2",
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+		dispatched++
+		if call.Name != "file.write" {
+			t.Fatalf("call.Name = %q, want file.write", call.Name)
+		}
+		if got := stringValue(call.Arguments["path"]); got != targetPath {
+			t.Fatalf("path = %q, want %q", got, targetPath)
+		}
+		if got := stringValue(call.Arguments["content"]); got != durableDraft {
+			t.Fatalf("content = %q, want durable draft", got)
+		}
+		runID := uuid.New()
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      targetPath,
+				"byte_size": len(durableDraft),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage recovery: %v", err)
+	}
+
+	if modelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1", modelCalls)
+	}
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	for _, item := range messages {
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery correction: cli.execute was emitted without `command`") {
+			t.Fatalf("unexpected cli correction prompt after direct rewrite: %s", item.Content)
+		}
+		if item.Role == "tool_result" && strings.Contains(item.Content, "command is required") {
+			t.Fatalf("unexpected command_required tool_result: %s", item.Content)
+		}
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnMirrorsArtifactIntoLegacyWorkspaceRootEX322(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

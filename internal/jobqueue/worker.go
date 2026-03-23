@@ -49,6 +49,13 @@ const (
 	legacyRateLimitJitterMax     = 30 * time.Second
 )
 
+func staleTriggeredTurnThreshold(scopeType string) time.Duration {
+	if strings.EqualFold(strings.TrimSpace(scopeType), "project_task") {
+		return defaultStaleThreshold
+	}
+	return staleContinuationThreshold
+}
+
 type JobWorker interface {
 	Start(ctx context.Context) error
 	Stop() error
@@ -1119,6 +1126,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 	rows, err := w.pool.Query(ctx, `
 		SELECT cs.id,
 		       ct.id,
+		       cs.scope_type,
 		       ct.trigger_message_id,
 		       COALESCE((
 		         SELECT MAX(retry_turn.retry_count)
@@ -1145,7 +1153,10 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		  AND ct.status = 'in_progress'
 		  AND ct.trigger_message_id IS NOT NULL
 		  AND ct.started_at IS NOT NULL
-		  AND ct.started_at < $1
+		  AND (
+		        (cs.scope_type = 'project_task' AND ct.started_at < $1)
+		     OR (cs.scope_type <> 'project_task' AND ct.started_at < $2)
+		      )
 		  AND (
 		    cs.scope_type NOT IN ('project', 'project_task')
 		    OR (
@@ -1161,7 +1172,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		      AND r.turn_id = ct.id
 		      AND r.status IN ('created', 'in_progress')
 		  )
-	`, w.clock.Now().UTC().Add(-staleContinuationThreshold))
+	`, w.clock.Now().UTC().Add(-defaultStaleThreshold), w.clock.Now().UTC().Add(-staleContinuationThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("list stale in-progress triggered turns: %w", err)
 	}
@@ -1170,13 +1181,14 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 	type staleTriggeredCandidate struct {
 		sessionID  uuid.UUID
 		turnID     uuid.UUID
+		scopeType  string
 		messageID  uuid.UUID
 		retryCount int
 	}
 	candidates := make([]staleTriggeredCandidate, 0)
 	for rows.Next() {
 		var item staleTriggeredCandidate
-		if err := rows.Scan(&item.sessionID, &item.turnID, &item.messageID, &item.retryCount); err != nil {
+		if err := rows.Scan(&item.sessionID, &item.turnID, &item.scopeType, &item.messageID, &item.retryCount); err != nil {
 			return 0, fmt.Errorf("scan stale in-progress triggered turn: %w", err)
 		}
 		candidates = append(candidates, item)
@@ -1244,6 +1256,14 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 			}, nil); err != nil {
 				return repaired, fmt.Errorf("enqueue recovered stale triggered retry for session %s: %w", item.sessionID, err)
 			}
+		}
+		if w.logger != nil {
+			w.logger.Info("job queue: recovered stale in-progress triggered turn",
+				"session_id", item.sessionID,
+				"turn_id", item.turnID,
+				"scope_type", strings.TrimSpace(item.scopeType),
+				"threshold", staleTriggeredTurnThreshold(item.scopeType).String(),
+			)
 		}
 		repaired++
 	}
