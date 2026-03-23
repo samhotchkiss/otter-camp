@@ -881,7 +881,9 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 			payload[key] = value
 		}
 	}
-	return s.transitionTaskRecord(ctx, taskRecord, resumeBlockedTaskTargetStatus(ctx, s.flowNodes, taskRecord), actor, payload, false)
+	resumeActor := actor
+	resumeActor.AllowGateBypass = true
+	return s.transitionTaskRecord(ctx, taskRecord, resumeBlockedTaskTargetStatus(ctx, s.flowNodes, taskRecord), resumeActor, payload, false)
 }
 
 func resumeBlockedTaskTargetStatus(ctx context.Context, flowNodes flowNodeRepository, taskRecord repo.ProjectTask) string {
@@ -1090,7 +1092,7 @@ func (s *service) projectRequiresPMBeforeQueue(ctx context.Context, projectID uu
 }
 
 func (s *service) ensureQueueEligible(ctx context.Context, taskRecord repo.ProjectTask, actor Actor) error {
-	if actor.AllowGateBypass && strings.EqualFold(strings.TrimSpace(actor.Type), "system") {
+	if actor.AllowGateBypass {
 		return nil
 	}
 	gateTask, err := s.lowestOutstandingProjectGate(ctx, taskRecord.ProjectID)

@@ -939,6 +939,79 @@ func TestTaskServiceIntegrationResumeValidationBlockedReviewTaskRestoresReviewSt
 	}
 }
 
+func TestTaskServiceIntegrationResumeValidationBlockedTaskBypassesOutstandingProjectGate(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "pm-user", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "PM Agent", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Blocking gate",
+		WorkStatus:     "draft",
+		BlocksScope:    "all",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("create gate task: %v", err)
+	}
+
+	created, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		Title:             "Resume behind gate",
+		WorkStatus:        "in_progress",
+		FlowTemplateID:    &template.ID,
+		CurrentFlowNodeID: template.StartNodeID,
+		AssignedAgentID:   &pmAgent.ID,
+		CreatedByType:     "system",
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create blocked task fixture: %v", err)
+	}
+
+	taskRecord := created
+	guardedMetadata, err := MergeValidationGuardMetadata(taskRecord.Metadata, ValidationGuardState{
+		InitialMessageID:   uuid.NewString(),
+		Fingerprint:        "file.write:content_required",
+		AttemptFingerprint: "file.write:content_required:attempt",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "content_required",
+		FailureReason:      "file.write requires content",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	taskRecord.Metadata = guardedMetadata
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update guarded task: %v", err)
+	}
+	if _, err := svc.MarkBlocked(ctx, created.ID, "deterministic tool validation loop blocked after 3 identical failures: file.write (content_required)", Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	resumed, err := svc.ResumeValidationBlockedTask(ctx, created.ID, Actor{Type: "human_user", ID: pmUser.ID})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+}
+
 func TestTaskServiceIntegrationResumeMissingDurableRecoveryCheckpointRepairsFromWorkspaceEX325(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
