@@ -131,8 +131,9 @@ type Worker struct {
 	done    chan struct{}
 	slots   chan struct{}
 
-	agentTurnInFlight  atomic.Int32
-	backgroundInFlight atomic.Int32
+	agentTurnInFlight   atomic.Int32
+	backgroundInFlight  atomic.Int32
+	maintenanceInFlight atomic.Int32
 }
 
 type queryExecutor interface {
@@ -1845,7 +1846,15 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 					continue
 				}
 
-				maintenanceJobs, err := w.claimPendingMaintenanceJobs(ctx, backgroundSlots)
+				maintenanceSlots := min(backgroundSlots, w.availableMaintenanceSlots())
+				if maintenanceSlots <= 0 {
+					if !claimedAny {
+						w.logger.Debug("job queue: no pending jobs")
+						return nil
+					}
+					continue
+				}
+				maintenanceJobs, err := w.claimPendingMaintenanceJobs(ctx, maintenanceSlots)
 				if err != nil {
 					if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 						w.logger.Error("job queue: claim failed", "job_class", "background_maintenance", "error", err)
@@ -1927,6 +1936,22 @@ func (w *Worker) availableBackgroundSlots() int {
 	return remaining
 }
 
+func (w *Worker) maxMaintenanceInFlight() int {
+	if w == nil || w.batchSize <= 1 {
+		return 1
+	}
+	return max(1, w.batchSize-1)
+}
+
+func (w *Worker) availableMaintenanceSlots() int {
+	maintenance := int(w.maintenanceInFlight.Load())
+	remaining := w.maxMaintenanceInFlight() - maintenance
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 func (w *Worker) inflightJobs() int {
 	if w == nil || w.slots == nil {
 		return 0
@@ -1944,6 +1969,9 @@ func (w *Worker) acquireExecutionSlot(jobType string) {
 		return
 	}
 	w.backgroundInFlight.Add(1)
+	if isMaintenanceJobType(jobType) {
+		w.maintenanceInFlight.Add(1)
+	}
 }
 
 func (w *Worker) releaseExecutionSlot(jobType string) {
@@ -1954,6 +1982,9 @@ func (w *Worker) releaseExecutionSlot(jobType string) {
 		w.agentTurnInFlight.Add(-1)
 	} else {
 		w.backgroundInFlight.Add(-1)
+		if isMaintenanceJobType(jobType) {
+			w.maintenanceInFlight.Add(-1)
+		}
 	}
 	select {
 	case <-w.slots:
@@ -1993,6 +2024,15 @@ func maintenanceBackgroundJobFilter() string {
 		retentionEnforceJobType,
 		traceSpanPartitionCreateJobType,
 	)
+}
+
+func isMaintenanceJobType(jobType string) bool {
+	switch strings.TrimSpace(jobType) {
+	case rollupUpdateJobType, modelUsageRollupDailyJobType, retentionEnforceJobType, traceSpanPartitionCreateJobType:
+		return true
+	default:
+		return false
+	}
 }
 
 func nonMaintenanceBackgroundJobFilter() string {
