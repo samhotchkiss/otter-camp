@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/bootstrap"
 	"github.com/samhotchkiss/otter-camp/internal/browser"
 	"github.com/samhotchkiss/otter-camp/internal/budget"
@@ -41,6 +43,8 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/secret"
 	"github.com/samhotchkiss/otter-camp/internal/storage"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	nativetools "github.com/samhotchkiss/otter-camp/internal/tools/native"
 	"github.com/samhotchkiss/otter-camp/internal/turn"
@@ -117,6 +121,16 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	})
 	if err != nil {
 		return fmt.Errorf("worker task service setup: %w", err)
+	}
+	if parentRepaired, gatesCancelled, err := startupProjectCleanup(ctx, pool.Raw(), tasks); err != nil {
+		return fmt.Errorf("worker startup project cleanup: %w", err)
+	} else {
+		if parentRepaired > 0 {
+			logger.Info("worker startup: auto-completed dormant orchestration parents", "count", parentRepaired)
+		}
+		if gatesCancelled > 0 {
+			logger.Info("worker startup: cancelled impossible draft project gates", "count", gatesCancelled)
+		}
 	}
 
 	scheduleEngine, err := scheduling.NewScheduleEngine(scheduling.ScheduleEngineOptions{
@@ -683,4 +697,88 @@ func (deterministicQueryEmbedder) Embed(_ context.Context, _ uuid.UUID, _ string
 		vectors = append(vectors, vector)
 	}
 	return vectors, nil
+}
+
+func startupProjectCleanup(ctx context.Context, pool *pgxpool.Pool, tasks tasksvc.TaskService) (int, int, error) {
+	if pool == nil || tasks == nil {
+		return 0, 0, nil
+	}
+	orgRepo := repo.NewOrgRepo(pool)
+	projectRepo := repo.NewProjectRepo(pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	orgs, err := orgRepo.List(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	parentRepaired := 0
+	gatesCancelled := 0
+	for _, org := range orgs {
+		projects, err := projectRepo.List(ctx, org.ID)
+		if err != nil {
+			return parentRepaired, gatesCancelled, err
+		}
+		for _, project := range projects {
+			repaired, cancelled, err := startupCleanupProjectDrafts(ctx, taskRepo, tasks, project.ID)
+			if err != nil {
+				return parentRepaired, gatesCancelled, err
+			}
+			parentRepaired += repaired
+			gatesCancelled += cancelled
+		}
+	}
+	return parentRepaired, gatesCancelled, nil
+}
+
+func startupCleanupProjectDrafts(ctx context.Context, taskRepo *repo.ProjectTaskRepo, tasks tasksvc.TaskService, projectID uuid.UUID) (int, int, error) {
+	parentRepaired := 0
+	gatesCancelled := 0
+	for pass := 0; pass < 4; pass++ {
+		drafts, err := taskRepo.ListByProject(ctx, projectID, "draft")
+		if err != nil {
+			return parentRepaired, gatesCancelled, err
+		}
+		progressed := false
+		for _, task := range drafts {
+			switch {
+			case len(taskdecomp.ParseChildTaskIDs(task.Metadata)) > 0:
+				_, err := tasks.TransitionStatus(ctx, task.ID, "done", tasksvc.Actor{
+					Type:                           "system",
+					AllowOrchestrationAutoComplete: true,
+				})
+				if err == nil {
+					parentRepaired++
+					progressed = true
+					continue
+				}
+				if errors.Is(err, repo.ErrConflict) || errors.Is(err, taskorchestration.ErrParentCompletionRequirements) {
+					continue
+				}
+				var invalidTransition tasksvc.ErrInvalidStatusTransition
+				if errors.As(err, &invalidTransition) {
+					continue
+				}
+				return parentRepaired, gatesCancelled, err
+			case strings.EqualFold(strings.TrimSpace(task.BlocksScope), "all") && tasksvc.ValidateProjectGateTask(task) != nil:
+				_, err := tasks.TransitionStatus(ctx, task.ID, "cancelled", tasksvc.Actor{Type: "system"})
+				if err == nil {
+					gatesCancelled++
+					progressed = true
+					continue
+				}
+				if errors.Is(err, repo.ErrConflict) {
+					continue
+				}
+				var invalidTransition tasksvc.ErrInvalidStatusTransition
+				if errors.As(err, &invalidTransition) {
+					continue
+				}
+				return parentRepaired, gatesCancelled, err
+			}
+		}
+		if !progressed {
+			break
+		}
+	}
+	return parentRepaired, gatesCancelled, nil
 }

@@ -3326,6 +3326,53 @@ func TestShouldStopAfterBlockedProjectBootstrapRecoveryReread(t *testing.T) {
 	}
 }
 
+func TestShouldBlockTaskRecoveryStatusPathTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+	}
+
+	if !shouldBlockTaskRecoveryStatusPathTool(rt, "file.read", map[string]any{"path": "planning/recovery-state/OC-20-WORK-COMPLETE-SUMMARY.md"}) {
+		t.Fatal("expected task recovery-state read to be blocked")
+	}
+	if !shouldBlockTaskRecoveryStatusPathTool(rt, "file.write", map[string]any{"path": ".ottercamp/recovery/docs/migration-plan/oc-15.md"}) {
+		t.Fatal("expected task recovery artifact write to be blocked")
+	}
+	if !shouldBlockTaskRecoveryStatusPathTool(rt, "file.list", map[string]any{"path": "planning/checkpoint"}) {
+		t.Fatal("expected task checkpoint listing to be blocked")
+	}
+	if shouldBlockTaskRecoveryStatusPathTool(rt, "file.read", map[string]any{"path": "planning/prd-spec/oc-24-infrastructure-spec.md"}) {
+		t.Fatal("deliverable file read should remain available")
+	}
+
+	rt.session.Mode = "sync"
+	if shouldBlockTaskRecoveryStatusPathTool(rt, "file.read", map[string]any{"path": "planning/recovery-state/OC-20-WORK-COMPLETE-SUMMARY.md"}) {
+		t.Fatal("expected sync task session to bypass async recovery-state guard")
+	}
+}
+
+func TestShouldBlockTaskStatusMessageTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+			ID:        uuid.New(),
+		},
+	}
+
+	if !shouldBlockTaskStatusMessageTool(rt, "message.send", map[string]any{"content": "Notifying the team that the task is complete."}) {
+		t.Fatal("expected task status message without target session to be blocked")
+	}
+	if shouldBlockTaskStatusMessageTool(rt, "message.send", map[string]any{"session_id": uuid.NewString(), "content": "handoff"}) {
+		t.Fatal("explicit target session should remain available")
+	}
+	if shouldBlockTaskStatusMessageTool(rt, "file.read", map[string]any{"path": "planning/prd-spec/spec.md"}) {
+		t.Fatal("non-message tool should not trigger status-message guard")
+	}
+}
+
 func TestShouldNotStopAfterBlockedProjectBootstrapRecoveryRereadScaffoldOnlyRecovery(t *testing.T) {
 	now := time.Now().UTC()
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
@@ -3791,6 +3838,133 @@ func TestDispatchToolsMessageSendPreservesExplicitTargetSessionID(t *testing.T) 
 	}
 	if got := dispatched.Arguments["agent_id"]; got != fixture.chat.participants[0].ParticipantID.String() {
 		t.Fatalf("agent_id = %v, want %s", got, fixture.chat.participants[0].ParticipantID)
+	}
+}
+
+func TestDispatchToolsBlocksTaskMessageSendWithoutSessionID(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		t.Fatalf("unexpected dispatched tool call: %s", call.Name)
+		return ToolResult{}, nil
+	}
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(string) error) (ModelResponse, error) {
+		round++
+		if round == 1 {
+			return ModelResponse{
+				ToolCalls: []ModelToolCall{{
+					ID:   "notify-team",
+					Name: "message.send",
+					Arguments: map[string]any{
+						"role":    "user",
+						"content": "Notify the team this task is complete.",
+					},
+				}},
+			}, nil
+		}
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var blocked bool
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") &&
+			message.ToolCallID != nil &&
+			*message.ToolCallID == "notify-team" &&
+			strings.Contains(message.Content, "status or notification messages without an explicit destination session") {
+			blocked = true
+			break
+		}
+	}
+	if !blocked {
+		t.Fatal("missing blocked message.send tool_result for task status-message guard")
+	}
+}
+
+func TestDispatchToolsBlocksTaskRecoveryStateRead(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		t.Fatalf("unexpected dispatched tool call: %s", call.Name)
+		return ToolResult{}, nil
+	}
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(string) error) (ModelResponse, error) {
+		round++
+		if round == 1 {
+			return ModelResponse{
+				ToolCalls: []ModelToolCall{{
+					ID:   "read-recovery",
+					Name: "file.read",
+					Arguments: map[string]any{
+						"path": "planning/recovery-state/OC-20-WORK-COMPLETE-SUMMARY.md",
+					},
+				}},
+			}, nil
+		}
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var blocked bool
+	for _, message := range messages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") &&
+			message.ToolCallID != nil &&
+			*message.ToolCallID == "read-recovery" &&
+			strings.Contains(message.Content, "should not reread recovery-state or checkpoint files") {
+			blocked = true
+			break
+		}
+	}
+	if !blocked {
+		t.Fatal("missing blocked recovery-state tool_result for async task session")
 	}
 }
 
@@ -7487,10 +7661,10 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 	const targetPath = "docs/content-strategy.md"
 
 	cases := []struct {
-		name    string
-		content string
+		name       string
+		content    string
 		targetPath string
-		want    string
+		want       string
 	}{
 		{
 			name: "rejects tool repair narration",
@@ -7693,14 +7867,14 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
-			name: "rejects deployment checklist progress preface",
+			name:    "rejects deployment checklist progress preface",
 			content: "Good. The spec file is partially complete. Now I need to write the complete deployment checklist, which is the critical missing deliverable. Let me create that:",
-			want: "intent to write the deliverable",
+			want:    "intent to write the deliverable",
 		},
 		{
-			name: "rejects migration plan status placeholder",
+			name:    "rejects migration plan status placeholder",
 			content: "Perfect! Now I see the situation clearly:\n\n1. **OC-15 has strategy artifacts already locked** (strategy brief, decision log, tradeoff matrix, success narrative)\n2. **The migration plan file is stubbed but incomplete**\n3. **I need to deliver the full migration plan** based on the locked strategy\n\nLet me read the strategy artifacts first, then write the complete migration plan:",
-			want: "asked the operator to choose the next step instead of the file body",
+			want:    "asked the operator to choose the next step instead of the file body",
 		},
 		{
 			name:    "rejects replace stub imperative",

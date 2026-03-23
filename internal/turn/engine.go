@@ -6946,6 +6946,22 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if shouldBlockTaskRecoveryStatusPathTool(rt, name, arguments) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildTaskRecoveryStatusPathToolGuardError(name),
+			})
+			continue
+		}
+		if shouldBlockTaskStatusMessageTool(rt, name, arguments) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildTaskStatusMessageToolGuardError(),
+			})
+			continue
+		}
 		if shouldBlockProjectKickoffFollowOnTool(rt, name) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -12209,6 +12225,57 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 	}
 }
 
+func shouldBlockTaskRecoveryStatusPathTool(rt *turnRuntime, toolName string, arguments map[string]any) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.read", "file.write", "file.edit", "file.list", "file.search":
+		return taskToolTouchesRecoveryStatusPath(arguments)
+	default:
+		return false
+	}
+}
+
+func shouldBlockTaskStatusMessageTool(rt *turnRuntime, toolName string, arguments map[string]any) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(toolName), "message.send") {
+		return false
+	}
+	targetSessionID := strings.TrimSpace(anyString(arguments["session_id"]))
+	return targetSessionID == ""
+}
+
+func taskToolTouchesRecoveryStatusPath(arguments map[string]any) bool {
+	for _, key := range []string{"path", "file_path", "target_path", "artifact_path", "file_pattern", "pattern"} {
+		if taskToolArgumentReferencesRecoveryStatusPath(anyString(arguments[key])) {
+			return true
+		}
+	}
+	return false
+}
+
+func taskToolArgumentReferencesRecoveryStatusPath(raw string) bool {
+	normalized := strings.ToLower(filepath.ToSlash(strings.TrimSpace(raw)))
+	if normalized == "" {
+		return false
+	}
+	return normalized == ".ottercamp/recovery" ||
+		strings.HasPrefix(normalized, ".ottercamp/recovery/") ||
+		normalized == "planning/recovery-state" ||
+		strings.HasPrefix(normalized, "planning/recovery-state/") ||
+		normalized == "planning/checkpoint" ||
+		strings.HasPrefix(normalized, "planning/checkpoint/")
+}
+
 func projectBootstrapRecoveryReadsPlanningPath(arguments map[string]any) bool {
 	path := strings.TrimSpace(stringValue(arguments["path"]))
 	if path == "" {
@@ -12330,6 +12397,19 @@ func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName
 	default:
 		return "bootstrap validation recovery already has the active project scope and persisted bootstrap state; skip broad project or template rereads and repair the named blocker directly."
 	}
+}
+
+func buildTaskRecoveryStatusPathToolGuardError(toolName string) string {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.write", "file.edit":
+		return "task execution should not write recovery-state or checkpoint files. Write the real deliverable artifact for the current task instead of mutating supervisor status files."
+	default:
+		return "task execution should not reread recovery-state or checkpoint files. Continue the current deliverable directly using the task artifacts already in this session."
+	}
+}
+
+func buildTaskStatusMessageToolGuardError() string {
+	return "task execution should not spend turns on status or notification messages without an explicit destination session. Continue the task deliverable directly in this turn, or provide a concrete target session_id for a real cross-session handoff."
 }
 
 func shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt *turnRuntime, blocked bool) bool {

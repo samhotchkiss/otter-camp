@@ -14,6 +14,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 )
 
 func TestTaskQueueProcessorHandleTaskQueuedEventIgnoresIrrelevantStatusesAndEvents(t *testing.T) {
@@ -1132,6 +1133,111 @@ func TestTaskQueueProcessorHandleTaskCompletedEventAutoCompletesParentTask(t *te
 	}
 }
 
+func TestTaskQueueProcessorHandleTaskCompletedEventCatchesUpDormantParentTasks(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	parentID := uuid.New()
+	grandparentID := uuid.New()
+	childID := uuid.New()
+
+	parentMetadata := taskdecomp.AppendChildTaskID(json.RawMessage(`{}`), childID)
+	grandparentMetadata := taskdecomp.AppendChildTaskID(json.RawMessage(`{}`), parentID)
+	taskRepo := &fakeTaskQueueTaskRepository{
+		task: repo.ProjectTask{
+			ID:             completedTaskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+		},
+		tasksByProject: []repo.ProjectTask{
+			{
+				ID:             grandparentID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "draft",
+				Metadata:       grandparentMetadata,
+			},
+			{
+				ID:             parentID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "draft",
+				Metadata:       parentMetadata,
+			},
+		},
+	}
+
+	runService := &fakeTaskQueueRunStarter{}
+	taskService := &fakeTaskQueueStatusTransitioner{}
+	taskService.onTransition = func(taskID uuid.UUID, toStatus string, actor tasksvc.Actor) error {
+		if toStatus != "done" || !actor.AllowOrchestrationAutoComplete {
+			return nil
+		}
+		switch taskID {
+		case grandparentID:
+			for _, task := range taskRepo.tasksByProject {
+				if task.ID == parentID && strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") {
+					for i := range taskRepo.tasksByProject {
+						if taskRepo.tasksByProject[i].ID == grandparentID {
+							taskRepo.tasksByProject[i].WorkStatus = "done"
+						}
+					}
+					return nil
+				}
+			}
+			return taskorchestration.ErrParentCompletionRequirements
+		case parentID:
+			for i := range taskRepo.tasksByProject {
+				if taskRepo.tasksByProject[i].ID == parentID {
+					taskRepo.tasksByProject[i].WorkStatus = "done"
+				}
+			}
+		}
+		return nil
+	}
+	processor := &TaskQueueProcessor{
+		tasks:       taskRepo,
+		taskService: taskService,
+		runs:        runService,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    completedTaskID,
+		"project_id": projectID,
+		"to_status":  "done",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "task.status_changed",
+		Payload:        payload,
+	}
+	if err := processor.handleTaskCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("handleTaskCompletedEvent: %v", err)
+	}
+
+	if len(taskService.transitionCalls) != 3 {
+		t.Fatalf("TransitionStatus calls = %d, want 3 (grandparent retry, parent, grandparent success)", len(taskService.transitionCalls))
+	}
+	if taskService.transitionCalls[0].taskID != grandparentID {
+		t.Fatalf("first transition task = %s, want grandparent %s", taskService.transitionCalls[0].taskID, grandparentID)
+	}
+	if taskService.transitionCalls[1].taskID != parentID {
+		t.Fatalf("second transition task = %s, want parent %s", taskService.transitionCalls[1].taskID, parentID)
+	}
+	if taskService.transitionCalls[2].taskID != grandparentID {
+		t.Fatalf("third transition task = %s, want grandparent retry %s", taskService.transitionCalls[2].taskID, grandparentID)
+	}
+	for _, task := range taskRepo.tasksByProject {
+		if task.WorkStatus != "done" {
+			t.Fatalf("task %+v remained non-done after dormant parent catch-up", task)
+		}
+	}
+}
+
 func TestTaskQueueProcessorHandleTaskCompletedEventAutoCompletesBootstrapPlanningTasks(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()
@@ -1988,12 +2094,28 @@ func (f *fakeTaskQueueTaskRepository) GetByID(context.Context, uuid.UUID) (repo.
 	return f.task, nil
 }
 
-func (f *fakeTaskQueueTaskRepository) ListByProject(context.Context, uuid.UUID, ...string) ([]repo.ProjectTask, error) {
+func (f *fakeTaskQueueTaskRepository) ListByProject(_ context.Context, _ uuid.UUID, statuses ...string) ([]repo.ProjectTask, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	if len(f.tasksByProject) > 0 {
-		return append([]repo.ProjectTask(nil), f.tasksByProject...), nil
+		statusFilter := map[string]struct{}{}
+		for _, status := range statuses {
+			normalized := strings.ToLower(strings.TrimSpace(status))
+			if normalized != "" {
+				statusFilter[normalized] = struct{}{}
+			}
+		}
+		out := make([]repo.ProjectTask, 0, len(f.tasksByProject))
+		for _, task := range f.tasksByProject {
+			if len(statusFilter) > 0 {
+				if _, ok := statusFilter[strings.ToLower(strings.TrimSpace(task.WorkStatus))]; !ok {
+					continue
+				}
+			}
+			out = append(out, task)
+		}
+		return out, nil
 	}
 	if len(f.taskLookupSequence) > 0 {
 		last := f.taskLookupSequence[len(f.taskLookupSequence)-1]
@@ -2015,6 +2137,7 @@ type fakeTaskQueueStatusTransitioner struct {
 	transitionCalls []transitionTaskQueueCall
 	transitionTask  *tasksvc.ProjectTask
 	transitionErr   error
+	onTransition    func(taskID uuid.UUID, toStatus string, actor tasksvc.Actor) error
 }
 
 func (f *fakeTaskQueueStatusTransitioner) TransitionStatus(_ context.Context, taskID uuid.UUID, toStatus string, actor tasksvc.Actor) (*tasksvc.ProjectTask, error) {
@@ -2023,6 +2146,11 @@ func (f *fakeTaskQueueStatusTransitioner) TransitionStatus(_ context.Context, ta
 		toStatus: toStatus,
 		actor:    actor,
 	})
+	if f.onTransition != nil {
+		if err := f.onTransition(taskID, toStatus, actor); err != nil {
+			return nil, err
+		}
+	}
 	if f.transitionErr != nil {
 		return nil, f.transitionErr
 	}

@@ -1114,6 +1114,9 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 		if err := p.maybeAutoCompleteParentTask(ctx, completedTask); err != nil {
 			return err
 		}
+		if err := p.maybeAutoCompleteDormantParentTasks(ctx, completedTask.ProjectID); err != nil {
+			return err
+		}
 		if err := p.maybeAutoCompleteBootstrapPlanningTasks(ctx, completedTask.ProjectID); err != nil {
 			return err
 		}
@@ -1168,6 +1171,44 @@ func (p *TaskQueueProcessor) maybeAutoCompleteParentTask(ctx context.Context, co
 		return nil
 	}
 	return err
+}
+
+func (p *TaskQueueProcessor) maybeAutoCompleteDormantParentTasks(ctx context.Context, projectID uuid.UUID) error {
+	if projectID == uuid.Nil || p.tasks == nil || p.taskService == nil {
+		return nil
+	}
+	for pass := 0; pass < 4; pass++ {
+		tasks, err := p.tasks.ListByProject(ctx, projectID, "draft")
+		if err != nil {
+			return err
+		}
+		progressed := false
+		for _, task := range tasks {
+			if len(taskdecomp.ParseChildTaskIDs(task.Metadata)) == 0 {
+				continue
+			}
+			_, err := p.taskService.TransitionStatus(ctx, task.ID, "done", tasksvc.Actor{
+				Type:                           "system",
+				AllowOrchestrationAutoComplete: true,
+			})
+			if err == nil {
+				progressed = true
+				continue
+			}
+			if errors.Is(err, repo.ErrConflict) || errors.Is(err, taskorchestration.ErrParentCompletionRequirements) {
+				continue
+			}
+			var invalidTransition tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &invalidTransition) {
+				continue
+			}
+			return err
+		}
+		if !progressed {
+			return nil
+		}
+	}
+	return nil
 }
 
 func (p *TaskQueueProcessor) maybeAutoCompleteBootstrapPlanningTasks(ctx context.Context, projectID uuid.UUID) error {
@@ -1337,6 +1378,12 @@ func (p *TaskQueueProcessor) handleProjectResumedEvent(ctx context.Context, even
 				return err
 			}
 		}
+	}
+	if err := p.maybeAutoCompleteDormantParentTasks(ctx, payload.ProjectID); err != nil {
+		return err
+	}
+	if err := p.maybeAutoCompleteBootstrapPlanningTasks(ctx, payload.ProjectID); err != nil {
+		return err
 	}
 	return p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID)
 }
