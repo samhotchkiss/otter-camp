@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -43,6 +44,8 @@ type Service struct {
 	environments environmentRepository
 	clock        func() time.Time
 }
+
+var sourceTaskLinePattern = regexp.MustCompile(`(?im)^-\s*Source task:\s*(?:OC-(\d+)|([0-9a-f-]{36}))(?:\s*\(([^)]*)\))?\s*$`)
 
 func New(opts Options) *Service {
 	clock := opts.Clock
@@ -218,6 +221,14 @@ func (s *Service) syncArtifact(
 	if err != nil {
 		return artifact, err
 	}
+	if repaired, rewriteErr := s.repairMismatchedTaskArtifact(absPath, payload, task, plan, artifact); rewriteErr != nil {
+		return artifact, rewriteErr
+	} else if repaired {
+		payload, err = os.ReadFile(absPath)
+		if err != nil {
+			return artifact, err
+		}
+	}
 	contentHash := sha256Hex(payload)
 	record, _, err := s.artifacts.UpsertVersion(ctx, repo.PlanningArtifactUpsert{
 		OrganizationID:      task.OrganizationID,
@@ -241,6 +252,98 @@ func (s *Service) syncArtifact(
 	artifact.Version = record.CurrentVersion
 	artifact.ContentSHA256 = strings.TrimSpace(record.LatestContentSHA256)
 	return artifact, nil
+}
+
+func (s *Service) repairMismatchedTaskArtifact(absPath string, payload []byte, task repo.ProjectTask, plan taskplan.Plan, artifact taskplan.PlannedArtifact) (bool, error) {
+	if !artifactClaimsDifferentTask(payload, task) {
+		return false, nil
+	}
+	replacement := scaffoldContent(s.clock(), task, plan, artifact)
+	if err := os.WriteFile(absPath, []byte(replacement), 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func artifactClaimsDifferentTask(payload []byte, task repo.ProjectTask) bool {
+	matches := sourceTaskLinePattern.FindSubmatch(payload)
+	if len(matches) == 0 {
+		return false
+	}
+	if task.TaskNumber > 0 {
+		number := strings.TrimSpace(string(matches[1]))
+		if number != "" && number != fmt.Sprintf("%d", task.TaskNumber) {
+			return true
+		}
+	}
+	if explicitTitle := strings.TrimSpace(string(matches[3])); explicitTitle != "" && taskTitleClearlyMismatched(explicitTitle, task.Title) {
+		return true
+	}
+	return false
+}
+
+func taskTitleClearlyMismatched(explicitTitle, taskTitle string) bool {
+	explicit := normalizeTaskTitleForMatch(explicitTitle)
+	current := normalizeTaskTitleForMatch(taskTitle)
+	if explicit == "" || current == "" {
+		return false
+	}
+	if explicit == current || strings.Contains(explicit, current) || strings.Contains(current, explicit) {
+		return false
+	}
+	explicitTokens := tokenSet(explicit)
+	currentTokens := tokenSet(current)
+	if len(explicitTokens) == 0 || len(currentTokens) == 0 {
+		return false
+	}
+	shared := 0
+	for token := range explicitTokens {
+		if _, ok := currentTokens[token]; ok {
+			shared++
+		}
+	}
+	minTokens := len(explicitTokens)
+	if len(currentTokens) < minTokens {
+		minTokens = len(currentTokens)
+	}
+	if minTokens == 0 {
+		return false
+	}
+	return float64(shared)/float64(minTokens) < 0.5
+}
+
+func normalizeTaskTitleForMatch(value string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if trimmed == "" {
+		return ""
+	}
+	var builder strings.Builder
+	lastSpace := false
+	for _, r := range trimmed {
+		isAlphaNum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if isAlphaNum {
+			builder.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			builder.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.Join(strings.Fields(builder.String()), " ")
+}
+
+func tokenSet(value string) map[string]struct{} {
+	fields := strings.Fields(value)
+	out := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		if field == "" {
+			continue
+		}
+		out[field] = struct{}{}
+	}
+	return out
 }
 
 func sanitizeRepoPath(repoPath string) string {
