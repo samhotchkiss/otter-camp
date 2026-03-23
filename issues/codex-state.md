@@ -19,35 +19,34 @@ The product goal is not just to generate plans or chats. It must reliably create
 
 ## Current live state
 
-As of 2026-03-22 evening local time, the active validation run is still `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`).
+As of 2026-03-23 morning local time, the clean validation run `sam-blog` (`efd1bd57-125b-44f7-ac17-4f5c9bec8bce`) is operationally drained.
 
-Current observed task counts after the latest recovery fixes:
+Current observed task counts:
 
-- `done=17`
-- `in_progress=4`
-- `review=6`
-- `blocked=0`
-- `draft=11`
+- `done=37`
+- `cancelled=1`
+- `open=0`
 
-The system is no longer wedged on the earlier recovery/runtime bugs. Remaining work is normal execution/review drain plus parent/draft cleanup, not a hard deadlock.
+Task `38` is intentionally `cancelled`, not `done`: it was an impossible legacy draft project gate (`blocks_scope=all` with no executable path). That row no longer blocks queueing and is now retired automatically at worker startup.
 
 Most recent shipped commits relevant to the current run:
 
-- `ed373d24` `Trim dangling task mutation quotes`
-- `44d8a609` `Recover malformed file edits from persisted drafts`
-- `0f23721f` `Reuse persisted drafts after recovery intent loops`
-- `cf44e6ea` `Sanitize malformed task mutation text`
+- `5a62c385` `Harden task cleanup and execution guardrails`
+- `c44cce47` `Block scaffold planning artifacts from review`
+- `845abf64` `Reject mismatched fallback drafts for file writes`
+- `54c9865e` `Ignore invalid draft project gates in task service`
 
 What those changed:
 
-- task titles/descriptions now strip malformed `<parameter ...>` echoes and dangling trailing quotes at mutation time
-- recovery turns can reuse durable drafts even after another intent-only assistant response
-- recovery turns can rewrite malformed `file.edit` calls with no path into concrete `file.write` calls when a checkpoint already has the target path and durable draft
-- the live SAM.blog rows carrying old task-text corruption were repaired in-place after those guards shipped
+- async `project_task` turns can no longer burn work on `planning/recovery-state`, checkpoint files, or targetless `message.send` status chatter
+- dormant orchestration-only draft parents are auto-completed through the real task service, including catch-up on worker startup
+- impossible legacy draft project gates are auto-cancelled on worker startup
+- stale draft-parent/project cleanup now works even when there are no remaining natural task-completion events to trigger it
+- the live SAM.blog project was verified after these fixes: all real work is complete, no tasks remain `draft`/`review`/`in_progress`/`blocked`
 
 ## Current product priorities
 
-The main priority is core-system reliability for unattended end-to-end project execution, followed immediately by making completed projects settle cleanly without operator cleanup.
+The main priority is still core-system reliability for unattended end-to-end project execution. The SAM.blog cleanup class is materially improved; the next priority is reducing the remaining need for operator review/approval and stale runtime cleanup during new validation projects.
 
 The standing rule from Sam is:
 
@@ -185,7 +184,7 @@ There was also earlier experimentation with cron/tmux message injection. The imp
 
 ## Current failure themes
 
-These were the repeated classes of failures that cost time during the SAM.blog validation run:
+These were the repeated classes of failures that cost time during the SAM.blog validation run and should still inform future hardening:
 
 - bootstrap persisted planning/setup artifacts without creating runnable first-wave execution
 - session or summary text claimed success when DB/runtime truth did not
@@ -193,7 +192,10 @@ These were the repeated classes of failures that cost time during the SAM.blog v
 - project/task runtime state drifted away from flow state
 - tasks were scoped too broadly, causing long stalls and poor decomposition
 - orchestration parent tasks and bootstrap planning shells could finish their real work but still remain stuck in `draft`
+- impossible legacy draft project gates could survive indefinitely unless some later product path retired them
 - provider/API failures were not surfaced clearly enough to distinguish external outages from OtterCamp bugs
+
+The first of those two cleanup issues is now fixed in product and verified live. The second is also fixed at worker startup for dormant legacy gates.
 
 When debugging, assume the real problem is usually one of:
 
@@ -212,7 +214,7 @@ Start here:
 - `reports/oc-test-human-interventions.md`
   - records of manual interventions during live tests
 - `reports/2026-03-22-samblog-clean-run-followup.md`
-  - summary of the 2026-03-22 SAM.blog clean-run repairs, shipped commits, live verification, and remaining product gaps
+  - summary of the 2026-03-22 SAM.blog clean-run repairs before the later 2026-03-23 cleanup hardening
 - `docsv2/`
   - product spec; must stay aligned with behavioral changes
 - `decisions.md`
