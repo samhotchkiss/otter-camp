@@ -5499,6 +5499,14 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsContextSummaryReadyReply(t *tes
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsIllHelpStub(t *testing.T) {
+	t.Parallel()
+
+	if !looksLikeGenericTaskRecoveryReply("I'll help") {
+		t.Fatal("expected I'll-help stub to be treated as generic recovery output")
+	}
+}
+
 func TestContinuationTurnUsesDeterministicBootstrapResumeState(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.session.ScopeType = "project"
@@ -7350,6 +7358,12 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 				"The draft document exists but is incomplete. " +
 				"Let me resume work by completing the accessibility standards document. " +
 				"I'll continue from where it was cut off and finish all remaining sections:",
+			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects task context placeholder narration",
+			content: "Perfect! Now I understand the task context and I need to resume OC-28 correctly. " +
+				"Let me now create the comprehensive accessibility standards document that unblocks the design system workstream.",
 			want: "intent to write the deliverable",
 		},
 		{
