@@ -755,6 +755,9 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 		if strings.TrimSpace(taskCtx.taskStatus) != "" {
 			lines = append(lines, "Status: "+strings.TrimSpace(taskCtx.taskStatus))
 		}
+		if strings.EqualFold(strings.TrimSpace(taskCtx.taskStatus), "review") {
+			lines = append(lines, "Review Mode: This task is at a review checkpoint. Do not continue implementation or modify deliverable files in this session. Inspect the existing deliverables, planning artifacts, and rubric, then either approve/advance the review or reject it with concrete findings.")
+		}
 		if strings.TrimSpace(taskCtx.taskDescription) != "" {
 			lines = append(lines, "Description: "+strings.TrimSpace(taskCtx.taskDescription))
 		}

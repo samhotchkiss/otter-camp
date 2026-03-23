@@ -146,6 +146,87 @@ func TestPromptAssemblerTaskContextBlockFormat(t *testing.T) {
 	}
 }
 
+func TestPromptAssemblerTaskContextIncludesReviewModeGuidance(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	reviewNodeID := uuid.New()
+	flowTemplateID := uuid.New()
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session: repo.ChatSession{
+			ID:             uuid.New(),
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+		},
+		agent: repo.Agent{
+			ID:             uuid.New(),
+			OrganizationID: orgID,
+			SystemPrompt:   "Agent",
+		},
+		messages: []repo.ChatMessage{
+			{SequenceNumber: 1, Role: "user", Content: "review"},
+		},
+	})
+
+	assembler.projects = &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {ID: projectID, OrganizationID: orgID, DisplayName: "Speaker Pipeline"},
+		},
+	}
+	assembler.tasks = &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    orgID,
+				ProjectID:         projectID,
+				TaskNumber:        16,
+				Title:             "Build reporting and pipeline analytics script",
+				Description:       strPtr("Create Python script to generate reports. Deliverable: src/generate_reports.py."),
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &reviewNodeID,
+				FlowTemplateID:    &flowTemplateID,
+				Metadata:          json.RawMessage(`{}`),
+			},
+		},
+	}
+	assembler.flowNodes = &fakeFlowNodeRepo{
+		nodesByID: map[uuid.UUID]repo.FlowNode{
+			reviewNodeID: {ID: reviewNodeID, FlowTemplateID: flowTemplateID, DisplayName: "Code & Testing Review", NodeType: "review"},
+		},
+		nodesByTemplate: map[uuid.UUID][]repo.FlowNode{
+			flowTemplateID: {
+				{ID: reviewNodeID, FlowTemplateID: flowTemplateID, DisplayName: "Code & Testing Review", NodeType: "review", Position: 1},
+			},
+		},
+	}
+	assembler.flowExecutions = &fakeFlowExecutionRepo{
+		activeByTaskAndNode: map[string]repo.FlowNodeExecution{
+			taskID.String() + "|" + reviewNodeID.String(): {
+				ID:         uuid.New(),
+				TaskID:     taskID,
+				FlowNodeID: reviewNodeID,
+				Status:     "active",
+			},
+		},
+	}
+
+	assembled, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID: assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:   assembler.agents.(*fakeAgentRepo).agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("Assemble error = %v", err)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Review Mode: This task is at a review checkpoint.") {
+		t.Fatalf("system prompt missing review mode guidance:\n%s", assembled.SystemPrompt)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Do not continue implementation or modify deliverable files in this session.") {
+		t.Fatalf("system prompt missing review mutation guard:\n%s", assembled.SystemPrompt)
+	}
+}
+
 func TestPromptAssemblerProjectContextIncludesLinkedPlanningArtifacts(t *testing.T) {
 	orgID := uuid.New()
 	projectID := uuid.New()

@@ -159,6 +159,27 @@ func (e *NativeToolExecutor) rejectExecutionFirstPlanningMutation(ctx context.Co
 	}, true, nil
 }
 
+func (e *NativeToolExecutor) rejectReviewTaskMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
+	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return nil, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return nil, false, nil
+	}
+	normalizedPath := normalizeWorkspacePath(relativePath)
+	return map[string]any{
+		"error":   "review_action_required",
+		"message": fmt.Sprintf("This task is currently in review. Do not modify `%s` from the review lane. Inspect the existing deliverables and either approve/advance the review or reject it with concrete findings.", normalizedPath),
+	}, true, nil
+}
+
 func normalizeSlug(value string) string {
 	trimmed := strings.TrimSpace(strings.ToLower(value))
 	trimmed = strings.ReplaceAll(trimmed, "_", "-")
@@ -671,6 +692,11 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 		}, nil
 	}
 	renderedPath := renderPath(wd.Root(), resolved)
+	if blocked, reject, rejectErr := e.rejectReviewTaskMutation(ctx, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if reject {
+		return blocked, nil
+	}
 	if blocked, reject, rejectErr := e.rejectExecutionFirstPlanningMutation(ctx, scope, renderedPath); rejectErr != nil {
 		return nil, rejectErr
 	} else if reject {
@@ -753,6 +779,11 @@ func (e *NativeToolExecutor) handleFileEdit(ctx context.Context, input map[strin
 		}, nil
 	}
 	renderedPath := renderPath(wd.Root(), resolved)
+	if blocked, reject, rejectErr := e.rejectReviewTaskMutation(ctx, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if reject {
+		return blocked, nil
+	}
 	if blocked, reject, rejectErr := e.rejectExecutionFirstPlanningMutation(ctx, scope, renderedPath); rejectErr != nil {
 		return nil, rejectErr
 	} else if reject {

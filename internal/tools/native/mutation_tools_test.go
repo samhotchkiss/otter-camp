@@ -336,6 +336,109 @@ func TestFileEditRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplici
 	}
 }
 
+func TestFileWriteRejectsMutationForReviewTask(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	description := "Create Python script to generate reports. Deliverable: src/generate_reports.py with report templates and example outputs."
+
+	taskRepo := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Build reporting and pipeline analytics script",
+			Description:    &description,
+			WorkStatus:     "review",
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = taskRepo
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		TaskID:         &taskID,
+	})
+
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "src/generate_reports.py",
+		"content":     "print('hello')\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "review_action_required" {
+		t.Fatalf("error = %v, want review_action_required", out["error"])
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "currently in review") {
+		t.Fatalf("message = %q, want review guidance", message)
+	}
+	if _, err := os.Stat(filepath.Join(root, "src", "generate_reports.py")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("review task deliverable should not be written, stat err = %v", err)
+	}
+}
+
+func TestFileEditRejectsMutationForReviewTask(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	description := "Create Python script to generate reports. Deliverable: src/generate_reports.py with report templates and example outputs."
+	target := filepath.Join(root, "src", "generate_reports.py")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("mkdir deliverable dir: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("print('hello')\n"), 0o644); err != nil {
+		t.Fatalf("write deliverable: %v", err)
+	}
+
+	taskRepo := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Build reporting and pipeline analytics script",
+			Description:    &description,
+			WorkStatus:     "review",
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = taskRepo
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		TaskID:         &taskID,
+	})
+
+	out, err := executor.Execute(ctx, "file.edit", map[string]any{
+		"path":       "src/generate_reports.py",
+		"old_string": "hello",
+		"new_string": "review",
+	})
+	if err != nil {
+		t.Fatalf("file.edit: %v", err)
+	}
+	if out["error"] != "review_action_required" {
+		t.Fatalf("error = %v, want review_action_required", out["error"])
+	}
+	body, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read deliverable: %v", err)
+	}
+	if string(body) != "print('hello')\n" {
+		t.Fatalf("review task deliverable mutated unexpectedly: %q", string(body))
+	}
+}
+
 func TestFileEditDirectoryReturnsPayloadError(t *testing.T) {
 	root := t.TempDir()
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
