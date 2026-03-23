@@ -7023,6 +7023,13 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "intent to write the deliverable",
 		},
 		{
+			name: "rejects recovery context placeholder narration",
+			content: "Excellent. I now have the full strategy context. " +
+				"The recovery state indicates I should write the actual migration plan deliverable (the main output document). " +
+				"Let me check what target file was specified:",
+			want: "intent to write the deliverable",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",

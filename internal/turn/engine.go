@@ -9232,6 +9232,8 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"write the comprehensive",
 		"draft the full",
 		"draft the comprehensive",
+		"should write",
+		"should draft",
 	)
 	hasSetupCue := containsAny(lower,
 		"now i have everything i need",
@@ -9240,6 +9242,11 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"i have enough context",
 		"i have what i need",
 		"now that i have",
+		"i now have the full",
+		"i now have complete context",
+		"i now have the full strategy context",
+		"i now have the full recovery context",
+		"the recovery state indicates",
 	)
 	hasDeliverableCue := containsAny(lower,
 		"deliverable",
