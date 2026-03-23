@@ -16,6 +16,8 @@ import (
 	"strings"
 )
 
+var utf8ReplacementBytes = []byte("\uFFFD")
+
 type listedEntry struct {
 	name       string
 	path       string
@@ -84,7 +86,7 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 		truncated = true
 	}
 
-	content := string(payload)
+	content := sanitizeUTF8TextBytes(payload)
 	if encoding == "base64" {
 		content = base64.StdEncoding.EncodeToString(payload)
 	}
@@ -394,6 +396,7 @@ func globMatch(pattern, candidate string) bool {
 
 func splitLines(data []byte) []string {
 	normalized := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	normalized = bytes.ToValidUTF8(normalized, utf8ReplacementBytes)
 	scanner := bufio.NewScanner(bytes.NewReader(normalized))
 	lines := make([]string, 0)
 	for scanner.Scan() {
@@ -403,4 +406,11 @@ func splitLines(data []byte) []string {
 		return []string{""}
 	}
 	return lines
+}
+
+func sanitizeUTF8TextBytes(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	return string(bytes.ToValidUTF8(data, utf8ReplacementBytes))
 }

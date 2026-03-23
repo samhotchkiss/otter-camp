@@ -1800,6 +1800,7 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			      WHERE ct.session_id = (job_queue.payload->>'session_id')::uuid
 			        AND ct.trigger_message_id = (job_queue.payload->>'message_id')::uuid
 			        AND ct.retry_count = COALESCE((job_queue.payload->>'retry_count')::int, 0)
+			        AND ct.status <> 'pending'
 			    )
 			  )
 			  AND (
@@ -1809,7 +1810,16 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			      FROM chat_session cs
 			      JOIN chat_turn current_turn ON current_turn.id = cs.current_turn_id
 			      WHERE cs.id = (job_queue.payload->>'session_id')::uuid
-			        AND current_turn.status IN ('pending', 'in_progress')
+			        AND (
+			          current_turn.status = 'in_progress'
+			          OR (
+			            current_turn.status = 'pending'
+			            AND (
+			              current_turn.trigger_message_id IS DISTINCT FROM (job_queue.payload->>'message_id')::uuid
+			              OR current_turn.retry_count <> COALESCE((job_queue.payload->>'retry_count')::int, 0)
+			            )
+			          )
+			        )
 			    )
 			  )
 			  %s

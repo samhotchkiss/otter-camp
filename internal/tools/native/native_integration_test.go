@@ -104,6 +104,52 @@ func TestIntegrationFileSearchDirectoryTree(t *testing.T) {
 	}
 }
 
+func TestIntegrationFileReadSanitizesInvalidUTF8(t *testing.T) {
+	root := t.TempDir()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+
+	raw := []byte{'h', 'i', 0xe2, 0x80, '\n', 'x'}
+	if err := os.WriteFile(filepath.Join(root, "bad.txt"), raw, 0o644); err != nil {
+		t.Fatalf("write bad.txt: %v", err)
+	}
+
+	out, err := executor.Execute(integrationExecCtx(), "file.read", map[string]any{"path": "bad.txt"})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["content"]; got != "hi\uFFFD\nx" {
+		t.Fatalf("file.read content = %v, want sanitized utf8", got)
+	}
+}
+
+func TestIntegrationFileSearchSanitizesInvalidUTF8(t *testing.T) {
+	root := t.TempDir()
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	raw := []byte{'a', 'l', 'p', 'h', 'a', '\n', 'b', 'a', 'd', 0xe2, 0x80, '\n', 'o', 'm', 'e', 'g', 'a', '\n'}
+	if err := os.WriteFile(filepath.Join(root, "docs", "bad.txt"), raw, 0o644); err != nil {
+		t.Fatalf("write bad.txt: %v", err)
+	}
+
+	out, err := executor.Execute(integrationExecCtx(), "file.search", map[string]any{
+		"path":    "docs",
+		"pattern": "bad",
+	})
+	if err != nil {
+		t.Fatalf("file.search: %v", err)
+	}
+	matches, _ := out["matches"].([]map[string]any)
+	if len(matches) != 1 {
+		t.Fatalf("matches length = %d, want 1", len(matches))
+	}
+	if got := matches[0]["line_content"]; got != "bad\uFFFD" {
+		t.Fatalf("line_content = %v, want sanitized utf8", got)
+	}
+}
+
 func TestIntegrationGitStatusRealRepo(t *testing.T) {
 	repoDir := t.TempDir()
 	mustRunGit(t, repoDir, "init")
@@ -4736,15 +4782,15 @@ func TestIntegrationTaskUpdateDraftToInProgressReturnsQueueGuidance(t *testing.T
 	}
 
 	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
-		OrganizationID:   orgID,
-		ProjectID:        project.ID,
-		Title:            "Write content audit brief",
-		WorkStatus:       "draft",
-		BlocksScope:      "none",
-		AssignedAgentID:  &agent.ID,
-		FlowTemplateID:   &template.ID,
-		CreatedByType:    "agent",
-		CreatedByID:      &agent.ID,
+		OrganizationID:      orgID,
+		ProjectID:           project.ID,
+		Title:               "Write content audit brief",
+		WorkStatus:          "draft",
+		BlocksScope:         "none",
+		AssignedAgentID:     &agent.ID,
+		FlowTemplateID:      &template.ID,
+		CreatedByType:       "agent",
+		CreatedByID:         &agent.ID,
 		RequiresHumanReview: false,
 	})
 	if err != nil {
