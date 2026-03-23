@@ -6208,7 +6208,7 @@ func TestTurnEngineIntegrationRecoveryTurnPreservesResumableStateAfterGuardrailC
 	}
 }
 
-func TestTurnEngineIntegrationRecoveryResumeHardensRepeatedIntentOnlyDraftEX329(t *testing.T) {
+func TestTurnEngineIntegrationRecoveryResumeUsesPersistedArtifactDraftAfterRepeatedIntentOnlyDraftEX329(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
 
@@ -6352,8 +6352,11 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	modelCalls := 0
 	fixture.model.streamFn = func(_ context.Context, req ModelRequest, _ func(token string) error) (ModelResponse, error) {
 		modelCalls++
-		if modelCalls > 1 {
+		if modelCalls > 2 {
 			return ModelResponse{}, fmt.Errorf("unexpected follow-up model call after repeated intent-only recovery draft")
+		}
+		if modelCalls == 2 {
+			return ModelResponse{Content: "persisted recovery draft applied"}, nil
 		}
 		promptBlob = flattenPrompt(req.Prompt)
 		return ModelResponse{
@@ -6370,21 +6373,42 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	}
 
 	dispatched := 0
-	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, _ func(runID uuid.UUID)) (ToolResult, error) {
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
 		dispatched++
-		t.Fatalf("unexpected tier2 dispatch for repeated intent-only recovery draft: %+v", call)
-		return ToolResult{}, nil
+		runID := uuid.New()
+		onRunStarted(runID)
+		path := stringValue(call.Arguments["path"])
+		content := stringValue(call.Arguments["content"])
+		if path != targetPath {
+			t.Fatalf("path = %q, want %q", path, targetPath)
+		}
+		if content != artifactDraft {
+			t.Fatalf("content = %q, want persisted artifact draft", content)
+		}
+		if err := os.WriteFile(targetAbs, []byte(content), 0o644); err != nil {
+			t.Fatalf("write target file: %v", err)
+		}
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"path":      path,
+				"byte_size": len(content),
+				"created":   true,
+			},
+			RunID: &runID,
+		}, nil
 	}
 
 	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
 		t.Fatalf("HandleUserMessage repeated intent-only recovery resume: %v", err)
 	}
 
-	if modelCalls != 1 {
-		t.Fatalf("model calls = %d, want 1 bounded recovery turn", modelCalls)
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2 after persisted-draft recovery write", modelCalls)
 	}
-	if dispatched != 0 {
-		t.Fatalf("tier2 dispatches = %d, want 0", dispatched)
+	if dispatched != 1 {
+		t.Fatalf("tier2 dispatches = %d, want 1", dispatched)
 	}
 	if strings.Contains(promptBlob, priorPlaceholder) {
 		t.Fatalf("prompt should omit rejected placeholder target draft:\n%s", promptBlob)
@@ -6403,92 +6427,28 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 	if err != nil {
 		t.Fatalf("read target file after repeated intent-only recovery draft: %v", err)
 	}
-	if string(outputBody) != priorPlaceholder {
-		t.Fatalf("target file changed unexpectedly:\n%s", string(outputBody))
+	if string(outputBody) != artifactDraft {
+		t.Fatalf("target file body = %q, want persisted artifact draft", string(outputBody))
 	}
 
 	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
 	if err != nil {
 		t.Fatalf("GetByID task after repeated intent-only recovery draft: %v", err)
 	}
-	if updatedTask.WorkStatus != "blocked" {
-		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
-	}
-
-	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
-	if !ok {
-		t.Fatalf("expected repeated intent-only recovery checkpoint metadata, metadata=%s", string(updatedTask.Metadata))
-	}
-	if checkpoint.TargetPath != targetPath {
-		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, targetPath)
-	}
-	if checkpoint.ArtifactPath != artifactRel {
-		t.Fatalf("checkpoint artifact_path = %q, want %q", checkpoint.ArtifactPath, artifactRel)
-	}
-	if checkpoint.BlockerClass != taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint {
-		t.Fatalf("checkpoint blocker_class = %q, want %q", checkpoint.BlockerClass, taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint)
-	}
-	if !strings.Contains(checkpoint.FailureReason, "repeated intent-only recovery drafts for docs/content-strategy.md") {
-		t.Fatalf("checkpoint failure_reason = %q, want repeated intent-only blocker", checkpoint.FailureReason)
-	}
-	if len(checkpoint.PriorFailureReasons) != 1 || checkpoint.PriorFailureReasons[0] != priorFailureReason {
-		t.Fatalf("checkpoint prior_failure_reasons = %v, want [%q]", checkpoint.PriorFailureReasons, priorFailureReason)
-	}
-
-	var blockedPayloadRaw []byte
-	if err := fixture.pool.QueryRow(ctx, `
-		SELECT payload
-		FROM project_task_event
-		WHERE task_id = $1
-		  AND event_type = 'status.changed'
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-	`, taskRecord.ID).Scan(&blockedPayloadRaw); err != nil {
-		t.Fatalf("load blocked task payload: %v", err)
-	}
-	var blockedPayload map[string]any
-	if err := json.Unmarshal(blockedPayloadRaw, &blockedPayload); err != nil {
-		t.Fatalf("unmarshal blocked task payload: %v", err)
-	}
-	if got := strings.TrimSpace(fmt.Sprintf("%v", blockedPayload["to_status"])); got != "blocked" {
-		t.Fatalf("blocked payload to_status = %q, want blocked", got)
-	}
-	if got := strings.TrimSpace(fmt.Sprintf("%v", blockedPayload["recovery_blocker_class"])); got != tasksvc.RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint {
-		t.Fatalf("blocked payload recovery_blocker_class = %q, want %q", got, tasksvc.RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint)
-	}
-	if got := anyStrings(blockedPayload["recovery_checkpoint_prior_failure_reasons"]); len(got) != 1 || got[0] != priorFailureReason {
-		t.Fatalf("blocked payload prior_failure_reasons = %v, want [%q]", got, priorFailureReason)
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want not blocked", updatedTask.WorkStatus)
 	}
 
 	turns, err := repo.NewChatTurnRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
 	if err != nil {
 		t.Fatalf("ListBySession turns: %v", err)
 	}
-	if len(turns) != 1 {
-		t.Fatalf("turn count = %d, want 1 bounded recovery turn", len(turns))
-	}
 	lastTurn := turns[len(turns)-1]
 	if lastTurn.Status != "completed" {
 		t.Fatalf("turn status = %q, want completed", lastTurn.Status)
 	}
-	gotStopReason := ""
-	if lastTurn.StopReason != nil {
-		gotStopReason = strings.TrimSpace(*lastTurn.StopReason)
-	}
-	if gotStopReason != stopReasonRecoveryFileRejected {
-		t.Fatalf("turn stop_reason = %q, want %q", gotStopReason, stopReasonRecoveryFileRejected)
-	}
-
-	artifactBody, err := os.ReadFile(artifactAbs)
-	if err != nil {
-		t.Fatalf("read repeated recovery artifact: %v", err)
-	}
-	artifactText := string(artifactBody)
-	if !strings.Contains(artifactText, repeatedPlaceholder) {
-		t.Fatalf("artifact missing repeated rejected placeholder draft:\n%s", artifactText)
-	}
-	if !strings.Contains(artifactText, "repeated intent-only recovery drafts for docs/content-strategy.md") {
-		t.Fatalf("artifact missing hardened repeated-intent blocker reason:\n%s", artifactText)
+	if lastTurn.StopReason != nil && strings.TrimSpace(*lastTurn.StopReason) == stopReasonRecoveryFileRejected {
+		t.Fatalf("turn stop_reason = %q, want persisted draft write to proceed", strings.TrimSpace(*lastTurn.StopReason))
 	}
 
 	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
@@ -6496,63 +6456,20 @@ Sam.blog publishes one durable operating system for thoughtful parents building 
 		t.Fatalf("ListBySession messages: %v", err)
 	}
 	var haltMessages int
-	var toolResults int
+	var successfulWrites int
 	for _, item := range messages {
-		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"docs/content-strategy.md"`) {
-			toolResults++
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"path":"docs/content-strategy.md"`) && strings.Contains(item.Content, `"created":true`) {
+			successfulWrites++
 		}
 		if item.Role == "system" && strings.Contains(item.Content, "hardened recovery checkpoint") {
 			haltMessages++
 		}
 	}
-	if haltMessages != 1 {
-		t.Fatalf("hardened halt messages = %d, want 1", haltMessages)
+	if haltMessages != 0 {
+		t.Fatalf("hardened halt messages = %d, want 0", haltMessages)
 	}
-	if toolResults != 0 {
-		t.Fatalf("file.write tool_results = %d, want 0", toolResults)
-	}
-
-	resumedAgain, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"})
-	if err != nil {
-		t.Fatalf("ResumeValidationBlockedTask after hardened blocker: %v", err)
-	}
-	if resumedAgain.WorkStatus != "queued" {
-		t.Fatalf("resumedAgain work_status = %q, want queued", resumedAgain.WorkStatus)
-	}
-	resumedAgainCheckpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumedAgain.Metadata)
-	if !ok {
-		t.Fatalf("expected checkpoint after hardened resume, metadata=%s", string(resumedAgain.Metadata))
-	}
-	if resumedAgainCheckpoint.BlockerClass != taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint {
-		t.Fatalf("resumedAgain checkpoint blocker_class = %q, want %q", resumedAgainCheckpoint.BlockerClass, taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint)
-	}
-	if len(resumedAgainCheckpoint.PriorFailureReasons) != 1 || resumedAgainCheckpoint.PriorFailureReasons[0] != priorFailureReason {
-		t.Fatalf("resumedAgain checkpoint prior_failure_reasons = %v, want [%q]", resumedAgainCheckpoint.PriorFailureReasons, priorFailureReason)
-	}
-
-	var resumePayloadRaw []byte
-	if err := fixture.pool.QueryRow(ctx, `
-		SELECT payload
-		FROM project_task_event
-		WHERE task_id = $1
-		  AND event_type = 'status.changed'
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-	`, taskRecord.ID).Scan(&resumePayloadRaw); err != nil {
-		t.Fatalf("load resume payload after hardened blocker: %v", err)
-	}
-	var resumePayload map[string]any
-	if err := json.Unmarshal(resumePayloadRaw, &resumePayload); err != nil {
-		t.Fatalf("unmarshal resume payload after hardened blocker: %v", err)
-	}
-	if got := strings.TrimSpace(fmt.Sprintf("%v", resumePayload["to_status"])); got != "queued" {
-		t.Fatalf("resume payload to_status = %q, want queued", got)
-	}
-	if got := strings.TrimSpace(fmt.Sprintf("%v", resumePayload["recovery_blocker_class"])); got != tasksvc.RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint {
-		t.Fatalf("resume payload recovery_blocker_class = %q, want %q", got, tasksvc.RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint)
-	}
-	if got := anyStrings(resumePayload["recovery_checkpoint_prior_failure_reasons"]); len(got) != 1 || got[0] != priorFailureReason {
-		t.Fatalf("resume payload prior_failure_reasons = %v, want [%q]", got, priorFailureReason)
+	if successfulWrites != 1 {
+		t.Fatalf("successful file.write tool_results = %d, want 1", successfulWrites)
 	}
 }
 

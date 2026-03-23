@@ -8708,6 +8708,9 @@ func (e *TurnEngine) recoveryFileWriteDraftContent(ctx context.Context, rt *turn
 	draft, ok := e.latestRecoveryAssistantDraftContent(ctx, rt)
 	if ok {
 		if reason := recoveryFileWriteDraftRejectReason(draft, targetPath); reason != "" {
+			if persistedDraft, persistedRejectReason, persistedOK := e.recoveryPersistedDraftContent(ctx, rt, targetPath); persistedOK && strings.TrimSpace(persistedRejectReason) == "" {
+				return persistedDraft, "", true
+			}
 			return draft, reason, false
 		}
 		if looksLikeRecoveryFileDraft(draft) {
@@ -8945,7 +8948,19 @@ func looksLikeRecoveryIntentNarrationPlaceholder(content string) bool {
 		"i have what i need",
 		"now that i have",
 	)
-	if hasWriteIntent && (hasSetupCue || wordCount <= 80) {
+	hasDeliverableCue := containsAny(lower,
+		"deliverable",
+		"document",
+		"strategy",
+		"spec",
+		"specification",
+		"plan",
+		"report",
+		"unblocks",
+		"foundation for",
+		"strategic foundation",
+	)
+	if hasWriteIntent && (hasSetupCue || (wordCount <= 80 && hasDeliverableCue)) {
 		return true
 	}
 	if wordCount <= 80 && containsAny(lower,
