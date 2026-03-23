@@ -7142,6 +7142,25 @@ func TestEnqueueAgentTurnIfActiveSuppressesRepeatedRecoveryRetryForSameMessage(t
 	}
 }
 
+func TestCancelRecoveryResumeDispatchMarksInitialMessageCancelled(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	rt := &turnRuntime{
+		initialMessageID: fixture.userMessageID,
+	}
+	if err := fixture.engine.cancelRecoveryResumeDispatch(context.Background(), rt, "recovery halted after repeated non-substantive drafts"); err != nil {
+		t.Fatalf("cancelRecoveryResumeDispatch: %v", err)
+	}
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !chat.AgentTurnDispatchCancelled(message.Metadata) {
+		t.Fatalf("expected cancelled dispatch metadata, got %s", string(message.Metadata))
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 	const targetPath = "docs/content-strategy.md"
 

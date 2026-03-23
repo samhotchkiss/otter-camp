@@ -7620,6 +7620,7 @@ func (e *TurnEngine) haltRecoveryCLIExecuteWithoutCommand(ctx context.Context, r
 		return true, checkpointErr
 	}
 	rt.recoveryBlockReason = buildRecoveryCLIExecuteFileOutputBlockedTaskReason(targetPath, artifactPath, failureReason)
+	_ = e.cancelRecoveryResumeDispatch(ctx, rt, rt.recoveryBlockReason)
 	return true, nil
 }
 
@@ -7977,7 +7978,27 @@ func (e *TurnEngine) haltRejectedRecoveryFileWrite(ctx context.Context, rt *turn
 		return true, true, checkpointErr
 	}
 	rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureReason)
+	_ = e.cancelRecoveryResumeDispatch(ctx, rt, rt.recoveryBlockReason)
 	return true, true, nil
+}
+
+func (e *TurnEngine) cancelRecoveryResumeDispatch(ctx context.Context, rt *turnRuntime, reason string) error {
+	if e == nil || e.messages == nil || rt == nil || rt.initialMessageID == uuid.Nil {
+		return nil
+	}
+	message, err := e.messages.GetByID(ctx, rt.initialMessageID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	merged, err := chat.MergeAgentTurnDispatchCancelledMetadata(message.Metadata, strings.TrimSpace(reason), e.now().UTC())
+	if err != nil {
+		return err
+	}
+	_, err = e.messages.UpdateMetadata(ctx, message.ID, merged)
+	return err
 }
 
 func recoveryFileWriteMissingContent(call ToolCall) (map[string]any, string, bool) {
