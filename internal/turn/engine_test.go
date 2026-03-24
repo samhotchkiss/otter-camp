@@ -9647,6 +9647,21 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "asked the operator to confirm execution direction instead of the file body",
 		},
 		{
+			name: "rejects oc-13 work plan continuation summary",
+			content: "# Task: Synthesize Validation Findings & Report\n\n" +
+				"## Current Status: IN PROGRESS\n\n" +
+				"I'm beginning work on consolidating validation findings into a comprehensive report.\n\n" +
+				"## Work Plan\n\n" +
+				"### Phase 1: Findings Consolidation (Current)\n" +
+				"- Gather all validation findings from previous testing phases\n\n" +
+				"### Phase 2: Categorization by Severity\n" +
+				"- Blocker issues\n\n" +
+				"## Notes on Previous Rejection\n" +
+				"Previous flow step was rejected. To proceed effectively, I need clarification.\n",
+			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			want:       "repeated a generic recovery reply instead of the file body",
+		},
+		{
 			name: "rejects oc-13 clarification questionnaire",
 			content: "I'm ready to help you synthesize the validation findings for OC-13. Before I proceed, I need to clarify one thing:\n\n" +
 				"**What's the current state of the target file?**\n\n" +
@@ -9709,6 +9724,72 @@ This document defines archive, results, and related-post wireframes.`,
 			}
 			if !strings.Contains(got, caseTargetPath) {
 				t.Fatalf("recoveryFileWriteDraftRejectReason() = %q, want target path", got)
+			}
+		})
+	}
+}
+
+func TestShouldBlockTaskRecoveryReadScopeTool(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		recoveryTurn:       true,
+		recoveryTargetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+	}
+
+	cases := []struct {
+		name      string
+		toolName  string
+		path      string
+		wantBlock bool
+	}{
+		{
+			name:      "allows target file",
+			toolName:  "file.read",
+			path:      "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			wantBlock: false,
+		},
+		{
+			name:      "allows same-task planning artifact",
+			toolName:  "file.read",
+			path:      "planning/discovery-plan/oc-13-validation-plan.md",
+			wantBlock: false,
+		},
+		{
+			name:      "allows matching recovery artifact path",
+			toolName:  "file.read",
+			path:      ".ottercamp/recovery/Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			wantBlock: false,
+		},
+		{
+			name:      "blocks sibling task report",
+			toolName:  "file.read",
+			path:      "Work/OC-12-VALIDATION-REPORT.md",
+			wantBlock: true,
+		},
+		{
+			name:      "blocks sibling task root file",
+			toolName:  "file.read",
+			path:      "HANDOFF-COMPLETENESS-VALIDATION-OC-11.md",
+			wantBlock: true,
+		},
+		{
+			name:      "ignores non-read tools",
+			toolName:  "file.search",
+			path:      "Work",
+			wantBlock: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldBlockTaskRecoveryReadScopeTool(rt, tc.toolName, map[string]any{"path": tc.path})
+			if got != tc.wantBlock {
+				t.Fatalf("shouldBlockTaskRecoveryReadScopeTool(%q, %q) = %v, want %v", tc.toolName, tc.path, got, tc.wantBlock)
 			}
 		})
 	}
@@ -12389,6 +12470,83 @@ func TestPersistRecoveryFileWriteCheckpointKeepsExistingSubstantiveTargetPath(t 
 	}
 	if checkpoint.TargetPath != existingTarget {
 		t.Fatalf("TargetPath = %q, want %q", checkpoint.TargetPath, existingTarget)
+	}
+}
+
+func TestPersistRecoveryFileWriteCheckpointDiscardsCrossTaskExistingTargetPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	workspaceRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	poisonedTarget := "Test/oc-10-fulfillment-readiness-test-plan.md"
+	currentTarget := "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	existingMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:   poisonedTarget,
+		ArtifactPath: ".ottercamp/recovery/Test/oc-10-fulfillment-readiness-test-plan.md",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				TaskNumber:     13,
+				ProjectID:      projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				WorkStatus:     "blocked",
+				Metadata:       existingMetadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	poisonedAbs := filepath.Join(workspaceRoot, filepath.FromSlash(poisonedTarget))
+	if err := os.MkdirAll(filepath.Dir(poisonedAbs), 0o755); err != nil {
+		t.Fatalf("mkdir poisoned target: %v", err)
+	}
+	if err := os.WriteFile(poisonedAbs, []byte("# OC-10 Test Plan\n\nSubstantive body.\n"), 0o644); err != nil {
+		t.Fatalf("write poisoned target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	if err := fixture.engine.persistRecoveryFileWriteCheckpoint(context.Background(), rt, currentTarget, ".ottercamp/recovery/Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md", "placeholder", uuid.New()); err != nil {
+		t.Fatalf("persistRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	updated := taskRepo.items[taskID]
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint")
+	}
+	if checkpoint.TargetPath != currentTarget {
+		t.Fatalf("TargetPath = %q, want %q", checkpoint.TargetPath, currentTarget)
 	}
 }
 

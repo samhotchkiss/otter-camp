@@ -517,6 +517,7 @@ type turnRuntime struct {
 	recoveryWriteDone     bool
 	recoveryBlockReason   string
 	recoveryQueuedTurn    bool
+	recoveryTargetPath    string
 	placeholderTargetSeen bool
 }
 
@@ -5031,6 +5032,9 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		startedAt:          e.turnStartTime(turn),
 		recoveryTurn:       isRecoveryResumeMessage(message),
 	}
+	if runtime.recoveryTurn {
+		runtime.recoveryTargetPath = e.latestRecoveryTargetPathForSession(ctx, session.ID)
+	}
 	runtime.projectIdentity = e.loadProjectIdentityForMessage(ctx, sessionID, messageID)
 	if messageRequestsFreshKickoff(session, message) {
 		runtime.historyStartID = &message.ID
@@ -8138,6 +8142,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if shouldBlockTaskRecoveryReadScopeTool(rt, name, arguments) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildTaskRecoveryReadScopeToolGuardError(rt, arguments),
+			})
+			continue
+		}
 		if shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, name, arguments) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -10076,6 +10088,23 @@ func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, check
 	return checkpoint
 }
 
+func normalizeRecoveryCheckpointPathsForTask(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) taskcheckpoint.RecoveryFileWriteCheckpoint {
+	checkpoint = normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
+	if recoveryDraftClearlyBelongsToDifferentTask(taskRecord, strings.TrimSpace(checkpoint.TargetPath), "") {
+		checkpoint.TargetPath = ""
+		checkpoint.ArtifactPath = ""
+	}
+	if recoveryDraftClearlyBelongsToDifferentTask(taskRecord, strings.TrimSpace(checkpoint.ArtifactPath), "") {
+		checkpoint.ArtifactPath = ""
+	}
+	if checkpoint.ArtifactPath != "" {
+		if recoveredTarget, ok := recoveryTargetPathFromArtifact(checkpoint.ArtifactPath); !ok || strings.TrimSpace(checkpoint.TargetPath) == "" || !sameWorkspaceRelativePath(recoveredTarget, checkpoint.TargetPath) {
+			checkpoint.ArtifactPath = ""
+		}
+	}
+	return taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
+}
+
 func taskNeedsExecutableReportTarget(taskRecord repo.ProjectTask) bool {
 	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
 	if taskRecord.Description != nil {
@@ -11382,6 +11411,42 @@ func (e *TurnEngine) latestContinuationSummaryDraftContent(ctx context.Context, 
 	return "", false
 }
 
+func (e *TurnEngine) latestRecoveryTargetPathForSession(ctx context.Context, sessionID uuid.UUID) string {
+	if e == nil || e.messages == nil || sessionID == uuid.Nil {
+		return ""
+	}
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return ""
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Status), "final") {
+			continue
+		}
+		if target := parseRecoveryResumeTargetPath(message.Content); target != "" {
+			return target
+		}
+	}
+	return ""
+}
+
+func parseRecoveryResumeTargetPath(content string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "Target file:") {
+			continue
+		}
+		target := strings.TrimSpace(strings.TrimPrefix(trimmed, "Target file:"))
+		return normalizeWorkspaceRelativePath(target)
+	}
+	return ""
+}
+
 func (e *TurnEngine) latestTaskHistoricalSubstantiveDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
 	if e == nil || e.pool == nil || rt == nil || rt.session == nil || rt.session.ScopeID == uuid.Nil {
 		return "", false
@@ -11766,6 +11831,17 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"do you want me to compile findings",
 	) {
 		return fmt.Sprintf("assistant draft for %s asked the operator to confirm execution direction instead of the file body", path)
+	}
+	if containsAny(lower,
+		"# task: synthesize validation findings & report",
+		"## current status: in progress",
+		"## work plan",
+	) && containsAny(lower,
+		"phase 1: findings consolidation",
+		"phase 2: categorization by severity",
+		"notes on previous rejection",
+	) {
+		return fmt.Sprintf("assistant draft for %s restated task status and work plan instead of the file body", path)
 	}
 	if containsAny(lower,
 		"i'm ready to help you synthesize the validation findings for oc-13",
@@ -12509,7 +12585,14 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	}
 	targetPath = strings.TrimSpace(targetPath)
 	artifactPath = strings.TrimSpace(artifactPath)
+	candidate := normalizeRecoveryCheckpointPathsForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:   targetPath,
+		ArtifactPath: artifactPath,
+	})
+	targetPath = strings.TrimSpace(candidate.TargetPath)
+	artifactPath = strings.TrimSpace(candidate.ArtifactPath)
 	if existing, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+		existing = normalizeRecoveryCheckpointPathsForTask(taskRecord, existing)
 		existingTarget := strings.TrimSpace(existing.TargetPath)
 		if existingTarget != "" && !sameWorkspaceRelativePath(existingTarget, targetPath) {
 			if existingDraft, found := e.readRecoveryWorkspaceText(ctx, rt, existingTarget); found {
@@ -12527,6 +12610,9 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 		}
 	}
 	if historicalTarget, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt); ok && historicalTarget != "" && !sameWorkspaceRelativePath(historicalTarget, targetPath) {
+		historicalTarget = strings.TrimSpace(normalizeRecoveryCheckpointPathsForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
+			TargetPath: historicalTarget,
+		}).TargetPath)
 		if currentDraft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); !found || recoveryFileWriteDraftRejectReason(currentDraft, targetPath) != "" || !looksLikeRecoveryFileDraft(currentDraft) {
 			targetPath = historicalTarget
 			if artifactPath != "" {
@@ -14482,6 +14568,40 @@ func shouldBlockTaskStatusMessageTool(rt *turnRuntime, toolName string, argument
 	return targetSessionID == ""
 }
 
+func shouldBlockTaskRecoveryReadScopeTool(rt *turnRuntime, toolName string, arguments map[string]any) bool {
+	if rt == nil || rt.session == nil || !rt.recoveryTurn {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+		return false
+	}
+	targetPath := strings.TrimSpace(rt.recoveryTargetPath)
+	if targetPath == "" {
+		return false
+	}
+	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	if path == "" {
+		return false
+	}
+	if sameWorkspaceRelativePath(path, targetPath) {
+		return false
+	}
+	if recoveredTarget, ok := recoveryTargetPathFromArtifact(path); ok && sameWorkspaceRelativePath(recoveredTarget, targetPath) {
+		return false
+	}
+	taskNumber, ok := recoveryCheckpointTaskNumberHint(targetPath)
+	if !ok || taskNumber <= 0 {
+		return false
+	}
+	if taskRecoveryReadPathMatchesTask(path, taskNumber) {
+		return false
+	}
+	return true
+}
+
 func shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt *turnRuntime, toolName string, arguments map[string]any) bool {
 	if rt == nil || rt.session == nil || !rt.placeholderTargetSeen {
 		return false
@@ -14497,6 +14617,26 @@ func shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt *turnRuntime, toolName
 	default:
 		return false
 	}
+}
+
+func taskRecoveryReadPathMatchesTask(path string, taskNumber int) bool {
+	if taskNumber <= 0 {
+		return false
+	}
+	normalized := normalizeWorkspaceRelativePath(path)
+	if normalized == "" {
+		return false
+	}
+	lower := strings.ToLower(normalized)
+	if strings.HasPrefix(lower, "planning/") {
+		if hinted, ok := recoveryCheckpointTaskNumberHint(lower); ok && hinted == taskNumber {
+			return true
+		}
+	}
+	if hinted, ok := recoveryCheckpointTaskNumberHint(lower); ok && hinted == taskNumber {
+		return true
+	}
+	return false
 }
 
 func taskToolTouchesRecoveryStatusPath(arguments map[string]any) bool {
@@ -14651,6 +14791,21 @@ func buildTaskRecoveryStatusPathToolGuardError(toolName string) string {
 	default:
 		return "task execution should not reread recovery-state or checkpoint files. Continue the current deliverable directly using the task artifacts already in this session."
 	}
+}
+
+func buildTaskRecoveryReadScopeToolGuardError(rt *turnRuntime, arguments map[string]any) string {
+	target := ""
+	if rt != nil {
+		target = strings.TrimSpace(rt.recoveryTargetPath)
+	}
+	path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+	if target == "" {
+		return "task recovery should not reread unrelated workspace artifacts. Continue from the current task deliverable, same-task planning artifacts, or the named recovery artifact only."
+	}
+	if path == "" {
+		return fmt.Sprintf("task recovery for `%s` should not reread unrelated workspace artifacts. Continue from the target file, same-task planning artifacts, or the named recovery artifact only.", target)
+	}
+	return fmt.Sprintf("task recovery for `%s` should not read unrelated workspace artifact `%s`. Continue from `%s`, the matching recovery artifact path, or same-task planning artifacts only.", target, path, target)
 }
 
 func buildTaskStatusMessageToolGuardError() string {
