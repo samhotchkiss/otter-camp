@@ -525,7 +525,7 @@ Subtask numbering follows the project convention: `OC-42.1`, `OC-42.2`, `OC-42.3
 When a task is at a review node, the task detail emphasizes the review surface (from ui-spec-for-figma.md Review Node View):
 
 - **Diff view**: task branch vs the `commit_sha` from the previous node's `flow_node_execution` (or vs `main` if first review). Full syntax-highlighted diff with file tree navigation. Inline comments are not supported in V1 — feedback goes through the chat session.
-- **Reviewer actions**: Approve / Reject with feedback. These are inline action buttons. Rejecting opens a text input for feedback (maps to `project_task_event.comment`).
+- **Reviewer actions**: Approve / Reject with feedback. These are inline action buttons. Approving records an empty review commit. Rejecting opens a text input for feedback (maps to `project_task_event.comment`) and may also attach repo-backed review artifacts written in CriticMarkup.
 - **Subtask summary** from the preceding work node (what was done).
 - **Link to work log** for detailed execution trace.
 
@@ -882,7 +882,7 @@ Feature parity is not a goal. The TUI excels at chat and quick actions. The web 
 8. **Sidebar is collapsible.** Defaults to expanded. Can be collapsed to icon-only for more main content space. Keyboard shortcut to toggle.
 9. **Chat pane is resizable.** Operator can drag the left edge to adjust width. Minimum width enforced. Width persisted in local storage.
 10. **Command bar is the primary keyboard navigation.** Cmd-K opens a fuzzy search across all entities. Quick actions, navigation, session switching, and system commands all accessible from the command bar.
-11. **Diff view for code review.** Task branch vs previous node's commit SHA at review nodes (incremental review). Full syntax highlighting, file tree navigation, unified/split toggle. Inline comments deferred to future enhancement — feedback goes through chat.
+11. **Diff view for code review.** Task branch vs previous node's commit SHA at review nodes (incremental review). Full syntax highlighting, file tree navigation, unified/split toggle. Repo-backed inline review artifacts use CriticMarkup when the review node writes notes; approval itself still closes with an empty review commit.
 12. **Feature parity with TUI is not a goal.** Each client plays to the strengths of its medium. TUI excels at chat and quick terminal actions. Web UI excels at visual overview, spatial layouts, review workflows, and monitoring.
 13. **Static SPA served by the API service.** No separate frontend server. The web UI ships as a static bundle embedded in the OtterCamp distribution. Self-hosters get it automatically.
 14. **Notification center is a sidebar overlay, not a separate page.** Quick access from the bell icon. Dismiss to return to current work.
@@ -898,14 +898,14 @@ Feature parity is not a goal. The TUI excels at chat and quick actions. The web 
 - **Work log visualization**: timeline vs flat list vs collapsible tree for the agent execution trace? The choice affects information density and readability.
 - **Transitions/animations**: how much animation when switching scope via pill, opening/collapsing sections, new activity feed items? The target is subtle and functional, not decorative.
 - **Offline/degraded mode**: what happens when the SSE connection drops? Show a banner, queue client-side actions, auto-reconnect? How much offline capability is worth building?
-- **Inline diff comments**: future enhancement for review workflows. When added, should comments live in the chat session or as a separate annotation layer on the diff?
+- **Inline diff comments**: resolved as repo-backed review artifacts, not chat-only comments. The standard markdown annotation format is CriticMarkup. The remaining open question is how the diff viewer should render and navigate those annotations.
 - **Browser notifications**: should the web UI request browser notification permission for urgent items when the tab is not focused? Or rely solely on in-app notifications and the future mobile app (doc 19)?
 
 ## Future Enhancements
 
 - **Customizable dashboard widgets**: operator can configure which sections appear and their layout.
 - **Saved filters/views**: save frequently used task board filters (e.g., "my review items", "blocked tasks in OtterCamp V2").
-- **Inline diff comments**: annotation layer on the diff viewer for review workflows, feeding comments back into the task sync session.
+- **CriticMarkup review annotations**: render repo-backed review artifacts in the diff viewer as a first-class annotation layer, while still mirroring the review decision summary into the task sync session.
 - **Keyboard shortcut customization**: operator can rebind shortcuts.
 - **Plugin/extension system for custom views**: third-party or project-specific UI panels.
 - **Split main content**: ability to view two main content panels side by side (e.g., two tasks, or a task and its dependency).

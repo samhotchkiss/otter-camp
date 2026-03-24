@@ -1128,6 +1128,6 @@ When offline:
 - **Agent avatar images**: generated avatars, uploaded photos, or colored initials? Should the starter trio have illustrated/illustrated avatars for personality?
 - **Panel proportions**: exact default widths for sidebar, main content, and chat pane. Presets ("wide chat", "wide main")?
 - **Work log detail**: timeline vs flat collapsible tree for the agent execution trace within each flow step?
-- **Inline diff comments**: future enhancement — annotation layer vs feeding comments back into chat session?
+- **Inline diff comments**: resolved as CriticMarkup-backed review artifacts stored in the repo. Open design question: whether the diff viewer renders them inline, in a side gutter, or both.
 - **Browser notifications**: should the web UI request browser notification permission for urgent items when the tab is not focused?
 - **Tablet mobile layout**: should the mobile app show a split-view (closer to web three-panel) on tablet widths?
