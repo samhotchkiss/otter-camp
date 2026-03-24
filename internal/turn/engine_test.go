@@ -7080,6 +7080,33 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsCrossTaskClarificationReply(t *
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsMissingContinuationSummaryReply(t *testing.T) {
+	t.Parallel()
+
+	content := "I don't see a continuation summary in your message. The context block shows task OC-18 (Design Intake Framework), but no continuation summary that contains task session history or draft deliverable content."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected missing-continuation-summary reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsNoSpecificRequestReply(t *testing.T) {
+	t.Parallel()
+
+	content := "I'm ready to assist. However, I don't see a specific question or request in your message."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected no-specific-request reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsConcreteSituationClarifier(t *testing.T) {
+	t.Parallel()
+
+	content := "I'm reviewing the continuation summary you provided, but I need to clarify the concrete situation before I continue."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected concrete-situation clarification reply to be treated as generic recovery output")
+	}
+}
+
 func TestTaskExecutionKickoffMessageDetectsTaskQueueKickoff(t *testing.T) {
 	t.Parallel()
 
