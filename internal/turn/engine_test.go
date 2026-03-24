@@ -8551,6 +8551,80 @@ func TestBootstrapAutoContinueRedirectsAfterBootstrapCompletion(t *testing.T) {
 	}
 }
 
+func TestBootstrapAutoContinueUsesResumeStateForRecoverableFailedBootstrap(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = uuid.New()
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+
+	state := projectBootstrapState{
+		Status:                   projectBootstrapStatusFailed,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveSelected,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFlowTemplatesPersisted,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureMissingReviewer,
+		ValidationFailureReason:  "kickoff validation failed: staffed project persisted executable work but did not assign an active reviewer",
+		AssignmentCount:          3,
+		PlannedTaskCount:         16,
+		PlannedFlowTemplateCount: 1,
+		BootstrapTaskOutstanding: true,
+		BootstrapTaskID:          uuid.NewString(),
+	}
+	metadata, err := projectBootstrapMetadataJSON(nil, state)
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	fixture.session.Metadata = metadata
+	fixture.chat.session.Metadata = metadata
+
+	userMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	userMetadata, err := json.Marshal(map[string]any{
+		"source":                       projectBootstrapSource,
+		"auto_continue":                true,
+		"bootstrap_initial_message_id": fixture.userMessageID.String(),
+	})
+	if err != nil {
+		t.Fatalf("Marshal user metadata: %v", err)
+	}
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), userMessage.ID, userMetadata); err != nil {
+		t.Fatalf("UpdateMetadata user message: %v", err)
+	}
+	if _, err := fixture.messages.UpdateContent(context.Background(), userMessage.ID, "Continue the active project bootstrap from the persisted state above."); err != nil {
+		t.Fatalf("UpdateContent user message: %v", err)
+	}
+
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawResume bool
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Bootstrap is already complete.") {
+			t.Fatalf("unexpected completed-bootstrap redirect: %q", msg.Content)
+		}
+		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
+			sawResume = true
+		}
+	}
+	if !sawResume {
+		t.Fatal("recoverable failed bootstrap resume message missing")
+	}
+}
+
 func TestFinalizePendingProjectBootstrapMessages(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 

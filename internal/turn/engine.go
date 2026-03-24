@@ -5941,7 +5941,9 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 	}
 	if rt != nil && rt.historyStartID == nil && e.projectBootstrapAutoContinueMessage(ctx, rt.initialMessageID) {
 		bootstrapState := projectBootstrapStateFromMetadata(rt.session.Metadata)
-		if projectBootstrapStateActive(bootstrapState) {
+		if projectBootstrapStateActive(bootstrapState) ||
+			(strings.EqualFold(strings.TrimSpace(bootstrapState.Status), projectBootstrapStatusFailed) &&
+				projectBootstrapResumeShouldRootAtResumeMessage(bootstrapState)) {
 			if _, err := e.appendProjectBootstrapResumeState(ctx, rt); err != nil {
 				return err
 			}
@@ -6706,13 +6708,16 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 		return false, err
 	} else {
 		if !projectBootstrapStateActive(state) {
-			if strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusFailed) || progress.Materialized() || !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) {
+			failedBootstrap := strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusFailed)
+			if progress.Materialized() || !e.projectBootstrapRuntimeManaged(ctx, rt.session, rt.initialMessageID) {
 				return false, nil
 			}
-			state.Status = projectBootstrapStatusActive
 			state.InitialMessageID = strings.TrimSpace(state.InitialMessageID)
 			if state.InitialMessageID == "" && rt.initialMessageID != uuid.Nil {
 				state.InitialMessageID = rt.initialMessageID.String()
+			}
+			if !failedBootstrap {
+				state.Status = projectBootstrapStatusActive
 			}
 		}
 		applyProjectBootstrapProgressState(&state, progress)
