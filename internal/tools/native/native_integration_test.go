@@ -4351,6 +4351,68 @@ func TestIntegrationBootstrapGateRejectsUnassignedExecutableTaskCreate(t *testin
 	}
 }
 
+func TestIntegrationBootstrapGateAutoAssignsSingleActiveWorkerForExecutableTaskCreate(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Auto Assignment",
+		"slug":        "bootstrap-auto-assignment-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap executable task creation auto-assigns the single active worker.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        assignee.ID,
+		ProjectID:      projectID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap planning auto assignment",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	createOut, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":       projectID.String(),
+		"title":            "WS1: Auto-assigned bootstrap execution slice",
+		"description":      "Create an executable bootstrap task without explicitly passing assigned_agent_id.",
+		"flow_template_id": template.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.create during bootstrap auto assignment: %v", err)
+	}
+	if createOut["error"] != nil {
+		t.Fatalf("task.create error = %v, want nil", createOut["error"])
+	}
+	taskID := mustUUIDValue(t, createOut["task"].(map[string]any)["id"])
+	createdTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if createdTask.AssignedAgentID == nil || *createdTask.AssignedAgentID != assignee.ID {
+		t.Fatalf("created task assigned_agent_id = %v, want %s", createdTask.AssignedAgentID, assignee.ID)
+	}
+}
+
 func TestIntegrationBootstrapPlanningTaskCreateRejectsOversizedTopLevelTask(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

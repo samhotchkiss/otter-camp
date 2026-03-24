@@ -1726,6 +1726,12 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			return nil, listErr
 		}
 		if bootstrapSetupStillActive(projectTasks) {
+			if assignedAgentID == nil && resolvedFlowTemplateID != nil {
+				assignedAgentID, err = e.inferBootstrapExecutableAssignee(ctx, projectID)
+				if err != nil {
+					return nil, err
+				}
+			}
 			prepared, decompErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
 				ParentTaskID: uuid.Nil,
 				Title:        title,
@@ -3561,6 +3567,28 @@ func bootstrapSetupStillActive(projectTasks []repo.ProjectTask) bool {
 		}
 	}
 	return false
+}
+
+func (e *NativeToolExecutor) inferBootstrapExecutableAssignee(ctx context.Context, projectID uuid.UUID) (*uuid.UUID, error) {
+	if projectID == uuid.Nil || e.assignments == nil {
+		return nil, nil
+	}
+	assignments, err := e.assignments.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	var activeWorkerID *uuid.UUID
+	for _, assignment := range assignments {
+		if !assignment.IsActive || !strings.EqualFold(strings.TrimSpace(assignment.Role), "worker") {
+			continue
+		}
+		if activeWorkerID != nil {
+			return nil, nil
+		}
+		id := assignment.AgentID
+		activeWorkerID = &id
+	}
+	return activeWorkerID, nil
 }
 
 func (e *NativeToolExecutor) findReusableScopedSession(ctx context.Context, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID, mode string) (*repo.ChatSession, error) {
