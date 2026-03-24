@@ -2422,7 +2422,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 
 func normalizeTaskWorkStatusAlias(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "ready":
+	case "ready", "work":
 		return "queued"
 	case "complete", "completed":
 		return "done"
