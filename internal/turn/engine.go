@@ -1987,7 +1987,76 @@ func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventb
 			return err
 		}
 	}
-	return pendingMessageRows.Err()
+	if err := pendingMessageRows.Err(); err != nil {
+		return err
+	}
+
+	failedBootstrapRows, err := e.pool.Query(ctx, `
+		SELECT cs.id
+		FROM chat_session cs
+		WHERE cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND cs.scope_type = 'project'
+		  AND cs.scope_id = $1
+		  AND cs.current_turn_id IS NULL
+		  AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') = $2
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_message cm
+		    WHERE cm.session_id = cs.id
+		      AND cm.role = 'user'
+		      AND cm.status = 'pending'
+		      AND COALESCE(cm.metadata->>'source', '') = $3
+		  )
+	`, payload.ProjectID, projectBootstrapStatusFailed, projectBootstrapSource)
+	if err != nil {
+		return err
+	}
+	defer failedBootstrapRows.Close()
+
+	for failedBootstrapRows.Next() {
+		var sessionID uuid.UUID
+		if err := failedBootstrapRows.Scan(&sessionID); err != nil {
+			return err
+		}
+		session, err := e.chat.GetSession(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				continue
+			}
+			return err
+		}
+		state := projectBootstrapStateFromMetadata(session.Metadata)
+		if !strings.EqualFold(strings.TrimSpace(state.Status), projectBootstrapStatusFailed) {
+			continue
+		}
+		progress, err := e.loadProjectBootstrapProgress(ctx, session.ScopeID)
+		if err != nil {
+			return err
+		}
+		if !progress.ValidationFailed() {
+			continue
+		}
+		agentID, err := e.resolveSessionAgentForSession(ctx, session)
+		if err != nil {
+			return err
+		}
+		if agentID == uuid.Nil {
+			continue
+		}
+		message, err := e.appendProjectBootstrapRecoveryContinuationMessage(ctx, session.ID, agentID, strings.TrimSpace(state.InitialMessageID), state.AutoTurnCount, progress)
+		if err != nil {
+			return err
+		}
+		if _, err := e.enqueueAgentTurnIfActive(ctx, session, AgentTurnPayload{
+			SessionID: session.ID,
+			MessageID: message.ID,
+			AgentID:   &agentID,
+		}, nil); err != nil {
+			return err
+		}
+	}
+	return failedBootstrapRows.Err()
 }
 
 func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, session *chat.ChatSession, turnID uuid.UUID) error {

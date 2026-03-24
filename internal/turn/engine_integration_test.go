@@ -19354,6 +19354,132 @@ func TestTurnEngineHandleProjectResumedEventEnqueuesPendingMessagesWithoutTurns(
 	}
 }
 
+func TestTurnEngineHandleProjectResumedEventEnqueuesFailedBootstrapRecovery(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project, err := repo.NewProjectRepo(fixture.pool).Create(ctx, repo.Project{
+		OrganizationID: fixture.org.ID,
+		Slug:           "resume-failed-bootstrap-project-" + uuid.NewString()[:8],
+		DisplayName:    "Resume Failed Bootstrap Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings: json.RawMessage(`{
+			"pause":{"is_paused":true,"reason":"kickoff validation failed: staffed project persisted executable work but did not assign an active reviewer"},
+			"project_bootstrap":{"status":"failed"}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	if _, err := repo.NewAgentProjectAssignmentRepo(fixture.pool).Assign(ctx, repo.AgentProjectAssignment{
+		ProjectID:      project.ID,
+		AgentID:        pmAgent.ID,
+		Role:           "project_manager",
+		IsActive:       true,
+		AssignedByType: "system",
+		AssignedByID:   &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("assign pm: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(fixture.pool).Create(ctx, repo.ChatSession{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create project session: %v", err)
+	}
+	initialMessage, err := repo.NewChatMessageRepo(fixture.pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project bootstrap from the persisted state above.",
+		Status:    "final",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create initial bootstrap message: %v", err)
+	}
+	state := projectBootstrapState{
+		Status:                   projectBootstrapStatusFailed,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureMissingReviewer,
+		ValidationFailureReason:  "kickoff validation failed: staffed project persisted executable work but did not assign an active reviewer",
+		AssignmentCount:          3,
+		PlannedTaskCount:         17,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:       4,
+		BootstrapTaskOutstanding: true,
+		BootstrapTaskID:          uuid.NewString(),
+		InitialMessageID:         initialMessage.ID.String(),
+	}
+	metadata, err := projectBootstrapMetadataJSON(session.Metadata, state)
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE chat_session
+		SET metadata = $2::jsonb
+		WHERE id = $1
+	`, session.ID, metadata); err != nil {
+		t.Fatalf("update session metadata: %v", err)
+	}
+
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE project
+		SET settings = '{}'::jsonb
+		WHERE id = $1
+	`, project.ID); err != nil {
+		t.Fatalf("resume project settings: %v", err)
+	}
+
+	payload, err := json.Marshal(map[string]any{"project_id": project.ID})
+	if err != nil {
+		t.Fatalf("marshal project.resumed payload: %v", err)
+	}
+	if err := fixture.engine.HandleProjectResumedEvent(ctx, eventbus.DomainEvent{
+		EventType:      "project.resumed",
+		OrganizationID: fixture.org.ID,
+		Payload:        payload,
+	}); err != nil {
+		t.Fatalf("HandleProjectResumedEvent: %v", err)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, session.ID); jobs != 1 {
+		t.Fatalf("runnable agent_turn jobs after resume = %d, want 1", jobs)
+	}
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list session messages: %v", err)
+	}
+	var sawPendingBootstrapMessage bool
+	for _, item := range messages {
+		if item.Role != "user" || item.Status != "pending" {
+			continue
+		}
+		if !strings.Contains(item.Content, "kickoff validation failed: staffed project persisted executable work but did not assign an active reviewer") {
+			continue
+		}
+		if !strings.Contains(item.Content, "create and assign at least one active reviewer") {
+			continue
+		}
+		sawPendingBootstrapMessage = true
+		break
+	}
+	if !sawPendingBootstrapMessage {
+		t.Fatal("pending bootstrap recovery message missing reviewer repair guidance")
+	}
+}
+
 func TestTurnEngineIntegrationRecoverCancelledBootstrapSessionsRequeuesActiveValidationRepair(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
