@@ -158,6 +158,9 @@ func TestFlowExecutionServiceRejectsSelfReview(t *testing.T) {
 	if executions[1].Status != "active" {
 		t.Fatalf("review execution status = %q, want active", executions[1].Status)
 	}
+	if executions[1].RuntimeSubstate == nil || *executions[1].RuntimeSubstate != "waiting_for_review" {
+		t.Fatalf("review execution runtime_substate = %v, want waiting_for_review", executions[1].RuntimeSubstate)
+	}
 }
 
 func TestFlowExecutionServiceAllowsHumanReviewAfterManualHumanAdvance(t *testing.T) {

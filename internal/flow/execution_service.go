@@ -383,16 +383,21 @@ func (s *service) startFlowUnlocked(ctx context.Context, taskID uuid.UUID) (*rep
 	if template.StartNodeID == nil {
 		return nil, ErrFlowNotStarted
 	}
+	startNode, err := s.flowNodes.GetByID(ctx, *template.StartNodeID)
+	if err != nil {
+		return nil, err
+	}
 
 	if _, err := s.tasks.SetFlowNode(ctx, taskRecord.ID, template.StartNodeID); err != nil {
 		return nil, err
 	}
 
 	execution, err := s.executions.Create(ctx, repo.FlowNodeExecution{
-		TaskID:      taskRecord.ID,
-		FlowNodeID:  *template.StartNodeID,
-		VisitNumber: 1,
-		Status:      "active",
+		TaskID:          taskRecord.ID,
+		FlowNodeID:      *template.StartNodeID,
+		VisitNumber:     1,
+		Status:          "active",
+		RuntimeSubstate: runtimeSubstateForNode(startNode.NodeType, startNode.RequiresHumanReview),
 	})
 	if err != nil {
 		return nil, err
@@ -469,10 +474,11 @@ func (s *service) PauseAtReviewCheckpoint(ctx context.Context, taskID uuid.UUID,
 		return nil, err
 	}
 	created, err := s.executions.Create(ctx, repo.FlowNodeExecution{
-		TaskID:      taskRecord.ID,
-		FlowNodeID:  *currentNode.NextNodeID,
-		VisitNumber: 1,
-		Status:      "active",
+		TaskID:          taskRecord.ID,
+		FlowNodeID:      *currentNode.NextNodeID,
+		VisitNumber:     1,
+		Status:          "active",
+		RuntimeSubstate: runtimeSubstateForNode(nextNode.NodeType, nextNode.RequiresHumanReview),
 	})
 	if err != nil {
 		return nil, err
@@ -668,10 +674,11 @@ func (s *service) advanceNextFlowTx(ctx context.Context, taskRecord repo.Project
 	taskRecord = updatedTaskRecord
 	taskRecord.CurrentFlowNodeID = &nextNode.ID
 	created, err := executionsTx.CreateTx(ctx, tx, repo.FlowNodeExecution{
-		TaskID:      taskRecord.ID,
-		FlowNodeID:  nextNode.ID,
-		VisitNumber: 1,
-		Status:      "active",
+		TaskID:          taskRecord.ID,
+		FlowNodeID:      nextNode.ID,
+		VisitNumber:     1,
+		Status:          "active",
+		RuntimeSubstate: runtimeSubstateForNode(nextNode.NodeType, nextNode.RequiresHumanReview),
 	})
 	if err != nil {
 		return nil, err
@@ -734,10 +741,11 @@ func (s *service) advanceNextFlowNonTx(ctx context.Context, taskRecord repo.Proj
 	}
 	taskRecord.CurrentFlowNodeID = &nextNode.ID
 	created, err := s.executions.Create(ctx, repo.FlowNodeExecution{
-		TaskID:      taskRecord.ID,
-		FlowNodeID:  nextNode.ID,
-		VisitNumber: 1,
-		Status:      "active",
+		TaskID:          taskRecord.ID,
+		FlowNodeID:      nextNode.ID,
+		VisitNumber:     1,
+		Status:          "active",
+		RuntimeSubstate: runtimeSubstateForNode(nextNode.NodeType, nextNode.RequiresHumanReview),
 	})
 	if err != nil {
 		return nil, err
@@ -787,6 +795,15 @@ func taskWorkStatusForNode(node repo.FlowNode) string {
 		return "review"
 	}
 	return "in_progress"
+}
+
+func runtimeSubstateForNode(nodeType string, requiresHumanReview bool) *string {
+	if strings.EqualFold(strings.TrimSpace(nodeType), "review") || requiresHumanReview {
+		value := "waiting_for_review"
+		return &value
+	}
+	value := "waiting_for_turn"
+	return &value
 }
 
 func (s *service) createTaskReviewInbox(ctx context.Context, taskRecord repo.ProjectTask, flowNodeID uuid.UUID, actor Actor) error {
@@ -1151,10 +1168,11 @@ func (s *service) rejectFlowNodeTx(ctx context.Context, taskRecord repo.ProjectT
 	taskRecord = updatedTaskRecord
 	taskRecord.CurrentFlowNodeID = rejectNodeID
 	created, err := executionsTx.CreateTx(ctx, tx, repo.FlowNodeExecution{
-		TaskID:      taskRecord.ID,
-		FlowNodeID:  rejectNode.ID,
-		VisitNumber: nextVisit,
-		Status:      "active",
+		TaskID:          taskRecord.ID,
+		FlowNodeID:      rejectNode.ID,
+		VisitNumber:     nextVisit,
+		Status:          "active",
+		RuntimeSubstate: runtimeSubstateForNode(rejectNode.NodeType, rejectNode.RequiresHumanReview),
 	})
 	if err != nil {
 		return nil, err
@@ -1210,10 +1228,11 @@ func (s *service) rejectFlowNodeNonTx(ctx context.Context, taskRecord repo.Proje
 	}
 	taskRecord.CurrentFlowNodeID = rejectNodeID
 	created, err := s.executions.Create(ctx, repo.FlowNodeExecution{
-		TaskID:      taskRecord.ID,
-		FlowNodeID:  rejectNode.ID,
-		VisitNumber: nextVisit,
-		Status:      "active",
+		TaskID:          taskRecord.ID,
+		FlowNodeID:      rejectNode.ID,
+		VisitNumber:     nextVisit,
+		Status:          "active",
+		RuntimeSubstate: runtimeSubstateForNode(rejectNode.NodeType, rejectNode.RequiresHumanReview),
 	})
 	if err != nil {
 		return nil, err

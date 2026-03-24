@@ -588,7 +588,6 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventCreatesRunForAgentNode(t *test
 		runs:  runService,
 		chats: chatService,
 	}
-
 	payload, err := json.Marshal(map[string]any{
 		"task_id":              taskID,
 		"project_id":           projectID,
@@ -851,10 +850,11 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventIgnoresTaskFlowRuntimeMismatch
 		},
 		flowNodes: &fakeTaskQueueFlowNodeRepository{
 			node: repo.FlowNode{
-				ID:        nodeID,
-				NodeType:  "work",
-				ActorType: strPtr("agent"),
-				ActorID:   &agentID,
+				ID:         nodeID,
+				NodeType:   "work",
+				NextNodeID: uuidPtr(uuid.New()),
+				ActorType:  strPtr("agent"),
+				ActorID:    &agentID,
 			},
 		},
 		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
@@ -910,10 +910,11 @@ func TestTaskQueueProcessorHandleFlowAdvancedEventDuplicateIsIdempotent(t *testi
 		},
 		flowNodes: &fakeTaskQueueFlowNodeRepository{
 			node: repo.FlowNode{
-				ID:        nodeID,
-				NodeType:  "work",
-				ActorType: strPtr("agent"),
-				ActorID:   &agentID,
+				ID:         nodeID,
+				NodeType:   "work",
+				NextNodeID: uuidPtr(uuid.New()),
+				ActorType:  strPtr("agent"),
+				ActorID:    &agentID,
 			},
 		},
 		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
@@ -1871,6 +1872,7 @@ func TestDispatchTaskQueueWakeupFlowCurrentUsesExecutionSession(t *testing.T) {
 		},
 		chats: chatService,
 	}
+	flowRepo := processor.flowExecutions.(*fakeTaskQueueFlowExecutionRepository)
 
 	metadata, err := json.Marshal(map[string]any{
 		"execution_wakeup": map[string]any{
@@ -1905,6 +1907,12 @@ func TestDispatchTaskQueueWakeupFlowCurrentUsesExecutionSession(t *testing.T) {
 	}
 	if len(chatService.createSessionInputs) != 0 {
 		t.Fatalf("CreateSession calls = %d, want 0 for flow wakeup dispatch", len(chatService.createSessionInputs))
+	}
+	if len(flowRepo.updateRuntimeSubstateCalls) != 1 {
+		t.Fatalf("UpdateRuntimeSubstate calls = %d, want 1", len(flowRepo.updateRuntimeSubstateCalls))
+	}
+	if flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate == nil || *flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate != "running" {
+		t.Fatalf("runtime_substate update = %v, want running", flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate)
 	}
 }
 
@@ -2012,6 +2020,7 @@ func TestDispatchTaskQueueWakeupFlowTransitionUsesExecutionSession(t *testing.T)
 		},
 		chats: chatService,
 	}
+	flowRepo := processor.flowExecutions.(*fakeTaskQueueFlowExecutionRepository)
 
 	metadata, err := json.Marshal(map[string]any{
 		"execution_wakeup": map[string]any{
@@ -2047,6 +2056,12 @@ func TestDispatchTaskQueueWakeupFlowTransitionUsesExecutionSession(t *testing.T)
 	}
 	if len(chatService.createSessionInputs) != 0 {
 		t.Fatalf("CreateSession calls = %d, want 0 for flow transition dispatch", len(chatService.createSessionInputs))
+	}
+	if len(flowRepo.updateRuntimeSubstateCalls) != 1 {
+		t.Fatalf("UpdateRuntimeSubstate calls = %d, want 1", len(flowRepo.updateRuntimeSubstateCalls))
+	}
+	if flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate == nil || *flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate != "running" {
+		t.Fatalf("runtime_substate update = %v, want running", flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate)
 	}
 }
 
@@ -2642,6 +2657,10 @@ type fakeTaskQueueFlowExecutionRepository struct {
 	execution        repo.FlowNodeExecution
 	executionsByTask map[uuid.UUID][]repo.FlowNodeExecution
 	abandonCalls     []uuid.UUID
+	updateRuntimeSubstateCalls []struct {
+		id              uuid.UUID
+		runtimeSubstate *string
+	}
 	updateCalls      []struct {
 		id       uuid.UUID
 		metadata json.RawMessage
@@ -2723,6 +2742,32 @@ func (f *fakeTaskQueueFlowExecutionRepository) UpdateMetadata(_ context.Context,
 		}
 	}
 	return repo.FlowNodeExecution{ID: id, Metadata: metadata}, nil
+}
+
+func (f *fakeTaskQueueFlowExecutionRepository) UpdateRuntimeSubstate(_ context.Context, id uuid.UUID, runtimeSubstate *string) (repo.FlowNodeExecution, error) {
+	if f.err != nil {
+		return repo.FlowNodeExecution{}, f.err
+	}
+	f.updateRuntimeSubstateCalls = append(f.updateRuntimeSubstateCalls, struct {
+		id              uuid.UUID
+		runtimeSubstate *string
+	}{id: id, runtimeSubstate: runtimeSubstate})
+	if f.execution.ID == id {
+		f.execution.RuntimeSubstate = runtimeSubstate
+		return f.execution, nil
+	}
+	if f.executionsByTask != nil {
+		for taskID, executions := range f.executionsByTask {
+			for i := range executions {
+				if executions[i].ID == id {
+					executions[i].RuntimeSubstate = runtimeSubstate
+					f.executionsByTask[taskID] = executions
+					return executions[i], nil
+				}
+			}
+		}
+	}
+	return repo.FlowNodeExecution{ID: id, RuntimeSubstate: runtimeSubstate}, nil
 }
 
 type fakeTaskQueueFlowNodeRepository struct {

@@ -65,6 +65,7 @@ type taskQueueFlowExecutionRepository interface {
 	ListByTask(ctx context.Context, taskID uuid.UUID) ([]repo.FlowNodeExecution, error)
 	Abandon(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
 	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error)
+	UpdateRuntimeSubstate(ctx context.Context, id uuid.UUID, runtimeSubstate *string) (repo.FlowNodeExecution, error)
 }
 
 type taskQueueFlowNodeRepository interface {
@@ -950,7 +951,10 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 				flowNode = &node
 			}
 		}
-		return p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, buildFlowKickoffMessage(taskRecord, execution, flowNode), messageMetadata)
+		if err := p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, buildFlowKickoffMessage(taskRecord, execution, flowNode), messageMetadata); err != nil {
+			return err
+		}
+		return p.markExecutionRunning(ctx, execution.ID)
 	case "flow_transition":
 		executionID, ok := metadataUUIDValue(runRecord.Metadata, "flow_node_execution_id")
 		if !ok {
@@ -996,10 +1000,25 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
-		return p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, buildFlowTransitionKickoffMessage(taskRecord, node, execution, eventType, rejectionFeedback), messageMetadata)
+		if err := p.appendWakeupKickoff(ctx, runRecord, *execution.SessionID, buildFlowTransitionKickoffMessage(taskRecord, node, execution, eventType, rejectionFeedback), messageMetadata); err != nil {
+			return err
+		}
+		return p.markExecutionRunning(ctx, execution.ID)
 	default:
 		return nil
 	}
+}
+
+func (p *TaskQueueProcessor) markExecutionRunning(ctx context.Context, executionID uuid.UUID) error {
+	if executionID == uuid.Nil || p.flowExecutions == nil {
+		return nil
+	}
+	running := "running"
+	_, err := p.flowExecutions.UpdateRuntimeSubstate(ctx, executionID, &running)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 func (p *TaskQueueProcessor) dispatchSupervisorWakeup(ctx context.Context, runRecord Run) error {
@@ -1773,6 +1792,18 @@ func buildFlowTransitionKickoffMessage(
 	rejectionFeedback string,
 ) string {
 	base := buildQueueKickoffMessage(taskRecord)
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") || node.RequiresHumanReview {
+		title := strings.TrimSpace(taskRecord.Title)
+		if title == "" {
+			title = "Untitled task"
+		}
+		description := strings.TrimSpace(valueOrEmpty(taskRecord.Description))
+		base = "Start review on task: " + title
+		if description != "" {
+			base += "\n\nTask description:\n" + description
+		}
+		base += "\n\nReview instruction:\nInspect the current deliverables and use flow.review_decision to approve or reject this review step."
+	}
 	nodeName := strings.TrimSpace(node.DisplayName)
 	if nodeName != "" {
 		base += "\n\nFlow node: " + nodeName
