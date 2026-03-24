@@ -2228,6 +2228,24 @@ func (w *Worker) claimPendingAgentTurns(ctx context.Context, limit int) ([]Job, 
 		SET status = 'dead_letter',
 		    claimed_by = NULL,
 		    claimed_at = NULL,
+		    last_error = 'purged closed-session agent_turn dispatch during claim',
+		    updated_at = now()
+		WHERE jq.status IN ('pending', 'claimed')
+		  AND jq.job_type = $1
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.status IN ('closed', 'archived')
+		  )
+	`, agentTurnJobType); err != nil {
+		return nil, fmt.Errorf("dead-letter closed-session agent_turn jobs before claim: %w", err)
+	}
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
 		    last_error = 'purged stale terminal message-attempt dispatch during claim',
 		    updated_at = now()
 		WHERE jq.status IN ('pending', 'claimed')

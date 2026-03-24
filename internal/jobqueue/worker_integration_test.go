@@ -3059,7 +3059,7 @@ func TestJobWorkerClaimPendingAgentTurnsClaimsOnlyOneJobPerSession(t *testing.T)
 	}
 }
 
-func TestJobWorkerClaimPendingAgentTurnsSkipsClosedSessions(t *testing.T) {
+func TestJobWorkerClaimPendingAgentTurnsDeadLettersClosedSessions(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
 		PollInterval:         time.Hour,
@@ -3121,11 +3121,16 @@ func TestJobWorkerClaimPendingAgentTurnsSkipsClosedSessions(t *testing.T) {
 	}
 
 	var status string
-	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, jobID).Scan(&status); err != nil {
+	var lastError *string
+	if err := pool.QueryRow(ctx, `SELECT status, last_error FROM job_queue WHERE id = $1`, jobID).Scan(&status, &lastError); err != nil {
 		t.Fatalf("query closed-session job: %v", err)
 	}
-	if status != "pending" {
-		t.Fatalf("closed-session job status = %q, want pending for later purge", status)
+	lastErrorValue := "<nil>"
+	if lastError != nil {
+		lastErrorValue = *lastError
+	}
+	if status != "dead_letter" || lastError == nil || *lastError != "purged closed-session agent_turn dispatch during claim" {
+		t.Fatalf("closed-session job = (%q, %q), want dead_letter/purged closed-session agent_turn dispatch during claim", status, lastErrorValue)
 	}
 }
 
