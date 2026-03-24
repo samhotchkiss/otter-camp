@@ -133,14 +133,17 @@ func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Contex
 	if deliverablePath == "" {
 		deliverablePath = e.latestRecoveryTargetPathForSession(ctx, scope)
 	}
-	if deliverablePath == "" {
-		return nil, false, nil
-	}
 	normalizedPath := normalizeWorkspacePath(relativePath)
-	if normalizedPath == "" || !sameOrNestedWorkspacePath(normalizedPath, deliverablePath) {
+	if normalizedPath == "" {
 		return nil, false, nil
 	}
 	if !looksLikeRejectedDeliverablePlaceholder(content) {
+		return nil, false, nil
+	}
+	if deliverablePath == "" {
+		deliverablePath = parsePlaceholderDeliverableTarget(content)
+	}
+	if deliverablePath == "" || !sameOrNestedWorkspacePath(normalizedPath, deliverablePath) {
 		return nil, false, nil
 	}
 	message := fmt.Sprintf("The explicit deliverable `%s` currently contains rejected placeholder or status narration. Do not reread `%s` for context. Overwrite it directly with the real deliverable body instead.", deliverablePath, normalizedPath)
@@ -186,6 +189,20 @@ func parseRecoveryTargetPath(content string) string {
 	return ""
 }
 
+func parsePlaceholderDeliverableTarget(content string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "**Deliverable Target**:") && !strings.HasPrefix(trimmed, "Deliverable Target:") {
+			continue
+		}
+		target := strings.TrimSpace(strings.TrimPrefix(trimmed, "**Deliverable Target**:"))
+		target = strings.TrimSpace(strings.TrimPrefix(target, "Deliverable Target:"))
+		return normalizeWorkspacePath(target)
+	}
+	return ""
+}
+
 func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" || len(trimmed) > 4000 {
@@ -196,8 +213,8 @@ func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 		return true
 	}
 	if strings.Contains(lower, "# ready to continue oc-") &&
-		strings.Contains(lower, "deliverable target:") &&
-		strings.Contains(lower, "what i need from you:") {
+		(strings.Contains(lower, "deliverable target:") || strings.Contains(lower, "**deliverable target**:")) &&
+		(strings.Contains(lower, "what i need from you:") || strings.Contains(lower, "**what i need from you**:")) {
 		return true
 	}
 	if strings.Contains(lower, "**status**: task oc-") &&
@@ -212,7 +229,7 @@ func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 		(strings.Contains(lower, "please provide the substantive draft") || strings.Contains(lower, "please provide the recovery artifact")) {
 		return true
 	}
-	if strings.Contains(lower, "what i need from you:") &&
+	if (strings.Contains(lower, "what i need from you:") || strings.Contains(lower, "**what i need from you**:")) &&
 		(strings.Contains(lower, "should i proceed") || strings.Contains(lower, "do you want me to")) {
 		return true
 	}
@@ -348,7 +365,7 @@ func (e *NativeToolExecutor) handleFileList(ctx context.Context, input map[strin
 }
 
 func (e *NativeToolExecutor) handleFileSearch(ctx context.Context, input map[string]any) (map[string]any, error) {
-	wd, _, resolved, err := e.resolveInputPath(ctx, input, "path")
+	wd, scope, resolved, err := e.resolveInputPath(ctx, input, "path")
 	if err != nil {
 		if errors.Is(err, ErrPathTraversal) {
 			return map[string]any{"error": "path_traversal"}, nil
@@ -412,6 +429,12 @@ func (e *NativeToolExecutor) handleFileSearch(ctx context.Context, input map[str
 		if err != nil {
 			return nil
 		}
+		renderedPath := renderPath(wd.Root(), filePath)
+		if _, blocked, rejectErr := e.rejectPlaceholderDeliverableRead(ctx, scope, renderedPath, sanitizeUTF8TextBytes(data)); rejectErr != nil {
+			return rejectErr
+		} else if blocked {
+			return nil
+		}
 		lines := splitLines(data)
 		for idx, line := range lines {
 			if !re.MatchString(line) {
@@ -433,7 +456,7 @@ func (e *NativeToolExecutor) handleFileSearch(ctx context.Context, input map[str
 			before := append([]string(nil), lines[beforeStart:idx]...)
 			after := append([]string(nil), lines[idx+1:afterEnd]...)
 			matches = append(matches, map[string]any{
-				"file":           renderPath(wd.Root(), filePath),
+				"file":           renderedPath,
 				"line_number":    idx + 1,
 				"line_content":   line,
 				"context_before": before,

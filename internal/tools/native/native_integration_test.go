@@ -498,6 +498,114 @@ func TestIntegrationFileReadRejectsPlaceholderRecoveryTargetWithoutExplicitDeliv
 	}
 }
 
+func TestIntegrationFileSearchOmitsPlaceholderRecoveryTargetWithoutExplicitDeliverable(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Consolidate all validation findings into a single report. Categorize issues by severity and prepare for review."
+	plan := taskplan.Analyze("Synthesize Validation Findings & Report", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:       "Synthesize Validation Findings & Report",
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:    pool,
+		DataDir: dataDir,
+	})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	if _, err := repo.NewChatMessageRepo(pool).Create(context.Background(), repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Recovery resume state]\nTarget file: Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md\nExisting target file draft: omitted because it matches the previously rejected non-substantive pattern.\n",
+	}); err != nil {
+		t.Fatalf("create recovery system message: %v", err)
+	}
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	targetPath := "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md"
+	targetAbs := filepath.Join(dataDir, "workspaces", projectRecord.Slug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	placeholder := "# Ready to Continue OC-13 Validation Synthesis\n\nDeliverable Target: Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md\n\nWhat I can see:\n- Prior tasks completed\n\nWhat I need from you:\n- Do you want me to proceed?\n"
+	if err := os.WriteFile(targetAbs, []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("write placeholder target: %v", err)
+	}
+	otherPath := filepath.Join(dataDir, "workspaces", projectRecord.Slug, "Work", "EXECUTION-SUMMARY.md")
+	if err := os.WriteFile(otherPath, []byte("Prior tasks completed and artifacts are ready."), 0o644); err != nil {
+		t.Fatalf("write other file: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.search", map[string]any{
+		"path":    "Work",
+		"pattern": "Prior tasks completed",
+	})
+	if err != nil {
+		t.Fatalf("file.search: %v", err)
+	}
+	matches, _ := out["matches"].([]map[string]any)
+	if len(matches) != 1 {
+		t.Fatalf("matches length = %d, want 1", len(matches))
+	}
+	if got := matches[0]["file"]; got != "Work/EXECUTION-SUMMARY.md" {
+		t.Fatalf("match file = %v, want Work/EXECUTION-SUMMARY.md", got)
+	}
+}
+
+func TestIntegrationFileReadRejectsPlaceholderSelfIdentifiedDeliverableWithoutSessionTarget(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Consolidate all validation findings into a single report. Categorize issues by severity and prepare for review."
+	plan := taskplan.Analyze("Synthesize Validation Findings & Report", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:       "Synthesize Validation Findings & Report",
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:    pool,
+		DataDir: dataDir,
+	})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	targetPath := "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md"
+	targetAbs := filepath.Join(dataDir, "workspaces", projectRecord.Slug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	placeholder := "# Ready to Continue OC-13 Validation Synthesis\n\n**Deliverable Target**: Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md\n\n**What I can see**:\n- Prior tasks completed\n\n**What I need from you**:\n1. Should I proceed with reading the planning artifacts?\n"
+	if err := os.WriteFile(targetAbs, []byte(placeholder), 0o644); err != nil {
+		t.Fatalf("write placeholder target: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+}
+
 func TestIntegrationFileWriteSamBlogAlternatingRawPayloadsReturnContentRequired(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
