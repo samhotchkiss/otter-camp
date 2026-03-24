@@ -482,6 +482,58 @@ func TestFileWriteRejectsAlternateMutationForExecutionFirstTaskWithExplicitOutpu
 	}
 }
 
+func TestFileWriteRejectsPlanningArtifactMutationForExecutionFirstTaskWithDirectoryOutput(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	description := "Execute test scenario 1 live. Output: Test with task ID and routing trace."
+	plan := taskplan.Analyze("Execute Test Scenario 1", &description)
+
+	taskRepo := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Execute Test Scenario 1",
+			Description:    &description,
+			Metadata:       taskplan.ApplyMetadata(nil, plan),
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = taskRepo
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		TaskID:         &taskID,
+	})
+
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/prd-spec/oc-19-prd.md",
+		"content":     "# Placeholder\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "deliverable_path_required" {
+		t.Fatalf("error = %v, want deliverable_path_required", out["error"])
+	}
+	if got := out["deliverable_path"]; got != "Test" {
+		t.Fatalf("deliverable_path = %v, want Test", got)
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "explicit deliverable directory `Test/`") {
+		t.Fatalf("message = %q, want directory guidance", message)
+	}
+	if !strings.Contains(message, "Write a concrete file under `Test/`") {
+		t.Fatalf("message = %q, want nested file guidance", message)
+	}
+}
+
 func TestFileEditRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplicitDeliverable(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

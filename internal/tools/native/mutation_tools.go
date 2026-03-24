@@ -188,6 +188,17 @@ func sameOrNestedWorkspacePath(path, root string) bool {
 	return normalizedPath == normalizedRoot || strings.HasPrefix(normalizedPath, normalizedRoot+"/")
 }
 
+func workspacePathLooksDirectory(path string) bool {
+	normalized := normalizeWorkspacePath(path)
+	if normalized == "" {
+		return false
+	}
+	if strings.HasSuffix(normalized, "/") {
+		return true
+	}
+	return filepath.Ext(normalized) == ""
+}
+
 func looksLikeNarratedTaskFileWritePlaceholder(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" || len(trimmed) > 1600 {
@@ -399,10 +410,14 @@ func (e *NativeToolExecutor) rejectExecutionFirstDeliverableMutation(ctx context
 	if sameOrNestedWorkspacePath(normalizedPath, deliverablePath) {
 		return nil, false, nil
 	}
+	message := fmt.Sprintf("This execution-first task already has an explicit deliverable path `%s`. Do not write `%s` during task execution. Continue the concrete deliverable instead.", deliverablePath, normalizedPath)
+	if workspacePathLooksDirectory(deliverablePath) {
+		message = fmt.Sprintf("This execution-first task already has an explicit deliverable directory `%s/`. Do not write `%s` during task execution. Write a concrete file under `%s/` instead.", strings.TrimSuffix(deliverablePath, "/"), normalizedPath, strings.TrimSuffix(deliverablePath, "/"))
+	}
 	return map[string]any{
 		"error":            "deliverable_path_required",
 		"deliverable_path": deliverablePath,
-		"message":          fmt.Sprintf("This execution-first task already has an explicit deliverable path `%s`. Do not write `%s` during task execution. Continue the concrete deliverable instead.", deliverablePath, normalizedPath),
+		"message":          message,
 	}, true, nil
 }
 
