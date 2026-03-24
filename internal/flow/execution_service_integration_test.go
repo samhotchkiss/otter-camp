@@ -579,7 +579,7 @@ func TestFlowExecutionServiceRejectFlowNodeMaxVisits(t *testing.T) {
 	pool := testdb.New(t)
 	fixture := seedFlowIntegrationFixture(t, ctx, pool)
 
-	template, _ := seedLinearTemplate(t, ctx, fixture, true, 2)
+	template, nodes := seedLinearTemplate(t, ctx, fixture, true, 2)
 	taskRecord := seedFlowTask(t, ctx, fixture, "Max visits task", "in_progress", &template.ID)
 
 	if _, err := fixture.service.StartFlow(ctx, taskRecord.ID); err != nil {
@@ -603,8 +603,11 @@ func TestFlowExecutionServiceRejectFlowNodeMaxVisits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus != "blocked" {
-		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[1].ID {
+		t.Fatalf("task current_flow_node_id = %v, want review node %s", updatedTask.CurrentFlowNodeID, nodes[1].ID)
 	}
 
 	executions, err := fixture.executionRepo.ListByTask(ctx, taskRecord.ID)

@@ -1093,6 +1093,9 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 		return nil, err
 	}
 	if nextVisit > rejectNode.MaxVisits {
+		if strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") {
+			return nil, ErrMaxVisitsExceeded
+		}
 		if _, markErr := s.taskService.MarkBlocked(ctx, taskRecord.ID, "flow rejection max visits exceeded", toTaskActor(actor)); markErr != nil {
 			return nil, markErr
 		}
