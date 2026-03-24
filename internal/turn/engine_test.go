@@ -6230,7 +6230,7 @@ func TestContinuationTurnUsesTaskFallbackSummaryForSupervisorContextQuestionnair
 	}
 	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
 		if req.Purpose == "continuation_summary" {
-			return ModelResponse{Content: "I don't see any active task context to resume. It appears this may be the start of our conversation.\n\nPlease provide:\n1. Context of the interrupted task\n2. Current status\n3. Remaining work\n4. What were we working on?"}, nil
+			return ModelResponse{Content: "# Task Resume\n\nI'm ready to continue. However, you've sent the resume command three times without providing context about what task needs to be resumed.\n\nPlease provide:\n1. Task Description\n2. Current Status\n3. Remaining Work"}, nil
 		}
 		if req.Purpose == "listening_eval" {
 			return ModelResponse{Content: "respond"}, nil
