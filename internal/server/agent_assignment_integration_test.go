@@ -155,6 +155,40 @@ func TestAgentAssignmentHTTPAutoActivatesDraftStaffWorker(t *testing.T) {
 	}
 }
 
+func TestProjectAgentHTTPAllowsMultipleRolesForSameAgent(t *testing.T) {
+	testServer, org, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	project := seedAssignmentProject(t, testServer.Pool, org.ID)
+	agentRecord := seedActiveAssignmentAgent(t, testServer.Pool, org.ID, "multi-role-agent")
+
+	for _, role := range []string{"pm", "reviewer"} {
+		assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/projects/"+project.ID.String()+"/agents", map[string]any{
+			"agent_id": agentRecord.ID.String(),
+			"role":     role,
+		}, map[string]string{"Authorization": "Bearer " + adminToken})
+		if assignResp.StatusCode != http.StatusOK {
+			t.Fatalf("%s assign status = %d, want %d body=%s", role, assignResp.StatusCode, http.StatusOK, string(assignResp.Body))
+		}
+	}
+
+	listResp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/projects/"+project.ID.String()+"/agents", nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d, want %d body=%s", listResp.StatusCode, http.StatusOK, string(listResp.Body))
+	}
+
+	items, ok := jsonPathValue(t, listResp.Body, "data").([]any)
+	if !ok {
+		t.Fatalf("list data not array body=%s", string(listResp.Body))
+	}
+	if len(items) != 2 {
+		t.Fatalf("list item count = %d, want 2 body=%s", len(items), string(listResp.Body))
+	}
+}
+
 func TestAgentAssignmentHTTPRejectsStarterTrioProjectRoles(t *testing.T) {
 	testServer, org, adminUser, _ := newAgentTestServer(t)
 	defer testServer.Close()

@@ -116,6 +116,108 @@ func TestAssignmentServiceRemoveFromProjectDeactivatesAndEmitsEvent(t *testing.T
 	}
 }
 
+func TestAssignmentServiceAssignToProjectPreservesExistingRoleForSameAgent(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
+
+	svc, err := NewAssignmentService(AssignmentServiceOptions{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("NewAssignmentService: %v", err)
+	}
+
+	_, project, agentA, _ := seedAssignmentServiceFixtures(t, ctx, pool)
+
+	if _, err := svc.AssignToProject(ctx, agentA.ID, project.ID, "project_manager", AssignmentActor{Type: "system"}); err != nil {
+		t.Fatalf("AssignToProject PM: %v", err)
+	}
+	if _, err := svc.AssignToProject(ctx, agentA.ID, project.ID, "reviewer", AssignmentActor{Type: "system"}); err != nil {
+		t.Fatalf("AssignToProject reviewer: %v", err)
+	}
+
+	projectAssignments := repo.NewAgentProjectAssignmentRepo(pool)
+	rows, err := projectAssignments.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+
+	activeRoles := make(map[string]bool)
+	for _, row := range rows {
+		if row.AgentID == agentA.ID && row.IsActive {
+			activeRoles[row.Role] = true
+		}
+	}
+	if !activeRoles["project_manager"] {
+		t.Fatal("missing active project_manager role after reviewer assignment")
+	}
+	if !activeRoles["reviewer"] {
+		t.Fatal("missing active reviewer role after reviewer assignment")
+	}
+}
+
+func TestAssignmentServiceRemoveFromProjectDeactivatesAllRolesForSameAgent(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	bus := eventbus.New(pool, slog.New(slog.NewTextHandler(io.Discard, nil)), eventbus.Config{})
+
+	svc, err := NewAssignmentService(AssignmentServiceOptions{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("NewAssignmentService: %v", err)
+	}
+
+	org, project, agentA, _ := seedAssignmentServiceFixtures(t, ctx, pool)
+
+	if _, err := svc.AssignToProject(ctx, agentA.ID, project.ID, "project_manager", AssignmentActor{Type: "system"}); err != nil {
+		t.Fatalf("AssignToProject PM: %v", err)
+	}
+	if _, err := svc.AssignToProject(ctx, agentA.ID, project.ID, "reviewer", AssignmentActor{Type: "system"}); err != nil {
+		t.Fatalf("AssignToProject reviewer: %v", err)
+	}
+
+	removed, err := svc.RemoveFromProject(ctx, agentA.ID, project.ID)
+	if err != nil {
+		t.Fatalf("RemoveFromProject: %v", err)
+	}
+	if removed.IsActive {
+		t.Fatalf("removed assignment is_active = true, want false")
+	}
+
+	projectAssignments := repo.NewAgentProjectAssignmentRepo(pool)
+	rows, err := projectAssignments.ListByAgentAndProject(ctx, agentA.ID, project.ID)
+	if err != nil {
+		t.Fatalf("ListByAgentAndProject: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("assignment count = %d, want 2", len(rows))
+	}
+	for _, row := range rows {
+		if row.IsActive {
+			t.Fatalf("assignment %s still active for role %s", row.ID, row.Role)
+		}
+	}
+
+	var eventCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type = 'agent.pm_removed'
+		  AND payload->>'agent_id' = $2
+		  AND payload->>'project_id' = $3
+	`, org.ID, agentA.ID.String(), project.ID.String()).Scan(&eventCount); err != nil {
+		t.Fatalf("query pm_removed event count: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("pm_removed event count = %d, want 1", eventCount)
+	}
+}
+
 func seedAssignmentServiceFixtures(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (repo.Organization, repo.Project, repo.Agent, repo.Agent) {
 	t.Helper()
 

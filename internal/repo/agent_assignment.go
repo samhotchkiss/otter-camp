@@ -69,10 +69,9 @@ func (r *AgentProjectAssignmentRepo) assign(ctx context.Context, db dbExecutor, 
 			deactivated_at
 		)
 		VALUES ($1, $2, $3, $4, $5, true, now(), NULL)
-		ON CONFLICT (agent_id, project_id)
+		ON CONFLICT (agent_id, project_id, role)
 		DO UPDATE
 		SET
-			role = EXCLUDED.role,
 			assigned_by_type = EXCLUDED.assigned_by_type,
 			assigned_by_id = EXCLUDED.assigned_by_id,
 			is_active = true,
@@ -113,14 +112,26 @@ func (r *AgentProjectAssignmentRepo) DeactivateTx(ctx context.Context, tx pgx.Tx
 
 func (r *AgentProjectAssignmentRepo) deactivate(ctx context.Context, db dbExecutor, agentID, projectID uuid.UUID) (AgentProjectAssignment, error) {
 	row := db.QueryRow(ctx, `
-		UPDATE agent_project_assignment
-		SET
-			is_active = false,
-			deactivated_at = now()
-		WHERE agent_id = $1
-		  AND project_id = $2
-		  AND is_active = true
-		RETURNING
+		WITH updated AS (
+			UPDATE agent_project_assignment
+			SET
+				is_active = false,
+				deactivated_at = now()
+			WHERE agent_id = $1
+			  AND project_id = $2
+			  AND is_active = true
+			RETURNING
+				id,
+				agent_id,
+				project_id,
+				role,
+				assigned_by_type,
+				assigned_by_id,
+				is_active,
+				assigned_at,
+				deactivated_at
+		)
+		SELECT
 			id,
 			agent_id,
 			project_id,
@@ -130,6 +141,9 @@ func (r *AgentProjectAssignmentRepo) deactivate(ctx context.Context, db dbExecut
 			is_active,
 			assigned_at,
 			deactivated_at
+		FROM updated
+		ORDER BY assigned_at DESC, id DESC
+		LIMIT 1
 	`, agentID, projectID)
 
 	item, err := scanAgentProjectAssignment(row)
@@ -140,6 +154,50 @@ func (r *AgentProjectAssignmentRepo) deactivate(ctx context.Context, db dbExecut
 		return AgentProjectAssignment{}, mapDBError(err)
 	}
 	return item, nil
+}
+
+func (r *AgentProjectAssignmentRepo) ListByAgentAndProject(ctx context.Context, agentID, projectID uuid.UUID) ([]AgentProjectAssignment, error) {
+	return r.listByAgentAndProject(ctx, r.pool, agentID, projectID)
+}
+
+func (r *AgentProjectAssignmentRepo) ListByAgentAndProjectTx(ctx context.Context, tx pgx.Tx, agentID, projectID uuid.UUID) ([]AgentProjectAssignment, error) {
+	return r.listByAgentAndProject(ctx, tx, agentID, projectID)
+}
+
+func (r *AgentProjectAssignmentRepo) listByAgentAndProject(ctx context.Context, db dbExecutor, agentID, projectID uuid.UUID) ([]AgentProjectAssignment, error) {
+	rows, err := db.Query(ctx, `
+		SELECT
+			id,
+			agent_id,
+			project_id,
+			role,
+			assigned_by_type,
+			assigned_by_id,
+			is_active,
+			assigned_at,
+			deactivated_at
+		FROM agent_project_assignment
+		WHERE agent_id = $1
+		  AND project_id = $2
+		ORDER BY is_active DESC, assigned_at DESC, id DESC
+	`, agentID, projectID)
+	if err != nil {
+		return nil, mapDBError(err)
+	}
+	defer rows.Close()
+
+	items := make([]AgentProjectAssignment, 0)
+	for rows.Next() {
+		item, scanErr := scanAgentProjectAssignment(rows)
+		if scanErr != nil {
+			return nil, mapDBError(scanErr)
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, mapDBError(rows.Err())
+	}
+	return items, nil
 }
 
 func (r *AgentProjectAssignmentRepo) GetByAgentAndProject(ctx context.Context, agentID, projectID uuid.UUID) (AgentProjectAssignment, error) {
@@ -165,6 +223,8 @@ func (r *AgentProjectAssignmentRepo) getByAgentAndProject(ctx context.Context, d
 		FROM agent_project_assignment
 		WHERE agent_id = $1
 		  AND project_id = $2
+		ORDER BY is_active DESC, assigned_at DESC, id DESC
+		LIMIT 1
 	`, agentID, projectID)
 
 	item, err := scanAgentProjectAssignment(row)

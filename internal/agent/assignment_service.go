@@ -46,6 +46,7 @@ type assignmentProjectRepository interface {
 	AssignTx(ctx context.Context, tx pgx.Tx, assignment repo.AgentProjectAssignment) (repo.AgentProjectAssignment, error)
 	DeactivateTx(ctx context.Context, tx pgx.Tx, agentID, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
 	GetByAgentAndProjectTx(ctx context.Context, tx pgx.Tx, agentID, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
+	ListByAgentAndProjectTx(ctx context.Context, tx pgx.Tx, agentID, projectID uuid.UUID) ([]repo.AgentProjectAssignment, error)
 	GetPMTx(ctx context.Context, tx pgx.Tx, projectID uuid.UUID) (repo.AgentProjectAssignment, error)
 }
 
@@ -205,9 +206,12 @@ func (s *assignmentService) RemoveFromProject(ctx context.Context, agentID, proj
 		_ = tx.Rollback(ctx)
 	}()
 
-	existing, err := s.projectAssignments.GetByAgentAndProjectTx(ctx, tx, agentID, projectID)
+	existingRows, err := s.projectAssignments.ListByAgentAndProjectTx(ctx, tx, agentID, projectID)
 	if err != nil {
 		return nil, err
+	}
+	if len(existingRows) == 0 {
+		return nil, repo.ErrNotFound
 	}
 
 	updated, err := s.projectAssignments.DeactivateTx(ctx, tx, agentID, projectID)
@@ -215,10 +219,17 @@ func (s *assignmentService) RemoveFromProject(ctx context.Context, agentID, proj
 		return nil, err
 	}
 
-	if existing.Role == "project_manager" && existing.IsActive {
+	removedActivePM := false
+	for _, existing := range existingRows {
+		if existing.Role == "project_manager" && existing.IsActive {
+			removedActivePM = true
+			break
+		}
+	}
+	if removedActivePM {
 		payload, marshalErr := json.Marshal(map[string]any{
-			"agent_id":   existing.AgentID,
-			"project_id": existing.ProjectID,
+			"agent_id":   agentID,
+			"project_id": projectID,
 		})
 		if marshalErr != nil {
 			return nil, fmt.Errorf("marshal agent.pm_removed payload: %w", marshalErr)

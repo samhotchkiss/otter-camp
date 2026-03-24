@@ -63,6 +63,7 @@ type fakeProjectAssignments struct {
 
 	assignResult     repo.AgentProjectAssignment
 	deactivateResult repo.AgentProjectAssignment
+	listResult       []repo.AgentProjectAssignment
 
 	callOrder []string
 	callTxs   []pgx.Tx
@@ -99,6 +100,15 @@ func (f *fakeProjectAssignments) DeactivateTx(_ context.Context, tx pgx.Tx, agen
 
 func (f *fakeProjectAssignments) GetByAgentAndProjectTx(context.Context, pgx.Tx, uuid.UUID, uuid.UUID) (repo.AgentProjectAssignment, error) {
 	return repo.AgentProjectAssignment{}, repo.ErrNotFound
+}
+
+func (f *fakeProjectAssignments) ListByAgentAndProjectTx(_ context.Context, tx pgx.Tx, _, _ uuid.UUID) ([]repo.AgentProjectAssignment, error) {
+	f.callOrder = append(f.callOrder, "list_agent_project")
+	f.callTxs = append(f.callTxs, tx)
+	if f.listResult == nil {
+		return nil, repo.ErrNotFound
+	}
+	return f.listResult, nil
 }
 
 func (f *fakeProjectAssignments) GetPMTx(_ context.Context, tx pgx.Tx, _ uuid.UUID) (repo.AgentProjectAssignment, error) {

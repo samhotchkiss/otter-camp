@@ -43,6 +43,54 @@ func TestAgentProjectAssignmentRepoReturnsPMConflictOnSecondActivePM(t *testing.
 	}
 }
 
+func TestAgentProjectAssignmentRepoAllowsMultipleRolesForSameAgentProject(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	_, project, agentA, _ := seedAssignmentProjectAgents(t, ctx, pool)
+	repo := NewAgentProjectAssignmentRepo(pool)
+
+	if _, err := repo.Assign(ctx, AgentProjectAssignment{
+		AgentID:        agentA.ID,
+		ProjectID:      project.ID,
+		Role:           "project_manager",
+		AssignedByType: "system",
+	}); err != nil {
+		t.Fatalf("Assign project_manager: %v", err)
+	}
+
+	if _, err := repo.Assign(ctx, AgentProjectAssignment{
+		AgentID:        agentA.ID,
+		ProjectID:      project.ID,
+		Role:           "reviewer",
+		AssignedByType: "system",
+	}); err != nil {
+		t.Fatalf("Assign reviewer: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM agent_project_assignment
+		WHERE agent_id = $1
+		  AND project_id = $2
+		  AND is_active = true
+	`, agentA.ID, project.ID).Scan(&count); err != nil {
+		t.Fatalf("count assignments: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("active assignment count = %d, want 2", count)
+	}
+
+	currentPM, err := repo.GetPM(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("GetPM: %v", err)
+	}
+	if currentPM.AgentID != agentA.ID {
+		t.Fatalf("GetPM agent_id = %s, want %s", currentPM.AgentID, agentA.ID)
+	}
+}
+
 func TestAgentProjectAssignmentPartialUniqueIndexRejectsDuplicatePMRows(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
