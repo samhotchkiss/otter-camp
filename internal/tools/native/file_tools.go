@@ -98,6 +98,12 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 	}
 
 	renderedPath := renderPath(wd.Root(), resolved)
+	if reject, blocked, rejectErr := e.rejectExecutionFirstDeliverableReread(ctx, wd, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if blocked {
+		reject["path"] = renderedPath
+		return reject, nil
+	}
 	if reject, blocked, rejectErr := e.rejectPlaceholderDeliverableRead(ctx, scope, renderedPath, content); rejectErr != nil {
 		return nil, rejectErr
 	} else if blocked {
@@ -155,6 +161,99 @@ func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Contex
 		"deliverable_path": deliverablePath,
 		"message":          message,
 	}, true, nil
+}
+
+func (e *NativeToolExecutor) rejectExecutionFirstDeliverableReread(ctx context.Context, wd SessionWorkDir, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
+	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return nil, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return nil, false, nil
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
+		return nil, false, nil
+	}
+	deliverablePath := parseExplicitDeliverablePath(taskRecord)
+	if deliverablePath == "" {
+		return nil, false, nil
+	}
+	normalizedPath := normalizeWorkspacePath(relativePath)
+	if normalizedPath == "" || sameOrNestedWorkspacePath(normalizedPath, deliverablePath) {
+		return nil, false, nil
+	}
+	exists, err := substantiveExplicitDeliverableExists(wd.Root(), deliverablePath)
+	if err != nil {
+		return nil, false, err
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	return map[string]any{
+		"error":            "explicit_deliverable_focus_required",
+		"deliverable_path": deliverablePath,
+		"message": fmt.Sprintf(
+			"This execution-first task already has a substantive explicit deliverable `%s`. Do not reread `%s` now. Revise the deliverable directly if needed, or stop and let the runtime advance the flow.",
+			deliverablePath,
+			normalizedPath,
+		),
+	}, true, nil
+}
+
+func substantiveExplicitDeliverableExists(workspaceRoot, deliverablePath string) (bool, error) {
+	normalized := normalizeWorkspacePath(deliverablePath)
+	if normalized == "" {
+		return false, nil
+	}
+	absPath := filepath.Join(workspaceRoot, filepath.FromSlash(normalized))
+	if workspacePathLooksDirectory(normalized) {
+		found := false
+		walkErr := filepath.WalkDir(absPath, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return filepath.SkipDir
+				}
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			info, statErr := d.Info()
+			if statErr != nil {
+				return statErr
+			}
+			if info.Size() > 0 {
+				found = true
+				return io.EOF
+			}
+			return nil
+		})
+		if errors.Is(walkErr, io.EOF) {
+			return true, nil
+		}
+		if errors.Is(walkErr, fs.ErrNotExist) {
+			return false, nil
+		}
+		if walkErr != nil {
+			return false, walkErr
+		}
+		return found, nil
+	}
+	info, err := os.Stat(absPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return info.Size() > 0, nil
 }
 
 func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Context, scope workspaceScope) string {
@@ -237,7 +336,7 @@ func looksLikeRejectedDeliverablePlaceholder(content string) bool {
 }
 
 func (e *NativeToolExecutor) handleFileList(ctx context.Context, input map[string]any) (map[string]any, error) {
-	wd, _, resolved, err := e.resolveInputPath(ctx, input, "path")
+	wd, scope, resolved, err := e.resolveInputPath(ctx, input, "path")
 	if err != nil {
 		if errors.Is(err, ErrPathTraversal) {
 			return map[string]any{"error": "path_traversal"}, nil
@@ -257,6 +356,13 @@ func (e *NativeToolExecutor) handleFileList(ctx context.Context, input map[strin
 			return map[string]any{"error": "not_found"}, nil
 		}
 		return nil, err
+	}
+	renderedPath := renderPath(wd.Root(), resolved)
+	if reject, blocked, rejectErr := e.rejectExecutionFirstDeliverableReread(ctx, wd, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if blocked {
+		reject["path"] = renderedPath
+		return reject, nil
 	}
 
 	entries := make([]listedEntry, 0)

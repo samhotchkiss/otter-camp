@@ -442,6 +442,106 @@ func TestIntegrationFileReadAllowsSubstantiveExplicitDeliverable(t *testing.T) {
 	}
 }
 
+func TestIntegrationFileReadRejectsPlanningRereadWhenExplicitDeliverableAlreadyExists(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	flowTemplate := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	description := "Define and document the first-wave executable tasks and later-wave deferred tasks for this project. Output: first-wave-manifest.md (task list, dependencies, wave assignment)."
+	plan := taskplan.Analyze("Prepare First-Wave Task Manifest", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:          "Prepare First-Wave Task Manifest",
+		Description:    &description,
+		FlowTemplateID: &flowTemplate.ID,
+		Metadata:       taskplan.ApplyMetadata(nil, plan),
+		WorkStatus:     "in_progress",
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	root := filepath.Join(dataDir, "workspaces", projectRecord.Slug)
+	if err := os.MkdirAll(filepath.Join(root, "planning", "prd-spec"), 0o755); err != nil {
+		t.Fatalf("mkdir planning dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "first-wave-manifest.md"), []byte("# First-Wave Manifest\n\nSubstantive manifest body.\n"), 0o644); err != nil {
+		t.Fatalf("write deliverable: %v", err)
+	}
+	planningPath := filepath.Join(root, "planning", "prd-spec", "oc-10-prd.md")
+	if err := os.WriteFile(planningPath, []byte("# PRD / requirements spec\n\nScaffold\n"), 0o644); err != nil {
+		t.Fatalf("write planning artifact: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": "planning/prd-spec/oc-10-prd.md"})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["error"]; got != "explicit_deliverable_focus_required" {
+		t.Fatalf("error = %v, want explicit_deliverable_focus_required", got)
+	}
+	if got := out["deliverable_path"]; got != "first-wave-manifest.md" {
+		t.Fatalf("deliverable_path = %v, want first-wave-manifest.md", got)
+	}
+	if msg := fmt.Sprintf("%v", out["message"]); !strings.Contains(msg, "Do not reread `planning/prd-spec/oc-10-prd.md` now") {
+		t.Fatalf("message = %q, want planning reread guidance", msg)
+	}
+}
+
+func TestIntegrationFileListRejectsWorkspaceRereadWhenExplicitDeliverableAlreadyExists(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	flowTemplate := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	description := "Define and document the first-wave executable tasks and later-wave deferred tasks for this project. Output: first-wave-manifest.md (task list, dependencies, wave assignment)."
+	plan := taskplan.Analyze("Prepare First-Wave Task Manifest", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:          "Prepare First-Wave Task Manifest",
+		Description:    &description,
+		FlowTemplateID: &flowTemplate.ID,
+		Metadata:       taskplan.ApplyMetadata(nil, plan),
+		WorkStatus:     "in_progress",
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	root := filepath.Join(dataDir, "workspaces", projectRecord.Slug)
+	if err := os.MkdirAll(filepath.Join(root, "planning"), 0o755); err != nil {
+		t.Fatalf("mkdir planning dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "first-wave-manifest.md"), []byte("# First-Wave Manifest\n\nSubstantive manifest body.\n"), 0o644); err != nil {
+		t.Fatalf("write deliverable: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.list", map[string]any{"path": "."})
+	if err != nil {
+		t.Fatalf("file.list: %v", err)
+	}
+	if got := out["error"]; got != "explicit_deliverable_focus_required" {
+		t.Fatalf("error = %v, want explicit_deliverable_focus_required", got)
+	}
+	if got := out["deliverable_path"]; got != "first-wave-manifest.md" {
+		t.Fatalf("deliverable_path = %v, want first-wave-manifest.md", got)
+	}
+	if msg := fmt.Sprintf("%v", out["message"]); !strings.Contains(msg, "Do not reread `.` now") {
+		t.Fatalf("message = %q, want workspace reread guidance", msg)
+	}
+}
+
 func TestIntegrationFileReadRejectsPlaceholderRecoveryTargetWithoutExplicitDeliverable(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
