@@ -965,6 +965,130 @@ func TestSupervisor_StrandedActiveExecutionSkipsUnresolvedRecoveryCheckpoint(t *
 	}
 }
 
+func TestSupervisor_StrandedActiveExecutionMarksStalledWhenRecoveryWakeupFails(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord := seedRunProject(t, ctx, pool, org.ID)
+	template, node := seedSupervisorFlowTemplateNode(t, ctx, pool, org.ID, projectRecord.ID, nil, nil)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Recovery Worker")
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         projectRecord.ID,
+		Title:             "Recover stranded execution",
+		WorkStatus:        "in_progress",
+		CurrentFlowNodeID: &node.ID,
+		FlowTemplateID:    &template.ID,
+		AssignedAgentID:   &worker.ID,
+		CreatedByType:     "system",
+		CreatedByID:       nil,
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("chat.NewService: %v", err)
+	}
+	session, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"supervisor_integration"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := chatService.AddParticipant(ctx, session.ID, "agent", worker.ID, "responder"); err != nil {
+		t.Fatalf("AddParticipant: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  node.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	realRunService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+	wakeSvc := realRunService.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+	if _, err := wakeSvc.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: org.ID,
+			ProjectID:      &projectRecord.ID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     &node.ID,
+			SessionID:      &session.ID,
+			PrincipalType:  "agent",
+			PrincipalID:    worker.ID,
+			TriggerType:    "scheduler",
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+		WakeupPayload: map[string]any{
+			"flow_node_execution_id": execution.ID.String(),
+		},
+	}); err != nil {
+		t.Fatalf("CreateExecutionWakeup: %v", err)
+	}
+
+	staleAt := time.Now().UTC().Add(-5 * time.Minute)
+	backdateStrandedExecutionFixture(t, ctx, pool, taskRecord.ID, session.ID, execution.ID, staleAt)
+
+	failingRunService := &fakeSupervisorWakeupRunService{
+		wakeupErr: fmt.Errorf("forced wakeup failure"),
+	}
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:        pool,
+		RunService:  failingRunService,
+		Runs:        NewRunRepository(pool),
+		RunEvents:   NewRunEventRepository(pool),
+		ChatService: chatService,
+		EventBus:    bus,
+		Logger:      newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectStrandedActiveExecutions(ctx); err == nil || !strings.Contains(err.Error(), "forced wakeup failure") {
+		t.Fatalf("detectStrandedActiveExecutions error = %v, want forced wakeup failure", err)
+	}
+
+	refreshedExecution, err := repo.NewFlowNodeExecutionRepo(pool).GetByID(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("GetByID execution: %v", err)
+	}
+	if refreshedExecution.Status != "active" {
+		t.Fatalf("execution status = %q, want active after failed recovery", refreshedExecution.Status)
+	}
+	if refreshedExecution.RuntimeSubstate == nil || *refreshedExecution.RuntimeSubstate != "stalled" {
+		t.Fatalf("execution runtime_substate = %v, want stalled", refreshedExecution.RuntimeSubstate)
+	}
+}
+
 func TestSupervisor_StrandedActiveExecutionSkipsCompletedRecoveryHaltInReview(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

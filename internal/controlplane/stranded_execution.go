@@ -69,6 +69,9 @@ func (s *Supervisor) detectStrandedActiveExecutions(ctx context.Context) error {
 		if !found {
 			continue
 		}
+		if markErr := s.markExecutionStalled(ctx, refreshed.ExecutionID); markErr != nil {
+			return markErr
+		}
 
 		if recoverErr := s.recoverStrandedActiveExecution(ctx, refreshed); recoverErr == nil {
 			continue
@@ -764,6 +767,26 @@ func (s *Supervisor) markExecutionRecoveryPending(ctx context.Context, execution
 	}
 	recoveryPending := "recovery_pending"
 	_, err = executionRepo.UpdateRuntimeSubstate(ctx, updatedExecution.ID, &recoveryPending)
+	return err
+}
+
+func (s *Supervisor) markExecutionStalled(ctx context.Context, executionID uuid.UUID) error {
+	if executionID == uuid.Nil || s.pool == nil {
+		return nil
+	}
+	executionRepo := repo.NewFlowNodeExecutionRepo(s.pool)
+	execution, err := executionRepo.GetByID(ctx, executionID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
+		return nil
+	}
+	stalled := "stalled"
+	_, err = executionRepo.UpdateRuntimeSubstate(ctx, executionID, &stalled)
 	return err
 }
 
