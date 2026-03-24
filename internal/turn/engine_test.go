@@ -13181,6 +13181,84 @@ func TestPersistRecoveryFileWriteCheckpointDiscardsCrossTaskExistingTargetPath(t
 	}
 }
 
+func TestPersistRecoveryFileWriteCheckpointPrefersAuthoritativeFailureTargetPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	workspaceRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	poisonedTarget := "planning/strategy-artifact/oc-20-success-narrative.md"
+	deliverableTarget := "schemas/pipeline-schema-v1.0.md"
+	failureReason := "This execution-first task already has an explicit deliverable path `schemas/pipeline-schema-v1.0.md`. Do not write `planning/strategy-artifact/oc-20-success-narrative.md` during task execution. Continue the concrete deliverable instead."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	existingMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:   poisonedTarget,
+		ArtifactPath: ".ottercamp/recovery/planning/strategy-artifact/oc-20-success-narrative.md",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				TaskNumber:     20,
+				ProjectID:      projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				WorkStatus:     "blocked",
+				Metadata:       existingMetadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	poisonedAbs := filepath.Join(workspaceRoot, filepath.FromSlash(poisonedTarget))
+	if err := os.MkdirAll(filepath.Dir(poisonedAbs), 0o755); err != nil {
+		t.Fatalf("mkdir poisoned target: %v", err)
+	}
+	if err := os.WriteFile(poisonedAbs, []byte("# Success narrative\n\nSubstantive body.\n"), 0o644); err != nil {
+		t.Fatalf("write poisoned target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	if err := fixture.engine.persistRecoveryFileWriteCheckpoint(context.Background(), rt, deliverableTarget, ".ottercamp/recovery/schemas/pipeline-schema-v1.0.md", failureReason, uuid.New()); err != nil {
+		t.Fatalf("persistRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	updated := taskRepo.items[taskID]
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint")
+	}
+	if checkpoint.TargetPath != deliverableTarget {
+		t.Fatalf("TargetPath = %q, want %q", checkpoint.TargetPath, deliverableTarget)
+	}
+}
+
 func TestRewriteRecoveryCLIExecuteWithoutCommandToFileWriteUsesPriorTurnDraft(t *testing.T) {
 	t.Parallel()
 

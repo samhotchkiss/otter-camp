@@ -12837,10 +12837,11 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	})
 	targetPath = strings.TrimSpace(candidate.TargetPath)
 	artifactPath = strings.TrimSpace(candidate.ArtifactPath)
+	authoritativeTarget := recoveryCheckpointTargetIsAuthoritative(targetPath, failureReason)
 	if existing, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
 		existing = normalizeRecoveryCheckpointPathsForTask(taskRecord, existing)
 		existingTarget := strings.TrimSpace(existing.TargetPath)
-		if existingTarget != "" && !sameWorkspaceRelativePath(existingTarget, targetPath) {
+		if !authoritativeTarget && existingTarget != "" && !sameWorkspaceRelativePath(existingTarget, targetPath) {
 			if existingDraft, found := e.readRecoveryWorkspaceText(ctx, rt, existingTarget); found {
 				if reason := recoveryFileWriteDraftRejectReason(existingDraft, existingTarget); reason == "" && looksLikeRecoveryFileDraft(existingDraft) {
 					targetPath = existingTarget
@@ -12855,7 +12856,8 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 			}
 		}
 	}
-	if historicalTarget, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt); ok && historicalTarget != "" && !sameWorkspaceRelativePath(historicalTarget, targetPath) {
+	if !authoritativeTarget {
+		if historicalTarget, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt); ok && historicalTarget != "" && !sameWorkspaceRelativePath(historicalTarget, targetPath) {
 		historicalTarget = strings.TrimSpace(normalizeRecoveryCheckpointPathsForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
 			TargetPath: historicalTarget,
 		}).TargetPath)
@@ -12867,6 +12869,7 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 				}
 			}
 		}
+	}
 	}
 	priorFailureReasons := e.recoveryCheckpointPriorFailureReasons(ctx, rt, failureReason)
 	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
@@ -12888,6 +12891,15 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	}
 	rt.historyStartID = &messageID
 	return nil
+}
+
+func recoveryCheckpointTargetIsAuthoritative(targetPath, failureReason string) bool {
+	targetPath = strings.TrimSpace(targetPath)
+	failureReason = strings.TrimSpace(failureReason)
+	if targetPath == "" || failureReason == "" {
+		return false
+	}
+	return strings.Contains(failureReason, targetPath)
 }
 
 func (e *TurnEngine) maybeClearRecoveryFileWriteCheckpoint(ctx context.Context, rt *turnRuntime, result ToolResult) (bool, error) {
