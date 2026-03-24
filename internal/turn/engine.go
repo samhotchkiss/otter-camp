@@ -1911,7 +1911,7 @@ func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventb
 			}
 			return err
 		}
-		if _, err := e.enqueueAgentTurnIfActive(ctx, session, AgentTurnPayload{
+		if _, err := e.enqueueAgentTurnForProjectResume(ctx, session, AgentTurnPayload{
 			SessionID: sessionID,
 			MessageID: messageID,
 		}, nil); err != nil {
@@ -1980,7 +1980,7 @@ func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventb
 			}
 			return err
 		}
-		if _, err := e.enqueueAgentTurnIfActive(ctx, session, AgentTurnPayload{
+		if _, err := e.enqueueAgentTurnForProjectResume(ctx, session, AgentTurnPayload{
 			SessionID: sessionID,
 			MessageID: messageID,
 		}, nil); err != nil {
@@ -2048,7 +2048,7 @@ func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventb
 		if err != nil {
 			return err
 		}
-		if _, err := e.enqueueAgentTurnIfActive(ctx, session, AgentTurnPayload{
+		if _, err := e.enqueueAgentTurnForProjectResume(ctx, session, AgentTurnPayload{
 			SessionID: session.ID,
 			MessageID: message.ID,
 			AgentID:   &agentID,
@@ -16994,6 +16994,47 @@ func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat
 		return false, err
 	} else if suppressed {
 		e.logger.Info("skipping enqueue after completed recovery halt for message",
+			"session_id", payload.SessionID,
+			"message_id", payload.MessageID,
+		)
+		return false, nil
+	}
+	if _, err := e.enqueuer.Enqueue(ctx, nil, AgentTurnJobType, e.jobPriority, payload, runAfter); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) enqueueAgentTurnForProjectResume(ctx context.Context, session *chat.ChatSession, payload AgentTurnPayload, runAfter *time.Time) (bool, error) {
+	if blocked, guard, err := e.validationLoopBlockerForSession(ctx, session); err != nil {
+		return false, err
+	} else if blocked {
+		e.logValidationLoopSuppressed("skipping project resume enqueue for blocked validation loop", session, payload.MessageID, guard)
+		return false, nil
+	}
+	message, err := e.messages.GetByID(ctx, payload.MessageID)
+	if err != nil {
+		return false, err
+	}
+	if chat.AgentTurnDispatchCancelled(message.Metadata) {
+		e.logger.Info("skipping project resume enqueue for cancelled agent turn dispatch", "session_id", payload.SessionID, "message_id", payload.MessageID)
+		return false, nil
+	}
+	cancelled, err := e.logicalMessageCancelled(ctx, payload.SessionID, payload.MessageID)
+	if err != nil {
+		return false, err
+	}
+	if cancelled {
+		e.logger.Info("skipping project resume enqueue after logical message cancellation", "session_id", payload.SessionID, "message_id", payload.MessageID)
+		return false, nil
+	}
+	if payload.FlowNodeExecutionID == nil && session != nil {
+		payload.FlowNodeExecutionID = cloneUUIDPointer(flowNodeExecutionIDFromSessionMetadata(session))
+	}
+	if suppressed, err := e.suppressRecoveryRetryForCompletedTurn(ctx, session, payload.MessageID); err != nil {
+		return false, err
+	} else if suppressed {
+		e.logger.Info("skipping project resume enqueue after completed recovery halt for message",
 			"session_id", payload.SessionID,
 			"message_id", payload.MessageID,
 		)
