@@ -1930,6 +1930,73 @@ func TestHandleTurnCompletedEventBlocksRepeatedGenericRecoveryReplyStatusInvento
 	}
 }
 
+func TestHandleTurnCompletedEventBlocksRepeatedGenericRecoveryReplyWorkspaceCheckVariant(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Metadata = mustRawJSON(t, map[string]any{"recovery_action": recoveryActionValidationResume})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	reply := "I'll help you resume the validation synthesis task. Let me first check the current state of the workspace and the task."
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, reply)
+	fixture.chat.mu.Lock()
+	fixture.chat.turns[turnID].RetryCount = maxGenericRecoveryReplyRetries
+	fixture.chat.mu.Unlock()
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "generic non-action replies") {
+		t.Fatalf("blocked reason = %q, want generic non-action reply reason", blocker.calls[0].reason)
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
+	}
+}
+
 func TestNormalizeRecoveryCheckpointTargetForTaskRepointsExecutionFirstReportAwayFromPlanning(t *testing.T) {
 	taskRecord := repo.ProjectTask{
 		TaskNumber: 13,
@@ -9438,6 +9505,18 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			content:    "I need to provide the content parameter for file_write. Here is the complete workflow specification:",
 			targetPath: "deliverables/oc-11-validation-workflow-spec.md",
 			want:       "tool-recovery troubleshooting",
+		},
+		{
+			name: "rejects operator-choice status questionnaire",
+			content: "I'm standing by to validate the Speaker Pipeline Ops workflow. I've reviewed the context:\n\n" +
+				"**Current Task**: OC-13 (Synthesize Validation Findings & Report) - In progress, Work node active\n\n" +
+				"**What I need from you**:\n" +
+				"1. Should I begin OC-13 execution?\n" +
+				"2. Or should I prioritize unblocking OC-19 and OC-26 first?\n" +
+				"3. Or would you like me to investigate and report the current bottleneck status?\n\n" +
+				"**Concise ask**: What's your priority?",
+			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			want:       "asked the operator to choose the next step instead of the file body",
 		},
 		{
 			name:    "accepts first-person file body",

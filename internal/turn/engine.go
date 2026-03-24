@@ -11713,6 +11713,11 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"should i inspect the planning artifacts",
 		"should i start drafting",
 		"who should review the completed",
+		"what i need from you:",
+		"concise ask:",
+		"should i begin oc-",
+		"should i prioritize unblocking",
+		"or would you like me to investigate and report",
 	) {
 		return fmt.Sprintf("assistant draft for %s asked the operator to choose the next step instead of the file body", path)
 	}
@@ -11725,6 +11730,8 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"what i need to proceed:",
 		"should i inspect the planning artifacts",
 		"should i start drafting",
+		"what i need from you:",
+		"concise ask:",
 	) {
 		return fmt.Sprintf("assistant draft for %s asked the operator to choose the next step instead of the file body", path)
 	}
@@ -16004,9 +16011,14 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"before i proceed with drafting",
 		"let me first examine the current state of the project and task",
 		"let me examine the current state of the project and task",
+		"let me first check the current state of the workspace and the task",
+		"let me first check the current state of the workspace",
+		"let me first check the current state of the task",
 		"let me read the strategy artifacts that are already locked",
 		"let me read those to understand the locked decisions",
 		"let me check the task flow and understand what step we're on",
+		"retrieve existing validation artifacts",
+		"check planning artifacts",
 		"the decisions are locked and clear",
 		"i need to confirm",
 	}
