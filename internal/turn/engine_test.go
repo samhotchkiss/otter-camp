@@ -6846,6 +6846,162 @@ func TestContinuationTurnAppendsDirectActionPromptForAsyncProjectTask(t *testing
 	}
 }
 
+func TestContinuationTurnUsesPriorSubstantiveDraftForAsyncProjectTask(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+	createCompletedTurnWithAssistantMessage(t, fixture, assignedID, strings.TrimSpace(`# Deliverable
+
+## Section
+Concrete draft body that should become the continuation root.
+`))
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			t.Fatalf("unexpected continuation_summary model call")
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessage *repo.ChatMessage
+	var actionPrompt *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if strings.Contains(message.Content, "[Continuation summary]") {
+			copyMessage := message
+			summaryMessage = &copyMessage
+		}
+		if strings.Contains(message.Content, "Treat it as the working artifact draft for this turn.") {
+			copyMessage := message
+			actionPrompt = &copyMessage
+		}
+	}
+	if summaryMessage == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(summaryMessage.Content, "Concrete draft body that should become the continuation root.") {
+		t.Fatalf("continuation summary = %q, want prior substantive draft", summaryMessage.Content)
+	}
+	if actionPrompt == nil {
+		t.Fatal("expected task continuation action prompt with draft guidance")
+	}
+}
+
+func TestContinuationTurnUsesPriorRecoveryArtifactDraftForAsyncProjectTask(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+			},
+		},
+	}
+	priorTurnID := createCompletedTurnWithAssistantMessage(t, fixture, assignedID, "Now I'll write the file body.")
+	appendToolResultMessage(t, fixture, priorTurnID, map[string]any{
+		"tool_name": "file.read",
+		"output": map[string]any{
+			"path": recoveryArtifactDir + "/design-system/03-accessibility-standards.md",
+			"content": strings.TrimSpace(`# Recovery file.write artifact
+
+Task: OC-28
+Target Path: design-system/03-accessibility-standards.md
+
+## Draft Content
+
+# Accessibility Standards
+
+## Contrast Requirements
+- Body copy must meet WCAG contrast thresholds.
+`),
+		},
+	})
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			t.Fatalf("unexpected continuation_summary model call")
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessage *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if strings.Contains(message.Content, "[Continuation summary]") {
+			copyMessage := message
+			summaryMessage = &copyMessage
+		}
+	}
+	if summaryMessage == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(summaryMessage.Content, "# Accessibility Standards") {
+		t.Fatalf("continuation summary = %q, want prior recovery artifact draft", summaryMessage.Content)
+	}
+}
+
 func TestBuildTaskContinuationActionPromptTreatsDocumentSummaryAsDraft(t *testing.T) {
 	summary := "# Visual Direction\n\n- Kind: strategy_artifact\n\n## Design Principles\nConcrete draft body."
 

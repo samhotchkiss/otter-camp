@@ -6619,13 +6619,18 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		return nil
 	}
 
-	profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "continuation_summary", 0, false)
-	if err != nil {
-		return err
-	}
 	messages, _ := e.messages.ListBySession(ctx, rt.session.ID)
 	if shouldAppendTaskContinuationActionPrompt(rt.session) && sessionHasSupervisorRecoveryPrompt(messages) {
 		return e.appendContinuationSummaryAndAction(ctx, rt, taskExecutionContinuationFallbackSummary())
+	}
+	if shouldAppendTaskContinuationActionPrompt(rt.session) {
+		if summary, ok := e.taskExecutionContinuationSummary(ctx, rt); ok {
+			return e.appendContinuationSummaryAndAction(ctx, rt, summary)
+		}
+	}
+	profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "continuation_summary", 0, false)
+	if err != nil {
+		return err
 	}
 	recent := lastNUserMessages(messages, 3)
 	resp, err := e.models.Complete(ctx, ModelRequest{
@@ -6656,6 +6661,29 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		summary = projectExecutionContinuationFallbackSummary()
 	}
 	return e.appendContinuationSummaryAndAction(ctx, rt, summary)
+}
+
+func (e *TurnEngine) taskExecutionContinuationSummary(ctx context.Context, rt *turnRuntime) (string, bool) {
+	if e == nil || rt == nil || rt.session == nil || !shouldAppendTaskContinuationActionPrompt(rt.session) {
+		return "", false
+	}
+	targetPath := e.latestRecoveryTargetPathForSession(ctx, rt.session.ID)
+	if draft, ok := e.latestPriorSubstantiveAssistantDraftContent(ctx, rt, targetPath); ok {
+		return compactContinuationSummary(draft), true
+	}
+	if draft, ok := e.latestPriorRecoveryArtifactDraftContent(ctx, rt, targetPath); ok {
+		return compactContinuationSummary(draft), true
+	}
+	if draft, ok := e.latestContinuationSummaryDraftContent(ctx, rt, targetPath); ok {
+		return compactContinuationSummary(draft), true
+	}
+	if draft, ok := e.latestTaskHistoricalSubstantiveDraftContent(ctx, rt, targetPath); ok {
+		return compactContinuationSummary(draft), true
+	}
+	if draft, rejectReason, ok := e.recoveryPersistedDraftContent(ctx, rt, targetPath); ok && strings.TrimSpace(rejectReason) == "" {
+		return compactContinuationSummary(draft), true
+	}
+	return "", false
 }
 
 func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt *turnRuntime, summary string) error {
@@ -11623,6 +11651,42 @@ func (e *TurnEngine) latestPriorSubstantiveAssistantDraftContent(ctx context.Con
 	return "", false
 }
 
+func (e *TurnEngine) latestPriorRecoveryArtifactDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", false
+	}
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return "", false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.TurnID == nil || *message.TurnID == rt.turn.ID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" || !strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+			continue
+		}
+		recoveredTargetPath, usedArtifactPath := recoveryTargetPathFromToolOutput(output)
+		if !usedArtifactPath || strings.TrimSpace(recoveredTargetPath) == "" {
+			continue
+		}
+		if strings.TrimSpace(targetPath) != "" && !sameWorkspaceRelativePath(recoveredTargetPath, targetPath) {
+			continue
+		}
+		draft := strings.TrimSpace(recoveryArtifactDraftContent(anyString(output["content"])))
+		if draft == "" {
+			continue
+		}
+		return draft, true
+	}
+	return "", false
+}
+
 func (e *TurnEngine) latestContinuationSummaryDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
 	if e == nil || e.messages == nil || rt == nil || rt.session == nil {
 		return "", false
@@ -12873,18 +12937,18 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	}
 	if !authoritativeTarget {
 		if historicalTarget, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt); ok && historicalTarget != "" && !sameWorkspaceRelativePath(historicalTarget, targetPath) {
-		historicalTarget = strings.TrimSpace(normalizeRecoveryCheckpointPathsForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
-			TargetPath: historicalTarget,
-		}).TargetPath)
-		if currentDraft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); !found || recoveryFileWriteDraftRejectReason(currentDraft, targetPath) != "" || !looksLikeRecoveryFileDraft(currentDraft) {
-			targetPath = historicalTarget
-			if artifactPath != "" {
-				if recoveredTarget, ok := recoveryTargetPathFromArtifact(artifactPath); ok && !sameWorkspaceRelativePath(recoveredTarget, historicalTarget) {
-					artifactPath = ""
+			historicalTarget = strings.TrimSpace(normalizeRecoveryCheckpointPathsForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
+				TargetPath: historicalTarget,
+			}).TargetPath)
+			if currentDraft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); !found || recoveryFileWriteDraftRejectReason(currentDraft, targetPath) != "" || !looksLikeRecoveryFileDraft(currentDraft) {
+				targetPath = historicalTarget
+				if artifactPath != "" {
+					if recoveredTarget, ok := recoveryTargetPathFromArtifact(artifactPath); ok && !sameWorkspaceRelativePath(recoveredTarget, historicalTarget) {
+						artifactPath = ""
+					}
 				}
 			}
 		}
-	}
 	}
 	priorFailureReasons := e.recoveryCheckpointPriorFailureReasons(ctx, rt, failureReason)
 	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
