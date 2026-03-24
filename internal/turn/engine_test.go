@@ -9417,6 +9417,11 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want: "generic recovery reply",
 		},
 		{
+			name:    "rejects target file first placeholder narration",
+			content: "I need to read the target file first to understand what work has already been persisted, since the recovery instruction indicates a target file path but the inline draft above is non-substantive.",
+			want:    "intent to write the deliverable",
+		},
+		{
 			name: "rejects full context acceptance criteria placeholder narration",
 			content: "Excellent! Now I understand the full context. I need to complete OC-28 by writing the comprehensive accessibility standards document. " +
 				"Let me check the acceptance criteria and dependency log as well:",

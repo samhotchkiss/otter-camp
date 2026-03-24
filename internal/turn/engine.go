@@ -11981,6 +11981,14 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
 	}
 	if containsAny(lower,
+		"i need to read the target file first",
+		"i need to read the existing target file first",
+		"i need to read the target file to understand what work has already been persisted",
+		"i need to read the existing target file and recovery artifact",
+	) {
+		return fmt.Sprintf("assistant draft for %s described intent to write the deliverable instead of the file body", path)
+	}
+	if containsAny(lower,
 		"i need to check what the current state of the target file is",
 		"then read the planning artifacts",
 		"understand the workflow specification requirements before writing the deliverable",
