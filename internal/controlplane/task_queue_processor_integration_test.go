@@ -341,6 +341,153 @@ func TestTaskQueueProcessorIntegrationResumeValidationBlockedTaskStartsFreshTurn
 	}
 }
 
+func TestTaskQueueProcessorIntegrationResumeValidationBlockedReviewTaskStartsFreshTurn(t *testing.T) {
+	ctx := context.Background()
+	fx := seedTaskQueueProcessorFixture(t, ctx)
+	defer fx.bus.Unsubscribe(fx.taskQueuedSub)
+	defer fx.bus.Unsubscribe(fx.taskCompletedSub)
+	defer fx.bus.Unsubscribe(fx.runCancellationSub)
+	defer fx.bus.Unsubscribe(fx.flowAdvancedSub)
+	stopTurnRuntime := startTaskQueueTurnRuntime(t, ctx, fx.pool, fx.bus, fx.org.ID)
+	defer stopTurnRuntime()
+
+	reviewer := mustCreateTaskQueueAgentAssignment(t, ctx, fx.pool, fx.org.ID, fx.project.ID, "reviewer", "Async Reviewer", "reviewer")
+	template := seedTaskQueueReviewCompletionFlowTemplate(t, ctx, fx.pool, fx.org.ID, fx.project.ID, fx.agent.ID, reviewer.ID)
+
+	created, err := fx.tasks.CreateTask(ctx, tasksvc.CreateTaskRequest{
+		ProjectID:       fx.project.ID,
+		Title:           "Resume validation blocked review task",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &fx.agent.ID,
+		CreatedByType:   "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "queued", tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := fx.tasks.TransitionStatus(ctx, created.ID, "in_progress", tasksvc.Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+	if _, err := fx.flow.StartFlow(ctx, created.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if _, err := fx.flow.PauseAtReviewCheckpoint(ctx, created.ID, flowsvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("PauseAtReviewCheckpoint: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fx.pool)
+	executionRepo := repo.NewFlowNodeExecutionRepo(fx.pool)
+	messageRepo := repo.NewChatMessageRepo(fx.pool)
+	turnRepo := repo.NewChatTurnRepo(fx.pool)
+
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		current, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		return current.WorkStatus == "review", nil
+	})
+
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID review task: %v", err)
+	}
+	guardedMetadata, err := tasksvc.MergeValidationGuardMetadata(taskRecord.Metadata, tasksvc.ValidationGuardState{
+		InitialMessageID:   uuid.NewString(),
+		Fingerprint:        "flow.review_decision:required",
+		AttemptFingerprint: "flow.review_decision:required:attempt",
+		ToolName:           "flow.review_decision",
+		FailureClass:       "tool_validation",
+		FailureCode:        "review_decision_required",
+		FailureReason:      "review turn completed without calling flow.review_decision",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("MergeValidationGuardMetadata: %v", err)
+	}
+	taskRecord.Metadata = guardedMetadata
+	taskRecord.WorkStatus = "blocked"
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update blocked review task: %v", err)
+	}
+	if _, err := fx.tasks.ResumeValidationBlockedTask(ctx, created.ID, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+
+	var (
+		sessionID    uuid.UUID
+		turns        []repo.ChatTurn
+		foundKickoff bool
+	)
+	waitForTaskQueueCondition(t, 10*time.Second, func() (bool, error) {
+		current, err := taskRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			return false, err
+		}
+		if current.WorkStatus != "review" || current.CurrentFlowNodeID == nil {
+			return false, nil
+		}
+
+		execution, err := executionRepo.GetActive(ctx, created.ID, *current.CurrentFlowNodeID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+			return false, nil
+		}
+		sessionID = *execution.SessionID
+
+		messages, err := messageRepo.ListBySession(ctx, sessionID)
+		if err != nil {
+			return false, err
+		}
+		foundKickoff = false
+		for _, message := range messages {
+			if message.Role != "user" || len(message.Metadata) == 0 {
+				continue
+			}
+			var metadata map[string]any
+			if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
+				continue
+			}
+			if metadata["source"] == "task_queue_processor" && strings.Contains(message.Content, "Start review on task:") {
+				foundKickoff = true
+				break
+			}
+		}
+		if !foundKickoff {
+			return false, nil
+		}
+
+		turns, err = turnRepo.ListBySession(ctx, sessionID)
+		if err != nil {
+			return false, err
+		}
+		if len(turns) == 0 {
+			return false, nil
+		}
+		status := strings.TrimSpace(turns[len(turns)-1].Status)
+		return status == "pending" || status == "in_progress" || status == "completed", nil
+	})
+
+	if sessionID == uuid.Nil {
+		t.Fatal("expected active review session after blocked review resume")
+	}
+	if !foundKickoff {
+		t.Fatal("expected review kickoff message after blocked review resume")
+	}
+	if len(turns) == 0 {
+		t.Fatal("expected a fresh review turn after blocked review resume")
+	}
+}
+
 func TestTaskQueueProcessorIntegrationQueuedReviewTaskRepairsRuntimeStatus(t *testing.T) {
 	ctx := context.Background()
 	fx := seedTaskQueueProcessorFixture(t, ctx)

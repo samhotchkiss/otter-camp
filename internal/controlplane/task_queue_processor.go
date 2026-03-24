@@ -336,8 +336,7 @@ func (p *TaskQueueProcessor) processQueuedTask(ctx context.Context, event eventb
 	}
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
 		if taskRecord.FlowTemplateID != nil && strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
-			_, err := p.ensureTaskFlowExecutionState(ctx, taskRecord)
-			return err
+			return p.ensureFlowRun(ctx, event, taskRecord)
 		}
 		return nil
 	}
