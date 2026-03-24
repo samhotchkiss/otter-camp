@@ -3610,10 +3610,28 @@ func (e *NativeToolExecutor) findReusableScopedSession(ctx context.Context, orga
 }
 
 func (e *NativeToolExecutor) findCurrentTaskExecutionSession(ctx context.Context, organizationID, taskID uuid.UUID, sessions []repo.ChatSession) (*repo.ChatSession, error) {
+	activeExecutionID := uuid.Nil
+	activeExecutionVisit := -1
+	if e.flowExecs != nil {
+		executions, err := e.flowExecs.ListByTask(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		for _, execution := range executions {
+			if !strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
+				continue
+			}
+			if activeExecutionID == uuid.Nil || execution.VisitNumber > activeExecutionVisit {
+				activeExecutionID = execution.ID
+				activeExecutionVisit = execution.VisitNumber
+			}
+		}
+	}
 	var (
-		newestBlank    *repo.ChatSession
-		latestNonBlank *repo.ChatSession
-		duplicates     []repo.ChatSession
+		activeExecutionSession *repo.ChatSession
+		newestBlank            *repo.ChatSession
+		latestNonBlank         *repo.ChatSession
+		duplicates             []repo.ChatSession
 	)
 	for i := range sessions {
 		session := sessions[i]
@@ -3634,6 +3652,11 @@ func (e *NativeToolExecutor) findCurrentTaskExecutionSession(ctx context.Context
 			continue
 		}
 		if !strings.EqualFold(strings.TrimSpace(session.Status), "active") {
+			continue
+		}
+		if activeExecutionID != uuid.Nil && sessionHasFlowExecution(session, activeExecutionID) {
+			candidate := session
+			activeExecutionSession = &candidate
 			continue
 		}
 		if isBlankTaskAsyncSession(session) {
@@ -3657,6 +3680,9 @@ func (e *NativeToolExecutor) findCurrentTaskExecutionSession(ctx context.Context
 	if err := e.closeScopedSessionDuplicates(ctx, duplicates); err != nil {
 		return nil, err
 	}
+	if activeExecutionSession != nil {
+		return activeExecutionSession, nil
+	}
 	if newestBlank != nil && (latestNonBlank == nil || taskAsyncSessionMoreRecent(*newestBlank, *latestNonBlank)) {
 		return newestBlank, nil
 	}
@@ -3664,6 +3690,27 @@ func (e *NativeToolExecutor) findCurrentTaskExecutionSession(ctx context.Context
 		return latestNonBlank, nil
 	}
 	return newestBlank, nil
+}
+
+func sessionHasFlowExecution(session repo.ChatSession, executionID uuid.UUID) bool {
+	if executionID == uuid.Nil {
+		return false
+	}
+	metadata := metadataObject(session.Metadata)
+	if metadata == nil {
+		return false
+	}
+	raw, ok := metadata["flow_node_execution_id"]
+	if !ok {
+		return false
+	}
+	switch typed := raw.(type) {
+	case string:
+		parsed, err := uuid.Parse(strings.TrimSpace(typed))
+		return err == nil && parsed == executionID
+	default:
+		return false
+	}
 }
 
 func (e *NativeToolExecutor) closeScopedSessionDuplicates(ctx context.Context, sessions []repo.ChatSession) error {

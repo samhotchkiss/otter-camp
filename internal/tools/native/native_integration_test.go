@@ -3406,6 +3406,109 @@ func TestIntegrationSessionCreateTaskBoundAsyncWorkUsesTaskSession(t *testing.T)
 	}
 }
 
+func TestIntegrationSessionCreateTaskBoundAsyncPrefersActiveExecutionSession(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 1)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		WorkStatus:     "in_progress",
+		FlowTemplateID: &template.ID,
+	})
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) == 0 {
+		t.Fatal("expected at least one flow node")
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).SetFlowNode(ctx, task.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("set task flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	oldExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "completed",
+	})
+	if err != nil {
+		t.Fatalf("create old execution: %v", err)
+	}
+	activeExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 2,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create active execution: %v", err)
+	}
+
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	oldSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata: func() json.RawMessage {
+			payload, marshalErr := json.Marshal(map[string]any{"flow_node_execution_id": oldExecution.ID.String(), "source": "stale"})
+			if marshalErr != nil {
+				t.Fatalf("marshal old session metadata: %v", marshalErr)
+			}
+			return payload
+		}(),
+	})
+	if err != nil {
+		t.Fatalf("create old task session: %v", err)
+	}
+	activeSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata: func() json.RawMessage {
+			payload, marshalErr := json.Marshal(map[string]any{"flow_node_execution_id": activeExecution.ID.String(), "source": "active"})
+			if marshalErr != nil {
+				t.Fatalf("marshal active session metadata: %v", marshalErr)
+			}
+			return payload
+		}(),
+	})
+	if err != nil {
+		t.Fatalf("create active task session: %v", err)
+	}
+	if oldSession.ID == activeSession.ID {
+		t.Fatal("expected distinct sessions for old and active executions")
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "session.create", map[string]any{
+		"scope_type": "project_task",
+		"scope_id":   task.ID.String(),
+		"mode":       "async",
+		"title":      "Reuse active execution session",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	session := out["session"].(map[string]any)
+	if got := mustUUIDValue(t, session["id"]); got != activeSession.ID {
+		t.Fatalf("session id = %s, want active execution session %s (not stale %s)", got, activeSession.ID, oldSession.ID)
+	}
+}
+
 func TestIntegrationMessageSendNormalizesInvalidRoleToUser(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
