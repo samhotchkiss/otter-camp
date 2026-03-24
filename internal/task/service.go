@@ -896,6 +896,24 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 		}
 		taskRecord.Metadata = cleared
 	}
+	targetStatus := resumeBlockedTaskTargetStatus(ctx, s.flowNodes, taskRecord)
+	if targetStatus == "review" {
+		if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); !ok {
+			decision.checkpoint = nil
+		} else {
+			cleared, clearErr := taskcheckpoint.ClearRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+			if clearErr != nil {
+				return nil, clearErr
+			}
+			taskRecord.Metadata = cleared
+			updatedTask, updateErr := s.updateTaskMetadata(ctx, taskRecord)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+			taskRecord = updatedTask
+			decision.checkpoint = nil
+		}
+	}
 
 	payload := map[string]any{
 		"recovery_action":        RecoveryActionResumeBlockedTask,
@@ -921,7 +939,7 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 	}
 	resumeActor := actor
 	resumeActor.AllowGateBypass = true
-	return s.transitionTaskRecord(ctx, taskRecord, resumeBlockedTaskTargetStatus(ctx, s.flowNodes, taskRecord), resumeActor, payload, false)
+	return s.transitionTaskRecord(ctx, taskRecord, targetStatus, resumeActor, payload, false)
 }
 
 func resumeBlockedTaskTargetStatus(ctx context.Context, flowNodes flowNodeRepository, taskRecord repo.ProjectTask) string {

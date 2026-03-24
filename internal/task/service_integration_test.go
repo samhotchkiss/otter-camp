@@ -1035,7 +1035,17 @@ func TestTaskServiceIntegrationResumeValidationBlockedReviewTaskRestoresReviewSt
 	if err != nil {
 		t.Fatalf("MergeValidationGuardMetadata: %v", err)
 	}
-	taskRecord.Metadata = guardedMetadata
+	checkpointedMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(guardedMetadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "Test/oc-10-fulfillment-readiness-test-plan.md",
+		ArtifactPath:  ".ottercamp/recovery/Test/oc-10-fulfillment-readiness-test-plan.md",
+		FailureReason: "recovery halted after 3 retries without a usable assistant response",
+		HaltTurnID:    uuid.NewString(),
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRecord.Metadata = checkpointedMetadata
 	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
 		t.Fatalf("Update review task: %v", err)
 	}
@@ -1052,6 +1062,9 @@ func TestTaskServiceIntegrationResumeValidationBlockedReviewTaskRestoresReviewSt
 	}
 	if _, ok := ParseValidationGuard(resumed.Metadata); ok {
 		t.Fatalf("expected validation guard to be cleared, metadata=%s", string(resumed.Metadata))
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumed.Metadata); ok {
+		t.Fatalf("expected durable recovery checkpoint to be cleared for review resume, metadata=%s", string(resumed.Metadata))
 	}
 
 	var payload []byte
@@ -1071,6 +1084,9 @@ func TestTaskServiceIntegrationResumeValidationBlockedReviewTaskRestoresReviewSt
 	}
 	if got := strings.TrimSpace(fmt.Sprintf("%v", eventPayload["to_status"])); got != "review" {
 		t.Fatalf("to_status = %q, want review", got)
+	}
+	if _, ok := eventPayload["recovery_checkpoint_target_path"]; ok {
+		t.Fatalf("expected review resume event payload to omit recovery checkpoint, payload=%s", string(payload))
 	}
 }
 
