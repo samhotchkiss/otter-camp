@@ -869,7 +869,7 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 	}
 
 	var created Run
-	dispatchRecoveryMessage := true
+	shouldEnsureRecoveryKickoff := true
 	if coordinator, ok := s.runService.(interface {
 		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
 	}); ok {
@@ -902,7 +902,7 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 			return s.maybeEscalateStaleBlocker(ctx, runRecord)
 		}
 		created = result.Run
-		dispatchRecoveryMessage = result.shouldDispatch()
+		shouldEnsureRecoveryKickoff = result.Decision != executionWakeupDeferred
 	} else {
 		var createErr error
 		created, createErr = s.runService.CreateRun(ctx, CreateRunInput{
@@ -929,25 +929,31 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 		}
 	}
 
-	if dispatchRecoveryMessage && s.chatService != nil && created.SessionID != nil && *created.SessionID != uuid.Nil {
+	if shouldEnsureRecoveryKickoff && s.chatService != nil && created.SessionID != nil && *created.SessionID != uuid.Nil {
 		sessionID := *created.SessionID
 		if strings.EqualFold(runRecord.PrincipalType, "agent") && runRecord.PrincipalID != uuid.Nil {
 			if _, addErr := s.chatService.AddParticipant(ctx, sessionID, "agent", runRecord.PrincipalID, "responder"); addErr != nil && !errors.Is(addErr, chat.ErrAlreadyParticipant) {
 				s.logger.Warn("supervisor: failed to add agent participant for recovery", "session_id", sessionID, "agent_id", runRecord.PrincipalID, "error", addErr)
 			}
 		}
+		flowNodeExecutionID := strings.TrimSpace(valueAsString(runtimeMetadata["flow_node_execution_id"]))
 		msgMeta, _ := json.Marshal(map[string]any{
-			"source": "supervisor",
-			"run_id": created.ID.String(),
-			"reason": strings.TrimSpace(reason),
+			"source":                 "supervisor",
+			"run_id":                 created.ID.String(),
+			"reason":                 strings.TrimSpace(reason),
+			"flow_node_execution_id": flowNodeExecutionID,
 		})
-		if _, msgErr := s.chatService.AppendMessage(ctx, chat.AppendMessageInput{
-			SessionID: sessionID,
-			Role:      "user",
-			Content:   "supervisor recovery: resume task",
-			Metadata:  msgMeta,
-		}); msgErr != nil {
-			s.logger.Warn("supervisor: failed to append recovery kickoff message", "session_id", sessionID, "error", msgErr)
+		if hasKickoff, kickoffErr := s.sessionHasSupervisorRecoveryKickoff(ctx, sessionID, flowNodeExecutionID); kickoffErr != nil {
+			s.logger.Warn("supervisor: failed to inspect recovery kickoff message", "session_id", sessionID, "error", kickoffErr)
+		} else if !hasKickoff {
+			if _, msgErr := s.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+				SessionID: sessionID,
+				Role:      "user",
+				Content:   "supervisor recovery: resume task",
+				Metadata:  msgMeta,
+			}); msgErr != nil {
+				s.logger.Warn("supervisor: failed to append recovery kickoff message", "session_id", sessionID, "error", msgErr)
+			}
 		}
 	}
 
@@ -966,6 +972,39 @@ func (s *Supervisor) recoverRun(ctx context.Context, runRecord Run, reason strin
 		Payload:   encodedPayload,
 	})
 	return err
+}
+
+func (s *Supervisor) sessionHasSupervisorRecoveryKickoff(ctx context.Context, sessionID uuid.UUID, flowNodeExecutionID string) (bool, error) {
+	if s.pool == nil || sessionID == uuid.Nil {
+		return false, nil
+	}
+	messages, err := repo.NewChatMessageRepo(s.pool).ListBySession(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		if strings.TrimSpace(message.Content) != "supervisor recovery: resume task" {
+			continue
+		}
+		if len(message.Metadata) == 0 || !json.Valid(message.Metadata) {
+			continue
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(message.Metadata, &metadata); err != nil {
+			continue
+		}
+		if strings.TrimSpace(valueAsString(metadata["source"])) != "supervisor" {
+			continue
+		}
+		if flowNodeExecutionID != "" && strings.TrimSpace(valueAsString(metadata["flow_node_execution_id"])) != flowNodeExecutionID {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func (s *Supervisor) fileBlocker(ctx context.Context, runRecord Run, reason string) error {

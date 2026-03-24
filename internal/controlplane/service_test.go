@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/samhotchkiss/otter-camp/internal/budget"
+	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
@@ -1149,6 +1150,75 @@ func TestSupervisorDetectStuckRunsInitiatesRecovery(t *testing.T) {
 	}
 }
 
+func TestSupervisorRecoverRunEnsuresKickoffForCoalescedWakeup(t *testing.T) {
+	sessionID := uuid.New()
+	taskID := uuid.New()
+	flowNodeID := uuid.New()
+	runID := uuid.New()
+	orgID := uuid.New()
+	agentID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{
+		session: &chat.ChatSession{
+			ID:     sessionID,
+			Status: "active",
+			Mode:   "async",
+		},
+	}
+	runSvc := &fakeSupervisorWakeupRunService{
+		wakeupResult: executionWakeupResult{
+			Run: Run{
+				ID:             runID,
+				OrganizationID: orgID,
+				Status:         "in_progress",
+				TriggerType:    "supervisor",
+				SessionID:      &sessionID,
+				TaskID:         &taskID,
+				FlowNodeID:     &flowNodeID,
+				PrincipalType:  "system",
+				PrincipalID:    uuid.Nil,
+			},
+			Decision: executionWakeupCoalesced,
+		},
+	}
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		RunService:  runSvc,
+		Runs:        &fakeSupervisorRuns{},
+		RunEvents:   &fakeSupervisorEvents{},
+		ChatService: chatService,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+
+	runRecord := Run{
+		ID:             uuid.New(),
+		OrganizationID: orgID,
+		ProjectID:      testPointerUUID(uuid.New()),
+		TaskID:         &taskID,
+		FlowNodeID:     &flowNodeID,
+		SessionID:      &sessionID,
+		PrincipalType:  "agent",
+		PrincipalID:    agentID,
+		TriggerType:    "scheduler",
+		Status:         "in_progress",
+	}
+	if err := supervisor.recoverRun(context.Background(), runRecord, strandedExecutionRecoveryReason); err != nil {
+		t.Fatalf("recoverRun: %v", err)
+	}
+
+	if len(runSvc.createExecutionWakeupInputs) != 1 {
+		t.Fatalf("CreateExecutionWakeup calls = %d, want 1", len(runSvc.createExecutionWakeupInputs))
+	}
+	if len(chatService.appendMessages) != 1 {
+		t.Fatalf("append recovery kickoff calls = %d, want 1", len(chatService.appendMessages))
+	}
+	if got := strings.TrimSpace(chatService.appendMessages[0].Content); got != "supervisor recovery: resume task" {
+		t.Fatalf("recovery kickoff content = %q, want %q", got, "supervisor recovery: resume task")
+	}
+}
+
 func TestSupervisorSkipsRecoveryAfterThreeDeadLettersFilesBlocker(t *testing.T) {
 	now := time.Date(2026, 2, 24, 12, 0, 0, 0, time.UTC)
 	stuckRun := Run{
@@ -1836,6 +1906,13 @@ type fakeSupervisorRunService struct {
 	requestCancelCalls []uuid.UUID
 }
 
+type fakeSupervisorWakeupRunService struct {
+	fakeSupervisorRunService
+	wakeupResult                executionWakeupResult
+	wakeupErr                   error
+	createExecutionWakeupInputs []executionWakeupInput
+}
+
 func (f *fakeSupervisorRunService) CreateRun(_ context.Context, input CreateRunInput) (Run, error) {
 	f.createRunCalls++
 	return Run{
@@ -1856,6 +1933,13 @@ func (*fakeSupervisorRunService) FailRun(context.Context, uuid.UUID, string, str
 func (f *fakeSupervisorRunService) RequestCancel(_ context.Context, runID uuid.UUID, _ CancelRequestActor) error {
 	f.requestCancelCalls = append(f.requestCancelCalls, runID)
 	return nil
+}
+func (f *fakeSupervisorWakeupRunService) CreateExecutionWakeup(_ context.Context, input executionWakeupInput) (executionWakeupResult, error) {
+	f.createExecutionWakeupInputs = append(f.createExecutionWakeupInputs, input)
+	if f.wakeupErr != nil {
+		return executionWakeupResult{}, f.wakeupErr
+	}
+	return f.wakeupResult, nil
 }
 func (*fakeSupervisorRunService) ConfirmCancelled(context.Context, uuid.UUID) error { return nil }
 func (*fakeSupervisorRunService) PauseRun(context.Context, uuid.UUID) error         { return nil }
