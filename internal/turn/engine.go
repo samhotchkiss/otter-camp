@@ -1868,6 +1868,9 @@ func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventb
 	if payload.ProjectID == uuid.Nil {
 		return nil
 	}
+	if err := e.clearProjectPauseAfterResume(ctx, payload.ProjectID); err != nil {
+		return err
+	}
 
 	rows, err := e.pool.Query(ctx, `
 		SELECT DISTINCT cs.id, ct.trigger_message_id
@@ -2057,6 +2060,31 @@ func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventb
 		}
 	}
 	return failedBootstrapRows.Err()
+}
+
+func (e *TurnEngine) clearProjectPauseAfterResume(ctx context.Context, projectID uuid.UUID) error {
+	if e == nil || e.pool == nil || projectID == uuid.Nil {
+		return nil
+	}
+	projectRepo := repo.NewProjectRepo(e.pool)
+	projectRecord, err := projectRepo.GetByID(ctx, projectID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	pauseState := projectpause.Parse(projectRecord.Settings)
+	if !pauseState.IsPaused {
+		return nil
+	}
+	updated := projectRecord
+	updated.Settings, err = projectpause.ClearPause(updated.Settings)
+	if err != nil {
+		return err
+	}
+	_, err = projectRepo.Update(ctx, updated)
+	return err
 }
 
 func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, session *chat.ChatSession, turnID uuid.UUID) error {
