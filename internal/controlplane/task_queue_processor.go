@@ -110,6 +110,7 @@ type taskQueueChatService interface {
 	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
 	ListMessages(ctx context.Context, sessionID uuid.UUID, filter chat.MessageFilter) ([]*chat.ChatMessage, error)
+	UpdateMessageStatus(ctx context.Context, messageID uuid.UUID, newStatus, errorMsg string) error
 }
 
 type taskQueueSessionRepository interface {
@@ -828,10 +829,21 @@ func (p *TaskQueueProcessor) ensureCanonicalTaskAsyncSession(ctx context.Context
 }
 
 func (p *TaskQueueProcessor) sessionHasKickoffMessage(ctx context.Context, sessionID, runID uuid.UUID) (bool, error) {
+	hasKickoff, _, err := p.reconcileWakeupKickoffMessages(ctx, sessionID, runID)
+	return hasKickoff, err
+}
+
+func (p *TaskQueueProcessor) reconcileWakeupKickoffMessages(ctx context.Context, sessionID, runID uuid.UUID) (bool, []uuid.UUID, error) {
 	messages, err := p.chats.ListMessages(ctx, sessionID, chat.MessageFilter{Limit: 200})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
+	type matchedMessage struct {
+		id             uuid.UUID
+		status         string
+		sequenceNumber int64
+	}
+	matches := make([]matchedMessage, 0, 2)
 	for _, message := range messages {
 		if message == nil || !strings.EqualFold(strings.TrimSpace(message.Role), "user") || len(message.Metadata) == 0 {
 			continue
@@ -844,10 +856,32 @@ func (p *TaskQueueProcessor) sessionHasKickoffMessage(ctx context.Context, sessi
 			continue
 		}
 		if strings.TrimSpace(valueAsString(metadata["run_id"])) == runID.String() {
-			return true, nil
+			matches = append(matches, matchedMessage{
+				id:             message.ID,
+				status:         strings.TrimSpace(message.Status),
+				sequenceNumber: message.SequenceNumber,
+			})
 		}
 	}
-	return false, nil
+	if len(matches) == 0 {
+		return false, nil, nil
+	}
+	keep := matches[0]
+	for _, candidate := range matches[1:] {
+		if candidate.sequenceNumber > keep.sequenceNumber {
+			keep = candidate
+		}
+	}
+	duplicates := make([]uuid.UUID, 0, len(matches)-1)
+	for _, candidate := range matches {
+		if candidate.id == keep.id {
+			continue
+		}
+		if strings.EqualFold(candidate.status, "pending") {
+			duplicates = append(duplicates, candidate.id)
+		}
+	}
+	return true, duplicates, nil
 }
 
 func (p *TaskQueueProcessor) dispatchWakeupRun(ctx context.Context, runRecord Run) error {
@@ -1044,11 +1078,16 @@ func (p *TaskQueueProcessor) appendWakeupKickoff(ctx context.Context, runRecord 
 			return err
 		}
 	}
-	hasKickoffMessage, err := p.sessionHasKickoffMessage(ctx, sessionID, runRecord.ID)
+	hasKickoffMessage, duplicateKickoffs, err := p.reconcileWakeupKickoffMessages(ctx, sessionID, runRecord.ID)
 	if err != nil {
 		return err
 	}
 	if hasKickoffMessage {
+		for _, duplicateMessageID := range duplicateKickoffs {
+			if err := p.chats.UpdateMessageStatus(ctx, duplicateMessageID, "final", ""); err != nil && !errors.Is(err, repo.ErrNotFound) {
+				return err
+			}
+		}
 		return nil
 	}
 	_, err = p.chats.AppendMessage(ctx, chat.AppendMessageInput{

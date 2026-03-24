@@ -2195,6 +2195,93 @@ func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestEnsureFlowRunFinalizesDuplicatePendingKickoffs(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	executionID := uuid.New()
+	agentID := uuid.New()
+	sessionID := uuid.New()
+	runID := uuid.New()
+	olderID := uuid.New()
+	newerID := uuid.New()
+	existingMetadata, err := json.Marshal(map[string]any{
+		"source": "task_queue_processor",
+		"run_id": runID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	chatService := &fakeTaskQueueChatService{
+		listMessages: []*chat.ChatMessage{
+			{
+				ID:             olderID,
+				SessionID:      sessionID,
+				Role:           "user",
+				Status:         "pending",
+				SequenceNumber: 1,
+				Metadata:       existingMetadata,
+			},
+			{
+				ID:             newerID,
+				SessionID:      sessionID,
+				Role:           "user",
+				Status:         "pending",
+				SequenceNumber: 2,
+				Metadata:       existingMetadata,
+			},
+		},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				FlowTemplateID: &flowTemplateID,
+				Title:          "Flow task",
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID},
+		},
+		runs: &fakeTaskQueueRunStarter{
+			run: Run{ID: runID, SessionID: &sessionID},
+		},
+		chats: chatService,
+	}
+
+	err = processor.ensureFlowRun(ctx, eventbus.DomainEvent{ID: uuid.New()}, repo.ProjectTask{
+		ID:                taskID,
+		OrganizationID:    orgID,
+		ProjectID:         projectID,
+		FlowTemplateID:    &flowTemplateID,
+		WorkStatus:        "in_progress",
+		Title:             "Flow task",
+		CurrentFlowNodeID: &flowNodeID,
+		AssignedAgentID:   &agentID,
+	})
+	if err != nil {
+		t.Fatalf("ensureFlowRun() error = %v", err)
+	}
+	if len(chatService.appendMessages) != 0 {
+		t.Fatalf("appendMessage calls = %d, want 0 for existing kickoff", len(chatService.appendMessages))
+	}
+	if len(chatService.updateMessageStatusCalls) != 1 {
+		t.Fatalf("UpdateMessageStatus calls = %d, want 1", len(chatService.updateMessageStatusCalls))
+	}
+	if chatService.updateMessageStatusCalls[0].messageID != olderID {
+		t.Fatalf("finalized kickoff message = %s, want older duplicate %s", chatService.updateMessageStatusCalls[0].messageID, olderID)
+	}
+	if chatService.updateMessageStatusCalls[0].newStatus != "final" {
+		t.Fatalf("finalized status = %q, want final", chatService.updateMessageStatusCalls[0].newStatus)
+	}
+}
+
 func indexOfCall(calls []string, target string) int {
 	for idx, call := range calls {
 		if call == target {
@@ -2831,6 +2918,14 @@ type fakeTaskQueueChatService struct {
 	appendMessages           []chat.AppendMessageInput
 	listMessages             []*chat.ChatMessage
 	listMessagesErr          error
+	updateMessageStatusCalls []updateMessageStatusCall
+	updateMessageStatusErr   error
+}
+
+type updateMessageStatusCall struct {
+	messageID uuid.UUID
+	newStatus string
+	errorMsg  string
 }
 
 func (f *fakeTaskQueueChatService) GetSession(_ context.Context, id uuid.UUID) (*chat.ChatSession, error) {
@@ -2972,6 +3067,25 @@ func (f *fakeTaskQueueChatService) ListMessages(context.Context, uuid.UUID, chat
 		return nil, f.listMessagesErr
 	}
 	return f.listMessages, nil
+}
+
+func (f *fakeTaskQueueChatService) UpdateMessageStatus(_ context.Context, messageID uuid.UUID, newStatus, errorMsg string) error {
+	f.calls = append(f.calls, "update_message_status")
+	f.updateMessageStatusCalls = append(f.updateMessageStatusCalls, updateMessageStatusCall{
+		messageID: messageID,
+		newStatus: newStatus,
+		errorMsg:  errorMsg,
+	})
+	if f.updateMessageStatusErr != nil {
+		return f.updateMessageStatusErr
+	}
+	for _, message := range f.listMessages {
+		if message != nil && message.ID == messageID {
+			message.Status = newStatus
+			break
+		}
+	}
+	return nil
 }
 
 var _ taskQueueChatService = (*fakeTaskQueueChatService)(nil)
