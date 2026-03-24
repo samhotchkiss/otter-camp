@@ -2368,16 +2368,16 @@ func TestJobWorkerRequeueStrandedSupervisorRecoveryTurnsSkipsBlockedTasks(t *tes
 		t.Fatalf("create flow node: %v", err)
 	}
 	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
-		OrganizationID: org.ID,
-		ProjectID:      project.ID,
-		Title:          "Blocked task",
-		WorkStatus:     "blocked",
-		BlocksScope:    "task",
-		FlowTemplateID: &template.ID,
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		Title:             "Blocked task",
+		WorkStatus:        "blocked",
+		BlocksScope:       "task",
+		FlowTemplateID:    &template.ID,
 		CurrentFlowNodeID: &flowNode.ID,
-		CreatedByType:  "system",
-		CreatedByID:    &agent.ID,
-		AssignedAgentID: &agent.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &agent.ID,
+		AssignedAgentID:   &agent.ID,
 	})
 	if err != nil {
 		t.Fatalf("create task: %v", err)
@@ -4293,15 +4293,15 @@ func TestJobWorkerRequeuePendingTurnsWithoutJobsSkipsBlockedTasks(t *testing.T) 
 		t.Fatalf("create flow node: %v", err)
 	}
 	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
-		OrganizationID:  org.ID,
-		ProjectID:       project.ID,
-		Title:           "Blocked pending turn",
-		WorkStatus:      "blocked",
-		BlocksScope:     "task",
-		FlowTemplateID:  &template.ID,
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		Title:             "Blocked pending turn",
+		WorkStatus:        "blocked",
+		BlocksScope:       "task",
+		FlowTemplateID:    &template.ID,
 		CurrentFlowNodeID: &flowNode.ID,
-		CreatedByType:   "system",
-		CreatedByID:     &agent.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &agent.ID,
 	})
 	if err != nil {
 		t.Fatalf("create task: %v", err)
@@ -4996,6 +4996,153 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsRecoveryHaltLoo
 	}
 	if requeued != 0 {
 		t.Fatalf("requeued sessions = %d, want 0 for halted recovery loop", requeued)
+	}
+}
+
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsAllowsReviewRecoveryHaltRetry(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-review-halt-retry",
+		DisplayName: "Requeue Active Execution Review Halt Retry",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Review Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You review pending work.",
+		AgentType:       "reviewer",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-review-halt-retry-project",
+		DisplayName:    "Requeue Active Execution Review Halt Retry Project",
+		Description:    "Project for review recovery requeue exception",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-review-halt-retry-template",
+		DisplayName:    "Requeue Active Execution Review Halt Retry Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Internal Review",
+		NodeType:       "review",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		Title:             "Review lane should retry after halted recovery mutation",
+		WorkStatus:        "review",
+		BlocksScope:       "task",
+		CurrentFlowNodeID: &flowNode.ID,
+		FlowTemplateID:    &template.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &agent.ID,
+		AssignedAgentID:   &agent.ID,
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Review only. Use flow.review_decision.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"task_queue_processor","flow_node_execution_id":"00000000-0000-0000-0000-000000000000"}`),
+	})
+	if err != nil {
+		t.Fatalf("create review kickoff message: %v", err)
+	}
+	stopReason := "recovery_content_required"
+	if _, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &message.ID,
+	}); err != nil {
+		t.Fatalf("create completed halted review turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, nil); err != nil {
+		t.Fatalf("clear current turn: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+	messageMetadata := map[string]any{
+		"source":                 "task_queue_processor",
+		"flow_node_execution_id": execution.ID.String(),
+	}
+	encodedMessageMetadata, err := json.Marshal(messageMetadata)
+	if err != nil {
+		t.Fatalf("marshal review kickoff metadata: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).UpdateMetadata(ctx, message.ID, encodedMessageMetadata); err != nil {
+		t.Fatalf("update review kickoff metadata: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1 for halted review recovery", requeued)
 	}
 }
 

@@ -1035,6 +1035,8 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		JOIN flow_node_execution e
 		  ON e.session_id = cs.id
 		 AND e.status = 'active'
+		JOIN flow_node fn
+		  ON fn.id = e.flow_node_id
 		JOIN chat_message cm
 		  ON cm.session_id = cs.id
 		WHERE cs.scope_type = 'project_task'
@@ -1076,13 +1078,16 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		          )
 		      )
 		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM chat_turn halted
-		    WHERE halted.session_id = cs.id
-		      AND halted.trigger_message_id = cm.id
-		      AND halted.status = 'completed'
-		      AND COALESCE(halted.stop_reason, '') = 'recovery_content_required'
+		  AND (
+		    COALESCE(fn.node_type, '') = 'review'
+		    OR NOT EXISTS (
+		      SELECT 1
+		      FROM chat_turn halted
+		      WHERE halted.session_id = cs.id
+		        AND halted.trigger_message_id = cm.id
+		        AND halted.status = 'completed'
+		        AND COALESCE(halted.stop_reason, '') = 'recovery_content_required'
+		    )
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
