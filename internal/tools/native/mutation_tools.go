@@ -40,6 +40,7 @@ var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
 var parentChildOrdinalTitlePattern = regexp.MustCompile(`^([a-z]+)\s+(\d+)\s*:`)
 var malformedParameterEchoPattern = regexp.MustCompile(`(?is)<parameter\s+name\s*=\s*"[^"]+"\s*>`)
 var explicitDeliverablePathPattern = regexp.MustCompile(`(?i)\bdeliverable:\s*([^\s,;]+)`)
+var bootstrapWaveFamilyTitlePattern = regexp.MustCompile(`(?i)\b(?:[a-z0-9]+-)?(fw|lw)\s*[-:]?\s*(\d+)\b`)
 
 var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
 
@@ -3271,6 +3272,14 @@ func normalizeComparableText(value string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }
 
+func bootstrapWaveFamilyKey(title string) string {
+	matches := bootstrapWaveFamilyTitlePattern.FindStringSubmatch(strings.TrimSpace(title))
+	if len(matches) != 3 {
+		return ""
+	}
+	return strings.ToLower(matches[1]) + strings.TrimSpace(matches[2])
+}
+
 func canonicalParentChildTitleKey(value string) string {
 	normalized := normalizeComparableText(value)
 	if normalized == "" {
@@ -3681,17 +3690,24 @@ func (e *NativeToolExecutor) findReusableProjectScopedTask(ctx context.Context, 
 
 	desiredTitle := normalizeComparableText(desired.Title)
 	desiredDescription := normalizeComparableText(derefString(desired.Description))
+	bootstrapFamilyKey := ""
+	if bootstrapSetupStillActive(tasks) {
+		bootstrapFamilyKey = bootstrapWaveFamilyKey(desired.Title)
+	}
 	var reusable *repo.ProjectTask
 	for i := range tasks {
 		taskRecord := tasks[i]
 		if isTaskTerminal(taskRecord.WorkStatus) {
 			continue
 		}
-		if normalizeComparableText(taskRecord.Title) != desiredTitle {
-			continue
+		titleMatches := normalizeComparableText(taskRecord.Title) == desiredTitle
+		if !titleMatches {
+			if bootstrapFamilyKey == "" || bootstrapWaveFamilyKey(taskRecord.Title) != bootstrapFamilyKey {
+				continue
+			}
 		}
 		existingDescription := normalizeComparableText(derefString(taskRecord.Description))
-		if desiredDescription != "" && existingDescription != "" && existingDescription != desiredDescription {
+		if desiredDescription != "" && existingDescription != "" && existingDescription != desiredDescription && titleMatches {
 			continue
 		}
 		if reusable == nil || taskCanonicalLess(taskRecord, *reusable) {

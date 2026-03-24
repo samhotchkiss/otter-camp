@@ -4202,6 +4202,7 @@ func TestIntegrationBootstrapPlanningTaskCreateRejectsOversizedTopLevelTask(t *t
 	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
 	dataDir := t.TempDir()
 	seedReviewRefinementSystemTemplate(t, ctx, pool)
 	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
@@ -4215,6 +4216,15 @@ func TestIntegrationBootstrapPlanningTaskCreateRejectsOversizedTopLevelTask(t *t
 		t.Fatalf("project.create: %v", err)
 	}
 	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        assignee.ID,
+		ProjectID:      projectID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
 
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
@@ -4260,6 +4270,7 @@ func TestIntegrationBootstrapPlanningTaskCreateRejectsBroadTopLevelTaskNeedingDe
 	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
 	dataDir := t.TempDir()
 	seedReviewRefinementSystemTemplate(t, ctx, pool)
 	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
@@ -4273,6 +4284,15 @@ func TestIntegrationBootstrapPlanningTaskCreateRejectsBroadTopLevelTaskNeedingDe
 		t.Fatalf("project.create: %v", err)
 	}
 	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        assignee.ID,
+		ProjectID:      projectID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
 
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
@@ -4321,6 +4341,7 @@ func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreams
 	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
 	dataDir := t.TempDir()
 	seedReviewRefinementSystemTemplate(t, ctx, pool)
 	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
@@ -4334,6 +4355,15 @@ func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreams
 		t.Fatalf("project.create: %v", err)
 	}
 	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        assignee.ID,
+		ProjectID:      projectID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
 
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
@@ -4347,22 +4377,39 @@ func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreams
 	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
 	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
 
-	titles := []string{
-		"Content Strategy",
-		"Site Architecture & Design",
-		"Site Build",
-		"Content Creation",
+	tasksToCreate := []struct {
+		title       string
+		description string
+	}{
+		{
+			title:       "SPO-FW1: Validate worker artifact generation",
+			description: "Run a bounded worker lane and confirm it produces the expected validation artifact output.",
+		},
+		{
+			title:       "SPO-FW2: Validate reviewer approval decision",
+			description: "Run a bounded reviewer lane and confirm approval transitions use flow.review_decision correctly.",
+		},
+		{
+			title:       "SPO-FW3: Validate reviewer rejection decision",
+			description: "Run a bounded reviewer lane and confirm rejection transitions use flow.review_decision correctly.",
+		},
+		{
+			title:       "SPO-LW1: Validate deferred later-wave activation",
+			description: "Confirm deferred later-wave execution activates only after first-wave work fully drains.",
+		},
 	}
-	for _, title := range titles {
+	for _, taskInput := range tasksToCreate {
 		out, err := executor.Execute(projectCtx, "task.create", map[string]any{
-			"project_id": projectID.String(),
-			"title":      title,
+			"project_id":        projectID.String(),
+			"title":             taskInput.title,
+			"description":       taskInput.description,
+			"assigned_agent_id": assignee.ID.String(),
 		})
 		if err != nil {
-			t.Fatalf("task.create %q: %v", title, err)
+			t.Fatalf("task.create %q: %v", taskInput.title, err)
 		}
 		if got := strings.TrimSpace(fmt.Sprintf("%v", out["error"])); got != "" && got != "<nil>" {
-			t.Fatalf("task.create %q error = %q, want empty", title, got)
+			t.Fatalf("task.create %q error = %q, want empty", taskInput.title, got)
 		}
 	}
 
@@ -4390,14 +4437,100 @@ func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreams
 	}
 	for _, task := range tasks {
 		switch strings.TrimSpace(task.Title) {
-		case "Content Strategy",
-			"Site Architecture & Design",
-			"Site Build",
-			"Content Creation":
+		case "SPO-FW1: Validate worker artifact generation",
+			"SPO-FW2: Validate reviewer approval decision",
+			"SPO-FW3: Validate reviewer rejection decision",
+			"SPO-LW1: Validate deferred later-wave activation":
 			if task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {
 				t.Fatalf("bootstrap parent task %q flow_template_id = %v, want resolved template", task.Title, task.FlowTemplateID)
 			}
 		}
+	}
+}
+
+func TestIntegrationBootstrapPlanningTaskCreateReusesBootstrapWaveFamily(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
+	dataDir := t.TempDir()
+	seedReviewRefinementSystemTemplate(t, ctx, pool)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Wave Reuse",
+		"slug":        "bootstrap-wave-reuse-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap retries reuse the same wave-family task instead of creating renamed duplicates.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        assignee.ID,
+		ProjectID:      projectID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap wave reuse repro",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	firstOut, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":        projectID.String(),
+		"title":             "SPO-FW1: Worker task execution and artifact generation",
+		"description":       "Execute the first bounded validation lane and persist the resulting artifact output.",
+		"blocks_scope":      "none",
+		"assigned_agent_id": assignee.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("first task.create: %v", err)
+	}
+	firstTaskID := mustUUIDValue(t, firstOut["task"].(map[string]any)["id"])
+
+	secondOut, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":        projectID.String(),
+		"title":             "SPO-FW1: Test workflow execution",
+		"description":       "Run the bounded execution lane and verify workflow artifact generation completes cleanly.",
+		"blocks_scope":      "none",
+		"assigned_agent_id": assignee.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("second task.create: %v", err)
+	}
+	secondTaskID := mustUUIDValue(t, secondOut["task"].(map[string]any)["id"])
+	if secondTaskID != firstTaskID {
+		t.Fatalf("second task id = %s, want reuse of first task %s", secondTaskID, firstTaskID)
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListByProject tasks: %v", err)
+	}
+	familyTasks := make([]repo.ProjectTask, 0)
+	for _, task := range tasks {
+		if strings.HasPrefix(strings.TrimSpace(task.Title), "SPO-FW1:") {
+			familyTasks = append(familyTasks, task)
+		}
+	}
+	if len(familyTasks) != 1 {
+		t.Fatalf("bootstrap FW1 family task count = %d, want 1", len(familyTasks))
+	}
+	if got := strings.TrimSpace(familyTasks[0].Title); got != "SPO-FW1: Test workflow execution" {
+		t.Fatalf("reused task title = %q, want updated retry title", got)
 	}
 }
 
@@ -4612,16 +4745,16 @@ func TestIntegrationBootstrapSetupPersistRejectsProjectWideGateInFirstWaveSelect
 	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
 	firstDescription := "Bounded first-wave validation task."
 	firstTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
-		OrganizationID: orgID,
-		ProjectID:      projectID,
-		Title:          "Val-1: First-wave worker task",
-		Description:    &firstDescription,
-		WorkStatus:     "draft",
-		BlocksScope:    "none",
-		FlowTemplateID: &template.ID,
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "Val-1: First-wave worker task",
+		Description:     &firstDescription,
+		WorkStatus:      "draft",
+		BlocksScope:     "none",
+		FlowTemplateID:  &template.ID,
 		AssignedAgentID: &actor.ID,
-		CreatedByType:  "agent",
-		CreatedByID:    &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
 	})
 	if err != nil {
 		t.Fatalf("create first task: %v", err)
@@ -4629,16 +4762,16 @@ func TestIntegrationBootstrapSetupPersistRejectsProjectWideGateInFirstWaveSelect
 
 	gateDescription := "Deferred project-wide gate task that must not be in the first wave."
 	gateTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
-		OrganizationID: orgID,
-		ProjectID:      projectID,
-		Title:          "Val-2: Project-wide gate",
-		Description:    &gateDescription,
-		WorkStatus:     "draft",
-		BlocksScope:    "all",
-		FlowTemplateID: &template.ID,
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "Val-2: Project-wide gate",
+		Description:     &gateDescription,
+		WorkStatus:      "draft",
+		BlocksScope:     "all",
+		FlowTemplateID:  &template.ID,
 		AssignedAgentID: &actor.ID,
-		CreatedByType:  "agent",
-		CreatedByID:    &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
 	})
 	if err != nil {
 		t.Fatalf("create gate task: %v", err)
