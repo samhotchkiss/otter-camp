@@ -227,6 +227,9 @@ func looksLikeNarratedTaskFileWritePlaceholder(content string) bool {
 	}
 	if !containsAnySubstring(lower,
 		"let me create",
+		"let me look at",
+		"let me examine",
+		"let me check",
 		"let me write",
 		"let me use",
 		"let me try",
@@ -246,6 +249,8 @@ func looksLikeNarratedTaskFileWritePlaceholder(content string) bool {
 		"requirements",
 		"implementation details",
 		"validation logic",
+		"the task requires me to",
+		"output: `",
 		"system prompt",
 		"with:\n1.",
 		"with:\r\n1.",
@@ -324,6 +329,23 @@ func (e *NativeToolExecutor) projectSessionBootstrapGitCommitBlocked(ctx context
 		}
 	}
 	return nil, false, nil
+}
+
+func (e *NativeToolExecutor) taskSessionGitCommitBlocked(ctx context.Context, scope workspaceScope) (map[string]any, bool, error) {
+	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return nil, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return map[string]any{
+		"error":   "task_git_commit_blocked",
+		"message": fmt.Sprintf("Task `%s` must not call git.commit directly. Write the concrete deliverable files only and let the runtime own commit/flow completion.", strings.TrimSpace(taskRecord.Title)),
+	}, true, nil
 }
 
 func (e *NativeToolExecutor) rejectProjectSessionExecutionMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
@@ -1157,6 +1179,11 @@ func (e *NativeToolExecutor) handleGitCommit(ctx context.Context, input map[stri
 		return nil, err
 	}
 	if blocked, reject, guardErr := e.projectSessionBootstrapGitCommitBlocked(ctx, scope); guardErr != nil {
+		return nil, guardErr
+	} else if reject {
+		return blocked, nil
+	}
+	if blocked, reject, guardErr := e.taskSessionGitCommitBlocked(ctx, scope); guardErr != nil {
 		return nil, guardErr
 	} else if reject {
 		return blocked, nil

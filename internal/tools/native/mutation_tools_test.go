@@ -243,11 +243,11 @@ func TestFileWriteRejectsProjectSessionExecutionDeliverableMutation(t *testing.T
 				Metadata:       json.RawMessage(`{"bootstrap_gate":true}`),
 			},
 			{
-				ID:             executableTaskID,
-				OrganizationID: orgID,
-				ProjectID:      projectID,
-				Title:          "OC-10: Define Validation Rules",
-				WorkStatus:     "draft",
+				ID:              executableTaskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				Title:           "OC-10: Define Validation Rules",
+				WorkStatus:      "draft",
 				AssignedAgentID: &agentID,
 			},
 		},
@@ -834,6 +834,79 @@ func TestGitCommitRejectsActiveBootstrapProjectSession(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("git command calls = %d, want 0", calls)
+	}
+}
+
+func TestGitCommitRejectsTaskSession(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+	calls := 0
+
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		Command: func(_ context.Context, _ string, _ ...string) *exec.Cmd {
+			calls++
+			return nil
+		},
+	})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Write validation scope",
+			WorkStatus:     "queued",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "git.commit", map[string]any{"message": "task commit"})
+	if err != nil {
+		t.Fatalf("git.commit: %v", err)
+	}
+	if out["error"] != "task_git_commit_blocked" {
+		t.Fatalf("error = %v, want task_git_commit_blocked", out["error"])
+	}
+	if !strings.Contains(fmt.Sprintf("%v", out["message"]), "must not call git.commit directly") {
+		t.Fatalf("message = %v, want direct git.commit guidance", out["message"])
+	}
+	if calls != 0 {
+		t.Fatalf("git command calls = %d, want 0", calls)
+	}
+}
+
+func TestLooksLikeNarratedTaskFileWritePlaceholderTaskRequiresMeVariant(t *testing.T) {
+	content := `Now I have the context. This is **OC-11: Execute Happy-Path Validation Test**. The task requires me to:
+
+1. Execute a baseline happy-path validation test
+2. Verify core routing and assignment to correct handler
+3. Collect metrics
+4. Output: ` + "`test-execution.md`" + ` with test results, routing trace, and pass/fail evidence
+
+Let me look at the flow template to understand the validation flow structure:`
+	if !looksLikeNarratedTaskFileWritePlaceholder(content) {
+		t.Fatal("expected task-requires-me placeholder to be rejected")
 	}
 }
 
