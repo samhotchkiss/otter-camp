@@ -27,6 +27,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 var ErrContextCompressed = errors.New("prompt context compressed")
@@ -765,6 +766,9 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 		if strings.TrimSpace(taskCtx.parentTaskLabel) != "" {
 			lines = append(lines, "Parent Task: "+strings.TrimSpace(taskCtx.parentTaskLabel))
 		}
+		if strings.TrimSpace(taskCtx.workspaceRoot) != "" {
+			lines = append(lines, "Workspace Root: "+strings.TrimSpace(taskCtx.workspaceRoot))
+		}
 		if len(taskCtx.planningArtifacts) > 0 {
 			lines = append(lines, "Relevant Planning Artifacts:")
 			for _, artifact := range taskCtx.planningArtifacts {
@@ -940,6 +944,7 @@ type projectTaskContext struct {
 	taskStatus           string
 	taskDescription      string
 	parentTaskLabel      string
+	workspaceRoot        string
 	contentMigration     bool
 	migrationCheckpoint  *taskcheckpoint.ContentMigrationCheckpoint
 	recoveryCheckpoint   *taskcheckpoint.RecoveryFileWriteCheckpoint
@@ -1007,6 +1012,9 @@ func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uu
 		projectRecord, projectErr := a.projects.GetByID(ctx, taskRecord.ProjectID)
 		if projectErr == nil {
 			out.projectName = strings.TrimSpace(projectRecord.DisplayName)
+			if root, rootErr := workspace.ProjectRoot("", strings.TrimSpace(projectRecord.Slug)); rootErr == nil {
+				out.workspaceRoot = strings.TrimSpace(root)
+			}
 		}
 	}
 	if out.projectName == "" {

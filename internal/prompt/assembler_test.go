@@ -62,6 +62,9 @@ func TestPromptAssemblerIncludesTaskContextForTaskScopedSession(t *testing.T) {
 	if !strings.Contains(assembled.SystemPrompt, "Current Flow Step: Implement (active)") {
 		t.Fatalf("system prompt missing current flow step")
 	}
+	if !strings.Contains(assembled.SystemPrompt, "Workspace Root: ") {
+		t.Fatalf("system prompt missing workspace root")
+	}
 	if !strings.Contains(assembled.SystemPrompt, "Subtasks:\n- [done] Set up Next.js project") {
 		t.Fatalf("system prompt missing subtasks block")
 	}
@@ -121,6 +124,7 @@ func TestPromptAssemblerTaskContextBlockFormat(t *testing.T) {
 		"Project: Landing Site",
 		"Status: in_progress",
 		"Description: Create a responsive landing page for OtterCamp.",
+		"Workspace Root: ",
 		"Acceptance Criteria:",
 		"- Mobile responsive design",
 		"- Page load < 2s",
@@ -726,7 +730,7 @@ func assembleTaskContextPrompt(t *testing.T) *AssembledPrompt {
 
 	assembler.projects = &fakeProjectRepo{
 		projects: map[uuid.UUID]repo.Project{
-			projectID: {ID: projectID, OrganizationID: orgID, DisplayName: "Landing Site"},
+			projectID: {ID: projectID, OrganizationID: orgID, DisplayName: "Landing Site", Slug: "landing-site"},
 		},
 	}
 	assembler.tasks = &fakeTaskRepo{
