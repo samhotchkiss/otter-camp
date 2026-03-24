@@ -582,11 +582,11 @@ func CanonicalLiveTurn(turns []ChatTurn) (*ChatTurn, []ChatTurn) {
 		right := pending[j]
 		switch {
 		case left.TurnNumber != right.TurnNumber:
-			return left.TurnNumber < right.TurnNumber
+			return left.TurnNumber > right.TurnNumber
 		case !left.CreatedAt.Equal(right.CreatedAt):
-			return left.CreatedAt.Before(right.CreatedAt)
+			return left.CreatedAt.After(right.CreatedAt)
 		default:
-			return left.ID.String() < right.ID.String()
+			return left.ID.String() > right.ID.String()
 		}
 	})
 

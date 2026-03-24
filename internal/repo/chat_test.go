@@ -130,10 +130,10 @@ func TestCanonicalLiveTurn(t *testing.T) {
 			wantDuplicateIDs: []uuid.UUID{pendingOne.ID},
 		},
 		{
-			name:             "multiple pending keeps oldest and duplicates extras",
+			name:             "multiple pending keeps newest and duplicates extras",
 			turns:            []ChatTurn{pendingThree, pendingOne, pendingTwo},
-			wantCurrentID:    pendingOne.ID,
-			wantDuplicateIDs: []uuid.UUID{pendingTwo.ID, pendingThree.ID},
+			wantCurrentID:    pendingThree.ID,
+			wantDuplicateIDs: []uuid.UUID{pendingTwo.ID, pendingOne.ID},
 		},
 		{
 			name:             "multiple in progress keeps newest and duplicates losers",
@@ -145,7 +145,7 @@ func TestCanonicalLiveTurn(t *testing.T) {
 			name:             "mixed live turns keep in progress and cancel all pending extras",
 			turns:            []ChatTurn{pendingTwo, inProgressOne, pendingOne},
 			wantCurrentID:    inProgressOne.ID,
-			wantDuplicateIDs: []uuid.UUID{pendingOne.ID, pendingTwo.ID},
+			wantDuplicateIDs: []uuid.UUID{pendingTwo.ID, pendingOne.ID},
 		},
 		{
 			name:             "cancelling in progress does not stay canonical",
