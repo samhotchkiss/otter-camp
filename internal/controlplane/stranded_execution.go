@@ -723,7 +723,7 @@ func (s *Supervisor) notifyProjectSessionForStrandedExecution(ctx context.Contex
 	_, err = s.chatService.AppendMessage(ctx, chat.AppendMessageInput{
 		SessionID: projectSession.ID,
 		Role:      "user",
-		Content:   "supervisor recovery: inspect stranded execution",
+		Content:   "supervisor recovery: inspect stranded execution and use flow.recovery_decision",
 		Metadata:  messageMetadata,
 	})
 	return err
@@ -740,7 +740,7 @@ func (s *Supervisor) sessionHasSupervisorPMRecoveryKickoff(ctx context.Context, 
 			FROM chat_message
 			WHERE session_id = $1
 			  AND role = 'user'
-			  AND content = 'supervisor recovery: inspect stranded execution'
+			  AND content = 'supervisor recovery: inspect stranded execution and use flow.recovery_decision'
 			  AND metadata->>'source' = 'supervisor'
 			  AND metadata->>'supervisor_pm_recovery' = 'true'
 			  AND metadata->>'flow_node_execution_id' = $2

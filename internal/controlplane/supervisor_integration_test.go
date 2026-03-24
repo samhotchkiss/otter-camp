@@ -1602,7 +1602,7 @@ func TestSupervisor_StrandedActiveExecutionFailureBlocksTaskAndAbandonsExecution
 	}
 	foundProjectKickoff := false
 	for _, item := range projectMessages {
-		if !strings.EqualFold(strings.TrimSpace(item.Role), "user") || strings.TrimSpace(item.Content) != "supervisor recovery: inspect stranded execution" {
+		if !strings.EqualFold(strings.TrimSpace(item.Role), "user") || strings.TrimSpace(item.Content) != "supervisor recovery: inspect stranded execution and use flow.recovery_decision" {
 			continue
 		}
 		var metadata map[string]any
