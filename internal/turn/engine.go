@@ -3100,10 +3100,14 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	bootstrapSetupTasks, canonicalSetupTaskByID := canonicalProjectBootstrapSetupTasks(setupTaskCandidates)
 	bootstrapSetupTaskByID = canonicalSetupTaskByID
 	progress.BootstrapSetupTaskCount = len(bootstrapSetupTasks)
+	firstWaveSelectionPersisted := false
 	for _, task := range bootstrapSetupTasks {
 		metadata := messageMetadataMap(task.Metadata)
 		if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "done") {
 			progress.BootstrapSetupDoneCount++
+			if strings.EqualFold(strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"])), "select-first-wave") {
+				firstWaveSelectionPersisted = true
+			}
 			if strings.EqualFold(strings.TrimSpace(stringValue(metadata["bootstrap_step_slug"])), bootstrapFrankSignOffStepSlug) {
 				progress.FrankSignOffRecorded = true
 			}
@@ -3173,11 +3177,20 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 	firstWaveTasks := make([]repo.ProjectTask, 0, len(plannedTasks))
 	assignedFirstWaveTasks := make([]repo.ProjectTask, 0, len(plannedTasks))
 	firstWaveTemplateIDs := make(map[uuid.UUID]struct{})
+	plannedFlowTemplateIDs := make(map[uuid.UUID]struct{})
 	structuralFailureClass := ""
 	structuralFailureReason := ""
 	unassignedLeafFailureClass := ""
 	unassignedLeafFailureReason := ""
 	for _, task := range plannedTasks {
+		if !firstWaveSelectionPersisted {
+			if _, explicit := projectBootstrapExplicitFirstWaveSelection(messageMetadataMap(task.Metadata)); explicit {
+				firstWaveSelectionPersisted = true
+			}
+		}
+		if task.FlowTemplateID != nil && *task.FlowTemplateID != uuid.Nil {
+			plannedFlowTemplateIDs[*task.FlowTemplateID] = struct{}{}
+		}
 		if parentID := taskdecomp.ParseParentTaskID(task.Metadata); parentID != uuid.Nil {
 			if setupTask, ok := bootstrapSetupTaskByID[parentID]; ok {
 				progress.ValidationStatus = projectBootstrapValidationFailed
@@ -3236,6 +3249,9 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		if childCount > 0 {
 			continue
 		}
+		if !firstWaveSelectionPersisted {
+			continue
+		}
 		if _, blocked := blockedTaskIDs[task.ID]; blocked {
 			continue
 		}
@@ -3252,6 +3268,13 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		if task.FlowTemplateID != nil && *task.FlowTemplateID != uuid.Nil {
 			firstWaveTemplateIDs[*task.FlowTemplateID] = struct{}{}
 		}
+	}
+	if len(plannedFlowTemplateIDs) > progress.PlannedFlowTemplateCount {
+		progress.PlannedFlowTemplateCount = len(plannedFlowTemplateIDs)
+	}
+	if !firstWaveSelectionPersisted {
+		firstWaveTasks = firstWaveTasks[:0]
+		assignedFirstWaveTasks = assignedFirstWaveTasks[:0]
 	}
 	if len(firstWaveTasks) > 0 && len(assignedFirstWaveTasks) == 0 {
 		progress.ValidationStatus = projectBootstrapValidationFailed
@@ -3310,22 +3333,24 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		return progress, nil
 	}
 
-	if len(firstWaveTasks) == 0 {
+	if firstWaveSelectionPersisted && len(firstWaveTasks) == 0 {
 		progress.ValidationStatus = projectBootstrapValidationFailed
 		progress.ValidationFailureClass = projectBootstrapFailureCompoundParent
 		progress.ValidationFailureReason = "kickoff validation failed: no bounded first-wave tasks remain after excluding orchestration-only parent workstreams"
 		return progress, nil
 	}
 
-	failureClass, failureReason, err := e.validateProjectBootstrapFirstWaveTasks(ctx, firstWaveTasks)
-	if err != nil {
-		return projectBootstrapProgress{}, err
-	}
-	if failureClass != "" {
-		progress.ValidationStatus = projectBootstrapValidationFailed
-		progress.ValidationFailureClass = failureClass
-		progress.ValidationFailureReason = failureReason
-		return progress, nil
+	if firstWaveSelectionPersisted {
+		failureClass, failureReason, err := e.validateProjectBootstrapFirstWaveTasks(ctx, firstWaveTasks)
+		if err != nil {
+			return projectBootstrapProgress{}, err
+		}
+		if failureClass != "" {
+			progress.ValidationStatus = projectBootstrapValidationFailed
+			progress.ValidationFailureClass = failureClass
+			progress.ValidationFailureReason = failureReason
+			return progress, nil
+		}
 	}
 
 	firstWaveTaskIDs := make([]uuid.UUID, 0, len(firstWaveTasks))
@@ -8308,13 +8333,26 @@ func (e *TurnEngine) inferBootstrapSetupPersistFromWorkspace(ctx context.Context
 		info, statErr := os.Stat(abs)
 		return statErr == nil && !info.IsDir()
 	}
+	selectedFirstWaveTaskIDs := map[uuid.UUID]struct{}{}
+	executableCandidates := bootstrapFirstWaveSelectableTasks(projectTasks)
+	if len(executableCandidates) == 1 {
+		selectedFirstWaveTaskIDs[executableCandidates[0].ID] = struct{}{}
+	} else if len(executableCandidates) > 1 {
+		if inferred := inferBootstrapFirstWaveSelection(executableCandidates); len(inferred) > 0 {
+			selectedFirstWaveTaskIDs = inferred
+		}
+	}
+	repoBindingPresent, err := e.projectBootstrapRepoBindingPresent(ctx, projectID)
+	if err != nil {
+		return nil, nil, "", err
+	}
 	stepReady := map[string]bool{
-		"bind-repo-environment":          filePresent("bootstrap/02-repo-and-environment.md"),
-		"staff-project":                  filePresent("bootstrap/03-staffing-plan.md") && progress.AssignmentCount > 0,
-		"decompose-workstreams":          filePresent("bootstrap/04-workstream-decomposition.md") && progress.PlannedTaskCount > 0,
-		"validate-task-shape":            filePresent("bootstrap/05-task-validation.md") && progress.PlannedTaskCount > 0,
-		"attach-validate-flow-templates": filePresent("bootstrap/06-flow-templates.md") && progress.PlannedTaskCount > 0 && progress.PlannedFlowTemplateCount > 0,
-		"select-first-wave":              filePresent("bootstrap/07-first-wave-tasks.md") && progress.FirstWaveTaskCount > 0,
+		"bind-repo-environment":          filePresent("bootstrap/02-repo-and-environment.md") || repoBindingPresent,
+		"staff-project":                  (filePresent("bootstrap/03-staffing-plan.md") || progress.AssignmentCount > 0) && progress.AssignmentCount > 0,
+		"decompose-workstreams":          (filePresent("bootstrap/04-workstream-decomposition.md") || progress.PlannedTaskCount > 0) && progress.PlannedTaskCount > 0,
+		"validate-task-shape":            (filePresent("bootstrap/05-task-validation.md") || bootstrapTaskShapeReadyForAutoPersist(progress)) && bootstrapTaskShapeReadyForAutoPersist(progress),
+		"attach-validate-flow-templates": (filePresent("bootstrap/06-flow-templates.md") || progress.PlannedFlowTemplateCount > 0) && progress.PlannedTaskCount > 0 && progress.PlannedFlowTemplateCount > 0,
+		"select-first-wave":              (filePresent("bootstrap/07-first-wave-tasks.md") || len(selectedFirstWaveTaskIDs) > 0) && len(selectedFirstWaveTaskIDs) > 0,
 	}
 	if filePresent("bootstrap/08-frank-sign-off-request.md") &&
 		stepReady["bind-repo-environment"] &&
@@ -8345,18 +8383,6 @@ func (e *TurnEngine) inferBootstrapSetupPersistFromWorkspace(ctx context.Context
 		}
 		completed = append(completed, slug)
 	}
-	selectedFirstWaveTaskIDs := map[uuid.UUID]struct{}{}
-	if stepReady["select-first-wave"] {
-		executableCandidates := bootstrapFirstWaveSelectableTasks(projectTasks)
-		if len(executableCandidates) == 1 {
-			selectedFirstWaveTaskIDs[executableCandidates[0].ID] = struct{}{}
-		} else if len(executableCandidates) > 1 {
-			if inferred := inferBootstrapFirstWaveSelection(executableCandidates); len(inferred) > 0 {
-				selectedFirstWaveTaskIDs = inferred
-			}
-		}
-	}
-
 	signOffSummary := ""
 	for _, slug := range completed {
 		if slug == bootstrapFrankSignOffStepSlug {
@@ -8365,6 +8391,35 @@ func (e *TurnEngine) inferBootstrapSetupPersistFromWorkspace(ctx context.Context
 		}
 	}
 	return completed, selectedFirstWaveTaskIDs, signOffSummary, nil
+}
+
+func (e *TurnEngine) projectBootstrapRepoBindingPresent(ctx context.Context, projectID uuid.UUID) (bool, error) {
+	if e == nil || e.environments == nil || projectID == uuid.Nil {
+		return false, nil
+	}
+	environments, err := e.environments.ListByProject(ctx, projectID)
+	if err != nil {
+		return false, err
+	}
+	return projectsvc.HasProjectRepoBinding(environments), nil
+}
+
+func bootstrapTaskShapeReadyForAutoPersist(progress projectBootstrapProgress) bool {
+	if progress.PlannedTaskCount == 0 {
+		return false
+	}
+	if !progress.ValidationFailed() {
+		return true
+	}
+	switch strings.TrimSpace(progress.ValidationFailureClass) {
+	case projectBootstrapFailureSetupTaskScope,
+		projectBootstrapFailureSetupTaskChildren,
+		projectBootstrapFailureCompoundParent,
+		projectBootstrapFailureFirstWaveSize:
+		return false
+	default:
+		return true
+	}
 }
 
 func (e *TurnEngine) persistBootstrapFirstWaveSelection(ctx context.Context, tasks []repo.ProjectTask, selected map[uuid.UUID]struct{}) error {

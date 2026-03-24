@@ -17061,6 +17061,9 @@ func TestTurnEngineIntegrationSyncProjectBootstrapSetupFromWorkspaceAutoPersists
 	if err != nil {
 		t.Fatalf("loadProjectBootstrapProgress: %v", err)
 	}
+	if progress.FirstWaveTaskCount != 0 {
+		t.Fatalf("progress.FirstWaveTaskCount = %d, want 0 before explicit first-wave selection is persisted", progress.FirstWaveTaskCount)
+	}
 	stepSlugs, selectedFirstWaveTaskIDs, _, err := fixture.engine.inferBootstrapSetupPersistFromWorkspace(ctx, project.ID, progress)
 	if err != nil {
 		t.Fatalf("inferBootstrapSetupPersistFromWorkspace: %v", err)
@@ -17122,6 +17125,104 @@ func TestTurnEngineIntegrationSyncProjectBootstrapSetupFromWorkspaceAutoPersists
 	}
 	if !containsMessageSubstring(messages, "\"tool_name\":\"bootstrap.setup.persist\"") {
 		t.Fatal("expected auto-persist bootstrap tool result in project session history")
+	}
+}
+
+func TestTurnEngineIntegrationInferBootstrapSetupPersistFromDurableProjectState(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	_ = mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: resume the active bootstrap workflow from persisted state.")
+
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerAgent, err := repo.NewAgentRepo(fixture.pool).Create(ctx, repo.Agent{
+		OrganizationID:   fixture.org.ID,
+		DisplayName:      "Bootstrap Worker",
+		AgentClass:       "staff",
+		LifecycleStatus:  "active",
+		SystemPrompt:     "You are the bootstrap worker.",
+		AgentType:        "worker",
+		MemoryReadScopes: []string{"org", "project", "agent"},
+		CreatedByType:    "system",
+		CreatedByID:      uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create bootstrap worker agent: %v", err)
+	}
+	reviewerAgent, err := repo.NewAgentRepo(fixture.pool).Create(ctx, repo.Agent{
+		OrganizationID:   fixture.org.ID,
+		DisplayName:      "Bootstrap Reviewer",
+		AgentClass:       "staff",
+		LifecycleStatus:  "active",
+		SystemPrompt:     "You are the bootstrap reviewer.",
+		AgentType:        "reviewer",
+		MemoryReadScopes: []string{"org", "project", "agent"},
+		CreatedByType:    "system",
+		CreatedByID:      uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create bootstrap reviewer agent: %v", err)
+	}
+
+	assignmentRepo := repo.NewAgentProjectAssignmentRepo(fixture.pool)
+	for _, assignment := range []repo.AgentProjectAssignment{
+		{AgentID: pmAgent.ID, ProjectID: project.ID, Role: "pm", AssignedByType: "agent", AssignedByID: &lori.ID},
+		{AgentID: workerAgent.ID, ProjectID: project.ID, Role: "worker", AssignedByType: "agent", AssignedByID: &lori.ID},
+		{AgentID: reviewerAgent.ID, ProjectID: project.ID, Role: "reviewer", AssignedByType: "agent", AssignedByID: &lori.ID},
+	} {
+		if _, err := assignmentRepo.Assign(ctx, assignment); err != nil {
+			t.Fatalf("assign bootstrap %s: %v", assignment.Role, err)
+		}
+	}
+
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	description := "Bounded bootstrap validation slice."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Create validation smoke test",
+		Description:     &description,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &workerAgent.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+	}); err != nil {
+		t.Fatalf("create planned task: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	stepSlugs, selectedFirstWaveTaskIDs, _, err := fixture.engine.inferBootstrapSetupPersistFromWorkspace(ctx, project.ID, progress)
+	if err != nil {
+		t.Fatalf("inferBootstrapSetupPersistFromWorkspace: %v", err)
+	}
+	for _, slug := range []string{
+		"bind-repo-environment",
+		"staff-project",
+		"decompose-workstreams",
+		"validate-task-shape",
+		"attach-validate-flow-templates",
+		"select-first-wave",
+	} {
+		found := false
+		for _, item := range stepSlugs {
+			if item == slug {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("stepSlugs = %v, want %s inferred from durable project state", stepSlugs, slug)
+		}
+	}
+	if len(selectedFirstWaveTaskIDs) != 1 {
+		t.Fatalf("selectedFirstWaveTaskIDs = %v, want exactly one inferred first-wave task", selectedFirstWaveTaskIDs)
 	}
 }
 
