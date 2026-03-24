@@ -7059,6 +7059,18 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsKickoffReadyAssistReply(t *test
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsCrossTaskClarificationReply(t *testing.T) {
+	t.Parallel()
+
+	content := "I need to clarify which task to continue. The continuation summary references multiple tasks with different statuses:\n\n" +
+		"1. OC-18 in_progress\n" +
+		"2. OC-19 blocked\n" +
+		"3. OC-20 blocked"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected cross-task clarification reply to be treated as generic recovery output")
+	}
+}
+
 func TestTaskExecutionKickoffMessageDetectsTaskQueueKickoff(t *testing.T) {
 	t.Parallel()
 
