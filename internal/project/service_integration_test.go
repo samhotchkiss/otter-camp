@@ -577,7 +577,16 @@ func TestProjectServicePauseResumePersistsStateAndPublishesEvents(t *testing.T) 
 	svc := newIntegrationService(t, pool)
 	orgID, projectID := seedProject(t, ctx, pool)
 
-	pausedByID := uuid.New()
+	user, err := repo.NewHumanUserRepo(pool).Create(ctx, repo.HumanUser{
+		OrganizationID: orgID,
+		Email:          "resume-events-" + uuid.NewString()[:8] + "@example.com",
+		DisplayName:    "Resume Events User",
+		Role:           "admin",
+	})
+	if err != nil {
+		t.Fatalf("create human user: %v", err)
+	}
+	pausedByID := user.ID
 	paused, err := svc.Pause(ctx, orgID, projectID, PauseProjectRequest{
 		Reason:       "operator pause",
 		Metadata:     json.RawMessage(`{"source":"integration-test"}`),
@@ -602,6 +611,55 @@ func TestProjectServicePauseResumePersistsStateAndPublishesEvents(t *testing.T) 
 	}
 	if projectpause.Parse(resumed.Settings).IsPaused {
 		t.Fatal("pause state after resume = true, want false")
+	}
+
+	type recordedEvent struct {
+		EventType string
+		ActorType string
+		ActorID   *uuid.UUID
+		Payload   []byte
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT event_type, actor_type, actor_id, payload::text
+		FROM domain_event
+		WHERE organization_id = $1
+		  AND event_type IN ('project.paused', 'project.resumed')
+		ORDER BY seq ASC
+	`, orgID)
+	if err != nil {
+		t.Fatalf("query domain_event: %v", err)
+	}
+	defer rows.Close()
+	events := make([]recordedEvent, 0, 2)
+	for rows.Next() {
+		var item recordedEvent
+		var payloadText string
+		if err := rows.Scan(&item.EventType, &item.ActorType, &item.ActorID, &payloadText); err != nil {
+			t.Fatalf("scan domain_event: %v", err)
+		}
+		item.Payload = []byte(payloadText)
+		events = append(events, item)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate domain_event: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("pause/resume domain_event count = %d, want 2", len(events))
+	}
+	for _, item := range events {
+		if item.ActorType != "human" {
+			t.Fatalf("%s actor_type = %q, want human", item.EventType, item.ActorType)
+		}
+		if item.ActorID == nil || *item.ActorID != pausedByID {
+			t.Fatalf("%s actor_id = %v, want %s", item.EventType, item.ActorID, pausedByID)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(item.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal %s payload: %v", item.EventType, err)
+		}
+		if got := strings.TrimSpace(fmt.Sprint(payload["project_id"])); got != projectID.String() {
+			t.Fatalf("%s payload.project_id = %q, want %q", item.EventType, got, projectID.String())
+		}
 	}
 }
 

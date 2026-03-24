@@ -167,6 +167,9 @@ func TestProjectPauseResumePublishesEvents(t *testing.T) {
 	if len(events.events) != 1 || events.events[0].EventType != "project.paused" {
 		t.Fatalf("pause events = %+v, want project.paused", events.events)
 	}
+	if events.events[0].ActorType != "human" {
+		t.Fatalf("pause actor_type = %q, want human", events.events[0].ActorType)
+	}
 
 	resumed, err := svc.Resume(context.Background(), orgID, projectID, "human_user", userID)
 	if err != nil {
@@ -177,6 +180,9 @@ func TestProjectPauseResumePublishesEvents(t *testing.T) {
 	}
 	if len(events.events) != 2 || events.events[1].EventType != "project.resumed" {
 		t.Fatalf("events = %+v, want trailing project.resumed", events.events)
+	}
+	if events.events[1].ActorType != "human" {
+		t.Fatalf("resume actor_type = %q, want human", events.events[1].ActorType)
 	}
 }
 

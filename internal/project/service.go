@@ -1729,13 +1729,33 @@ func (s *service) publishEvent(ctx context.Context, orgID uuid.UUID, eventType, 
 	if err != nil {
 		return err
 	}
+	domainActorType, domainActorID := normalizeDomainActor(actorType, actorID)
 	return s.events.Publish(ctx, nil, eventbus.DomainEvent{
 		OrganizationID: orgID,
 		EventType:      eventType,
-		ActorType:      actorType,
-		ActorID:        actorID,
+		ActorType:      domainActorType,
+		ActorID:        domainActorID,
 		Payload:        encodedPayload,
 	})
+}
+
+func normalizeDomainActor(actorType string, actorID *uuid.UUID) (string, *uuid.UUID) {
+	switch strings.TrimSpace(strings.ToLower(actorType)) {
+	case "human", "human_user":
+		if actorID == nil || *actorID == uuid.Nil {
+			return actorSystem, nil
+		}
+		return "human", actorID
+	case actorAgent:
+		if actorID == nil || *actorID == uuid.Nil {
+			return actorSystem, nil
+		}
+		return actorAgent, actorID
+	case "supervisor":
+		return "supervisor", nil
+	default:
+		return actorSystem, nil
+	}
 }
 
 func actorIDPointer(id uuid.UUID) *uuid.UUID {
