@@ -4519,6 +4519,85 @@ func TestIntegrationBootstrapSetupPersistRequiresExplicitFirstWaveSelectionAndPe
 	}
 }
 
+func TestIntegrationBootstrapSetupPersistRejectsProjectWideGateInFirstWaveSelection(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap First Wave Gate Rejection",
+		"slug":        "bootstrap-first-wave-gate-" + uuid.NewString()[:8],
+		"description": "Verify select-first-wave rejects project-wide gates.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap first-wave gate rejection",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
+	firstDescription := "Bounded first-wave validation task."
+	firstTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		Title:          "Val-1: First-wave worker task",
+		Description:    &firstDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "none",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: &actor.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create first task: %v", err)
+	}
+
+	gateDescription := "Deferred project-wide gate task that must not be in the first wave."
+	gateTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		Title:          "Val-2: Project-wide gate",
+		Description:    &gateDescription,
+		WorkStatus:     "draft",
+		BlocksScope:    "all",
+		FlowTemplateID: &template.ID,
+		AssignedAgentID: &actor.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create gate task: %v", err)
+	}
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs":    []string{"select-first-wave"},
+		"first_wave_task_numbers": []string{strconv.Itoa(firstTask.TaskNumber), strconv.Itoa(gateTask.TaskNumber)},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist with project-wide gate selection: %v", err)
+	}
+	if out["error"] != "invalid_first_wave_selection" {
+		t.Fatalf("error = %v, want invalid_first_wave_selection", out["error"])
+	}
+	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "blocks_scope=all") {
+		t.Fatalf("message = %q, want blocks_scope=all guidance", got)
+	}
+}
+
 func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

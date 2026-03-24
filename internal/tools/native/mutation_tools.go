@@ -2477,6 +2477,20 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 	}
 	if stringSliceContains(stepSlugs, "select-first-wave") {
 		executableCandidates := bootstrapFirstWaveSelectableTasks(projectTasks)
+		if explicitFirstWaveSelection {
+			for taskID := range selectedFirstWaveTaskIDs {
+				task, ok := bootstrapTaskByID(projectTasks, taskID)
+				if !ok {
+					continue
+				}
+				if strings.EqualFold(strings.TrimSpace(task.BlocksScope), "all") {
+					return map[string]any{
+						"error":   "invalid_first_wave_selection",
+						"message": fmt.Sprintf("Task %d (%s) uses blocks_scope=all and cannot be selected into the first wave because it would block the rest of the wave from becoming runnable.", task.TaskNumber, task.Title),
+					}, nil
+				}
+			}
+		}
 		switch {
 		case explicitFirstWaveSelection && len(selectedFirstWaveTaskIDs) == 0:
 			return map[string]any{
@@ -2643,9 +2657,21 @@ func bootstrapFirstWaveSelectableTasks(tasks []repo.ProjectTask) []repo.ProjectT
 		if bootstrapGateTask(task) || bootstrapSetupTask(task) {
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(task.BlocksScope), "all") {
+			continue
+		}
 		selectable = append(selectable, task)
 	}
 	return selectable
+}
+
+func bootstrapTaskByID(tasks []repo.ProjectTask, taskID uuid.UUID) (repo.ProjectTask, bool) {
+	for _, task := range tasks {
+		if task.ID == taskID {
+			return task, true
+		}
+	}
+	return repo.ProjectTask{}, false
 }
 
 func (e *NativeToolExecutor) persistBootstrapFirstWaveSelection(ctx context.Context, tasks []repo.ProjectTask, selected map[uuid.UUID]struct{}) error {
