@@ -6196,6 +6196,74 @@ func TestContinuationTurnUsesTaskFallbackSummaryForAsyncProjectTask(t *testing.T
 	}
 }
 
+func TestContinuationTurnUsesTaskFallbackSummaryForSupervisorContextQuestionnaire(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				AssignedAgentID: &assignedID,
+				WorkStatus:      "review",
+			},
+		},
+	}
+	fixture.engine.assignments = &fakeAssignmentRepo{
+		list: []repo.AgentProjectAssignment{{
+			ProjectID: projectID,
+			AgentID:   assignedID,
+			IsActive:  true,
+			Role:      "reviewer",
+		}},
+	}
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: "# Supervisor Recovery: Resume Task\n\nI'm ready to continue. Please provide:\n\n1. Context of the interrupted task\n2. Current status\n3. Specific next steps\n\nWhat were we working on?"}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessage *repo.ChatMessage
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Continuation summary]") {
+			msgCopy := msg
+			summaryMessage = &msgCopy
+		}
+	}
+	if summaryMessage == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(summaryMessage.Content, taskExecutionContinuationFallbackSummary()) {
+		t.Fatalf("continuation summary = %q, want task fallback summary", summaryMessage.Content)
+	}
+}
+
 func TestContinuationTurnAppendsDirectActionPromptForAsyncProjectTask(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

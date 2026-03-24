@@ -6621,6 +6621,8 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 		"i do not have prior context",
 		"please provide the task details",
 		"please provide: 1.",
+		"context of the interrupted task",
+		"what were we working on",
 		"what task were we working on",
 		"what specific task was previously in progress",
 	}
