@@ -1054,6 +1054,10 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		      COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
 		      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
 		    )
+		    OR (
+		      COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+		      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+		    )
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1

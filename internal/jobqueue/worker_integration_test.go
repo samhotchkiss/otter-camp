@@ -5146,6 +5146,143 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsAllowsReviewRecovery
 	}
 }
 
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsAllowsSyntheticReviewRecoveryRetry(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-synthetic-review-recovery",
+		DisplayName: "Requeue Active Execution Synthetic Review Recovery",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Synthetic Review Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You review work.",
+		AgentType:       "reviewer",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-synthetic-review-recovery-project",
+		DisplayName:    "Requeue Active Execution Synthetic Review Recovery Project",
+		Description:    "Project for synthetic review recovery requeue coverage",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-synthetic-review-recovery-template",
+		DisplayName:    "Requeue Active Execution Synthetic Review Recovery Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Internal Review",
+		NodeType:       "review",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		Title:             "Synthetic review recovery should retry",
+		WorkStatus:        "review",
+		BlocksScope:       "task",
+		CurrentFlowNodeID: &flowNode.ID,
+		FlowTemplateID:    &template.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &agent.ID,
+		AssignedAgentID:   &agent.ID,
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+	messageMetadata := json.RawMessage(fmt.Sprintf(`{"source":"task_recovery_resume","synthetic_user_message":true,"flow_node_execution_id":"%s"}`, execution.ID))
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active task recovery now.",
+		Status:    "pending",
+		Metadata:  messageMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create synthetic recovery message: %v", err)
+	}
+	stopReason := "recovery_content_required"
+	if _, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		StopReason:       &stopReason,
+		TriggerMessageID: &message.ID,
+	}); err != nil {
+		t.Fatalf("create completed halted synthetic review turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, nil); err != nil {
+		t.Fatalf("clear current turn: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1 for synthetic halted review recovery", requeued)
+	}
+}
+
 func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsLogicallyCancelledLatestMessage(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
