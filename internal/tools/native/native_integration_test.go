@@ -542,6 +542,159 @@ func TestIntegrationFileListRejectsWorkspaceRereadWhenExplicitDeliverableAlready
 	}
 }
 
+func TestIntegrationFileReadRejectsRecoveryRereadOutsideTarget(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Design the core data model for speaking opportunities in the pipeline. Output: schema-definition.md with complete field specifications."
+	plan := taskplan.Analyze("Design Pipeline Data Schema & Fields", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:       "Design Pipeline Data Schema & Fields",
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+		WorkStatus:  "blocked",
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	if _, err := repo.NewChatMessageRepo(pool).Create(context.Background(), repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Recovery resume state]\nTarget file: schema-definition.md\nExisting target file draft: omitted because no substantive draft has been persisted yet.\n",
+	}); err != nil {
+		t.Fatalf("create recovery system message: %v", err)
+	}
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	root := filepath.Join(dataDir, "workspaces", projectRecord.Slug)
+	if err := os.MkdirAll(filepath.Join(root, "planning", "strategy-artifact"), 0o755); err != nil {
+		t.Fatalf("mkdir planning dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "planning", "strategy-artifact", "oc-9-strategy-brief.md"), []byte("# Strategy brief\n"), 0o644); err != nil {
+		t.Fatalf("write planning artifact: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": "planning/strategy-artifact/oc-9-strategy-brief.md"})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, want recovery_target_focus_required", got)
+	}
+	if got := out["deliverable_path"]; got != "schema-definition.md" {
+		t.Fatalf("deliverable_path = %v, want schema-definition.md", got)
+	}
+}
+
+func TestIntegrationFileListRejectsRecoveryWorkspaceRereadOutsideTarget(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Design the core data model for speaking opportunities in the pipeline. Output: schema-definition.md with complete field specifications."
+	plan := taskplan.Analyze("Design Pipeline Data Schema & Fields", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:       "Design Pipeline Data Schema & Fields",
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+		WorkStatus:  "blocked",
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	if _, err := repo.NewChatMessageRepo(pool).Create(context.Background(), repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Recovery resume state]\nTarget file: schema-definition.md\nExisting target file draft: omitted because no substantive draft has been persisted yet.\n",
+	}); err != nil {
+		t.Fatalf("create recovery system message: %v", err)
+	}
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	root := filepath.Join(dataDir, "workspaces", projectRecord.Slug)
+	if err := os.MkdirAll(filepath.Join(root, "planning"), 0o755); err != nil {
+		t.Fatalf("mkdir planning dir: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.list", map[string]any{"path": "."})
+	if err != nil {
+		t.Fatalf("file.list: %v", err)
+	}
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, want recovery_target_focus_required", got)
+	}
+	if got := out["deliverable_path"]; got != "schema-definition.md" {
+		t.Fatalf("deliverable_path = %v, want schema-definition.md", got)
+	}
+}
+
+func TestIntegrationFileSearchRejectsRecoveryWorkspaceRereadOutsideTarget(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Design the core data model for speaking opportunities in the pipeline. Output: schema-definition.md with complete field specifications."
+	plan := taskplan.Analyze("Design Pipeline Data Schema & Fields", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:       "Design Pipeline Data Schema & Fields",
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+		WorkStatus:  "blocked",
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	if _, err := repo.NewChatMessageRepo(pool).Create(context.Background(), repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Recovery resume state]\nTarget file: schema-definition.md\nExisting target file draft: omitted because no substantive draft has been persisted yet.\n",
+	}); err != nil {
+		t.Fatalf("create recovery system message: %v", err)
+	}
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	root := filepath.Join(dataDir, "workspaces", projectRecord.Slug)
+	if err := os.MkdirAll(filepath.Join(root, "planning"), 0o755); err != nil {
+		t.Fatalf("mkdir planning dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "planning", "notes.md"), []byte("schema\n"), 0o644); err != nil {
+		t.Fatalf("write planning note: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.search", map[string]any{"path": ".", "pattern": "schema"})
+	if err != nil {
+		t.Fatalf("file.search: %v", err)
+	}
+	if got := out["error"]; got != "recovery_target_focus_required" {
+		t.Fatalf("error = %v, want recovery_target_focus_required", got)
+	}
+	if got := out["deliverable_path"]; got != "schema-definition.md" {
+		t.Fatalf("deliverable_path = %v, want schema-definition.md", got)
+	}
+}
+
 func TestIntegrationFileReadRejectsPlaceholderRecoveryTargetWithoutExplicitDeliverable(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

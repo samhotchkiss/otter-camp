@@ -98,6 +98,12 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 	}
 
 	renderedPath := renderPath(wd.Root(), resolved)
+	if reject, blocked, rejectErr := e.rejectRecoveryTargetReread(ctx, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if blocked {
+		reject["path"] = renderedPath
+		return reject, nil
+	}
 	if reject, blocked, rejectErr := e.rejectExecutionFirstDeliverableReread(ctx, wd, scope, renderedPath); rejectErr != nil {
 		return nil, rejectErr
 	} else if blocked {
@@ -202,6 +208,29 @@ func (e *NativeToolExecutor) rejectExecutionFirstDeliverableReread(ctx context.C
 		"message": fmt.Sprintf(
 			"This execution-first task already has a substantive explicit deliverable `%s`. Do not reread `%s` now. Revise the deliverable directly if needed, or stop and let the runtime advance the flow.",
 			deliverablePath,
+			normalizedPath,
+		),
+	}, true, nil
+}
+
+func (e *NativeToolExecutor) rejectRecoveryTargetReread(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
+	if e == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return nil, false, nil
+	}
+	targetPath := e.latestRecoveryTargetPathForSession(ctx, scope)
+	if targetPath == "" {
+		return nil, false, nil
+	}
+	normalizedPath := normalizeWorkspacePath(relativePath)
+	if normalizedPath == "" || sameOrNestedWorkspacePath(normalizedPath, targetPath) {
+		return nil, false, nil
+	}
+	return map[string]any{
+		"error":            "recovery_target_focus_required",
+		"deliverable_path": targetPath,
+		"message": fmt.Sprintf(
+			"Recovery already identified `%s` as the target deliverable. Do not reread `%s` now. Continue from the recovery target and write the deliverable body directly.",
+			targetPath,
 			normalizedPath,
 		),
 	}, true, nil
@@ -358,6 +387,12 @@ func (e *NativeToolExecutor) handleFileList(ctx context.Context, input map[strin
 		return nil, err
 	}
 	renderedPath := renderPath(wd.Root(), resolved)
+	if reject, blocked, rejectErr := e.rejectRecoveryTargetReread(ctx, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if blocked {
+		reject["path"] = renderedPath
+		return reject, nil
+	}
 	if reject, blocked, rejectErr := e.rejectExecutionFirstDeliverableReread(ctx, wd, scope, renderedPath); rejectErr != nil {
 		return nil, rejectErr
 	} else if blocked {
@@ -504,6 +539,13 @@ func (e *NativeToolExecutor) handleFileSearch(ctx context.Context, input map[str
 			return map[string]any{"error": "not_found"}, nil
 		}
 		return nil, err
+	}
+	renderedPath := renderPath(wd.Root(), resolved)
+	if reject, blocked, rejectErr := e.rejectRecoveryTargetReread(ctx, scope, renderedPath); rejectErr != nil {
+		return nil, rejectErr
+	} else if blocked {
+		reject["path"] = renderedPath
+		return reject, nil
 	}
 
 	matches := make([]map[string]any, 0)
