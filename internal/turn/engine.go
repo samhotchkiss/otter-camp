@@ -4388,10 +4388,23 @@ func projectFailureActionForProgress(progress projectBootstrapProgress, failureC
 			return projectFailureActionPause
 		}
 	}
-	if projectBootstrapReachedFirstWaveClaim(progress) {
+	if projectBootstrapReachedFirstWaveClaim(progress) || projectBootstrapReachedRecoverableFailureCheckpoint(progress) {
 		return projectFailureActionPause
 	}
 	return projectFailureActionArchive
+}
+
+func projectBootstrapReachedRecoverableFailureCheckpoint(progress projectBootstrapProgress) bool {
+	switch strings.TrimSpace(projectBootstrapLastSuccessfulCheckpoint(progress)) {
+	case projectBootstrapCheckpointTaskTreePersisted,
+		projectBootstrapCheckpointFlowTemplatesPersisted,
+		projectBootstrapCheckpointFirstWaveSelected,
+		projectBootstrapCheckpointFirstWaveExecutions,
+		projectBootstrapCheckpointFirstWaveJobsClaimed:
+		return true
+	default:
+		return false
+	}
 }
 
 func formatBootstrapCheckpoint(checkpoint string) string {

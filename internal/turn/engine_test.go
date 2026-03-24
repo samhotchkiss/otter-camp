@@ -4457,6 +4457,41 @@ func TestMaxToolCallsAsyncContinuationRecoversLeakedInProgressTurn(t *testing.T)
 	}
 }
 
+func TestProjectFailureActionForProgressPausesAfterTaskTreePersistence(t *testing.T) {
+	progress := projectBootstrapProgress{
+		AssignmentCount:          3,
+		PlannedTaskCount:         5,
+		PlannedFlowTemplateCount: 1,
+	}
+	if got := projectFailureActionForProgress(progress, projectFailureCategoryBootstrap, projectBootstrapFailureCompoundParent); got != projectFailureActionPause {
+		t.Fatalf("projectFailureActionForProgress = %q, want %q", got, projectFailureActionPause)
+	}
+}
+
+func TestProjectFailureActionForProgressArchivesBeforeTaskTreePersistence(t *testing.T) {
+	progress := projectBootstrapProgress{
+		AssignmentCount: 1,
+	}
+	if got := projectFailureActionForProgress(progress, projectFailureCategoryBootstrap, projectBootstrapFailureMissingAssignments); got != projectFailureActionArchive {
+		t.Fatalf("projectFailureActionForProgress = %q, want %q", got, projectFailureActionArchive)
+	}
+}
+
+func TestBuildProjectBootstrapAutomaticFailureMessageUsesPauseLanguageAfterRecoverableCheckpoint(t *testing.T) {
+	record := buildProjectBootstrapAutomaticFailureRecord(projectBootstrapProgress{
+		AssignmentCount:          3,
+		PlannedTaskCount:         5,
+		PlannedFlowTemplateCount: 1,
+	}, projectFailureCategoryBootstrap, projectBootstrapFailureCompoundParent, "task tree needs repair", time.Now().UTC())
+	if record.Action != projectFailureActionPause {
+		t.Fatalf("record.Action = %q, want %q", record.Action, projectFailureActionPause)
+	}
+	message := buildProjectBootstrapAutomaticFailureMessage(record)
+	if !strings.Contains(message, "paused automatically because execution had already reached") {
+		t.Fatalf("message = %q, want pause wording", message)
+	}
+}
+
 func TestProjectBootstrapRecoverableMaxToolCallFailure(t *testing.T) {
 	if !projectBootstrapRecoverableMaxToolCallFailure(projectBootstrapProgress{
 		ValidationFailureClass: projectBootstrapFailureCompoundParent,
