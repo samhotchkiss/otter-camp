@@ -2337,6 +2337,25 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			          OR (
 			            current_turn.status = 'pending'
 			            AND (
+			              EXISTS (
+			                SELECT 1
+			                FROM job_queue blocking_jq
+			                WHERE blocking_jq.job_type = '%s'
+			                  AND blocking_jq.status IN ('pending', 'claimed')
+			                  AND (blocking_jq.payload->>'session_id')::uuid = cs.id
+			                  AND (blocking_jq.payload->>'message_id')::uuid = current_turn.trigger_message_id
+			                  AND COALESCE((blocking_jq.payload->>'retry_count')::int, 0) = current_turn.retry_count
+			              )
+			              OR EXISTS (
+			                SELECT 1
+			                FROM flow_node_execution blocking_execution
+			                WHERE blocking_execution.session_id = cs.id
+			                  AND blocking_execution.status = 'active'
+			                  AND COALESCE(blocking_execution.metadata->>'live_turn_id', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+			                  AND (blocking_execution.metadata->>'live_turn_id')::uuid = current_turn.id
+			              )
+			            )
+			            AND (
 			              current_turn.trigger_message_id IS DISTINCT FROM (job_queue.payload->>'message_id')::uuid
 			              OR current_turn.retry_count <> COALESCE((job_queue.payload->>'retry_count')::int, 0)
 			            )
@@ -2364,7 +2383,7 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 		WHERE jq.id = claimable.id
 		RETURNING jq.id, jq.job_type, jq.priority, jq.payload, jq.status, jq.claimed_by, jq.claimed_at,
 		          jq.attempts, jq.max_attempts, jq.last_error, jq.run_after, jq.created_at, jq.updated_at
-	`, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
+	`, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
 	if err != nil {
 		return nil, fmt.Errorf("claim pending jobs: %w", err)
 	}
