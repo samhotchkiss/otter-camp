@@ -1305,7 +1305,9 @@ func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 	if session == nil || latestCompleted == nil || latestUser == nil {
 		return false, nil
 	}
-	if !isRecoveryResumeMessage(*latestUser) && !taskContinuationResumeMessageRootsHistory(*latestUser) {
+	isRecoveryLike := isRecoveryResumeMessage(*latestUser) || taskContinuationResumeMessageRootsHistory(*latestUser)
+	isExecutionKickoff := taskExecutionKickoffMessage(*latestUser)
+	if !isRecoveryLike && !isExecutionKickoff {
 		return false, nil
 	}
 	sessionMessages := messagesFromTaskSession(ctx, e, session)
@@ -1324,7 +1326,11 @@ func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 
 	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
 		reason := buildGenericRecoveryReplyBlockedReason(assistantContent, latestCompleted.RetryCount+1)
-		if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, "[Recovery turn halted: "+reason+"]"); err != nil {
+		haltLabel := "Recovery turn halted"
+		if isExecutionKickoff {
+			haltLabel = "Task kickoff halted"
+		}
+		if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, "["+haltLabel+": "+reason+"]"); err != nil {
 			return true, err
 		}
 		if e.taskTransitions == nil {
@@ -13017,6 +13023,22 @@ func isRecoveryResumeMessage(message repo.ChatMessage) bool {
 	}
 	text := strings.ToLower(normalizeInstructionText(message.Content))
 	return strings.Contains(text, "resume") && strings.Contains(text, "task")
+}
+
+func taskExecutionKickoffMessage(message repo.ChatMessage) bool {
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return false
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	content := strings.TrimSpace(message.Content)
+	if !strings.HasPrefix(content, "Start work on task: ") && !strings.HasPrefix(content, "Start review on task: ") {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), "task_queue_processor") &&
+		strings.TrimSpace(stringValue(metadata["flow_node_execution_id"])) == "" {
+		return false
+	}
+	return true
 }
 
 func taskContinuationResumeMessageRootsHistory(message repo.ChatMessage) bool {
