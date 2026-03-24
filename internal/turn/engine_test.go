@@ -9519,6 +9519,21 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "asked the operator to choose the next step instead of the file body",
 		},
 		{
+			name: "rejects clarification-heavy continuation summary",
+			content: "# Validation Findings & Report Synthesis\n\n" +
+				"## Task Status: IN PROGRESS\n\n" +
+				"Before I proceed, I need clarification on:\n\n" +
+				"1. **Source Data**:\n" +
+				"   - Do you have existing validation findings/logs to consolidate?\n" +
+				"2. **Severity Definitions**:\n" +
+				"   - What specific criteria define each severity level?\n" +
+				"3. **Documentation Format**:\n" +
+				"   - Preferred output format?\n" +
+				"   - Audience level: Executive, Technical, or Mixed?\n",
+			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			want:       "asked for clarification instead of the file body",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
