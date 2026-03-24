@@ -538,6 +538,7 @@ type toolValidationFailure struct {
 	FailureClass       string
 	FailureCode        string
 	FailureReason      string
+	DeliverablePath    string
 	Fingerprint        string
 	AttemptFingerprint string
 }
@@ -13315,11 +13316,14 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 
 	next := current
 	blockedNow := false
+	var blockedFailure *toolValidationFailure
 	for _, failure := range failures {
 		candidate, candidateBlocked := nextTaskValidationGuardState(next, rt.initialMessageID, rt.turn.ID, failure, e.now())
 		next = candidate
 		if candidateBlocked {
 			blockedNow = true
+			failureCopy := failure
+			blockedFailure = &failureCopy
 			break
 		}
 	}
@@ -13352,6 +13356,13 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	rt.stopReason = stopReasonValidationBlocked
 	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildValidationLoopSystemMessage(next)); err != nil {
 		return false, err
+	}
+	if blockedFailure != nil {
+		if targetPath := strings.TrimSpace(blockedFailure.DeliverablePath); targetPath != "" {
+			if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", blockedFailure.FailureReason, rt.initialMessageID); checkpointErr != nil {
+				return false, checkpointErr
+			}
+		}
 	}
 	return true, nil
 }
@@ -13435,23 +13446,23 @@ func classifyToolValidationFailure(call ToolCall, result ToolResult) (toolValida
 		if code := strings.TrimSpace(toolResultErrorCode(result)); code != "" {
 			reason = fmt.Sprintf("malformed _raw arguments (%s)", code)
 		}
-		return buildToolValidationFailure(toolName, "malformed_arguments_raw", reason, attemptFingerprint), true
+		return buildToolValidationFailure(toolName, "malformed_arguments_raw", reason, attemptFingerprint, ""), true
 	}
 
 	if code := normalizeValidationFailureCode(toolResultErrorCode(result)); isToolValidationCode(code) {
-		return buildToolValidationFailure(toolName, code, strings.TrimSpace(toolResultErrorCode(result)), attemptFingerprint), true
+		return buildToolValidationFailure(toolName, code, strings.TrimSpace(toolResultErrorCode(result)), attemptFingerprint, toolResultDeliverablePath(result)), true
 	}
 
 	if reason := strings.TrimSpace(stripToolFailurePrefix(result.Error, toolName)); reason != "" {
 		if code := normalizeValidationFailureCode(reason); isToolValidationCode(code) {
-			return buildToolValidationFailure(toolName, code, reason, attemptFingerprint), true
+			return buildToolValidationFailure(toolName, code, reason, attemptFingerprint, toolResultDeliverablePath(result)), true
 		}
 	}
 
 	return toolValidationFailure{}, false
 }
 
-func buildToolValidationFailure(toolName, failureCode, failureReason, attemptFingerprint string) toolValidationFailure {
+func buildToolValidationFailure(toolName, failureCode, failureReason, attemptFingerprint, deliverablePath string) toolValidationFailure {
 	code := normalizeValidationFailureCode(failureCode)
 	if code == "" {
 		code = "validation_failure"
@@ -13466,9 +13477,21 @@ func buildToolValidationFailure(toolName, failureCode, failureReason, attemptFin
 		FailureClass:       "tool_validation",
 		FailureCode:        code,
 		FailureReason:      reason,
+		DeliverablePath:    strings.TrimSpace(deliverablePath),
 		Fingerprint:        strings.ToLower(strings.TrimSpace(toolName)) + ":" + code,
 		AttemptFingerprint: strings.TrimSpace(attemptFingerprint),
 	}
+}
+
+func toolResultDeliverablePath(result ToolResult) string {
+	if len(result.Output) == 0 {
+		return ""
+	}
+	raw, ok := result.Output["deliverable_path"]
+	if !ok || raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", raw))
 }
 
 func hasRawToolArguments(call ToolCall) bool {

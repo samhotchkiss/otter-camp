@@ -9093,6 +9093,28 @@ func TestCollectToolValidationFailuresSuppressesFocusReadFailuresAfterSuccessful
 	}
 }
 
+func TestCollectToolValidationFailuresPreservesDeliverablePath(t *testing.T) {
+	t.Parallel()
+
+	calls := []ToolCall{{ID: "read-1", Name: "file.read"}}
+	results := []ToolResult{{
+		ToolCallID: "read-1",
+		Name:       "file.read",
+		Output: map[string]any{
+			"error":            "recovery_target_focus_required",
+			"deliverable_path": "schemas/pipeline-schema-v1.0.md",
+		},
+	}}
+
+	failures := collectToolValidationFailures(calls, results)
+	if len(failures) != 1 {
+		t.Fatalf("failure count = %d, want 1", len(failures))
+	}
+	if failures[0].DeliverablePath != "schemas/pipeline-schema-v1.0.md" {
+		t.Fatalf("DeliverablePath = %q, want schemas/pipeline-schema-v1.0.md", failures[0].DeliverablePath)
+	}
+}
+
 func TestCollectToolValidationFailuresKeepsNonFocusFailuresAfterSuccessfulFileWrite(t *testing.T) {
 	t.Parallel()
 
@@ -9184,6 +9206,81 @@ func TestHandleUserMessageSkipsBlockedValidationLoop(t *testing.T) {
 	}
 	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
 		t.Fatalf("agent turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestHandleUserMessageValidationLoopBlockPersistsDeliverableCheckpoint(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				Title:           "Write schema",
+				WorkStatus:      "in_progress",
+				AssignedAgentID: &assignedAgentID,
+				Metadata:        json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.read", Tier: "tier2"}}}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("read"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{
+			ToolCalls: []ModelToolCall{{
+				ID:   "read-1",
+				Name: "file.read",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"path": "planning/strategy-artifact/oc-20-success-narrative.md",
+				},
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(ctx context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"error":            "recovery_target_focus_required",
+				"deliverable_path": "schemas/pipeline-schema-v1.0.md",
+			},
+			RunID: &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	taskRecord, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint")
+	}
+	if checkpoint.TargetPath != "schemas/pipeline-schema-v1.0.md" {
+		t.Fatalf("TargetPath = %q, want schemas/pipeline-schema-v1.0.md", checkpoint.TargetPath)
+	}
+	if checkpoint.FailureReason != "recovery_target_focus_required" {
+		t.Fatalf("FailureReason = %q, want recovery_target_focus_required", checkpoint.FailureReason)
 	}
 }
 
