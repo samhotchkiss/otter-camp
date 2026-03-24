@@ -1264,6 +1264,71 @@ func TestHandleTurnCompletedEventBlocksRepeatedReviewTurnWithoutDecision(t *test
 	}
 }
 
+func TestHandleTurnCompletedEventAutoRejectsExplicitReviewDecision(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "review"},
+		},
+	}
+	fixture.flowAdvancer.tasks = taskRepo
+	fixture.engine.flowAdvancer = fixture.flowAdvancer
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = buildTaskReviewActionPrompt(fixture.session)
+	message.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "## REVIEW DECISION: REJECT FOR REWORK\n\nI am rejecting this task because the deliverables remain incomplete.")
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+	if fixture.flowAdvancer.rejectFlowCalls != 1 {
+		t.Fatalf("reject flow calls = %d, want 1", fixture.flowAdvancer.rejectFlowCalls)
+	}
+	if fixture.flowAdvancer.lastRejectActor.Type != "agent" || fixture.flowAdvancer.lastRejectActor.ID != agentID {
+		t.Fatalf("reject actor = %+v, want agent %s", fixture.flowAdvancer.lastRejectActor, agentID)
+	}
+}
+
 func TestHandleTurnCompletedEventSkipsWhenCompletionMessagePresent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 
@@ -10286,8 +10351,10 @@ type fakeFlowAdvancer struct {
 	ensureActiveCalls     int
 	recordNodeCommitCalls int
 	advanceFlowCalls      int
+	rejectFlowCalls       int
 	lastCommitSHA         string
 	lastAdvanceActor      flowsvc.Actor
+	lastRejectActor       flowsvc.Actor
 }
 
 func (f *fakeFlowAdvancer) EnsureActiveExecution(_ context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error) {
@@ -10315,6 +10382,21 @@ func (f *fakeFlowAdvancer) AdvanceFlow(_ context.Context, taskID uuid.UUID, acto
 		}
 	}
 	return &repo.FlowNodeExecution{TaskID: taskID, Status: "completed"}, nil
+}
+
+func (f *fakeFlowAdvancer) RejectFlowNode(_ context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error) {
+	f.rejectFlowCalls++
+	f.lastRejectActor = actor
+	if f.tasks != nil {
+		taskRecord, err := f.tasks.GetByID(context.Background(), taskID)
+		if err == nil {
+			taskRecord.WorkStatus = "in_progress"
+			if _, updateErr := f.tasks.Update(context.Background(), taskRecord); updateErr != nil {
+				return nil, updateErr
+			}
+		}
+	}
+	return &repo.FlowNodeExecution{TaskID: taskID, Status: "rejected"}, nil
 }
 
 type fakeAssignmentRepo struct {

@@ -362,6 +362,7 @@ type flowNodeRepository interface {
 
 type flowAdvancer interface {
 	AdvanceFlow(ctx context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error)
+	RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor flowsvc.Actor) (*repo.FlowNodeExecution, error)
 	EnsureActiveExecution(ctx context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error)
 	RecordNodeCommit(ctx context.Context, taskID uuid.UUID, commitSHA, branchName string) (*repo.FlowNodeExecution, error)
 }
@@ -1415,6 +1416,25 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 	if !taskReviewActionMessage(*latestUser) && !taskExecutionKickoffMessage(*latestUser) {
 		return false, nil
 	}
+	if decision, ok := explicitReviewDecisionFromText(assistantContent); ok && e.flowAdvancer != nil {
+		actor := flowsvc.Actor{Type: "system"}
+		if latestCompleted.RespondingID != uuid.Nil {
+			actor = flowsvc.Actor{Type: "agent", ID: latestCompleted.RespondingID}
+		}
+		if decision == "approve" {
+			if _, err := e.flowAdvancer.AdvanceFlow(ctx, taskRecord.ID, actor); err != nil {
+				return true, err
+			}
+		} else {
+			if _, err := e.flowAdvancer.RejectFlowNode(ctx, taskRecord.ID, actor); err != nil {
+				return true, err
+			}
+		}
+		if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, "[Review decision auto-applied from explicit assistant output: "+decision+".]"); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
 
 	reason := "review turn completed without calling flow.review_decision"
 	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
@@ -1466,6 +1486,45 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 		return true, err
 	}
 	return enqueued, nil
+}
+
+func explicitReviewDecisionFromText(content string) (string, bool) {
+	text := strings.ToLower(normalizeInstructionText(content))
+	if strings.TrimSpace(text) == "" {
+		return "", false
+	}
+	rejectSignals := []string{
+		"review decision: reject",
+		"review decision reject",
+		"decision: reject",
+		"decision reject",
+		"reject for rework",
+		"i am rejecting",
+		"i'm rejecting",
+		"do not approve",
+		"rework required",
+	}
+	for _, signal := range rejectSignals {
+		if strings.Contains(text, signal) {
+			return "reject", true
+		}
+	}
+	approveSignals := []string{
+		"review decision: approve",
+		"review decision approve",
+		"decision: approve",
+		"decision approve",
+		"i am approving",
+		"i'm approving",
+		"approved for merge",
+		"approve for merge",
+	}
+	for _, signal := range approveSignals {
+		if strings.Contains(text, signal) {
+			return "approve", true
+		}
+	}
+	return "", false
 }
 
 func messagesFromTaskSession(ctx context.Context, e *TurnEngine, session *chat.ChatSession) []repo.ChatMessage {
