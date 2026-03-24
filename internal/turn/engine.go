@@ -1193,6 +1193,11 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 		}
 		return err
 	}
+	if continued, continueErr := e.maybeContinueProjectExecutionAfterTerminalTaskTurn(ctx, taskRecord); continueErr != nil {
+		return continueErr
+	} else if continued {
+		return nil
+	}
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
 		return nil
 	}
@@ -1441,7 +1446,40 @@ func (e *TurnEngine) HandleTurnCancelledEvent(ctx context.Context, event eventbu
 	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
 		return e.handleProjectBootstrapCancelledTurn(ctx, session, payload.TurnID)
 	}
-	return nil
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") || e.tasks == nil {
+		return nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	_, err = e.maybeContinueProjectExecutionAfterTerminalTaskTurn(ctx, taskRecord)
+	return err
+}
+
+func (e *TurnEngine) maybeContinueProjectExecutionAfterTerminalTaskTurn(ctx context.Context, taskRecord repo.ProjectTask) (bool, error) {
+	if e == nil || e.pool == nil || taskRecord.ID == uuid.Nil || taskRecord.ProjectID == uuid.Nil {
+		return false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus)) {
+	case "done", "cancelled":
+	default:
+		return false, nil
+	}
+	metadata := messageMetadataMap(taskRecord.Metadata)
+	if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+		return false, nil
+	}
+	if setupTask, _ := metadata["bootstrap_setup_task"].(bool); setupTask {
+		return false, nil
+	}
+	if err := e.maybeContinueProjectExecutionAfterTaskCompletion(ctx, taskRecord.ProjectID, taskRecord); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) HandleTaskStatusChangedEvent(ctx context.Context, event eventbus.DomainEvent) error {
