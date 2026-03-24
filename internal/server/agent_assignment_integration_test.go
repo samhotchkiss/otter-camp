@@ -112,6 +112,49 @@ func TestAgentAssignmentHTTPAutoActivatesDraftStaffPMEX255(t *testing.T) {
 	}
 }
 
+func TestAgentAssignmentHTTPAutoActivatesDraftStaffWorker(t *testing.T) {
+	testServer, org, adminUser, _ := newAgentTestServer(t)
+	defer testServer.Close()
+
+	adminToken := loginToken(t, testServer.URL, adminUser.Email, "admin-password")
+	project := seedAssignmentProject(t, testServer.Pool, org.ID)
+
+	createResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents", map[string]any{
+		"display_name":  "Auto Worker " + uuid.NewString()[:8],
+		"agent_class":   "staff",
+		"agent_type":    "worker",
+		"system_prompt": "You are a worker.",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d body=%s", createResp.StatusCode, http.StatusCreated, string(createResp.Body))
+	}
+	agentID := jsonPathString(t, createResp.Body, "data", "id")
+	if got := jsonPathString(t, createResp.Body, "data", "lifecycle_status"); got != "draft" {
+		t.Fatalf("create lifecycle_status = %q, want draft body=%s", got, string(createResp.Body))
+	}
+
+	assignResp := mustJSON(t, http.MethodPost, testServer.URL+"/v1/agents/"+agentID+"/project-assignments", map[string]any{
+		"project_id": project.ID.String(),
+		"role":       "worker",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	if assignResp.StatusCode != http.StatusOK {
+		t.Fatalf("assign status = %d, want %d body=%s", assignResp.StatusCode, http.StatusOK, string(assignResp.Body))
+	}
+	if got := jsonPathString(t, assignResp.Body, "data", "role"); got != "worker" {
+		t.Fatalf("assigned role = %q, want worker body=%s", got, string(assignResp.Body))
+	}
+
+	agentResp := mustJSON(t, http.MethodGet, testServer.URL+"/v1/agents/"+agentID, nil, map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	})
+	if agentResp.StatusCode != http.StatusOK {
+		t.Fatalf("get agent status = %d, want %d body=%s", agentResp.StatusCode, http.StatusOK, string(agentResp.Body))
+	}
+	if got := jsonPathString(t, agentResp.Body, "data", "lifecycle_status"); got != "active" {
+		t.Fatalf("agent lifecycle_status = %q, want active body=%s", got, string(agentResp.Body))
+	}
+}
+
 func TestAgentAssignmentHTTPRejectsStarterTrioProjectRoles(t *testing.T) {
 	testServer, org, adminUser, _ := newAgentTestServer(t)
 	defer testServer.Close()

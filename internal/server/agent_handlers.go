@@ -1443,7 +1443,7 @@ func (h agentHandlers) ensureAssignableProjectAgent(ctx context.Context, orgID u
 	if h.service == nil {
 		return agentRecord, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(role), "project_manager") {
+	if errors.Is(agent.ValidateProjectAssignmentTarget(agentRecord, role), agent.ErrAssignmentPMRequiresStaff) {
 		return agentRecord, nil
 	}
 	if !strings.EqualFold(strings.TrimSpace(agentRecord.AgentClass), "staff") {
@@ -1453,8 +1453,9 @@ func (h agentHandlers) ensureAssignableProjectAgent(ctx context.Context, orgID u
 		return agentRecord, nil
 	}
 
-	// Staffing creates real PM candidates as draft staff agents. Promote that
-	// supported draft->active transition before enforcing assignment rules.
+	// Staffing creates assignable project agents as draft staff records first.
+	// Promote them to active on assignment so downstream task-assignment
+	// validation can rely on the persisted project roster.
 	if err := h.service.Unpause(ctx, orgID, agentRecord.ID); err != nil {
 		return repo.Agent{}, err
 	}

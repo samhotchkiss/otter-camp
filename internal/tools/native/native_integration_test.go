@@ -2523,6 +2523,57 @@ func TestIntegrationFreshPMCandidateCanBeCreatedAndAssigned(t *testing.T) {
 	}
 }
 
+func TestIntegrationFreshWorkerCandidateCanBeCreatedAndAssigned(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	ctx := integrationExecCtxWith(orgID, actor.ID)
+
+	createdOut, err := executor.Execute(ctx, "agent.create_staff", map[string]any{
+		"name":          "Marin",
+		"agent_type":    "worker",
+		"system_prompt": "You are a worker.",
+	})
+	if err != nil {
+		t.Fatalf("agent.create_staff: %v", err)
+	}
+	createdAgent, ok := createdOut["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent.create_staff output = %T, want map[string]any", createdOut["agent"])
+	}
+	agentID := mustUUIDValue(t, createdAgent["id"])
+	if createdAgent["lifecycle_status"] != "draft" {
+		t.Fatalf("created lifecycle_status = %v, want draft", createdAgent["lifecycle_status"])
+	}
+
+	assignOut, err := executor.Execute(ctx, "agent.assign_project", map[string]any{
+		"agent_id":   agentID.String(),
+		"project_id": project.ID.String(),
+		"role":       "worker",
+	})
+	if err != nil {
+		t.Fatalf("agent.assign_project: %v", err)
+	}
+	assignment, ok := assignOut["assignment"].(map[string]any)
+	if !ok {
+		t.Fatalf("assignment output = %T, want map[string]any", assignOut["assignment"])
+	}
+	if mustUUIDValue(t, assignment["agent_id"]) != agentID {
+		t.Fatalf("assignment agent_id = %v, want %s", assignment["agent_id"], agentID)
+	}
+
+	assignedRecord, err := repo.NewAgentRepo(pool).GetByID(context.Background(), agentID)
+	if err != nil {
+		t.Fatalf("load assigned worker: %v", err)
+	}
+	if assignedRecord.LifecycleStatus != "active" {
+		t.Fatalf("assigned lifecycle_status = %q, want active", assignedRecord.LifecycleStatus)
+	}
+}
+
 func TestIntegrationAgentAssignProjectRejectsSecondPM(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

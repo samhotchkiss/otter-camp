@@ -4786,9 +4786,6 @@ func (e *NativeToolExecutor) handleAgentAssignProject(ctx context.Context, input
 }
 
 func (e *NativeToolExecutor) ensureAssignableProjectAgent(ctx context.Context, orgID uuid.UUID, agentRecord repo.Agent, role string) (repo.Agent, map[string]any, error) {
-	if !strings.EqualFold(strings.TrimSpace(role), "project_manager") {
-		return agentRecord, nil, nil
-	}
 	if errors.Is(agentsvc.ValidateProjectAssignmentTarget(agentRecord, role), agentsvc.ErrAssignmentPMRequiresStaff) {
 		return repo.Agent{}, map[string]any{
 			"error":   "project_manager_requires_staff_agent",
@@ -4804,6 +4801,9 @@ func (e *NativeToolExecutor) ensureAssignableProjectAgent(ctx context.Context, o
 	if e.agentService == nil {
 		return agentRecord, nil, nil
 	}
+	// Bootstrap and interactive staffing create assignable project agents as
+	// draft records first. Promote them to active on assignment regardless of
+	// role so later task assignment guards can rely on the project roster.
 	if err := e.agentService.Unpause(ctx, orgID, agentRecord.ID); err != nil {
 		return repo.Agent{}, nil, err
 	}
