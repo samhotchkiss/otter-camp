@@ -1510,6 +1510,15 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		    WHERE r.session_id = cs.id
 		      AND r.turn_id = COALESCE(live_turn.id, ct.id)
 		      AND r.status IN ('created', 'in_progress')
+		      AND (
+		            r.status = 'created'
+		         OR EXISTS (
+		              SELECT 1
+		              FROM model_invocation mi
+		              WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
+		                AND mi.status = 'in_flight'
+		            )
+		          )
 		  )
 	`, w.clock.Now().UTC().Add(-defaultStaleThreshold), w.clock.Now().UTC().Add(-staleContinuationThreshold))
 	if err != nil {
