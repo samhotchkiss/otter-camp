@@ -47,6 +47,9 @@ func TestFlowNodeExecutionRepoLifecycleAndGetActive(t *testing.T) {
 	if active.ID != second.ID {
 		t.Fatalf("GetActive ID = %s, want %s", active.ID, second.ID)
 	}
+	if active.RuntimeSubstate == nil || *active.RuntimeSubstate != "waiting_for_turn" {
+		t.Fatalf("GetActive runtime_substate = %v, want waiting_for_turn", active.RuntimeSubstate)
+	}
 
 	completed, err := executionRepo.Complete(ctx, second.ID)
 	if err != nil {
@@ -54,6 +57,9 @@ func TestFlowNodeExecutionRepoLifecycleAndGetActive(t *testing.T) {
 	}
 	if completed.CompletedAt == nil {
 		t.Fatal("Complete completed_at = nil, want non-nil")
+	}
+	if completed.RuntimeSubstate != nil {
+		t.Fatalf("Complete runtime_substate = %v, want nil", completed.RuntimeSubstate)
 	}
 
 	activeAfterComplete, err := executionRepo.GetActive(ctx, fixture.Task.ID, fixture.FlowNode.ID)
@@ -91,6 +97,9 @@ func TestFlowNodeExecutionRepoRejectAndVisitIncrement(t *testing.T) {
 	if rejected.CompletedAt == nil {
 		t.Fatal("Reject completed_at = nil, want non-nil")
 	}
+	if rejected.RuntimeSubstate != nil {
+		t.Fatalf("Reject runtime_substate = %v, want nil", rejected.RuntimeSubstate)
+	}
 
 	second, err := executionRepo.Create(ctx, FlowNodeExecution{
 		TaskID:      fixture.Task.ID,
@@ -103,6 +112,51 @@ func TestFlowNodeExecutionRepoRejectAndVisitIncrement(t *testing.T) {
 	}
 	if second.VisitNumber != 2 {
 		t.Fatalf("second visit_number = %d, want 2", second.VisitNumber)
+	}
+	if second.RuntimeSubstate == nil || *second.RuntimeSubstate != "waiting_for_turn" {
+		t.Fatalf("second runtime_substate = %v, want waiting_for_turn", second.RuntimeSubstate)
+	}
+}
+
+func TestFlowNodeExecutionRepoUpdateRuntimeSubstate(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowExecutionFixture(t, ctx, pool)
+
+	executionRepo := NewFlowNodeExecutionRepo(pool)
+
+	execution, err := executionRepo.Create(ctx, FlowNodeExecution{
+		TaskID:     fixture.Task.ID,
+		FlowNodeID: fixture.FlowNode.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create execution: %v", err)
+	}
+
+	running := "running"
+	updated, err := executionRepo.UpdateRuntimeSubstate(ctx, execution.ID, &running)
+	if err != nil {
+		t.Fatalf("UpdateRuntimeSubstate: %v", err)
+	}
+	if updated.RuntimeSubstate == nil || *updated.RuntimeSubstate != running {
+		t.Fatalf("updated runtime_substate = %v, want %q", updated.RuntimeSubstate, running)
+	}
+
+	cleared, err := executionRepo.Complete(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("Complete execution: %v", err)
+	}
+	if cleared.RuntimeSubstate != nil {
+		t.Fatalf("completed runtime_substate = %v, want nil", cleared.RuntimeSubstate)
+	}
+
+	recoveryPending := "recovery_pending"
+	terminalUpdate, err := executionRepo.UpdateRuntimeSubstate(ctx, execution.ID, &recoveryPending)
+	if err != nil {
+		t.Fatalf("UpdateRuntimeSubstate terminal execution: %v", err)
+	}
+	if terminalUpdate.RuntimeSubstate != nil {
+		t.Fatalf("terminal runtime_substate = %v, want nil", terminalUpdate.RuntimeSubstate)
 	}
 }
 

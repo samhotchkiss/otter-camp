@@ -13,16 +13,17 @@ import (
 )
 
 type FlowNodeExecution struct {
-	ID          uuid.UUID
-	TaskID      uuid.UUID
-	FlowNodeID  uuid.UUID
-	VisitNumber int
-	Status      string
-	SessionID   *uuid.UUID
-	CommitSHA   *string
-	StartedAt   time.Time
-	CompletedAt *time.Time
-	Metadata    json.RawMessage
+	ID              uuid.UUID
+	TaskID          uuid.UUID
+	FlowNodeID      uuid.UUID
+	VisitNumber     int
+	Status          string
+	RuntimeSubstate *string
+	SessionID       *uuid.UUID
+	CommitSHA       *string
+	StartedAt       time.Time
+	CompletedAt     *time.Time
+	Metadata        json.RawMessage
 }
 
 type ProjectSubtask struct {
@@ -82,19 +83,21 @@ func (r *FlowNodeExecutionRepo) CreateTx(ctx context.Context, tx pgx.Tx, executi
 			flow_node_id,
 			visit_number,
 			status,
+			runtime_substate,
 			session_id,
 			commit_sha,
 			started_at,
 			completed_at,
 			metadata
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, now()), $8, $9::jsonb)
-		RETURNING id, task_id, flow_node_id, visit_number, status, session_id, commit_sha, started_at, completed_at, metadata
+		VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, now()), $9, $10::jsonb)
+		RETURNING id, task_id, flow_node_id, visit_number, status, runtime_substate, session_id, commit_sha, started_at, completed_at, metadata
 	`,
 		execution.TaskID,
 		execution.FlowNodeID,
 		defaultVisitNumber(execution.VisitNumber),
-		defaultFlowNodeExecutionStatus(execution.Status),
+		normalizeFlowNodeExecutionStatus(execution.Status),
+		normalizeFlowNodeExecutionRuntimeSubstate(execution.Status, execution.RuntimeSubstate),
 		execution.SessionID,
 		trimStringPointer(execution.CommitSHA),
 		zeroTimeToNil(execution.StartedAt),
@@ -111,7 +114,7 @@ func (r *FlowNodeExecutionRepo) CreateTx(ctx context.Context, tx pgx.Tx, executi
 
 func (r *FlowNodeExecutionRepo) GetByID(ctx context.Context, id uuid.UUID) (FlowNodeExecution, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, task_id, flow_node_id, visit_number, status, session_id, commit_sha, started_at, completed_at, metadata
+		SELECT id, task_id, flow_node_id, visit_number, status, runtime_substate, session_id, commit_sha, started_at, completed_at, metadata
 		FROM flow_node_execution
 		WHERE id = $1
 	`, id)
@@ -128,7 +131,7 @@ func (r *FlowNodeExecutionRepo) GetByID(ctx context.Context, id uuid.UUID) (Flow
 
 func (r *FlowNodeExecutionRepo) GetActive(ctx context.Context, taskID, flowNodeID uuid.UUID) (FlowNodeExecution, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, task_id, flow_node_id, visit_number, status, session_id, commit_sha, started_at, completed_at, metadata
+		SELECT id, task_id, flow_node_id, visit_number, status, runtime_substate, session_id, commit_sha, started_at, completed_at, metadata
 		FROM flow_node_execution
 		WHERE task_id = $1
 		  AND flow_node_id = $2
@@ -149,7 +152,7 @@ func (r *FlowNodeExecutionRepo) GetActive(ctx context.Context, taskID, flowNodeI
 
 func (r *FlowNodeExecutionRepo) ListByTask(ctx context.Context, taskID uuid.UUID) ([]FlowNodeExecution, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, task_id, flow_node_id, visit_number, status, session_id, commit_sha, started_at, completed_at, metadata
+		SELECT id, task_id, flow_node_id, visit_number, status, runtime_substate, session_id, commit_sha, started_at, completed_at, metadata
 		FROM flow_node_execution
 		WHERE task_id = $1
 		ORDER BY started_at ASC, id ASC
@@ -202,9 +205,10 @@ func (r *FlowNodeExecutionRepo) updateStatus(ctx context.Context, tx pgx.Tx, id 
 		UPDATE flow_node_execution
 		SET
 			status = $2,
+			runtime_substate = CASE WHEN $2 = 'active' THEN runtime_substate ELSE NULL END,
 			completed_at = COALESCE(completed_at, now())
 		WHERE id = $1
-		RETURNING id, task_id, flow_node_id, visit_number, status, session_id, commit_sha, started_at, completed_at, metadata
+		RETURNING id, task_id, flow_node_id, visit_number, status, runtime_substate, session_id, commit_sha, started_at, completed_at, metadata
 	`, id, strings.TrimSpace(status))
 
 	updated, err := scanFlowNodeExecution(row)
@@ -223,7 +227,7 @@ func (r *FlowNodeExecutionRepo) RecordCommitSHA(ctx context.Context, id uuid.UUI
 		UPDATE flow_node_execution
 		SET commit_sha = NULLIF($2, '')
 		WHERE id = $1
-		RETURNING id, task_id, flow_node_id, visit_number, status, session_id, commit_sha, started_at, completed_at, metadata
+		RETURNING id, task_id, flow_node_id, visit_number, status, runtime_substate, session_id, commit_sha, started_at, completed_at, metadata
 	`, id, trimmedCommit)
 
 	updated, err := scanFlowNodeExecution(row)
@@ -245,7 +249,7 @@ func (r *FlowNodeExecutionRepo) UpdateMetadataTx(ctx context.Context, tx pgx.Tx,
 		UPDATE flow_node_execution
 		SET metadata = $2::jsonb
 		WHERE id = $1
-		RETURNING id, task_id, flow_node_id, visit_number, status, session_id, commit_sha, started_at, completed_at, metadata
+		RETURNING id, task_id, flow_node_id, visit_number, status, runtime_substate, session_id, commit_sha, started_at, completed_at, metadata
 	`, id, normalizeFlowExecutionJSON(metadata))
 
 	updated, err := scanFlowNodeExecution(row)
@@ -270,8 +274,29 @@ func (r *FlowNodeExecutionRepo) SetSessionID(ctx context.Context, id, sessionID 
 		UPDATE flow_node_execution
 		SET session_id = $2
 		WHERE id = $1
-		RETURNING id, task_id, flow_node_id, visit_number, status, session_id, commit_sha, started_at, completed_at, metadata
+		RETURNING id, task_id, flow_node_id, visit_number, status, runtime_substate, session_id, commit_sha, started_at, completed_at, metadata
 	`, id, sessionID)
+
+	updated, err := scanFlowNodeExecution(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FlowNodeExecution{}, ErrNotFound
+	}
+	if err != nil {
+		return FlowNodeExecution{}, mapDBError(err)
+	}
+	return updated, nil
+}
+
+func (r *FlowNodeExecutionRepo) UpdateRuntimeSubstate(ctx context.Context, id uuid.UUID, runtimeSubstate *string) (FlowNodeExecution, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE flow_node_execution
+		SET runtime_substate = CASE
+			WHEN status = 'active' THEN NULLIF($2, '')
+			ELSE NULL
+		END
+		WHERE id = $1
+		RETURNING id, task_id, flow_node_id, visit_number, status, runtime_substate, session_id, commit_sha, started_at, completed_at, metadata
+	`, id, trimStringPointer(runtimeSubstate))
 
 	updated, err := scanFlowNodeExecution(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -656,6 +681,7 @@ func scanFlowNodeExecution(row pgx.Row) (FlowNodeExecution, error) {
 		&execution.FlowNodeID,
 		&execution.VisitNumber,
 		&execution.Status,
+		&execution.RuntimeSubstate,
 		&execution.SessionID,
 		&execution.CommitSHA,
 		&execution.StartedAt,
@@ -730,10 +756,22 @@ func defaultVisitNumber(value int) int {
 	return value
 }
 
-func defaultFlowNodeExecutionStatus(value string) string {
+func normalizeFlowNodeExecutionStatus(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return "active"
+	}
+	return trimmed
+}
+
+func normalizeFlowNodeExecutionRuntimeSubstate(status string, value *string) *string {
+	if !strings.EqualFold(strings.TrimSpace(normalizeFlowNodeExecutionStatus(status)), "active") {
+		return nil
+	}
+	trimmed := trimStringPointer(value)
+	if trimmed == nil {
+		defaultValue := "waiting_for_turn"
+		return &defaultValue
 	}
 	return trimmed
 }

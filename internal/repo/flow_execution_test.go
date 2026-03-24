@@ -17,8 +17,14 @@ func TestFlowExecutionDefaults(t *testing.T) {
 		t.Fatalf("defaultVisitNumber(3) = %d, want 3", got)
 	}
 
-	if got := defaultFlowNodeExecutionStatus("   "); got != "active" {
-		t.Fatalf("defaultFlowNodeExecutionStatus(blank) = %q, want %q", got, "active")
+	if got := normalizeFlowNodeExecutionStatus("   "); got != "active" {
+		t.Fatalf("normalizeFlowNodeExecutionStatus(blank) = %q, want %q", got, "active")
+	}
+	if got := normalizeFlowNodeExecutionRuntimeSubstate("", nil); got == nil || *got != "waiting_for_turn" {
+		t.Fatalf("normalizeFlowNodeExecutionRuntimeSubstate(active,nil) = %v, want waiting_for_turn", got)
+	}
+	if got := normalizeFlowNodeExecutionRuntimeSubstate("completed", nil); got != nil {
+		t.Fatalf("normalizeFlowNodeExecutionRuntimeSubstate(completed,nil) = %v, want nil", got)
 	}
 	if got := defaultSubtaskStatus(""); got != "pending" {
 		t.Fatalf("defaultSubtaskStatus(blank) = %q, want %q", got, "pending")
