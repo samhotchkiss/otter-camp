@@ -385,6 +385,9 @@ func (s *Supervisor) recoverStrandedActiveExecution(ctx context.Context, candida
 	if !isLiveTurnStatus(turn.Status) {
 		return errStrandedExecutionUnrecoverable{reason: fmt.Sprintf("recovery turn entered non-live status %q", turn.Status)}
 	}
+	if err := s.markExecutionRecoveryPending(ctx, candidate.ExecutionID, result.Run.ID, turn.ID, candidate.CurrentTurnID, strandedExecutionRecoveryReason); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -637,6 +640,9 @@ func (s *Supervisor) clearTaskRuntimeActiveRunIfMatches(ctx context.Context, tas
 }
 
 func (s *Supervisor) markExecutionStranded(ctx context.Context, candidate strandedExecutionCandidate, reason string) error {
+	if err := s.recordExecutionRecoveryCheckpoint(ctx, candidate.ExecutionID, candidate.CurrentTurnID, strings.TrimSpace(reason), "await_pm_decision"); err != nil {
+		return err
+	}
 	if err := s.releaseStrandedExecutionOwner(ctx, candidate); err != nil {
 		return err
 	}
@@ -709,6 +715,91 @@ func (s *Supervisor) abandonActiveExecution(ctx context.Context, executionID uui
 		return nil
 	}
 	_, err = executionRepo.Abandon(ctx, executionID)
+	return err
+}
+
+func (s *Supervisor) markExecutionRecoveryPending(ctx context.Context, executionID, runID, turnID, failedTurnID uuid.UUID, reason string) error {
+	if executionID == uuid.Nil || s.pool == nil {
+		return nil
+	}
+	executionRepo := repo.NewFlowNodeExecutionRepo(s.pool)
+	execution, err := executionRepo.GetByID(ctx, executionID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
+		return nil
+	}
+	commitSHA := ""
+	if execution.CommitSHA != nil {
+		commitSHA = strings.TrimSpace(*execution.CommitSHA)
+	}
+	liveOwner := repo.FlowExecutionLiveOwnerFromMetadata(execution.Metadata)
+	if failedTurnID == uuid.Nil && liveOwner.TurnID != nil {
+		failedTurnID = *liveOwner.TurnID
+	}
+	now := s.clock.Now().UTC()
+	checkpoint := &repo.FlowExecutionRecoveryCheckpoint{
+		CheckpointType: "stranded_execution",
+		LastCommitSHA:  commitSHA,
+		ResumeAction:   "start_new_turn",
+		FailureClass:   "product_runtime",
+		FailureSummary: strings.TrimSpace(reason),
+		UpdatedAt:      &now,
+	}
+	if failedTurnID != uuid.Nil {
+		checkpoint.FailedTurnID = &failedTurnID
+	}
+	updatedMetadata := repo.FlowExecutionMetadataWithRecoveryCheckpoint(execution.Metadata, checkpoint)
+	updatedMetadata = repo.FlowExecutionMetadataWithLiveOwner(updatedMetadata, repo.FlowExecutionLiveOwner{
+		RunID:  uuidPtr(runID),
+		TurnID: uuidPtr(turnID),
+	})
+	updatedExecution, err := executionRepo.UpdateMetadata(ctx, executionID, updatedMetadata)
+	if err != nil {
+		return err
+	}
+	recoveryPending := "recovery_pending"
+	_, err = executionRepo.UpdateRuntimeSubstate(ctx, updatedExecution.ID, &recoveryPending)
+	return err
+}
+
+func (s *Supervisor) recordExecutionRecoveryCheckpoint(ctx context.Context, executionID, failedTurnID uuid.UUID, reason, resumeAction string) error {
+	if executionID == uuid.Nil || s.pool == nil {
+		return nil
+	}
+	executionRepo := repo.NewFlowNodeExecutionRepo(s.pool)
+	execution, err := executionRepo.GetByID(ctx, executionID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	commitSHA := ""
+	if execution.CommitSHA != nil {
+		commitSHA = strings.TrimSpace(*execution.CommitSHA)
+	}
+	liveOwner := repo.FlowExecutionLiveOwnerFromMetadata(execution.Metadata)
+	if failedTurnID == uuid.Nil && liveOwner.TurnID != nil {
+		failedTurnID = *liveOwner.TurnID
+	}
+	now := s.clock.Now().UTC()
+	checkpoint := &repo.FlowExecutionRecoveryCheckpoint{
+		CheckpointType: "stranded_execution",
+		LastCommitSHA:  commitSHA,
+		ResumeAction:   strings.TrimSpace(resumeAction),
+		FailureClass:   "product_runtime",
+		FailureSummary: strings.TrimSpace(reason),
+		UpdatedAt:      &now,
+	}
+	if failedTurnID != uuid.Nil {
+		checkpoint.FailedTurnID = &failedTurnID
+	}
+	_, err = executionRepo.UpdateMetadata(ctx, executionID, repo.FlowExecutionMetadataWithRecoveryCheckpoint(execution.Metadata, checkpoint))
 	return err
 }
 

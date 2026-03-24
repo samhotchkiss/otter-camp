@@ -2,18 +2,31 @@ package repo
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 const (
-	FlowExecutionMetadataLiveRunID  = "live_run_id"
-	FlowExecutionMetadataLiveTurnID = "live_turn_id"
+	FlowExecutionMetadataLiveRunID          = "live_run_id"
+	FlowExecutionMetadataLiveTurnID         = "live_turn_id"
+	FlowExecutionMetadataRecoveryCheckpoint = "recovery_checkpoint"
 )
 
 type FlowExecutionLiveOwner struct {
 	RunID  *uuid.UUID
 	TurnID *uuid.UUID
+}
+
+type FlowExecutionRecoveryCheckpoint struct {
+	CheckpointType      string     `json:"checkpoint_type,omitempty"`
+	LastCommitSHA       string     `json:"last_commit_sha,omitempty"`
+	LastCompletedTurnID *uuid.UUID `json:"last_completed_turn_id,omitempty"`
+	FailedTurnID        *uuid.UUID `json:"failed_turn_id,omitempty"`
+	ResumeAction        string     `json:"resume_action,omitempty"`
+	FailureClass        string     `json:"failure_class,omitempty"`
+	FailureSummary      string     `json:"failure_summary,omitempty"`
+	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
 }
 
 func FlowExecutionMetadataWithLiveOwner(existing json.RawMessage, owner FlowExecutionLiveOwner) json.RawMessage {
@@ -25,6 +38,23 @@ func FlowExecutionMetadataWithLiveOwner(existing json.RawMessage, owner FlowExec
 	setOrDeleteUUID(payload, FlowExecutionMetadataLiveRunID, owner.RunID)
 	setOrDeleteUUID(payload, FlowExecutionMetadataLiveTurnID, owner.TurnID)
 
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return encoded
+}
+
+func FlowExecutionMetadataWithRecoveryCheckpoint(existing json.RawMessage, checkpoint *FlowExecutionRecoveryCheckpoint) json.RawMessage {
+	payload := map[string]any{}
+	if len(existing) > 0 && json.Valid(existing) {
+		_ = json.Unmarshal(existing, &payload)
+	}
+	if checkpoint == nil {
+		delete(payload, FlowExecutionMetadataRecoveryCheckpoint)
+	} else {
+		payload[FlowExecutionMetadataRecoveryCheckpoint] = checkpoint
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return json.RawMessage(`{}`)
@@ -44,6 +74,25 @@ func FlowExecutionLiveOwnerFromMetadata(raw json.RawMessage) FlowExecutionLiveOw
 		RunID:  metadataUUIDPointer(payload, FlowExecutionMetadataLiveRunID),
 		TurnID: metadataUUIDPointer(payload, FlowExecutionMetadataLiveTurnID),
 	}
+}
+
+func FlowExecutionRecoveryCheckpointFromMetadata(raw json.RawMessage) (*FlowExecutionRecoveryCheckpoint, bool) {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return nil, false
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, false
+	}
+	value, ok := payload[FlowExecutionMetadataRecoveryCheckpoint]
+	if !ok || len(value) == 0 || string(value) == "null" {
+		return nil, false
+	}
+	var checkpoint FlowExecutionRecoveryCheckpoint
+	if err := json.Unmarshal(value, &checkpoint); err != nil {
+		return nil, false
+	}
+	return &checkpoint, true
 }
 
 func metadataUUIDPointer(payload map[string]any, key string) *uuid.UUID {

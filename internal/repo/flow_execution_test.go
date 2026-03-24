@@ -1,10 +1,14 @@
 package repo
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestFlowExecutionDefaults(t *testing.T) {
@@ -60,5 +64,46 @@ func TestProjectSubtaskNextSequenceNumberUsesMaxPlusOne(t *testing.T) {
 
 	if !strings.Contains(string(src), "COALESCE(MAX(sequence_number), 0) + 1") {
 		t.Fatalf("NextSequenceNumber query must use MAX(sequence_number)+1")
+	}
+}
+
+func TestFlowExecutionRecoveryCheckpointMetadataRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	runID := uuid.New()
+	failedTurnID := uuid.New()
+	updatedAt := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+
+	raw := FlowExecutionMetadataWithRecoveryCheckpoint(
+		FlowExecutionMetadataWithLiveOwner(json.RawMessage(`{}`), FlowExecutionLiveOwner{RunID: &runID}),
+		&FlowExecutionRecoveryCheckpoint{
+			CheckpointType: "stranded_execution",
+			FailedTurnID:   &failedTurnID,
+			ResumeAction:   "start_new_turn",
+			FailureClass:   "product_runtime",
+			FailureSummary: "active execution lost live task turn",
+			UpdatedAt:      &updatedAt,
+		},
+	)
+
+	checkpoint, ok := FlowExecutionRecoveryCheckpointFromMetadata(raw)
+	if !ok || checkpoint == nil {
+		t.Fatal("expected recovery checkpoint in metadata")
+	}
+	if checkpoint.CheckpointType != "stranded_execution" {
+		t.Fatalf("checkpoint_type = %q, want stranded_execution", checkpoint.CheckpointType)
+	}
+	if checkpoint.FailedTurnID == nil || *checkpoint.FailedTurnID != failedTurnID {
+		t.Fatalf("failed_turn_id = %v, want %s", checkpoint.FailedTurnID, failedTurnID)
+	}
+	if checkpoint.ResumeAction != "start_new_turn" {
+		t.Fatalf("resume_action = %q, want start_new_turn", checkpoint.ResumeAction)
+	}
+	if checkpoint.FailureClass != "product_runtime" {
+		t.Fatalf("failure_class = %q, want product_runtime", checkpoint.FailureClass)
+	}
+	liveOwner := FlowExecutionLiveOwnerFromMetadata(raw)
+	if liveOwner.RunID == nil || *liveOwner.RunID != runID {
+		t.Fatalf("live run id = %v, want %s", liveOwner.RunID, runID)
 	}
 }

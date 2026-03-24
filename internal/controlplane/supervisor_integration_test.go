@@ -772,6 +772,29 @@ func TestSupervisor_StrandedActiveExecutionRecoveryRestoresLiveTurn(t *testing.T
 	if refreshedExecution.Status != "active" {
 		t.Fatalf("execution status = %q, want active", refreshedExecution.Status)
 	}
+	if refreshedExecution.RuntimeSubstate == nil || *refreshedExecution.RuntimeSubstate != "recovery_pending" {
+		t.Fatalf("execution runtime_substate = %v, want recovery_pending", refreshedExecution.RuntimeSubstate)
+	}
+	liveOwner := repo.FlowExecutionLiveOwnerFromMetadata(refreshedExecution.Metadata)
+	if liveOwner.RunID == nil || *liveOwner.RunID != recoveryRunID {
+		t.Fatalf("execution live run id = %v, want %s", liveOwner.RunID, recoveryRunID)
+	}
+	if liveOwner.TurnID == nil || *liveOwner.TurnID != *refreshedSession.CurrentTurnID {
+		t.Fatalf("execution live turn id = %v, want %s", liveOwner.TurnID, *refreshedSession.CurrentTurnID)
+	}
+	checkpoint, ok := repo.FlowExecutionRecoveryCheckpointFromMetadata(refreshedExecution.Metadata)
+	if !ok || checkpoint == nil {
+		t.Fatal("expected execution recovery checkpoint metadata")
+	}
+	if checkpoint.CheckpointType != "stranded_execution" {
+		t.Fatalf("checkpoint type = %q, want stranded_execution", checkpoint.CheckpointType)
+	}
+	if checkpoint.ResumeAction != "start_new_turn" {
+		t.Fatalf("checkpoint resume_action = %q, want start_new_turn", checkpoint.ResumeAction)
+	}
+	if !strings.Contains(checkpoint.FailureSummary, "active execution lost live task turn") {
+		t.Fatalf("checkpoint failure_summary = %q, want stranded execution reason", checkpoint.FailureSummary)
+	}
 }
 
 func TestSupervisor_StrandedActiveExecutionSkipsUnresolvedRecoveryCheckpoint(t *testing.T) {
