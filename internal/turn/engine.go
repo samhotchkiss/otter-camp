@@ -17407,7 +17407,12 @@ func (e *TurnEngine) syncBoundFlowExecutionTurnOwnership(ctx context.Context, se
 		RunID:  repo.FlowExecutionLiveOwnerFromMetadata(execution.Metadata).RunID,
 		TurnID: turnID,
 	})
-	_, err = repo.NewFlowNodeExecutionRepo(e.pool).UpdateMetadata(ctx, execution.ID, updated)
+	executionRepo := repo.NewFlowNodeExecutionRepo(e.pool)
+	if _, err := executionRepo.UpdateMetadata(ctx, execution.ID, updated); err != nil {
+		return err
+	}
+	running := "running"
+	_, err = executionRepo.UpdateRuntimeSubstate(ctx, execution.ID, &running)
 	return err
 }
 
@@ -17436,10 +17441,33 @@ func (e *TurnEngine) reconcileBoundFlowExecutionTurnOwnership(ctx context.Contex
 	if liveOwner.TurnID == nil || *liveOwner.TurnID != turnID {
 		return
 	}
-	_, _ = executionRepo.UpdateMetadata(ctx, execution.ID, repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{
+	updatedExecution, err := executionRepo.UpdateMetadata(ctx, execution.ID, repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{
 		RunID:  liveOwner.RunID,
 		TurnID: nil,
 	}))
+	if err != nil {
+		return
+	}
+	waiting := e.waitingBoundFlowExecutionRuntimeSubstate(ctx, session)
+	if waiting == nil {
+		return
+	}
+	_, _ = executionRepo.UpdateRuntimeSubstate(ctx, updatedExecution.ID, waiting)
+}
+
+func (e *TurnEngine) waitingBoundFlowExecutionRuntimeSubstate(ctx context.Context, session *chat.ChatSession) *string {
+	if session == nil {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") && session.ScopeID != uuid.Nil && e.tasks != nil {
+		taskRecord, err := e.tasks.GetByID(ctx, session.ScopeID)
+		if err == nil && strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+			value := "waiting_for_review"
+			return &value
+		}
+	}
+	value := "waiting_for_turn"
+	return &value
 }
 
 type toolExecutionBinding struct {

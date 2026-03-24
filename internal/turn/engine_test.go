@@ -7038,6 +7038,44 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	}
 }
 
+func TestWaitingBoundFlowExecutionRuntimeSubstateUsesReviewForReviewTask(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {ID: taskID, WorkStatus: "review"},
+		},
+	}
+
+	got := fixture.engine.waitingBoundFlowExecutionRuntimeSubstate(context.Background(), fixture.session)
+	if got == nil || *got != "waiting_for_review" {
+		t.Fatalf("waitingBoundFlowExecutionRuntimeSubstate = %v, want waiting_for_review", got)
+	}
+}
+
+func TestWaitingBoundFlowExecutionRuntimeSubstateDefaultsToWaitingForTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {ID: taskID, WorkStatus: "in_progress"},
+		},
+	}
+
+	got := fixture.engine.waitingBoundFlowExecutionRuntimeSubstate(context.Background(), fixture.session)
+	if got == nil || *got != "waiting_for_turn" {
+		t.Fatalf("waitingBoundFlowExecutionRuntimeSubstate = %v, want waiting_for_turn", got)
+	}
+}
+
 func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	task := repo.ProjectTask{TaskNumber: 11, Title: "Document what persisted correctly"}
 
