@@ -8549,6 +8549,10 @@ func TestIntegrationFlowReviewDecisionApproveCreatesEmptyCanonicalCommit(t *test
 	if updatedExecution.CommitSHA == nil || strings.TrimSpace(*updatedExecution.CommitSHA) == "" {
 		t.Fatalf("review commit_sha = %v, want non-empty canonical commit", updatedExecution.CommitSHA)
 	}
+	decision, ok := repo.FlowExecutionReviewDecisionFromMetadata(updatedExecution.Metadata)
+	if !ok || decision == nil || decision.Decision != "approve" {
+		t.Fatalf("review decision metadata = %#v, want approve", decision)
+	}
 
 	messageBytes, err := exec.Command("git", "-C", workspaceRoot, "log", "-1", "--pretty=%B").CombinedOutput()
 	if err != nil {
@@ -8759,6 +8763,10 @@ func TestIntegrationFlowReviewDecisionRejectCreatesCanonicalRejectionCommit(t *t
 	}
 	if updatedExecution.CommitSHA == nil || strings.TrimSpace(*updatedExecution.CommitSHA) == "" {
 		t.Fatalf("review rejection commit_sha = %v, want non-empty canonical commit", updatedExecution.CommitSHA)
+	}
+	decision, ok := repo.FlowExecutionReviewDecisionFromMetadata(updatedExecution.Metadata)
+	if !ok || decision == nil || decision.Decision != "reject" || decision.Reason != "missing tests" {
+		t.Fatalf("review decision metadata = %#v, want reject with reason", decision)
 	}
 
 	messageBytes, err := exec.Command("git", "-C", workspaceRoot, "log", "-1", "--pretty=%B").CombinedOutput()

@@ -4628,6 +4628,9 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	}
 	reason, _ := readString(input, "reason")
 	findings, _ := readString(input, "findings")
+	if err := e.recordReviewDecisionMetadata(ctx, execution, decision, reason, findings); err != nil {
+		return nil, err
+	}
 	if decision == "approve" {
 		dirty, err := e.reviewExecutionWorkspaceDirty(ctx, execution.TaskID)
 		if err != nil {
@@ -4803,6 +4806,21 @@ func taskBranchString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func (e *NativeToolExecutor) recordReviewDecisionMetadata(ctx context.Context, execution repo.FlowNodeExecution, decision, reason, findings string) error {
+	if e.flowExecs == nil || execution.ID == uuid.Nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	metadata := repo.FlowExecutionMetadataWithReviewDecision(execution.Metadata, &repo.FlowExecutionReviewDecision{
+		Decision:  strings.TrimSpace(decision),
+		Reason:    strings.TrimSpace(reason),
+		Findings:  strings.TrimSpace(findings),
+		DecidedAt: &now,
+	})
+	_, err := e.flowExecs.UpdateMetadata(ctx, execution.ID, metadata)
+	return err
 }
 
 func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input map[string]any) (map[string]any, error) {

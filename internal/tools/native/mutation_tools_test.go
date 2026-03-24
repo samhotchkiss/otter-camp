@@ -1515,6 +1515,10 @@ func (m *mockFlowExecutionRepo) Reject(context.Context, uuid.UUID) (repo.FlowNod
 	return repo.FlowNodeExecution{}, errors.New("not implemented")
 }
 
+func (m *mockFlowExecutionRepo) UpdateMetadata(context.Context, uuid.UUID, json.RawMessage) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
 type mockProjectSubtaskRepo struct{}
 
 func (m *mockProjectSubtaskRepo) Create(context.Context, repo.ProjectSubtask) (repo.ProjectSubtask, error) {

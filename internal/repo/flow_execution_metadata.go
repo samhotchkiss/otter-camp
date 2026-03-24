@@ -11,6 +11,7 @@ const (
 	FlowExecutionMetadataLiveRunID          = "live_run_id"
 	FlowExecutionMetadataLiveTurnID         = "live_turn_id"
 	FlowExecutionMetadataRecoveryCheckpoint = "recovery_checkpoint"
+	FlowExecutionMetadataReviewDecision     = "review_decision"
 )
 
 type FlowExecutionLiveOwner struct {
@@ -27,6 +28,13 @@ type FlowExecutionRecoveryCheckpoint struct {
 	FailureClass        string     `json:"failure_class,omitempty"`
 	FailureSummary      string     `json:"failure_summary,omitempty"`
 	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
+}
+
+type FlowExecutionReviewDecision struct {
+	Decision  string     `json:"decision,omitempty"`
+	Reason    string     `json:"reason,omitempty"`
+	Findings  string     `json:"findings,omitempty"`
+	DecidedAt *time.Time `json:"decided_at,omitempty"`
 }
 
 func FlowExecutionMetadataWithLiveOwner(existing json.RawMessage, owner FlowExecutionLiveOwner) json.RawMessage {
@@ -54,6 +62,23 @@ func FlowExecutionMetadataWithRecoveryCheckpoint(existing json.RawMessage, check
 		delete(payload, FlowExecutionMetadataRecoveryCheckpoint)
 	} else {
 		payload[FlowExecutionMetadataRecoveryCheckpoint] = checkpoint
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return encoded
+}
+
+func FlowExecutionMetadataWithReviewDecision(existing json.RawMessage, decision *FlowExecutionReviewDecision) json.RawMessage {
+	payload := map[string]any{}
+	if len(existing) > 0 && json.Valid(existing) {
+		_ = json.Unmarshal(existing, &payload)
+	}
+	if decision == nil {
+		delete(payload, FlowExecutionMetadataReviewDecision)
+	} else {
+		payload[FlowExecutionMetadataReviewDecision] = decision
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -93,6 +118,25 @@ func FlowExecutionRecoveryCheckpointFromMetadata(raw json.RawMessage) (*FlowExec
 		return nil, false
 	}
 	return &checkpoint, true
+}
+
+func FlowExecutionReviewDecisionFromMetadata(raw json.RawMessage) (*FlowExecutionReviewDecision, bool) {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return nil, false
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, false
+	}
+	value, ok := payload[FlowExecutionMetadataReviewDecision]
+	if !ok || len(value) == 0 || string(value) == "null" {
+		return nil, false
+	}
+	var decision FlowExecutionReviewDecision
+	if err := json.Unmarshal(value, &decision); err != nil {
+		return nil, false
+	}
+	return &decision, true
 }
 
 func metadataUUIDPointer(payload map[string]any, key string) *uuid.UUID {
