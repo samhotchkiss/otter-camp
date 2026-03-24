@@ -5322,6 +5322,39 @@ func TestProjectBootstrapProgressAdvancedBeyondState(t *testing.T) {
 	}
 }
 
+func TestProjectBootstrapPauseInvalidatedByCurrentProgressForFirstWavePromotion(t *testing.T) {
+	state := projectBootstrapState{
+		Status:                   projectBootstrapStatusFailed,
+		FailureClass:             "first_wave_execution_missing",
+		FailurePhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		AssignmentCount:          3,
+		PlannedTaskCount:         3,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:       3,
+	}
+	progress := projectBootstrapProgress{
+		AssignmentCount:          3,
+		PlannedTaskCount:         3,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:       3,
+		FirstWavePromotedCount:   3,
+	}
+	if !projectBootstrapPauseInvalidatedByCurrentProgress(state, progress) {
+		t.Fatal("first-wave promotion should invalidate stale first-wave execution pause")
+	}
+}
+
+func TestProjectBootstrapPauseMetadataInvalidatedByCurrentProgressForFirstWavePromotion(t *testing.T) {
+	progress := projectBootstrapProgress{
+		FirstWaveTaskCount:     3,
+		FirstWavePromotedCount: 3,
+	}
+	metadata := json.RawMessage(`{"failure_class":"first_wave_execution_missing","failure_phase":"first_wave_executions_created"}`)
+	if !projectBootstrapPauseMetadataInvalidatedByCurrentProgress(metadata, progress) {
+		t.Fatal("pause metadata should invalidate stale first-wave execution pause after promotion")
+	}
+}
+
 func TestBuildProjectBootstrapValidationRecoveryPrompt(t *testing.T) {
 	prompt := buildProjectBootstrapValidationRecoveryPrompt(2, projectBootstrapProgress{
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveSize,

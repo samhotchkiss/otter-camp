@@ -749,6 +749,83 @@ func (p *TaskQueueProcessor) ensureFlowRun(ctx context.Context, event eventbus.D
 	return p.dispatchWakeupRun(ctx, result.Run)
 }
 
+func (p *TaskQueueProcessor) RepairExecutionWakeupKickoff(ctx context.Context, taskID, executionID uuid.UUID) error {
+	if taskID == uuid.Nil || executionID == uuid.Nil {
+		return nil
+	}
+	taskRecord, err := p.tasks.GetByID(ctx, taskID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	execution, err := p.flowExecutions.GetByID(ctx, executionID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if execution.SessionID == nil || *execution.SessionID == uuid.Nil {
+		return nil
+	}
+	principalType := "system"
+	principalID := uuid.Nil
+	if taskRecord.AssignedAgentID != nil && *taskRecord.AssignedAgentID != uuid.Nil {
+		principalType = "agent"
+		principalID = *taskRecord.AssignedAgentID
+	}
+	idempotencyKey := fmt.Sprintf("repair-flow-current:%s", execution.ID)
+	metadata, err := json.Marshal(map[string]any{
+		"source":                 "task_queue_processor",
+		"flow_node_execution_id": execution.ID,
+		"run_mode":               "async",
+		"wake_kind":              "flow_current",
+		"repair_reason":          "missing_kickoff_message",
+	})
+	if err != nil {
+		return err
+	}
+	wakeupPayload := map[string]any{
+		"source":                 "task_queue_processor",
+		"flow_node_execution_id": execution.ID.String(),
+		"run_mode":               "async",
+		"repair_reason":          "missing_kickoff_message",
+	}
+	result, err := p.runs.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: taskRecord.OrganizationID,
+			PrincipalType:  principalType,
+			PrincipalID:    principalID,
+			TriggerType:    taskQueueTriggerType,
+			ProjectID:      &taskRecord.ProjectID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     taskRecord.CurrentFlowNodeID,
+			SessionID:      execution.SessionID,
+			IdempotencyKey: &idempotencyKey,
+			Metadata:       metadata,
+		},
+		WakeupSource:  "task_queue_processor",
+		WakeupKind:    "flow_current",
+		WakeupPayload: wakeupPayload,
+	})
+	if err != nil {
+		return err
+	}
+	if execution.ID != uuid.Nil {
+		if _, err := p.flowExecutions.UpdateMetadata(ctx, execution.ID, repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{
+			RunID: &result.Run.ID,
+		})); err != nil {
+			return err
+		}
+	}
+	if !result.shouldDispatch() {
+		return nil
+	}
+	return p.dispatchWakeupRun(ctx, result.Run)
+}
+
 func (p *TaskQueueProcessor) ensureAssignedAgentRun(ctx context.Context, event eventbus.DomainEvent, taskRecord repo.ProjectTask) error {
 	if taskOwnedByFlowExecution(taskRecord) {
 		return nil

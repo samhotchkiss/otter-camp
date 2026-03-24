@@ -3046,6 +3046,27 @@ func projectBootstrapProgressAdvancedBeyondState(state projectBootstrapState, pr
 		progress.FirstWaveJobCount > state.FirstWaveJobCount
 }
 
+func projectBootstrapPauseInvalidatedByCurrentProgress(state projectBootstrapState, progress projectBootstrapProgress) bool {
+	if projectBootstrapProgressAdvancedBeyondState(state, progress) {
+		return true
+	}
+	failureClass := strings.ToLower(strings.TrimSpace(state.FailureClass))
+	failurePhase := strings.ToLower(strings.TrimSpace(state.FailurePhase))
+	if failureClass == "first_wave_execution_missing" || failurePhase == projectBootstrapCheckpointFirstWaveExecutions {
+		return progress.FirstWaveTaskCount > 0 && progress.FirstWavePromotedCount > 0
+	}
+	return false
+}
+
+func projectBootstrapPauseMetadataInvalidatedByCurrentProgress(metadata json.RawMessage, progress projectBootstrapProgress) bool {
+	failureClass := strings.ToLower(strings.TrimSpace(stringValue(messageMetadataMap(metadata)["failure_class"])))
+	failurePhase := strings.ToLower(strings.TrimSpace(stringValue(messageMetadataMap(metadata)["failure_phase"])))
+	if failureClass == "first_wave_execution_missing" || failurePhase == projectBootstrapCheckpointFirstWaveExecutions {
+		return progress.FirstWaveTaskCount > 0 && progress.FirstWavePromotedCount > 0
+	}
+	return false
+}
+
 func projectBootstrapRestartScaffoldOnly(progress projectBootstrapProgress) bool {
 	return progress.BootstrapTaskID != uuid.Nil &&
 		progress.BootstrapSetupTaskCount > 0 &&
@@ -16717,7 +16738,56 @@ func (e *TurnEngine) projectPausedForSession(ctx context.Context, session *chat.
 		return false, "", err
 	}
 	pauseState := projectpause.Parse(projectRecord.Settings)
+	if pauseState.IsPaused {
+		if cleared, clearErr := e.clearStaleProjectBootstrapPause(ctx, projectRecord, pauseState); clearErr != nil {
+			return false, "", clearErr
+		} else if cleared {
+			return false, "", nil
+		}
+	}
 	return pauseState.IsPaused, pauseState.Reason, nil
+}
+
+func (e *TurnEngine) clearStaleProjectBootstrapPause(ctx context.Context, projectRecord repo.Project, pauseState projectpause.State) (bool, error) {
+	if e == nil || e.pool == nil || projectRecord.ID == uuid.Nil || !pauseState.IsPaused {
+		return false, nil
+	}
+	if !strings.Contains(strings.ToLower(strings.TrimSpace(string(pauseState.Metadata))), projectBootstrapSource) {
+		return false, nil
+	}
+	storedState := projectBootstrapStateFromMetadata(projectRecord.Settings)
+	if strings.TrimSpace(storedState.Status) == "" {
+		return false, nil
+	}
+	progress, err := e.loadProjectBootstrapProgress(ctx, projectRecord.ID)
+	if err != nil {
+		return false, err
+	}
+	if !projectBootstrapPauseInvalidatedByCurrentProgress(storedState, progress) &&
+		!projectBootstrapPauseMetadataInvalidatedByCurrentProgress(pauseState.Metadata, progress) {
+		return false, nil
+	}
+	updated := projectRecord
+	updated.Settings, err = projectpause.ClearPause(updated.Settings)
+	if err != nil {
+		return false, err
+	}
+	if _, err := repo.NewProjectRepo(e.pool).Update(ctx, updated); err != nil {
+		return false, err
+	}
+	if e.logger != nil {
+		e.logger.Info("cleared stale project bootstrap pause after progress advanced",
+			"project_id", projectRecord.ID,
+			"pause_reason", strings.TrimSpace(pauseState.Reason),
+			"stored_first_wave_promoted_count", storedState.FirstWavePromotedCount,
+			"current_first_wave_promoted_count", progress.FirstWavePromotedCount,
+			"stored_first_wave_execution_count", storedState.FirstWaveExecutionCount,
+			"current_first_wave_execution_count", progress.FirstWaveExecutionCount,
+			"stored_first_wave_job_count", storedState.FirstWaveJobCount,
+			"current_first_wave_job_count", progress.FirstWaveJobCount,
+		)
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) validationLoopBlockerForSession(ctx context.Context, session *chat.ChatSession) (bool, taskValidationGuardState, error) {

@@ -35,6 +35,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/policy"
 	"github.com/samhotchkiss/otter-camp/internal/profiles"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/push"
 	"github.com/samhotchkiss/otter-camp/internal/push/adapters"
@@ -122,7 +123,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	if err != nil {
 		return fmt.Errorf("worker task service setup: %w", err)
 	}
-	if parentRepaired, draftSettled, gatesCancelled, err := startupProjectCleanup(ctx, pool.Raw(), tasks); err != nil {
+	if parentRepaired, draftSettled, gatesCancelled, pausesCleared, err := startupProjectCleanup(ctx, pool.Raw(), tasks); err != nil {
 		return fmt.Errorf("worker startup project cleanup: %w", err)
 	} else {
 		if parentRepaired > 0 {
@@ -133,6 +134,9 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		}
 		if gatesCancelled > 0 {
 			logger.Info("worker startup: cancelled impossible draft project gates", "count", gatesCancelled)
+		}
+		if pausesCleared > 0 {
+			logger.Info("worker startup: cleared stale bootstrap pauses", "count", pausesCleared)
 		}
 	}
 
@@ -315,6 +319,11 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 	defer bus.Unsubscribe(turnCompletedSub)
 	turnCancelledSub := queueProcessor.SubscribeTurnCancelledWakeups(nil)
 	defer bus.Unsubscribe(turnCancelledSub)
+	if repaired, err := repairExecutionWakeupsMissingKickoff(ctx, pool.Raw(), queueProcessor); err != nil {
+		return fmt.Errorf("worker startup execution wakeup repair: %w", err)
+	} else if repaired > 0 {
+		logger.Info("worker startup: repaired active execution wakeups missing kickoff", "count", repaired)
+	}
 	toolResolver, err := tools.NewToolResolver(tools.ToolResolverOptions{
 		Pool:   pool.Raw(),
 		Events: bus,
@@ -702,9 +711,9 @@ func (deterministicQueryEmbedder) Embed(_ context.Context, _ uuid.UUID, _ string
 	return vectors, nil
 }
 
-func startupProjectCleanup(ctx context.Context, pool *pgxpool.Pool, tasks tasksvc.TaskService) (int, int, int, error) {
+func startupProjectCleanup(ctx context.Context, pool *pgxpool.Pool, tasks tasksvc.TaskService) (int, int, int, int, error) {
 	if pool == nil || tasks == nil {
-		return 0, 0, 0, nil
+		return 0, 0, 0, 0, nil
 	}
 	orgRepo := repo.NewOrgRepo(pool)
 	projectRepo := repo.NewProjectRepo(pool)
@@ -712,27 +721,126 @@ func startupProjectCleanup(ctx context.Context, pool *pgxpool.Pool, tasks tasksv
 
 	orgs, err := orgRepo.List(ctx)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	parentRepaired := 0
 	draftSettled := 0
 	gatesCancelled := 0
+	pausesCleared := 0
 	for _, org := range orgs {
 		projects, err := projectRepo.List(ctx, org.ID)
 		if err != nil {
-			return parentRepaired, draftSettled, gatesCancelled, err
+			return parentRepaired, draftSettled, gatesCancelled, pausesCleared, err
 		}
 		for _, project := range projects {
+			cleared, err := clearStaleBootstrapPauseForQueuedFirstWave(ctx, pool, projectRepo, taskRepo, project)
+			if err != nil {
+				return parentRepaired, draftSettled, gatesCancelled, pausesCleared, err
+			}
+			if cleared {
+				pausesCleared++
+			}
 			repaired, settled, cancelled, err := startupCleanupProjectDrafts(ctx, taskRepo, tasks, project.ID)
 			if err != nil {
-				return parentRepaired, draftSettled, gatesCancelled, err
+				return parentRepaired, draftSettled, gatesCancelled, pausesCleared, err
 			}
 			parentRepaired += repaired
 			draftSettled += settled
 			gatesCancelled += cancelled
 		}
 	}
-	return parentRepaired, draftSettled, gatesCancelled, nil
+	return parentRepaired, draftSettled, gatesCancelled, pausesCleared, nil
+}
+
+func clearStaleBootstrapPauseForQueuedFirstWave(ctx context.Context, pool *pgxpool.Pool, projectRepo *repo.ProjectRepo, taskRepo *repo.ProjectTaskRepo, project repo.Project) (bool, error) {
+	if project.ID == uuid.Nil || pool == nil || projectRepo == nil || taskRepo == nil {
+		return false, nil
+	}
+	pauseState := projectpause.Parse(project.Settings)
+	if !pauseState.IsPaused {
+		return false, nil
+	}
+	pauseMetadata := parseJSONMap(pauseState.Metadata)
+	if !strings.EqualFold(strings.TrimSpace(fmt.Sprintf("%v", pauseMetadata["source"])), "project_bootstrap") {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(fmt.Sprintf("%v", pauseMetadata["failure_class"])), "first_wave_execution_missing") {
+		return false, nil
+	}
+	tasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		return false, err
+	}
+	selectedCount := 0
+	promotedCount := 0
+	selectedTaskIDs := make([]uuid.UUID, 0)
+	for _, task := range tasks {
+		metadata := parseJSONMap(task.Metadata)
+		if !boolValue(metadata["bootstrap_first_wave_selected"]) {
+			continue
+		}
+		selectedCount++
+		selectedTaskIDs = append(selectedTaskIDs, task.ID)
+		switch strings.ToLower(strings.TrimSpace(task.WorkStatus)) {
+		case "queued", "in_progress", "review", "done":
+			promotedCount++
+		}
+	}
+	if selectedCount == 0 {
+		return false, nil
+	}
+	executionCount, err := countActiveFirstWaveExecutions(ctx, pool, selectedTaskIDs)
+	if err != nil {
+		return false, err
+	}
+	if promotedCount == 0 && executionCount == 0 {
+		return false, nil
+	}
+	updated := project
+	updated.Settings, err = projectpause.ClearPause(updated.Settings)
+	if err != nil {
+		return false, err
+	}
+	if _, err := projectRepo.Update(ctx, updated); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func countActiveFirstWaveExecutions(ctx context.Context, pool *pgxpool.Pool, taskIDs []uuid.UUID) (int, error) {
+	if pool == nil || len(taskIDs) == 0 {
+		return 0, nil
+	}
+	var count int
+	err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM flow_node_execution
+		WHERE task_id = ANY($1)
+		  AND status = 'active'
+	`, taskIDs).Scan(&count)
+	return count, err
+}
+
+func parseJSONMap(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return map[string]any{}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+		return map[string]any{}
+	}
+	return payload
+}
+
+func boolValue(raw any) bool {
+	switch value := raw.(type) {
+	case bool:
+		return value
+	case string:
+		return strings.EqualFold(strings.TrimSpace(value), "true")
+	default:
+		return false
+	}
 }
 
 func startupCleanupProjectDrafts(ctx context.Context, taskRepo *repo.ProjectTaskRepo, tasks tasksvc.TaskService, projectID uuid.UUID) (int, int, int, error) {
@@ -813,4 +921,60 @@ func draftTaskAutoCompletes(task repo.ProjectTask) bool {
 		return false
 	}
 	return tasksvc.SatisfiedDraftAutoCompletable(task)
+}
+
+func repairExecutionWakeupsMissingKickoff(ctx context.Context, pool *pgxpool.Pool, queueProcessor *controlplane.TaskQueueProcessor) (int64, error) {
+	if pool == nil || queueProcessor == nil {
+		return 0, nil
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT e.task_id, e.id
+		FROM flow_node_execution e
+		JOIN chat_session cs ON cs.id = e.session_id
+		WHERE e.status = 'active'
+		  AND COALESCE(e.runtime_substate, 'waiting_for_turn') = 'waiting_for_turn'
+		  AND cs.scope_type = 'project_task'
+		  AND cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND cs.current_turn_id IS NULL
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_message cm
+		    WHERE cm.session_id = cs.id
+		      AND cm.role = 'user'
+		      AND COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
+		      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = 'agent_turn'
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (
+		        COALESCE(jq.payload->>'flow_node_execution_id', '') = e.id::text
+		        OR (jq.payload->>'session_id')::uuid = cs.id
+		      )
+		  )
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var taskID uuid.UUID
+		var executionID uuid.UUID
+		if err := rows.Scan(&taskID, &executionID); err != nil {
+			return repaired, err
+		}
+		if err := queueProcessor.RepairExecutionWakeupKickoff(ctx, taskID, executionID); err != nil {
+			return repaired, err
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, err
+	}
+	return repaired, nil
 }
