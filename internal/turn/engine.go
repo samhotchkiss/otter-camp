@@ -1198,7 +1198,8 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	} else if continued {
 		return nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "in_progress") {
+	taskStatus := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
+	if taskStatus != "in_progress" && taskStatus != "review" {
 		return nil
 	}
 	if taskRecord.CurrentFlowNodeID == nil {
@@ -1212,7 +1213,11 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 		}
 		return err
 	}
-	if !strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "work") {
+	nodeType := strings.ToLower(strings.TrimSpace(currentNode.NodeType))
+	if taskStatus == "in_progress" && nodeType != "work" {
+		return nil
+	}
+	if taskStatus == "review" && nodeType != "review" {
 		return nil
 	}
 
@@ -1231,6 +1236,26 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	messages, err := e.messages.ListBySession(ctx, session.ID)
 	if err != nil {
 		return err
+	}
+	if taskStatus == "review" {
+		if reviewTurnCompletedWithDecision(messages, payload.TurnID) {
+			return nil
+		}
+		latestUser := latestUserMessage(messages)
+		if latestUser == nil {
+			return nil
+		}
+		assistant := latestAssistantFinalForTurn(messages, payload.TurnID)
+		assistantContent := ""
+		if assistant != nil {
+			assistantContent = assistant.Content
+		}
+		if handled, handleErr := e.handleCompletedReviewTurnWithoutDecision(ctx, session, taskRecord, latestCompleted, latestUser, assistantContent); handleErr != nil {
+			return handleErr
+		} else if handled {
+			return nil
+		}
+		return nil
 	}
 	if shouldSuppressAutoContinuationForRecoveryHalt(messages, payload.TurnID, taskRecord.Metadata) {
 		return nil
@@ -1335,6 +1360,73 @@ func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 		}
 		if e.taskTransitions == nil {
 			return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+		}
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+
+	nextMessageID := latestUser.ID
+	if e.chat != nil {
+		retryMessage, appendErr := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+			SessionID: session.ID,
+			TurnID:    &latestCompleted.ID,
+			Role:      "user",
+			Content:   latestUser.Content,
+			Metadata:  latestUser.Metadata,
+		})
+		if appendErr != nil {
+			return true, appendErr
+		}
+		if retryMessage != nil && retryMessage.ID != uuid.Nil {
+			nextMessageID = retryMessage.ID
+		}
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  nextMessageID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if latestCompleted.RespondingID != uuid.Nil {
+		agentID := latestCompleted.RespondingID
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return true, err
+	}
+	return enqueued, nil
+}
+
+func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
+	ctx context.Context,
+	session *chat.ChatSession,
+	taskRecord repo.ProjectTask,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+	assistantContent string,
+) (bool, error) {
+	if session == nil || latestCompleted == nil || latestUser == nil {
+		return false, nil
+	}
+	if !taskReviewActionMessage(*latestUser) && !taskExecutionKickoffMessage(*latestUser) {
+		return false, nil
+	}
+
+	reason := "review turn completed without calling flow.review_decision"
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, "[Review turn halted: "+reason+" after repeated retries. The task is now blocked. Inspect the current deliverables and call flow.review_decision with the active flow_node_execution_id to approve or reject the review step.]"); err != nil {
+			return true, err
+		}
+		if e.taskTransitions == nil {
+			return true, fmt.Errorf(errMissingTaskTransitionServiceForRecoveryBlock)
+		}
+		if strings.TrimSpace(assistantContent) != "" {
+			snippet, _ := truncateRecoveryResumeExcerpt(strings.TrimSpace(assistantContent), 160)
+			reason += fmt.Sprintf(": %s", snippet)
 		}
 		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, reason, tasksvc.Actor{Type: "system"}); err != nil {
 			return true, err
@@ -13053,6 +13145,18 @@ func taskExecutionKickoffMessage(message repo.ChatMessage) bool {
 	return true
 }
 
+func taskReviewActionMessage(message repo.ChatMessage) bool {
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return false
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	if strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), "task_review_action") {
+		return true
+	}
+	content := strings.TrimSpace(message.Content)
+	return strings.HasPrefix(content, "Review only.") && strings.Contains(content, "flow.review_decision")
+}
+
 func taskContinuationResumeMessageRootsHistory(message repo.ChatMessage) bool {
 	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
 		return false
@@ -13101,6 +13205,22 @@ func buildTaskReviewActionPrompt(session *chat.ChatSession) string {
 		lines = append(lines, "Use flow_node_execution_id "+executionID.String()+" in flow.review_decision.")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func reviewTurnCompletedWithDecision(messages []repo.ChatMessage, turnID uuid.UUID) bool {
+	for _, message := range messagesForTurn(messages, turnID) {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, _, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(toolName), "flow.review_decision") {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *TurnEngine) shouldAppendSyntheticUserPrompt(ctx context.Context, sessionID uuid.UUID, source string) (bool, error) {
