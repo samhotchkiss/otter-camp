@@ -7913,6 +7913,118 @@ func TestContinuationTurnSynthesizesBootstrapResumeStateWhenMetadataIsStale(t *t
 	t.Fatal("project bootstrap resume message missing with stale metadata")
 }
 
+func TestBootstrapAutoContinueRedirectsAfterBootstrapCompletion(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = uuid.New()
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+
+	state := projectBootstrapState{
+		Status:                   projectBootstrapStatusCompleted,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveJobsClaimed,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveJobsClaimed,
+		ValidationStatus:         projectBootstrapValidationPassed,
+		AssignmentCount:          4,
+		PlannedTaskCount:         12,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:       4,
+		FirstWavePromotedCount:   4,
+		FirstWaveExecutionCount:  4,
+		FirstWaveJobCount:        4,
+	}
+	metadata, err := projectBootstrapMetadataJSON(nil, state)
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	fixture.session.Metadata = metadata
+	fixture.chat.session.Metadata = metadata
+
+	userMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	userMetadata, err := json.Marshal(map[string]any{
+		"source":                      projectBootstrapSource,
+		"auto_continue":               true,
+		"bootstrap_initial_message_id": fixture.userMessageID.String(),
+	})
+	if err != nil {
+		t.Fatalf("Marshal user metadata: %v", err)
+	}
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), userMessage.ID, userMetadata); err != nil {
+		t.Fatalf("UpdateMetadata user message: %v", err)
+	}
+	if _, err := fixture.messages.UpdateContent(context.Background(), userMessage.ID, "Continue the active project bootstrap from the persisted state above."); err != nil {
+		t.Fatalf("UpdateContent user message: %v", err)
+	}
+
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawRedirect bool
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Bootstrap is already complete.") {
+			sawRedirect = true
+		}
+		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
+			t.Fatalf("resume message = %q, want none after bootstrap completion", msg.Content)
+		}
+	}
+	if !sawRedirect {
+		t.Fatal("completed bootstrap redirect message missing")
+	}
+}
+
+func TestFinalizePendingProjectBootstrapMessages(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+
+	bootstrapMsg := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Continue the active project bootstrap from the persisted state above.",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","auto_continue":true}`),
+	})
+	plainMsg := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Normal user message",
+	})
+
+	if err := fixture.engine.finalizePendingProjectBootstrapMessages(context.Background(), fixture.session.ID); err != nil {
+		t.Fatalf("finalizePendingProjectBootstrapMessages: %v", err)
+	}
+
+	updatedBootstrap, err := fixture.messages.GetByID(context.Background(), bootstrapMsg.ID)
+	if err != nil {
+		t.Fatalf("GetByID bootstrap message: %v", err)
+	}
+	if updatedBootstrap.Status != "final" {
+		t.Fatalf("bootstrap message status = %q, want final", updatedBootstrap.Status)
+	}
+
+	updatedPlain, err := fixture.messages.GetByID(context.Background(), plainMsg.ID)
+	if err != nil {
+		t.Fatalf("GetByID plain message: %v", err)
+	}
+	if updatedPlain.Status != "pending" {
+		t.Fatalf("plain message status = %q, want pending", updatedPlain.Status)
+	}
+}
+
 func TestResolveModelProfileWorkerDefaultsToStandardWithoutOverrides(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.engine.resolver = nil

@@ -2094,6 +2094,9 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 		state.AutoTurnCount = 0
 		state.CompletedAt = &now
 		state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+		if err := e.finalizePendingProjectBootstrapMessages(ctx, session.ID); err != nil {
+			return err
+		}
 		return e.updateProjectBootstrapState(ctx, session, state)
 	}
 
@@ -5650,6 +5653,36 @@ func (e *TurnEngine) projectBootstrapAutoContinueMessage(ctx context.Context, me
 	return ok && raw
 }
 
+func buildCompletedProjectBootstrapRedirectMessage() string {
+	return "[Bootstrap is already complete. Do not continue bootstrap setup on this turn. Continue normal project orchestration from the current live task state instead. Do not re-read scaffold artifacts, template catalogs, or the full task tree unless a specific active blocker requires it.]"
+}
+
+func (e *TurnEngine) finalizePendingProjectBootstrapMessages(ctx context.Context, sessionID uuid.UUID) error {
+	if e == nil || e.messages == nil || sessionID == uuid.Nil {
+		return nil
+	}
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Status), "pending") {
+			continue
+		}
+		metadata := messageMetadataMap(message.Metadata)
+		if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectBootstrapSource) {
+			continue
+		}
+		if _, err := e.messages.UpdateStatus(ctx, message.ID, "final", ""); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e *TurnEngine) handleRateLimitedTurnFailure(
 	ctx context.Context,
 	runtime *turnRuntime,
@@ -5820,8 +5853,15 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		}
 	}
 	if rt != nil && rt.historyStartID == nil && e.projectBootstrapAutoContinueMessage(ctx, rt.initialMessageID) {
-		if _, err := e.appendProjectBootstrapResumeState(ctx, rt); err != nil {
-			return err
+		bootstrapState := projectBootstrapStateFromMetadata(rt.session.Metadata)
+		if projectBootstrapStateActive(bootstrapState) {
+			if _, err := e.appendProjectBootstrapResumeState(ctx, rt); err != nil {
+				return err
+			}
+		} else {
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildCompletedProjectBootstrapRedirectMessage()); err != nil {
+				return err
+			}
 		}
 	}
 	if rt != nil && rt.historyStartID == nil {
