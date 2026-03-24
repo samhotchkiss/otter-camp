@@ -6533,6 +6533,29 @@ func TestBuildProjectBootstrapResumeActionPromptForPartialFirstWaveMaterializati
 	}
 }
 
+func TestBuildProjectBootstrapResumeActionPromptForExplicitFirstWaveSelection(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		CurrentPhase:            projectBootstrapCheckpointFirstWaveSelected,
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
+		ValidationFailureReason: buildProjectBootstrapExplicitFirstWaveSelectionFailureReason(),
+	}, projectBootstrapResumeSnapshot{
+		SelectableFirstWaveLine: "Selectable first-wave tasks: task 10 id=abc title=\"Build report generator\" assigned_agent_id=worker-1; task 11 id=def title=\"Write dashboard spec\" assigned_agent_id=worker-2",
+	})
+	if !strings.Contains(prompt, "Start with bootstrap.setup.persist") {
+		t.Fatalf("prompt = %q, want persist-first guidance", prompt)
+	}
+	if !strings.Contains(prompt, "first_wave_task_ids or first_wave_task_numbers") {
+		t.Fatalf("prompt = %q, want explicit first-wave selection guidance", prompt)
+	}
+	if strings.Contains(prompt, "Do not start with bootstrap.setup.persist on this turn unless you have already repaired the named blocker") {
+		t.Fatalf("prompt = %q, want no conflicting no-persist guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Use the selectable task ids already listed") {
+		t.Fatalf("prompt = %q, want selectable-task guidance", prompt)
+	}
+}
+
 func TestBuildProjectBootstrapResumeActionPromptForUnassignedFirstWaveTask(t *testing.T) {
 	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
 		CurrentPhase:            projectBootstrapCheckpointFirstWaveExecutions,
@@ -6578,6 +6601,22 @@ func TestBuildProjectBootstrapResumeStateMessageIncludesValidationFailure(t *tes
 	})
 	if !strings.Contains(message, "Current validation failure: kickoff validation failed: first-wave task 35") {
 		t.Fatalf("message = %q, want validation failure line", message)
+	}
+}
+
+func TestBuildProjectBootstrapResumeStateMessageIncludesSelectableFirstWaveTasks(t *testing.T) {
+	message := buildProjectBootstrapResumeStateMessage(projectBootstrapState{
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveSelected,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFlowTemplatesPersisted,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureReason:  buildProjectBootstrapExplicitFirstWaveSelectionFailureReason(),
+	}, projectBootstrapResumeSnapshot{
+		ProjectID:               uuid.NewString(),
+		ProjectSlug:             "speaker-pipeline-ops-validation-fresh",
+		SelectableFirstWaveLine: "Selectable first-wave tasks: task 10 id=abc title=\"Build report generator\" assigned_agent_id=worker-1; task 11 id=def title=\"Write dashboard spec\" assigned_agent_id=worker-2",
+	})
+	if !strings.Contains(message, "Selectable first-wave tasks: task 10 id=abc") {
+		t.Fatalf("message = %q, want selectable first-wave line", message)
 	}
 }
 
@@ -6643,6 +6682,18 @@ func TestProjectBootstrapBlockedRecoveryFailureFallsBackToRecentRecoveryMessage(
 		{Role: "assistant", Content: "I'll first reread the state."},
 	}, projectBootstrapState{})
 	if reason != "kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution." {
+		t.Fatalf("reason = %q", reason)
+	}
+	if class != projectBootstrapFailureFirstWaveExecution {
+		t.Fatalf("class = %q, want %q", class, projectBootstrapFailureFirstWaveExecution)
+	}
+}
+
+func TestProjectBootstrapBlockedRecoveryFailureFallsBackToBootstrapPersistSelectionError(t *testing.T) {
+	reason, class := projectBootstrapBlockedRecoveryFailure([]repo.ChatMessage{
+		{Role: "tool_result", Content: `{"tool_name":"bootstrap.setup.persist","output":{"error":"first_wave_task_selection_required","message":"When persisting select-first-wave with multiple executable project tasks, include the exact selected first-wave tasks via first_wave_task_ids or first_wave_task_numbers so later-wave work stays draft."}}`},
+	}, projectBootstrapState{})
+	if reason != buildProjectBootstrapExplicitFirstWaveSelectionFailureReason() {
 		t.Fatalf("reason = %q", reason)
 	}
 	if class != projectBootstrapFailureFirstWaveExecution {

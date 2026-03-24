@@ -4898,6 +4898,10 @@ func TestIntegrationBootstrapSetupPersistRequiresExplicitFirstWaveSelectionAndPe
 	if out["error"] != "first_wave_task_selection_required" {
 		t.Fatalf("error = %v, want first_wave_task_selection_required", out["error"])
 	}
+	hints, ok := out["selectable_first_wave_tasks"].([]map[string]any)
+	if !ok || len(hints) != 2 {
+		t.Fatalf("selectable_first_wave_tasks = %#v, want 2 task hints", out["selectable_first_wave_tasks"])
+	}
 
 	out, err = executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
 		"completed_step_slugs":    []string{"select-first-wave"},
@@ -5005,6 +5009,10 @@ func TestIntegrationBootstrapSetupPersistRejectsProjectWideGateInFirstWaveSelect
 	}
 	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "blocks_scope=all") {
 		t.Fatalf("message = %q, want blocks_scope=all guidance", got)
+	}
+	hints, ok := out["selectable_first_wave_tasks"].([]map[string]any)
+	if !ok || len(hints) != 1 {
+		t.Fatalf("selectable_first_wave_tasks = %#v, want 1 task hint", out["selectable_first_wave_tasks"])
 	}
 }
 

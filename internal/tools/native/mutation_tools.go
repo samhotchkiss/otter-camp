@@ -2496,6 +2496,7 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 	}
 	if stringSliceContains(stepSlugs, "select-first-wave") {
 		executableCandidates := bootstrapFirstWaveSelectableTasks(projectTasks)
+		selectionHints := bootstrapFirstWaveSelectionHints(executableCandidates)
 		if !explicitFirstWaveSelection && len(executableCandidates) > 1 {
 			if inferred := inferBootstrapFirstWaveSelection(executableCandidates); len(inferred) > 0 {
 				selectedFirstWaveTaskIDs = inferred
@@ -2509,8 +2510,9 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 				}
 				if strings.EqualFold(strings.TrimSpace(task.BlocksScope), "all") {
 					return map[string]any{
-						"error":   "invalid_first_wave_selection",
-						"message": fmt.Sprintf("Task %d (%s) uses blocks_scope=all and cannot be selected into the first wave because it would block the rest of the wave from becoming runnable.", task.TaskNumber, task.Title),
+						"error":                       "invalid_first_wave_selection",
+						"message":                     fmt.Sprintf("Task %d (%s) uses blocks_scope=all and cannot be selected into the first wave because it would block the rest of the wave from becoming runnable.", task.TaskNumber, task.Title),
+						"selectable_first_wave_tasks": selectionHints,
 					}, nil
 				}
 			}
@@ -2518,13 +2520,15 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		switch {
 		case explicitFirstWaveSelection && len(selectedFirstWaveTaskIDs) == 0:
 			return map[string]any{
-				"error":   "first_wave_task_selection_required",
-				"message": "When persisting `select-first-wave`, include at least one selected task via `first_wave_task_ids` or `first_wave_task_numbers`.",
+				"error":                       "first_wave_task_selection_required",
+				"message":                     "When persisting `select-first-wave`, include at least one selected task via `first_wave_task_ids` or `first_wave_task_numbers`.",
+				"selectable_first_wave_tasks": selectionHints,
 			}, nil
 		case !explicitFirstWaveSelection && len(executableCandidates) > 1 && len(selectedFirstWaveTaskIDs) == 0:
 			return map[string]any{
-				"error":   "first_wave_task_selection_required",
-				"message": "When persisting `select-first-wave` with multiple executable project tasks, include the exact selected first-wave tasks via `first_wave_task_ids` or `first_wave_task_numbers` so later-wave work stays draft.",
+				"error":                       "first_wave_task_selection_required",
+				"message":                     "When persisting `select-first-wave` with multiple executable project tasks, include the exact selected first-wave tasks via `first_wave_task_ids` or `first_wave_task_numbers` so later-wave work stays draft.",
+				"selectable_first_wave_tasks": selectionHints,
 			}, nil
 		case !explicitFirstWaveSelection && len(executableCandidates) == 1:
 			selectedFirstWaveTaskIDs = map[uuid.UUID]struct{}{executableCandidates[0].ID: {}}
@@ -2687,6 +2691,25 @@ func bootstrapFirstWaveSelectableTasks(tasks []repo.ProjectTask) []repo.ProjectT
 		selectable = append(selectable, task)
 	}
 	return selectable
+}
+
+func bootstrapFirstWaveSelectionHints(tasks []repo.ProjectTask) []map[string]any {
+	if len(tasks) == 0 {
+		return nil
+	}
+	hints := make([]map[string]any, 0, len(tasks))
+	for _, task := range tasks {
+		entry := map[string]any{
+			"task_id":     task.ID.String(),
+			"task_number": task.TaskNumber,
+			"title":       strings.TrimSpace(task.Title),
+		}
+		if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
+			entry["assigned_agent_id"] = task.AssignedAgentID.String()
+		}
+		hints = append(hints, entry)
+	}
+	return hints
 }
 
 func inferBootstrapFirstWaveSelection(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {

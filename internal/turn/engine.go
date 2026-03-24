@@ -4205,6 +4205,10 @@ func buildProjectBootstrapValidationRecoveryPrompt(autoTurnCount int, progress p
 		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent and the corrected first-wave set is ready to validate."
 	}
 	lowerReason := strings.ToLower(reason)
+	if projectBootstrapReasonRequiresExplicitFirstWaveSelection(reason) {
+		recoveryHint = "Bootstrap is already waiting on an explicit first-wave subset. Do not reread project state, task trees, templates, or scaffold artifacts first. Reuse the persisted staffed task tree and immediately call bootstrap.setup.persist with completed_step_slugs including select-first-wave plus first_wave_task_ids or first_wave_task_numbers for the exact runnable subset."
+		nextActionHint = "Your first assistant action should be a bootstrap.setup.persist tool call, not a narrative reply. Do not begin with project.get, project.list, task.list, flow.list_templates, agent.list, file.read, or staffing discovery. Persist the selected first-wave subset directly so later-wave tasks remain draft."
+	}
 	if strings.Contains(lowerReason, "has no assigned agent") {
 		recoveryHint = "Repair the named persisted first-wave task directly. Do not begin with project.get, task.list, task.children, flow.list_templates, agent.list, or other broad rereads. Assign that exact task to one of the already-created active project assignees, then continue bootstrap from the corrected first-wave task set."
 		nextActionHint = "Do not call bootstrap.setup.persist until every selected first-wave task has an assigned active project agent and the corrected first-wave set is ready to validate. Your first repair step should directly fix the named unassigned first-wave task instead of gathering more context. Your next assistant action should be a tool call, not a narrative reply. Do not call task.get on the named blocked task first when the exact task id and active assignee roster are already present in the bootstrap resume system message; go straight to task.update unless a concrete blocker makes that impossible. Do not call task.get with the bare task number from the validation error; use the exact task id and active assignee roster from the bootstrap resume system message already in this turn, and only inspect that one specific task if its persisted assignment target is still unclear."
@@ -6526,12 +6530,13 @@ func (e *TurnEngine) appendProjectBootstrapResumeActionPrompt(ctx context.Contex
 }
 
 type projectBootstrapResumeSnapshot struct {
-	ProjectID      string
-	ProjectSlug    string
-	ExistingPM     string
-	AssignmentLine string
-	FailedTaskLine string
-	RepairTaskLine string
+	ProjectID               string
+	ProjectSlug             string
+	ExistingPM              string
+	AssignmentLine          string
+	FailedTaskLine          string
+	RepairTaskLine          string
+	SelectableFirstWaveLine string
 }
 
 var projectBootstrapFailureTaskNumberPattern = regexp.MustCompile(`(?:first-wave )?task ([0-9]+)`)
@@ -6594,9 +6599,42 @@ func projectBootstrapBlockedRecoveryFailure(messages []repo.ChatMessage, state p
 		}
 	}
 	if reason == "" {
+		for i := len(messages) - 1; i >= 0; i-- {
+			message := messages[i]
+			if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+				continue
+			}
+			toolName, output, errText, ok := parseToolResultMessage(message.Content)
+			if !ok || !strings.EqualFold(strings.TrimSpace(toolName), "bootstrap.setup.persist") || strings.TrimSpace(errText) != "" {
+				continue
+			}
+			switch strings.TrimSpace(anyString(output["error"])) {
+			case "first_wave_task_selection_required":
+				reason = buildProjectBootstrapExplicitFirstWaveSelectionFailureReason()
+			case "invalid_first_wave_selection":
+				reason = buildProjectBootstrapInvalidFirstWaveSelectionFailureReason(anyString(output["message"]))
+			}
+			if reason != "" {
+				break
+			}
+		}
+	}
+	if reason == "" {
 		return "", ""
 	}
 	return reason, projectBootstrapFailureClassForReason(state.ValidationFailureClass, reason)
+}
+
+func buildProjectBootstrapExplicitFirstWaveSelectionFailureReason() string {
+	return "kickoff validation failed: bootstrap setup requires an explicit first-wave selection; call bootstrap.setup.persist with select-first-wave plus first_wave_task_ids or first_wave_task_numbers for the exact runnable subset so later-wave tasks remain draft"
+}
+
+func buildProjectBootstrapInvalidFirstWaveSelectionFailureReason(message string) string {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		trimmed = "repair the selected first-wave subset so every chosen task can run autonomously"
+	}
+	return fmt.Sprintf("kickoff validation failed: persisted first-wave selection is invalid: %s", trimmed)
 }
 
 func projectBootstrapAckOnlyReply(assistant *repo.ChatMessage) bool {
@@ -6740,6 +6778,8 @@ func projectBootstrapFailureClassForReason(currentClass, reason string) string {
 	}
 	lower := strings.ToLower(strings.TrimSpace(reason))
 	switch {
+	case projectBootstrapReasonRequiresExplicitFirstWaveSelection(reason):
+		return projectBootstrapFailureFirstWaveExecution
 	case strings.Contains(lower, "bounded size policy"), strings.Contains(lower, "bounded task-size policy"):
 		return projectBootstrapFailureFirstWaveSize
 	case strings.Contains(lower, "flow"), strings.Contains(lower, "template"):
@@ -6752,6 +6792,14 @@ func projectBootstrapFailureClassForReason(currentClass, reason string) string {
 	default:
 		return ""
 	}
+}
+
+func projectBootstrapReasonRequiresExplicitFirstWaveSelection(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(lower, "explicit first-wave selection") ||
+		strings.Contains(lower, "first_wave_task_selection_required") ||
+		(strings.Contains(lower, "select-first-wave") && strings.Contains(lower, "first_wave_task_")) ||
+		(strings.Contains(lower, "selected first-wave subset") && strings.Contains(lower, "remain draft"))
 }
 
 func formatBootstrapResumeTaskLine(taskRecord repo.ProjectTask) string {
@@ -6965,7 +7013,29 @@ func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, pro
 			snapshot.RepairTaskLine = buildProjectBootstrapUnresolvedFailureRepairTaskLine(taskNumber, failureTitle)
 		}
 	}
+	if projectBootstrapReasonRequiresExplicitFirstWaveSelection(state.ValidationFailureReason) && e.tasks != nil {
+		if tasks, err := e.tasks.ListByProject(ctx, projectID); err == nil {
+			if selectableLine := formatBootstrapSelectableFirstWaveLine(bootstrapFirstWaveSelectableTasks(tasks)); selectableLine != "" {
+				snapshot.SelectableFirstWaveLine = selectableLine
+			}
+		}
+	}
 	return snapshot, nil
+}
+
+func formatBootstrapSelectableFirstWaveLine(tasks []repo.ProjectTask) string {
+	if len(tasks) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		label := fmt.Sprintf("task %d id=%s title=%q", task.TaskNumber, task.ID.String(), strings.TrimSpace(task.Title))
+		if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
+			label += " assigned_agent_id=" + task.AssignedAgentID.String()
+		}
+		parts = append(parts, label)
+	}
+	return "Selectable first-wave tasks: " + strings.Join(parts, "; ")
 }
 
 func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapshot projectBootstrapResumeSnapshot) string {
@@ -7005,6 +7075,9 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	}
 	if repairLine := strings.TrimSpace(snapshot.RepairTaskLine); repairLine != "" {
 		lines = append(lines, repairLine)
+	}
+	if selectable := strings.TrimSpace(snapshot.SelectableFirstWaveLine); selectable != "" {
+		lines = append(lines, selectable)
 	}
 	if pm := strings.TrimSpace(snapshot.ExistingPM); pm != "" {
 		lines = append(lines, "Existing PM: "+pm)
@@ -7177,10 +7250,14 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState, snapsh
 			reason = "repair the concrete bootstrap validation blocker named above"
 		}
 		lowerReason := strings.ToLower(reason)
+		explicitSelectionRequired := projectBootstrapReasonRequiresExplicitFirstWaveSelection(reason)
 		unresolvedFailedTask := strings.TrimSpace(snapshot.FailedTaskLine) == "" &&
 			strings.Contains(strings.ToLower(strings.TrimSpace(snapshot.RepairTaskLine)), "exact persisted task id is no longer resolvable")
 		lines = append(lines, "Bootstrap is currently blocked on this validation failure: "+reason)
-		if unresolvedFailedTask {
+		if explicitSelectionRequired {
+			lines = append(lines, "This validation failure means bootstrap is waiting on an explicit selected first-wave subset. Start with bootstrap.setup.persist from the persisted state above and include completed_step_slugs containing select-first-wave plus first_wave_task_ids or first_wave_task_numbers for the exact runnable subset.")
+			lines = append(lines, "Do not call project.get, project.list, task.list, flow.list_templates, agent.list, or scaffold file reads before that bootstrap.setup.persist call.")
+		} else if unresolvedFailedTask {
 			lines = append(lines, "The named blocker no longer resolves to one exact persisted task id. Start with bootstrap.setup.persist from the persisted state above so the runtime can restate the current blocker against the actual surviving task tree before you attempt any direct repair.")
 			lines = append(lines, "Do not call project.get, project.list, task.list, flow.list_templates, agent.list, or scaffold file reads before that bootstrap.setup.persist call.")
 		} else {
@@ -7209,7 +7286,9 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState, snapsh
 		}
 		lines = append(lines, "When the named blocker is fixed, resume with bootstrap.setup.persist using only canonical bootstrap setup step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off. Current phase names like first_wave_executions_created are not valid completed_step_slugs.")
 		lines = append(lines, "If first-wave selection is already persisted, do not use raw task.update to force draft first-wave tasks into queued or in_progress. Leave those tasks in draft and let bootstrap.setup.persist plus the bootstrap governance gate handle promotion after validation passes.")
-		if unresolvedFailedTask {
+		if explicitSelectionRequired {
+			lines = append(lines, "Use the selectable task ids already listed in the bootstrap resume state above and persist the exact runnable subset directly. Do not answer with narrative, recollection, or a state summary.")
+		} else if unresolvedFailedTask {
 			lines = append(lines, "If that bootstrap.setup.persist call returns a newly resolved exact task id, repair that one task directly on the next step. If it reports that the blocker is already structurally resolved, use it to persist the corrected setup state immediately.")
 		} else {
 			lines = append(lines, "Only after the named blocker is repaired should you call bootstrap.setup.persist to record the corrected setup state.")
@@ -7424,7 +7503,8 @@ func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProg
 		return true
 	case projectBootstrapFailureFirstWaveExecution:
 		reason := strings.ToLower(strings.TrimSpace(progress.ValidationFailureReason))
-		return strings.Contains(reason, "bounded size policy") ||
+		return projectBootstrapReasonRequiresExplicitFirstWaveSelection(reason) ||
+			strings.Contains(reason, "bounded size policy") ||
 			strings.Contains(reason, "has no assigned agent") ||
 			strings.Contains(reason, "requires human approval before queueing") ||
 			strings.Contains(reason, "project-wide gate (blocks_scope=all)") ||
