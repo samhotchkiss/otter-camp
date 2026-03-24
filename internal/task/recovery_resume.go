@@ -24,6 +24,7 @@ const (
 	RecoveryActionResumeBlockedTask = "resume_validation_blocked_task"
 
 	RecoveryBlockerClassNotBlocked                               = "not_blocked"
+	RecoveryBlockerClassFlowRejectionMaxVisits                   = "flow_rejection_max_visits"
 	RecoveryBlockerClassValidationLoop                           = "deterministic_validation_loop"
 	RecoveryBlockerClassDurableRecoveryCheckpoint                = taskcheckpoint.RecoveryFileWriteBlockerClassDurableCheckpoint
 	RecoveryBlockerClassRepeatedNonSubstantiveRecoveryCheckpoint = taskcheckpoint.RecoveryFileWriteBlockerClassRepeatedNonSubstantiveCheckpoint
@@ -78,12 +79,19 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
 		return taskResumeDecision{blockerClass: RecoveryBlockerClassNotBlocked}
 	}
+	blockerReason = strings.TrimSpace(blockerReason)
+	if strings.EqualFold(blockerReason, "flow rejection max visits exceeded") {
+		return taskResumeDecision{
+			blockerClass:  RecoveryBlockerClassFlowRejectionMaxVisits,
+			blockerReason: blockerReason,
+		}
+	}
 	if guard, ok := ParseValidationGuard(taskRecord.Metadata); ok && guard.Blocked {
 		guardCopy := guard
 		return taskResumeDecision{
 			resumable:            true,
 			blockerClass:         RecoveryBlockerClassValidationLoop,
-			blockerReason:        strings.TrimSpace(blockerReason),
+			blockerReason:        blockerReason,
 			clearValidationGuard: true,
 			validationGuard:      &guardCopy,
 		}
@@ -97,13 +105,13 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 		return taskResumeDecision{
 			resumable:     true,
 			blockerClass:  blockerClass,
-			blockerReason: strings.TrimSpace(blockerReason),
+			blockerReason: blockerReason,
 			checkpoint:    &checkpointCopy,
 		}
 	}
 	return taskResumeDecision{
 		blockerClass:  RecoveryBlockerClassBlockedWithoutResumableState,
-		blockerReason: strings.TrimSpace(blockerReason),
+		blockerReason: blockerReason,
 	}
 }
 

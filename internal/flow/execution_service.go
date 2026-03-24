@@ -1139,6 +1139,7 @@ func (s *service) rejectFlowNodeMaxVisitsExceeded(ctx context.Context, taskRecor
 		"attempted_reject_visit":      nextVisit,
 		"flow_rejection_max_visits":   true,
 		"flow_rejection_blocked_task": true,
+		"blocker_reason":              "flow rejection max visits exceeded",
 	}
 	taskActor := toTaskActor(actor)
 	taskActor.AllowFlowRuntimeBypass = true
@@ -1149,15 +1150,15 @@ func (s *service) rejectFlowNodeMaxVisitsExceeded(ctx context.Context, taskRecor
 	taskRecord.WorkStatus = transitionedTask.WorkStatus
 
 	payload := map[string]any{
-		"task_id":                    taskRecord.ID,
-		"project_id":                 taskRecord.ProjectID,
-		"from_flow_node_id":          currentNode.ID,
-		"attempted_reject_node_id":   rejectNode.ID,
-		"attempted_reject_visit":     nextVisit,
-		"rejected_execution_id":      activeExecution.ID,
-		"blocked":                    true,
-		"blocked_reason":             "flow rejection max visits exceeded",
-		"max_visits_exceeded":        true,
+		"task_id":                  taskRecord.ID,
+		"project_id":               taskRecord.ProjectID,
+		"from_flow_node_id":        currentNode.ID,
+		"attempted_reject_node_id": rejectNode.ID,
+		"attempted_reject_visit":   nextVisit,
+		"rejected_execution_id":    activeExecution.ID,
+		"blocked":                  true,
+		"blocked_reason":           "flow rejection max visits exceeded",
+		"max_visits_exceeded":      true,
 	}
 	if err := s.recordTaskEventTx(ctx, tx, taskRecord, "flow.rejected", actor, payload); err != nil {
 		return nil, err
@@ -1188,6 +1189,7 @@ func (s *service) rejectFlowNodeMaxVisitsExceededNonTx(ctx context.Context, task
 		"attempted_reject_visit":      nextVisit,
 		"flow_rejection_max_visits":   true,
 		"flow_rejection_blocked_task": true,
+		"blocker_reason":              "flow rejection max visits exceeded",
 	}
 	taskActor := toTaskActor(actor)
 	taskActor.AllowFlowRuntimeBypass = true

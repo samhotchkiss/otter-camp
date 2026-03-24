@@ -15,6 +15,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
@@ -437,6 +438,34 @@ func TestResumeValidationBlockedTaskRejectsNonBlockedTask(t *testing.T) {
 	}
 	if resumeErr.BlockerClass != RecoveryBlockerClassNotBlocked {
 		t.Fatalf("resume blocker_class = %q, want %q", resumeErr.BlockerClass, RecoveryBlockerClassNotBlocked)
+	}
+}
+
+func TestClassifyTaskResumeDecisionRejectsFlowRejectionMaxVisitsEvenWithCheckpoint(t *testing.T) {
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "Work/report.md",
+		ArtifactPath:  ".ottercamp/recovery/Work/report.md",
+		FailureReason: "placeholder draft",
+		HaltTurnID:    uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	decision := classifyTaskResumeDecision(repo.ProjectTask{
+		ID:         uuid.New(),
+		WorkStatus: "blocked",
+		Metadata:   metadata,
+	}, "flow rejection max visits exceeded")
+
+	if decision.resumable {
+		t.Fatal("decision.resumable = true, want false")
+	}
+	if decision.blockerClass != RecoveryBlockerClassFlowRejectionMaxVisits {
+		t.Fatalf("blockerClass = %q, want %q", decision.blockerClass, RecoveryBlockerClassFlowRejectionMaxVisits)
+	}
+	if decision.blockerReason != "flow rejection max visits exceeded" {
+		t.Fatalf("blockerReason = %q, want flow rejection max visits exceeded", decision.blockerReason)
 	}
 }
 
