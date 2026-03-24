@@ -25,6 +25,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/chat"
 	"github.com/samhotchkiss/otter-camp/internal/controlplane"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/flowcommit"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
@@ -4951,6 +4952,13 @@ func (e *TurnEngine) handleCompletedWorkTurn(ctx context.Context, taskRecord rep
 	if !ok {
 		return false, nil
 	}
+	if signal.commitSHA == "" {
+		commitSHA, err := e.ensureCanonicalTaskExecutionCommit(ctx, taskRecord)
+		if err != nil {
+			return false, err
+		}
+		signal.commitSHA = commitSHA
+	}
 	if signal.commitSHA != "" {
 		if _, err := e.flowAdvancer.RecordNodeCommit(ctx, taskRecord.ID, signal.commitSHA, ""); err != nil {
 			return false, err
@@ -4961,6 +4969,77 @@ func (e *TurnEngine) handleCompletedWorkTurn(ctx context.Context, taskRecord rep
 	}
 	return true, nil
 }
+
+func (e *TurnEngine) ensureCanonicalTaskExecutionCommit(ctx context.Context, taskRecord repo.ProjectTask) (string, error) {
+	if e.projects == nil || e.flowNodes == nil || e.flowAdvancer == nil {
+		return "", fmt.Errorf("turn engine requires project, flow node, and flow advance services for canonical task execution commit")
+	}
+	activeExecution, err := e.flowAdvancer.EnsureActiveExecution(ctx, taskRecord.ID)
+	if err != nil {
+		return "", err
+	}
+	node, err := e.flowNodes.GetByID(ctx, activeExecution.FlowNodeID)
+	if err != nil {
+		return "", err
+	}
+	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	workspaceRoot, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+	if err != nil {
+		return "", err
+	}
+	branchName := strings.TrimSpace(pointerString(taskRecord.BranchName))
+	if branchName == "" {
+		branchName = fmt.Sprintf("task/%d", taskRecord.TaskNumber)
+	}
+	result, err := flowcommit.CommitAll(ctx, workspaceRoot, branchName, canonicalTaskExecutionCommitMessage(taskRecord, node, activeExecution.VisitNumber), true)
+	if err != nil {
+		return "", err
+	}
+	return result.SHA, nil
+}
+
+func canonicalTaskExecutionCommitMessage(taskRecord repo.ProjectTask, node repo.FlowNode, visitNumber int) string {
+	return strings.Join([]string{
+		fmt.Sprintf("flow(work:%s#%d): %s", canonicalTurnExecutionNodeSlug(node), visitNumber, strings.TrimSpace(taskRecord.Title)),
+		"",
+		fmt.Sprintf("task_number: %d", taskRecord.TaskNumber),
+		fmt.Sprintf("task_id: %s", taskRecord.ID),
+		fmt.Sprintf("flow_node_id: %s", node.ID),
+		fmt.Sprintf("node_type: %s", strings.TrimSpace(node.NodeType)),
+		fmt.Sprintf("visit: %d", visitNumber),
+	}, "\n")
+}
+
+func canonicalTurnExecutionNodeSlug(node repo.FlowNode) string {
+	source := strings.TrimSpace(node.DisplayName)
+	if source == "" {
+		source = strings.TrimSpace(node.NodeType)
+	}
+	source = strings.ToLower(source)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range source {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if lastDash {
+			continue
+		}
+		b.WriteByte('-')
+		lastDash = true
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "node"
+	}
+	return out
+}
+
 
 func (e *TurnEngine) HandleUserMessage(ctx context.Context, sessionID, messageID uuid.UUID) error {
 	return e.handleUserMessage(ctx, sessionID, messageID, nil, 0, nil)

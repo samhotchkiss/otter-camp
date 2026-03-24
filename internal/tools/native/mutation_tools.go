@@ -24,6 +24,7 @@ import (
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/flowcommit"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
 	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
@@ -34,6 +35,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/toolargs"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
@@ -4551,8 +4553,20 @@ func (e *NativeToolExecutor) handleFlowAdvance(ctx context.Context, input map[st
 	if err != nil {
 		return nil, err
 	}
+	activeExecution, err := e.flowService.EnsureActiveExecution(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
 	if commitSHA, ok := readString(input, "commit_sha"); ok && commitSHA != "" {
 		if _, err := e.flowService.RecordNodeCommit(ctx, taskID, commitSHA, ""); err != nil {
+			return nil, err
+		}
+	} else {
+		commitResult, err := e.createCanonicalExecutionCommit(ctx, *activeExecution, "", "")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := e.flowService.RecordNodeCommit(ctx, taskID, commitResult.SHA, commitResult.BranchName); err != nil {
 			return nil, err
 		}
 	}
@@ -4612,7 +4626,26 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	if err != nil {
 		return nil, err
 	}
+	reason, _ := readString(input, "reason")
+	findings, _ := readString(input, "findings")
 	if decision == "approve" {
+		dirty, err := e.reviewExecutionWorkspaceDirty(ctx, execution.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		if dirty {
+			return map[string]any{
+				"error":   "review_approval_requires_clean_workspace",
+				"message": "Approval must close with an empty runtime-owned commit. The review workspace still has file changes. Either discard them or reject the review with findings.",
+			}, nil
+		}
+		commitResult, err := e.createCanonicalExecutionCommit(ctx, execution, "approve", "")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := e.flowService.RecordNodeCommit(ctx, execution.TaskID, commitResult.SHA, commitResult.BranchName); err != nil {
+			return nil, err
+		}
 		next, err := e.flowService.AdvanceFlow(ctx, execution.TaskID, flowActorFromExecutionActor(actorFromContext(ctx)))
 		if err != nil {
 			return nil, err
@@ -4624,6 +4657,17 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 		return map[string]any{"next_node_id": nextNodeID}, nil
 	}
 
+	rejectionSummary := strings.TrimSpace(reason)
+	if rejectionSummary == "" {
+		rejectionSummary = strings.TrimSpace(findings)
+	}
+	commitResult, err := e.createCanonicalExecutionCommit(ctx, execution, "reject", rejectionSummary)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := e.flowService.RecordNodeCommit(ctx, execution.TaskID, commitResult.SHA, commitResult.BranchName); err != nil {
+		return nil, err
+	}
 	next, err := e.flowService.RejectFlowNode(ctx, execution.TaskID, flowActorFromExecutionActor(actorFromContext(ctx)))
 	if err != nil {
 		return nil, err
@@ -4638,6 +4682,127 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 		}
 	}
 	return map[string]any{"next_node_id": next.FlowNodeID}, nil
+}
+
+func (e *NativeToolExecutor) createCanonicalExecutionCommit(ctx context.Context, execution repo.FlowNodeExecution, decision, summary string) (flowcommit.CommitResult, error) {
+	taskRecord, err := e.tasks.GetByID(ctx, execution.TaskID)
+	if err != nil {
+		return flowcommit.CommitResult{}, err
+	}
+	node, err := e.flowNodes.GetByID(ctx, execution.FlowNodeID)
+	if err != nil {
+		return flowcommit.CommitResult{}, err
+	}
+	root, err := e.taskWorkspaceRoot(ctx, taskRecord)
+	if err != nil {
+		return flowcommit.CommitResult{}, err
+	}
+	branchName := strings.TrimSpace(taskBranchString(taskRecord.BranchName))
+	if branchName == "" {
+		branchName = fmt.Sprintf("task/%d", taskRecord.TaskNumber)
+	}
+	return flowcommit.CommitAll(ctx, root, branchName, canonicalExecutionCommitMessage(taskRecord, node, execution.VisitNumber, decision, summary), true)
+}
+
+func (e *NativeToolExecutor) reviewExecutionWorkspaceDirty(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	taskRecord, err := e.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return false, err
+	}
+	root, err := e.taskWorkspaceRoot(ctx, taskRecord)
+	if err != nil {
+		return false, err
+	}
+	return flowcommit.WorktreeDirty(ctx, root)
+}
+
+func (e *NativeToolExecutor) taskWorkspaceRoot(ctx context.Context, taskRecord repo.ProjectTask) (string, error) {
+	if trimmed := strings.TrimSpace(e.explicitRoot); trimmed != "" {
+		return filepath.Clean(trimmed), nil
+	}
+	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	return workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+}
+
+func canonicalExecutionCommitMessage(taskRecord repo.ProjectTask, node repo.FlowNode, visitNumber int, decision, summary string) string {
+	header := fmt.Sprintf("flow(%s:%s#%d): %s", canonicalExecutionCommitKind(node, decision), canonicalExecutionNodeSlug(node), visitNumber, canonicalExecutionCommitAction(decision, summary, taskRecord.Title))
+	lines := []string{
+		header,
+		"",
+		fmt.Sprintf("task_number: %d", taskRecord.TaskNumber),
+		fmt.Sprintf("task_id: %s", taskRecord.ID),
+		fmt.Sprintf("flow_node_id: %s", node.ID),
+		fmt.Sprintf("node_type: %s", strings.TrimSpace(node.NodeType)),
+		fmt.Sprintf("visit: %d", visitNumber),
+	}
+	if trimmed := strings.TrimSpace(decision); trimmed != "" {
+		lines = append(lines, fmt.Sprintf("decision: %s", trimmed))
+	}
+	if trimmed := strings.TrimSpace(summary); trimmed != "" {
+		lines = append(lines, fmt.Sprintf("summary: %s", trimmed))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func canonicalExecutionCommitKind(node repo.FlowNode, decision string) string {
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
+		return "review"
+	}
+	return "work"
+}
+
+func canonicalExecutionCommitAction(decision, summary, fallback string) string {
+	switch strings.TrimSpace(decision) {
+	case "approve":
+		return "approve"
+	case "reject":
+		if strings.TrimSpace(summary) != "" {
+			return "reject - " + strings.TrimSpace(summary)
+		}
+		return "reject"
+	default:
+		if strings.TrimSpace(fallback) != "" {
+			return strings.TrimSpace(fallback)
+		}
+		return "complete"
+	}
+}
+
+func canonicalExecutionNodeSlug(node repo.FlowNode) string {
+	source := strings.TrimSpace(node.DisplayName)
+	if source == "" {
+		source = strings.TrimSpace(node.NodeType)
+	}
+	source = strings.ToLower(source)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range source {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if lastDash {
+			continue
+		}
+		b.WriteByte('-')
+		lastDash = true
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "node"
+	}
+	return out
+}
+
+func taskBranchString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (e *NativeToolExecutor) handleFlowCreateTemplate(ctx context.Context, input map[string]any) (map[string]any, error) {
