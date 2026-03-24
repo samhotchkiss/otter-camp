@@ -2186,6 +2186,8 @@ func TestDispatchTaskQueueWakeupFlowTransitionSkipsTerminalExecution(t *testing.
 func TestHandleTurnTerminalEventReleasesSpecificRunResolvedFromTurn(t *testing.T) {
 	ctx := context.Background()
 	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
 	sessionID := uuid.New()
 	turnID := uuid.New()
 	messageID := uuid.New()
@@ -2224,8 +2226,19 @@ func TestHandleTurnTerminalEventReleasesSpecificRunResolvedFromTurn(t *testing.T
 	processor := &TaskQueueProcessor{
 		tasks: &fakeTaskQueueTaskRepository{
 			task: repo.ProjectTask{
-				ID:         taskID,
-				WorkStatus: "in_progress",
+				ID:                taskID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{
+				ID:              executionID,
+				TaskID:          taskID,
+				FlowNodeID:      nodeID,
+				Status:          "active",
+				RuntimeSubstate: func() *string { value := "running"; return &value }(),
+				SessionID:       &sessionID,
 			},
 		},
 		runs:  runService,
@@ -2244,6 +2257,88 @@ func TestHandleTurnTerminalEventReleasesSpecificRunResolvedFromTurn(t *testing.T
 	}
 	if runService.releaseExecutionCalls[0].runID != runID {
 		t.Fatalf("released run_id = %s, want %s", runService.releaseExecutionCalls[0].runID, runID)
+	}
+	flowRepo := processor.flowExecutions.(*fakeTaskQueueFlowExecutionRepository)
+	if len(flowRepo.updateRuntimeSubstateCalls) != 1 {
+		t.Fatalf("UpdateRuntimeSubstate calls = %d, want 1", len(flowRepo.updateRuntimeSubstateCalls))
+	}
+	if flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate == nil || *flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate != "waiting_for_turn" {
+		t.Fatalf("runtime_substate update = %v, want waiting_for_turn", flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate)
+	}
+}
+
+func TestHandleTurnTerminalEventSetsWaitingForReviewForReviewTask(t *testing.T) {
+	ctx := context.Background()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	sessionID := uuid.New()
+	turnID := uuid.New()
+	messageID := uuid.New()
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": sessionID.String(),
+		"turn_id":    turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:                taskID,
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{
+				ID:              executionID,
+				TaskID:          taskID,
+				FlowNodeID:      nodeID,
+				Status:          "active",
+				RuntimeSubstate: func() *string { value := "running"; return &value }(),
+				SessionID:       &sessionID,
+			},
+		},
+		runs: &fakeTaskQueueRunStarter{},
+		chats: &fakeTaskQueueChatService{
+			session: &chat.ChatSession{
+				ID:        sessionID,
+				ScopeType: "project_task",
+				ScopeID:   taskID,
+			},
+			turn: &chat.ChatTurn{
+				ID:               turnID,
+				SessionID:        sessionID,
+				Status:           "completed",
+				TriggerMessageID: &messageID,
+			},
+			listMessages: []*chat.ChatMessage{
+				{
+					ID:        messageID,
+					SessionID: sessionID,
+					Role:      "user",
+					Metadata:  json.RawMessage(`{}`),
+				},
+			},
+		},
+	}
+
+	if err := processor.handleTurnTerminalEvent(ctx, eventbus.DomainEvent{
+		EventType: "chat.turn.completed",
+		Payload:   payload,
+	}); err != nil {
+		t.Fatalf("handleTurnTerminalEvent: %v", err)
+	}
+
+	flowRepo := processor.flowExecutions.(*fakeTaskQueueFlowExecutionRepository)
+	if len(flowRepo.updateRuntimeSubstateCalls) != 1 {
+		t.Fatalf("UpdateRuntimeSubstate calls = %d, want 1", len(flowRepo.updateRuntimeSubstateCalls))
+	}
+	if flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate == nil || *flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate != "waiting_for_review" {
+		t.Fatalf("runtime_substate update = %v, want waiting_for_review", flowRepo.updateRuntimeSubstateCalls[0].runtimeSubstate)
 	}
 }
 
@@ -2859,18 +2954,18 @@ func (f *fakeTaskQueueRunStarter) RetireRuntimeStateForProject(_ context.Context
 }
 
 type fakeTaskQueueFlowExecutionRepository struct {
-	execution        repo.FlowNodeExecution
-	executionsByTask map[uuid.UUID][]repo.FlowNodeExecution
-	abandonCalls     []uuid.UUID
+	execution                  repo.FlowNodeExecution
+	executionsByTask           map[uuid.UUID][]repo.FlowNodeExecution
+	abandonCalls               []uuid.UUID
 	updateRuntimeSubstateCalls []struct {
 		id              uuid.UUID
 		runtimeSubstate *string
 	}
-	updateCalls      []struct {
+	updateCalls []struct {
 		id       uuid.UUID
 		metadata json.RawMessage
 	}
-	err              error
+	err error
 }
 
 func (f *fakeTaskQueueFlowExecutionRepository) GetActive(context.Context, uuid.UUID, uuid.UUID) (repo.FlowNodeExecution, error) {

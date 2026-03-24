@@ -1138,6 +1138,31 @@ func (p *TaskQueueProcessor) markExecutionRunning(ctx context.Context, execution
 	return err
 }
 
+func (p *TaskQueueProcessor) updateExecutionWaitingSubstateForTask(ctx context.Context, taskRecord repo.ProjectTask, sessionID uuid.UUID) error {
+	if p.flowExecutions == nil || taskRecord.ID == uuid.Nil || taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {
+		return nil
+	}
+	execution, err := p.flowExecutions.GetActive(ctx, taskRecord.ID, *taskRecord.CurrentFlowNodeID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if execution.SessionID == nil || *execution.SessionID != sessionID {
+		return nil
+	}
+	waiting := "waiting_for_turn"
+	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		waiting = "waiting_for_review"
+	}
+	_, err = p.flowExecutions.UpdateRuntimeSubstate(ctx, execution.ID, &waiting)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
 func (p *TaskQueueProcessor) dispatchSupervisorWakeup(ctx context.Context, runRecord Run) error {
 	if runRecord.SessionID == nil || *runRecord.SessionID == uuid.Nil {
 		return nil
@@ -1638,6 +1663,9 @@ func (p *TaskQueueProcessor) handleTurnTerminalEvent(ctx context.Context, event 
 	}
 	releaseRunID, err := p.resolveTurnRunID(ctx, payload.TurnID)
 	if err != nil {
+		return err
+	}
+	if err := p.updateExecutionWaitingSubstateForTask(ctx, taskRecord, session.ID); err != nil {
 		return err
 	}
 	if paused, err := p.projectPaused(ctx, taskRecord.ProjectID); err != nil {
