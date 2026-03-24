@@ -280,20 +280,21 @@ func TestRejectFlowNodeMaxVisitsExceeded(t *testing.T) {
 	execID := uuid.New()
 	projectID := uuid.New()
 
-	svc := &service{
-		tasks: &fakeTaskRepo{
-			items: map[uuid.UUID]repo.ProjectTask{
-				taskID: {
-					ID:                taskID,
-					ProjectID:         projectID,
-					OrganizationID:    uuid.New(),
-					CurrentFlowNodeID: &currentNodeID,
-				},
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				ProjectID:         projectID,
+				OrganizationID:    uuid.New(),
+				CurrentFlowNodeID: &currentNodeID,
 			},
 		},
+	}
+	svc := &service{
+		tasks: taskRepo,
 		flowNodes: &fakeNodeRepo{
 			items: map[uuid.UUID]repo.FlowNode{
-				currentNodeID: {ID: currentNodeID, RejectNodeID: &rejectNodeID},
+				currentNodeID: {ID: currentNodeID, NodeType: "review", RejectNodeID: &rejectNodeID},
 				rejectNodeID:  {ID: rejectNodeID, MaxVisits: 10},
 			},
 		},
@@ -308,12 +309,28 @@ func TestRejectFlowNodeMaxVisitsExceeded(t *testing.T) {
 				taskID: {{TaskID: taskID, FlowNodeID: rejectNodeID, VisitNumber: 10}},
 			},
 		},
-		taskService: &fakeTaskCoordinator{},
+		taskService: &fakeTaskCoordinator{tasks: taskRepo},
+		taskEvents:  &fakeTaskEventRepo{},
+		events:      &fakeEventBus{},
 	}
 
-	_, err := svc.RejectFlowNode(context.Background(), taskID, Actor{Type: "system"})
-	if !errors.Is(err, ErrMaxVisitsExceeded) {
-		t.Fatalf("RejectFlowNode err = %v, want ErrMaxVisitsExceeded", err)
+	next, err := svc.RejectFlowNode(context.Background(), taskID, Actor{Type: "system"})
+	if err != nil {
+		t.Fatalf("RejectFlowNode err = %v, want nil", err)
+	}
+	if next == nil {
+		t.Fatal("RejectFlowNode returned nil execution")
+	}
+	executionRepo := svc.executions.(*fakeExecutionRepo)
+	if executionRepo.rejectCalls != 1 {
+		t.Fatalf("reject calls = %d, want 1", executionRepo.rejectCalls)
+	}
+	updatedTask, err := svc.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
 	}
 }
 

@@ -595,16 +595,23 @@ func TestFlowExecutionServiceRejectFlowNodeMaxVisits(t *testing.T) {
 		t.Fatalf("AdvanceFlow to review again: %v", err)
 	}
 
-	if _, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID}); err == nil || err != ErrMaxVisitsExceeded {
-		t.Fatalf("RejectFlowNode max visits err = %v, want ErrMaxVisitsExceeded", err)
+	rejected, err := fixture.service.RejectFlowNode(ctx, taskRecord.ID, Actor{Type: "human_user", ID: fixture.pmUser.ID})
+	if err != nil {
+		t.Fatalf("RejectFlowNode max visits err = %v, want nil", err)
+	}
+	if rejected == nil {
+		t.Fatal("RejectFlowNode returned nil execution")
+	}
+	if rejected.Status != "rejected" {
+		t.Fatalf("returned execution status = %q, want rejected", rejected.Status)
 	}
 
 	updatedTask, err := fixture.taskRepo.GetByID(ctx, taskRecord.ID)
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
 	}
-	if updatedTask.WorkStatus != "review" {
-		t.Fatalf("task work_status = %q, want review", updatedTask.WorkStatus)
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
 	}
 	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[1].ID {
 		t.Fatalf("task current_flow_node_id = %v, want review node %s", updatedTask.CurrentFlowNodeID, nodes[1].ID)

@@ -1094,7 +1094,7 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 	}
 	if nextVisit > rejectNode.MaxVisits {
 		if strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") {
-			return nil, ErrMaxVisitsExceeded
+			return s.rejectFlowNodeMaxVisitsExceeded(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
 		}
 		if _, markErr := s.taskService.MarkBlocked(ctx, taskRecord.ID, "flow rejection max visits exceeded", toTaskActor(actor)); markErr != nil {
 			return nil, markErr
@@ -1102,6 +1102,118 @@ func (s *service) RejectFlowNode(ctx context.Context, taskID uuid.UUID, actor Ac
 		return nil, ErrMaxVisitsExceeded
 	}
 	return s.rejectFlowNodeTx(ctx, taskRecord, currentNode, activeExecution, rejectNodeID, rejectNode, nextVisit, actor)
+}
+
+func (s *service) rejectFlowNodeMaxVisitsExceeded(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, rejectNode repo.FlowNode, nextVisit int, actor Actor) (*repo.FlowNodeExecution, error) {
+	if s.pool == nil {
+		return s.rejectFlowNodeMaxVisitsExceededNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+	}
+	executionsTx, execOK := s.executions.(flowNodeExecutionRepositoryTx)
+	_, taskOK := s.tasks.(projectTaskRepositoryTx)
+	taskServiceTx, svcOK := s.taskService.(taskCoordinatorTx)
+	if !execOK || !taskOK || !svcOK {
+		return s.rejectFlowNodeMaxVisitsExceededNonTx(ctx, taskRecord, currentNode, activeExecution, rejectNode, nextVisit, actor)
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := executionsTx.UpdateMetadataTx(ctx, tx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+	rejectedExecution, err := executionsTx.RejectTx(ctx, tx, activeExecution.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	statusPayload := map[string]any{
+		"transition_source":           "flow_transition",
+		"flow_event_type":             "flow.rejected",
+		"rejected_execution_id":       activeExecution.ID,
+		"attempted_reject_node_id":    rejectNode.ID,
+		"attempted_reject_visit":      nextVisit,
+		"flow_rejection_max_visits":   true,
+		"flow_rejection_blocked_task": true,
+	}
+	taskActor := toTaskActor(actor)
+	taskActor.AllowFlowRuntimeBypass = true
+	transitionedTask, err := taskServiceTx.TransitionStatusWithPayloadTx(ctx, tx, taskRecord, "blocked", taskActor, statusPayload)
+	if err != nil {
+		return nil, err
+	}
+	taskRecord.WorkStatus = transitionedTask.WorkStatus
+
+	payload := map[string]any{
+		"task_id":                    taskRecord.ID,
+		"project_id":                 taskRecord.ProjectID,
+		"from_flow_node_id":          currentNode.ID,
+		"attempted_reject_node_id":   rejectNode.ID,
+		"attempted_reject_visit":     nextVisit,
+		"rejected_execution_id":      activeExecution.ID,
+		"blocked":                    true,
+		"blocked_reason":             "flow rejection max visits exceeded",
+		"max_visits_exceeded":        true,
+	}
+	if err := s.recordTaskEventTx(ctx, tx, taskRecord, "flow.rejected", actor, payload); err != nil {
+		return nil, err
+	}
+	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.rejected", actor.Type, actorIDPtr(actor), payload, tx); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &rejectedExecution, nil
+}
+
+func (s *service) rejectFlowNodeMaxVisitsExceededNonTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, rejectNode repo.FlowNode, nextVisit int, actor Actor) (*repo.FlowNodeExecution, error) {
+	if _, err := s.executions.UpdateMetadata(ctx, activeExecution.ID, executionMetadataWithCompletedBy(activeExecution.Metadata, actor)); err != nil {
+		return nil, err
+	}
+	rejectedExecution, err := s.executions.Reject(ctx, activeExecution.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	statusPayload := map[string]any{
+		"transition_source":           "flow_transition",
+		"flow_event_type":             "flow.rejected",
+		"rejected_execution_id":       activeExecution.ID,
+		"attempted_reject_node_id":    rejectNode.ID,
+		"attempted_reject_visit":      nextVisit,
+		"flow_rejection_max_visits":   true,
+		"flow_rejection_blocked_task": true,
+	}
+	taskActor := toTaskActor(actor)
+	taskActor.AllowFlowRuntimeBypass = true
+	if _, err := s.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, "blocked", taskActor, statusPayload); err != nil {
+		return nil, err
+	}
+	taskRecord.WorkStatus = "blocked"
+
+	payload := map[string]any{
+		"task_id":                  taskRecord.ID,
+		"project_id":               taskRecord.ProjectID,
+		"from_flow_node_id":        currentNode.ID,
+		"attempted_reject_node_id": rejectNode.ID,
+		"attempted_reject_visit":   nextVisit,
+		"rejected_execution_id":    activeExecution.ID,
+		"blocked":                  true,
+		"blocked_reason":           "flow rejection max visits exceeded",
+		"max_visits_exceeded":      true,
+	}
+	if err := s.recordTaskEvent(ctx, taskRecord, "flow.rejected", actor, payload); err != nil {
+		return nil, err
+	}
+	if err := s.publishDomainEvent(ctx, taskRecord.OrganizationID, "flow.rejected", actor.Type, actorIDPtr(actor), payload); err != nil {
+		return nil, err
+	}
+	return &rejectedExecution, nil
 }
 
 func (s *service) resolveRejectNode(ctx context.Context, currentNode repo.FlowNode) (*uuid.UUID, repo.FlowNode, error) {
