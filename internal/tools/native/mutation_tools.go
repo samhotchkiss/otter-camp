@@ -2622,6 +2622,7 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 	sort.Slice(completed, func(i, j int) bool {
 		return fmt.Sprintf("%v", completed[i]["step_slug"]) < fmt.Sprintf("%v", completed[j]["step_slug"])
 	})
+	selectableHints := bootstrapFirstWaveSelectionHints(bootstrapFirstWaveSelectableTasks(projectTasks))
 	response := map[string]any{
 		"project_id":               projectID,
 		"status":                   "persisted",
@@ -2631,6 +2632,9 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 	}
 	if len(selectedFirstWaveTaskIDs) > 0 {
 		response["selected_first_wave_task_ids"] = orderedUUIDStrings(selectedFirstWaveTaskIDs)
+	}
+	if stringSliceContains(remaining, "select-first-wave") && len(selectableHints) > 0 {
+		response["selectable_first_wave_tasks"] = selectableHints
 	}
 	if len(remaining) > 0 {
 		response["message"] = fmt.Sprintf("Bootstrap setup is not complete yet. Persist the remaining canonical step slugs next: %s.", strings.Join(remaining, ", "))

@@ -4904,6 +4904,17 @@ func TestIntegrationBootstrapSetupPersistRequiresExplicitFirstWaveSelectionAndPe
 	}
 
 	out, err = executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{"staff-project"},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist with remaining select-first-wave: %v", err)
+	}
+	hints, ok = out["selectable_first_wave_tasks"].([]map[string]any)
+	if !ok || len(hints) != 2 {
+		t.Fatalf("selectable_first_wave_tasks with remaining select-first-wave = %#v, want 2 task hints", out["selectable_first_wave_tasks"])
+	}
+
+	out, err = executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
 		"completed_step_slugs":    []string{"select-first-wave"},
 		"first_wave_task_numbers": []string{strconv.Itoa(firstTask.TaskNumber)},
 	})

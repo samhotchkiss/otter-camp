@@ -12427,6 +12427,11 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 				return err
 			}
 		}
+		if instruction, ok := buildBootstrapFirstWaveSelectionInstruction(result); ok {
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, instruction); err != nil {
+				return err
+			}
+		}
 		if cleared, clearErr := e.maybeClearRecoveryFileWriteCheckpoint(ctx, rt, result); clearErr != nil {
 			return clearErr
 		} else if cleared {
@@ -12437,6 +12442,41 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 		}
 	}
 	return nil
+}
+
+func buildBootstrapFirstWaveSelectionInstruction(result ToolResult) (string, bool) {
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "bootstrap.setup.persist") || len(result.Output) == 0 {
+		return "", false
+	}
+	if !stringSliceContainsFold(anyStrings(result.Output["remaining_step_slugs"]), "select-first-wave") {
+		return "", false
+	}
+	rawHints, ok := result.Output["selectable_first_wave_tasks"].([]any)
+	if !ok || len(rawHints) == 0 {
+		return "", false
+	}
+	parts := make([]string, 0, len(rawHints))
+	for _, raw := range rawHints {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		taskID := strings.TrimSpace(anyString(entry["task_id"]))
+		taskNumber := strings.TrimSpace(anyString(entry["task_number"]))
+		title := strings.TrimSpace(anyString(entry["title"]))
+		if taskID == "" || taskNumber == "" {
+			continue
+		}
+		label := fmt.Sprintf("task %s id=%s", taskNumber, taskID)
+		if title != "" {
+			label += fmt.Sprintf(" title=%q", title)
+		}
+		parts = append(parts, label)
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	return "[Bootstrap first-wave selection] The next bootstrap step is select-first-wave. Do not call project.get, task.list, or scaffold file reads first. Call bootstrap.setup.persist again with completed_step_slugs including select-first-wave plus first_wave_task_ids or first_wave_task_numbers chosen from: " + strings.Join(parts, "; "), true
 }
 
 func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRuntime, calls []ToolCall, results []ToolResult) (bool, error) {

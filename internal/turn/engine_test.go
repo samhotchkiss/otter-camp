@@ -6749,6 +6749,28 @@ func TestProjectBootstrapBlockedRecoveryFailureFallsBackToBootstrapPersistSelect
 	}
 }
 
+func TestBuildBootstrapFirstWaveSelectionInstruction(t *testing.T) {
+	instruction, ok := buildBootstrapFirstWaveSelectionInstruction(ToolResult{
+		Name: "bootstrap.setup.persist",
+		Output: map[string]any{
+			"remaining_step_slugs": []any{"select-first-wave", "record-frank-sign-off"},
+			"selectable_first_wave_tasks": []any{
+				map[string]any{"task_id": "task-1", "task_number": 9, "title": "Validate API endpoint specs"},
+				map[string]any{"task_id": "task-2", "task_number": 10, "title": "Test invalid input validation"},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("expected first-wave instruction to be generated")
+	}
+	if !strings.Contains(instruction, "select-first-wave") {
+		t.Fatalf("instruction = %q, want select-first-wave guidance", instruction)
+	}
+	if !strings.Contains(instruction, "task 9 id=task-1") {
+		t.Fatalf("instruction = %q, want selectable task ids", instruction)
+	}
+}
+
 func TestProjectBootstrapAckOnlyRecoveryReply(t *testing.T) {
 	if !projectBootstrapAckOnlyReply(&repo.ChatMessage{Role: "assistant", Content: "Acknowledged."}) {
 		t.Fatal("expected bare acknowledgement to be detected")
