@@ -348,6 +348,29 @@ func (e *NativeToolExecutor) taskSessionGitCommitBlocked(ctx context.Context, sc
 	}, true, nil
 }
 
+func (e *NativeToolExecutor) taskSessionDirectDoneBlocked(ctx context.Context, scope workspaceScope, taskRecord repo.ProjectTask) (map[string]any, bool, error) {
+	if e == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return nil, false, nil
+	}
+	if taskRecord.ID == uuid.Nil || taskRecord.ID != *scope.taskID || taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {
+		return nil, false, nil
+	}
+	message := "This task is flow-owned. Do not mark it done with task.update. Finish the concrete deliverable work for the current node and let the runtime advance the flow."
+	if e.flowNodes != nil {
+		if node, err := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID); err == nil {
+			if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
+				message = "This task is in a review node. Do not mark it done with task.update. Inspect the deliverable and use flow.review_decision to approve or reject the review step."
+			}
+		} else if !errors.Is(err, repo.ErrNotFound) {
+			return nil, false, err
+		}
+	}
+	return map[string]any{
+		"error":   "flow_owned_done_blocked",
+		"message": message,
+	}, true, nil
+}
+
 func (e *NativeToolExecutor) rejectProjectSessionExecutionMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
 	if e == nil || e.chatSessions == nil || e.tasks == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil || scope.projectID == nil || *scope.projectID == uuid.Nil {
 		return nil, false, nil
@@ -2301,6 +2324,11 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 			return map[string]any{"error": "reopen_feedback can only be used when reopening a completed child task"}, nil
 		}
 		if strings.EqualFold(desiredStatus, "done") {
+			if blocked, reject, guardErr := e.taskSessionDirectDoneBlocked(ctx, scope, current); guardErr != nil {
+				return nil, guardErr
+			} else if reject {
+				return blocked, nil
+			}
 			if _, validationErr := e.validateTaskDoneTransition(ctx, current); validationErr != nil {
 				return map[string]any{"error": validationErr.Error()}, nil
 			}

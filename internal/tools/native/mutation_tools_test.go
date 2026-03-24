@@ -3255,6 +3255,75 @@ func TestTaskUpdateRejectsDoneWhenFlowNodeNotTerminal(t *testing.T) {
 	}
 }
 
+func TestTaskSessionDirectDoneBlockedForFlowOwnedTaskSession(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	taskRecord := repo.ProjectTask{
+		ID:                taskID,
+		OrganizationID:    uuid.New(),
+		ProjectID:         uuid.New(),
+		WorkStatus:        "queued",
+		FlowTemplateID:    &flowTemplateID,
+		CurrentFlowNodeID: &flowNodeID,
+		Title:             "Prepare First-Wave Task Manifest",
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	sessionID := uuid.New()
+	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID}
+
+	out, reject, err := executor.taskSessionDirectDoneBlocked(context.Background(), scope, taskRecord)
+	if err != nil {
+		t.Fatalf("taskSessionDirectDoneBlocked: %v", err)
+	}
+	if !reject {
+		t.Fatal("expected reject for flow-owned task session")
+	}
+	if out["error"] != "flow_owned_done_blocked" {
+		t.Fatalf("error = %v, want flow_owned_done_blocked", out["error"])
+	}
+	if !strings.Contains(fmt.Sprintf("%v", out["message"]), "Do not mark it done with task.update") {
+		t.Fatalf("message = %v, want flow-owned done guidance", out["message"])
+	}
+}
+
+func TestTaskSessionDirectDoneBlockedForFlowOwnedReviewTaskSession(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	taskRecord := repo.ProjectTask{
+		ID:                taskID,
+		OrganizationID:    uuid.New(),
+		ProjectID:         uuid.New(),
+		WorkStatus:        "review",
+		FlowTemplateID:    &flowTemplateID,
+		CurrentFlowNodeID: &flowNodeID,
+		Title:             "Review Validation Scope",
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.flowNodes = &mockFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			flowNodeID: {ID: flowNodeID, NodeType: "review"},
+		},
+	}
+	sessionID := uuid.New()
+	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID}
+
+	out, reject, err := executor.taskSessionDirectDoneBlocked(context.Background(), scope, taskRecord)
+	if err != nil {
+		t.Fatalf("taskSessionDirectDoneBlocked: %v", err)
+	}
+	if !reject {
+		t.Fatal("expected reject for flow-owned review task session")
+	}
+	if out["error"] != "flow_owned_done_blocked" {
+		t.Fatalf("error = %v, want flow_owned_done_blocked", out["error"])
+	}
+	if !strings.Contains(fmt.Sprintf("%v", out["message"]), "flow.review_decision") {
+		t.Fatalf("message = %v, want review decision guidance", out["message"])
+	}
+}
+
 func TestTaskUpdateAllowsDoneWhenTerminalExecutionCompleted(t *testing.T) {
 	taskID := uuid.New()
 	flowTemplateID := uuid.New()
