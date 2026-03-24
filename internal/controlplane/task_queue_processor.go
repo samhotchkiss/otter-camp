@@ -1027,6 +1027,9 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		if err != nil {
 			return err
 		}
+		if !strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
+			return nil
+		}
 		principalID := runRecord.PrincipalID
 		if principalID == uuid.Nil && taskRecord.AssignedAgentID != nil {
 			principalID = *taskRecord.AssignedAgentID
@@ -1077,6 +1080,9 @@ func (p *TaskQueueProcessor) dispatchTaskQueueWakeup(ctx context.Context, runRec
 		}
 		if err != nil {
 			return err
+		}
+		if !strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
+			return nil
 		}
 		if runRecord.FlowNodeID == nil || *runRecord.FlowNodeID == uuid.Nil {
 			return nil

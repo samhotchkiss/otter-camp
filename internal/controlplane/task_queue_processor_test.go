@@ -1580,7 +1580,7 @@ func TestEnsureFlowRunAddsParticipantAndKickoffMessage(t *testing.T) {
 			},
 		},
 		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
-			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID},
+			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID, Status: "active"},
 		},
 		runs: &fakeTaskQueueRunStarter{
 			run: Run{ID: runID, SessionID: &sessionID},
@@ -2071,6 +2071,71 @@ func TestDispatchTaskQueueWakeupFlowTransitionUsesExecutionSession(t *testing.T)
 	}
 }
 
+func TestDispatchTaskQueueWakeupFlowTransitionSkipsTerminalExecution(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	runID := uuid.New()
+	agentID := uuid.New()
+	executionSessionID := uuid.New()
+
+	chatService := &fakeTaskQueueChatService{
+		nodeSession: &chat.ChatSession{ID: executionSessionID, OrganizationID: orgID, ScopeType: "project_task", ScopeID: taskID, Mode: "async", Status: "active"},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:              taskID,
+				OrganizationID:  orgID,
+				ProjectID:       projectID,
+				Title:           "Flow transition task",
+				FlowTemplateID:  &nodeID,
+				AssignedAgentID: &agentID,
+			},
+		},
+		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
+			execution: repo.FlowNodeExecution{ID: executionID, TaskID: taskID, FlowNodeID: nodeID, SessionID: &executionSessionID, Status: "rejected"},
+		},
+		flowNodes: &fakeTaskQueueFlowNodeRepository{
+			node: repo.FlowNode{ID: nodeID, DisplayName: "Review", NodeType: "review"},
+		},
+		chats: chatService,
+	}
+
+	metadata, err := json.Marshal(map[string]any{
+		"execution_wakeup": map[string]any{
+			"source": "task_queue_processor",
+			"kind":   "flow_transition",
+		},
+		"flow_node_execution_id": executionID.String(),
+		"flow_event_type":        "flow.rejected",
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+
+	err = processor.dispatchTaskQueueWakeup(ctx, Run{
+		ID:             runID,
+		OrganizationID: orgID,
+		PrincipalType:  "agent",
+		PrincipalID:    agentID,
+		TaskID:         &taskID,
+		FlowNodeID:     &nodeID,
+		SessionID:      &executionSessionID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		t.Fatalf("dispatchTaskQueueWakeup() error = %v", err)
+	}
+
+	if len(chatService.appendMessages) != 0 {
+		t.Fatalf("appendMessage calls = %d, want 0 for terminal execution", len(chatService.appendMessages))
+	}
+}
+
 func TestHandleTurnTerminalEventReleasesSpecificRunResolvedFromTurn(t *testing.T) {
 	ctx := context.Background()
 	taskID := uuid.New()
@@ -2175,7 +2240,7 @@ func TestEnsureFlowRunKickoffIsIdempotent(t *testing.T) {
 			},
 		},
 		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
-			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID},
+			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID, Status: "active"},
 		},
 		runs: &fakeTaskQueueRunStarter{
 			run: Run{ID: runID, SessionID: &sessionID},
@@ -2253,7 +2318,7 @@ func TestEnsureFlowRunFinalizesDuplicatePendingKickoffs(t *testing.T) {
 			},
 		},
 		flowExecutions: &fakeTaskQueueFlowExecutionRepository{
-			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID},
+			execution: repo.FlowNodeExecution{ID: executionID, FlowNodeID: flowNodeID, SessionID: &sessionID, Status: "active"},
 		},
 		runs: &fakeTaskQueueRunStarter{
 			run: Run{ID: runID, SessionID: &sessionID},
