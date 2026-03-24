@@ -1150,6 +1150,53 @@ func TestTaskQueueProcessorHandleTaskCompletedEventFailsBlockedTrackingRuns(t *t
 	}
 }
 
+func TestTaskQueueProcessorHandleTaskCompletedEventIgnoresTurnInProgressWhenClosingBlockedSession(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	taskID := uuid.New()
+	activeExecutionID := uuid.New()
+	activeSessionID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{}
+	flowExecutions := &fakeTaskQueueFlowExecutionRepository{
+		executionsByTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {
+				{ID: activeExecutionID, TaskID: taskID, FlowNodeID: uuid.New(), Status: "active", SessionID: &activeSessionID},
+			},
+		},
+	}
+	chatService := &fakeTaskQueueChatService{closeSessionErr: chat.ErrTurnInProgress}
+	processor := &TaskQueueProcessor{
+		runs:           runService,
+		flowExecutions: flowExecutions,
+		chats:          chatService,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":        taskID,
+		"to_status":      "blocked",
+		"blocker_reason": "recovery halted after 3 retries without a usable assistant response",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "task.status_changed",
+		Payload:        payload,
+	}
+	if err := processor.handleTaskCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("handleTaskCompletedEvent: %v", err)
+	}
+
+	if len(chatService.closeSessionCalls) != 1 || chatService.closeSessionCalls[0] != activeSessionID {
+		t.Fatalf("CloseSession calls = %+v, want session %s", chatService.closeSessionCalls, activeSessionID)
+	}
+	if len(flowExecutions.abandonCalls) != 1 || flowExecutions.abandonCalls[0] != activeExecutionID {
+		t.Fatalf("Abandon calls = %+v, want execution %s", flowExecutions.abandonCalls, activeExecutionID)
+	}
+}
+
 func TestTaskQueueProcessorHandleTaskCompletedEventAutoCompletesParentTask(t *testing.T) {
 	ctx := context.Background()
 	orgID := uuid.New()

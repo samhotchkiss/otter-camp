@@ -1341,7 +1341,7 @@ func (p *TaskQueueProcessor) abandonActiveFlowExecutionsForTask(ctx context.Cont
 			continue
 		}
 		if p.chats != nil && execution.SessionID != nil && *execution.SessionID != uuid.Nil {
-			if err := p.chats.CloseSession(ctx, *execution.SessionID); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			if err := p.chats.CloseSession(ctx, *execution.SessionID); err != nil && !errors.Is(err, repo.ErrNotFound) && !errors.Is(err, chat.ErrTurnInProgress) {
 				return err
 			}
 		}
