@@ -78,8 +78,12 @@ func TestFlowExecutionRecoveryCheckpointMetadataRoundTrip(t *testing.T) {
 		FlowExecutionMetadataWithLiveOwner(json.RawMessage(`{}`), FlowExecutionLiveOwner{RunID: &runID}),
 		&FlowExecutionRecoveryCheckpoint{
 			CheckpointType: "stranded_execution",
+			LastCommitSHA:  "abc123",
+			BranchHeadSHA:  "def456",
 			FailedTurnID:   &failedTurnID,
 			ResumeAction:   "start_new_turn",
+			TargetPath:     "docs/plan.md",
+			ArtifactRef:    ".ottercamp/recovery/docs/plan.md",
 			FailureClass:   "product_runtime",
 			FailureSummary: "active execution lost live task turn",
 			UpdatedAt:      &updatedAt,
@@ -98,6 +102,15 @@ func TestFlowExecutionRecoveryCheckpointMetadataRoundTrip(t *testing.T) {
 	}
 	if checkpoint.ResumeAction != "start_new_turn" {
 		t.Fatalf("resume_action = %q, want start_new_turn", checkpoint.ResumeAction)
+	}
+	if checkpoint.BranchHeadSHA != "def456" {
+		t.Fatalf("branch_head_sha = %q, want def456", checkpoint.BranchHeadSHA)
+	}
+	if checkpoint.TargetPath != "docs/plan.md" {
+		t.Fatalf("target_path = %q, want docs/plan.md", checkpoint.TargetPath)
+	}
+	if checkpoint.ArtifactRef != ".ottercamp/recovery/docs/plan.md" {
+		t.Fatalf("artifact_ref = %q, want .ottercamp/recovery/docs/plan.md", checkpoint.ArtifactRef)
 	}
 	if checkpoint.FailureClass != "product_runtime" {
 		t.Fatalf("failure_class = %q, want product_runtime", checkpoint.FailureClass)

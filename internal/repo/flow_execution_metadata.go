@@ -22,9 +22,12 @@ type FlowExecutionLiveOwner struct {
 type FlowExecutionRecoveryCheckpoint struct {
 	CheckpointType      string     `json:"checkpoint_type,omitempty"`
 	LastCommitSHA       string     `json:"last_commit_sha,omitempty"`
+	BranchHeadSHA       string     `json:"branch_head_sha,omitempty"`
 	LastCompletedTurnID *uuid.UUID `json:"last_completed_turn_id,omitempty"`
 	FailedTurnID        *uuid.UUID `json:"failed_turn_id,omitempty"`
 	ResumeAction        string     `json:"resume_action,omitempty"`
+	TargetPath          string     `json:"target_path,omitempty"`
+	ArtifactRef         string     `json:"artifact_ref,omitempty"`
 	FailureClass        string     `json:"failure_class,omitempty"`
 	FailureSummary      string     `json:"failure_summary,omitempty"`
 	UpdatedAt           *time.Time `json:"updated_at,omitempty"`

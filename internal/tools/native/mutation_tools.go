@@ -4862,10 +4862,22 @@ func (e *NativeToolExecutor) recordCommitCloseFailure(ctx context.Context, execu
 	if execution.CommitSHA != nil {
 		lastCommitSHA = strings.TrimSpace(*execution.CommitSHA)
 	}
+	branchHeadSHA := ""
+	if e.explicitRoot != "" {
+		if head, err := flowcommit.HeadSHA(ctx, e.explicitRoot); err == nil {
+			branchHeadSHA = strings.TrimSpace(head)
+		}
+	}
+	targetPath := ""
+	if execution.SessionID != nil && *execution.SessionID != uuid.Nil {
+		targetPath = e.latestRecoveryTargetPathForSession(ctx, workspaceScope{sessionID: execution.SessionID})
+	}
 	metadata := repo.FlowExecutionMetadataWithRecoveryCheckpoint(execution.Metadata, &repo.FlowExecutionRecoveryCheckpoint{
 		CheckpointType: "awaiting_commit_close",
 		LastCommitSHA:  lastCommitSHA,
+		BranchHeadSHA:  branchHeadSHA,
 		ResumeAction:   "close_execution",
+		TargetPath:     targetPath,
 		FailureClass:   "product_runtime",
 		FailureSummary: strings.TrimSpace(commitErr.Error()),
 		UpdatedAt:      &now,

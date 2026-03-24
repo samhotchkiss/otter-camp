@@ -83,6 +83,21 @@ func WorktreeDirty(ctx context.Context, repoRoot string) (bool, error) {
 	return strings.TrimSpace(status) != "", nil
 }
 
+func HeadSHA(ctx context.Context, repoRoot string) (string, error) {
+	root := filepath.Clean(strings.TrimSpace(repoRoot))
+	if root == "" {
+		return "", fmt.Errorf("repo root is required")
+	}
+	if err := ensureGitWorkspace(ctx, root); err != nil {
+		return "", err
+	}
+	sha, err := gitOutput(ctx, root, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(sha), nil
+}
+
 func ensureGitWorkspace(ctx context.Context, root string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
