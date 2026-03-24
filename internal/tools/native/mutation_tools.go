@@ -4570,6 +4570,15 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	if err != nil {
 		return nil, err
 	}
+	if e.tasks != nil {
+		taskRecord, getErr := e.tasks.GetByID(ctx, execution.TaskID)
+		if getErr == nil && strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+			return map[string]any{
+				"blocked": true,
+				"message": "review rejection recorded, but the reject path has exhausted its allowed visits and the task is now blocked",
+			}, nil
+		}
+	}
 	return map[string]any{"next_node_id": next.FlowNodeID}, nil
 }
 

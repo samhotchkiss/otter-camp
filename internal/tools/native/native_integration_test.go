@@ -7757,6 +7757,134 @@ func TestIntegrationFlowRejectRollsBackRuntimeStateWhenEventPublishFails(t *test
 	}
 }
 
+func TestIntegrationFlowReviewDecisionRejectReturnsBlockedWhenRejectPathExhausted(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &projectRecord.OrganizationID,
+		ProjectID:      &project.ID,
+		Slug:           "review-max-visits-" + strings.ToLower(uuid.NewString()[:8]),
+		DisplayName:    "Review Max Visits " + uuid.NewString()[:8],
+		Description:    "test flow template with exhausted reject path",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("update work node: %v", err)
+	}
+	reviewNode.RejectNodeID = &workNode.ID
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update review node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("update template: %v", err)
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "review",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &reviewNode.ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	if _, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  workNode.ID,
+		VisitNumber: 1,
+		Status:      "completed",
+	}); err != nil {
+		t.Fatalf("seed completed work visit: %v", err)
+	}
+	originalExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  reviewNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create review execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:          pool,
+		WorkspaceRoot: t.TempDir(),
+	})
+	execCtx := integrationExecCtxWith(orgID, agent.ID)
+	out, err := executor.Execute(execCtx, "flow.review_decision", map[string]any{
+		"flow_node_execution_id": originalExecution.ID.String(),
+		"decision":               "reject",
+	})
+	if err != nil {
+		t.Fatalf("flow.review_decision reject exhausted path: %v", err)
+	}
+	if blocked, _ := out["blocked"].(bool); !blocked {
+		t.Fatalf("blocked = %v, want true output=%v", out["blocked"], out)
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("load updated task: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+
+	updatedExecution, err := executionRepo.GetByID(ctx, originalExecution.ID)
+	if err != nil {
+		t.Fatalf("load updated execution: %v", err)
+	}
+	if updatedExecution.Status != "rejected" {
+		t.Fatalf("execution status = %q, want rejected", updatedExecution.Status)
+	}
+}
+
 func integrationExecCtxWith(orgID, agentID uuid.UUID) context.Context {
 	return mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
 		OrganizationID: orgID,
