@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -14,6 +15,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/google/uuid"
+
+	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
 var utf8ReplacementBytes = []byte("\uFFFD")
@@ -27,7 +33,7 @@ type listedEntry struct {
 }
 
 func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[string]any) (map[string]any, error) {
-	wd, _, resolved, err := e.resolveInputPath(ctx, input, "path")
+	wd, scope, resolved, err := e.resolveInputPath(ctx, input, "path")
 	if err != nil {
 		if errors.Is(err, ErrPathTraversal) {
 			return map[string]any{"error": "path_traversal"}, nil
@@ -91,13 +97,126 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 		content = base64.StdEncoding.EncodeToString(payload)
 	}
 
+	renderedPath := renderPath(wd.Root(), resolved)
+	if reject, blocked, rejectErr := e.rejectPlaceholderDeliverableRead(ctx, scope, renderedPath, content); rejectErr != nil {
+		return nil, rejectErr
+	} else if blocked {
+		reject["path"] = renderedPath
+		return reject, nil
+	}
+
 	return map[string]any{
 		"content":   content,
 		"encoding":  encoding,
 		"byte_size": stat.Size(),
 		"truncated": truncated,
-		"path":      renderPath(wd.Root(), resolved),
+		"path":      renderedPath,
 	}, nil
+}
+
+func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Context, scope workspaceScope, relativePath, content string) (map[string]any, bool, error) {
+	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return nil, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
+		return nil, false, nil
+	}
+	deliverablePath := parseExplicitDeliverablePath(taskRecord)
+	if deliverablePath == "" {
+		deliverablePath = e.latestRecoveryTargetPathForSession(ctx, scope)
+	}
+	if deliverablePath == "" {
+		return nil, false, nil
+	}
+	normalizedPath := normalizeWorkspacePath(relativePath)
+	if normalizedPath == "" || !sameOrNestedWorkspacePath(normalizedPath, deliverablePath) {
+		return nil, false, nil
+	}
+	if !looksLikeRejectedDeliverablePlaceholder(content) {
+		return nil, false, nil
+	}
+	message := fmt.Sprintf("The explicit deliverable `%s` currently contains rejected placeholder or status narration. Do not reread `%s` for context. Overwrite it directly with the real deliverable body instead.", deliverablePath, normalizedPath)
+	if workspacePathLooksDirectory(deliverablePath) {
+		message = fmt.Sprintf("A file under the explicit deliverable directory `%s/` currently contains rejected placeholder or status narration. Do not reread `%s` for context. Overwrite it directly with the real deliverable body instead.", strings.TrimSuffix(deliverablePath, "/"), normalizedPath)
+	}
+	return map[string]any{
+		"error":            "placeholder_deliverable",
+		"deliverable_path": deliverablePath,
+		"message":          message,
+	}, true, nil
+}
+
+func (e *NativeToolExecutor) latestRecoveryTargetPathForSession(ctx context.Context, scope workspaceScope) string {
+	if e == nil || e.messages == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil {
+		return ""
+	}
+	messages, err := e.messages.ListBySession(ctx, *scope.sessionID)
+	if err != nil {
+		return ""
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if !strings.EqualFold(strings.TrimSpace(messages[i].Role), "system") {
+			continue
+		}
+		if target := parseRecoveryTargetPath(messages[i].Content); target != "" {
+			return target
+		}
+	}
+	return ""
+}
+
+func parseRecoveryTargetPath(content string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "Target file:") {
+			continue
+		}
+		target := strings.TrimSpace(strings.TrimPrefix(trimmed, "Target file:"))
+		return normalizeWorkspacePath(target)
+	}
+	return ""
+}
+
+func looksLikeRejectedDeliverablePlaceholder(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || len(trimmed) > 4000 {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if looksLikeNarratedTaskFileWritePlaceholder(trimmed) {
+		return true
+	}
+	if strings.Contains(lower, "# ready to continue oc-") &&
+		strings.Contains(lower, "deliverable target:") &&
+		strings.Contains(lower, "what i need from you:") {
+		return true
+	}
+	if strings.Contains(lower, "**status**: task oc-") &&
+		strings.Contains(lower, "currently **in_progress**") &&
+		strings.Contains(lower, "target deliverable file is just a placeholder") {
+		return true
+	}
+	if strings.Contains(lower, "task execution is already underway. reuse the existing workspace files") {
+		return true
+	}
+	if strings.Contains(lower, "i don't see a durable draft") &&
+		(strings.Contains(lower, "please provide the substantive draft") || strings.Contains(lower, "please provide the recovery artifact")) {
+		return true
+	}
+	if strings.Contains(lower, "what i need from you:") &&
+		(strings.Contains(lower, "should i proceed") || strings.Contains(lower, "do you want me to")) {
+		return true
+	}
+	return false
 }
 
 func (e *NativeToolExecutor) handleFileList(ctx context.Context, input map[string]any) (map[string]any, error) {
