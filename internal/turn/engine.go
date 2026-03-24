@@ -6643,6 +6643,11 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 		"context of the interrupted task",
 		"i don't see any active task context",
 		"i do not see any active task context",
+		"i don't see a durable draft",
+		"i do not see a durable draft",
+		"please provide the substantive draft",
+		"please provide the substantive draft or recovery artifact",
+		"please provide the recovery artifact",
 		"start of our conversation",
 		"# task resume",
 		"resume command three times",
@@ -11638,6 +11643,13 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeGenericTaskRecoveryReply(trimmed) || looksLikeRecoveryQuestionEcho(trimmed) {
 		return fmt.Sprintf("assistant draft for %s repeated a generic recovery reply instead of the file body", path)
 	}
+	if containsAny(lower,
+		"task execution is already underway.",
+		"reuse the existing workspace files, task state, prior tool results",
+		"continue the active task directly.",
+	) {
+		return fmt.Sprintf("assistant draft for %s repeated a continuation-summary fallback instead of the file body", path)
+	}
 	if len(trimmed) < 240 && containsAny(lower,
 		"now write",
 		"now let me write",
@@ -11684,6 +11696,10 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		"can you provide the flow_node_execution_id",
 		"if you'd like me to check the current task state",
 		"determine the active flow node",
+		"i don't see a durable draft",
+		"i do not see a durable draft",
+		"please provide the substantive draft",
+		"please provide the substantive draft or recovery artifact",
 	) {
 		return fmt.Sprintf("assistant draft for %s asked for runtime control-plane input instead of the file body", path)
 	}

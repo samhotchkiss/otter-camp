@@ -6424,6 +6424,48 @@ func TestContinuationTurnNormalizesGenericNoContextSummary(t *testing.T) {
 	}
 }
 
+func TestContinuationTurnNormalizesMissingDurableDraftSummary(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: nil},
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: "I don't see a durable draft for the OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md file in the context provided above. Please provide the substantive draft or recovery artifact for this task so I can write the target file directly."}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessage *repo.ChatMessage
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Continuation summary]") {
+			msgCopy := msg
+			summaryMessage = &msgCopy
+		}
+	}
+	if summaryMessage == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(summaryMessage.Content, "Continuation summary unavailable.") {
+		t.Fatalf("continuation summary = %q, want normalized unavailable message", summaryMessage.Content)
+	}
+}
+
 func TestContinuationTurnUsesTaskFallbackSummaryForAsyncProjectTask(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -9532,6 +9574,18 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 				"   - Audience level: Executive, Technical, or Mixed?\n",
 			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
 			want:       "asked for clarification instead of the file body",
+		},
+		{
+			name:       "rejects continuation summary fallback text",
+			content:    "Task execution is already underway. Reuse the existing workspace files, task state, prior tool results, and recent artifacts from this session to continue the active task directly.",
+			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			want:       "continuation-summary fallback instead of the file body",
+		},
+		{
+			name:       "rejects missing durable draft continuation summary",
+			content:    "I don't see a durable draft for the OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md file in the context provided above. Please provide the substantive draft or recovery artifact for this task so I can write the target file directly.",
+			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			want:       "runtime control-plane input instead of the file body",
 		},
 		{
 			name:    "accepts first-person file body",
