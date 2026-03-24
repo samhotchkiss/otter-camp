@@ -2831,6 +2831,50 @@ func TestAppendProjectBootstrapContinuationMessagePreservesFreshKickoffMetadata(
 	}
 }
 
+func TestAppendProjectBootstrapContinuationMessageUsesPhaseAwareResumePrompt(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                  projectBootstrapStatusActive,
+		CurrentPhase:            projectBootstrapCheckpointFirstWaveSelected,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFlowTemplatesPersisted,
+		AssignmentCount:         3,
+		PlannedTaskCount:        13,
+		PlannedFlowTemplateCount: 2,
+		BootstrapTaskID:         uuid.NewString(),
+		BootstrapTaskOutstanding: true,
+		ValidationStatus:        projectBootstrapValidationPassed,
+		StartedAt:               &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	fixture.session.Metadata = metadata
+	fixture.chat.session.Metadata = metadata
+
+	initialID := uuid.New()
+	initial := fixture.messages.create(repo.ChatMessage{
+		ID:        initialID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "Start the validation project.",
+	})
+
+	msg, err := fixture.engine.appendProjectBootstrapContinuationMessage(context.Background(), fixture.session.ID, fixture.chat.participants[0].ParticipantID, initial.ID.String(), 0)
+	if err != nil {
+		t.Fatalf("appendProjectBootstrapContinuationMessage: %v", err)
+	}
+	if strings.Contains(msg.Content, "Persist project assignments, scoped tasks, and flow templates if the handoff already contains enough information") {
+		t.Fatalf("content = %q, want phase-aware resume prompt instead of generic bootstrap continuation", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "Your first tool call in this resume turn should be bootstrap.setup.persist") {
+		t.Fatalf("content = %q, want resume prompt to start with bootstrap.setup.persist guidance", msg.Content)
+	}
+}
+
 func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	content := "Start a brand-new Sam.blog project from scratch. Do not reuse archived chains."
@@ -5200,8 +5244,12 @@ func TestHandleTurnCancelledEventEnqueuesBootstrapRecovery(t *testing.T) {
 	if !fixture.messages.containsContent("[Recovered cancelled bootstrap turn - retrying in a fresh turn.]") {
 		t.Fatal("missing bootstrap cancellation recovery system message")
 	}
-	if !fixture.messages.containsContentSubstring("Continue the bounded project bootstrap setup workflow now.") {
-		t.Fatal("missing bootstrap continuation message")
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	if len(messages) < 3 {
+		t.Fatal("missing bootstrap continuation message append")
 	}
 
 	if err := fixture.engine.HandleTurnCancelledEvent(context.Background(), event); err != nil {
