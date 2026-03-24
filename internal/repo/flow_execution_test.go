@@ -75,7 +75,10 @@ func TestFlowExecutionRecoveryCheckpointMetadataRoundTrip(t *testing.T) {
 	updatedAt := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
 
 	raw := FlowExecutionMetadataWithRecoveryCheckpoint(
-		FlowExecutionMetadataWithLiveOwner(json.RawMessage(`{}`), FlowExecutionLiveOwner{RunID: &runID}),
+		FlowExecutionMetadataWithEntryHeadSHA(
+			FlowExecutionMetadataWithLiveOwner(json.RawMessage(`{}`), FlowExecutionLiveOwner{RunID: &runID}),
+			"entry123",
+		),
 		&FlowExecutionRecoveryCheckpoint{
 			CheckpointType: "stranded_execution",
 			LastCommitSHA:  "abc123",
@@ -118,5 +121,8 @@ func TestFlowExecutionRecoveryCheckpointMetadataRoundTrip(t *testing.T) {
 	liveOwner := FlowExecutionLiveOwnerFromMetadata(raw)
 	if liveOwner.RunID == nil || *liveOwner.RunID != runID {
 		t.Fatalf("live run id = %v, want %s", liveOwner.RunID, runID)
+	}
+	if got := FlowExecutionEntryHeadSHAFromMetadata(raw); got != "entry123" {
+		t.Fatalf("entry head sha = %q, want entry123", got)
 	}
 }

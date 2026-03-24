@@ -4735,7 +4735,8 @@ func (e *NativeToolExecutor) createCanonicalExecutionCommit(ctx context.Context,
 	if branchName == "" {
 		branchName = fmt.Sprintf("task/%d", taskRecord.TaskNumber)
 	}
-	return flowcommit.CommitAll(ctx, root, branchName, canonicalExecutionCommitMessage(taskRecord, node, execution.VisitNumber, decision, summary), true)
+	baseSHA := repo.FlowExecutionEntryHeadSHAFromMetadata(execution.Metadata)
+	return flowcommit.CommitAllFromBase(ctx, root, branchName, baseSHA, canonicalExecutionCommitMessage(taskRecord, node, execution.VisitNumber, decision, summary), true)
 }
 
 func (e *NativeToolExecutor) reviewExecutionWorkspaceDirty(ctx context.Context, taskID uuid.UUID) (bool, error) {

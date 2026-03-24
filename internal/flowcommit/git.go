@@ -98,6 +98,65 @@ func HeadSHA(ctx context.Context, repoRoot string) (string, error) {
 	return strings.TrimSpace(sha), nil
 }
 
+func CommitAllFromBase(ctx context.Context, repoRoot, branchName, baseSHA, message string, allowEmpty bool) (CommitResult, error) {
+	root := filepath.Clean(strings.TrimSpace(repoRoot))
+	if root == "" {
+		return CommitResult{}, fmt.Errorf("repo root is required")
+	}
+	trimmedBase := strings.TrimSpace(baseSHA)
+	if trimmedBase == "" {
+		return CommitAll(ctx, repoRoot, branchName, message, allowEmpty)
+	}
+	if err := ensureGitWorkspace(ctx, root); err != nil {
+		return CommitResult{}, err
+	}
+	trimmedBranch := strings.TrimSpace(branchName)
+	if trimmedBranch == "" {
+		trimmedBranch = "main"
+	}
+	if err := ensureIdentity(ctx, root); err != nil {
+		return CommitResult{}, err
+	}
+	if err := checkoutBranch(ctx, root, trimmedBranch); err != nil {
+		return CommitResult{}, err
+	}
+	if headSHA, err := HeadSHA(ctx, root); err == nil && strings.TrimSpace(headSHA) == trimmedBase {
+		return CommitAll(ctx, root, trimmedBranch, message, allowEmpty)
+	}
+	if _, err := gitOutput(ctx, root, "reset", "--soft", trimmedBase); err != nil {
+		return CommitResult{}, err
+	}
+	if _, err := gitOutput(ctx, root, "add", "-A"); err != nil {
+		return CommitResult{}, err
+	}
+	filesStaged, err := stagedFileCount(ctx, root)
+	if err != nil {
+		return CommitResult{}, err
+	}
+	args := []string{"commit", "-m", strings.TrimSpace(message)}
+	if allowEmpty {
+		args = append(args, "--allow-empty")
+	}
+	if _, err := gitOutput(ctx, root, args...); err != nil {
+		return CommitResult{}, err
+	}
+	sha, err := gitOutput(ctx, root, "rev-parse", "HEAD")
+	if err != nil {
+		return CommitResult{}, err
+	}
+	trimmedSHA := strings.TrimSpace(sha)
+	shortSHA := trimmedSHA
+	if len(shortSHA) > 7 {
+		shortSHA = shortSHA[:7]
+	}
+	return CommitResult{
+		SHA:         trimmedSHA,
+		ShortSHA:    shortSHA,
+		FilesStaged: filesStaged,
+		BranchName:  trimmedBranch,
+	}, nil
+}
+
 func ensureGitWorkspace(ctx context.Context, root string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err

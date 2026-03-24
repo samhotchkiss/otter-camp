@@ -2,6 +2,7 @@ package repo
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,6 +11,7 @@ import (
 const (
 	FlowExecutionMetadataLiveRunID          = "live_run_id"
 	FlowExecutionMetadataLiveTurnID         = "live_turn_id"
+	FlowExecutionMetadataEntryHeadSHA       = "entry_branch_head_sha"
 	FlowExecutionMetadataRecoveryCheckpoint = "recovery_checkpoint"
 	FlowExecutionMetadataReviewDecision     = "review_decision"
 )
@@ -49,6 +51,24 @@ func FlowExecutionMetadataWithLiveOwner(existing json.RawMessage, owner FlowExec
 	setOrDeleteUUID(payload, FlowExecutionMetadataLiveRunID, owner.RunID)
 	setOrDeleteUUID(payload, FlowExecutionMetadataLiveTurnID, owner.TurnID)
 
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return encoded
+}
+
+func FlowExecutionMetadataWithEntryHeadSHA(existing json.RawMessage, sha string) json.RawMessage {
+	payload := map[string]any{}
+	if len(existing) > 0 && json.Valid(existing) {
+		_ = json.Unmarshal(existing, &payload)
+	}
+	trimmed := strings.TrimSpace(sha)
+	if trimmed == "" {
+		delete(payload, FlowExecutionMetadataEntryHeadSHA)
+	} else {
+		payload[FlowExecutionMetadataEntryHeadSHA] = trimmed
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return json.RawMessage(`{}`)
@@ -102,6 +122,18 @@ func FlowExecutionLiveOwnerFromMetadata(raw json.RawMessage) FlowExecutionLiveOw
 		RunID:  metadataUUIDPointer(payload, FlowExecutionMetadataLiveRunID),
 		TurnID: metadataUUIDPointer(payload, FlowExecutionMetadataLiveTurnID),
 	}
+}
+
+func FlowExecutionEntryHeadSHAFromMetadata(raw json.RawMessage) string {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	value, _ := payload[FlowExecutionMetadataEntryHeadSHA].(string)
+	return strings.TrimSpace(value)
 }
 
 func FlowExecutionRecoveryCheckpointFromMetadata(raw json.RawMessage) (*FlowExecutionRecoveryCheckpoint, bool) {

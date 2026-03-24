@@ -24,6 +24,7 @@ import (
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
+	"github.com/samhotchkiss/otter-camp/internal/flowcommit"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -8009,6 +8010,86 @@ func TestIntegrationFlowAdvanceCreatesCanonicalCommitWhenCommitSHAOmitted(t *tes
 	message := strings.TrimSpace(string(messageBytes))
 	if !strings.Contains(message, "flow(work:") {
 		t.Fatalf("latest commit message = %q, want flow(work:...) prefix", message)
+	}
+}
+
+func TestIntegrationFlowAdvanceSquashesScratchCommitsFromExecutionBase(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "in_progress",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	execution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	workspaceRoot := t.TempDir()
+	branchName := fmt.Sprintf("task/%d", task.TaskNumber)
+	base, err := flowcommit.CommitAll(ctx, workspaceRoot, branchName, "base task branch state", true)
+	if err != nil {
+		t.Fatalf("base commit: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "deliverable.txt"), []byte("draft one\n"), 0o644); err != nil {
+		t.Fatalf("write draft one: %v", err)
+	}
+	if _, err := flowcommit.CommitAll(ctx, workspaceRoot, branchName, "scratch draft 1", false); err != nil {
+		t.Fatalf("scratch commit 1: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "deliverable.txt"), []byte("draft two\n"), 0o644); err != nil {
+		t.Fatalf("write draft two: %v", err)
+	}
+	if _, err := flowcommit.CommitAll(ctx, workspaceRoot, branchName, "scratch draft 2", false); err != nil {
+		t.Fatalf("scratch commit 2: %v", err)
+	}
+
+	metadata := repo.FlowExecutionMetadataWithEntryHeadSHA(execution.Metadata, base.SHA)
+	execution, err = executionRepo.UpdateMetadata(ctx, execution.ID, metadata)
+	if err != nil {
+		t.Fatalf("update execution metadata: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: workspaceRoot})
+	if _, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.advance", map[string]any{
+		"flow_node_execution_id": execution.ID.String(),
+	}); err != nil {
+		t.Fatalf("flow.advance: %v", err)
+	}
+
+	countBytes, err := exec.Command("git", "-C", workspaceRoot, "rev-list", "--count", fmt.Sprintf("%s..HEAD", base.SHA)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("count commits after base: %v: %s", err, strings.TrimSpace(string(countBytes)))
+	}
+	if strings.TrimSpace(string(countBytes)) != "1" {
+		t.Fatalf("commits after base = %q, want 1 canonical commit", strings.TrimSpace(string(countBytes)))
 	}
 }
 

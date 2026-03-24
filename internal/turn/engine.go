@@ -4994,7 +4994,8 @@ func (e *TurnEngine) ensureCanonicalTaskExecutionCommit(ctx context.Context, tas
 	if branchName == "" {
 		branchName = fmt.Sprintf("task/%d", taskRecord.TaskNumber)
 	}
-	result, err := flowcommit.CommitAll(ctx, workspaceRoot, branchName, canonicalTaskExecutionCommitMessage(taskRecord, node, activeExecution.VisitNumber), true)
+	baseSHA := repo.FlowExecutionEntryHeadSHAFromMetadata(activeExecution.Metadata)
+	result, err := flowcommit.CommitAllFromBase(ctx, workspaceRoot, branchName, baseSHA, canonicalTaskExecutionCommitMessage(taskRecord, node, activeExecution.VisitNumber), true)
 	if err != nil {
 		return "", err
 	}
@@ -17482,7 +17483,13 @@ func (e *TurnEngine) syncBoundFlowExecutionTurnOwnership(ctx context.Context, se
 	if err != nil {
 		return err
 	}
-	updated := repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{
+	updatedMetadata := execution.Metadata
+	if entryHead := repo.FlowExecutionEntryHeadSHAFromMetadata(updatedMetadata); entryHead == "" {
+		if head := e.boundExecutionEntryHeadSHA(ctx, session); head != "" {
+			updatedMetadata = repo.FlowExecutionMetadataWithEntryHeadSHA(updatedMetadata, head)
+		}
+	}
+	updated := repo.FlowExecutionMetadataWithLiveOwner(updatedMetadata, repo.FlowExecutionLiveOwner{
 		RunID:  repo.FlowExecutionLiveOwnerFromMetadata(execution.Metadata).RunID,
 		TurnID: turnID,
 	})
@@ -17493,6 +17500,29 @@ func (e *TurnEngine) syncBoundFlowExecutionTurnOwnership(ctx context.Context, se
 	running := "running"
 	_, err = executionRepo.UpdateRuntimeSubstate(ctx, execution.ID, &running)
 	return err
+}
+
+func (e *TurnEngine) boundExecutionEntryHeadSHA(ctx context.Context, session *chat.ChatSession) string {
+	if e == nil || e.tasks == nil || e.projects == nil || session == nil || !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") || session.ScopeID == uuid.Nil {
+		return ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, session.ScopeID)
+	if err != nil {
+		return ""
+	}
+	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return ""
+	}
+	root, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+	if err != nil {
+		return ""
+	}
+	head, err := flowcommit.HeadSHA(ctx, root)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(head)
 }
 
 func (e *TurnEngine) reconcileBoundFlowExecutionTurnOwnership(ctx context.Context, session *chat.ChatSession, turnID uuid.UUID) {
