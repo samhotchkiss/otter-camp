@@ -4564,6 +4564,7 @@ func (e *NativeToolExecutor) handleFlowAdvance(ctx context.Context, input map[st
 	} else {
 		commitResult, err := e.createCanonicalExecutionCommit(ctx, *activeExecution, "", "")
 		if err != nil {
+			_ = e.recordCommitCloseFailure(ctx, *activeExecution, err)
 			return nil, err
 		}
 		if _, err := e.flowService.RecordNodeCommit(ctx, taskID, commitResult.SHA, commitResult.BranchName); err != nil {
@@ -4628,8 +4629,10 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	}
 	reason, _ := readString(input, "reason")
 	findings, _ := readString(input, "findings")
-	if err := e.recordReviewDecisionMetadata(ctx, execution, decision, reason, findings); err != nil {
+	if updatedExecution, err := e.recordReviewDecisionMetadata(ctx, execution, decision, reason, findings); err != nil {
 		return nil, err
+	} else {
+		execution = updatedExecution
 	}
 	if decision == "approve" {
 		dirty, err := e.reviewExecutionWorkspaceDirty(ctx, execution.TaskID)
@@ -4644,6 +4647,7 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 		}
 		commitResult, err := e.createCanonicalExecutionCommit(ctx, execution, "approve", "")
 		if err != nil {
+			_ = e.recordCommitCloseFailure(ctx, execution, err)
 			return nil, err
 		}
 		if _, err := e.flowService.RecordNodeCommit(ctx, execution.TaskID, commitResult.SHA, commitResult.BranchName); err != nil {
@@ -4666,6 +4670,7 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	}
 	commitResult, err := e.createCanonicalExecutionCommit(ctx, execution, "reject", rejectionSummary)
 	if err != nil {
+		_ = e.recordCommitCloseFailure(ctx, execution, err)
 		return nil, err
 	}
 	if _, err := e.flowService.RecordNodeCommit(ctx, execution.TaskID, commitResult.SHA, commitResult.BranchName); err != nil {
@@ -4808,9 +4813,9 @@ func taskBranchString(value *string) string {
 	return *value
 }
 
-func (e *NativeToolExecutor) recordReviewDecisionMetadata(ctx context.Context, execution repo.FlowNodeExecution, decision, reason, findings string) error {
+func (e *NativeToolExecutor) recordReviewDecisionMetadata(ctx context.Context, execution repo.FlowNodeExecution, decision, reason, findings string) (repo.FlowNodeExecution, error) {
 	if e.flowExecs == nil || execution.ID == uuid.Nil {
-		return nil
+		return execution, nil
 	}
 	now := time.Now().UTC()
 	metadata := repo.FlowExecutionMetadataWithReviewDecision(execution.Metadata, &repo.FlowExecutionReviewDecision{
@@ -4819,7 +4824,31 @@ func (e *NativeToolExecutor) recordReviewDecisionMetadata(ctx context.Context, e
 		Findings:  strings.TrimSpace(findings),
 		DecidedAt: &now,
 	})
-	_, err := e.flowExecs.UpdateMetadata(ctx, execution.ID, metadata)
+	return e.flowExecs.UpdateMetadata(ctx, execution.ID, metadata)
+}
+
+func (e *NativeToolExecutor) recordCommitCloseFailure(ctx context.Context, execution repo.FlowNodeExecution, commitErr error) error {
+	if e.flowExecs == nil || execution.ID == uuid.Nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	lastCommitSHA := ""
+	if execution.CommitSHA != nil {
+		lastCommitSHA = strings.TrimSpace(*execution.CommitSHA)
+	}
+	metadata := repo.FlowExecutionMetadataWithRecoveryCheckpoint(execution.Metadata, &repo.FlowExecutionRecoveryCheckpoint{
+		CheckpointType: "awaiting_commit_close",
+		LastCommitSHA:  lastCommitSHA,
+		ResumeAction:   "close_execution",
+		FailureClass:   "product_runtime",
+		FailureSummary: strings.TrimSpace(commitErr.Error()),
+		UpdatedAt:      &now,
+	})
+	if _, err := e.flowExecs.UpdateMetadata(ctx, execution.ID, metadata); err != nil {
+		return err
+	}
+	stalled := "stalled"
+	_, err := e.flowExecs.UpdateRuntimeSubstate(ctx, execution.ID, &stalled)
 	return err
 }
 

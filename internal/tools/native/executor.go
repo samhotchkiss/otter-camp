@@ -133,6 +133,7 @@ type flowExecutionReader interface {
 	RecordCommitSHA(ctx context.Context, id uuid.UUID, commitSHA string) (repo.FlowNodeExecution, error)
 	Reject(ctx context.Context, id uuid.UUID) (repo.FlowNodeExecution, error)
 	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error)
+	UpdateRuntimeSubstate(ctx context.Context, id uuid.UUID, runtimeSubstate *string) (repo.FlowNodeExecution, error)
 }
 
 type subtaskReader interface {

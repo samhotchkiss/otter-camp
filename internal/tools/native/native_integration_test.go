@@ -8779,6 +8779,117 @@ func TestIntegrationFlowReviewDecisionRejectCreatesCanonicalRejectionCommit(t *t
 	}
 }
 
+func TestIntegrationFlowReviewDecisionCommitFailurePersistsCheckpointAndStallsExecution(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &projectRecord.OrganizationID,
+		ProjectID:      &project.ID,
+		Slug:           "reject-failure-flow-" + strings.ToLower(uuid.NewString()[:8]),
+		DisplayName:    "Reject Failure Flow " + uuid.NewString()[:8],
+		Description:    "test flow template for commit close failures",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	template.StartNodeID = &reviewNode.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("update template: %v", err)
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "review",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &reviewNode.ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	waitingForReview := "waiting_for_review"
+	reviewExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:          task.ID,
+		FlowNodeID:      reviewNode.ID,
+		VisitNumber:     1,
+		Status:          "active",
+		RuntimeSubstate: &waitingForReview,
+	})
+	if err != nil {
+		t.Fatalf("create review execution: %v", err)
+	}
+
+	rootParent := t.TempDir()
+	invalidRoot := filepath.Join(rootParent, "not-a-directory")
+	if err := os.WriteFile(invalidRoot, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write invalid root file: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: invalidRoot})
+	if _, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.review_decision", map[string]any{
+		"flow_node_execution_id": reviewExecution.ID.String(),
+		"decision":               "reject",
+		"reason":                 "missing tests",
+	}); err == nil {
+		t.Fatal("expected flow.review_decision commit failure")
+	}
+
+	refreshedExecution, err := executionRepo.GetByID(ctx, reviewExecution.ID)
+	if err != nil {
+		t.Fatalf("load refreshed execution: %v", err)
+	}
+	if refreshedExecution.Status != "active" {
+		t.Fatalf("execution status = %q, want active after commit failure", refreshedExecution.Status)
+	}
+	if refreshedExecution.RuntimeSubstate == nil || *refreshedExecution.RuntimeSubstate != "stalled" {
+		t.Fatalf("execution runtime_substate = %v, want stalled", refreshedExecution.RuntimeSubstate)
+	}
+	checkpoint, ok := repo.FlowExecutionRecoveryCheckpointFromMetadata(refreshedExecution.Metadata)
+	if !ok || checkpoint == nil {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.CheckpointType != "awaiting_commit_close" {
+		t.Fatalf("checkpoint type = %q, want awaiting_commit_close", checkpoint.CheckpointType)
+	}
+	if checkpoint.ResumeAction != "close_execution" {
+		t.Fatalf("checkpoint resume_action = %q, want close_execution", checkpoint.ResumeAction)
+	}
+	decision, ok := repo.FlowExecutionReviewDecisionFromMetadata(refreshedExecution.Metadata)
+	if !ok || decision == nil || decision.Decision != "reject" || decision.Reason != "missing tests" {
+		t.Fatalf("review decision metadata = %#v, want reject with reason", decision)
+	}
+}
+
 func TestIntegrationFlowReviewDecisionRejectReturnsBlockedWhenRejectPathExhausted(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
