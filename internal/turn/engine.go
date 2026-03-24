@@ -1944,6 +1944,11 @@ func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventb
 		    OR
 		    (cs.scope_type = 'project_task' AND pt.project_id = $1)
 		  )
+		  AND NOT (
+		    cs.scope_type = 'project'
+		    AND cs.scope_id = $1
+		    AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') = $3
+		  )
 		  AND (
 		    cs.current_turn_id IS NULL
 		    OR current_ct.id IS NULL
@@ -1964,7 +1969,7 @@ func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventb
 		      AND (jq.payload->>'session_id')::uuid = cs.id
 		      AND (jq.payload->>'message_id')::uuid = cm.id
 		  )
-	`, payload.ProjectID, AgentTurnJobType)
+	`, payload.ProjectID, AgentTurnJobType, projectBootstrapStatusFailed)
 	if err != nil {
 		return err
 	}
@@ -2003,15 +2008,7 @@ func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventb
 		  AND cs.scope_id = $1
 		  AND cs.current_turn_id IS NULL
 		  AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') = $2
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM chat_message cm
-		    WHERE cm.session_id = cs.id
-		      AND cm.role = 'user'
-		      AND cm.status = 'pending'
-		      AND COALESCE(cm.metadata->>'source', '') = $3
-		  )
-	`, payload.ProjectID, projectBootstrapStatusFailed, projectBootstrapSource)
+	`, payload.ProjectID, projectBootstrapStatusFailed)
 	if err != nil {
 		return err
 	}
