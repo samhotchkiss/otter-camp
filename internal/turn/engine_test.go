@@ -4359,6 +4359,15 @@ func TestIsRecoverableProjectExecutionFailure(t *testing.T) {
 	if !isRecoverableProjectExecutionFailure(errors.New("pq: sorry, too many clients already")) {
 		t.Fatal("transient infrastructure failures should be recoverable for project execution")
 	}
+	if !isRecoverableProjectExecutionFailure(chat.ErrInvalidStatusTransition) {
+		t.Fatal("chat invalid status transition races should be recoverable for project execution")
+	}
+	if !isRecoverableProjectExecutionFailure(tasksvc.ErrInvalidStatusTransition{From: "review", To: "in_progress"}) {
+		t.Fatal("task invalid status transition races should be recoverable for project execution")
+	}
+	if !isRecoverableProjectExecutionFailure(repo.ErrConflict) {
+		t.Fatal("optimistic status conflicts should be recoverable for project execution")
+	}
 	if isRecoverableProjectExecutionFailure(errors.New("provider auth failed")) {
 		t.Fatal("provider auth failures should not be treated as recoverable project execution failures")
 	}

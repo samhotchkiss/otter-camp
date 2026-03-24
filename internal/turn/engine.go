@@ -11470,9 +11470,13 @@ func isRecoverableExecutionContinuationDepthError(err error) bool {
 }
 
 func isRecoverableProjectExecutionFailure(err error) bool {
+	var invalidTaskTransition tasksvc.ErrInvalidStatusTransition
 	return isTransientInfrastructureError(err) ||
 		isTransientModelError(err) ||
-		isRecoverableExecutionContinuationDepthError(err)
+		isRecoverableExecutionContinuationDepthError(err) ||
+		errors.Is(err, chat.ErrInvalidStatusTransition) ||
+		errors.As(err, &invalidTaskTransition) ||
+		errors.Is(err, repo.ErrConflict)
 }
 
 func (e *TurnEngine) handleTaskScopedProviderAuthFailure(ctx context.Context, rt *turnRuntime, cause error) (bool, error) {
