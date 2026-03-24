@@ -9828,6 +9828,141 @@ func TestTurnEngineIntegrationBootstrapIgnoresDependencyBlockedLaterWaveForFirst
 	}
 }
 
+func TestTurnEngineIntegrationBootstrapDefersExplicitLaterWaveTasksFromFirstWaveValidation(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, pmAgent.ID, fixture.user.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	firstWaveDescription := "Deliver the first runnable validation slice now."
+	firstWaveTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "FIRST WAVE: Validate flow-driven execution",
+		Description:     &firstWaveDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create first-wave task: %v", err)
+	}
+
+	nextWaveDescription := "Defer broader edge-case validation until the first wave is complete."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "VALIDATE-004: First Wave Drain Detection (Later Wave)",
+		Description:     &nextWaveDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("Create next-wave task: %v", err)
+	}
+
+	bootstrapCompleteDescription := "Verify readiness only after first-wave execution has landed."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "BOOTSTRAP COMPLETE: Verify project readiness and first-wave status",
+		Description:     &bootstrapCompleteDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("Create bootstrap-complete task: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if progress.ValidationStatus != projectBootstrapValidationPassed {
+		t.Fatalf("validation_status = %q, want passed", progress.ValidationStatus)
+	}
+	if progress.FirstWaveTaskCount != 1 {
+		t.Fatalf("first_wave_task_count = %d, want 1", progress.FirstWaveTaskCount)
+	}
+	if len(progress.FirstWaveTasks) != 1 || progress.FirstWaveTasks[0].ID != firstWaveTask.ID {
+		t.Fatalf("first_wave_tasks = %+v, want only explicit first-wave task %s", progress.FirstWaveTasks, firstWaveTask.ID)
+	}
+}
+
+func TestTurnEngineIntegrationBootstrapHonorsExplicitFirstWaveSelectionMetadata(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, pmAgent.ID, fixture.user.ID)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+
+	selectedMetadata, err := json.Marshal(map[string]any{"bootstrap_first_wave_selected": true})
+	if err != nil {
+		t.Fatalf("marshal selected metadata: %v", err)
+	}
+	selectedDescription := "Execute the selected first-wave validation task."
+	selectedTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Val-1: Execute test work and reach review",
+		Description:     &selectedDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+		Metadata:        selectedMetadata,
+	})
+	if err != nil {
+		t.Fatalf("Create selected first-wave task: %v", err)
+	}
+
+	deferredMetadata, err := json.Marshal(map[string]any{"bootstrap_first_wave_selected": false})
+	if err != nil {
+		t.Fatalf("marshal deferred metadata: %v", err)
+	}
+	deferredDescription := "Keep this later-wave task in draft."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Val-2: Deferred validation",
+		Description:     &deferredDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+		Metadata:        deferredMetadata,
+	}); err != nil {
+		t.Fatalf("Create deferred later-wave task: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if progress.ValidationStatus != projectBootstrapValidationPassed {
+		t.Fatalf("validation_status = %q, want passed", progress.ValidationStatus)
+	}
+	if progress.FirstWaveTaskCount != 1 {
+		t.Fatalf("first_wave_task_count = %d, want 1", progress.FirstWaveTaskCount)
+	}
+	if len(progress.FirstWaveTasks) != 1 || progress.FirstWaveTasks[0].ID != selectedTask.ID {
+		t.Fatalf("first_wave_tasks = %+v, want only explicitly selected task %s", progress.FirstWaveTasks, selectedTask.ID)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapQueuesRecoveryAfterRecoverableFirstWaveValidationFailure(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -4414,6 +4415,107 @@ func TestIntegrationBootstrapSetupPersistCompletesRequestedSetupSteps(t *testing
 		if got := statuses[slug]; got != "done" {
 			t.Fatalf("bootstrap step %q status = %q, want done", slug, got)
 		}
+	}
+}
+
+func TestIntegrationBootstrapSetupPersistRequiresExplicitFirstWaveSelectionAndPersistsIt(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Persist Explicit First Wave",
+		"slug":        "bootstrap-persist-explicit-first-wave-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap.setup.persist requires and records explicit first-wave task selection.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap persist explicit first wave",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
+	firstDescription := "Execute the initial bounded validation slice."
+	firstTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "Val-1: Execute test work and reach review",
+		Description:     &firstDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create first task: %v", err)
+	}
+	secondDescription := "Execute the deferred later-wave validation slice."
+	secondTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "Val-2: Deferred validation",
+		Description:     &secondDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create second task: %v", err)
+	}
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{"select-first-wave"},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist without selection: %v", err)
+	}
+	if out["error"] != "first_wave_task_selection_required" {
+		t.Fatalf("error = %v, want first_wave_task_selection_required", out["error"])
+	}
+
+	out, err = executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs":    []string{"select-first-wave"},
+		"first_wave_task_numbers": []string{strconv.Itoa(firstTask.TaskNumber)},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist with explicit selection: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("bootstrap.setup.persist explicit selection error = %v, want nil", out["error"])
+	}
+
+	reloadedFirst, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, firstTask.ID)
+	if err != nil {
+		t.Fatalf("reload first task: %v", err)
+	}
+	firstMeta := metadataObject(reloadedFirst.Metadata)
+	if selected, ok := firstMeta["bootstrap_first_wave_selected"].(bool); !ok || !selected {
+		t.Fatalf("first task bootstrap_first_wave_selected = %v, want true", firstMeta["bootstrap_first_wave_selected"])
+	}
+
+	reloadedSecond, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, secondTask.ID)
+	if err != nil {
+		t.Fatalf("reload second task: %v", err)
+	}
+	secondMeta := metadataObject(reloadedSecond.Metadata)
+	if selected, ok := secondMeta["bootstrap_first_wave_selected"].(bool); !ok || selected {
+		t.Fatalf("second task bootstrap_first_wave_selected = %v, want false", secondMeta["bootstrap_first_wave_selected"])
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -286,7 +287,7 @@ func (e *NativeToolExecutor) projectSessionDirectTaskMutationBlocked(ctx context
 		return nil, false, nil
 	}
 	return map[string]any{
-		"error": "task_lane_owned_by_project_task_session",
+		"error":   "task_lane_owned_by_project_task_session",
 		"message": "This task already has an active execution lane. Do not mutate it from the project session. Let the project_task session advance the flow and write deliverables, or use flow.review_decision from the task's review lane when that lane is active.",
 	}, true, nil
 }
@@ -306,7 +307,7 @@ func (e *NativeToolExecutor) projectSessionBootstrapGitCommitBlocked(ctx context
 		if bootstrapGateTask(taskRecord) && !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
 			return map[string]any{
 				"error":   "bootstrap_git_commit_blocked",
-				"message": "Bootstrap is still active for this project session. Do not use git.commit to satisfy bootstrap steps. Persist bootstrap progress through bootstrap.setup.persist using canonical completed_step_slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off.",
+				"message": "Bootstrap is still active for this project session. Do not use git.commit to satisfy bootstrap steps. Persist bootstrap progress through bootstrap.setup.persist using canonical completed_step_slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off. When recording select-first-wave and multiple executable tasks exist, include the exact selected tasks via first_wave_task_ids or first_wave_task_numbers so later-wave work stays draft.",
 			}, true, nil
 		}
 	}
@@ -2059,7 +2060,7 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 	if bootstrapSetupTask(current) {
 		return map[string]any{
 			"error":   bootstrapSetupManagedMessage,
-			"message": "Bootstrap setup checklist tasks are system-managed while the bootstrap governance gate is active. Do not edit, reassign, or complete them through task.update. Record completed setup steps through bootstrap.setup.persist using canonical step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off.",
+			"message": "Bootstrap setup checklist tasks are system-managed while the bootstrap governance gate is active. Do not edit, reassign, or complete them through task.update. Record completed setup steps through bootstrap.setup.persist using canonical step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off. When recording select-first-wave and multiple executable tasks exist, include the exact selected tasks via first_wave_task_ids or first_wave_task_numbers.",
 		}, nil
 	}
 	if blocked, reject, guardErr := e.projectSessionDirectTaskMutationBlocked(ctx, scope, current); guardErr != nil {
@@ -2467,6 +2468,33 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 	if err != nil {
 		return nil, err
 	}
+	selectedFirstWaveTaskIDs, explicitFirstWaveSelection, selectionErr := resolveBootstrapFirstWaveSelection(input, projectTasks)
+	if selectionErr != nil {
+		return map[string]any{
+			"error":   "invalid_first_wave_selection",
+			"message": selectionErr.Error(),
+		}, nil
+	}
+	if stringSliceContains(stepSlugs, "select-first-wave") {
+		executableCandidates := bootstrapFirstWaveSelectableTasks(projectTasks)
+		switch {
+		case explicitFirstWaveSelection && len(selectedFirstWaveTaskIDs) == 0:
+			return map[string]any{
+				"error":   "first_wave_task_selection_required",
+				"message": "When persisting `select-first-wave`, include at least one selected task via `first_wave_task_ids` or `first_wave_task_numbers`.",
+			}, nil
+		case !explicitFirstWaveSelection && len(executableCandidates) > 1:
+			return map[string]any{
+				"error":   "first_wave_task_selection_required",
+				"message": "When persisting `select-first-wave` with multiple executable project tasks, include the exact selected first-wave tasks via `first_wave_task_ids` or `first_wave_task_numbers` so later-wave work stays draft.",
+			}, nil
+		case !explicitFirstWaveSelection && len(executableCandidates) == 1:
+			selectedFirstWaveTaskIDs = map[uuid.UUID]struct{}{executableCandidates[0].ID: {}}
+		}
+		if err := e.persistBootstrapFirstWaveSelection(ctx, projectTasks, selectedFirstWaveTaskIDs); err != nil {
+			return nil, err
+		}
+	}
 	tasksBySlug := make(map[string]repo.ProjectTask)
 	for _, taskRecord := range projectTasks {
 		metadata := metadataObject(taskRecord.Metadata)
@@ -2559,12 +2587,115 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		"setup_checklist_complete": len(remaining) == 0,
 		"remaining_step_slugs":     remaining,
 	}
+	if len(selectedFirstWaveTaskIDs) > 0 {
+		response["selected_first_wave_task_ids"] = orderedUUIDStrings(selectedFirstWaveTaskIDs)
+	}
 	if len(remaining) > 0 {
 		response["message"] = fmt.Sprintf("Bootstrap setup is not complete yet. Persist the remaining canonical step slugs next: %s.", strings.Join(remaining, ", "))
 	} else {
 		response["message"] = "Bootstrap setup checklist is fully persisted. The governance gate will complete automatically once validation passes."
 	}
 	return response, nil
+}
+
+func resolveBootstrapFirstWaveSelection(input map[string]any, tasks []repo.ProjectTask) (map[uuid.UUID]struct{}, bool, error) {
+	selected := make(map[uuid.UUID]struct{})
+	ids := readStringSlice(input, "first_wave_task_ids")
+	numbers := readStringSlice(input, "first_wave_task_numbers")
+	explicit := len(ids) > 0 || len(numbers) > 0
+	if !explicit {
+		return selected, false, nil
+	}
+
+	byID := make(map[string]repo.ProjectTask, len(tasks))
+	byNumber := make(map[string]repo.ProjectTask, len(tasks))
+	for _, task := range tasks {
+		if task.ID != uuid.Nil {
+			byID[task.ID.String()] = task
+		}
+		byNumber[strconv.Itoa(task.TaskNumber)] = task
+	}
+
+	for _, raw := range ids {
+		parsed, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil || parsed == uuid.Nil {
+			return nil, true, fmt.Errorf("invalid first-wave task id %q", raw)
+		}
+		task, ok := byID[parsed.String()]
+		if !ok {
+			return nil, true, fmt.Errorf("first-wave task id %q does not belong to this project", raw)
+		}
+		selected[task.ID] = struct{}{}
+	}
+	for _, raw := range numbers {
+		task, ok := byNumber[strings.TrimSpace(raw)]
+		if !ok {
+			return nil, true, fmt.Errorf("first-wave task number %q does not belong to this project", raw)
+		}
+		selected[task.ID] = struct{}{}
+	}
+	return selected, true, nil
+}
+
+func bootstrapFirstWaveSelectableTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
+	selectable := make([]repo.ProjectTask, 0, len(tasks))
+	for _, task := range tasks {
+		if bootstrapGateTask(task) || bootstrapSetupTask(task) {
+			continue
+		}
+		selectable = append(selectable, task)
+	}
+	return selectable
+}
+
+func (e *NativeToolExecutor) persistBootstrapFirstWaveSelection(ctx context.Context, tasks []repo.ProjectTask, selected map[uuid.UUID]struct{}) error {
+	if e == nil || e.tasks == nil {
+		return nil
+	}
+	for _, task := range tasks {
+		if bootstrapGateTask(task) || bootstrapSetupTask(task) {
+			continue
+		}
+		metadata := metadataObject(task.Metadata)
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		_, isSelected := selected[task.ID]
+		metadata["bootstrap_first_wave_selected"] = isSelected
+		updatedMetadata, err := json.Marshal(metadata)
+		if err != nil {
+			return err
+		}
+		task.Metadata = updatedMetadata
+		if _, err := e.tasks.Update(ctx, task); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func orderedUUIDStrings(items map[uuid.UUID]struct{}) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for id := range items {
+		if id == uuid.Nil {
+			continue
+		}
+		out = append(out, id.String())
+	}
+	sort.Strings(out)
+	return out
+}
+
+func stringSliceContains(items []string, needle string) bool {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(needle)) {
+			return true
+		}
+	}
+	return false
 }
 
 func validBootstrapSetupStepSlugs() []string {

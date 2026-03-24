@@ -3199,6 +3199,9 @@ func (e *TurnEngine) loadProjectBootstrapProgress(ctx context.Context, projectID
 		if _, blocked := blockedTaskIDs[task.ID]; blocked {
 			continue
 		}
+		if projectBootstrapTaskDeferredFromFirstWave(task) {
+			continue
+		}
 		firstWaveTasks = append(firstWaveTasks, task)
 		if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
 			assignedFirstWaveTasks = append(assignedFirstWaveTasks, task)
@@ -3421,6 +3424,140 @@ func projectBootstrapTaskEnteredExecution(status string) bool {
 	default:
 		return false
 	}
+}
+
+func projectBootstrapTaskDeferredFromFirstWave(task repo.ProjectTask) bool {
+	metadata := messageMetadataMap(task.Metadata)
+	if explicit, ok := projectBootstrapExplicitFirstWaveSelection(metadata); ok {
+		return !explicit
+	}
+	if wave := projectBootstrapWaveHint(metadata); wave > 1 {
+		return true
+	}
+
+	title := strings.ToLower(strings.TrimSpace(task.Title))
+	switch {
+	case strings.HasPrefix(title, "next wave:"),
+		strings.HasPrefix(title, "[next wave]"),
+		strings.HasPrefix(title, "bootstrap complete:"),
+		strings.HasPrefix(title, "[bootstrap complete]"),
+		strings.Contains(title, "later wave"),
+		strings.Contains(title, "next wave"):
+		return true
+	}
+
+	if matches := projectBootstrapWaveTitlePattern.FindStringSubmatch(strings.TrimSpace(task.Title)); len(matches) == 2 {
+		if wave, err := strconv.Atoi(strings.TrimSpace(matches[1])); err == nil && wave > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func projectBootstrapExplicitFirstWaveSelection(metadata map[string]any) (bool, bool) {
+	if len(metadata) == 0 {
+		return false, false
+	}
+	for _, key := range []string{
+		"bootstrap_first_wave_selected",
+		"first_wave_selected",
+		"selected_for_first_wave",
+	} {
+		raw, ok := metadata[key]
+		if !ok {
+			continue
+		}
+		selected, valid := boolValue(raw)
+		if valid {
+			return selected, true
+		}
+	}
+	if bootstrapRaw, ok := metadata["bootstrap"]; ok {
+		if nested := metadataMapValue(bootstrapRaw); len(nested) > 0 {
+			if selected, ok := projectBootstrapExplicitFirstWaveSelection(nested); ok {
+				return selected, true
+			}
+		}
+	}
+	return false, false
+}
+
+func projectBootstrapWaveHint(metadata map[string]any) int {
+	if len(metadata) == 0 {
+		return 0
+	}
+	for _, key := range []string{
+		"bootstrap_wave",
+		"wave",
+		"execution_wave",
+		"planned_wave",
+	} {
+		raw, ok := metadata[key]
+		if !ok {
+			continue
+		}
+		if wave := intValue(raw); wave > 0 {
+			return wave
+		}
+	}
+	if bootstrapRaw, ok := metadata["bootstrap"]; ok {
+		if nested := metadataMapValue(bootstrapRaw); len(nested) > 0 {
+			if wave := projectBootstrapWaveHint(nested); wave > 0 {
+				return wave
+			}
+		}
+	}
+	return 0
+}
+
+func metadataMapValue(value any) map[string]any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed
+	case json.RawMessage:
+		return messageMetadataMap(typed)
+	case []byte:
+		return messageMetadataMap(json.RawMessage(typed))
+	case string:
+		return messageMetadataMap(json.RawMessage(typed))
+	default:
+		return map[string]any{}
+	}
+}
+
+func boolValue(value any) (bool, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return false, false
+}
+
+func intValue(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		if parsed, err := typed.Int64(); err == nil {
+			return int(parsed)
+		}
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func bootstrapTaskNeedsActiveExecution(status string) bool {
@@ -6316,6 +6453,7 @@ type projectBootstrapResumeSnapshot struct {
 
 var projectBootstrapFailureTaskNumberPattern = regexp.MustCompile(`(?:first-wave )?task ([0-9]+)`)
 var projectBootstrapFailureTaskTitlePattern = regexp.MustCompile(`(?:first-wave )?task [0-9]+ \(([^)]+)\)`)
+var projectBootstrapWaveTitlePattern = regexp.MustCompile(`(?i)^\[?\s*wave\s+([0-9]+)\s*\]?[:\-\]]?`)
 
 func formatBootstrapResumeAgentLabel(agentRecord repo.Agent) string {
 	name := strings.TrimSpace(agentRecord.DisplayName)
@@ -6892,7 +7030,7 @@ func projectBootstrapResumePhaseGuidance(state projectBootstrapState) string {
 			guidance += " In this resume turn, start with bootstrap.setup.persist from the persisted setup progress above before re-reading tasks, templates, or scaffold artifacts. Record already-complete staffing and decomposition steps first, and only inspect a specifically named blocker if that tool asks for it."
 		}
 		if projectBootstrapResumeNeedsSetupPersist(state) {
-			guidance += " Bootstrap checklist steps are persisted through the bootstrap.setup.persist tool, not raw task.update status changes. While the bootstrap governance gate is still open, do not manually queue or start first-wave execution tasks. In this phase, do not call task.list or flow.list_templates before trying bootstrap.setup.persist from the persisted counts above; only inspect a specific task or template if bootstrap.setup.persist returns a concrete blocker naming it. Treat bind-repo-environment as confirming the canonical repo/workspace binding and environment records already present for the project; do not use git.commit or ad hoc cli.execute commands just to satisfy the bootstrap checklist. If the persisted setup work is already complete, call bootstrap.setup.persist with completed_step_slugs for bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off; include sign_off_summary when recording Frank approval."
+			guidance += " Bootstrap checklist steps are persisted through the bootstrap.setup.persist tool, not raw task.update status changes. While the bootstrap governance gate is still open, do not manually queue or start first-wave execution tasks. In this phase, do not call task.list or flow.list_templates before trying bootstrap.setup.persist from the persisted counts above; only inspect a specific task or template if bootstrap.setup.persist returns a concrete blocker naming it. Treat bind-repo-environment as confirming the canonical repo/workspace binding and environment records already present for the project; do not use git.commit or ad hoc cli.execute commands just to satisfy the bootstrap checklist. If the persisted setup work is already complete, call bootstrap.setup.persist with completed_step_slugs for bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off; include sign_off_summary when recording Frank approval. When persisting select-first-wave and multiple executable tasks exist, include first_wave_task_ids or first_wave_task_numbers for the exact selected runnable subset so later-wave tasks remain draft."
 		}
 		return guidance + " Do not restart the project or ask the user to restate the request."
 	}
