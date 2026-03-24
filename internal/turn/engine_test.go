@@ -8987,6 +8987,72 @@ func TestHandleUserMessageFailsWhenValidationLoopBlockLacksTaskTransitions(t *te
 	}
 }
 
+func TestCollectToolValidationFailuresSuppressesFocusReadFailuresAfterSuccessfulFileWrite(t *testing.T) {
+	t.Parallel()
+
+	calls := []ToolCall{
+		{ID: "read-1", Name: "file.read"},
+		{ID: "write-1", Name: "file.write"},
+	}
+	results := []ToolResult{
+		{
+			ToolCallID: "read-1",
+			Name:       "file.read",
+			Output: map[string]any{
+				"error":            "recovery_target_focus_required",
+				"deliverable_path": "schema-definition.md",
+			},
+		},
+		{
+			ToolCallID: "write-1",
+			Name:       "file.write",
+			Output: map[string]any{
+				"path":      "schema-definition.md",
+				"byte_size": 4096,
+			},
+		},
+	}
+
+	failures := collectToolValidationFailures(calls, results)
+	if len(failures) != 0 {
+		t.Fatalf("failures = %v, want suppressed focus-read failure after successful file.write", failures)
+	}
+}
+
+func TestCollectToolValidationFailuresKeepsNonFocusFailuresAfterSuccessfulFileWrite(t *testing.T) {
+	t.Parallel()
+
+	calls := []ToolCall{
+		{ID: "read-1", Name: "file.read"},
+		{ID: "write-1", Name: "file.write"},
+	}
+	results := []ToolResult{
+		{
+			ToolCallID: "read-1",
+			Name:       "file.read",
+			Output: map[string]any{
+				"error": "path_required",
+			},
+		},
+		{
+			ToolCallID: "write-1",
+			Name:       "file.write",
+			Output: map[string]any{
+				"path":      "schema-definition.md",
+				"byte_size": 4096,
+			},
+		},
+	}
+
+	failures := collectToolValidationFailures(calls, results)
+	if len(failures) != 1 {
+		t.Fatalf("failure count = %d, want 1", len(failures))
+	}
+	if failures[0].FailureCode != "path_required" {
+		t.Fatalf("failure code = %q, want path_required", failures[0].FailureCode)
+	}
+}
+
 func TestHandleUserMessageSkipsBlockedValidationLoop(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

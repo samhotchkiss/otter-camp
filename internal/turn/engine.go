@@ -13173,6 +13173,7 @@ func collectToolValidationFailures(calls []ToolCall, results []ToolResult) []too
 		callByID[strings.TrimSpace(call.ID)] = call
 	}
 
+	suppressFocusReadFailures := turnHasSuccessfulFileMutation(results)
 	failures := make([]toolValidationFailure, 0, len(results))
 	for _, result := range results {
 		call, ok := callByID[strings.TrimSpace(result.ToolCallID)]
@@ -13181,10 +13182,38 @@ func collectToolValidationFailures(calls []ToolCall, results []ToolResult) []too
 		}
 		failure, matched := classifyToolValidationFailure(call, result)
 		if matched {
+			if suppressFocusReadFailures && shouldSuppressFocusReadValidationFailure(failure) {
+				continue
+			}
 			failures = append(failures, failure)
 		}
 	}
 	return failures
+}
+
+func turnHasSuccessfulFileMutation(results []ToolResult) bool {
+	for _, result := range results {
+		if strings.TrimSpace(result.Error) != "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(result.Name)) {
+		case "file.write", "file.edit":
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSuppressFocusReadValidationFailure(failure toolValidationFailure) bool {
+	if !strings.EqualFold(strings.TrimSpace(failure.ToolName), "file.read") {
+		return false
+	}
+	switch strings.TrimSpace(failure.FailureCode) {
+	case "recovery_target_focus_required", "explicit_deliverable_focus_required":
+		return true
+	default:
+		return false
+	}
 }
 
 func toolCallsContainAttemptFingerprint(calls []ToolCall, attemptFingerprint string) bool {
