@@ -562,6 +562,56 @@ func TestIntegrationFileSearchOmitsPlaceholderRecoveryTargetWithoutExplicitDeliv
 	}
 }
 
+func TestIntegrationFileWriteRejectsPlanningMutationForExecutionFirstTaskWithRecoveryTarget(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Consolidate all validation findings into a single report. Categorize issues by severity and prepare for review."
+	plan := taskplan.Analyze("Synthesize Validation Findings & Report", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:       "Synthesize Validation Findings & Report",
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:    pool,
+		DataDir: dataDir,
+	})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	if _, err := repo.NewChatMessageRepo(pool).Create(context.Background(), repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Recovery resume state]\nTarget file: Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md\nExisting target file draft: omitted because it matches the previously rejected non-substantive pattern.\n",
+	}); err != nil {
+		t.Fatalf("create recovery system message: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "planning/discovery-plan/oc-13-validation-plan.md",
+		"content":     "# misplaced",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if got := out["error"]; got != "deliverable_path_required" {
+		t.Fatalf("error = %v, want deliverable_path_required", got)
+	}
+	if got := out["deliverable_path"]; got != "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md" {
+		t.Fatalf("deliverable_path = %v, want recovery target", got)
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "Do not write `planning/discovery-plan/oc-13-validation-plan.md`") {
+		t.Fatalf("message = %q, want target-path guidance", message)
+	}
+}
+
 func TestIntegrationFileReadRejectsPlaceholderSelfIdentifiedDeliverableWithoutSessionTarget(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

@@ -9471,6 +9471,18 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "intent to write the deliverable",
 		},
 		{
+			name: "rejects numbered validation status inventory placeholder",
+			content: "Perfect. I can see:\n" +
+				"1. **OC-13 is the synthesis task** (in_progress)\n" +
+				"2. **Three completed validation tasks** (OC-10, OC-11, OC-12 all done)\n" +
+				"3. **OC-12 report exists** with comprehensive speaker profile quality validation\n" +
+				"4. **Planning artifact for OC-13 is complete**\n" +
+				"5. **Target file is currently a placeholder** — needs to be overwritten with substantive synthesis report\n\n" +
+				"Let me read the OC-10 and OC-11 reports to gather all findings:",
+			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			want:       "asked the operator to choose the next step instead of the file body",
+		},
+		{
 			name:       "rejects file write failed due to missing content narration",
 			content:    "I see the file_write failed due to missing content parameter. Let me create the comprehensive workflow specification now:",
 			targetPath: "deliverables/oc-11-workflow-specification.md",
@@ -9633,6 +9645,17 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 				"I'll move quickly once you confirm direction.",
 			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
 			want:       "asked the operator to confirm execution direction instead of the file body",
+		},
+		{
+			name: "rejects oc-13 clarification questionnaire",
+			content: "I'm ready to help you synthesize the validation findings for OC-13. Before I proceed, I need to clarify one thing:\n\n" +
+				"**What's the current state of the target file?**\n\n" +
+				"Should I:\n" +
+				"1. Check if `planning/discovery-plan/oc-13-validation-plan.md` already exists and continue from there, or\n" +
+				"2. Start fresh with a comprehensive validation findings report?\n\n" +
+				"Also, do you want me to pull findings from the completed sibling tasks (OC-10, OC-11, OC-12) and the test execution results documented above, or should I ask you to provide the key findings to synthesize?",
+			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			want:       "repeated a generic recovery reply instead of the file body",
 		},
 		{
 			name:    "accepts first-person file body",

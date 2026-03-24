@@ -401,6 +401,9 @@ func (e *NativeToolExecutor) rejectExecutionFirstDeliverableMutation(ctx context
 	}
 	deliverablePath := parseExplicitDeliverablePath(taskRecord)
 	if deliverablePath == "" {
+		deliverablePath = e.latestRecoveryTargetPathForSession(ctx, scope)
+	}
+	if deliverablePath == "" {
 		return nil, false, nil
 	}
 	normalizedPath := normalizeWorkspacePath(relativePath)

@@ -11747,6 +11747,15 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return fmt.Sprintf("assistant draft for %s asked the operator to choose the next step instead of the file body", path)
 	}
 	if containsAny(lower,
+		"perfect. i can see:",
+		"perfect! i can see:",
+	) && containsAny(lower,
+		"three completed validation tasks",
+		"let me read the oc-10 and oc-11 reports",
+	) {
+		return fmt.Sprintf("assistant draft for %s asked the operator to choose the next step instead of the file body", path)
+	}
+	if containsAny(lower,
 		"# ready to continue oc-",
 		"deliverable target:",
 		"what i can see:",
@@ -11755,6 +11764,18 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	) && containsAny(lower,
 		"should i proceed with reading the planning artifacts",
 		"do you want me to compile findings",
+	) {
+		return fmt.Sprintf("assistant draft for %s asked the operator to confirm execution direction instead of the file body", path)
+	}
+	if containsAny(lower,
+		"i'm ready to help you synthesize the validation findings for oc-13",
+		"before i proceed, i need to clarify one thing:",
+		"what's the current state of the target file?",
+	) && containsAny(lower,
+		"should i:",
+		"check if `planning/discovery-plan/oc-13-validation-plan.md` already exists and continue from there",
+		"start fresh with a comprehensive validation findings report",
+		"do you want me to pull findings from the completed sibling tasks",
 	) {
 		return fmt.Sprintf("assistant draft for %s asked the operator to confirm execution direction instead of the file body", path)
 	}
