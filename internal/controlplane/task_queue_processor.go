@@ -107,6 +107,7 @@ type taskQueueChatService interface {
 	GetTurn(ctx context.Context, id uuid.UUID) (*chat.ChatTurn, error)
 	CreateSession(ctx context.Context, input chat.CreateSessionInput) (*chat.ChatSession, error)
 	GetOrCreateNodeSession(ctx context.Context, flowNodeExecutionID, agentID uuid.UUID) (*chat.ChatSession, error)
+	CloseSession(ctx context.Context, sessionID uuid.UUID) error
 	AddParticipant(ctx context.Context, sessionID uuid.UUID, participantType string, participantID uuid.UUID, role string) (*chat.ChatParticipant, error)
 	AppendMessage(ctx context.Context, input chat.AppendMessageInput) (*chat.ChatMessage, error)
 	ListMessages(ctx context.Context, sessionID uuid.UUID, filter chat.MessageFilter) ([]*chat.ChatMessage, error)
@@ -1255,6 +1256,11 @@ func (p *TaskQueueProcessor) abandonActiveFlowExecutionsForTask(ctx context.Cont
 	for _, execution := range executions {
 		if !strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
 			continue
+		}
+		if p.chats != nil && execution.SessionID != nil && *execution.SessionID != uuid.Nil {
+			if err := p.chats.CloseSession(ctx, *execution.SessionID); err != nil && !errors.Is(err, repo.ErrNotFound) {
+				return err
+			}
 		}
 		if _, err := p.flowExecutions.Abandon(ctx, execution.ID); err != nil && !errors.Is(err, repo.ErrNotFound) {
 			return err

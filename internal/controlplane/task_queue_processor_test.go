@@ -1089,17 +1089,20 @@ func TestTaskQueueProcessorHandleTaskCompletedEventFailsBlockedTrackingRuns(t *t
 		},
 	}
 	activeExecutionID := uuid.New()
+	activeSessionID := uuid.New()
 	flowExecutions := &fakeTaskQueueFlowExecutionRepository{
 		executionsByTask: map[uuid.UUID][]repo.FlowNodeExecution{
 			taskID: {
-				{ID: activeExecutionID, TaskID: taskID, FlowNodeID: uuid.New(), Status: "active"},
+				{ID: activeExecutionID, TaskID: taskID, FlowNodeID: uuid.New(), Status: "active", SessionID: &activeSessionID},
 				{ID: uuid.New(), TaskID: taskID, FlowNodeID: uuid.New(), Status: "completed"},
 			},
 		},
 	}
+	chatService := &fakeTaskQueueChatService{}
 	processor := &TaskQueueProcessor{
 		runs:           runService,
 		flowExecutions: flowExecutions,
+		chats:          chatService,
 	}
 
 	payload, err := json.Marshal(map[string]any{
@@ -1141,6 +1144,9 @@ func TestTaskQueueProcessorHandleTaskCompletedEventFailsBlockedTrackingRuns(t *t
 	}
 	if len(flowExecutions.abandonCalls) != 1 || flowExecutions.abandonCalls[0] != activeExecutionID {
 		t.Fatalf("Abandon calls = %+v, want execution %s", flowExecutions.abandonCalls, activeExecutionID)
+	}
+	if len(chatService.closeSessionCalls) != 1 || chatService.closeSessionCalls[0] != activeSessionID {
+		t.Fatalf("CloseSession calls = %+v, want session %s", chatService.closeSessionCalls, activeSessionID)
 	}
 }
 
@@ -2903,6 +2909,8 @@ type fakeTaskQueueChatService struct {
 	createSessionResult  *chat.ChatSession
 	nodeSession          *chat.ChatSession
 	turn                 *chat.ChatTurn
+	closeSessionCalls    []uuid.UUID
+	closeSessionErr      error
 	createSessionInputs  []chat.CreateSessionInput
 	createSessionErr     error
 	getOrCreateNodeCalls []struct {
@@ -3007,6 +3015,23 @@ func (f *fakeTaskQueueChatService) GetOrCreateNodeSession(_ context.Context, flo
 		f.onGetOrCreateNodeSession(session)
 	}
 	return session, nil
+}
+
+func (f *fakeTaskQueueChatService) CloseSession(_ context.Context, sessionID uuid.UUID) error {
+	f.calls = append(f.calls, "close_session")
+	f.closeSessionCalls = append(f.closeSessionCalls, sessionID)
+	if f.closeSessionErr != nil {
+		return f.closeSessionErr
+	}
+	if f.session != nil && f.session.ID == sessionID {
+		f.session.Status = "closed"
+		f.session.CurrentTurnID = nil
+	}
+	if f.nodeSession != nil && f.nodeSession.ID == sessionID {
+		f.nodeSession.Status = "closed"
+		f.nodeSession.CurrentTurnID = nil
+	}
+	return nil
 }
 
 func (f *fakeTaskQueueChatService) GetTurn(_ context.Context, id uuid.UUID) (*chat.ChatTurn, error) {
