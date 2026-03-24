@@ -1611,6 +1611,14 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	if parentTask != nil && !hasNonNilKey(input, "requires_human_review") {
 		requiresHumanReview = parentTask.RequiresHumanReview
 	}
+	var assignedAgentID *uuid.UUID
+	if value, ok := readUUID(input, "assigned_agent_id"); ok && value != uuid.Nil {
+		assignedAgentID = &value
+	}
+	if assignedAgentID == nil && parentTask != nil && parentTask.AssignedAgentID != nil && *parentTask.AssignedAgentID != uuid.Nil {
+		inheritedAssignedAgentID := *parentTask.AssignedAgentID
+		assignedAgentID = &inheritedAssignedAgentID
+	}
 	metadata, policyErr := applyReviewPolicyInput(json.RawMessage(`{}`), input)
 	if policyErr != nil {
 		return map[string]any{"error": policyErr.Error()}, nil
@@ -1678,6 +1686,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			Description:         description,
 			WorkStatus:          "draft",
 			FlowTemplateID:      resolvedFlowTemplateID,
+			AssignedAgentID:     assignedAgentID,
 			RequiresHumanReview: requiresHumanReview,
 			BlocksScope:         blocksScope,
 			Metadata:            enrichedMetadata,
@@ -1727,6 +1736,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		Description:         description,
 		BlocksScope:         blocksScope,
 		FlowTemplateID:      resolvedFlowTemplateID,
+		AssignedAgentID:     assignedAgentID,
 		RequiresHumanReview: requiresHumanReview,
 		Metadata:            enrichedMetadata,
 	}
@@ -1771,6 +1781,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			Title:               title,
 			Description:         description,
 			FlowTemplateID:      resolvedFlowTemplateID,
+			AssignedAgentID:     assignedAgentID,
 			BlocksScope:         blocksScope,
 			CreatedByType:       actor.createdByType,
 			CreatedByID:         actor.createdByID,

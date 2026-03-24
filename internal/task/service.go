@@ -47,6 +47,7 @@ var (
 	ErrProjectGateBlockingQueue            = errors.New("task is blocked by an outstanding project gate and cannot be queued yet")
 	ErrProjectGateBlockingCreate           = errors.New("task is blocked by an outstanding project gate and cannot be created yet")
 	ErrProjectGateExecutionPathRequired    = errors.New("non-bootstrap tasks with blocks_scope=all must include an assigned agent, executable flow template, or human review path")
+	ErrBootstrapTaskAssigneeRequired       = errors.New("bootstrap executable non-bootstrap tasks must include assigned_agent_id for an active project assignee unless the task is explicitly orchestration-only")
 	ErrInvalidBlocksScope                  = errors.New("blocks_scope must be one of: none, all")
 	ErrDoneRequiresTerminalFlow            = errors.New("task can only be marked done when its flow reaches a terminal node")
 	ErrTransitionTargetRequired            = errors.New("target status is required")
@@ -522,6 +523,9 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskRequest) (*Proje
 	if err := s.ensureCreateEligible(ctx, req.ProjectID, normalizedMetadata); err != nil {
 		return nil, err
 	}
+	if s.bootstrapExecutableTaskNeedsAssignment(ctx, req.ProjectID, normalizedMetadata) && (req.AssignedAgentID == nil || *req.AssignedAgentID == uuid.Nil) {
+		return nil, ErrBootstrapTaskAssigneeRequired
+	}
 
 	if req.AssignedAgentID != nil {
 		assignment, getErr := s.assignments.GetByAgentAndProject(ctx, *req.AssignedAgentID, req.ProjectID)
@@ -579,6 +583,26 @@ assignedAgentValidated:
 	}
 
 	return &created, nil
+}
+
+func (s *service) bootstrapExecutableTaskNeedsAssignment(ctx context.Context, projectID uuid.UUID, metadata json.RawMessage) bool {
+	if s == nil || projectID == uuid.Nil {
+		return false
+	}
+	if bootstrapGateCreationExempt(metadata) {
+		return false
+	}
+	payload := taskMetadataMap(metadata)
+	if decomp, _ := payload["decomposition"].(map[string]any); decomp != nil {
+		if orchestrationOnly, _ := decomp["orchestration_only"].(bool); orchestrationOnly {
+			return false
+		}
+	}
+	gateTask, err := s.lowestOutstandingProjectGate(ctx, projectID)
+	if err != nil || gateTask == nil {
+		return false
+	}
+	return bootstrapPlanningCreateAllowed(*gateTask)
 }
 
 func (s *service) allowBootstrapSetupStarterTrioAssignment(ctx context.Context, agentID uuid.UUID, metadata json.RawMessage) bool {

@@ -4091,6 +4091,7 @@ func TestIntegrationBootstrapGateAllowsPlanningTaskCreateBeforeGateClears(t *tes
 	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
 
 	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
@@ -4103,6 +4104,15 @@ func TestIntegrationBootstrapGateAllowsPlanningTaskCreateBeforeGateClears(t *tes
 	}
 	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
 	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        assignee.ID,
+		ProjectID:      projectID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
 
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
@@ -4117,10 +4127,11 @@ func TestIntegrationBootstrapGateAllowsPlanningTaskCreateBeforeGateClears(t *tes
 	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
 
 	createOut, err := executor.Execute(projectCtx, "task.create", map[string]any{
-		"project_id":       projectID.String(),
-		"title":            "WS1: Bootstrap-planned research slice",
-		"description":      "Create the first bounded task during bootstrap while the governance gate is still open.",
-		"flow_template_id": template.ID.String(),
+		"project_id":        projectID.String(),
+		"title":             "WS1: Bootstrap-planned research slice",
+		"description":       "Create the first bounded task during bootstrap while the governance gate is still open.",
+		"flow_template_id":  template.ID.String(),
+		"assigned_agent_id": assignee.ID.String(),
 	})
 	if err != nil {
 		t.Fatalf("task.create during bootstrap gate: %v", err)
@@ -4135,6 +4146,53 @@ func TestIntegrationBootstrapGateAllowsPlanningTaskCreateBeforeGateClears(t *tes
 	}
 	if createdTask.WorkStatus != "draft" {
 		t.Fatalf("created task status = %q, want draft", createdTask.WorkStatus)
+	}
+	if createdTask.AssignedAgentID == nil || *createdTask.AssignedAgentID != assignee.ID {
+		t.Fatalf("created task assigned_agent_id = %v, want %s", createdTask.AssignedAgentID, assignee.ID)
+	}
+}
+
+func TestIntegrationBootstrapGateRejectsUnassignedExecutableTaskCreate(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Create Assignment Guard",
+		"slug":        "bootstrap-create-assignment-guard-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap planning rejects executable task creation without an assignee.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap planning assignment guard",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	createOut, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":       projectID.String(),
+		"title":            "WS1: Unassigned bootstrap execution slice",
+		"description":      "Create an executable bootstrap task without assigning it.",
+		"flow_template_id": template.ID.String(),
+	})
+	if err == nil || !strings.Contains(err.Error(), tasksvc.ErrBootstrapTaskAssigneeRequired.Error()) {
+		t.Fatalf("task.create err = %v, want bootstrap assignment requirement", err)
+	}
+	if createOut != nil {
+		t.Fatalf("task.create output = %#v, want nil on rejected bootstrap task create", createOut)
 	}
 }
 
