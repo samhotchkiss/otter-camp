@@ -6499,6 +6499,9 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		return err
 	}
 	messages, _ := e.messages.ListBySession(ctx, rt.session.ID)
+	if shouldAppendTaskContinuationActionPrompt(rt.session) && sessionHasSupervisorRecoveryPrompt(messages) {
+		return e.appendContinuationSummaryAndAction(ctx, rt, taskExecutionContinuationFallbackSummary())
+	}
 	recent := lastNUserMessages(messages, 3)
 	resp, err := e.models.Complete(ctx, ModelRequest{
 		OrganizationID:  rt.session.OrganizationID,
@@ -6526,6 +6529,13 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 	}
 	if shouldAppendProjectContinuationActionPrompt(rt.session) && continuationSummaryLooksUnavailable(summary) {
 		summary = projectExecutionContinuationFallbackSummary()
+	}
+	return e.appendContinuationSummaryAndAction(ctx, rt, summary)
+}
+
+func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt *turnRuntime, summary string) error {
+	if e == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return nil
 	}
 	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Continuation summary] "+summary)
 	if err != nil {
@@ -6570,6 +6580,15 @@ func (e *TurnEngine) continueTurn(ctx context.Context, rt *turnRuntime) error {
 		return err
 	}
 	return nil
+}
+
+func sessionHasSupervisorRecoveryPrompt(messages []repo.ChatMessage) bool {
+	for i := len(messages) - 1; i >= 0 && i >= len(messages)-6; i-- {
+		if isRecoveryResumeMessage(messages[i]) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *TurnEngine) persistTurnHistoryStart(ctx context.Context, rt *turnRuntime, messageID uuid.UUID) error {

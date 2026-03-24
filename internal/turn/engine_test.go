@@ -6205,6 +6205,15 @@ func TestContinuationTurnUsesTaskFallbackSummaryForSupervisorContextQuestionnair
 	fixture.session.ScopeID = taskID
 	fixture.chat.session.ScopeType = fixture.session.ScopeType
 	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	rootMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID root user message: %v", err)
+	}
+	rootMessage.Content = "supervisor recovery: resume task"
+	rootMessage.Metadata = mustRawJSON(t, map[string]any{
+		"source": "supervisor",
+	})
+	fixture.messages.upsert(rootMessage)
 	fixture.engine.tasks = &fakeTaskRepo{
 		items: map[uuid.UUID]repo.ProjectTask{
 			taskID: {
@@ -6261,6 +6270,9 @@ func TestContinuationTurnUsesTaskFallbackSummaryForSupervisorContextQuestionnair
 	}
 	if !strings.Contains(summaryMessage.Content, taskExecutionContinuationFallbackSummary()) {
 		t.Fatalf("continuation summary = %q, want task fallback summary", summaryMessage.Content)
+	}
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuationSummaryCalls = %d, want 0 for supervisor recovery fallback", fixture.model.continuationSummaryCalls)
 	}
 }
 
