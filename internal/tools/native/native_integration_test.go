@@ -8645,6 +8645,132 @@ func TestIntegrationFlowReviewDecisionApproveRejectsDirtyWorkspace(t *testing.T)
 	}
 }
 
+func TestIntegrationFlowReviewDecisionRejectCreatesCanonicalRejectionCommit(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &projectRecord.OrganizationID,
+		ProjectID:      &project.ID,
+		Slug:           "reject-commit-flow-" + strings.ToLower(uuid.NewString()[:8]),
+		DisplayName:    "Reject Commit Flow " + uuid.NewString()[:8],
+		Description:    "test flow template for rejection commits",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("update work node: %v", err)
+	}
+	reviewNode.RejectNodeID = &workNode.ID
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update review node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("update template: %v", err)
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "review",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &reviewNode.ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	if _, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  workNode.ID,
+		VisitNumber: 1,
+		Status:      "completed",
+	}); err != nil {
+		t.Fatalf("seed completed work visit: %v", err)
+	}
+	reviewExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  reviewNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create review execution: %v", err)
+	}
+
+	workspaceRoot := t.TempDir()
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: workspaceRoot})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.review_decision", map[string]any{
+		"flow_node_execution_id": reviewExecution.ID.String(),
+		"decision":               "reject",
+		"reason":                 "missing tests",
+	})
+	if err != nil {
+		t.Fatalf("flow.review_decision reject: %v", err)
+	}
+	if out["next_node_id"] == nil {
+		t.Fatalf("next_node_id = %v, want new work node id", out["next_node_id"])
+	}
+
+	updatedExecution, err := executionRepo.GetByID(ctx, reviewExecution.ID)
+	if err != nil {
+		t.Fatalf("load updated execution: %v", err)
+	}
+	if updatedExecution.CommitSHA == nil || strings.TrimSpace(*updatedExecution.CommitSHA) == "" {
+		t.Fatalf("review rejection commit_sha = %v, want non-empty canonical commit", updatedExecution.CommitSHA)
+	}
+
+	messageBytes, err := exec.Command("git", "-C", workspaceRoot, "log", "-1", "--pretty=%B").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log latest commit: %v: %s", err, strings.TrimSpace(string(messageBytes)))
+	}
+	message := strings.TrimSpace(string(messageBytes))
+	if !strings.Contains(message, "flow(review:review#1): reject - missing tests") {
+		t.Fatalf("latest commit message = %q, want rejection commit header", message)
+	}
+}
+
 func TestIntegrationFlowReviewDecisionRejectReturnsBlockedWhenRejectPathExhausted(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
