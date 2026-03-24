@@ -2021,6 +2021,32 @@ func TestNormalizeRecoveryCheckpointTargetForTaskRepointsExecutionFirstReportAwa
 	}
 }
 
+func TestNormalizeRecoveryCheckpointTargetForTaskPrefersExplicitDeliverablePath(t *testing.T) {
+	description := "Design the core data model for speaking opportunities in the pipeline. Output: schema-definition.md with complete field specifications."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  9,
+		Title:       "Design Pipeline Data Schema & Fields",
+		Description: &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": "execution_first",
+			},
+		}),
+	}
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:   "planning/strategy-artifact/oc-9-success-narrative.md",
+		ArtifactPath: ".ottercamp/recovery/planning/strategy-artifact/oc-9-success-narrative.md",
+	}
+
+	normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
+	if normalized.TargetPath != "schema-definition.md" {
+		t.Fatalf("normalized target_path = %q, want explicit deliverable path", normalized.TargetPath)
+	}
+	if normalized.ArtifactPath != checkpoint.ArtifactPath {
+		t.Fatalf("artifact_path = %q, want %q", normalized.ArtifactPath, checkpoint.ArtifactPath)
+	}
+}
+
 func TestNormalizeRecoveryCheckpointTargetForTaskKeepsPlanningTargetForNonReportTask(t *testing.T) {
 	taskRecord := repo.ProjectTask{
 		TaskNumber: 7,

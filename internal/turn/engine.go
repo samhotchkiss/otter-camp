@@ -10108,6 +10108,13 @@ func recoveryTaskTargetPathScore(taskRecord repo.ProjectTask, targetPath, draft 
 func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) taskcheckpoint.RecoveryFileWriteCheckpoint {
 	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	targetPath := strings.TrimSpace(checkpoint.TargetPath)
+	if explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord)); explicit != "" {
+		if sameWorkspaceRelativePath(explicit, targetPath) {
+			return checkpoint
+		}
+		checkpoint.TargetPath = explicit
+		return checkpoint
+	}
 	if targetPath == "" || !strings.HasPrefix(strings.ToLower(targetPath), "planning/") {
 		return checkpoint
 	}
