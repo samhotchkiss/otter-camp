@@ -758,7 +758,7 @@ func (a *PromptAssembler) buildLayer3(ctx context.Context, session repo.ChatSess
 			lines = append(lines, "Status: "+strings.TrimSpace(taskCtx.taskStatus))
 		}
 		if strings.EqualFold(strings.TrimSpace(taskCtx.taskStatus), "review") {
-			lines = append(lines, "Review Mode: This task is at a review checkpoint. Do not continue implementation or modify deliverable files in this session. Inspect the existing deliverables, planning artifacts, and rubric, then use `flow.review_decision` with the active `flow_node_execution_id` to either `approve` or `reject` the review. If you reject, put the concrete findings in the review decision you communicate, not in a new workspace file.")
+			lines = append(lines, "Review Mode: This task is at a review checkpoint. Do not continue the implementation as if this were a work node. Inspect the existing deliverables, planning artifacts, and rubric, then use `flow.review_decision` with the active `flow_node_execution_id` to either `approve` or `reject` the review. Approval closes with an empty runtime-owned review commit. Rejection may also write repo-backed review artifacts, but they must stay review-scoped and use CriticMarkup for markdown annotations rather than continuing the deliverable implementation.")
 		}
 		if strings.TrimSpace(taskCtx.taskDescription) != "" {
 			lines = append(lines, "Description: "+strings.TrimSpace(taskCtx.taskDescription))

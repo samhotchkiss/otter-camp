@@ -14053,7 +14053,7 @@ func syntheticContinuationActionMessageMetadata(session *chat.ChatSession, sourc
 
 func buildTaskReviewActionPrompt(session *chat.ChatSession) string {
 	lines := []string{
-		"Review only. Inspect the current deliverables and use flow.review_decision to approve or reject this review step.",
+		"Review only. Inspect the current deliverables and use flow.review_decision to approve or reject this review step. Approval closes with an empty review commit. Rejection may add review-scoped CriticMarkup notes.",
 		"Do not continue implementation, do not write deliverable files, and do not summarize what you plan to review.",
 	}
 	if executionID := flowNodeExecutionIDFromSessionMetadata(session); executionID != nil && *executionID != uuid.Nil {

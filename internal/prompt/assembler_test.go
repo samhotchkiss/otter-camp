@@ -329,8 +329,11 @@ func TestPromptAssemblerTaskContextIncludesReviewModeGuidance(t *testing.T) {
 	if !strings.Contains(assembled.SystemPrompt, "Review Mode: This task is at a review checkpoint.") {
 		t.Fatalf("system prompt missing review mode guidance:\n%s", assembled.SystemPrompt)
 	}
-	if !strings.Contains(assembled.SystemPrompt, "Do not continue implementation or modify deliverable files in this session.") {
+	if !strings.Contains(assembled.SystemPrompt, "Do not continue the implementation as if this were a work node.") {
 		t.Fatalf("system prompt missing review mutation guard:\n%s", assembled.SystemPrompt)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "CriticMarkup") {
+		t.Fatalf("system prompt missing CriticMarkup review artifact guidance:\n%s", assembled.SystemPrompt)
 	}
 	if !strings.Contains(assembled.SystemPrompt, "flow.review_decision") {
 		t.Fatalf("system prompt missing explicit review decision guidance:\n%s", assembled.SystemPrompt)

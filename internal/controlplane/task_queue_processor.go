@@ -1240,7 +1240,7 @@ func buildFlowKickoffMessage(taskRecord repo.ProjectTask, execution repo.FlowNod
 		if description != "" {
 			base += "\n\nTask description:\n" + description
 		}
-		base += "\n\nReview instruction:\nInspect the current deliverables and use flow.review_decision to approve or reject this review step."
+		base += "\n\nReview instruction:\nInspect the current deliverables and use flow.review_decision to approve or reject this review step. Approval closes with an empty review commit. Rejection may add review-scoped CriticMarkup notes."
 	}
 	if execution.ID == uuid.Nil {
 		return base
@@ -1957,7 +1957,7 @@ func buildFlowTransitionKickoffMessage(
 		if description != "" {
 			base += "\n\nTask description:\n" + description
 		}
-		base += "\n\nReview instruction:\nInspect the current deliverables and use flow.review_decision to approve or reject this review step."
+		base += "\n\nReview instruction:\nInspect the current deliverables and use flow.review_decision to approve or reject this review step. Approval closes with an empty review commit. Rejection may add review-scoped CriticMarkup notes."
 	}
 	nodeName := strings.TrimSpace(node.DisplayName)
 	if nodeName != "" {
