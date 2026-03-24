@@ -8446,6 +8446,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return false, nil
 		}
+		handled, stop, err = e.handleTaskFileWriteWrongPath(ctx, rt, &call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 		handled, stop, err = e.handleRecoveryFileWriteWithoutContent(ctx, rt, &call)
 		if err != nil {
 			return false, err
@@ -9568,12 +9578,87 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 	return false, false, nil
 }
 
+func (e *TurnEngine) handleTaskFileWriteWrongPath(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
+	if rt == nil || call == nil || rt.turn == nil || rt.session == nil {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.write") {
+		return false, false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
+		return false, false, nil
+	}
+
+	normalized := toolargs.Normalize("file.write", call.Arguments)
+	attemptedPath := normalizeTurnWorkspacePath(stringValue(normalized["path"]))
+	if attemptedPath == "" {
+		return false, false, nil
+	}
+
+	targetPath, _, ok := e.recoveryFileOutputContext(ctx, rt)
+	targetPath = normalizeTurnWorkspacePath(targetPath)
+	if !ok || targetPath == "" || sameOrNestedTurnWorkspacePath(attemptedPath, targetPath) {
+		return false, false, nil
+	}
+
+	normalized["path"] = targetPath
+	if _, exists := normalized["create_dirs"]; !exists {
+		normalized["create_dirs"] = true
+	}
+	call.Arguments = normalized
+	e.logger.Info("task continuation: rewrote file.write path to execution target",
+		"session_id", rt.session.ID,
+		"turn_id", rt.turn.ID,
+		"attempted_path", attemptedPath,
+		"target_path", targetPath,
+	)
+	return false, false, nil
+}
+
 func buildTaskFileWriteRetryMessage(targetPath string) string {
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
 		path = "<target file>"
 	}
 	return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. The first non-whitespace character of your next assistant message must be the first character of the deliverable itself, not a sentence like 'I will write' or 'Let me provide'.]", path)
+}
+
+func normalizeTurnWorkspacePath(value string) string {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if trimmed == "" {
+		return ""
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(trimmed))
+	cleaned = strings.TrimPrefix(cleaned, "./")
+	if cleaned == "." {
+		return ""
+	}
+	return cleaned
+}
+
+func sameOrNestedTurnWorkspacePath(pathValue, rootValue string) bool {
+	pathValue = normalizeTurnWorkspacePath(pathValue)
+	rootValue = normalizeTurnWorkspacePath(rootValue)
+	if pathValue == "" || rootValue == "" {
+		return false
+	}
+	if pathValue == rootValue {
+		return true
+	}
+	rootPrefix := strings.TrimSuffix(rootValue, "/") + "/"
+	return strings.HasPrefix(pathValue, rootPrefix)
 }
 
 func (e *TurnEngine) handleTaskCLIExecuteWithoutCommand(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {

@@ -11786,6 +11786,124 @@ func TestHandleTaskRejectedFileWriteContentRewritesPlaceholderFromPriorDraft(t *
 	}
 }
 
+func TestHandleTaskFileWriteWrongPathRewritesToRecoveryTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	priorTurnID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "Scoring/scoring-model-v1.0.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:         taskID,
+			WorkStatus: "in_progress",
+			Metadata: mustRawJSON(t, map[string]any{
+				"planning": map[string]any{
+					"mode": string(taskplan.ModeExecutionFirst),
+				},
+			}),
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"path":    targetPath,
+				"content": "# Scoring Model\n\nUse weighted criteria.\n",
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "Scoring/automation-implementation-brief.md",
+			"content": "# Scoring Model\n\nUse weighted criteria.\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
+		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
+	}
+}
+
+func TestHandleTaskFileWriteWrongPathSkipsNonExecutionFirstTasks(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:         taskID,
+			WorkStatus: "in_progress",
+			Metadata:   mustRawJSON(t, map[string]any{"planning": map[string]any{"mode": "orchestration"}}),
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "Scoring/automation-implementation-brief.md",
+			"content": "# Brief\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "Scoring/automation-implementation-brief.md" {
+		t.Fatalf("path = %q, want unchanged", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftContentUsesPriorTurnDraftAfterCurrentNarration(t *testing.T) {
 	t.Parallel()
 
