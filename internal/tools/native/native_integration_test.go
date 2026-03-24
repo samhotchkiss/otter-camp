@@ -8884,6 +8884,9 @@ func TestIntegrationFlowReviewDecisionCommitFailurePersistsCheckpointAndStallsEx
 	if checkpoint.ResumeAction != "close_execution" {
 		t.Fatalf("checkpoint resume_action = %q, want close_execution", checkpoint.ResumeAction)
 	}
+	if checkpoint.ArtifactRef != "" {
+		t.Fatalf("checkpoint artifact_ref = %q, want empty when no recovery target is known", checkpoint.ArtifactRef)
+	}
 	decision, ok := repo.FlowExecutionReviewDecisionFromMetadata(refreshedExecution.Metadata)
 	if !ok || decision == nil || decision.Decision != "reject" || decision.Reason != "missing tests" {
 		t.Fatalf("review decision metadata = %#v, want reject with reason", decision)

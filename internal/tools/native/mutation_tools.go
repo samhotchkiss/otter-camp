@@ -4869,8 +4869,12 @@ func (e *NativeToolExecutor) recordCommitCloseFailure(ctx context.Context, execu
 		}
 	}
 	targetPath := ""
+	artifactRef := ""
 	if execution.SessionID != nil && *execution.SessionID != uuid.Nil {
 		targetPath = e.latestRecoveryTargetPathForSession(ctx, workspaceScope{sessionID: execution.SessionID})
+		if targetPath != "" {
+			artifactRef = filepath.ToSlash(filepath.Join(".ottercamp", "recovery", filepath.FromSlash(targetPath)))
+		}
 	}
 	metadata := repo.FlowExecutionMetadataWithRecoveryCheckpoint(execution.Metadata, &repo.FlowExecutionRecoveryCheckpoint{
 		CheckpointType: "awaiting_commit_close",
@@ -4878,6 +4882,7 @@ func (e *NativeToolExecutor) recordCommitCloseFailure(ctx context.Context, execu
 		BranchHeadSHA:  branchHeadSHA,
 		ResumeAction:   "close_execution",
 		TargetPath:     targetPath,
+		ArtifactRef:    artifactRef,
 		FailureClass:   "product_runtime",
 		FailureSummary: strings.TrimSpace(commitErr.Error()),
 		UpdatedAt:      &now,
