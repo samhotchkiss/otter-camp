@@ -475,6 +475,8 @@ func (e *NativeToolExecutor) Execute(ctx context.Context, toolName string, input
 		return e.handleFlowAdvance(ctx, input)
 	case "flow.review_decision":
 		return e.handleFlowReviewDecision(ctx, input)
+	case "flow.recovery_decision":
+		return e.handleFlowRecoveryDecision(ctx, input)
 	case "flow.create_template":
 		return e.handleFlowCreateTemplate(ctx, input)
 	case "schedule.create":

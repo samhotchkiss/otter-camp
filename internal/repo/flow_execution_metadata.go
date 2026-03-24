@@ -13,6 +13,7 @@ const (
 	FlowExecutionMetadataLiveTurnID         = "live_turn_id"
 	FlowExecutionMetadataEntryHeadSHA       = "entry_branch_head_sha"
 	FlowExecutionMetadataRecoveryCheckpoint = "recovery_checkpoint"
+	FlowExecutionMetadataRecoveryDecision   = "recovery_decision"
 	FlowExecutionMetadataReviewDecision     = "review_decision"
 )
 
@@ -39,6 +40,12 @@ type FlowExecutionReviewDecision struct {
 	Decision  string     `json:"decision,omitempty"`
 	Reason    string     `json:"reason,omitempty"`
 	Findings  string     `json:"findings,omitempty"`
+	DecidedAt *time.Time `json:"decided_at,omitempty"`
+}
+
+type FlowExecutionRecoveryDecision struct {
+	Decision  string     `json:"decision,omitempty"`
+	Reason    string     `json:"reason,omitempty"`
 	DecidedAt *time.Time `json:"decided_at,omitempty"`
 }
 
@@ -110,6 +117,23 @@ func FlowExecutionMetadataWithReviewDecision(existing json.RawMessage, decision 
 	return encoded
 }
 
+func FlowExecutionMetadataWithRecoveryDecision(existing json.RawMessage, decision *FlowExecutionRecoveryDecision) json.RawMessage {
+	payload := map[string]any{}
+	if len(existing) > 0 && json.Valid(existing) {
+		_ = json.Unmarshal(existing, &payload)
+	}
+	if decision == nil {
+		delete(payload, FlowExecutionMetadataRecoveryDecision)
+	} else {
+		payload[FlowExecutionMetadataRecoveryDecision] = decision
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return encoded
+}
+
 func FlowExecutionLiveOwnerFromMetadata(raw json.RawMessage) FlowExecutionLiveOwner {
 	if len(raw) == 0 || !json.Valid(raw) {
 		return FlowExecutionLiveOwner{}
@@ -153,6 +177,25 @@ func FlowExecutionRecoveryCheckpointFromMetadata(raw json.RawMessage) (*FlowExec
 		return nil, false
 	}
 	return &checkpoint, true
+}
+
+func FlowExecutionRecoveryDecisionFromMetadata(raw json.RawMessage) (*FlowExecutionRecoveryDecision, bool) {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return nil, false
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, false
+	}
+	value, ok := payload[FlowExecutionMetadataRecoveryDecision]
+	if !ok || len(value) == 0 || string(value) == "null" {
+		return nil, false
+	}
+	var decision FlowExecutionRecoveryDecision
+	if err := json.Unmarshal(value, &decision); err != nil {
+		return nil, false
+	}
+	return &decision, true
 }
 
 func FlowExecutionReviewDecisionFromMetadata(raw json.RawMessage) (*FlowExecutionReviewDecision, bool) {

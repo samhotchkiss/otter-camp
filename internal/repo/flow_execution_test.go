@@ -126,3 +126,24 @@ func TestFlowExecutionRecoveryCheckpointMetadataRoundTrip(t *testing.T) {
 		t.Fatalf("entry head sha = %q, want entry123", got)
 	}
 }
+
+func TestFlowExecutionRecoveryDecisionMetadataRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	decidedAt := time.Date(2026, 3, 24, 11, 0, 0, 0, time.UTC)
+	raw := FlowExecutionMetadataWithRecoveryDecision(json.RawMessage(`{}`), &FlowExecutionRecoveryDecision{
+		Decision:  "retry",
+		Reason:    "fresh execution needed after stranded session",
+		DecidedAt: &decidedAt,
+	})
+	decision, ok := FlowExecutionRecoveryDecisionFromMetadata(raw)
+	if !ok || decision == nil {
+		t.Fatal("expected recovery decision metadata")
+	}
+	if decision.Decision != "retry" {
+		t.Fatalf("decision = %q, want retry", decision.Decision)
+	}
+	if decision.Reason != "fresh execution needed after stranded session" {
+		t.Fatalf("reason = %q, want round-tripped reason", decision.Reason)
+	}
+}

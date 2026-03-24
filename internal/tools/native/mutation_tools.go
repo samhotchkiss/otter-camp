@@ -4718,6 +4718,187 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	return map[string]any{"next_node_id": next.FlowNodeID}, nil
 }
 
+func (e *NativeToolExecutor) handleFlowRecoveryDecision(ctx context.Context, input map[string]any) (map[string]any, error) {
+	if e.flowExecs == nil || e.tasks == nil || e.flowNodes == nil || e.taskService == nil {
+		return map[string]any{"error": "flow_recovery_unavailable"}, nil
+	}
+	executionID, ok := readUUID(input, "flow_node_execution_id")
+	if !ok || executionID == uuid.Nil {
+		return map[string]any{"error": "flow_node_execution_id_required"}, nil
+	}
+	decision, ok := readString(input, "decision")
+	if !ok {
+		return map[string]any{"error": "decision_required"}, nil
+	}
+	decision = strings.ToLower(strings.TrimSpace(decision))
+	reason, _ := readString(input, "reason")
+	reason = strings.TrimSpace(reason)
+
+	execution, err := e.flowExecs.GetByID(ctx, executionID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return map[string]any{"error": "flow_node_execution_not_found"}, nil
+		}
+		return nil, err
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, execution.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	node, err := e.flowNodes.GetByID(ctx, execution.FlowNodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	switch decision {
+	case "resume":
+		if !strings.EqualFold(strings.TrimSpace(execution.Status), "active") {
+			return map[string]any{"error": "resume_requires_active_execution"}, nil
+		}
+		return e.resumeExecutionAfterRecoveryDecision(ctx, execution, taskRecord, node, reason)
+	case "retry":
+		return e.retryExecutionAfterRecoveryDecision(ctx, execution, taskRecord, node, reason)
+	case "block", "escalate":
+		return e.recordBlockingRecoveryDecision(ctx, execution, taskRecord, decision, reason)
+	default:
+		return map[string]any{"error": "invalid_recovery_decision"}, nil
+	}
+}
+
+func (e *NativeToolExecutor) resumeExecutionAfterRecoveryDecision(ctx context.Context, execution repo.FlowNodeExecution, taskRecord repo.ProjectTask, node repo.FlowNode, reason string) (map[string]any, error) {
+	updatedExecution, err := e.recordRecoveryDecisionMetadata(ctx, execution, "resume", reason)
+	if err != nil {
+		return nil, err
+	}
+	checkpoint, _ := repo.FlowExecutionRecoveryCheckpointFromMetadata(updatedExecution.Metadata)
+	if checkpoint != nil {
+		checkpoint.ResumeAction = "start_new_turn"
+		if reason != "" {
+			checkpoint.FailureSummary = reason
+		}
+		now := time.Now().UTC()
+		checkpoint.UpdatedAt = &now
+		updatedExecution, err = e.flowExecs.UpdateMetadata(ctx, updatedExecution.ID, repo.FlowExecutionMetadataWithRecoveryCheckpoint(updatedExecution.Metadata, checkpoint))
+		if err != nil {
+			return nil, err
+		}
+	}
+	waiting := recoveryDecisionRuntimeSubstate(node)
+	if _, err := e.flowExecs.UpdateRuntimeSubstate(ctx, updatedExecution.ID, &waiting); err != nil {
+		return nil, err
+	}
+	targetStatus := recoveryDecisionTaskStatus(node)
+	transitioned, err := e.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, targetStatus, tasksvc.Actor{
+		Type: "agent",
+		ID:   actorFromContext(ctx).createdByID,
+	}, map[string]any{
+		"transition_source":       "flow_recovery_decision",
+		"flow_node_execution_id":  updatedExecution.ID.String(),
+		"recovery_decision":       "resume",
+		"recovery_decision_reason": reason,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"task_id":                 taskRecord.ID.String(),
+		"task_work_status":        transitioned.WorkStatus,
+		"flow_node_execution_id":  updatedExecution.ID.String(),
+		"recovery_decision":       "resume",
+		"runtime_substate":        waiting,
+	}, nil
+}
+
+func (e *NativeToolExecutor) retryExecutionAfterRecoveryDecision(ctx context.Context, execution repo.FlowNodeExecution, taskRecord repo.ProjectTask, node repo.FlowNode, reason string) (map[string]any, error) {
+	updatedExecution, err := e.recordRecoveryDecisionMetadata(ctx, execution, "retry", reason)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(strings.TrimSpace(updatedExecution.Status), "active") {
+		if e.pool == nil {
+			return map[string]any{"error": "flow_execution_repository_unavailable"}, nil
+		}
+		abandoned, abandonErr := repo.NewFlowNodeExecutionRepo(e.pool).Abandon(ctx, updatedExecution.ID)
+		if abandonErr != nil {
+			return nil, abandonErr
+		}
+		updatedExecution = abandoned
+	}
+	targetStatus := recoveryDecisionTaskStatus(node)
+	transitioned, err := e.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, targetStatus, tasksvc.Actor{
+		Type: "agent",
+		ID:   actorFromContext(ctx).createdByID,
+	}, map[string]any{
+		"transition_source":       "flow_recovery_decision",
+		"flow_node_execution_id":  updatedExecution.ID.String(),
+		"recovery_decision":       "retry",
+		"recovery_decision_reason": reason,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if e.flowService == nil {
+		return map[string]any{"error": "flow_service_unavailable"}, nil
+	}
+	nextExecution, err := e.flowService.EnsureActiveExecution(ctx, taskRecord.ID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"task_id":                  taskRecord.ID.String(),
+		"task_work_status":         transitioned.WorkStatus,
+		"previous_execution_id":    updatedExecution.ID.String(),
+		"flow_node_execution_id":   nextExecution.ID.String(),
+		"recovery_decision":        "retry",
+	}, nil
+}
+
+func (e *NativeToolExecutor) recordBlockingRecoveryDecision(ctx context.Context, execution repo.FlowNodeExecution, taskRecord repo.ProjectTask, decision, reason string) (map[string]any, error) {
+	updatedExecution, err := e.recordRecoveryDecisionMetadata(ctx, execution, decision, reason)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(strings.TrimSpace(updatedExecution.Status), "active") {
+		stalled := "stalled"
+		if _, err := e.flowExecs.UpdateRuntimeSubstate(ctx, updatedExecution.ID, &stalled); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{
+		"task_id":                taskRecord.ID.String(),
+		"task_work_status":       taskRecord.WorkStatus,
+		"flow_node_execution_id": updatedExecution.ID.String(),
+		"recovery_decision":      decision,
+	}, nil
+}
+
+func (e *NativeToolExecutor) recordRecoveryDecisionMetadata(ctx context.Context, execution repo.FlowNodeExecution, decision, reason string) (repo.FlowNodeExecution, error) {
+	if e.flowExecs == nil || execution.ID == uuid.Nil {
+		return execution, nil
+	}
+	now := time.Now().UTC()
+	metadata := repo.FlowExecutionMetadataWithRecoveryDecision(execution.Metadata, &repo.FlowExecutionRecoveryDecision{
+		Decision:  strings.TrimSpace(decision),
+		Reason:    strings.TrimSpace(reason),
+		DecidedAt: &now,
+	})
+	return e.flowExecs.UpdateMetadata(ctx, execution.ID, metadata)
+}
+
+func recoveryDecisionTaskStatus(node repo.FlowNode) string {
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") || node.RequiresHumanReview {
+		return "review"
+	}
+	return "queued"
+}
+
+func recoveryDecisionRuntimeSubstate(node repo.FlowNode) string {
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") || node.RequiresHumanReview {
+		return "waiting_for_review"
+	}
+	return "waiting_for_turn"
+}
+
 func (e *NativeToolExecutor) createCanonicalExecutionCommit(ctx context.Context, execution repo.FlowNodeExecution, decision, summary string) (flowcommit.CommitResult, error) {
 	taskRecord, err := e.tasks.GetByID(ctx, execution.TaskID)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -2509,7 +2510,7 @@ func TestIntegrationTaskCompletionRequiresPlanningContractOrOverride(t *testing.
 	execRepo := repo.NewFlowNodeExecutionRepo(pool)
 	nodeRepo := repo.NewFlowNodeRepo(pool)
 
-	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
+	template := makeExecutableProjectFlowTemplate(t, context.Background(), pool, project.ID)
 	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
 	if err != nil {
 		t.Fatalf("GetByTemplateOrdered: %v", err)
@@ -4382,7 +4383,7 @@ func TestIntegrationTaskCreateRejectsNonBootstrapWorkWhileBootstrapGateIsOpen(t 
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
 	actor := testutil.MakeAgent(t, pool, orgID)
-	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	template := makeExecutableProjectFlowTemplate(t, context.Background(), pool, project.ID)
 
 	taskRepo := repo.NewProjectTaskRepo(pool)
 	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
@@ -6087,7 +6088,7 @@ func TestIntegrationTaskUpdateQueueKeepsDecomposedParentDraftAndQueuesChildren(t
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
 	agent := testutil.MakeAgent(t, pool, orgID)
-	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	template := makeExecutableProjectFlowTemplate(t, context.Background(), pool, project.ID)
 
 	description := strings.Join([]string{
 		"- Define the first execution slice for the launch.",
@@ -6164,7 +6165,7 @@ func TestIntegrationTaskUpdateRejectsQueuedPromotionForOrchestrationParentWithou
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
 	agent := testutil.MakeAgent(t, pool, orgID)
-	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	template := makeExecutableProjectFlowTemplate(t, context.Background(), pool, project.ID)
 
 	description := "Coordinate the HTML template workstream and delegate the actual template builds into bounded child tasks."
 	plan := taskplan.Analyze("WS2: HTML Layout Templates", &description)
@@ -6224,7 +6225,7 @@ func TestIntegrationTaskUpdateDraftToInProgressReturnsQueueGuidance(t *testing.T
 	orgID := testutil.MakeOrg(t, pool)
 	agent := testutil.MakeAgent(t, pool, orgID)
 	project := testutil.MakeProject(t, pool, orgID)
-	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
+	template := makeExecutableProjectFlowTemplate(t, context.Background(), pool, project.ID)
 
 	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
 		ProjectID:      project.ID,
@@ -6274,7 +6275,7 @@ func TestIntegrationTaskUpdateBootstrapGateBlockSuggestsSetupPersist(t *testing.
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
 	agent := testutil.MakeAgent(t, pool, orgID)
-	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	template := makeExecutableProjectFlowTemplate(t, context.Background(), pool, project.ID)
 
 	gateTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
 		OrganizationID: orgID,
@@ -7756,7 +7757,7 @@ func TestIntegrationFlowAdvanceMovesToNextNode(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
-	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
+	template := makeExecutableProjectFlowTemplate(t, context.Background(), pool, project.ID)
 	agent := testutil.MakeAgent(t, pool, orgID)
 
 	nodeRepo := repo.NewFlowNodeRepo(pool)
@@ -7822,7 +7823,7 @@ func TestIntegrationFlowAdvanceBackfillsMissingExecutionFromTaskScope(t *testing
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
-	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
+	template := makeExecutableProjectFlowTemplate(t, context.Background(), pool, project.ID)
 	agent := testutil.MakeAgent(t, pool, orgID)
 
 	nodeRepo := repo.NewFlowNodeRepo(pool)
@@ -7949,7 +7950,7 @@ func TestIntegrationFlowAdvanceCreatesCanonicalCommitWhenCommitSHAOmitted(t *tes
 	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
-	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
 	agent := testutil.MakeAgent(t, pool, orgID)
 
 	nodeRepo := repo.NewFlowNodeRepo(pool)
@@ -8018,7 +8019,7 @@ func TestIntegrationFlowAdvanceSquashesScratchCommitsFromExecutionBase(t *testin
 	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
-	template := testutil.MakeFlowTemplate(t, pool, project.ID, 2)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
 	agent := testutil.MakeAgent(t, pool, orgID)
 
 	nodeRepo := repo.NewFlowNodeRepo(pool)
@@ -9099,6 +9100,185 @@ func TestIntegrationFlowReviewDecisionRejectReturnsBlockedWhenRejectPathExhauste
 	}
 	if updatedExecution.Status != "rejected" {
 		t.Fatalf("execution status = %q, want rejected", updatedExecution.Status)
+	}
+}
+
+func TestIntegrationFlowRecoveryDecisionResumeRestoresQueuedExecution(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "blocked",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	stalled := "stalled"
+	now := time.Now().UTC()
+	execution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:          task.ID,
+		FlowNodeID:      nodes[0].ID,
+		VisitNumber:     1,
+		Status:          "active",
+		RuntimeSubstate: &stalled,
+		Metadata: repo.FlowExecutionMetadataWithRecoveryCheckpoint(json.RawMessage(`{}`), &repo.FlowExecutionRecoveryCheckpoint{
+			CheckpointType: "stranded_execution",
+			ResumeAction:   "await_pm_decision",
+			FailureClass:   "product_runtime",
+			FailureSummary: "active execution lost live task turn",
+			UpdatedAt:      &now,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.recovery_decision", map[string]any{
+		"flow_node_execution_id": execution.ID.String(),
+		"decision":               "resume",
+		"reason":                 "session repaired; queue a fresh turn on the same execution",
+	})
+	if err != nil {
+		t.Fatalf("flow.recovery_decision resume: %v", err)
+	}
+	if out["recovery_decision"] != "resume" {
+		t.Fatalf("recovery_decision = %v, want resume", out["recovery_decision"])
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if updatedTask.WorkStatus != "queued" {
+		t.Fatalf("task work_status = %q, want queued", updatedTask.WorkStatus)
+	}
+	updatedExecution, err := executionRepo.GetByID(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("load execution: %v", err)
+	}
+	if updatedExecution.RuntimeSubstate == nil || *updatedExecution.RuntimeSubstate != "waiting_for_turn" {
+		t.Fatalf("runtime_substate = %v, want waiting_for_turn", updatedExecution.RuntimeSubstate)
+	}
+	checkpoint, ok := repo.FlowExecutionRecoveryCheckpointFromMetadata(updatedExecution.Metadata)
+	if !ok || checkpoint == nil || checkpoint.ResumeAction != "start_new_turn" {
+		t.Fatalf("checkpoint = %#v, want resume_action=start_new_turn", checkpoint)
+	}
+	recoveryDecision, ok := repo.FlowExecutionRecoveryDecisionFromMetadata(updatedExecution.Metadata)
+	if !ok || recoveryDecision == nil || recoveryDecision.Decision != "resume" {
+		t.Fatalf("recovery decision = %#v, want resume", recoveryDecision)
+	}
+}
+
+func TestIntegrationFlowRecoveryDecisionRetryCreatesFreshExecution(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "blocked",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &nodes[0].ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	now := time.Now().UTC()
+	execution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  nodes[0].ID,
+		VisitNumber: 1,
+		Status:      "abandoned",
+		Metadata: repo.FlowExecutionMetadataWithRecoveryCheckpoint(json.RawMessage(`{}`), &repo.FlowExecutionRecoveryCheckpoint{
+			CheckpointType: "stranded_execution",
+			ResumeAction:   "await_pm_decision",
+			FailureClass:   "product_runtime",
+			FailureSummary: "fresh execution required after stranded task lane",
+			UpdatedAt:      &now,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.recovery_decision", map[string]any{
+		"flow_node_execution_id": execution.ID.String(),
+		"decision":               "retry",
+		"reason":                 "create a fresh execution from the same flow node",
+	})
+	if err != nil {
+		t.Fatalf("flow.recovery_decision retry: %v", err)
+	}
+	if out["recovery_decision"] != "retry" {
+		t.Fatalf("recovery_decision = %v, want retry", out["recovery_decision"])
+	}
+	newExecutionID, err := uuid.Parse(strings.TrimSpace(fmt.Sprintf("%v", out["flow_node_execution_id"])))
+	if err != nil || newExecutionID == uuid.Nil {
+		t.Fatalf("new execution id = %v, want valid uuid", out["flow_node_execution_id"])
+	}
+	if newExecutionID == execution.ID {
+		t.Fatalf("new execution id = %s, want different execution", newExecutionID)
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if updatedTask.WorkStatus != "queued" {
+		t.Fatalf("task work_status = %q, want queued", updatedTask.WorkStatus)
+	}
+	newExecution, err := executionRepo.GetByID(ctx, newExecutionID)
+	if err != nil {
+		t.Fatalf("load new execution: %v", err)
+	}
+	if newExecution.Status != "active" {
+		t.Fatalf("new execution status = %q, want active", newExecution.Status)
+	}
+	recoveryDecision, ok := repo.FlowExecutionRecoveryDecisionFromMetadata(execution.Metadata)
+	_ = recoveryDecision
+	updatedOldExecution, err := executionRepo.GetByID(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("load old execution: %v", err)
+	}
+	recoveryDecision, ok = repo.FlowExecutionRecoveryDecisionFromMetadata(updatedOldExecution.Metadata)
+	if !ok || recoveryDecision == nil || recoveryDecision.Decision != "retry" {
+		t.Fatalf("old execution recovery decision = %#v, want retry", recoveryDecision)
 	}
 }
 
