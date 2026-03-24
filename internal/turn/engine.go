@@ -12847,6 +12847,16 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 		existing = normalizeRecoveryCheckpointPathsForTask(taskRecord, existing)
 		existingTarget := strings.TrimSpace(existing.TargetPath)
 		if !authoritativeTarget && existingTarget != "" && !sameWorkspaceRelativePath(existingTarget, targetPath) {
+			existingScore := recoveryTaskTargetPathScore(taskRecord, existingTarget, "")
+			currentScore := recoveryTaskTargetPathScore(taskRecord, targetPath, "")
+			if existingScore > currentScore {
+				targetPath = existingTarget
+				if existingArtifact := strings.TrimSpace(existing.ArtifactPath); existingArtifact != "" {
+					if recoveredTarget, ok := recoveryTargetPathFromArtifact(existingArtifact); ok && sameWorkspaceRelativePath(recoveredTarget, existingTarget) {
+						artifactPath = existingArtifact
+					}
+				}
+			}
 			if existingDraft, found := e.readRecoveryWorkspaceText(ctx, rt, existingTarget); found {
 				if reason := recoveryFileWriteDraftRejectReason(existingDraft, existingTarget); reason == "" && looksLikeRecoveryFileDraft(existingDraft) {
 					targetPath = existingTarget

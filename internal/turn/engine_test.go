@@ -13349,6 +13349,67 @@ func TestPersistRecoveryFileWriteCheckpointPrefersAuthoritativeFailureTargetPath
 	}
 }
 
+func TestPersistRecoveryFileWriteCheckpointPrefersBetterTaskMatchedExistingTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	existingTarget := "deliverables/OC-18-INTAKE-FRAMEWORK-SCHEMA.md"
+	driftTarget := "schemas/scoring-algorithm-v1.0.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	existingMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:   existingTarget,
+		ArtifactPath: ".ottercamp/recovery/deliverables/OC-18-INTAKE-FRAMEWORK-SCHEMA.md",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	description := "Define sourcing channels, intake form structure, lead qualification criteria, and triage logic for speaking opportunity identification and capture."
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				TaskNumber:     18,
+				Title:          "OC-01: Design Intake Framework",
+				Description:    &description,
+				ProjectID:      projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				WorkStatus:     "blocked",
+				Metadata:       existingMetadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	if err := fixture.engine.persistRecoveryFileWriteCheckpoint(context.Background(), rt, driftTarget, ".ottercamp/recovery/schemas/scoring-algorithm-v1.0.md", "flow rejection max visits exceeded", uuid.New()); err != nil {
+		t.Fatalf("persistRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	updated := taskRepo.items[taskID]
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint")
+	}
+	if checkpoint.TargetPath != existingTarget {
+		t.Fatalf("TargetPath = %q, want %q", checkpoint.TargetPath, existingTarget)
+	}
+}
+
 func TestRewriteRecoveryCLIExecuteWithoutCommandToFileWriteUsesPriorTurnDraft(t *testing.T) {
 	t.Parallel()
 
