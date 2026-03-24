@@ -2380,7 +2380,28 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			          )
 			        )
 			        AND (
-			          current_turn.status = 'in_progress'
+			          (
+			            current_turn.status = 'in_progress'
+			            AND (
+			              cs.scope_type <> 'project_task'
+			              OR EXISTS (
+			                SELECT 1
+			                FROM run r
+			                WHERE r.session_id = cs.id
+			                  AND r.turn_id = current_turn.id
+			                  AND r.status IN ('created', 'in_progress')
+			                  AND (
+			                        r.status = 'created'
+			                     OR EXISTS (
+			                          SELECT 1
+			                          FROM model_invocation mi
+			                          WHERE mi.turn_id = current_turn.id
+			                            AND mi.status = 'in_flight'
+			                        )
+			                  )
+			              )
+			            )
+			          )
 			          OR (
 			            current_turn.status = 'pending'
 			            AND (

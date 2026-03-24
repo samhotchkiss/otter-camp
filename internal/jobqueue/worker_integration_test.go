@@ -3488,6 +3488,221 @@ func TestJobWorkerClaimPendingAgentTurnsIgnoresStalePendingCurrentTurnWithoutLiv
 	}
 }
 
+func TestJobWorkerClaimPendingAgentTurnsIgnoresStaleInProgressTurnWithoutLiveInvocation(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-ignore-stale-in-progress-turn-without-live-invocation",
+		DisplayName: "Claim Ignore Stale In Progress Turn Without Live Invocation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Claim Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover stale in-progress task turns.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-ignore-stale-in-progress-turn-project",
+		DisplayName:    "Claim Ignore Stale In Progress Turn Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "claim-ignore-stale-in-progress-turn-template",
+		DisplayName:    "Claim Ignore Stale In Progress Turn Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         project.ID,
+		Title:             "Claim ignores stale in-progress turn without live invocation",
+		WorkStatus:        "review",
+		BlocksScope:       "task",
+		FlowTemplateID:    &template.ID,
+		CurrentFlowNodeID: &flowNode.ID,
+		CreatedByType:     "system",
+		CreatedByID:       &agent.ID,
+		AssignedAgentID:   &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "stale review retry",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("Create stale message: %v", err)
+	}
+	staleTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &staleMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("Create stale in-progress turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &staleTurn.ID); err != nil {
+		t.Fatalf("UpdateCurrentTurn: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+
+	runID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO run (
+			id,
+			organization_id,
+			project_id,
+			task_id,
+			flow_node_id,
+			session_id,
+			turn_id,
+			principal_type,
+			principal_id,
+			status,
+			trigger_type,
+			version,
+			metadata
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'agent', $8, 'in_progress', 'scheduler', 1, '{}'::jsonb)
+	`, runID, org.ID, project.ID, taskRecord.ID, flowNode.ID, session.ID, staleTurn.ID, agent.ID); err != nil {
+		t.Fatalf("create stale run: %v", err)
+	}
+	metadata := repo.FlowExecutionMetadataWithLiveOwner(execution.Metadata, repo.FlowExecutionLiveOwner{RunID: &runID, TurnID: &staleTurn.ID})
+	if _, err := repo.NewFlowNodeExecutionRepo(pool).UpdateMetadata(ctx, execution.ID, metadata); err != nil {
+		t.Fatalf("set live owner metadata: %v", err)
+	}
+
+	provider, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
+		Slug:        "claim-ignore-stale-in-progress-turn-provider",
+		DisplayName: "Claim Ignore Stale In Progress Turn Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create model provider: %v", err)
+	}
+	invocationCompletedAt := time.Now().UTC().Add(-30 * time.Minute)
+	errorCode := "context_canceled"
+	errorMessage := "context canceled"
+	if _, err := repo.NewModelInvocationRepo(pool).Create(ctx, repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   provider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "failed",
+		ModelName:         "test-model",
+		AgentID:           &agent.ID,
+		ProjectID:         &project.ID,
+		ProjectTaskID:     &taskRecord.ID,
+		SessionID:         &session.ID,
+		TurnID:            &staleTurn.ID,
+		RunID:             &runID,
+		ErrorCode:         &errorCode,
+		ErrorMessage:      &errorMessage,
+		CompletedAt:       &invocationCompletedAt,
+	}); err != nil {
+		t.Fatalf("create failed invocation: %v", err)
+	}
+
+	freshMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "system",
+		Content:   "[Review action required] Call flow.review_decision for the active review node execution.",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("Create fresh message: %v", err)
+	}
+
+	var freshJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":1,"flow_node_execution_id":"%s"}`, session.ID, freshMessage.ID, execution.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, freshMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, freshMessage.ID, 1),
+	).Scan(&freshJobID); err != nil {
+		t.Fatalf("insert fresh job: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 10)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed jobs = %d, want 1", len(claimed))
+	}
+	if claimed[0].ID != freshJobID {
+		t.Fatalf("claimed job = %s, want %s", claimed[0].ID, freshJobID)
+	}
+}
+
 func TestJobWorkerRequeueStrandedSupervisorRecoveryTurnsSkipsPausedAndArchivedProjects(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
