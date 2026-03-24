@@ -11427,6 +11427,63 @@ func TestHandleTaskFileWriteWithoutContentPrefersPriorSubstantiveDraftOverIntent
 	}
 }
 
+func TestHandleTaskFileWriteWithoutContentAppendsCorrectionWhenNoDraftExists(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "schema-definition.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Let me provide the full schema definition content:",
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWithoutContent: %v", err)
+	}
+	if !handled || abort {
+		t.Fatalf("handled=%v abort=%v, want true false", handled, abort)
+	}
+	if rt.taskFileFixes != 1 {
+		t.Fatalf("taskFileFixes = %d, want 1", rt.taskFileFixes)
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	last := messages[len(messages)-1]
+	if !strings.EqualFold(last.Role, "system") {
+		t.Fatalf("last role = %q, want system", last.Role)
+	}
+	if !strings.Contains(last.Content, "Task execution correction") || !strings.Contains(last.Content, targetPath) {
+		t.Fatalf("last content = %q, want task correction message for %s", last.Content, targetPath)
+	}
+}
+
 func TestHandleTaskCLIExecuteWithoutCommandRewritesToFileWriteFromDraft(t *testing.T) {
 	t.Parallel()
 

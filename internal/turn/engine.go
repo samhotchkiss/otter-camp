@@ -94,6 +94,7 @@ const (
 	validationLoopSuppressionReason           = "validation_loop_blocked"
 	recoveryCLIRepairBudget                   = 1
 	recoveryFileWriteRepairBudget             = 1
+	taskFileWriteRepairBudget                 = 1
 	recoveryArtifactDir                       = ".ottercamp/recovery"
 	recoveryResumeExcerptChars                = 3000
 	maxContinuationSummaryChars               = 4000
@@ -513,6 +514,7 @@ type turnRuntime struct {
 	recoveryTurn          bool
 	recoveryCLIFixes      int
 	recoveryFileFixes     int
+	taskFileFixes         int
 	recoveryFileWrites    map[string]recoveryPopulatedFileWriteState
 	recoveryWriteDone     bool
 	recoveryBlockReason   string
@@ -9444,7 +9446,14 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 
 	draft, ok := e.taskContinuationDraftContent(ctx, rt, targetPath)
 	if !ok {
-		return false, false, nil
+		if rt.taskFileFixes >= taskFileWriteRepairBudget {
+			return false, false, nil
+		}
+		rt.taskFileFixes++
+		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskFileWriteRetryMessage(targetPath)); err != nil {
+			return true, false, err
+		}
+		return true, false, nil
 	}
 
 	normalized["content"] = draft
@@ -9458,6 +9467,14 @@ func (e *TurnEngine) handleTaskFileWriteWithoutContent(ctx context.Context, rt *
 		"path", targetPath,
 	)
 	return false, false, nil
+}
+
+func buildTaskFileWriteRetryMessage(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "<target file>"
+	}
+	return fmt.Sprintf("[Task execution correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. The first non-whitespace character of your next assistant message must be the first character of the deliverable itself, not a sentence like 'I will write' or 'Let me provide'.]", path)
 }
 
 func (e *TurnEngine) handleTaskCLIExecuteWithoutCommand(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
