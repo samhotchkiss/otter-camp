@@ -646,6 +646,9 @@ func (s *Supervisor) markExecutionStranded(ctx context.Context, candidate strand
 	if err := s.recordExecutionRecoveryCheckpoint(ctx, candidate.ExecutionID, candidate.CurrentTurnID, strings.TrimSpace(reason), "await_pm_decision"); err != nil {
 		return err
 	}
+	if err := s.notifyProjectSessionForStrandedExecution(ctx, candidate, strings.TrimSpace(reason)); err != nil {
+		return err
+	}
 	if err := s.releaseStrandedExecutionOwner(ctx, candidate); err != nil {
 		return err
 	}
@@ -656,6 +659,94 @@ func (s *Supervisor) markExecutionStranded(ctx context.Context, candidate strand
 		return err
 	}
 	return s.recordStrandedRuntimeState(ctx, candidate, reason)
+}
+
+func (s *Supervisor) notifyProjectSessionForStrandedExecution(ctx context.Context, candidate strandedExecutionCandidate, reason string) error {
+	if s == nil || s.pool == nil || s.chatService == nil || s.runService == nil || candidate.ProjectID == uuid.Nil || candidate.OrganizationID == uuid.Nil {
+		return nil
+	}
+	projectSession, err := repo.NewChatSessionRepo(s.pool).GetByScopeAndMode(ctx, "project", candidate.ProjectID, "async")
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if projectSession == nil || projectSession.ID == uuid.Nil || !strings.EqualFold(strings.TrimSpace(projectSession.Status), "active") {
+		return nil
+	}
+	if hasKickoff, err := s.sessionHasSupervisorPMRecoveryKickoff(ctx, projectSession.ID, candidate.ExecutionID); err != nil {
+		return err
+	} else if hasKickoff {
+		return nil
+	}
+
+	metadata, err := json.Marshal(map[string]any{
+		"source":                     "supervisor",
+		"supervisor_pm_recovery":     true,
+		"supervisor_recovery_from":   candidate.ExecutionID.String(),
+		"supervisor_recovery_reason": strings.TrimSpace(reason),
+		"task_id":                    candidate.TaskID.String(),
+		"flow_node_execution_id":     candidate.ExecutionID.String(),
+		"recovery_disposition":       "await_pm_decision",
+	})
+	if err != nil {
+		return err
+	}
+	runRecord, err := s.runService.CreateRun(ctx, CreateRunInput{
+		OrganizationID: candidate.OrganizationID,
+		PrincipalType:  "system",
+		PrincipalID:    uuid.Nil,
+		TriggerType:    "supervisor",
+		ProjectID:      &candidate.ProjectID,
+		SessionID:      &projectSession.ID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.runService.StartRun(ctx, runRecord.ID); err != nil && !errors.Is(err, ErrInvalidTransition) {
+		return err
+	}
+	messageMetadata, err := json.Marshal(map[string]any{
+		"source":                 "supervisor",
+		"run_id":                 runRecord.ID.String(),
+		"reason":                 strings.TrimSpace(reason),
+		"task_id":                candidate.TaskID.String(),
+		"flow_node_execution_id": candidate.ExecutionID.String(),
+		"supervisor_pm_recovery": true,
+		"recovery_disposition":   "await_pm_decision",
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: projectSession.ID,
+		Role:      "user",
+		Content:   "supervisor recovery: inspect stranded execution",
+		Metadata:  messageMetadata,
+	})
+	return err
+}
+
+func (s *Supervisor) sessionHasSupervisorPMRecoveryKickoff(ctx context.Context, sessionID, executionID uuid.UUID) (bool, error) {
+	if s == nil || s.pool == nil || sessionID == uuid.Nil || executionID == uuid.Nil {
+		return false, nil
+	}
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM chat_message
+			WHERE session_id = $1
+			  AND role = 'user'
+			  AND content = 'supervisor recovery: inspect stranded execution'
+			  AND metadata->>'source' = 'supervisor'
+			  AND metadata->>'supervisor_pm_recovery' = 'true'
+			  AND metadata->>'flow_node_execution_id' = $2
+		)
+	`, sessionID, executionID.String()).Scan(&exists)
+	return exists, err
 }
 
 func (s *Supervisor) transitionTaskToBlocked(ctx context.Context, taskID uuid.UUID) error {

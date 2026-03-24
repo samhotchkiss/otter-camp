@@ -617,6 +617,17 @@ func TestSupervisor_StrandedActiveExecutionRecoveryRestoresLiveTurn(t *testing.T
 	if err != nil {
 		t.Fatalf("chat.NewService: %v", err)
 	}
+	projectSession, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        projectRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"supervisor_integration"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession project: %v", err)
+	}
+	_ = projectSession
 	session, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
 		OrganizationID: org.ID,
 		ScopeType:      "project_task",
@@ -829,6 +840,17 @@ func TestSupervisor_StrandedActiveExecutionSkipsUnresolvedRecoveryCheckpoint(t *
 	if err != nil {
 		t.Fatalf("chat.NewService: %v", err)
 	}
+	projectSession, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        projectRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"supervisor_integration"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession project: %v", err)
+	}
+	_ = projectSession
 	session, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
 		OrganizationID: org.ID,
 		ScopeType:      "project_task",
@@ -1431,6 +1453,16 @@ func TestSupervisor_StrandedActiveExecutionFailureBlocksTaskAndAbandonsExecution
 	if err != nil {
 		t.Fatalf("chat.NewService: %v", err)
 	}
+	projectSession, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        projectRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"supervisor_integration"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession project: %v", err)
+	}
 	session, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
 		OrganizationID: org.ID,
 		ScopeType:      "project_task",
@@ -1549,6 +1581,48 @@ func TestSupervisor_StrandedActiveExecutionFailureBlocksTaskAndAbandonsExecution
 	}
 	if !strings.Contains(contract.FailureReason, "no recovery agent") {
 		t.Fatalf("runtime failure_reason = %q, want no recovery agent detail", contract.FailureReason)
+	}
+
+	var projectRecoveryRunID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		SELECT id
+		FROM run
+		WHERE session_id = $1
+		  AND trigger_type = 'supervisor'
+		  AND metadata->>'supervisor_pm_recovery' = 'true'
+		  AND metadata->>'flow_node_execution_id' = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, projectSession.ID, execution.ID.String()).Scan(&projectRecoveryRunID); err != nil {
+		t.Fatalf("load project recovery run: %v", err)
+	}
+	projectMessages, err := repo.NewChatMessageRepo(pool).ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project session: %v", err)
+	}
+	foundProjectKickoff := false
+	for _, item := range projectMessages {
+		if !strings.EqualFold(strings.TrimSpace(item.Role), "user") || strings.TrimSpace(item.Content) != "supervisor recovery: inspect stranded execution" {
+			continue
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(item.Metadata, &metadata); err != nil {
+			continue
+		}
+		if strings.TrimSpace(valueAsString(metadata["run_id"])) != projectRecoveryRunID.String() {
+			continue
+		}
+		if strings.TrimSpace(valueAsString(metadata["flow_node_execution_id"])) != execution.ID.String() {
+			continue
+		}
+		if strings.TrimSpace(valueAsString(metadata["recovery_disposition"])) != "await_pm_decision" {
+			continue
+		}
+		foundProjectKickoff = true
+		break
+	}
+	if !foundProjectKickoff {
+		t.Fatal("expected project-session PM recovery kickoff message")
 	}
 }
 
