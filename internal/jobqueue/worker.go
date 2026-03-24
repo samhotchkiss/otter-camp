@@ -2223,6 +2223,26 @@ func (w *Worker) claimPendingLimit(ctx context.Context, limit int) ([]Job, error
 }
 
 func (w *Worker) claimPendingAgentTurns(ctx context.Context, limit int) ([]Job, error) {
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    last_error = 'purged stale terminal message-attempt dispatch during claim',
+		    updated_at = now()
+		WHERE jq.status IN ('pending', 'claimed')
+		  AND jq.job_type = $1
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = (jq.payload->>'session_id')::uuid
+		      AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+		      AND ct.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+		      AND ct.status IN ('completed', 'cancelled', 'failed')
+		  )
+	`, agentTurnJobType); err != nil {
+		return nil, fmt.Errorf("dead-letter stale terminal agent_turn jobs before claim: %w", err)
+	}
 	return w.claimPendingByFilter(ctx, limit, "job_type = $3")
 }
 
