@@ -143,7 +143,7 @@ const (
 var (
 	errContextCompressionContinuationDepthExceeded = errors.New("context compression continuation depth exceeded")
 	errAgentTurnPromptGuardrailDepthExceeded       = errors.New("agent turn prompt exceeded guardrail continuation depth")
-	explicitDeliverablePathPattern                 = regexp.MustCompile(`(?i)\bdeliverable:\s*([^\s,;]+)`)
+	explicitDeliverablePathPattern                 = regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`)
 	recoveryCheckpointTaskNumberPattern            = regexp.MustCompile(`\boc[- ]?0*([1-9][0-9]*)\b`)
 )
 

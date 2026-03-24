@@ -430,6 +430,58 @@ func TestFileWriteRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplic
 	}
 }
 
+func TestFileWriteRejectsAlternateMutationForExecutionFirstTaskWithExplicitOutput(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	description := "Test invalid request rejection. Output: test-result-validation.log with structured test evidence."
+	plan := taskplan.Analyze("Test input validation", &description)
+
+	taskRepo := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Test input validation",
+			Description:    &description,
+			Metadata:       taskplan.ApplyMetadata(nil, plan),
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = taskRepo
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		TaskID:         &taskID,
+	})
+
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "oc-17-validation-test-execution.py",
+		"content":     "print('helper')\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "deliverable_path_required" {
+		t.Fatalf("error = %v, want deliverable_path_required", out["error"])
+	}
+	if got := out["deliverable_path"]; got != "test-result-validation.log" {
+		t.Fatalf("deliverable_path = %v, want test-result-validation.log", got)
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "test-result-validation.log") {
+		t.Fatalf("message = %q, want explicit output path guidance", message)
+	}
+	if _, err := os.Stat(filepath.Join(root, "oc-17-validation-test-execution.py")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("alternate helper file should not be written, stat err = %v", err)
+	}
+}
+
 func TestFileEditRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplicitDeliverable(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

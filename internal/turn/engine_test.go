@@ -11865,6 +11865,37 @@ func TestExplicitExecutionDeliverableWriteCompleted(t *testing.T) {
 	}
 }
 
+func TestExplicitExecutionDeliverableWriteCompletedRecognizesOutputPath(t *testing.T) {
+	t.Parallel()
+
+	description := "Test invalid request rejection. Output: test-result-validation.log with structured test evidence."
+	plan := taskplan.Analyze("Test input validation", &description)
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+
+	if !explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "test-result-validation.log",
+			"byte_size": 4096,
+		},
+	}) {
+		t.Fatal("expected Output: path to count as explicit deliverable write")
+	}
+
+	if explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "oc-17-validation-test-execution.py",
+			"byte_size": 4096,
+		},
+	}) {
+		t.Fatal("unexpected completion from alternate execution helper file")
+	}
+}
+
 func TestShouldStopAfterExecutionArtifactWriteForPlannedArtifact(t *testing.T) {
 	t.Parallel()
 

@@ -39,7 +39,7 @@ import (
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
 var parentChildOrdinalTitlePattern = regexp.MustCompile(`^([a-z]+)\s+(\d+)\s*:`)
 var malformedParameterEchoPattern = regexp.MustCompile(`(?is)(<parameter\s+name\s*=\s*"[^"]+"\s*>|,?\s*antml:parameter>)`)
-var explicitDeliverablePathPattern = regexp.MustCompile(`(?i)\bdeliverable:\s*([^\s,;]+)`)
+var explicitDeliverablePathPattern = regexp.MustCompile(`(?i)\b(?:deliverable|output):\s*([^\s,;]+)`)
 var bootstrapWaveFamilyTitlePattern = regexp.MustCompile(`(?i)\b(?:[a-z0-9]+-)?(fw|lw)\s*[-:]?\s*(\d+)\b`)
 
 var errInvalidExecutableFlowTemplate = errors.New(flowTemplateValidationMessage)
@@ -373,7 +373,7 @@ func (e *NativeToolExecutor) rejectProjectSessionExecutionMutation(ctx context.C
 	}, true, nil
 }
 
-func (e *NativeToolExecutor) rejectExecutionFirstPlanningMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
+func (e *NativeToolExecutor) rejectExecutionFirstDeliverableMutation(ctx context.Context, scope workspaceScope, relativePath string) (map[string]any, bool, error) {
 	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
 		return nil, false, nil
 	}
@@ -389,11 +389,11 @@ func (e *NativeToolExecutor) rejectExecutionFirstPlanningMutation(ctx context.Co
 		return nil, false, nil
 	}
 	deliverablePath := parseExplicitDeliverablePath(taskRecord)
-	if deliverablePath == "" || strings.HasPrefix(strings.ToLower(deliverablePath), "planning/") {
+	if deliverablePath == "" {
 		return nil, false, nil
 	}
 	normalizedPath := normalizeWorkspacePath(relativePath)
-	if normalizedPath == "" || !strings.HasPrefix(strings.ToLower(normalizedPath), "planning/") {
+	if normalizedPath == "" {
 		return nil, false, nil
 	}
 	if sameOrNestedWorkspacePath(normalizedPath, deliverablePath) {
@@ -402,7 +402,7 @@ func (e *NativeToolExecutor) rejectExecutionFirstPlanningMutation(ctx context.Co
 	return map[string]any{
 		"error":            "deliverable_path_required",
 		"deliverable_path": deliverablePath,
-		"message":          fmt.Sprintf("This execution-first task already has an explicit deliverable path `%s`. Do not write planning artifacts like `%s` during task execution. Continue the concrete deliverable instead.", deliverablePath, normalizedPath),
+		"message":          fmt.Sprintf("This execution-first task already has an explicit deliverable path `%s`. Do not write `%s` during task execution. Continue the concrete deliverable instead.", deliverablePath, normalizedPath),
 	}, true, nil
 }
 
@@ -958,7 +958,7 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 	} else if reject {
 		return blocked, nil
 	}
-	if blocked, reject, rejectErr := e.rejectExecutionFirstPlanningMutation(ctx, scope, renderedPath); rejectErr != nil {
+	if blocked, reject, rejectErr := e.rejectExecutionFirstDeliverableMutation(ctx, scope, renderedPath); rejectErr != nil {
 		return nil, rejectErr
 	} else if reject {
 		return blocked, nil
@@ -1056,7 +1056,7 @@ func (e *NativeToolExecutor) handleFileEdit(ctx context.Context, input map[strin
 	} else if reject {
 		return blocked, nil
 	}
-	if blocked, reject, rejectErr := e.rejectExecutionFirstPlanningMutation(ctx, scope, renderedPath); rejectErr != nil {
+	if blocked, reject, rejectErr := e.rejectExecutionFirstDeliverableMutation(ctx, scope, renderedPath); rejectErr != nil {
 		return nil, rejectErr
 	} else if reject {
 		return blocked, nil
