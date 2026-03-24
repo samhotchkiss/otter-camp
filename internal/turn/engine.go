@@ -6818,6 +6818,10 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	if flowTemplatesReady && state.FirstWaveTaskCount == 0 && state.FirstWavePromotedCount == 0 && state.FirstWaveJobCount == 0 {
 		lines = append(lines, "The persisted task tree already has runnable flow templates. Do not create more agents, parent tasks, or child tasks unless a concrete task is still unassigned or fails a boundedness/validation rule. Reuse the existing staffed task tree and move a small first executable wave into execution now.")
 	}
+	if state.AssignmentCount == 0 && state.PlannedTaskCount == 0 && state.PlannedFlowTemplateCount == 0 {
+		lines = append(lines, "Bootstrap is not complete just because the governance gate or checklist tasks are marked done. Bootstrap only counts as complete after real project assignments, non-bootstrap project tasks, and runnable flow templates are persisted.")
+		lines = append(lines, "If the project currently contains only the bootstrap checklist tasks, your next acceptable action is to create staffed project work. Do not answer with a completion claim, and do not treat task 1-8 alone as a finished bootstrap.")
+	}
 	lines = append(lines, projectBootstrapResumePhaseGuidance(state))
 	return strings.Join(lines, "\n")
 }
@@ -6941,6 +6945,10 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string
 		"Continue the active project bootstrap from the persisted state above.",
 		"Do not restate the project state or re-read scaffold artifacts, template catalogs, or the full task tree unless the persisted counts are clearly inconsistent with tool results.",
 		"Do not call task.list, flow.list_templates, or file.read on scaffold planning artifacts unless a specific persisted task, template, or count is actually unclear.",
+	}
+	if state.AssignmentCount == 0 && state.PlannedTaskCount == 0 && state.PlannedFlowTemplateCount == 0 {
+		lines = append(lines, "Do not claim bootstrap is complete just because the governance gate or checklist tasks are done. Those system-managed setup tasks do not count as staffed project work.")
+		lines = append(lines, "Your next action must create real project assignments, non-bootstrap tasks, and runnable flow templates, or report a concrete blocker preventing that.")
 	}
 	if strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
 		reason := strings.TrimSpace(state.ValidationFailureReason)

@@ -6540,6 +6540,23 @@ func TestBuildProjectBootstrapResumeStateMessageIncludesNamedBlockedTask(t *test
 	}
 }
 
+func TestBuildProjectBootstrapResumeStateMessageRejectsChecklistOnlyCompletion(t *testing.T) {
+	message := buildProjectBootstrapResumeStateMessage(projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		CurrentPhase:             projectBootstrapCheckpointStaffingPersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointProjectCreated,
+	}, projectBootstrapResumeSnapshot{
+		ProjectID:   uuid.NewString(),
+		ProjectSlug: "speaker-pipeline-test",
+	})
+	if !strings.Contains(message, "Bootstrap is not complete just because the governance gate or checklist tasks are marked done.") {
+		t.Fatalf("message = %q, want checklist-only completion warning", message)
+	}
+	if !strings.Contains(message, "task 1-8 alone as a finished bootstrap") {
+		t.Fatalf("message = %q, want explicit checklist-only warning", message)
+	}
+}
+
 func TestProjectBootstrapFailureTaskNumber(t *testing.T) {
 	if got := projectBootstrapFailureTaskNumber("kickoff validation failed: first-wave task 19 (Draft homepage hero) has no assigned agent"); got != 19 {
 		t.Fatalf("task number = %d, want 19", got)
@@ -6661,6 +6678,21 @@ func TestBuildProjectBootstrapResumeActionPromptForUnassignedTaskRequiresImmedia
 	}
 	if !strings.Contains(got, "call task.update on that task now") {
 		t.Fatalf("expected direct task.update guidance, got %q", got)
+	}
+}
+
+func TestBuildProjectBootstrapResumeActionPromptRejectsChecklistOnlyCompletion(t *testing.T) {
+	state := projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		CurrentPhase:             projectBootstrapCheckpointStaffingPersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointProjectCreated,
+	}
+	got := buildProjectBootstrapResumeActionPrompt(state)
+	if !strings.Contains(got, "Do not claim bootstrap is complete just because the governance gate or checklist tasks are done.") {
+		t.Fatalf("expected checklist-only completion rejection, got %q", got)
+	}
+	if !strings.Contains(got, "Your next action must create real project assignments, non-bootstrap tasks, and runnable flow templates") {
+		t.Fatalf("expected staffed-work creation guidance, got %q", got)
 	}
 }
 
