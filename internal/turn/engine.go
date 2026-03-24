@@ -9810,12 +9810,19 @@ func (e *TurnEngine) reconcileRecoveryCheckpointCandidate(ctx context.Context, r
 			checkpoint.TargetPath = ""
 			checkpoint.ArtifactPath = ""
 		}
+		checkpoint = normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
 	}
 	historicalHintTarget, hintOK := e.recoveryHistoricalTargetPathHint(ctx, rt)
 	historicalTarget, _, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt)
 	historicalTarget = strings.TrimSpace(historicalTarget)
 	if (!ok || historicalTarget == "") && hintOK {
 		historicalTarget = strings.TrimSpace(historicalHintTarget)
+		ok = historicalTarget != ""
+	}
+	if haveTaskRecord && historicalTarget != "" {
+		historicalTarget = strings.TrimSpace(normalizeRecoveryCheckpointTargetForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
+			TargetPath: historicalTarget,
+		}).TargetPath)
 		ok = historicalTarget != ""
 	}
 	if !ok || historicalTarget == "" {
@@ -10034,6 +10041,72 @@ func recoveryTaskTargetPathScore(taskRecord repo.ProjectTask, targetPath, draft 
 	return score
 }
 
+func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) taskcheckpoint.RecoveryFileWriteCheckpoint {
+	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
+	targetPath := strings.TrimSpace(checkpoint.TargetPath)
+	if targetPath == "" || !strings.HasPrefix(strings.ToLower(targetPath), "planning/") {
+		return checkpoint
+	}
+	plan, ok := taskplan.Parse(taskRecord.Metadata)
+	if !ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
+		return checkpoint
+	}
+	if !taskNeedsExecutableReportTarget(taskRecord) {
+		return checkpoint
+	}
+	inferred, ok := inferredExecutionReportTargetPath(taskRecord)
+	if !ok || sameWorkspaceRelativePath(inferred, targetPath) {
+		return checkpoint
+	}
+	checkpoint.TargetPath = inferred
+	return checkpoint
+}
+
+func taskNeedsExecutableReportTarget(taskRecord repo.ProjectTask) bool {
+	text := strings.ToLower(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	return strings.Contains(text, "report") ||
+		strings.Contains(text, "findings") ||
+		strings.Contains(text, "synthesize") ||
+		strings.Contains(text, "summary")
+}
+
+func inferredExecutionReportTargetPath(taskRecord repo.ProjectTask) (string, bool) {
+	if taskRecord.TaskNumber <= 0 {
+		return "", false
+	}
+	slug := strings.ToUpper(reportTargetSlug(taskRecord.Title))
+	if slug == "" {
+		slug = "REPORT"
+	}
+	return fmt.Sprintf("Work/OC-%d-%s.md", taskRecord.TaskNumber, slug), true
+}
+
+func reportTargetSlug(title string) string {
+	normalized := strings.TrimSpace(title)
+	if normalized == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range normalized {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if lastDash {
+				continue
+			}
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
 type recoveryResumeState struct {
 	targetPath                  string
 	targetDraft                 string
@@ -10151,6 +10224,10 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 	checkpoint, ok := e.recoveryFileWriteCheckpointCandidate(ctx, rt, "")
 	if !ok {
 		return recoveryResumeState{}, false
+	}
+	if taskRecord, ok := e.recoveryCheckpointTaskRecord(ctx, rt); ok {
+		normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, *checkpoint)
+		checkpoint = &normalized
 	}
 
 	state := recoveryResumeState{

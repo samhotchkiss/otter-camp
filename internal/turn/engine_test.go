@@ -1930,6 +1930,89 @@ func TestHandleTurnCompletedEventBlocksRepeatedGenericRecoveryReplyStatusInvento
 	}
 }
 
+func TestNormalizeRecoveryCheckpointTargetForTaskRepointsExecutionFirstReportAwayFromPlanning(t *testing.T) {
+	taskRecord := repo.ProjectTask{
+		TaskNumber: 13,
+		Title:      "Synthesize Validation Findings & Report",
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": "execution_first",
+			},
+		}),
+	}
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:   "planning/discovery-plan/oc-13-validation-plan.md",
+		ArtifactPath: ".ottercamp/recovery/planning/discovery-plan/oc-13-validation-plan.md",
+	}
+
+	normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
+	if normalized.TargetPath != "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md" {
+		t.Fatalf("normalized target_path = %q, want Work report path", normalized.TargetPath)
+	}
+	if normalized.ArtifactPath != checkpoint.ArtifactPath {
+		t.Fatalf("artifact_path = %q, want %q", normalized.ArtifactPath, checkpoint.ArtifactPath)
+	}
+}
+
+func TestNormalizeRecoveryCheckpointTargetForTaskKeepsPlanningTargetForNonReportTask(t *testing.T) {
+	taskRecord := repo.ProjectTask{
+		TaskNumber: 7,
+		Title:      "Validate task sizing and dependencies",
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": "execution_first",
+			},
+		}),
+	}
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: "planning/discovery-plan/oc-7-validation-plan.md",
+	}
+
+	normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
+	if normalized.TargetPath != checkpoint.TargetPath {
+		t.Fatalf("normalized target_path = %q, want unchanged %q", normalized.TargetPath, checkpoint.TargetPath)
+	}
+}
+
+func TestReconcileRecoveryCheckpointCandidateNormalizesExecutionFirstReportTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Synthesize validation findings into a single report with recommendations."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  13,
+				WorkStatus:  "blocked",
+				Title:       "Synthesize Validation Findings & Report",
+				Description: &description,
+				Metadata: mustRawJSON(t, map[string]any{
+					"planning": map[string]any{
+						"mode": "execution_first",
+					},
+				}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+	}
+
+	checkpoint := fixture.engine.reconcileRecoveryCheckpointCandidate(context.Background(), rt, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:   "planning/discovery-plan/oc-13-validation-plan.md",
+		ArtifactPath: ".ottercamp/recovery/planning/discovery-plan/oc-13-validation-plan.md",
+	})
+	if checkpoint.TargetPath != "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md" {
+		t.Fatalf("TargetPath = %q, want normalized work report path", checkpoint.TargetPath)
+	}
+}
+
 func TestHandleTurnCompletedEventRetriesGenericTaskContinuationReply(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700002000, 0).UTC()
