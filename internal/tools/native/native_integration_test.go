@@ -4255,6 +4255,67 @@ func TestIntegrationBootstrapPlanningTaskCreateRejectsOversizedTopLevelTask(t *t
 	}
 }
 
+func TestIntegrationBootstrapPlanningTaskCreateRejectsBroadTopLevelTaskNeedingDecomposition(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	dataDir := t.TempDir()
+	seedReviewRefinementSystemTemplate(t, ctx, pool)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Broad Parent Rejection",
+		"slug":        "bootstrap-broad-parent-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap task.create rejects broad top-level work that still requires decomposition.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap broad parent planning",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	beforeTasks, err := taskRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list project tasks before create: %v", err)
+	}
+
+	out, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":  projectID.String(),
+		"title":       "Implement pipeline validation rules",
+		"description": "Define validation rules, severity model, remediation categories, exception handling, duplicate detection, and operator escalation guidance for the speaker pipeline. Deliver the complete validation rules package and supporting documentation as executable project work.",
+	})
+	if err != nil {
+		t.Fatalf("task.create broad top-level bootstrap task: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", out["error"])); !strings.Contains(got, "requires decomposition into bounded child tasks") {
+		t.Fatalf("task.create error = %q, want decomposition rejection", got)
+	}
+	if _, ok := out["suggested_decomposition"].(map[string]any); !ok {
+		t.Fatalf("suggested_decomposition = %T, want map", out["suggested_decomposition"])
+	}
+
+	afterTasks, err := taskRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list project tasks after create: %v", err)
+	}
+	if len(afterTasks) != len(beforeTasks) {
+		t.Fatalf("project task count = %d, want %d after rejected broad bootstrap task", len(afterTasks), len(beforeTasks))
+	}
+}
+
 func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreamsInSameProjectSession(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -4595,6 +4656,121 @@ func TestIntegrationBootstrapSetupPersistRejectsProjectWideGateInFirstWaveSelect
 	}
 	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "blocks_scope=all") {
 		t.Fatalf("message = %q, want blocks_scope=all guidance", got)
+	}
+}
+
+func TestIntegrationBootstrapSetupPersistInfersFirstWaveSelectionFromFWAndLWTitles(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Persist Inferred First Wave",
+		"slug":        "bootstrap-persist-inferred-first-wave-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap.setup.persist infers FW/LW first-wave selection.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap persist inferred first wave",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
+
+	firstDescription := "Execute the selected first-wave task."
+	firstTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "FW-1: Execute test work",
+		Description:     &firstDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create first task: %v", err)
+	}
+	secondDescription := "Review the first-wave task."
+	secondTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "FW-2: Review and approve work",
+		Description:     &secondDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create second task: %v", err)
+	}
+	deferredDescription := "Keep this later-wave task deferred."
+	deferredTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "LW-1: Deferred follow-on validation",
+		Description:     &deferredDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create deferred task: %v", err)
+	}
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{"select-first-wave"},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist inferred selection: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("bootstrap.setup.persist inferred selection error = %v, want nil", out["error"])
+	}
+
+	reloadedFirst, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, firstTask.ID)
+	if err != nil {
+		t.Fatalf("reload first task: %v", err)
+	}
+	firstMeta := metadataObject(reloadedFirst.Metadata)
+	if selected, ok := firstMeta["bootstrap_first_wave_selected"].(bool); !ok || !selected {
+		t.Fatalf("first task bootstrap_first_wave_selected = %v, want true", firstMeta["bootstrap_first_wave_selected"])
+	}
+
+	reloadedSecond, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, secondTask.ID)
+	if err != nil {
+		t.Fatalf("reload second task: %v", err)
+	}
+	secondMeta := metadataObject(reloadedSecond.Metadata)
+	if selected, ok := secondMeta["bootstrap_first_wave_selected"].(bool); !ok || !selected {
+		t.Fatalf("second task bootstrap_first_wave_selected = %v, want true", secondMeta["bootstrap_first_wave_selected"])
+	}
+
+	reloadedDeferred, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, deferredTask.ID)
+	if err != nil {
+		t.Fatalf("reload deferred task: %v", err)
+	}
+	deferredMeta := metadataObject(reloadedDeferred.Metadata)
+	if selected, ok := deferredMeta["bootstrap_first_wave_selected"].(bool); !ok || selected {
+		t.Fatalf("deferred task bootstrap_first_wave_selected = %v, want false", deferredMeta["bootstrap_first_wave_selected"])
 	}
 }
 

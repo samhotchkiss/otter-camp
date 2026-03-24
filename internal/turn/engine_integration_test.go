@@ -10104,6 +10104,60 @@ func TestTurnEngineIntegrationProjectBootstrapQueuesRecoveryAfterRecoverableFirs
 	}
 }
 
+func TestTurnEngineIntegrationProjectBootstrapTreatsLWPrefixedTasksAsDeferred(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	template := mustCreateReviewFlowTemplate(t, ctx, fixture.pool, fixture.org.ID)
+
+	selectedDescription := "Execute the selected first-wave validation task."
+	selectedTask, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "FW-1: Execute test work and reach review",
+		Description:     &selectedDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+	})
+	if err != nil {
+		t.Fatalf("Create selected first-wave task: %v", err)
+	}
+
+	deferredDescription := "Keep this later-wave task in draft."
+	if _, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "LW-1: Deferred validation",
+		Description:     &deferredDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &pmAgent.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &fixture.user.ID,
+	}); err != nil {
+		t.Fatalf("Create deferred later-wave task: %v", err)
+	}
+
+	progress, err := fixture.engine.loadProjectBootstrapProgress(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("loadProjectBootstrapProgress: %v", err)
+	}
+	if progress.ValidationStatus != projectBootstrapValidationPassed {
+		t.Fatalf("validation_status = %q, want passed", progress.ValidationStatus)
+	}
+	if progress.FirstWaveTaskCount != 1 {
+		t.Fatalf("first_wave_task_count = %d, want 1", progress.FirstWaveTaskCount)
+	}
+	if len(progress.FirstWaveTasks) != 1 || progress.FirstWaveTasks[0].ID != selectedTask.ID {
+		t.Fatalf("first_wave_tasks = %+v, want only non-deferred FW task %s", progress.FirstWaveTasks, selectedTask.ID)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapKeepsRecoveryBudgetForNoProgressValidationRetry(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

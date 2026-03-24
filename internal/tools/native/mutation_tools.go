@@ -472,6 +472,15 @@ func readStringSlice(input map[string]any, key string) []string {
 
 func boundedTaskTooLargeResponse(title string, description *string, err error) map[string]any {
 	response := map[string]any{"error": err.Error()}
+	return appendSuggestedDecomposition(response, title, description)
+}
+
+func boundedTaskNeedsDecompositionResponse(title string, description *string) map[string]any {
+	response := map[string]any{"error": "task still requires decomposition into bounded child tasks before it can be created as executable work"}
+	return appendSuggestedDecomposition(response, title, description)
+}
+
+func appendSuggestedDecomposition(response map[string]any, title string, description *string) map[string]any {
 	plan := taskdecomp.Analyze(title, description)
 	if !plan.RequiresDecomposition || len(plan.Deliverables) == 0 {
 		return response
@@ -1716,7 +1725,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			return nil, listErr
 		}
 		if bootstrapSetupStillActive(projectTasks) {
-			_, decompErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+			prepared, decompErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
 				ParentTaskID: uuid.Nil,
 				Title:        title,
 				Description:  description,
@@ -1727,6 +1736,9 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 					return boundedTaskTooLargeResponse(title, description, decompErr), nil
 				}
 				return nil, decompErr
+			}
+			if prepared.Applied {
+				return boundedTaskNeedsDecompositionResponse(title, description), nil
 			}
 		}
 	}
@@ -2477,6 +2489,11 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 	}
 	if stringSliceContains(stepSlugs, "select-first-wave") {
 		executableCandidates := bootstrapFirstWaveSelectableTasks(projectTasks)
+		if !explicitFirstWaveSelection && len(executableCandidates) > 1 {
+			if inferred := inferBootstrapFirstWaveSelection(executableCandidates); len(inferred) > 0 {
+				selectedFirstWaveTaskIDs = inferred
+			}
+		}
 		if explicitFirstWaveSelection {
 			for taskID := range selectedFirstWaveTaskIDs {
 				task, ok := bootstrapTaskByID(projectTasks, taskID)
@@ -2497,7 +2514,7 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 				"error":   "first_wave_task_selection_required",
 				"message": "When persisting `select-first-wave`, include at least one selected task via `first_wave_task_ids` or `first_wave_task_numbers`.",
 			}, nil
-		case !explicitFirstWaveSelection && len(executableCandidates) > 1:
+		case !explicitFirstWaveSelection && len(executableCandidates) > 1 && len(selectedFirstWaveTaskIDs) == 0:
 			return map[string]any{
 				"error":   "first_wave_task_selection_required",
 				"message": "When persisting `select-first-wave` with multiple executable project tasks, include the exact selected first-wave tasks via `first_wave_task_ids` or `first_wave_task_numbers` so later-wave work stays draft.",
@@ -2663,6 +2680,59 @@ func bootstrapFirstWaveSelectableTasks(tasks []repo.ProjectTask) []repo.ProjectT
 		selectable = append(selectable, task)
 	}
 	return selectable
+}
+
+func inferBootstrapFirstWaveSelection(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
+	if len(tasks) == 0 {
+		return nil
+	}
+	selected := make(map[uuid.UUID]struct{})
+	known := 0
+	for _, task := range tasks {
+		hint, ok := bootstrapFirstWaveSelectionHint(task)
+		if !ok {
+			continue
+		}
+		known++
+		if hint {
+			selected[task.ID] = struct{}{}
+		}
+	}
+	if known != len(tasks) || len(selected) == 0 {
+		return nil
+	}
+	return selected
+}
+
+func bootstrapFirstWaveSelectionHint(task repo.ProjectTask) (bool, bool) {
+	metadata := metadataObject(task.Metadata)
+	if raw, ok := metadata["bootstrap_first_wave_selected"]; ok {
+		if selected, valid := raw.(bool); valid {
+			return selected, true
+		}
+	}
+
+	title := strings.ToLower(strings.TrimSpace(task.Title))
+	switch {
+	case strings.HasPrefix(title, "fw-"),
+		strings.HasPrefix(title, "fw:"),
+		strings.HasPrefix(title, "[fw]"),
+		strings.HasPrefix(title, "[fw-"),
+		strings.Contains(title, "first-wave"),
+		strings.Contains(title, "first wave"):
+		return true, true
+	case strings.HasPrefix(title, "lw-"),
+		strings.HasPrefix(title, "lw:"),
+		strings.HasPrefix(title, "[lw]"),
+		strings.HasPrefix(title, "[lw-"),
+		strings.Contains(title, "later-wave"),
+		strings.Contains(title, "later wave"),
+		strings.Contains(title, "deferred"),
+		strings.Contains(title, "next wave"):
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func bootstrapTaskByID(tasks []repo.ProjectTask, taskID uuid.UUID) (repo.ProjectTask, bool) {

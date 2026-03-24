@@ -3479,8 +3479,13 @@ func projectBootstrapTaskDeferredFromFirstWave(task repo.ProjectTask) bool {
 	switch {
 	case strings.HasPrefix(title, "next wave:"),
 		strings.HasPrefix(title, "[next wave]"),
+		strings.HasPrefix(title, "lw-"),
+		strings.HasPrefix(title, "lw:"),
+		strings.HasPrefix(title, "[lw]"),
+		strings.HasPrefix(title, "[lw-"),
 		strings.HasPrefix(title, "bootstrap complete:"),
 		strings.HasPrefix(title, "[bootstrap complete]"),
+		strings.Contains(title, "deferred"),
 		strings.Contains(title, "later wave"),
 		strings.Contains(title, "next wave"):
 		return true
