@@ -17061,12 +17061,15 @@ func TestTurnEngineIntegrationSyncProjectBootstrapSetupFromWorkspaceAutoPersists
 	if err != nil {
 		t.Fatalf("loadProjectBootstrapProgress: %v", err)
 	}
-	stepSlugs, _, err := fixture.engine.inferBootstrapSetupPersistFromWorkspace(ctx, project.ID, progress)
+	stepSlugs, selectedFirstWaveTaskIDs, _, err := fixture.engine.inferBootstrapSetupPersistFromWorkspace(ctx, project.ID, progress)
 	if err != nil {
 		t.Fatalf("inferBootstrapSetupPersistFromWorkspace: %v", err)
 	}
 	if !reflect.DeepEqual(stepSlugs, []string{"bind-repo-environment", "staff-project"}) {
 		t.Fatalf("inferred bootstrap step slugs = %v, want bind/staff", stepSlugs)
+	}
+	if len(selectedFirstWaveTaskIDs) != 0 {
+		t.Fatalf("selectedFirstWaveTaskIDs = %v, want empty when no first-wave artifacts exist", selectedFirstWaveTaskIDs)
 	}
 
 	turn, err := fixture.chatService.CreateTurn(ctx, projectSession.ID, lori.ID)

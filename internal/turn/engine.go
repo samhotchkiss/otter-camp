@@ -8091,14 +8091,14 @@ func (e *TurnEngine) autoPersistBootstrapSetupFromWorkspace(ctx context.Context,
 	if !progress.BootstrapTaskOutstanding || progress.BootstrapSetupTaskCount == 0 {
 		return false, nil
 	}
-	stepSlugs, signOffSummary, err := e.inferBootstrapSetupPersistFromWorkspace(ctx, rt.session.ScopeID, progress)
+	stepSlugs, selectedFirstWaveTaskIDs, signOffSummary, err := e.inferBootstrapSetupPersistFromWorkspace(ctx, rt.session.ScopeID, progress)
 	if err != nil {
 		return false, err
 	}
 	if len(stepSlugs) == 0 {
 		return false, nil
 	}
-	output, err := e.persistBootstrapSetupSteps(ctx, rt.session.ScopeID, stepSlugs, signOffSummary)
+	output, err := e.persistBootstrapSetupSteps(ctx, rt.session.ScopeID, stepSlugs, selectedFirstWaveTaskIDs, signOffSummary)
 	if err != nil {
 		return false, err
 	}
@@ -8135,14 +8135,14 @@ func (e *TurnEngine) syncProjectBootstrapSetupFromWorkspace(ctx context.Context,
 	if !progress.BootstrapTaskOutstanding || progress.BootstrapSetupTaskCount == 0 {
 		return false, nil
 	}
-	stepSlugs, signOffSummary, err := e.inferBootstrapSetupPersistFromWorkspace(ctx, session.ScopeID, progress)
+	stepSlugs, selectedFirstWaveTaskIDs, signOffSummary, err := e.inferBootstrapSetupPersistFromWorkspace(ctx, session.ScopeID, progress)
 	if err != nil {
 		return false, err
 	}
 	if len(stepSlugs) == 0 {
 		return false, nil
 	}
-	output, err := e.persistBootstrapSetupSteps(ctx, session.ScopeID, stepSlugs, signOffSummary)
+	output, err := e.persistBootstrapSetupSteps(ctx, session.ScopeID, stepSlugs, selectedFirstWaveTaskIDs, signOffSummary)
 	if err != nil {
 		return false, err
 	}
@@ -8161,7 +8161,7 @@ func (e *TurnEngine) syncProjectBootstrapSetupFromWorkspace(ctx context.Context,
 	return true, nil
 }
 
-func (e *TurnEngine) persistBootstrapSetupSteps(ctx context.Context, projectID uuid.UUID, stepSlugs []string, signOffSummary string) (map[string]any, error) {
+func (e *TurnEngine) persistBootstrapSetupSteps(ctx context.Context, projectID uuid.UUID, stepSlugs []string, selectedFirstWaveTaskIDs map[uuid.UUID]struct{}, signOffSummary string) (map[string]any, error) {
 	if e == nil || e.tasks == nil || e.taskTransitions == nil || projectID == uuid.Nil {
 		return nil, nil
 	}
@@ -8186,6 +8186,11 @@ func (e *TurnEngine) persistBootstrapSetupSteps(ctx context.Context, projectID u
 			continue
 		}
 		tasksBySlug[slug] = task
+	}
+	if stringSliceContainsFold(stepSlugs, "select-first-wave") {
+		if err := e.persistBootstrapFirstWaveSelection(ctx, projectTasks, selectedFirstWaveTaskIDs); err != nil {
+			return nil, err
+		}
 	}
 
 	completed := make([]map[string]any, 0, len(stepSlugs))
@@ -8245,28 +8250,29 @@ func (e *TurnEngine) persistBootstrapSetupSteps(ctx context.Context, projectID u
 		"completed_steps":          completed,
 		"setup_checklist_complete": len(remaining) == 0,
 		"remaining_step_slugs":     remaining,
+		"selected_first_wave_task_ids": orderedUUIDStrings(selectedFirstWaveTaskIDs),
 	}, nil
 }
 
-func (e *TurnEngine) inferBootstrapSetupPersistFromWorkspace(ctx context.Context, projectID uuid.UUID, progress projectBootstrapProgress) ([]string, string, error) {
+func (e *TurnEngine) inferBootstrapSetupPersistFromWorkspace(ctx context.Context, projectID uuid.UUID, progress projectBootstrapProgress) ([]string, map[uuid.UUID]struct{}, string, error) {
 	if e == nil || e.projects == nil || e.tasks == nil || projectID == uuid.Nil {
-		return nil, "", nil
+		return nil, nil, "", nil
 	}
 	projectRecord, err := e.projects.GetByID(ctx, projectID)
 	if errors.Is(err, repo.ErrNotFound) {
-		return nil, "", nil
+		return nil, nil, "", nil
 	}
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	workspaceRoot, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 
 	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	setupTasks := make([]repo.ProjectTask, 0, len(projectTasks))
 	for _, task := range projectTasks {
@@ -8328,6 +8334,18 @@ func (e *TurnEngine) inferBootstrapSetupPersistFromWorkspace(ctx context.Context
 		}
 		completed = append(completed, slug)
 	}
+	selectedFirstWaveTaskIDs := map[uuid.UUID]struct{}{}
+	if stepReady["select-first-wave"] {
+		executableCandidates := bootstrapFirstWaveSelectableTasks(projectTasks)
+		if len(executableCandidates) == 1 {
+			selectedFirstWaveTaskIDs[executableCandidates[0].ID] = struct{}{}
+		} else if len(executableCandidates) > 1 {
+			if inferred := inferBootstrapFirstWaveSelection(executableCandidates); len(inferred) > 0 {
+				selectedFirstWaveTaskIDs = inferred
+			}
+		}
+	}
+
 	signOffSummary := ""
 	for _, slug := range completed {
 		if slug == bootstrapFrankSignOffStepSlug {
@@ -8335,7 +8353,136 @@ func (e *TurnEngine) inferBootstrapSetupPersistFromWorkspace(ctx context.Context
 			break
 		}
 	}
-	return completed, signOffSummary, nil
+	return completed, selectedFirstWaveTaskIDs, signOffSummary, nil
+}
+
+func (e *TurnEngine) persistBootstrapFirstWaveSelection(ctx context.Context, tasks []repo.ProjectTask, selected map[uuid.UUID]struct{}) error {
+	if e == nil || e.tasks == nil {
+		return nil
+	}
+	for _, task := range tasks {
+		if bootstrapGateTask(task) || bootstrapSetupTask(task) {
+			continue
+		}
+		metadata := messageMetadataMap(task.Metadata)
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		_, isSelected := selected[task.ID]
+		metadata["bootstrap_first_wave_selected"] = isSelected
+		updatedMetadata, err := json.Marshal(metadata)
+		if err != nil {
+			return err
+		}
+		task.Metadata = updatedMetadata
+		if _, err := e.tasks.Update(ctx, task); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stringSliceContainsFold(items []string, needle string) bool {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(needle)) {
+			return true
+		}
+	}
+	return false
+}
+
+func bootstrapGateTask(task repo.ProjectTask) bool {
+	metadata := messageMetadataMap(task.Metadata)
+	bootstrapGate, _ := metadata["bootstrap_gate"].(bool)
+	return bootstrapGate
+}
+
+func bootstrapSetupTask(task repo.ProjectTask) bool {
+	metadata := messageMetadataMap(task.Metadata)
+	setupTask, _ := metadata["bootstrap_setup_task"].(bool)
+	return setupTask
+}
+
+func bootstrapFirstWaveSelectableTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
+	selectable := make([]repo.ProjectTask, 0, len(tasks))
+	for _, task := range tasks {
+		if bootstrapGateTask(task) || bootstrapSetupTask(task) {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(task.BlocksScope), "all") {
+			continue
+		}
+		selectable = append(selectable, task)
+	}
+	return selectable
+}
+
+func inferBootstrapFirstWaveSelection(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
+	if len(tasks) == 0 {
+		return nil
+	}
+	selected := make(map[uuid.UUID]struct{})
+	known := 0
+	for _, task := range tasks {
+		hint, ok := bootstrapFirstWaveSelectionHint(task)
+		if !ok {
+			continue
+		}
+		known++
+		if hint {
+			selected[task.ID] = struct{}{}
+		}
+	}
+	if known != len(tasks) || len(selected) == 0 {
+		return nil
+	}
+	return selected
+}
+
+func bootstrapFirstWaveSelectionHint(task repo.ProjectTask) (bool, bool) {
+	metadata := messageMetadataMap(task.Metadata)
+	if raw, ok := metadata["bootstrap_first_wave_selected"]; ok {
+		if selected, valid := raw.(bool); valid {
+			return selected, true
+		}
+	}
+
+	title := strings.ToLower(strings.TrimSpace(task.Title))
+	switch {
+	case strings.HasPrefix(title, "fw-"),
+		strings.HasPrefix(title, "fw:"),
+		strings.HasPrefix(title, "[fw]"),
+		strings.HasPrefix(title, "[fw-"),
+		strings.Contains(title, "first-wave"),
+		strings.Contains(title, "first wave"):
+		return true, true
+	case strings.HasPrefix(title, "lw-"),
+		strings.HasPrefix(title, "lw:"),
+		strings.HasPrefix(title, "[lw]"),
+		strings.HasPrefix(title, "[lw-"),
+		strings.Contains(title, "later-wave"),
+		strings.Contains(title, "later wave"),
+		strings.Contains(title, "deferred"),
+		strings.Contains(title, "next wave"):
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func orderedUUIDStrings(items map[uuid.UUID]struct{}) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for id := range items {
+		if id == uuid.Nil {
+			continue
+		}
+		out = append(out, id.String())
+	}
+	sort.Strings(out)
+	return out
 }
 
 func toolResultsContainNamedTool(results []ToolResult, toolName string) bool {
