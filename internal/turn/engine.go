@@ -10690,6 +10690,14 @@ func truncateRecoveryResumeExcerpt(text string, limit int) (string, bool) {
 }
 
 func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRuntime) (string, string, bool) {
+	if taskRecord, ok := e.recoveryCheckpointTaskRecord(ctx, rt); ok {
+		if targetPath := strings.TrimSpace(explicitDeliverablePath(taskRecord)); targetPath != "" {
+			if draft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
+				return targetPath, draft, true
+			}
+			return targetPath, "", true
+		}
+	}
 	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
 		if targetPath := strings.TrimSpace(checkpoint.TargetPath); targetPath != "" {
 			if draft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {

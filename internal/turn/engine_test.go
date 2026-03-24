@@ -11853,6 +11853,72 @@ func TestRecoveryHistoricalSubstantiveOutputContextSkipsNewerStrategyArtifacts(t
 	}
 }
 
+func TestRecoveryFileOutputContextPrefersExplicitDeliverablePathOverHistoricalPlanningArtifacts(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	description := "Design the core data model for speaking opportunities in the pipeline. Output: schema-definition.md with complete field specifications."
+	plan := taskplan.Analyze("Design Pipeline Data Schema & Fields", &description)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		Description:    &description,
+		Metadata:       taskplan.ApplyMetadata(nil, plan),
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "planning/strategy-artifact/oc-9-success-narrative.md",
+				"content": strings.TrimSpace(`# Success narrative
+
+- Kind: strategy_artifact
+- Source task: OC-9
+`),
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	targetPath, draft, ok := fixture.engine.recoveryFileOutputContext(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery file output context")
+	}
+	if targetPath != "schema-definition.md" {
+		t.Fatalf("targetPath = %q, want schema-definition.md", targetPath)
+	}
+	if draft != "" {
+		t.Fatalf("draft = %q, want empty explicit-deliverable fallback", draft)
+	}
+}
+
 func TestRecoveryFileWriteCheckpointCandidatePrefersHistoricalSubstantivePathOverInitialMessageMetadata(t *testing.T) {
 	t.Parallel()
 
