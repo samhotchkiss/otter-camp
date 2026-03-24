@@ -1070,6 +1070,57 @@ func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
 	}
 }
 
+func TestAppendRecoveryResumeStateSkipsReviewTasks(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "test-result-state-machine.log",
+		ArtifactPath:  ".ottercamp/recovery/test-result-state-machine.log",
+		FailureReason: "assistant draft for test-result-state-machine.log described intent to write the deliverable instead of the file body",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				ProjectID:  uuid.New(),
+				WorkStatus: "review",
+				Metadata:   checkpointMetadata,
+			},
+		},
+	}
+	turn := &chat.ChatTurn{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   fixture.chat.participants[0].ParticipantID,
+		Status:         "in_progress",
+	}
+	fixture.chat.turns[turn.ID] = turn
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turn.ID)
+	rt := &turnRuntime{
+		session:      fixture.session,
+		turn:         turn,
+		recoveryTurn: true,
+	}
+
+	appended, err := fixture.engine.appendRecoveryResumeState(context.Background(), rt, false)
+	if err != nil {
+		t.Fatalf("appendRecoveryResumeState: %v", err)
+	}
+	if appended {
+		t.Fatal("appendRecoveryResumeState = true, want false for review task")
+	}
+	if rt.historyStartID != nil {
+		t.Fatalf("historyStartID = %v, want nil when review task skips recovery state", *rt.historyStartID)
+	}
+}
+
 func TestHandleTurnCompletedEventSkipsWhenCompletionMessagePresent(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 

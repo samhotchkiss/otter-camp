@@ -9829,8 +9829,20 @@ type recoveryResumeState struct {
 }
 
 func (e *TurnEngine) appendRecoveryResumeState(ctx context.Context, rt *turnRuntime, preserveInitialMessage bool) (bool, error) {
-	if rt == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
+	if e == nil || e.tasks == nil || rt == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
 		return false, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+			return false, nil
+		}
 	}
 	state, ok := e.loadRecoveryResumeState(ctx, rt)
 	if !ok {
