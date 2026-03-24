@@ -113,6 +113,32 @@ func TestFileWritePathOnlyRawReturnsContentRequired(t *testing.T) {
 	}
 }
 
+func TestSanitizeStructuredTaskTextStripsMalformedParameterEchoes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "xml parameter echo",
+			input: `Capture baseline metrics for the pipeline.<parameter name="description">`,
+			want:  "Capture baseline metrics for the pipeline.",
+		},
+		{
+			name:  "antml parameter tail",
+			input: `Capture system metrics for the validation lane.",antml:parameter>`,
+			want:  "Capture system metrics for the validation lane.",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeStructuredTaskText(tc.input); got != tc.want {
+				t.Fatalf("sanitizeStructuredTaskText(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFileWriteAllowsExplicitEmptyStringContent(t *testing.T) {
 	root := t.TempDir()
 	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})

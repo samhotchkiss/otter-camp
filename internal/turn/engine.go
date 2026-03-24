@@ -6413,7 +6413,7 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	if err != nil {
 		return false, err
 	}
-	if compactAction, ok, err := e.appendProjectBootstrapResumeActionPrompt(ctx, rt, state); err != nil {
+	if compactAction, ok, err := e.appendProjectBootstrapResumeActionPrompt(ctx, rt, state, snapshot); err != nil {
 		return false, err
 	} else if ok {
 		rt.historyStartID = &message.ID
@@ -6447,7 +6447,7 @@ func (e *TurnEngine) appendProjectBootstrapResumeState(ctx context.Context, rt *
 	return true, nil
 }
 
-func (e *TurnEngine) appendProjectBootstrapResumeActionPrompt(ctx context.Context, rt *turnRuntime, state projectBootstrapState) (*chat.ChatMessage, bool, error) {
+func (e *TurnEngine) appendProjectBootstrapResumeActionPrompt(ctx context.Context, rt *turnRuntime, state projectBootstrapState, snapshot projectBootstrapResumeSnapshot) (*chat.ChatMessage, bool, error) {
 	if e == nil || e.messages == nil || rt == nil || rt.initialMessageID == uuid.Nil {
 		return nil, false, nil
 	}
@@ -6479,7 +6479,7 @@ func (e *TurnEngine) appendProjectBootstrapResumeActionPrompt(ctx context.Contex
 		rt.agent.ID,
 		initialMessageID,
 		state.AutoTurnCount,
-		buildProjectBootstrapResumeActionPrompt(state),
+		buildProjectBootstrapResumeActionPrompt(state, snapshot),
 	)
 	if err != nil {
 		return nil, false, err
@@ -7123,7 +7123,7 @@ func projectBootstrapResumeShouldStartWithPersist(state projectBootstrapState) b
 	return false
 }
 
-func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string {
+func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState, snapshot projectBootstrapResumeSnapshot) string {
 	lines := []string{
 		"Continue the active project bootstrap from the persisted state above.",
 		"Do not restate the project state or re-read scaffold artifacts, template catalogs, or the full task tree unless the persisted counts are clearly inconsistent with tool results.",
@@ -7139,8 +7139,15 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string
 			reason = "repair the concrete bootstrap validation blocker named above"
 		}
 		lowerReason := strings.ToLower(reason)
+		unresolvedFailedTask := strings.TrimSpace(snapshot.FailedTaskLine) == "" &&
+			strings.Contains(strings.ToLower(strings.TrimSpace(snapshot.RepairTaskLine)), "exact persisted task id is no longer resolvable")
 		lines = append(lines, "Bootstrap is currently blocked on this validation failure: "+reason)
-		lines = append(lines, "Do not start with bootstrap.setup.persist on this turn unless you have already repaired the named blocker. First fix the specific persisted task, assignment, flow attachment, or bounded-size issue named above.")
+		if unresolvedFailedTask {
+			lines = append(lines, "The named blocker no longer resolves to one exact persisted task id. Start with bootstrap.setup.persist from the persisted state above so the runtime can restate the current blocker against the actual surviving task tree before you attempt any direct repair.")
+			lines = append(lines, "Do not call project.get, project.list, task.list, flow.list_templates, agent.list, or scaffold file reads before that bootstrap.setup.persist call.")
+		} else {
+			lines = append(lines, "Do not start with bootstrap.setup.persist on this turn unless you have already repaired the named blocker. First fix the specific persisted task, assignment, flow attachment, or bounded-size issue named above.")
+		}
 		lines = append(lines, "If the failure names an oversized first-wave or parent task, split that exact persisted task into narrower executable child tasks and keep each child bounded. If the failure names an unassigned or flowless first-wave task, fix that exact task directly.")
 		if strings.Contains(lowerReason, "only ") &&
 			(strings.Contains(lowerReason, "selected first-wave child tasks created flow_node_execution rows") ||
@@ -7164,7 +7171,11 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState) string
 		}
 		lines = append(lines, "When the named blocker is fixed, resume with bootstrap.setup.persist using only canonical bootstrap setup step slugs such as bind-repo-environment, staff-project, decompose-workstreams, validate-task-shape, attach-validate-flow-templates, select-first-wave, and record-frank-sign-off. Current phase names like first_wave_executions_created are not valid completed_step_slugs.")
 		lines = append(lines, "If first-wave selection is already persisted, do not use raw task.update to force draft first-wave tasks into queued or in_progress. Leave those tasks in draft and let bootstrap.setup.persist plus the bootstrap governance gate handle promotion after validation passes.")
-		lines = append(lines, "Only after the named blocker is repaired should you call bootstrap.setup.persist to record the corrected setup state.")
+		if unresolvedFailedTask {
+			lines = append(lines, "If that bootstrap.setup.persist call returns a newly resolved exact task id, repair that one task directly on the next step. If it reports that the blocker is already structurally resolved, use it to persist the corrected setup state immediately.")
+		} else {
+			lines = append(lines, "Only after the named blocker is repaired should you call bootstrap.setup.persist to record the corrected setup state.")
+		}
 		lines = append(lines, "Do not ask the user what they want. Continue the bootstrap workflow now.")
 		return strings.Join(lines, " ")
 	}

@@ -38,7 +38,7 @@ import (
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
 var parentChildOrdinalTitlePattern = regexp.MustCompile(`^([a-z]+)\s+(\d+)\s*:`)
-var malformedParameterEchoPattern = regexp.MustCompile(`(?is)<parameter\s+name\s*=\s*"[^"]+"\s*>`)
+var malformedParameterEchoPattern = regexp.MustCompile(`(?is)(<parameter\s+name\s*=\s*"[^"]+"\s*>|,?\s*antml:parameter>)`)
 var explicitDeliverablePathPattern = regexp.MustCompile(`(?i)\bdeliverable:\s*([^\s,;]+)`)
 var bootstrapWaveFamilyTitlePattern = regexp.MustCompile(`(?i)\b(?:[a-z0-9]+-)?(fw|lw)\s*[-:]?\s*(\d+)\b`)
 

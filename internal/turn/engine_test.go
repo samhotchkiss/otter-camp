@@ -4719,7 +4719,7 @@ func TestBuildProjectBootstrapResumeActionPromptForProjectGateFirstWaveTask(t *t
 		ValidationStatus:        projectBootstrapValidationFailed,
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
 		ValidationFailureReason: "kickoff validation failed: first-wave task 15 (Create flow template with work/review/merge nodes) is a project-wide gate (blocks_scope=all), so it cannot be selected alongside other first-wave tasks because it will block the rest of the wave from entering runnable execution",
-	})
+	}, projectBootstrapResumeSnapshot{})
 	if !strings.Contains(prompt, "Do not keep that named task as a project-wide gate while it remains in a multi-task first wave") {
 		t.Fatalf("prompt = %q, want project-gate repair guidance", prompt)
 	}
@@ -6397,7 +6397,7 @@ func TestBuildProjectBootstrapResumeActionPromptForSetupPersist(t *testing.T) {
 		BootstrapTaskOutstanding: true,
 		FirstWaveTaskCount:       3,
 		ValidationStatus:         projectBootstrapValidationPassed,
-	})
+	}, projectBootstrapResumeSnapshot{})
 	if !strings.Contains(prompt, "Do not call task.list, flow.list_templates, or file.read on scaffold planning artifacts") {
 		t.Fatalf("prompt = %q, want tool-specific anti-reread guidance", prompt)
 	}
@@ -6430,7 +6430,7 @@ func TestBuildProjectBootstrapResumeActionPromptForValidationFailure(t *testing.
 		ValidationStatus:        projectBootstrapValidationFailed,
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveSize,
 		ValidationFailureReason: "kickoff validation failed: first-wave task 35 (List blog personality traits) violates the bounded task-size policy: split it into smaller reviewable tasks before queueing",
-	})
+	}, projectBootstrapResumeSnapshot{})
 	if !strings.Contains(prompt, "Bootstrap is currently blocked on this validation failure: kickoff validation failed: first-wave task 35") {
 		t.Fatalf("prompt = %q, want concrete validation failure", prompt)
 	}
@@ -6451,13 +6451,36 @@ func TestBuildProjectBootstrapResumeActionPromptForValidationFailure(t *testing.
 	}
 }
 
+func TestBuildProjectBootstrapResumeActionPromptForUnresolvedFailedTaskStartsWithPersist(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		CurrentPhase:            projectBootstrapCheckpointFlowTemplatesPersisted,
+		ValidationStatus:        projectBootstrapValidationFailed,
+		ValidationFailureClass:  projectBootstrapFailureCompoundParent,
+		ValidationFailureReason: "kickoff validation failed: task 20 (Define cross-field validation rules) is still a broad parent workstream and must be split into bounded executable child tasks before bootstrap can complete",
+	}, projectBootstrapResumeSnapshot{
+		RepairTaskLine: buildProjectBootstrapUnresolvedFailureRepairTaskLine(20, "Define cross-field validation rules"),
+	})
+	if !strings.Contains(prompt, "The named blocker no longer resolves to one exact persisted task id. Start with bootstrap.setup.persist") {
+		t.Fatalf("prompt = %q, want unresolved-task persist-first guidance", prompt)
+	}
+	if strings.Contains(prompt, "Do not start with bootstrap.setup.persist on this turn unless you have already repaired the named blocker") {
+		t.Fatalf("prompt = %q, want no conflicting no-persist guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call project.get, project.list, task.list, flow.list_templates, agent.list, or scaffold file reads before that bootstrap.setup.persist call") {
+		t.Fatalf("prompt = %q, want no-reread-before-persist guidance", prompt)
+	}
+	if !strings.Contains(prompt, "If that bootstrap.setup.persist call returns a newly resolved exact task id, repair that one task directly on the next step") {
+		t.Fatalf("prompt = %q, want resolved-id follow-up guidance", prompt)
+	}
+}
+
 func TestBuildProjectBootstrapResumeActionPromptForPartialFirstWaveMaterialization(t *testing.T) {
 	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
 		CurrentPhase:            projectBootstrapCheckpointFirstWaveExecutions,
 		ValidationStatus:        projectBootstrapValidationFailed,
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
 		ValidationFailureReason: "kickoff validation failed: only 12 of 20 selected first-wave child tasks created flow_node_execution rows, so bootstrap never materialized the full runnable child wave",
-	})
+	}, projectBootstrapResumeSnapshot{})
 	if !strings.Contains(prompt, "selected first wave is too large or too broad to materialize cleanly in one pass") {
 		t.Fatalf("prompt = %q, want first-wave narrowing guidance", prompt)
 	}
@@ -6481,7 +6504,7 @@ func TestBuildProjectBootstrapResumeActionPromptForUnassignedFirstWaveTask(t *te
 		ValidationStatus:        projectBootstrapValidationFailed,
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
 		ValidationFailureReason: "kickoff validation failed: first-wave task 19 (Draft homepage hero) has no assigned agent",
-	})
+	}, projectBootstrapResumeSnapshot{})
 	if !strings.Contains(prompt, "already names the exact unassigned first-wave task") {
 		t.Fatalf("prompt = %q, want exact-task repair guidance", prompt)
 	}
@@ -6499,7 +6522,7 @@ func TestBuildProjectBootstrapResumeActionPromptForUnassignedWaveParent(t *testi
 		ValidationStatus:        projectBootstrapValidationFailed,
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
 		ValidationFailureReason: "kickoff validation failed: first-wave task 11 (Wave 3: Polish, Deploy & Content) has no assigned agent",
-	})
+	}, projectBootstrapResumeSnapshot{})
 	if !strings.Contains(prompt, "If the named task is a broad wave/workstream parent, do not read planning artifacts first") {
 		t.Fatalf("prompt = %q, want no planning reread guidance", prompt)
 	}
@@ -6672,7 +6695,7 @@ func TestBuildProjectBootstrapResumeActionPromptForUnassignedTaskRequiresImmedia
 		ValidationStatus:         projectBootstrapValidationFailed,
 		ValidationFailureReason:  "kickoff validation failed: first-wave task 11 (Site Build) has no assigned agent, so bootstrap cannot queue runnable execution",
 	}
-	got := buildProjectBootstrapResumeActionPrompt(state)
+	got := buildProjectBootstrapResumeActionPrompt(state, projectBootstrapResumeSnapshot{})
 	if !strings.Contains(got, "Your next assistant action should be a tool call, not a narrative reply.") {
 		t.Fatalf("expected immediate tool action guidance, got %q", got)
 	}
@@ -6687,7 +6710,7 @@ func TestBuildProjectBootstrapResumeActionPromptRejectsChecklistOnlyCompletion(t
 		CurrentPhase:             projectBootstrapCheckpointStaffingPersisted,
 		LastSuccessfulCheckpoint: projectBootstrapCheckpointProjectCreated,
 	}
-	got := buildProjectBootstrapResumeActionPrompt(state)
+	got := buildProjectBootstrapResumeActionPrompt(state, projectBootstrapResumeSnapshot{})
 	if !strings.Contains(got, "Do not claim bootstrap is complete just because the governance gate or checklist tasks are done.") {
 		t.Fatalf("expected checklist-only completion rejection, got %q", got)
 	}
@@ -7050,7 +7073,7 @@ func TestBuildProjectBootstrapResumeActionPromptStartsWithPersistAfterTaskTree(t
 		PlannedTaskCount:         18,
 		CurrentPhase:             projectBootstrapCheckpointTaskTreePersisted,
 		LastSuccessfulCheckpoint: projectBootstrapCheckpointTaskTreePersisted,
-	})
+	}, projectBootstrapResumeSnapshot{})
 	if !strings.Contains(prompt, "Your first tool call in this resume turn should be bootstrap.setup.persist") {
 		t.Fatalf("prompt = %q, want persist-first guidance after task tree", prompt)
 	}
