@@ -1796,6 +1796,140 @@ func TestHandleTurnCompletedEventBlocksRepeatedGenericRecoveryReplyHelpWithVaria
 	}
 }
 
+func TestHandleTurnCompletedEventBlocksRepeatedGenericRecoveryReplyPleaseSpecifyVariant(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Metadata = mustRawJSON(t, map[string]any{"recovery_action": recoveryActionValidationResume})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	reply := "I'm ready to assist with the Speaker Pipeline Ops Validation project.\n\nWhat do you need me to do?\n\nPlease specify:\n1. What action should I take?"
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, reply)
+	fixture.chat.mu.Lock()
+	fixture.chat.turns[turnID].RetryCount = maxGenericRecoveryReplyRetries
+	fixture.chat.mu.Unlock()
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "generic non-action replies") {
+		t.Fatalf("blocked reason = %q, want generic non-action reply reason", blocker.calls[0].reason)
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
+	}
+}
+
+func TestHandleTurnCompletedEventBlocksRepeatedGenericRecoveryReplyStatusInventoryVariant(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Metadata = mustRawJSON(t, map[string]any{"recovery_action": recoveryActionValidationResume})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	reply := "I'm ready to assist with the Speaker Pipeline Ops Validation task.\n\n**Current Status**: Task is in the Work node of an active flow execution.\n\nI have access to:\n- Planning artifacts\n- Prior task outputs"
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, reply)
+	fixture.chat.mu.Lock()
+	fixture.chat.turns[turnID].RetryCount = maxGenericRecoveryReplyRetries
+	fixture.chat.mu.Unlock()
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "generic non-action replies") {
+		t.Fatalf("blocked reason = %q, want generic non-action reply reason", blocker.calls[0].reason)
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
+	}
+}
+
 func TestHandleTurnCompletedEventRetriesGenericTaskContinuationReply(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700002000, 0).UTC()
