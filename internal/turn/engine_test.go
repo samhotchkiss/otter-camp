@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1436,6 +1437,108 @@ func TestHandleTurnCompletedEventAdvancesFlowFromSuccessfulGitCommit(t *testing.
 	}
 	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
 		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestHandleTurnCompletedEventCreatesCanonicalCommitFromDeliverableWrite(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	projectID := uuid.New()
+	projectSlug := "task-commit-" + uuid.NewString()[:8]
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	description := "Complete the task deliverable. Output: deliverable.md"
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				TaskNumber:        7,
+				Title:             "Write Deliverable",
+				Description:       &description,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+				Metadata: mustRawJSON(t, map[string]any{
+					"planning": map[string]any{
+						"mode": "execution_first",
+					},
+				}),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.flowAdvancer.tasks = taskRepo
+	fixture.flowAdvancer.activeExecution = &repo.FlowNodeExecution{
+		TaskID:      taskID,
+		FlowNodeID:  nodeID,
+		VisitNumber: 1,
+		Status:      "active",
+	}
+	fixture.engine.flowAdvancer = fixture.flowAdvancer
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work", DisplayName: "Work"},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Slug:           projectSlug,
+			},
+		},
+	}
+
+	projectRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "deliverable.md"), []byte("deliverable body\n"), 0o644); err != nil {
+		t.Fatalf("write deliverable: %v", err)
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Deliverable written.")
+	appendToolResultMessage(t, fixture, turnID, map[string]any{
+		"tool_name": "file.write",
+		"output": map[string]any{
+			"path":      "deliverable.md",
+			"byte_size": 17,
+		},
+	})
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if fixture.flowAdvancer.recordNodeCommitCalls != 1 {
+		t.Fatalf("record node commit calls = %d, want 1", fixture.flowAdvancer.recordNodeCommitCalls)
+	}
+	if strings.TrimSpace(fixture.flowAdvancer.lastCommitSHA) == "" {
+		t.Fatal("last commit sha = empty, want canonical runtime commit")
+	}
+	if fixture.flowAdvancer.advanceFlowCalls != 1 {
+		t.Fatalf("advance flow calls = %d, want 1", fixture.flowAdvancer.advanceFlowCalls)
+	}
+
+	messageBytes, err := exec.Command("git", "-C", projectRoot, "log", "-1", "--pretty=%B").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log latest commit: %v: %s", err, strings.TrimSpace(string(messageBytes)))
+	}
+	message := strings.TrimSpace(string(messageBytes))
+	if !strings.Contains(message, "flow(work:work#1): Write Deliverable") {
+		t.Fatalf("latest commit message = %q, want canonical work commit header", message)
 	}
 }
 
@@ -11618,6 +11721,7 @@ func (f *fakeFlowNodeRepo) GetByID(_ context.Context, id uuid.UUID) (repo.FlowNo
 
 type fakeFlowAdvancer struct {
 	tasks                 *fakeTaskRepo
+	activeExecution       *repo.FlowNodeExecution
 	ensureActiveCalls     int
 	recordNodeCommitCalls int
 	advanceFlowCalls      int
@@ -11629,6 +11733,10 @@ type fakeFlowAdvancer struct {
 
 func (f *fakeFlowAdvancer) EnsureActiveExecution(_ context.Context, taskID uuid.UUID) (*repo.FlowNodeExecution, error) {
 	f.ensureActiveCalls++
+	if f.activeExecution != nil {
+		copyExecution := *f.activeExecution
+		return &copyExecution, nil
+	}
 	return &repo.FlowNodeExecution{TaskID: taskID, Status: "active"}, nil
 }
 
