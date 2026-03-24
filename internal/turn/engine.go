@@ -6770,6 +6770,7 @@ func continuationSummaryLooksUnavailable(summary string) bool {
 		"i do not see any active task context",
 		"i don't see a durable draft",
 		"i do not see a durable draft",
+		"no continuation summary or task session history was included in this message",
 		"please provide the substantive draft",
 		"please provide the substantive draft or recovery artifact",
 		"please provide the recovery artifact",
