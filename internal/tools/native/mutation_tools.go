@@ -486,10 +486,36 @@ func (e *NativeToolExecutor) rejectReviewTaskMutation(ctx context.Context, scope
 		return nil, false, nil
 	}
 	normalizedPath := normalizeWorkspacePath(relativePath)
+	if allowedReviewArtifactPath(normalizedPath) {
+		return nil, false, nil
+	}
 	return map[string]any{
 		"error":   "review_action_required",
-		"message": fmt.Sprintf("This task is currently in review. Do not modify `%s` from the review lane. Inspect the existing deliverables, then call `flow.review_decision` with the active `flow_node_execution_id` and `decision=approve` or `decision=reject`. Put concrete rejection findings in the review decision itself, not in a new workspace file.", normalizedPath),
+		"message": fmt.Sprintf("This task is currently in review. Do not modify `%s` from the review lane unless it is a review-scoped markdown artifact. Inspect the existing deliverables, then call `flow.review_decision` with the active `flow_node_execution_id` and `decision=approve` or `decision=reject`. Repo-backed review notes must stay under `review/`, `reviews/`, `.ottercamp/review/`, or `.ottercamp/reviews/` and use CriticMarkup markdown annotations rather than continuing the deliverable implementation.", normalizedPath),
 	}, true, nil
+}
+
+func allowedReviewArtifactPath(path string) bool {
+	normalizedPath := normalizeWorkspacePath(path)
+	if normalizedPath == "" {
+		return false
+	}
+	lowerPath := strings.ToLower(normalizedPath)
+	if !strings.HasSuffix(lowerPath, ".md") && !strings.HasSuffix(lowerPath, ".markdown") && !strings.HasSuffix(lowerPath, ".mdown") {
+		return false
+	}
+	allowedPrefixes := []string{
+		"review/",
+		"reviews/",
+		".ottercamp/review/",
+		".ottercamp/reviews/",
+	}
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(lowerPath, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeSlug(value string) string {

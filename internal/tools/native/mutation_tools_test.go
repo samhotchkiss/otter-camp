@@ -636,6 +636,9 @@ func TestFileWriteRejectsMutationForReviewTask(t *testing.T) {
 	if !strings.Contains(message, "flow.review_decision") {
 		t.Fatalf("message = %q, want explicit review decision guidance", message)
 	}
+	if !strings.Contains(message, "CriticMarkup") {
+		t.Fatalf("message = %q, want CriticMarkup guidance", message)
+	}
 	if _, err := os.Stat(filepath.Join(root, "src", "generate_reports.py")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("review task deliverable should not be written, stat err = %v", err)
 	}
@@ -691,12 +694,63 @@ func TestFileEditRejectsMutationForReviewTask(t *testing.T) {
 	if !strings.Contains(message, "flow.review_decision") {
 		t.Fatalf("message = %q, want explicit review decision guidance", message)
 	}
+	if !strings.Contains(message, "review-scoped markdown artifact") {
+		t.Fatalf("message = %q, want review artifact guidance", message)
+	}
 	body, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("read deliverable: %v", err)
 	}
 	if string(body) != "print('hello')\n" {
 		t.Fatalf("review task deliverable mutated unexpectedly: %q", string(body))
+	}
+}
+
+func TestFileWriteAllowsReviewScopedMarkdownArtifact(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	agentID := uuid.New()
+	description := "Review the reporting deliverable and record line-specific feedback."
+
+	taskRepo := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			Title:          "Review reporting implementation",
+			Description:    &description,
+			WorkStatus:     "review",
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = taskRepo
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		TaskID:         &taskID,
+	})
+
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path":        "review/rejection-notes.md",
+		"content":     "Line 12: {>> handle empty input <<}\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["created"] != true {
+		t.Fatalf("created = %v, want true", out["created"])
+	}
+	body, err := os.ReadFile(filepath.Join(root, "review", "rejection-notes.md"))
+	if err != nil {
+		t.Fatalf("read review artifact: %v", err)
+	}
+	if string(body) != "Line 12: {>> handle empty input <<}" {
+		t.Fatalf("review artifact content = %q", string(body))
 	}
 }
 
