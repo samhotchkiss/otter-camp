@@ -1575,6 +1575,7 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 		FROM flow_node_execution e
 		JOIN project_task t ON t.id = e.task_id
 		WHERE t.project_id = $1
+		  AND lower(trim(t.work_status)) NOT IN ('done', 'cancelled')
 		  AND e.status = 'active'
 	`, projectID).Scan(&activeTaskExecutions); err != nil {
 		return err
@@ -1592,6 +1593,7 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 		  AND cs.mode = 'async'
 		  AND cs.status = 'active'
 		  AND t.project_id = $1
+		  AND lower(trim(t.work_status)) NOT IN ('done', 'cancelled')
 	`, projectID).Scan(&activeTaskSessions); err != nil {
 		return err
 	}

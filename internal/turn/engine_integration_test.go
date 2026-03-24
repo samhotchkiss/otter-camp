@@ -15601,6 +15601,116 @@ func TestTurnEngineIntegrationProjectBootstrapFailsExplicitlyAfterRepeatedNoProg
 	}
 }
 
+func TestTurnEngineIntegrationProjectExecutionContinuationIgnoresTerminalTaskSessionsAndExecutions(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: project bootstrap already completed.")
+
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerAgent := mustCreateBootstrapWorkerAgent(t, ctx, fixture.pool, fixture.org.ID)
+	reviewerAgent := mustCreateBootstrapReviewerAgent(t, ctx, fixture.pool, fixture.org.ID)
+	assignments := assignment.NewService(repo.NewProjectAssignmentRepo(fixture.pool))
+	for _, item := range []assignment.AssignInput{
+		{ProjectID: project.ID, AgentID: pmAgent.ID, Role: "pm", AssignedByType: "agent", AssignedByID: &lori.ID},
+		{ProjectID: project.ID, AgentID: workerAgent.ID, Role: "worker", AssignedByType: "agent", AssignedByID: &lori.ID},
+		{ProjectID: project.ID, AgentID: reviewerAgent.ID, Role: "reviewer", AssignedByType: "agent", AssignedByID: &lori.ID},
+	} {
+		if _, err := assignments.Assign(ctx, item); err != nil {
+			t.Fatalf("Assign(%s): %v", item.Role, err)
+		}
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, projectBootstrapState{
+		Status:                  projectBootstrapStatusCompleted,
+		InitialMessageID:        handoff.ID.String(),
+		StartedAt:               &now,
+		UpdatedAt:               &now,
+		CompletedAt:             &now,
+		LastCheckpoint:          projectBootstrapCheckpointFirstWaveJobsClaimed,
+		CurrentPhase:            projectBootstrapCheckpointFirstWaveJobsClaimed,
+		PlannedTaskCount:        6,
+		FirstWaveTaskCount:      2,
+		FirstWavePromotedCount:  2,
+		FirstWaveExecutionCount: 2,
+		FirstWaveJobCount:       2,
+	}); err != nil {
+		t.Fatalf("updateProjectBootstrapState completed: %v", err)
+	}
+
+	template := mustCreateReviewFlowTemplate(t, ctx, fixture.pool, fixture.org.ID)
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	createTask := func(number int, title, status string, assignedID uuid.UUID) repo.ProjectTask {
+		description := fmt.Sprintf("Task %d description.", number)
+		input := repo.ProjectTask{
+			OrganizationID: fixture.org.ID,
+			ProjectID:      project.ID,
+			TaskNumber:     number,
+			Title:          title,
+			Description:    &description,
+			WorkStatus:     status,
+			FlowTemplateID: &template.ID,
+			CreatedByType:  "agent",
+			CreatedByID:    &lori.ID,
+		}
+		if assignedID != uuid.Nil {
+			input.AssignedAgentID = &assignedID
+		}
+		taskRecord, err := taskRepo.Create(ctx, input)
+		if err != nil {
+			t.Fatalf("Create task %d: %v", number, err)
+		}
+		return taskRecord
+	}
+
+	completed := createTask(10, "Completed first-wave task", "done", workerAgent.ID)
+	_ = createTask(11, "Draft follow-on task A", "draft", workerAgent.ID)
+	_ = createTask(12, "Draft follow-on task B", "draft", workerAgent.ID)
+
+	taskSession, _ := mustCreateTaskSession(t, ctx, fixture, completed, "stale terminal lane still closing down")
+	execution, err := repo.NewFlowNodeExecutionRepo(fixture.pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      completed.ID,
+		FlowNodeID:  *template.StartNodeID,
+		VisitNumber: 1,
+		SessionID:   &taskSession.ID,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("Create terminal-task flow execution: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE flow_node_execution
+		SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{live_turn_id}', to_jsonb($2::text), true)
+		WHERE id = $1
+	`, execution.ID, uuid.NewString()); err != nil {
+		t.Fatalf("seed execution metadata: %v", err)
+	}
+
+	if err := fixture.engine.HandleTaskStatusChangedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "task.status_changed",
+		Payload: mustJSON(t, map[string]any{
+			"task_id":    completed.ID.String(),
+			"project_id": project.ID.String(),
+			"to_status":  "done",
+		}),
+	}); err != nil {
+		t.Fatalf("HandleTaskStatusChangedEvent terminal-lane completion: %v", err)
+	}
+
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSession.ID); jobs != 1 {
+		t.Fatalf("runnable project continuation jobs = %d, want 1", jobs)
+	}
+}
+
 func TestTurnEngineIntegrationProjectBootstrapWatchdogFailsHungInFlightTurnAndReleasesClaim(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
