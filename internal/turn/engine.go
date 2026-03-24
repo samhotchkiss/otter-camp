@@ -12949,6 +12949,7 @@ func (e *TurnEngine) handleRecoveryPopulatedFileWriteOutcome(ctx context.Context
 		targetPath = strings.TrimSpace(stringValue(result.Output["path"]))
 	}
 
+	failureTargetPath := recoveryFileWriteFailureTargetPath(targetPath, result)
 	durable, failureReason := e.recoveryPopulatedFileWriteDurableOutcome(ctx, rt, targetPath, result)
 	if durable {
 		if rt.recoveryTurn {
@@ -12958,23 +12959,23 @@ func (e *TurnEngine) handleRecoveryPopulatedFileWriteOutcome(ctx context.Context
 	}
 
 	rt.stopReason = stopReasonRecoveryFileRejected
-	artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, state.Draft, failureReason)
+	artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, failureTargetPath, state.Draft, failureReason)
 	if artifactErr != nil {
 		e.logger.Warn("recovery: failed to persist populated file.write artifact",
 			"session_id", rt.session.ID,
 			"turn_id", rt.turn.ID,
-			"path", targetPath,
+			"path", failureTargetPath,
 			"error", artifactErr,
 		)
 	}
-	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReason))
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(failureTargetPath, artifactPath, failureReason))
 	if err != nil {
 		return true, err
 	}
-	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, failureReason, message.ID); checkpointErr != nil {
+	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, failureTargetPath, artifactPath, failureReason, message.ID); checkpointErr != nil {
 		return true, checkpointErr
 	}
-	rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureReason)
+	rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(failureTargetPath, artifactPath, failureReason)
 	return true, nil
 }
 
@@ -13010,6 +13011,20 @@ func recoveryFileWriteFailureReason(result ToolResult) string {
 		return code
 	}
 	return ""
+}
+
+func recoveryFileWriteFailureTargetPath(currentTargetPath string, result ToolResult) string {
+	targetPath := strings.TrimSpace(currentTargetPath)
+	deliverablePath := strings.TrimSpace(toolResultDeliverablePath(result))
+	if deliverablePath == "" {
+		return targetPath
+	}
+	switch normalizeValidationFailureCode(toolResultErrorCode(result)) {
+	case "deliverable_path_required", "explicit_deliverable_focus_required", "recovery_target_focus_required":
+		return deliverablePath
+	default:
+		return targetPath
+	}
 }
 
 func (e *TurnEngine) recoveryFileWriteTargetExists(ctx context.Context, rt *turnRuntime, targetPath string) (bool, error) {

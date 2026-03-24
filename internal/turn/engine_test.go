@@ -9284,6 +9284,95 @@ func TestHandleUserMessageValidationLoopBlockPersistsDeliverableCheckpoint(t *te
 	}
 }
 
+func TestHandleRecoveryPopulatedFileWriteOutcomePrefersDeliverablePathFromToolResult(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline-ops"
+	orgSlug := "default"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.dataDir = dataDir
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     20,
+				WorkStatus:     "in_progress",
+			},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+		recoveryFileWrites: map[string]recoveryPopulatedFileWriteState{
+			"write-1": {
+				TargetPath: "planning/strategy-artifact/oc-20-success-narrative.md",
+				Draft:      "# Pipeline Schema\n\nSubstantive schema body.\n",
+			},
+		},
+	}
+
+	handled, err := fixture.engine.handleRecoveryPopulatedFileWriteOutcome(context.Background(), rt, ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path": "planning/strategy-artifact/oc-20-success-narrative.md",
+		},
+	}, ToolResult{
+		ToolCallID: "write-1",
+		Name:       "file.write",
+		Output: map[string]any{
+			"error":            "deliverable_path_required",
+			"deliverable_path": "schemas/pipeline-schema-v1.0.md",
+			"message":          "This execution-first task already has an explicit deliverable path `schemas/pipeline-schema-v1.0.md`. Do not write `planning/strategy-artifact/oc-20-success-narrative.md` during task execution. Continue the concrete deliverable instead.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleRecoveryPopulatedFileWriteOutcome: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected handled=true")
+	}
+
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint")
+	}
+	if checkpoint.TargetPath != "schemas/pipeline-schema-v1.0.md" {
+		t.Fatalf("TargetPath = %q, want schemas/pipeline-schema-v1.0.md", checkpoint.TargetPath)
+	}
+	if !strings.Contains(checkpoint.ArtifactPath, "schemas/pipeline-schema-v1.0.md") {
+		t.Fatalf("ArtifactPath = %q, want schema artifact path", checkpoint.ArtifactPath)
+	}
+	if !fixture.messages.containsContentSubstring("schemas/pipeline-schema-v1.0.md") {
+		t.Fatal("expected recovery halt message to mention deliverable path")
+	}
+}
+
 func TestEnsureRecoveryTurnDurableTaskStateFailsWithoutTaskTransitions(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
