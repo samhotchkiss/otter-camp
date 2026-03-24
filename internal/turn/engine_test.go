@@ -2837,16 +2837,16 @@ func TestAppendProjectBootstrapContinuationMessageUsesPhaseAwareResumePrompt(t *
 	fixture.session.ScopeID = uuid.New()
 	now := time.Now().UTC()
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
-		Status:                  projectBootstrapStatusActive,
-		CurrentPhase:            projectBootstrapCheckpointFirstWaveSelected,
+		Status:                   projectBootstrapStatusActive,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveSelected,
 		LastSuccessfulCheckpoint: projectBootstrapCheckpointFlowTemplatesPersisted,
-		AssignmentCount:         3,
-		PlannedTaskCount:        13,
+		AssignmentCount:          3,
+		PlannedTaskCount:         13,
 		PlannedFlowTemplateCount: 2,
-		BootstrapTaskID:         uuid.NewString(),
+		BootstrapTaskID:          uuid.NewString(),
 		BootstrapTaskOutstanding: true,
-		ValidationStatus:        projectBootstrapValidationPassed,
-		StartedAt:               &now,
+		ValidationStatus:         projectBootstrapValidationPassed,
+		StartedAt:                &now,
 	})
 	if err != nil {
 		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
@@ -6563,7 +6563,9 @@ func TestBuildProjectBootstrapResumeActionPromptForPartialFirstWaveMaterializati
 		ValidationStatus:        projectBootstrapValidationFailed,
 		ValidationFailureClass:  projectBootstrapFailureFirstWaveExecution,
 		ValidationFailureReason: "kickoff validation failed: only 12 of 20 selected first-wave child tasks created flow_node_execution rows, so bootstrap never materialized the full runnable child wave",
-	}, projectBootstrapResumeSnapshot{})
+	}, projectBootstrapResumeSnapshot{
+		SelectedFirstWaveLine: "Currently selected first-wave tasks: task 10 id=abc title=\"Build report generator\" assigned_agent_id=worker-1; task 11 id=def title=\"Write dashboard spec\" assigned_agent_id=worker-2",
+	})
 	if !strings.Contains(prompt, "selected first wave is too large or too broad to materialize cleanly in one pass") {
 		t.Fatalf("prompt = %q, want first-wave narrowing guidance", prompt)
 	}
@@ -6578,6 +6580,9 @@ func TestBuildProjectBootstrapResumeActionPromptForPartialFirstWaveMaterializati
 	}
 	if !strings.Contains(prompt, "repair the runnable subset with direct task and flow mutations") {
 		t.Fatalf("prompt = %q, want direct repair guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Use the currently selected first-wave task ids already listed") {
+		t.Fatalf("prompt = %q, want selected-wave guidance", prompt)
 	}
 }
 
@@ -6665,6 +6670,22 @@ func TestBuildProjectBootstrapResumeStateMessageIncludesSelectableFirstWaveTasks
 	})
 	if !strings.Contains(message, "Selectable first-wave tasks: task 10 id=abc") {
 		t.Fatalf("message = %q, want selectable first-wave line", message)
+	}
+}
+
+func TestBuildProjectBootstrapResumeStateMessageIncludesSelectedFirstWaveTasks(t *testing.T) {
+	message := buildProjectBootstrapResumeStateMessage(projectBootstrapState{
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureReason:  "kickoff validation failed: only 11 of 12 selected first-wave child tasks produced runnable agent_turn jobs, so bootstrap never claimed the full runnable child wave",
+	}, projectBootstrapResumeSnapshot{
+		ProjectID:             uuid.NewString(),
+		ProjectSlug:           "speaker-pipeline-ops-validation-fresh",
+		SelectedFirstWaveLine: "Currently selected first-wave tasks: task 10 id=abc title=\"Build report generator\" assigned_agent_id=worker-1; task 11 id=def title=\"Write dashboard spec\" assigned_agent_id=worker-2",
+	})
+	if !strings.Contains(message, "Currently selected first-wave tasks: task 10 id=abc") {
+		t.Fatalf("message = %q, want selected first-wave line", message)
 	}
 }
 
@@ -8450,14 +8471,14 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "intent to write the deliverable",
 		},
 		{
-			name: "rejects target file placeholder narrative",
-			content: "The target file currently contains placeholder narrative (366 bytes) instead of the substantive workflow specification. The acceptance criteria document confirms the deliverable should be a comprehensive 11-section workflow specification for speaker pipeline validation discovery (target size 13.3 KB). I need to write the actual workflow specification content now.",
+			name:       "rejects target file placeholder narrative",
+			content:    "The target file currently contains placeholder narrative (366 bytes) instead of the substantive workflow specification. The acceptance criteria document confirms the deliverable should be a comprehensive 11-section workflow specification for speaker pipeline validation discovery (target size 13.3 KB). I need to write the actual workflow specification content now.",
 			targetPath: "deliverables/oc-11-workflow-specification.md",
 			want:       "intent to write the deliverable",
 		},
 		{
-			name: "rejects current state and planning reread placeholder",
-			content: "I need to check what the current state of the target file is, then read the planning artifacts to understand the workflow specification requirements before writing the deliverable.",
+			name:       "rejects current state and planning reread placeholder",
+			content:    "I need to check what the current state of the target file is, then read the planning artifacts to understand the workflow specification requirements before writing the deliverable.",
 			targetPath: "deliverables/oc-11-workflow-specification.md",
 			want:       "intent to write the deliverable",
 		},
@@ -8483,20 +8504,20 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "intent to write the deliverable",
 		},
 		{
-			name: "rejects file write failed due to missing content narration",
-			content: "I see the file_write failed due to missing content parameter. Let me create the comprehensive workflow specification now:",
+			name:       "rejects file write failed due to missing content narration",
+			content:    "I see the file_write failed due to missing content parameter. Let me create the comprehensive workflow specification now:",
 			targetPath: "deliverables/oc-11-workflow-specification.md",
 			want:       "intent to write the deliverable",
 		},
 		{
-			name: "rejects content parameter complete specification narration",
-			content: "I need to provide the content parameter for the file write. Let me create the complete workflow specification:",
+			name:       "rejects content parameter complete specification narration",
+			content:    "I need to provide the content parameter for the file write. Let me create the complete workflow specification:",
 			targetPath: "deliverables/oc-11-workflow-specification.md",
 			want:       "intent to write the deliverable",
 		},
 		{
-			name: "rejects actual content let me write specification narration",
-			content: "I need to provide the actual content. Let me write the complete workflow specification:",
+			name:       "rejects actual content let me write specification narration",
+			content:    "I need to provide the actual content. Let me write the complete workflow specification:",
 			targetPath: "deliverables/oc-11-workflow-specification.md",
 			want:       "intent to write the deliverable",
 		},
@@ -8583,14 +8604,14 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "tool-recovery troubleshooting",
 		},
 		{
-			name: "rejects file write function signature troubleshooting",
-			content: "I'm encountering a tool parameter validation issue with file_write-it requires the `content` parameter but the function signature isn't accepting my input correctly. Let me use file_edit instead to replace the placeholder with the full specification:",
+			name:       "rejects file write function signature troubleshooting",
+			content:    "I'm encountering a tool parameter validation issue with file_write-it requires the `content` parameter but the function signature isn't accepting my input correctly. Let me use file_edit instead to replace the placeholder with the full specification:",
 			targetPath: "deliverables/oc-11-validation-workflow-spec.md",
 			want:       "tool-recovery troubleshooting",
 		},
 		{
-			name: "rejects file write content parameter narration",
-			content: "I need to provide the content parameter for file_write. Here is the complete workflow specification:",
+			name:       "rejects file write content parameter narration",
+			content:    "I need to provide the content parameter for file_write. Here is the complete workflow specification:",
 			targetPath: "deliverables/oc-11-validation-workflow-spec.md",
 			want:       "tool-recovery troubleshooting",
 		},
@@ -10263,7 +10284,7 @@ func TestHandleTaskCLIExecuteWithoutCommandRewritesToFileWriteFromDraft(t *testi
 		TurnID:    &priorTurnID,
 		Role:      "assistant",
 		Status:    "final",
-		Content: "# Workflow Specification\n\n## Overview\n- Concrete workflow body.\n",
+		Content:   "# Workflow Specification\n\n## Overview\n- Concrete workflow body.\n",
 	})
 	fixture.messages.create(repo.ChatMessage{
 		SessionID: fixture.session.ID,

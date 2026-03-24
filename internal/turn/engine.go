@@ -6547,6 +6547,7 @@ type projectBootstrapResumeSnapshot struct {
 	AssignmentLine          string
 	FailedTaskLine          string
 	RepairTaskLine          string
+	SelectedFirstWaveLine   string
 	SelectableFirstWaveLine string
 }
 
@@ -6813,6 +6814,14 @@ func projectBootstrapReasonRequiresExplicitFirstWaveSelection(reason string) boo
 		(strings.Contains(lower, "selected first-wave subset") && strings.Contains(lower, "remain draft"))
 }
 
+func projectBootstrapReasonRequiresFirstWaveShrink(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(lower, "only ") &&
+		(strings.Contains(lower, "selected first-wave child tasks created flow_node_execution rows") ||
+			strings.Contains(lower, "selected first-wave child tasks produced runnable agent_turn jobs") ||
+			strings.Contains(lower, "selected first-wave child tasks left draft or entered queued execution"))
+}
+
 func formatBootstrapResumeTaskLine(taskRecord repo.ProjectTask) string {
 	if taskRecord.ID == uuid.Nil {
 		return ""
@@ -7026,12 +7035,37 @@ func (e *TurnEngine) loadProjectBootstrapResumeSnapshot(ctx context.Context, pro
 	}
 	if projectBootstrapReasonRequiresExplicitFirstWaveSelection(state.ValidationFailureReason) && e.tasks != nil {
 		if tasks, err := e.tasks.ListByProject(ctx, projectID); err == nil {
+			if selectedLine := formatBootstrapSelectedFirstWaveLine(bootstrapExplicitSelectedFirstWaveTasks(tasks)); selectedLine != "" {
+				snapshot.SelectedFirstWaveLine = selectedLine
+			}
 			if selectableLine := formatBootstrapSelectableFirstWaveLine(bootstrapFirstWaveSelectableTasks(tasks)); selectableLine != "" {
 				snapshot.SelectableFirstWaveLine = selectableLine
 			}
 		}
 	}
+	if projectBootstrapReasonRequiresFirstWaveShrink(state.ValidationFailureReason) && e.tasks != nil && snapshot.SelectedFirstWaveLine == "" {
+		if tasks, err := e.tasks.ListByProject(ctx, projectID); err == nil {
+			if selectedLine := formatBootstrapSelectedFirstWaveLine(bootstrapExplicitSelectedFirstWaveTasks(tasks)); selectedLine != "" {
+				snapshot.SelectedFirstWaveLine = selectedLine
+			}
+		}
+	}
 	return snapshot, nil
+}
+
+func formatBootstrapSelectedFirstWaveLine(tasks []repo.ProjectTask) string {
+	if len(tasks) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		label := fmt.Sprintf("Currently selected first-wave tasks: task %d id=%s title=%q", task.TaskNumber, task.ID.String(), strings.TrimSpace(task.Title))
+		if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
+			label += " assigned_agent_id=" + task.AssignedAgentID.String()
+		}
+		parts = append(parts, label)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func formatBootstrapSelectableFirstWaveLine(tasks []repo.ProjectTask) string {
@@ -7086,6 +7120,9 @@ func buildProjectBootstrapResumeStateMessage(state projectBootstrapState, snapsh
 	}
 	if repairLine := strings.TrimSpace(snapshot.RepairTaskLine); repairLine != "" {
 		lines = append(lines, repairLine)
+	}
+	if selected := strings.TrimSpace(snapshot.SelectedFirstWaveLine); selected != "" {
+		lines = append(lines, selected)
 	}
 	if selectable := strings.TrimSpace(snapshot.SelectableFirstWaveLine); selectable != "" {
 		lines = append(lines, selectable)
@@ -7275,12 +7312,12 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState, snapsh
 			lines = append(lines, "Do not start with bootstrap.setup.persist on this turn unless you have already repaired the named blocker. First fix the specific persisted task, assignment, flow attachment, or bounded-size issue named above.")
 		}
 		lines = append(lines, "If the failure names an oversized first-wave or parent task, split that exact persisted task into narrower executable child tasks and keep each child bounded. If the failure names an unassigned or flowless first-wave task, fix that exact task directly.")
-		if strings.Contains(lowerReason, "only ") &&
-			(strings.Contains(lowerReason, "selected first-wave child tasks created flow_node_execution rows") ||
-				strings.Contains(lowerReason, "selected first-wave child tasks produced runnable agent_turn jobs") ||
-				strings.Contains(lowerReason, "selected first-wave child tasks left draft or entered queued execution")) {
+		if projectBootstrapReasonRequiresFirstWaveShrink(reason) {
 			lines = append(lines, "This validation failure means the selected first wave is too large or too broad to materialize cleanly in one pass. Reduce the first wave to a smaller bounded subset of the already-created child tasks, leave later-wave tasks in draft, and then persist the corrected first-wave selection.")
 			lines = append(lines, "Do not start that repair with project.list, project.get, task.list, flow.list_templates, flow.get_execution, file.read, file.write, agent.list, or staffing discovery. Do not rewrite planning artifacts or restaff the project. Work directly from the persisted first-wave child tasks already named by the bootstrap state, repair the runnable subset with direct task and flow mutations, and only then return to bootstrap.setup.persist.")
+			if strings.TrimSpace(snapshot.SelectedFirstWaveLine) != "" {
+				lines = append(lines, "Use the currently selected first-wave task ids already listed in the bootstrap resume state above. Drop one or more of those selected tasks from the subset directly; do not ask the runtime to restate which tasks are already selected.")
+			}
 		}
 		if strings.Contains(lowerReason, "has no assigned agent") {
 			lines = append(lines, "This validation failure already names the exact unassigned first-wave task. Repair that persisted task directly instead of gathering more context. Do not start with project.get, task.list, task.children, flow.list_templates, or agent.list unless a single task-specific lookup is strictly necessary to complete that one assignment.")
@@ -8385,11 +8422,11 @@ func (e *TurnEngine) persistBootstrapSetupSteps(ctx context.Context, projectID u
 	}
 
 	return map[string]any{
-		"project_id":               projectID,
-		"status":                   "persisted",
-		"completed_steps":          completed,
-		"setup_checklist_complete": len(remaining) == 0,
-		"remaining_step_slugs":     remaining,
+		"project_id":                   projectID,
+		"status":                       "persisted",
+		"completed_steps":              completed,
+		"setup_checklist_complete":     len(remaining) == 0,
+		"remaining_step_slugs":         remaining,
 		"selected_first_wave_task_ids": orderedUUIDStrings(selectedFirstWaveTaskIDs),
 	}, nil
 }
@@ -8585,6 +8622,35 @@ func bootstrapFirstWaveSelectableTasks(tasks []repo.ProjectTask) []repo.ProjectT
 		selectable = append(selectable, task)
 	}
 	return selectable
+}
+
+func bootstrapExplicitSelectedFirstWaveTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
+	selected := make([]repo.ProjectTask, 0, len(tasks))
+	for _, task := range tasks {
+		if bootstrapGateTask(task) || bootstrapSetupTask(task) {
+			continue
+		}
+		explicit, ok := projectBootstrapExplicitFirstWaveSelection(messageMetadataMap(task.Metadata))
+		if !ok || !explicit {
+			continue
+		}
+		selected = append(selected, task)
+	}
+	sort.Slice(selected, func(i, j int) bool {
+		left := selected[i].TaskNumber
+		right := selected[j].TaskNumber
+		switch {
+		case left > 0 && right > 0:
+			return left < right
+		case left > 0:
+			return true
+		case right > 0:
+			return false
+		default:
+			return selected[i].ID.String() < selected[j].ID.String()
+		}
+	})
+	return selected
 }
 
 func inferBootstrapFirstWaveSelection(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
