@@ -11738,6 +11738,18 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 		return fmt.Sprintf("assistant draft for %s asked the operator to choose the next step instead of the file body", path)
 	}
 	if containsAny(lower,
+		"# ready to continue oc-",
+		"deliverable target:",
+		"what i can see:",
+		"what i need from you:",
+		"i'll move quickly once you confirm direction",
+	) && containsAny(lower,
+		"should i proceed with reading the planning artifacts",
+		"do you want me to compile findings",
+	) {
+		return fmt.Sprintf("assistant draft for %s asked the operator to confirm execution direction instead of the file body", path)
+	}
+	if containsAny(lower,
 		"before i proceed, i need clarification on:",
 		"before i proceed, i need clarification",
 		"source data:",

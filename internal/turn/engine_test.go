@@ -9588,6 +9588,19 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			want:       "runtime control-plane input instead of the file body",
 		},
 		{
+			name: "rejects ready-to-continue confirmation stub",
+			content: "# Ready to Continue OC-13 Validation Synthesis\n\n" +
+				"**Current Task**: OC-13: Synthesize Validation Findings & Report\n" +
+				"**Deliverable Target**: Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md\n\n" +
+				"**What I can see**:\n- Prior tasks completed\n- Planning artifacts available\n\n" +
+				"**What I need from you**:\n" +
+				"1. Should I proceed with reading the planning artifacts?\n" +
+				"2. Do you want me to compile findings from the workspace artifacts into the synthesis report immediately?\n\n" +
+				"I'll move quickly once you confirm direction.",
+			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
+			want:       "asked the operator to confirm execution direction instead of the file body",
+		},
+		{
 			name:    "accepts first-person file body",
 			content: "I will write at dawn because the house is quiet and the work still matters.",
 			want:    "",
