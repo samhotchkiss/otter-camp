@@ -12170,6 +12170,37 @@ func TestExplicitExecutionDeliverableWriteCompletedRecognizesOutputPath(t *testi
 	}
 }
 
+func TestExplicitExecutionDeliverableWriteCompletedRecognizesDirectoryOutputChildFile(t *testing.T) {
+	t.Parallel()
+
+	description := "Review SLA compliance report. Check that metrics are valid and analysis is sound. Output: Metrics review memo with approval status and any data quality concerns."
+	plan := taskplan.Analyze("Review Metrics & Analysis", &description)
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+
+	if !explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "Metrics/OC-26-QUALITY-GATE-SECOND-REVIEW.md",
+			"byte_size": 10415,
+		},
+	}) {
+		t.Fatal("expected child file under Output directory to count as explicit deliverable write")
+	}
+
+	if explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "planning/metrics-framework/oc-26-metric-tree.md",
+			"byte_size": 10415,
+		},
+	}) {
+		t.Fatal("unexpected completion from planning artifact outside Output directory")
+	}
+}
+
 func TestShouldStopAfterExecutionArtifactWriteForPlannedArtifact(t *testing.T) {
 	t.Parallel()
 
@@ -12195,6 +12226,27 @@ func TestShouldStopAfterExecutionArtifactWriteForPlannedArtifact(t *testing.T) {
 		},
 	}) {
 		t.Fatal("expected stop signal from planned execution artifact write")
+	}
+}
+
+func TestShouldStopAfterExecutionArtifactWriteForExplicitDirectoryOutput(t *testing.T) {
+	t.Parallel()
+
+	description := "Review SLA compliance report. Check that metrics are valid and analysis is sound. Output: Metrics review memo with approval status and any data quality concerns."
+	plan := taskplan.Analyze("Review Metrics & Analysis", &description)
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+
+	if !shouldStopAfterExecutionArtifactWrite(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "Metrics/OC-26-QUALITY-GATE-SECOND-REVIEW.md",
+			"byte_size": 10415,
+		},
+	}) {
+		t.Fatal("expected stop signal from explicit deliverable directory write")
 	}
 }
 

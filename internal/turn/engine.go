@@ -16007,10 +16007,21 @@ func explicitExecutionDeliverableWriteCompleted(taskRecord repo.ProjectTask, res
 		return false
 	}
 	writtenPath := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
-	if writtenPath == "" || !sameWorkspaceRelativePath(writtenPath, deliverablePath) {
+	if writtenPath == "" || !writtenPathMatchesExplicitDeliverable(writtenPath, deliverablePath) {
 		return false
 	}
 	return anyInt(result.Output["byte_size"]) > 0
+}
+
+func writtenPathMatchesExplicitDeliverable(writtenPath, deliverablePath string) bool {
+	if sameWorkspaceRelativePath(writtenPath, deliverablePath) {
+		return true
+	}
+	directoryPrefix := strings.TrimSuffix(deliverablePath, "/")
+	if directoryPrefix == "" {
+		return false
+	}
+	return strings.HasPrefix(writtenPath, directoryPrefix+"/")
 }
 
 func shouldStopAfterExecutionArtifactWrite(taskRecord repo.ProjectTask, result ToolResult) bool {
