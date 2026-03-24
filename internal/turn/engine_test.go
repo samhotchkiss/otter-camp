@@ -4229,6 +4229,40 @@ func TestShouldBlockTaskStatusMessageTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockTaskPlaceholderDeliverableFollowOnTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+		placeholderTargetSeen: true,
+	}
+
+	if !shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, "task.list", nil) {
+		t.Fatal("expected task.list to be blocked after placeholder deliverable read")
+	}
+	if !shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, "git.log", nil) {
+		t.Fatal("expected git.log to be blocked after placeholder deliverable read")
+	}
+	if !shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, "file.list", map[string]any{"path": "Work"}) {
+		t.Fatal("expected file.list to be blocked after placeholder deliverable read")
+	}
+	if !shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, "file.search", map[string]any{"path": "Work", "pattern": "OC-13"}) {
+		t.Fatal("expected file.search to be blocked after placeholder deliverable read")
+	}
+	if !shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, "file.read", map[string]any{"path": "planning/discovery-plan/oc-13-validation-plan.md"}) {
+		t.Fatal("expected planning file.read to be blocked after placeholder deliverable read")
+	}
+	if shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, "file.read", map[string]any{"path": "Work/OC-12-VALIDATION-REPORT.md"}) {
+		t.Fatal("expected targeted deliverable read to remain available after placeholder deliverable read")
+	}
+
+	rt.placeholderTargetSeen = false
+	if shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, "task.list", nil) {
+		t.Fatal("expected no follow-on blocking before placeholder deliverable read")
+	}
+}
+
 func TestShouldNotStopAfterBlockedProjectBootstrapRecoveryRereadScaffoldOnlyRecovery(t *testing.T) {
 	now := time.Now().UTC()
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
@@ -8418,8 +8452,8 @@ func TestBootstrapAutoContinueRedirectsAfterBootstrapCompletion(t *testing.T) {
 		t.Fatalf("GetByID user message: %v", err)
 	}
 	userMetadata, err := json.Marshal(map[string]any{
-		"source":                      projectBootstrapSource,
-		"auto_continue":               true,
+		"source":                       projectBootstrapSource,
+		"auto_continue":                true,
 		"bootstrap_initial_message_id": fixture.userMessageID.String(),
 	})
 	if err != nil {

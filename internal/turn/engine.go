@@ -489,34 +489,35 @@ type TurnEngine struct {
 }
 
 type turnRuntime struct {
-	session             *chat.ChatSession
-	agent               repo.Agent
-	turn                *chat.ChatTurn
-	initialMessageID    uuid.UUID
-	initialMessageText  string
-	currentJobID        *uuid.UUID
-	runID               *uuid.UUID
-	runStepID           *uuid.UUID
-	runAttemptID        *uuid.UUID
-	startedAt           time.Time
-	toolCallsUsed       int
-	activeTier2RunID    *uuid.UUID
-	activeTier2RunMu    sync.RWMutex
-	modelRetryUsed      int
-	invocationAttempt   int
-	toolSet             []tools.ToolDescriptor
-	stopReason          string
-	projectIdentity     *projectIdentity
-	historyStartID      *uuid.UUID
-	disableMemory       bool
-	freshKickoff        bool
-	recoveryTurn        bool
-	recoveryCLIFixes    int
-	recoveryFileFixes   int
-	recoveryFileWrites  map[string]recoveryPopulatedFileWriteState
-	recoveryWriteDone   bool
-	recoveryBlockReason string
-	recoveryQueuedTurn  bool
+	session               *chat.ChatSession
+	agent                 repo.Agent
+	turn                  *chat.ChatTurn
+	initialMessageID      uuid.UUID
+	initialMessageText    string
+	currentJobID          *uuid.UUID
+	runID                 *uuid.UUID
+	runStepID             *uuid.UUID
+	runAttemptID          *uuid.UUID
+	startedAt             time.Time
+	toolCallsUsed         int
+	activeTier2RunID      *uuid.UUID
+	activeTier2RunMu      sync.RWMutex
+	modelRetryUsed        int
+	invocationAttempt     int
+	toolSet               []tools.ToolDescriptor
+	stopReason            string
+	projectIdentity       *projectIdentity
+	historyStartID        *uuid.UUID
+	disableMemory         bool
+	freshKickoff          bool
+	recoveryTurn          bool
+	recoveryCLIFixes      int
+	recoveryFileFixes     int
+	recoveryFileWrites    map[string]recoveryPopulatedFileWriteState
+	recoveryWriteDone     bool
+	recoveryBlockReason   string
+	recoveryQueuedTurn    bool
+	placeholderTargetSeen bool
 }
 
 type projectIdentity struct {
@@ -8137,6 +8138,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt, name, arguments) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildTaskPlaceholderDeliverableFollowOnToolGuardError(name),
+			})
+			continue
+		}
 		if shouldBlockTaskStatusMessageTool(rt, name, arguments) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -12831,6 +12840,9 @@ func (e *TurnEngine) appendToolResults(ctx context.Context, rt *turnRuntime, res
 		if result.RunID != nil {
 			payload["run_id"] = result.RunID.String()
 		}
+		if strings.EqualFold(strings.TrimSpace(result.Name), "file.read") && strings.EqualFold(strings.TrimSpace(anyString(result.Output["error"])), "placeholder_deliverable") {
+			rt.placeholderTargetSeen = true
+		}
 		raw, _ := json.Marshal(payload)
 		toolCallID := result.ToolCallID
 		message, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
@@ -14449,6 +14461,23 @@ func shouldBlockTaskStatusMessageTool(rt *turnRuntime, toolName string, argument
 	return targetSessionID == ""
 }
 
+func shouldBlockTaskPlaceholderDeliverableFollowOnTool(rt *turnRuntime, toolName string, arguments map[string]any) bool {
+	if rt == nil || rt.session == nil || !rt.placeholderTargetSeen {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "task.list", "git.log", "file.list", "file.search":
+		return true
+	case "file.read":
+		return projectBootstrapRecoveryReadsPlanningPath(arguments)
+	default:
+		return false
+	}
+}
+
 func taskToolTouchesRecoveryStatusPath(arguments map[string]any) bool {
 	for _, key := range []string{"path", "file_path", "target_path", "artifact_path", "file_pattern", "pattern"} {
 		if taskToolArgumentReferencesRecoveryStatusPath(anyString(arguments[key])) {
@@ -14605,6 +14634,17 @@ func buildTaskRecoveryStatusPathToolGuardError(toolName string) string {
 
 func buildTaskStatusMessageToolGuardError() string {
 	return "task execution should not spend turns on status or notification messages without an explicit destination session. Continue the task deliverable directly in this turn, or provide a concrete target session_id for a real cross-session handoff."
+}
+
+func buildTaskPlaceholderDeliverableFollowOnToolGuardError(toolName string) string {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "task.list", "git.log":
+		return "task execution already confirmed that the target deliverable file is a rejected placeholder. Do not reread task lists or git history now. Use the completed validation artifacts already read in this turn and write the substantive deliverable body directly."
+	case "file.list", "file.search":
+		return "task execution already confirmed that the target deliverable file is a rejected placeholder. Do not browse or search the workspace again now. Use the completed validation artifacts already read in this turn and write the substantive deliverable body directly."
+	default:
+		return "task execution already confirmed that the target deliverable file is a rejected placeholder. Do not reread broad planning or discovery context now. Write the substantive deliverable body directly using the artifacts already read in this turn."
+	}
 }
 
 func shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt *turnRuntime, blocked bool) bool {
