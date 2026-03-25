@@ -9307,6 +9307,151 @@ func TestJobWorkerFailStaleModelInvocationsFailsOrphanedAsyncProjectSessionInvoc
 	}
 }
 
+func TestJobWorkerFailStaleModelInvocationsFailsDetachedAsyncProjectSessionInvocationWithStaleTurn(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "fail-stale-project-session-detached-turn-invocation",
+		DisplayName: "Fail Stale Project Session Detached Turn Invocation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover project continuations.",
+		AgentType:       "pm",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "fail-stale-project-session-detached-turn-invocation-project",
+		DisplayName:    "Fail Stale Project Session Detached Turn Invocation Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "continue orchestrating the project",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create trigger message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &message.ID,
+	})
+	if err != nil {
+		t.Fatalf("create stale detached turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET started_at = now() - interval '20 minutes'
+		WHERE id = $1
+	`, turn.ID); err != nil {
+		t.Fatalf("age stale detached turn: %v", err)
+	}
+
+	provider, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
+		Slug:        "fail-stale-project-session-detached-turn-invocation-provider",
+		DisplayName: "Fail Stale Project Session Detached Turn Invocation Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	invocation, err := repo.NewModelInvocationRepo(pool).Create(ctx, repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   provider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "in_flight",
+		ModelName:         "test-model",
+		AgentID:           &agent.ID,
+		ProjectID:         &project.ID,
+		SessionID:         &session.ID,
+		TurnID:            &turn.ID,
+	})
+	if err != nil {
+		t.Fatalf("create detached project invocation: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE model_invocation
+		SET created_at = now() - interval '20 minutes'
+		WHERE id = $1
+	`, invocation.ID); err != nil {
+		t.Fatalf("age detached project invocation: %v", err)
+	}
+	if _, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		TurnID:    &turn.ID,
+		Role:      "assistant",
+		Content:   "",
+		Status:    "pending",
+	}); err != nil {
+		t.Fatalf("create pending assistant: %v", err)
+	}
+
+	repaired, err := worker.FailStaleModelInvocations(ctx)
+	if err != nil {
+		t.Fatalf("FailStaleModelInvocations: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired invocations = %d, want 1", repaired)
+	}
+
+	storedInvocation, err := repo.NewModelInvocationRepo(pool).GetByID(ctx, invocation.ID)
+	if err != nil {
+		t.Fatalf("reload invocation: %v", err)
+	}
+	if storedInvocation.Status != "failed" {
+		t.Fatalf("invocation status = %q, want failed", storedInvocation.Status)
+	}
+	storedTurn, err := repo.NewChatTurnRepo(pool).GetByID(ctx, turn.ID)
+	if err != nil {
+		t.Fatalf("reload turn: %v", err)
+	}
+	if storedTurn.Status != "failed" {
+		t.Fatalf("turn status = %q, want failed", storedTurn.Status)
+	}
+}
+
 func TestJobWorkerFailStaleModelInvocationsFailsOldActiveExecutionTaskSession(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

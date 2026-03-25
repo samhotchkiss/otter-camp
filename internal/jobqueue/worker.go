@@ -1402,8 +1402,7 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		  AND (
 		    (
 		      mi.created_at < CASE
-		        WHEN mi.turn_id IS NULL
-		         AND EXISTS (
+		        WHEN EXISTS (
 		           SELECT 1
 		           FROM chat_session cs_orphan
 		           WHERE cs_orphan.id = mi.session_id
@@ -1411,8 +1410,7 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		             AND cs_orphan.scope_type = 'project_task'
 		         )
 		        THEN $3::timestamptz
-		        WHEN mi.turn_id IS NULL
-		         AND EXISTS (
+		        WHEN EXISTS (
 		           SELECT 1
 		           FROM chat_session cs_orphan
 		           WHERE cs_orphan.id = mi.session_id
