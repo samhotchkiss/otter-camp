@@ -16674,12 +16674,22 @@ func (e *TurnEngine) handleProjectBootstrapTerminalTurnFailure(ctx context.Conte
 	return true, nil
 }
 
-func projectBootstrapWatchdogTimeoutForModel(_ string, base time.Duration) time.Duration {
+func projectBootstrapWatchdogTimeoutForModel(modelName string, base time.Duration) time.Duration {
 	if base <= 0 {
 		return base
 	}
-	if base < 4*time.Minute {
-		return 4 * time.Minute
+	floor := 8 * time.Minute
+	lowerModel := strings.ToLower(strings.TrimSpace(modelName))
+	switch {
+	case strings.Contains(lowerModel, "qwen"),
+		strings.Contains(lowerModel, "mistral"),
+		strings.Contains(lowerModel, "llama"),
+		strings.Contains(lowerModel, "gemma"),
+		strings.Contains(lowerModel, "deepseek"):
+		floor = 20 * time.Minute
+	}
+	if base < floor {
+		return floor
 	}
 	return base
 }

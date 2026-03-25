@@ -115,6 +115,166 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
   - the fresh duplicate kickoff symptom is not reproducible once the stale extra worker processes are removed
   - the single-winner guard remains a reasonable defensive hardening, but the live symptom was primarily operational multi-worker drift
 
+## 2026-03-25 14:56 MDT update
+
+- deployed runtime is now actually rebuilt from the current tree and restarted cleanly
+- tmux runtime remains `codex-e2e-20260324`
+- live `serve` / `worker` start time is `2026-03-25 14:48:57 MDT`
+- health is green after the rebuild/restart
+- the old `1m30s` bootstrap watchdog seam is no longer reproducing on the fresh live canary
+
+### Important deployment correction
+
+- rerun-63 was not a trustworthy proof of the watchdog fix because the worker process was still an old binary:
+  - worker start time was `13:03:32 MDT`
+  - worker startup banner warned:
+    - `binary commit 664ff7bd... != HEAD 8c9b603e...`
+- I rebuilt `./bin/ottercamp` at `14:48:50 MDT` and restarted both panes:
+  - `65627 ./bin/ottercamp serve`
+  - `65629 ./bin/ottercamp worker --concurrency 24`
+- after that restart, the stale-binary mismatch warning disappeared; only the expected dirty-worktree warning remains because unrelated tracked changes are still present in the repo
+
+### Fresh live canary: rerun-65 bootstrap lane is active on the real deployed build
+
+- project:
+  - `658df263-20c5-43cf-8cc8-72cc0a2bf0dc`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-65`
+- note on create surface:
+  - direct `project create` still seeds the canonical bootstrap task tree (`8` tasks) but does not create an async project session by itself
+  - to keep the operator run moving, I used the normal product surface to create the async project session explicitly and then sent the canonical Frank bootstrap handoff into that session
+- session / kickoff state:
+  - async project session `f4185138-9bf9-4e12-8dde-413ef4fb1a47`
+  - bootstrap handoff message `d45985dc-bad6-4eff-9e80-9e5eb8ef2a23`
+  - kickoff job `5f963302-da3d-469d-a356-dc5d41473cac`
+  - kickoff turn `7fd11bed-8eba-4c68-8f72-050fa81583d0`
+  - invocation `75758be1-11be-4308-9c87-32a562ab9fb4`
+  - resolved agent `271c2b3e-e44c-42da-962b-9cab89110d81`
+
+### Live proof: the old 90-second watchdog seam is broken
+
+- at `14:56:02 MDT`, which is already past the old `1m30s` failure boundary for this turn:
+  - session `f4185138-9bf9-4e12-8dde-413ef4fb1a47` was still `active`
+  - turn `7fd11bed-8eba-4c68-8f72-050fa81583d0` was still `in_progress`
+  - invocation `75758be1-11be-4308-9c87-32a562ab9fb4` was still `in_flight`
+- by `14:56:43 MDT`, the session metadata had advanced further:
+  - `project_bootstrap.status = active`
+  - `project_bootstrap.current_phase = staffing_persisted`
+- so the prior failure mode:
+  - `bootstrap setup watchdog timed out after 1m30s with zero persisted staffing drafts...`
+  is no longer the current live blocker on the fresh rebuilt deployment
+
+### Current live seam
+
+- rerun-65 bootstrap is still in progress; it has not yet completed or exposed the next hard runtime failure
+- there is still background noise from older project sessions:
+  - worker periodic cleanup continues to log `requeued active project sessions without turns`
+  - those old lanes are no longer starving the fresh rerun-65 bootstrap lane, but they are still active background churn
+- the next concrete checkpoint is:
+  - either first real persisted bootstrap materialization beyond `staffing_persisted`
+  - or the next longer-timeout/runtime seam if this turn eventually stalls again later
+
+### Current next step
+
+- keep rerun-65 running on the clean deployed stack
+- capture the first post-90-second real seam or the first successful bootstrap completion checkpoint
+- if no new product seam appears, proceed from rerun-65 into the next Plan 0325B verification phase
+
+## 2026-03-25 15:00 MDT update
+
+- rerun-65 is still the active proof target
+- the fresh bootstrap-resume turn is alive; the lane has not reproduced the old watchdog seam
+- no code changes were made in this slice; this is a live-state checkpoint only
+
+### Live rerun-65 state at 15:00 MDT
+
+- project:
+  - `658df263-20c5-43cf-8cc8-72cc0a2bf0dc`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-65`
+- async project session:
+  - `f4185138-9bf9-4e12-8dde-413ef4fb1a47`
+- kickoff turn completed successfully:
+  - turn `7fd11bed-8eba-4c68-8f72-050fa81583d0`
+  - invocation `75758be1-11be-4308-9c87-32a562ab9fb4`
+- active bootstrap-resume turn:
+  - turn `bf38eb1a-b4dd-4241-b9f9-7a164336b95b`
+  - trigger message `7bb0c1c5-d53a-49d1-ad5b-40ed04c4c6f9`
+  - invocation `0bb28f4e-9757-4a3b-97f1-4c1d55dacaf8`
+  - model `qwen2.5:72b`
+  - status `in_progress` / `in_flight`
+
+### Persisted bootstrap state
+
+- session remains `active`
+- `project_bootstrap.status = active`
+- `project_bootstrap.current_phase = staffing_persisted`
+- `project_bootstrap.last_successful_checkpoint = project_created`
+- current task tree:
+  - task `2` (`Bind repo and environment`) is `done`
+  - tasks `1` and `3-7` remain `draft` and are assigned to bootstrap agent `271c2b3e-e44c-42da-962b-9cab89110d81`
+  - task `8` remains `draft` and is assigned to Frank `391aa626-d434-4e68-81ff-af29c55a8a20`
+- active project-scoped flow template still exists
+- no `agent_project_assignment` rows yet
+
+### Current seam
+
+- the fresh lane is no longer failing at the old `1m30s` bootstrap watchdog boundary
+- the current question is whether the live bootstrap-resume turn eventually persists staffing/materialization or stalls later in the resume path
+- background worker churn from older project sessions still exists, but it is not starving rerun-65 at this checkpoint
+
+## 2026-03-25 15:03 MDT update
+
+- latest local runtime is now patch-on-top of pushed commit `8c9b603e`
+- rerun-65 exposed the next real bootstrap seam cleanly
+- a new watchdog-policy fix is in code with focused `internal/turn` coverage and is ready to deploy
+
+### New local patch: bootstrap watchdog now gives materially longer time to slow/local model families during setup materialization
+
+- root cause:
+  - `internal/turn/engine.go`
+  - `projectBootstrapWatchdogTimeoutForModel(...)` still applied a flat `max(base, 4m)` timeout to every async bootstrap turn
+  - live rerun-65 proved that this was still a false-positive timeout for qwen-backed bootstrap resume: kickoff succeeded in `184s`, but the very next bootstrap-resume invocation was still `in_flight` at `4m0s` and got failed even though no provider/runtime crash had occurred
+  - historical live data in the same DB shows at least one qwen bootstrap invocation that ran `925s`, which makes a universal `4m` cap incompatible with the current local-model runtime
+- behavior:
+  - async bootstrap turns now use:
+    - `20m` floor for clearly slow/local model families (`qwen`, `mistral`, `llama`, `gemma`, `deepseek`)
+    - `8m` floor for the remaining model families
+  - larger explicit configured base timeouts still win unchanged
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- focused verification:
+  - `go test ./internal/turn -run 'Test(ProjectBootstrapWatchdogTimeoutForModel|HandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueueFailure|RecoverProjectTaskStaleInboundTurnWithoutRunKeepsLiveInvocation|RecoverRetriedAgentTurnLeakKeepsRecentCompletedInvocation)$' -count=1`
+
+### Live proof of the seam on rerun-65
+
+- original project:
+  - `658df263-20c5-43cf-8cc8-72cc0a2bf0dc`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-65`
+- bootstrap-resume failure:
+  - session `f4185138-9bf9-4e12-8dde-413ef4fb1a47`
+  - turn `bf38eb1a-b4dd-4241-b9f9-7a164336b95b`
+  - invocation `0bb28f4e-9757-4a3b-97f1-4c1d55dacaf8`
+  - failed at `15:01:38 MDT`
+  - failure:
+    - `bootstrap setup watchdog timed out after 4m0s with zero persisted staffing drafts, project assignments, scoped tasks, or flow templates; model invocation 0bb28f4e-9757-4a3b-97f1-4c1d55dacaf8 remained in_flight`
+- project metadata after failure:
+  - `project_bootstrap.status = failed`
+  - `project_bootstrap.current_phase = staffing_persisted`
+  - `last_successful_checkpoint = project_created`
+- automatic restart lane created by product:
+  - restart project `2ed2fcef-b110-4171-bd50-4b574a059a2f`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-65-restart`
+  - restart session `16b95db3-58bf-4e6d-905c-a75fe2c6d1dc`
+  - restart turn `ac270264-4c1d-4bb1-853b-be37411a70a0`
+  - restart invocation `d64052eb-19ac-430f-80a1-38c76554754b` is now the fresh live bootstrap target
+
+### Current next step
+
+- commit and push this watchdog-policy slice
+- rebuild/restart tmux `serve` and `worker`
+- keep the fresh restart lane (`rerun-65-restart`) under observation on the new timeout policy
+- if that lane still fails before materializing staffing, capture the next bootstrap-progress seam rather than treating timeout policy as the blocker anymore
+
 ## 2026-03-25 14:12 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `76537eb9`
