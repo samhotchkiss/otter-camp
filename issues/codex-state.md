@@ -2,6 +2,58 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 12:24 MDT update
+
+- active operator canary is still rerun-40 project `85c6f2ad-ce59-425f-b9f9-ce4f81b5d545`
+- rerun-40 is no longer clean proof material because the bad graph already let later sibling work execute out of order
+- current board slice on rerun-40:
+  - task `12`: `done`
+  - task `13`: `in_progress`
+  - task `14`: `done`
+  - task `15`: `done`
+  - task `16`: `draft`
+  - task `17`: `draft`
+  - task `18`: `done`
+  - task `19`: `draft`
+  - task `20`: `draft`
+
+### New decomposed-child dependency fix
+
+- patched [`internal/tools/native/mutation_tools.go`](../internal/tools/native/mutation_tools.go)
+  - `createDecomposedParentChildren(...)` now adds sequential sibling `project_task_dependency` edges in child creation order
+  - the same helper is used for reused and newly-created decomposed children, so follow-on retries preserve the same ordering graph instead of recreating an empty one
+- added focused coverage in [`internal/tools/native/mutation_tools_test.go`](../internal/tools/native/mutation_tools_test.go)
+  - `TestTaskCreateDecomposedChildrenAddSequentialDependenciesDuringBootstrap`
+- added focused integration coverage in [`internal/tools/native/native_integration_test.go`](../internal/tools/native/native_integration_test.go)
+  - `TestIntegrationBootstrapParentDecompositionAddsSequentialChildDependencies`
+
+### Verification completed in this stretch
+
+- `go test ./internal/tools/native -run 'Test(TaskCreateDecomposedChildrenAddSequentialDependenciesDuringBootstrap|TaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegration(BootstrapParentDecompositionAddsSequentialChildDependencies|ParentTaskCanDecomposeBroadFollowOnChildRequest)$' -count=1`
+
+### Live evidence captured before the fresh rerun
+
+- the contaminated rerun-40 child dependency graph currently resolves as:
+  - `13 -> 12`
+  - `14 -> 13`
+  - `16 -> 15`
+  - `17 -> 16`
+  - `19 -> 18`
+  - `20 -> 19`
+- but rerun-40 still shows the earlier bad effect in persisted task state:
+  - task `14` already reached `done` while task `13` remains `in_progress`
+- that means rerun-40 cannot be used to prove the fix; the next required step is a fresh rerun under the rebuilt binary
+
+### Current next seam
+
+- no new runtime seam has been proven yet after this patch
+- the next step is operational:
+  - rebuild
+  - restart `codex-e2e-20260324`
+  - create a brand-new fresh validation project
+  - verify bounded child tasks come out with the sequential dependency graph before execution starts
+
 ## 2026-03-25 09:05 MDT update
 
 - rerun-38 project `fc4a025d-e7c9-4b88-9485-17d2b6328e52` is still the main fresh canary

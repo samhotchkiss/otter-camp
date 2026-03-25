@@ -5082,6 +5082,13 @@ func TestIntegrationProjectKickoffTaskCreateBindsCanonicalRepoBeforeTaskTree(t *
 		t.Fatalf("session.create: %v", err)
 	}
 	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_session
+		SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{project_bootstrap,status}', '"active"'::jsonb, true)
+		WHERE id = $1
+	`, sessionID); err != nil {
+		t.Fatalf("mark bootstrap session active: %v", err)
+	}
 	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
 
 	for _, title := range []string{"Kickoff parent workstream", "Kickoff child task"} {
@@ -5745,6 +5752,108 @@ func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreams
 			if task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil {
 				t.Fatalf("bootstrap parent task %q flow_template_id = %v, want resolved template", task.Title, task.FlowTemplateID)
 			}
+		}
+	}
+}
+
+func TestIntegrationBootstrapParentDecompositionAddsSequentialChildDependencies(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
+	dataDir := t.TempDir()
+	seedReviewRefinementSystemTemplate(t, ctx, pool)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Child Dependencies",
+		"slug":        "bootstrap-child-deps-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap decomposition creates sibling task dependencies in creation order.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        assignee.ID,
+		ProjectID:      projectID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap child dependency repro",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	parentOut, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":        projectID.String(),
+		"title":             "Validation execution lane",
+		"description":       "Coordinate a bounded validation lane and delegate executable child checks.",
+		"assigned_agent_id": assignee.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("parent task.create: %v", err)
+	}
+	parentTaskID := mustUUIDValue(t, parentOut["task"].(map[string]any)["id"])
+
+	childOut, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":     projectID.String(),
+		"parent_task_id": parentTaskID.String(),
+		"title":          "Generate 20 new blog post ideas across all pillars",
+		"description":    "Develop the content backlog for the launch.",
+	})
+	if err != nil {
+		t.Fatalf("child decomposition task.create: %v", err)
+	}
+	decomp, ok := childOut["decomposition"].(map[string]any)
+	if !ok {
+		t.Fatalf("decomposition = %T, want map", childOut["decomposition"])
+	}
+	rawChildIDs, ok := decomp["child_task_ids"].([]uuid.UUID)
+	if !ok || len(rawChildIDs) < 2 {
+		t.Fatalf("child_task_ids = %#v, want at least 2 ids", decomp["child_task_ids"])
+	}
+	childIDs := append([]uuid.UUID(nil), rawChildIDs...)
+
+	var dependencyCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task_dependency
+		WHERE source_type = 'project_task'
+		  AND depends_on_type = 'project_task'
+		  AND source_id = $1
+		  AND depends_on_id = $2
+	`, childIDs[1], childIDs[0]).Scan(&dependencyCount); err != nil {
+		t.Fatalf("count first child dependency: %v", err)
+	}
+	if dependencyCount != 1 {
+		t.Fatalf("dependency count for %s -> %s = %d, want 1", childIDs[1], childIDs[0], dependencyCount)
+	}
+	if len(childIDs) > 2 {
+		if err := pool.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM project_task_dependency
+			WHERE source_type = 'project_task'
+			  AND depends_on_type = 'project_task'
+			  AND source_id = $1
+			  AND depends_on_id = $2
+		`, childIDs[2], childIDs[1]).Scan(&dependencyCount); err != nil {
+			t.Fatalf("count second child dependency: %v", err)
+		}
+		if dependencyCount != 1 {
+			t.Fatalf("dependency count for %s -> %s = %d, want 1", childIDs[2], childIDs[1], dependencyCount)
 		}
 	}
 }

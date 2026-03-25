@@ -2602,6 +2602,11 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 	for _, childTaskID := range childTaskIDs {
 		parentTask.Metadata = taskdecomp.AppendChildTaskID(parentTask.Metadata, childTaskID)
 	}
+	for idx := 1; idx < len(childTaskIDs); idx++ {
+		if err := e.ensureProjectTaskDependency(ctx, childTaskIDs[idx], childTaskIDs[idx-1], actor); err != nil {
+			return nil, err
+		}
+	}
 	parentTask.Metadata = taskdecomp.ApplyMetadata(parentTask.Metadata, prepared.Plan, prepared.SourceDescription, childTaskIDs)
 	parentTask.BlocksScope = "none"
 	if _, err := e.tasks.Update(ctx, parentTask); err != nil {
@@ -2615,6 +2620,28 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 		},
 		"tasks": taskItems,
 	}, nil
+}
+
+func (e *NativeToolExecutor) ensureProjectTaskDependency(ctx context.Context, sourceID, dependsOnID uuid.UUID, actor executionActor) error {
+	if e.dependencies == nil || sourceID == uuid.Nil || dependsOnID == uuid.Nil || sourceID == dependsOnID {
+		return nil
+	}
+	hasCycle, err := e.dependencies.CheckCycle(ctx, "project_task", sourceID, dependsOnID)
+	if err != nil {
+		return err
+	}
+	if hasCycle {
+		return nil
+	}
+	_, err = e.dependencies.Add(ctx, repo.ProjectTaskDependency{
+		SourceType:    "project_task",
+		SourceID:      sourceID,
+		DependsOnType: "project_task",
+		DependsOnID:   dependsOnID,
+		CreatedByType: actor.createdByType,
+		CreatedByID:   actor.createdByPtr,
+	})
+	return err
 }
 
 func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[string]any) (map[string]any, error) {

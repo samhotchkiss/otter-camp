@@ -1854,6 +1854,30 @@ type mockTaskRepo struct {
 	lastUpdatedTaskStat string
 }
 
+type mockDependencyRepo struct {
+	added       []repo.ProjectTaskDependency
+	cycleByEdge map[string]bool
+}
+
+func (m *mockDependencyRepo) Add(_ context.Context, dependency repo.ProjectTaskDependency) (repo.ProjectTaskDependency, error) {
+	if dependency.ID == uuid.Nil {
+		dependency.ID = uuid.New()
+	}
+	m.added = append(m.added, dependency)
+	return dependency, nil
+}
+
+func (m *mockDependencyRepo) CheckCycle(_ context.Context, sourceType string, sourceID, dependsOnID uuid.UUID) (bool, error) {
+	if m.cycleByEdge == nil {
+		return false, nil
+	}
+	return m.cycleByEdge[fmt.Sprintf("%s:%s:%s", sourceType, sourceID, dependsOnID)], nil
+}
+
+func (m *mockDependencyRepo) Remove(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
 func (m *mockTaskRepo) Create(_ context.Context, task repo.ProjectTask) (repo.ProjectTask, error) {
 	m.createCalls++
 	created := task
@@ -2922,6 +2946,106 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 	}
 	if createdEvents != 1 {
 		t.Fatalf("task.created events = %d, want 1 for the missing child task", createdEvents)
+	}
+}
+
+func TestTaskCreateDecomposedChildrenAddSequentialDependenciesDuringBootstrap(t *testing.T) {
+	orgID := uuid.New()
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+	workerID := uuid.New()
+	flowTemplateID := uuid.New()
+	parentDescription := "Break the validation lane into bounded executable checks."
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:                  parentTaskID,
+			OrganizationID:      orgID,
+			ProjectID:           projectID,
+			Title:               "Validation lane parent",
+			Description:         &parentDescription,
+			WorkStatus:          "draft",
+			FlowTemplateID:      &flowTemplateID,
+			AssignedAgentID:     &workerID,
+			RequiresHumanReview: true,
+		},
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:                  parentTaskID,
+				OrganizationID:      orgID,
+				ProjectID:           projectID,
+				Title:               "Validation lane parent",
+				Description:         &parentDescription,
+				WorkStatus:          "draft",
+				FlowTemplateID:      &flowTemplateID,
+				AssignedAgentID:     &workerID,
+				RequiresHumanReview: true,
+				Metadata:            json.RawMessage(`{}`),
+			},
+			{
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 1,
+				Title:      "Bootstrap governance gate",
+				Metadata:   json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+			},
+		},
+	}
+	dependencies := &mockDependencyRepo{}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.dependencies = dependencies
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+				Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	out, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id":     projectID.String(),
+		"parent_task_id": parentTaskID.String(),
+		"title":          "Generate 20 new blog post ideas across all pillars",
+		"description":    "Develop the content backlog for the launch.",
+	})
+	if err != nil {
+		t.Fatalf("task.create decomposed child follow-on: %v", err)
+	}
+	decomp, ok := out["decomposition"].(map[string]any)
+	if !ok {
+		t.Fatalf("decomposition = %T, want map[string]any", out["decomposition"])
+	}
+	rawChildIDs, ok := decomp["child_task_ids"].([]uuid.UUID)
+	if !ok || len(rawChildIDs) < 2 {
+		t.Fatalf("child_task_ids = %#v, want at least 2 ids", decomp["child_task_ids"])
+	}
+	if len(dependencies.added) != len(rawChildIDs)-1 {
+		t.Fatalf("dependency adds = %d, want %d", len(dependencies.added), len(rawChildIDs)-1)
+	}
+	for idx, dep := range dependencies.added {
+		if dep.SourceType != "project_task" || dep.DependsOnType != "project_task" {
+			t.Fatalf("dependency[%d] types = %s -> %s, want project_task -> project_task", idx, dep.SourceType, dep.DependsOnType)
+		}
+		if dep.SourceID != rawChildIDs[idx+1] {
+			t.Fatalf("dependency[%d] source = %s, want %s", idx, dep.SourceID, rawChildIDs[idx+1])
+		}
+		if dep.DependsOnID != rawChildIDs[idx] {
+			t.Fatalf("dependency[%d] depends_on = %s, want %s", idx, dep.DependsOnID, rawChildIDs[idx])
+		}
 	}
 }
 
@@ -5334,10 +5458,10 @@ func mustUUIDFromAny(t *testing.T, raw any) uuid.UUID {
 // ── Project creation auto-assignment tests ──────────────────────────────
 
 type fakeProjectRepo struct {
-	lastCreated repo.Project
-	projects    map[uuid.UUID]repo.Project
+	lastCreated     repo.Project
+	projects        map[uuid.UUID]repo.Project
 	createErrBySlug map[string]error
-	createdSlugs []string
+	createdSlugs    []string
 }
 
 func (f *fakeProjectRepo) Create(_ context.Context, p repo.Project) (repo.Project, error) {
