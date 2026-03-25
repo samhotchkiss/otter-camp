@@ -2000,7 +2000,16 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		          )
 		        )
 		     OR (cs.scope_type = 'project_task' AND COALESCE(live_turn.started_at, ct.started_at) < $1)
-		     OR (cs.scope_type <> 'project_task' AND COALESCE(live_turn.started_at, ct.started_at) < $2)
+		     OR (
+		          cs.scope_type <> 'project_task'
+		          AND COALESCE(live_turn.started_at, ct.started_at) < $2
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM model_invocation mi
+		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND mi.status = 'in_flight'
+		          )
+		        )
 		      )
 		  AND (
 		    cs.scope_type NOT IN ('project', 'project_task')

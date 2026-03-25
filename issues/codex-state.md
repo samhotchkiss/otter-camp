@@ -6136,3 +6136,74 @@ The next move from here:
 - next proof target:
   - wait for the first rerun-68 follow-on completion
   - if it returns empty again, verify the runtime now appends the explicit empty-output system note and fresh bootstrap-resume retry prompt instead of failing after silent auto-continue churn
+
+## 2026-03-25 16:17 MDT: rerun-68 kickoff is still within the configured qwen watchdog budget
+
+- current live probe:
+  - project `a4c03a5c-c2e7-4d61-bcbb-96443062e8fa`
+  - session `62bf75e1-3eeb-4c17-ab79-5c1fff830803`
+  - kickoff turn `eb552bb7-9511-46f6-b7e9-17ba46d58289`
+  - invocation `1149a4fe-377f-4c75-92a0-5a76babf26b5`
+  - model `qwen2.5:72b`
+
+- observed state at `16:17:14 MDT`:
+  - turn still `in_progress`
+  - invocation still `in_flight`
+  - kickoff started at `16:12:21 MDT`
+  - session still pinned at:
+    - `project_bootstrap.status = active`
+    - `current_phase = staffing_persisted`
+    - `last_successful_checkpoint = project_created`
+
+- significance:
+  - after re-checking the code path, this is **not** yet a timeout seam
+  - `projectBootstrapWatchdogTimeoutForModel("qwen2.5:72b", base)` is intentionally `20m`, covered by `TestProjectBootstrapWatchdogTimeoutForModel`
+  - so the new bootstrap empty-follow-on retry branch has not fired simply because kickoff itself has not completed yet
+  - this lane is still within its configured slow-model budget
+
+- current next target:
+  - either keep waiting for this qwen kickoff to complete into the first follow-on turn
+  - or switch to a faster proof path if we need to exercise the new empty-follow-on branch without waiting on the 20-minute qwen budget
+
+## 2026-03-25 16:31 MDT: rerun-68 exposed stale bootstrap-turn recovery against a live retry invocation
+
+- live rerun-68 outcome after the prior qwen wait:
+  - session [`62bf75e1-3eeb-4c17-ab79-5c1fff830803`](/Users/sam/dev/otter-camp) never reached the new empty-follow-on branch
+  - kickoff turn `eb552bb7-9511-46f6-b7e9-17ba46d58289` retried multiple model invocations:
+    - `1149a4fe-377f-4c75-92a0-5a76babf26b5` failed `transient model failure`
+    - `c80c06ae-0b29-43a2-8525-ef12ae756849` failed `transient model failure`
+    - `abdbd616-fb3c-4b64-a92f-1d9a8006c0d4` completed
+    - `5fb97a64-779a-4dac-92af-6df7923184ff` later failed with `product_runtime`
+  - the only concrete mutation recorded on that kickoff turn was a failed `task.create` tool call:
+    - run `57da64f5-fbc8-4e8b-b7ac-3ad7077b5eaa`
+    - tool execution `4ffba9fe-575e-464f-8873-a5c7d0169271`
+    - validation error:
+      - `bootstrap executable non-bootstrap tasks must include assigned_agent_id for an active project assignee unless the task is explicitly orchestration-only`
+  - project state after that failure was still scaffold-only:
+    - only tasks `1-8`
+    - zero `agent_project_assignment` rows
+    - session `current_turn_id = NULL`
+    - kickoff turn failed
+    - no fresh retry job left pending for the session
+
+- root cause found in worker recovery:
+  - worker log at `16:28:18 MDT` shows:
+    - `job queue: recovered stale in-progress triggered turn session_id=62bf75e1-3eeb-4c17-ab79-5c1fff830803 turn_id=eb552bb7-9511-46f6-b7e9-17ba46d58289 scope_type=project threshold=15m0s`
+  - the recovery query was still using the original `chat_turn.started_at` age gate for non-`project_task` sessions
+  - that meant an old bootstrap kickoff turn could be recovered as stale even while a fresh retry invocation on the same turn was still `in_flight`
+  - this is the project/bootstrap analogue of the stale live-turn cleanup bug previously fixed for task lanes
+
+- fix landed locally and verified:
+  - [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+    - narrowed the stale age-based recovery guard so only non-`project_task` sessions require `NOT EXISTS in_flight model_invocation` on the same live turn
+    - task-lane recovery semantics remain unchanged
+  - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+    - added `TestJobWorkerRecoverStaleInProgressTriggeredTurnsKeepsProjectBootstrapSessionWithLiveInvocation`
+
+- focused verification passed:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRecoverStaleInProgressTriggeredTurns(UsesExecutionMetadataLiveTurn|FailsClaimedProjectSessionAfterCompletedInvocation|KeepsProjectBootstrapSessionWithLiveInvocation)' -count=1`
+
+- next deployment step:
+  - rebuild `./bin/ottercamp`
+  - restart tmux `codex-e2e-20260324` serve and worker
+  - continue with a fresh bootstrap probe to verify a live project/bootstrap turn with an `in_flight` retry invocation is no longer recovered prematurely
