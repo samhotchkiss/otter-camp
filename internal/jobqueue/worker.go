@@ -51,6 +51,7 @@ const (
 	agentTurnRateLimitMaxRetries = 6
 	legacyRateLimitJitterFloor   = 5 * time.Minute
 	legacyRateLimitJitterMax     = 30 * time.Second
+	maxInFlightProjectContinuations = 4
 )
 
 func staleTriggeredTurnThreshold(scopeType string) time.Duration {
@@ -1400,7 +1401,27 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		WHERE mi.status = 'in_flight'
 		  AND (
 		    (
-		      mi.created_at < $1
+		      mi.created_at < CASE
+		        WHEN mi.turn_id IS NULL
+		         AND EXISTS (
+		           SELECT 1
+		           FROM chat_session cs_orphan
+		           WHERE cs_orphan.id = mi.session_id
+		             AND cs_orphan.mode = 'async'
+		             AND cs_orphan.scope_type = 'project_task'
+		         )
+		        THEN $3::timestamptz
+		        WHEN mi.turn_id IS NULL
+		         AND EXISTS (
+		           SELECT 1
+		           FROM chat_session cs_orphan
+		           WHERE cs_orphan.id = mi.session_id
+		             AND cs_orphan.mode = 'async'
+		             AND cs_orphan.scope_type = 'project'
+		         )
+		        THEN $4::timestamptz
+		        ELSE $1::timestamptz
+		      END
 		      AND NOT EXISTS (
 		        SELECT 1
 		        FROM chat_turn ct
@@ -3049,12 +3070,35 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 		args = append(args, agentTurnJobType)
 	}
 	rows, err := w.pool.Query(ctx, fmt.Sprintf(`
-		WITH ranked AS (
+		WITH project_async_budget AS (
+			SELECT GREATEST(0, %d - COUNT(*)) AS available
+			FROM model_invocation mi
+			JOIN chat_session cs
+			  ON cs.id = mi.session_id
+			WHERE mi.status = 'in_flight'
+			  AND cs.scope_type = 'project'
+		),
+		ranked AS (
 			SELECT id,
 			       job_type,
 			       priority,
 			       run_after,
 			       created_at,
+			       CASE
+			           WHEN job_type = '%s'
+			             AND EXISTS (
+			                 SELECT 1
+			                 FROM chat_session cs
+			                 JOIN chat_message cm
+			                   ON cm.id = (job_queue.payload->>'message_id')::uuid
+			                 WHERE cs.id = (job_queue.payload->>'session_id')::uuid
+			                   AND cs.scope_type = 'project'
+			                   AND cs.mode = 'async'
+			                   AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_bootstrap')
+			             )
+			           THEN 1
+			           ELSE 0
+			       END AS project_async_continuation,
 			       CASE
 			           WHEN job_type = '%s'
 			             AND EXISTS (
@@ -3239,10 +3283,30 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			  )
 			  %s
 		),
-		claimable AS (
-			SELECT id
+		deduped AS (
+			SELECT *,
+			       CASE
+			           WHEN project_async_continuation = 1
+			           THEN ROW_NUMBER() OVER (
+			               ORDER BY priority DESC,
+			                        agent_turn_claim_bias ASC,
+			                        CASE WHEN job_type = 'agent_turn' THEN run_after END DESC,
+			                        CASE WHEN job_type <> 'agent_turn' THEN run_after END ASC,
+			                        CASE WHEN job_type = 'agent_turn' THEN created_at END DESC,
+			                        CASE WHEN job_type <> 'agent_turn' THEN created_at END ASC
+			           )
+			           ELSE NULL
+			       END AS project_async_rank
 			FROM ranked
 			WHERE session_rn = 1
+		),
+		claimable AS (
+			SELECT id
+			FROM deduped
+			WHERE (
+			        project_async_continuation = 0
+			     OR project_async_rank <= (SELECT available FROM project_async_budget)
+			      )
 			ORDER BY priority DESC,
 			         agent_turn_claim_bias ASC,
 			         CASE WHEN job_type = 'agent_turn' THEN run_after END DESC,
@@ -3262,7 +3326,7 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 		WHERE jq.id = claimable.id
 		RETURNING jq.id, jq.job_type, jq.priority, jq.payload, jq.status, jq.claimed_by, jq.claimed_at,
 		          jq.attempts, jq.max_attempts, jq.last_error, jq.run_after, jq.created_at, jq.updated_at
-	`, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
+	`, maxInFlightProjectContinuations, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
 	if err != nil {
 		return nil, fmt.Errorf("claim pending jobs: %w", err)
 	}

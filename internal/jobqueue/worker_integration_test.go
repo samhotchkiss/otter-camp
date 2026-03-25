@@ -4534,6 +4534,191 @@ func TestJobWorkerClaimPendingAgentTurnsPrefersNewestProjectContinuation(t *test
 	}
 }
 
+func TestJobWorkerClaimPendingAgentTurnsCapsConcurrentProjectContinuations(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-caps-concurrent-project-continuations",
+		DisplayName: "Claim Caps Concurrent Project Continuations",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue projects.",
+		AgentType:       "pm",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	provider, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
+		Slug:        "claim-caps-concurrent-project-continuations-provider",
+		DisplayName: "Claim Caps Concurrent Project Continuations Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+
+	for i := 0; i < maxInFlightProjectContinuations; i++ {
+		project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+			OrganizationID: org.ID,
+			Slug:           fmt.Sprintf("claim-caps-concurrent-project-continuations-live-%d-%s", i, uuid.NewString()[:8]),
+			DisplayName:    fmt.Sprintf("Live Project %d", i),
+			DeliveryMode:   "gated",
+			CreatedByType:  "system",
+			CreatedByID:    uuid.Nil,
+			Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+		})
+		if err != nil {
+			t.Fatalf("create live project %d: %v", i, err)
+		}
+		session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+			OrganizationID: org.ID,
+			ScopeType:      "project",
+			ScopeID:        project.ID,
+			Mode:           "async",
+			Status:         "active",
+			CreatedByType:  "system",
+			CreatedByID:    uuid.New(),
+			Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+		})
+		if err != nil {
+			t.Fatalf("create live project session %d: %v", i, err)
+		}
+		if _, err := repo.NewModelInvocationRepo(pool).Create(ctx, repo.ModelInvocation{
+			OrganizationID:    org.ID,
+			ModelProviderID:   provider.ID,
+			InvocationPurpose: "agent_turn",
+			Status:            "in_flight",
+			ModelName:         "test-model",
+			AgentID:           &agent.ID,
+			ProjectID:         &project.ID,
+			SessionID:         &session.ID,
+		}); err != nil {
+			t.Fatalf("create live project invocation %d: %v", i, err)
+		}
+	}
+
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-caps-concurrent-project-continuations-pending-" + uuid.NewString()[:8],
+		DisplayName:    "Pending Project Continuation",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending project: %v", err)
+	}
+	projectSession, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending project session: %v", err)
+	}
+	projectMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: projectSession.ID,
+		Role:      "user",
+		Content:   "Continue project execution.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending project continuation message: %v", err)
+	}
+	var projectJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, projectSession.ID, projectMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s", projectSession.ID, projectMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", projectSession.ID, projectMessage.ID, 0),
+	).Scan(&projectJobID); err != nil {
+		t.Fatalf("insert pending project continuation job: %v", err)
+	}
+
+	orgSession, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "organization",
+		ScopeID:        org.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create org session: %v", err)
+	}
+	orgMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: orgSession.ID,
+		Role:      "user",
+		Content:   "Create a fresh validation canary project now.",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("create org message: %v", err)
+	}
+	var orgJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, orgSession.ID, orgMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s", orgSession.ID, orgMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", orgSession.ID, orgMessage.ID, 0),
+	).Scan(&orgJobID); err != nil {
+		t.Fatalf("insert org job: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 2)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed jobs = %d, want 1", len(claimed))
+	}
+	if claimed[0].ID != orgJobID {
+		t.Fatalf("claimed job = %s, want org job %s", claimed[0].ID, orgJobID)
+	}
+
+	var projectStatus, orgStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, projectJobID).Scan(&projectStatus); err != nil {
+		t.Fatalf("query project job: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, orgJobID).Scan(&orgStatus); err != nil {
+		t.Fatalf("query org job: %v", err)
+	}
+	if projectStatus != "pending" {
+		t.Fatalf("project continuation job status = %q, want pending", projectStatus)
+	}
+	if orgStatus != "claimed" {
+		t.Fatalf("org job status = %q, want claimed", orgStatus)
+	}
+}
+
 func TestJobWorkerClaimPendingAgentTurnsSkipsStaleProjectBootstrapAndContinuationJobs(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -9017,6 +9202,108 @@ func TestJobWorkerFailStaleModelInvocationsSkipsActiveAsyncOrganizationSession(t
 	}
 	if refreshedSession.CurrentTurnID == nil || *refreshedSession.CurrentTurnID != turn.ID {
 		t.Fatalf("current_turn_id = %v, want %s", refreshedSession.CurrentTurnID, turn.ID)
+	}
+}
+
+func TestJobWorkerFailStaleModelInvocationsFailsOrphanedAsyncProjectSessionInvocationWithoutTurn(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "fail-stale-project-session-orphaned-invocation",
+		DisplayName: "Fail Stale Project Session Orphaned Invocation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover project continuations.",
+		AgentType:       "pm",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "fail-stale-project-session-orphaned-invocation-project",
+		DisplayName:    "Fail Stale Project Session Orphaned Invocation Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	invocationProvider, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
+		Slug:        "fail-stale-project-session-orphaned-invocation-provider",
+		DisplayName: "Fail Stale Project Session Orphaned Invocation Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	invocation, err := repo.NewModelInvocationRepo(pool).Create(ctx, repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   invocationProvider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "in_flight",
+		ModelName:         "test-model",
+		AgentID:           &agent.ID,
+		ProjectID:         &project.ID,
+		SessionID:         &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create orphaned project invocation: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE model_invocation
+		SET created_at = now() - interval '20 minutes'
+		WHERE id = $1
+	`, invocation.ID); err != nil {
+		t.Fatalf("age orphaned project invocation: %v", err)
+	}
+
+	repaired, err := worker.FailStaleModelInvocations(ctx)
+	if err != nil {
+		t.Fatalf("FailStaleModelInvocations: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired invocations = %d, want 1", repaired)
+	}
+
+	storedInvocation, err := repo.NewModelInvocationRepo(pool).GetByID(ctx, invocation.ID)
+	if err != nil {
+		t.Fatalf("reload invocation: %v", err)
+	}
+	if storedInvocation.Status != "failed" {
+		t.Fatalf("invocation status = %q, want failed", storedInvocation.Status)
+	}
+	if storedInvocation.ErrorCode == nil || strings.TrimSpace(*storedInvocation.ErrorCode) != "stale_model_invocation" {
+		t.Fatalf("invocation error_code = %v, want stale_model_invocation", storedInvocation.ErrorCode)
 	}
 }
 
