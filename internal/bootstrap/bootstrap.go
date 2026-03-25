@@ -980,7 +980,7 @@ func defaultProfileSeeds() []modelProfileSeed {
 		{
 			LogicalProfileID:    "high-capability",
 			ProviderSlug:        "anthropic",
-			ModelName:           "claude-haiku-4-5-20251001",
+			ModelName:           "claude-opus-4-6",
 			ContextWindowTokens: 200000,
 			MaxOutputTokens:     4096,
 			SupportsStreaming:   true,
@@ -990,7 +990,7 @@ func defaultProfileSeeds() []modelProfileSeed {
 		{
 			LogicalProfileID:    "standard",
 			ProviderSlug:        "anthropic",
-			ModelName:           "claude-haiku-4-5-20251001",
+			ModelName:           "claude-sonnet-4-20250514",
 			ContextWindowTokens: 200000,
 			MaxOutputTokens:     4096,
 			SupportsStreaming:   true,
@@ -1111,16 +1111,6 @@ func (b *Bootstrapper) upsertOrgProfile(ctx context.Context, organizationID uuid
 	default:
 		return repo.ModelProfile{}, err
 	}
-}
-
-func profileNeedsRotation(current repo.ModelProfile, desired repo.ModelProfile) bool {
-	return current.ProviderID != desired.ProviderID ||
-		current.ModelName != desired.ModelName ||
-		current.ContextWindowTokens != desired.ContextWindowTokens ||
-		current.MaxOutputTokens != desired.MaxOutputTokens ||
-		current.SupportsStreaming != desired.SupportsStreaming ||
-		current.SupportsVision != desired.SupportsVision ||
-		current.InvocationPurpose != desired.InvocationPurpose
 }
 
 func (b *Bootstrapper) getCurrentOrgProfile(ctx context.Context, organizationID uuid.UUID, logicalID string) (repo.ModelProfile, error) {

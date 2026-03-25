@@ -4552,3 +4552,43 @@ The next move from here:
   - the original Anthropic blocker is fixed
   - Frank is successfully running tool-enabled Claude Opus turns under setup-token/subscription auth
   - the remaining activity in the live session is just the follow-on project handoff/session creation chain continuing from the successful `project.create`
+
+## 2026-03-25 Opus 4.6 alignment
+
+- user-required correction:
+  - Frank should be on Opus 4.6, not Sonnet and not the older `claude-opus-4-20250514`
+
+- what was wrong:
+  - Frank self-reported `Claude 3.5 Sonnet`, but that answer was stale and incorrect
+  - the actual live `high-capability` org profile was still version `3` -> `claude-opus-4-20250514`
+
+- fixes applied:
+  - [`internal/bootstrap/bootstrap.go`](/Users/sam/dev/otter-camp/internal/bootstrap/bootstrap.go)
+    - changed default `high-capability` seed from `claude-opus-4-20250514` to `claude-opus-4-6`
+  - [`internal/bootstrap/bootstrap_integration_test.go`](/Users/sam/dev/otter-camp/internal/bootstrap/bootstrap_integration_test.go)
+    - updated expected seeded `high-capability` model to `claude-opus-4-6`
+  - live org profile updated through API:
+    - `PATCH /v1/model/profiles/high-capability`
+    - new current row:
+      - version `4`
+      - display name `Claude Opus 4.6`
+      - model `claude-opus-4-6`
+
+- verification:
+  - `go test -tags=integration ./internal/bootstrap -run 'TestBootstrapRun(SeedsAndIsIdempotent|PreservesExistingCurrentModelProfileVersion)$' -count=1`
+  - DB proof after patch:
+    - `high-capability` version `4` current true -> `claude-opus-4-6`
+
+- live proof:
+  - fresh Frank prompt:
+    - message `daa31315-7fc6-49f7-917a-d82050d7a9a6`
+  - fresh invocations after the profile bump:
+    - `f0093cad-6d97-41cc-a19c-32d3508680e5` -> `claude-opus-4-6`
+    - `d176d7d3-2a9a-4a42-8ae4-6ec7caa5438d` -> `claude-opus-4-6`
+  - live tool-use proof on 4.6:
+    - Frank emitted `project.list`
+    - tool result confirmed project `anthropic-oauth-fix-probe`
+
+- current truth:
+  - Frank is now actually routing `agent_turn` traffic through `claude-opus-4-6`
+  - if Frank verbally reports a different model again, trust `model_invocation.model_name`, not the assistant text

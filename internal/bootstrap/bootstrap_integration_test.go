@@ -106,6 +106,21 @@ func TestBootstrapRunSeedsAndIsIdempotent(t *testing.T) {
 			t.Fatalf("assignment %s logical_profile_id = %q, want %q", purpose, got.LogicalProfileID, logicalID)
 		}
 	}
+
+	profileRepo := repo.NewModelProfileRepo(pool)
+	for logicalID, expectedModel := range map[string]string{
+		"high-capability": "claude-opus-4-6",
+		"standard":        "claude-sonnet-4-20250514",
+		"haiku":           "claude-haiku-4-5-20251001",
+	} {
+		profile, getErr := profileRepo.GetCurrentByLogicalID(ctx, org.ID, logicalID)
+		if getErr != nil {
+			t.Fatalf("profile %s: %v", logicalID, getErr)
+		}
+		if profile.ModelName != expectedModel {
+			t.Fatalf("profile %s model_name = %q, want %q", logicalID, profile.ModelName, expectedModel)
+		}
+	}
 }
 
 func TestBootstrapRunPreservesExistingCurrentModelProfileVersion(t *testing.T) {
