@@ -1992,6 +1992,135 @@ func TestHandleTurnCompletedEventRetriesEmptyReviewTurnWithoutDecisionAtRetryLim
 	}
 }
 
+func TestHandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700002100, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = uuid.New()
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	updatedAt := base.Add(-time.Minute)
+	lastProgressAt := base.Add(-2 * time.Minute)
+
+	state := projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		CurrentPhase:     projectBootstrapCheckpointStaffingPersisted,
+		InitialMessageID: fixture.userMessageID.String(),
+		AutoTurnCount:    1,
+		AssignmentCount:  0,
+		PlannedTaskCount: 0,
+		LastResponderID:  fixture.chat.participants[0].ParticipantID.String(),
+		UpdatedAt:        &updatedAt,
+		LastProgressAt:   &lastProgressAt,
+	}
+	metadata, err := projectBootstrapMetadataJSON(nil, state)
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	fixture.session.Metadata = metadata
+	fixture.chat.session.Metadata = metadata
+
+	userMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	userMessage.Content = "Continue the active project bootstrap from the persisted state above."
+	userMessage.Metadata = mustRawJSON(t, map[string]any{
+		"source":                       projectBootstrapSource,
+		"auto_continue":                true,
+		"bootstrap_initial_message_id": fixture.userMessageID.String(),
+		"bootstrap_auto_turn_count":    1,
+	})
+	fixture.messages.upsert(userMessage)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "")
+
+	turns, err := fixture.engine.turns.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	latestCompleted := latestCompletedTurn(turns)
+	if latestCompleted == nil || latestCompleted.ID != turnID {
+		t.Fatalf("latestCompleted = %#v, want turn %s", latestCompleted, turnID)
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	assistant := latestAssistantFinalForTurn(messages, turnID)
+	if assistant == nil {
+		t.Fatal("assistant message missing")
+	}
+	progress := projectBootstrapProgress{ValidationStatus: projectBootstrapValidationPending}
+
+	handled, err := fixture.engine.handleCompletedProjectBootstrapEmptyAssistantTurn(
+		context.Background(),
+		fixture.session,
+		latestCompleted,
+		&userMessage,
+		assistant,
+		messages,
+		state,
+		progress,
+		base,
+	)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectBootstrapEmptyAssistantTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("payload.retry_count = %#v, want 1", jobs[0].payload)
+	}
+	if jobs[0].runAfter == nil || !jobs[0].runAfter.Equal(base.Add(defaultAutoContinueDelay)) {
+		t.Fatalf("run_after = %v, want %s", jobs[0].runAfter, base.Add(defaultAutoContinueDelay))
+	}
+
+	retryPrompt, err := fixture.messages.GetByID(context.Background(), jobs[0].payload.MessageID)
+	if err != nil {
+		t.Fatalf("GetByID retry prompt: %v", err)
+	}
+	if !strings.Contains(retryPrompt.Content, "Your last bootstrap follow-on turn returned empty assistant output.") {
+		t.Fatalf("retry prompt = %q, want explicit empty-output warning", retryPrompt.Content)
+	}
+	if !strings.Contains(retryPrompt.Content, "Do not reply with blank text") {
+		t.Fatalf("retry prompt = %q, want blank-text warning", retryPrompt.Content)
+	}
+	retryMetadata := messageMetadataMap(retryPrompt.Metadata)
+	if got := strings.TrimSpace(stringValue(retryMetadata["source"])); got != projectBootstrapSource {
+		t.Fatalf("retry prompt source = %q, want %q", got, projectBootstrapSource)
+	}
+	if got := strings.TrimSpace(stringValue(retryMetadata["bootstrap_initial_message_id"])); got != fixture.userMessageID.String() {
+		t.Fatalf("retry prompt bootstrap_initial_message_id = %q, want %s", got, fixture.userMessageID)
+	}
+
+	messages, err = fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages after retry: %v", err)
+	}
+	var sawSystem bool
+	for _, msg := range messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "Bootstrap follow-on turn returned empty assistant output") {
+			sawSystem = true
+			break
+		}
+	}
+	if !sawSystem {
+		t.Fatal("missing bootstrap empty-output retry system message")
+	}
+}
+
 func TestHandleTurnCompletedEventAutoRejectsExplicitReviewDecision(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 

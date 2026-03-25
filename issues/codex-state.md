@@ -366,6 +366,73 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 - rebuild and restart the worker
 - launch a fresh bootstrap/restart probe so the next bootstrap auto-continue turn is generated fully under the sanitized root logic
 - verify the new bootstrap messages no longer carry `bootstrap_initial_message_id = cd0989b9-...`
+
+## 2026-03-25 15:55 MDT update
+
+- deployed runtime is now patch-on-top of pushed commit `859d5b6b`
+- health is green after the latest worker restart
+- fresh probe `rerun-67` is the new active proof target:
+  - project `957d881f-9a4d-4ae3-b834-04cd588fc25a`
+  - session `39df1799-4c56-41dd-84d5-07f978d46cf7`
+
+### Live proof: bootstrap follow-on messages now keep the clean bootstrap root
+
+- kickoff message:
+  - `8bb44873-c3a0-4cce-bbf5-a19449441644`
+  - metadata:
+    - `source = project_bootstrap`
+    - no inherited stale `bootstrap_initial_message_id`
+- kickoff turn:
+  - `998cb35f-602b-4558-8637-556dae862573`
+  - invocation:
+    - `bac4b06b-0122-475c-9923-d53685cd43a3`
+    - model `qwen2.5:72b`
+  - completed cleanly at `15:48:10 MDT`
+- first bootstrap follow-on messages generated under the patched engine:
+  - `33795841-98d5-40bc-a299-77e1f4f470b1`
+    - `source = project_bootstrap`
+    - `bootstrap_initial_message_id = 8bb44873-c3a0-4cce-bbf5-a19449441644`
+    - `bootstrap_auto_turn_count = 1`
+  - `c11abda0-b7a5-47a3-ac10-7a4a49998825`
+    - `source = project_bootstrap`
+    - `bootstrap_initial_message_id = 8bb44873-c3a0-4cce-bbf5-a19449441644`
+    - `bootstrap_auto_turn_count = 1`
+  - second follow-on pair:
+    - `77b38722-1f41-4b3c-8692-642f5fde600f`
+      - `source = project_bootstrap`
+      - `bootstrap_initial_message_id = 8bb44873-c3a0-4cce-bbf5-a19449441644`
+      - `bootstrap_auto_turn_count = 2`
+- important contrast:
+  - the old bad root `cd0989b9-b078-4bd9-afc9-b5aa0dd631b8` is no longer being inherited by new bootstrap continuation messages on the fresh probe
+
+### Live proof: the same-session claim race still stays closed on the fresh probe
+
+- kickoff dispatch:
+  - one claimed job `b2171403-cec4-43fe-8f85-994ade46dcec`
+  - no second same-session bootstrap claim followed it
+- first follow-on completion / requeue:
+  - completed turn `998cb35f-602b-4558-8637-556dae862573`
+  - next active turn `77f37a5e-0f99-4516-b4d3-1bde4b6531bb`
+  - only one agent-turn claim for the active follow-on:
+    - job `43b14209-a6b4-4ac6-9703-e8ab981eabe7`
+    - message `c11abda0-b7a5-47a3-ac10-7a4a49998825`
+- there are still multiple pending bootstrap user messages on the session, but the worker is no longer double-claiming them into the same turn window
+
+### Current live state
+
+- session `39df1799-4c56-41dd-84d5-07f978d46cf7` remains `active`
+- current turn:
+  - `77f37a5e-0f99-4516-b4d3-1bde4b6531bb`
+- bootstrap metadata:
+  - `status = active`
+  - `current_phase = staffing_persisted`
+  - `last_successful_checkpoint = project_created`
+
+### Current next step
+
+- keep rerun-67 running on the deployed stack
+- capture the next real bootstrap-product seam after the now-fixed stale-root and double-claim issues
+- if bootstrap stalls again, inspect whether the remaining blocker is still scaffold-only materialization or a different late-bootstrap failure path
   - `project_bootstrap.status = failed`
   - `project_bootstrap.current_phase = staffing_persisted`
   - `last_successful_checkpoint = project_created`
@@ -5955,3 +6022,117 @@ The next move from here:
   - commit/push this combined worktree runtime slice
   - rebuild/restart again
   - verify task 12 no longer needs `git init` / empty-commit self-repair and that the next recovery turn goes straight into deliverable writing
+
+## 2026-03-25 15:56 MDT: rerun-67 proves the new bootstrap seam
+
+- fresh canary:
+  - project `957d881f-9a4d-4ae3-b834-04cd588fc25a`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-67`
+  - async project session `39df1799-4c56-41dd-84d5-07f978d46cf7`
+  - kickoff bootstrap message `8bb44873-c3a0-4cce-bbf5-a19449441644`
+
+- latest pushed fixes already proved live on this session:
+  - no same-session double claim on the kickoff lane
+  - bootstrap follow-on messages now keep a clean bootstrap root instead of inheriting stale execution-continuation history
+  - live follow-on message roots:
+    - `33795841-98d5-40bc-a299-77e1f4f470b1`
+    - `c11abda0-b7a5-47a3-ac10-7a4a49998825`
+    - `77b38722-1f41-4b3c-8692-642f5fde600f`
+  - all three carry:
+    - `source = project_bootstrap`
+    - `bootstrap_initial_message_id = 8bb44873-c3a0-4cce-bbf5-a19449441644`
+
+- kickoff proof:
+  - claimed dispatch `b2171403-cec4-43fe-8f85-994ade46dcec`
+  - kickoff turn `998cb35f-602b-4558-8637-556dae862573`
+  - invocation `bac4b06b-0122-475c-9923-d53685cd43a3`
+  - model `qwen2.5:72b`
+  - kickoff completed at `2026-03-25 15:48:10 MDT`
+
+- current terminal state of rerun-67:
+  - session is now `closed`
+  - `project_bootstrap.status = failed`
+  - `project_bootstrap.current_phase = staffing_persisted`
+  - `project_bootstrap.last_successful_checkpoint = project_created`
+  - final failure message `85f26b2a-6cc4-422d-b3bf-f95532e07a80`
+  - failure text:
+    - `bootstrap setup stalled after 3 consecutive follow-on turns without creating project assignments, scoped tasks, and flow templates`
+  - project still contains only canonical bootstrap tasks `1-8`
+  - task `2` is `done`
+  - tasks `1,3,4,5,6,7,8` remain `draft`
+  - `agent_project_assignment` count = `0`
+  - `flow_template` count = `1`
+
+- exact turn chain:
+  - kickoff turn `998cb35f-602b-4558-8637-556dae862573`
+  - first follow-on turn `6aa8d071-c276-4b98-868c-6df1afc13ee1`
+  - second follow-on turn `77f37a5e-0f99-4516-b4d3-1bde4b6531bb`
+  - cancelled pending continuation turn `dc2dc2ec-8baf-44b4-a5e1-c2a91dc2d410`
+
+- strongest evidence for the next seam:
+  - the only concrete mutation recorded in chat history is the initial `bootstrap.setup.persist` tool result
+  - follow-on bootstrap prompts are explicit and correct about what must happen next:
+    - create real project assignments
+    - create non-bootstrap scoped tasks
+    - attach runnable flow templates
+    - do not treat tasks `1-8` as finished bootstrap
+  - but the two completed follow-on turns each produced an assistant final message with empty content:
+    - `9e99c65c-26e6-4426-97b2-f38a65314f4f`
+    - `90b4f26b-6b85-456f-90be-e9b4ffffb59b`
+  - those turns have model invocations but no `run`, `run_step`, or `tool_execution` rows
+  - invocation rows also have no prompt/response storage keys, so raw outputs are not recoverable from object storage
+
+- current diagnosis:
+  - the live blocker is no longer stale retry routing, same-session double claims, or stale bootstrap history roots
+  - the next seam is empty/non-action bootstrap follow-on completions
+  - the turn engine currently treats those empty follow-ons as generic no-progress bootstrap turns, appends another bootstrap resume prompt, and burns the `auto_turn_count` budget until bootstrap fails
+
+- next implementation target:
+  - add bootstrap-specific handling for empty assistant follow-on turns
+  - expected runtime behavior:
+    - detect empty assistant output on active `project_bootstrap` follow-on turns with no tool success
+    - append an explicit system note that the bootstrap follow-on returned empty output
+    - enqueue a fresh bootstrap-resume retry with stronger direct-action guidance instead of silently consuming another generic continuation slot
+    - cover the path in `internal/turn/engine_test.go`
+
+## 2026-03-25 16:13 MDT: bootstrap empty-output retry fix deployed
+
+- new runtime fix:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added bootstrap-specific handling for completed `project_bootstrap` turns whose assistant final message is empty and whose turn has no successful tool result
+    - instead of silently treating those as generic no-progress auto-continues, the engine now:
+      - appends an explicit system note
+      - emits a fresh bootstrap-resume retry prompt with stronger direct-action guidance
+      - increments retry count on the new `agent_turn` payload
+  - focused regression:
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - `TestHandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt`
+
+- focused verification passed:
+  - `go test ./internal/turn -run 'Test(HandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt|BootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID|ContinuationTurnAppendsCompactBootstrapActionPromptAfterCompression|ContinuationTurnSynthesizesBootstrapResumeStateWhenMetadataIsStale)' -count=1`
+
+- deployed runtime:
+  - rebuilt `./bin/ottercamp`
+  - restarted tmux `codex-e2e-20260324` worker on the new binary
+  - restarted tmux `codex-e2e-20260324` serve on the new binary after clearing the stale old listener on `:4110`
+  - `./bin/ottercamp health` is green
+
+- fresh live probe under this exact build:
+  - project `a4c03a5c-c2e7-4d61-bcbb-96443062e8fa`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-68`
+  - async project session `62bf75e1-3eeb-4c17-ab79-5c1fff830803`
+  - bootstrap kickoff message `f53f2545-4966-4c41-bf17-22d4f1112cc4`
+  - kickoff turn `eb552bb7-9511-46f6-b7e9-17ba46d58289`
+  - live invocation `1149a4fe-377f-4c75-92a0-5a76babf26b5`
+  - model `qwen2.5:72b`
+
+- current live state:
+  - session is `active`
+  - `project_bootstrap.status = active`
+  - `project_bootstrap.current_phase = staffing_persisted`
+  - `project_bootstrap.last_successful_checkpoint = project_created`
+  - kickoff handoff is still in-flight, so the new empty-follow-on retry path has not yet been proven in production behavior
+
+- next proof target:
+  - wait for the first rerun-68 follow-on completion
+  - if it returns empty again, verify the runtime now appends the explicit empty-output system note and fresh bootstrap-resume retry prompt instead of failing after silent auto-continue churn

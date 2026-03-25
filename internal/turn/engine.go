@@ -1598,6 +1598,102 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 	return enqueued, nil
 }
 
+func (e *TurnEngine) handleCompletedProjectBootstrapEmptyAssistantTurn(
+	ctx context.Context,
+	session *chat.ChatSession,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+	assistant *repo.ChatMessage,
+	messages []repo.ChatMessage,
+	state projectBootstrapState,
+	progress projectBootstrapProgress,
+	now time.Time,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil || latestUser == nil || assistant == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(stringValue(messageMetadataMap(latestUser.Metadata)["source"])), projectBootstrapSource) {
+		return false, nil
+	}
+	if strings.TrimSpace(assistant.Content) != "" || turnHasSuccessfulToolResult(messages, latestCompleted.ID) {
+		return false, nil
+	}
+
+	nextAutoTurnCount := state.AutoTurnCount + 1
+	if nextAutoTurnCount >= maxProjectBootstrapAutoTurns {
+		return false, nil
+	}
+
+	state.Status = projectBootstrapStatusActive
+	state.LastTurnID = latestCompleted.ID.String()
+	state.BootstrapTaskID = progress.BootstrapTaskID.String()
+	state.BootstrapTaskOutstanding = progress.BootstrapTaskOutstanding
+	applyProjectBootstrapProgressState(&state, progress)
+	state.AutoTurnCount = nextAutoTurnCount
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = nil
+	state.FailureCategory = ""
+	state.FailureClass = ""
+	state.FailurePhase = ""
+	state.FailureReason = ""
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
+	if latestCompleted.RespondingID != uuid.Nil {
+		state.LastResponderID = latestCompleted.RespondingID.String()
+	}
+	if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
+		return true, err
+	}
+	if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, "[Bootstrap follow-on turn returned empty assistant output. Retrying with a fresh bootstrap-resume prompt that requires concrete tool action or a concrete blocker.]"); err != nil {
+		return true, err
+	}
+	if queued, err := e.hasQueuedAgentTurnForSession(ctx, session.ID, nil); err != nil {
+		return true, err
+	} else if queued {
+		return true, nil
+	}
+
+	snapshot, err := e.loadProjectBootstrapResumeSnapshot(ctx, session.ScopeID, state)
+	if err != nil {
+		return true, err
+	}
+	retryPrompt := strings.TrimSpace(buildProjectBootstrapResumeActionPrompt(state, snapshot) +
+		" Your last bootstrap follow-on turn returned empty assistant output. Do not reply with blank text, acknowledgement, or a state summary. Your next assistant action must either emit the concrete tool calls that materially advance bootstrap or explain one concrete blocker preventing those tool calls.")
+	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, session, latestCompleted.RespondingID)
+	continuationMessage, err := e.appendProjectBootstrapContinuationMessageWithContent(
+		ctx,
+		session.ID,
+		continuationAgentID,
+		state.InitialMessageID,
+		state.AutoTurnCount,
+		retryPrompt,
+	)
+	if err != nil {
+		return true, err
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  continuationMessage.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if continuationAgentID != uuid.Nil {
+		nextAgentID := continuationAgentID
+		nextPayload.AgentID = &nextAgentID
+	}
+	runAfter := now.Add(defaultAutoContinueDelay)
+	_, err = e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 func (e *TurnEngine) persistBlockedReviewDecisionValidationGuard(
 	ctx context.Context,
 	taskRecord repo.ProjectTask,
@@ -2355,6 +2451,11 @@ func (e *TurnEngine) handleProjectBootstrapCompletedTurn(ctx context.Context, se
 	progress, err = e.ensureProjectBootstrapFirstWaveExecution(ctx, progress)
 	if err != nil {
 		return err
+	}
+	if handled, handleErr := e.handleCompletedProjectBootstrapEmptyAssistantTurn(ctx, session, latestCompleted, latestUser, assistant, messages, state, progress, now); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
 	}
 	narrativeClaimedCompletion := projectBootstrapNarrativeClaimsCompletion(assistant)
 	normalizeProjectBootstrapValidationFailure(&progress, narrativeClaimedCompletion)
