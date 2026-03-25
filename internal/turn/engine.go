@@ -60,6 +60,7 @@ const (
 	defaultProjectBootstrapRestartRetryBudget = 2
 	defaultListeningEvalDelay                 = 500 * time.Millisecond
 	defaultAutoContinueDelay                  = 2 * time.Second
+	postModelInvocationGrace                  = 30 * time.Second
 	defaultModelRetryBudget                   = 3
 	defaultRateLimitBackoff                   = 30 * time.Second
 	maxRateLimitBackoff                       = 30 * time.Minute
@@ -5760,6 +5761,11 @@ func (e *TurnEngine) recoverRetriedAgentTurnLeak(
 	if attempts <= 1 {
 		return false, nil
 	}
+	if liveOrRecent, err := e.turnHasLiveOrRecentCompletedInvocation(ctx, turn.ID); err != nil {
+		return false, err
+	} else if liveOrRecent {
+		return false, nil
+	}
 
 	failureReason := "recovered claimed agent_turn found prior turn still in_progress; marking stale turn failed and scheduling a fresh retry"
 	if err := e.failRetriedLeakedTurn(ctx, turn.ID, failureReason); err != nil {
@@ -5871,6 +5877,31 @@ func (e *TurnEngine) turnHasLiveModelInvocation(ctx context.Context, turnID uuid
 	return exists, nil
 }
 
+func (e *TurnEngine) turnHasLiveOrRecentCompletedInvocation(ctx context.Context, turnID uuid.UUID) (bool, error) {
+	if e == nil || e.pool == nil || turnID == uuid.Nil {
+		return false, nil
+	}
+	recentBefore := e.now().UTC().Add(-postModelInvocationGrace)
+	var exists bool
+	if err := e.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM model_invocation
+			WHERE turn_id = $1
+			  AND (
+			        status = 'in_flight'
+			     OR (
+			          status = 'completed'
+			      AND COALESCE(completed_at, created_at) >= $2
+			        )
+			      )
+		)
+	`, turnID, recentBefore).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 func (e *TurnEngine) recoverRetriedSessionCurrentTurnLeak(
 	ctx context.Context,
 	session *chat.ChatSession,
@@ -5902,6 +5933,11 @@ func (e *TurnEngine) recoverRetriedSessionCurrentTurnLeak(
 		return false, err
 	}
 	if !strings.EqualFold(strings.TrimSpace(currentTurn.Status), "in_progress") {
+		return false, nil
+	}
+	if liveOrRecent, err := e.turnHasLiveOrRecentCompletedInvocation(ctx, currentTurn.ID); err != nil {
+		return false, err
+	} else if liveOrRecent {
 		return false, nil
 	}
 

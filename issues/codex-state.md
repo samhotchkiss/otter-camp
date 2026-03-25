@@ -2,6 +2,70 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 14:32 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `f4721c1b`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after the latest rebuild/restart
+- the fresh project-session stale retry loop is narrowed again
+- the newest live fix is in worker claim budgeting, not bootstrap heuristics
+
+### New local patch: retried project/org session turns now ignore live or just-completed invocations before stale-leak recovery
+
+- root cause:
+  - `internal/turn/engine.go`
+  - `recoverRetriedAgentTurnLeak(...)` and `recoverRetriedSessionCurrentTurnLeak(...)` treated any `attempts > 1` claimed job as proof that the current in-progress project/org continuation turn was stale
+  - they did not check whether the turn still had a live model invocation or a just-completed invocation inside the same post-model grace window already used by worker cleanup
+- behavior:
+  - non-task async session leak recovery now calls a shared `turnHasLiveOrRecentCompletedInvocation(...)` guard before failing/retrying the current turn
+  - this makes project/org continuation recovery consistent with the existing project-task stale inbound-turn guard
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- focused verification:
+  - `go test ./internal/turn -run 'Test(ProjectBootstrapWatchdogTimeoutForModel|RecoverProjectTaskStaleInboundTurnWithoutRunKeepsLiveInvocation|RecoverRetriedAgentTurnLeakKeepsRecentCompletedInvocation)$' -count=1`
+
+### New local patch: project continuation claim budget now ignores in-flight invocations already attached to failed turns
+
+- root cause:
+  - `claimPendingByFilter(...)` computed `project_async_budget` from all project-scope `model_invocation.status='in_flight'` rows
+  - live DB proof showed one of those rows belonged to a project turn already marked `failed`, so it still consumed one of the four project continuation slots and starved fresh bootstrap continuations
+  - on rerun-60, the fresh project bootstrap dispatch `41c2b147-d39d-476d-ac1c-a3f9091ab116` stayed `pending` with no current turn purely because the budget had fallen to `0`
+- behavior:
+  - project continuation budget now counts only:
+    - in-flight project invocations with no bound turn yet, or
+    - in-flight project invocations whose bound turn is still `pending` or `in_progress`
+  - stale in-flight rows on terminal project turns no longer block fresh project bootstrap/continuation claims
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerClaimPendingAgentTurns(CapsConcurrentProjectContinuations|IgnoresInFlightProjectInvocationOnFailedTurn)$' -count=1`
+
+### Live proof on rerun-60
+
+- fresh direct project canary:
+  - project `2fd1f96a-eb29-4768-bc56-31ac234c30b1`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-60`
+  - async project session `d4d47045-01bc-4b7a-843b-f2e4383c3a91`
+- pre-fix blocker:
+  - pending bootstrap dispatch `41c2b147-d39d-476d-ac1c-a3f9091ab116` remained unclaimed
+  - session had `current_turn_id = NULL`
+  - worker logs showed `no pending jobs` even though the dispatch row was still `pending`
+  - direct DB inspection showed `project_async_budget` was exhausted by 4 project-scope `in_flight` invocations, including stale row:
+    - invocation `d09718cb-827c-4f8c-85e4-b8be82b1b67c`
+    - session `72d87248-251c-4b9e-936f-b60edd78195a`
+    - turn `f99978a9-2f3d-43e8-b16f-aaa49a2cb399`
+    - invocation `status = in_flight` while turn `status = failed`
+- post-fix live proof after redeploy:
+  - worker immediately claimed rerun-60 dispatch `41c2b147-d39d-476d-ac1c-a3f9091ab116`
+  - it created fresh turn `cfa24fc7-f48c-4e77-bee3-8295f1efb9ea`
+  - session `d4d47045-01bc-4b7a-843b-f2e4383c3a91` now has `current_turn_id = cfa24fc7-f48c-4e77-bee3-8295f1efb9ea`
+  - live invocation `cf93c11f-f99a-469e-9da3-9214294f58c4` is `in_flight` on `qwen2.5:72b`
+- remaining seam:
+  - the project session still emits duplicate synthetic `project_bootstrap` handoff messages (`343af243-...` and `e6bc050e-...`)
+  - but the starvation seam is fixed: the surviving bootstrap job is now claimable and actively running
+
 ## 2026-03-25 14:12 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `76537eb9`

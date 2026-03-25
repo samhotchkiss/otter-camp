@@ -4719,6 +4719,217 @@ func TestJobWorkerClaimPendingAgentTurnsCapsConcurrentProjectContinuations(t *te
 	}
 }
 
+func TestJobWorkerClaimPendingAgentTurnsIgnoresInFlightProjectInvocationOnFailedTurn(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-ignores-failed-turn-project-invocation",
+		DisplayName: "Claim Ignores Failed Turn Project Invocation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue projects.",
+		AgentType:       "pm",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	provider, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
+		Slug:        "claim-ignores-failed-turn-project-invocation-provider",
+		DisplayName: "Claim Ignores Failed Turn Project Invocation Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+
+	for i := 0; i < maxInFlightProjectContinuations-1; i++ {
+		project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+			OrganizationID: org.ID,
+			Slug:           fmt.Sprintf("claim-ignores-failed-turn-live-%d-%s", i, uuid.NewString()[:8]),
+			DisplayName:    fmt.Sprintf("Live Project %d", i),
+			DeliveryMode:   "gated",
+			CreatedByType:  "system",
+			CreatedByID:    uuid.Nil,
+			Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+		})
+		if err != nil {
+			t.Fatalf("create live project %d: %v", i, err)
+		}
+		session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+			OrganizationID: org.ID,
+			ScopeType:      "project",
+			ScopeID:        project.ID,
+			Mode:           "async",
+			Status:         "active",
+			CreatedByType:  "system",
+			CreatedByID:    uuid.New(),
+			Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+		})
+		if err != nil {
+			t.Fatalf("create live project session %d: %v", i, err)
+		}
+		if _, err := repo.NewModelInvocationRepo(pool).Create(ctx, repo.ModelInvocation{
+			OrganizationID:    org.ID,
+			ModelProviderID:   provider.ID,
+			InvocationPurpose: "agent_turn",
+			Status:            "in_flight",
+			ModelName:         "test-model",
+			AgentID:           &agent.ID,
+			ProjectID:         &project.ID,
+			SessionID:         &session.ID,
+		}); err != nil {
+			t.Fatalf("create live project invocation %d: %v", i, err)
+		}
+	}
+
+	staleProject, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-ignores-failed-turn-stale-" + uuid.NewString()[:8],
+		DisplayName:    "Stale Failed Turn Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale project: %v", err)
+	}
+	staleSession, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        staleProject.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale session: %v", err)
+	}
+	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: staleSession.ID,
+		Role:      "user",
+		Content:   "Continue project execution.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale message: %v", err)
+	}
+	staleTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        staleSession.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "failed",
+		TriggerMessageID: &staleMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create stale turn: %v", err)
+	}
+	if _, err := repo.NewModelInvocationRepo(pool).Create(ctx, repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   provider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "in_flight",
+		ModelName:         "test-model",
+		AgentID:           &agent.ID,
+		ProjectID:         &staleProject.ID,
+		SessionID:         &staleSession.ID,
+		TurnID:            &staleTurn.ID,
+	}); err != nil {
+		t.Fatalf("create stale failed-turn invocation: %v", err)
+	}
+
+	pendingProject, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-ignores-failed-turn-pending-" + uuid.NewString()[:8],
+		DisplayName:    "Pending Project Continuation",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending project: %v", err)
+	}
+	pendingSession, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        pendingProject.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending session: %v", err)
+	}
+	creatorID := uuid.Nil
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      pendingProject.ID,
+		Title:          "Pending draft task",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    &creatorID,
+	}); err != nil {
+		t.Fatalf("create pending open task: %v", err)
+	}
+	pendingMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: pendingSession.ID,
+		Role:      "user",
+		Content:   "Continue project execution.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending project continuation message: %v", err)
+	}
+	var pendingJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, pendingSession.ID, pendingMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s", pendingSession.ID, pendingMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", pendingSession.ID, pendingMessage.ID, 0),
+	).Scan(&pendingJobID); err != nil {
+		t.Fatalf("insert pending project continuation job: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 1)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed jobs = %d, want 1", len(claimed))
+	}
+	if claimed[0].ID != pendingJobID {
+		t.Fatalf("claimed job id = %s, want pending job %s", claimed[0].ID, pendingJobID)
+	}
+}
+
 func TestJobWorkerClaimPendingAgentTurnsSkipsStaleProjectBootstrapAndContinuationJobs(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -11182,9 +11393,9 @@ func TestJobWorkerRecoverStaleInProgressContinuationTurnsSynthesizesProjectConti
 	}
 
 	var (
-		jobStatus   string
-		jobMessage  uuid.UUID
-		retryCount  int
+		jobStatus  string
+		jobMessage uuid.UUID
+		retryCount int
 	)
 	if err := pool.QueryRow(ctx, `
 		SELECT status, (payload->>'message_id')::uuid, COALESCE((payload->>'retry_count')::int, 0)

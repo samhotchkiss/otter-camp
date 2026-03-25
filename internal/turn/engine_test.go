@@ -328,14 +328,14 @@ func TestSyncBoundFlowExecutionTurnOwnershipClearsStaleLiveRunID(t *testing.T) {
 		t.Fatalf("insert session: %v", err)
 	}
 	createdExecution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
-		TaskID:     taskRecord.ID,
-		FlowNodeID: flowNode.ID,
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  flowNode.ID,
 		VisitNumber: 1,
-		Status:     "active",
-		SessionID:  &sessionID,
+		Status:      "active",
+		SessionID:   &sessionID,
 		Metadata: repo.FlowExecutionMetadataWithLiveOwner(json.RawMessage(`{}`), repo.FlowExecutionLiveOwner{
-		RunID:  &staleRunID,
-		TurnID: nil,
+			RunID:  &staleRunID,
+			TurnID: nil,
 		}),
 	})
 	if err != nil {
@@ -5979,6 +5979,143 @@ func TestRecoverProjectTaskStaleInboundTurnWithoutRunKeepsLiveInvocation(t *test
 	}
 	if recovered {
 		t.Fatal("recovered = true, want false when live model invocation exists")
+	}
+
+	storedTurn, err := fixture.chat.GetTurn(context.Background(), dbTurn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn: %v", err)
+	}
+	if storedTurn.Status != "in_progress" {
+		t.Fatalf("turn status = %q, want in_progress", storedTurn.Status)
+	}
+}
+
+func TestRecoverRetriedAgentTurnLeakKeepsRecentCompletedInvocation(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+
+	projectID := uuid.New()
+	messageID := uuid.New()
+
+	org, err := repo.NewOrgRepo(fixture.engine.pool).Create(context.Background(), repo.Organization{
+		Slug:        "recover-retried-agent-turn-leak-keep-recent-completed",
+		DisplayName: "Recover Retried Agent Turn Leak Keep Recent Completed",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	dbAgent, err := repo.NewAgentRepo(fixture.engine.pool).Create(context.Background(), repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Recover Retried Agent Turn Leak Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Test agent",
+		AgentType:       "pm",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	dbSession, err := repo.NewChatSessionRepo(fixture.engine.pool).Create(context.Background(), repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        projectID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create db session: %v", err)
+	}
+	dbMessage, err := repo.NewChatMessageRepo(fixture.engine.pool).Create(context.Background(), repo.ChatMessage{
+		SessionID: dbSession.ID,
+		Role:      "user",
+		Content:   "Continue bootstrap.",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("create db message: %v", err)
+	}
+	messageID = dbMessage.ID
+	dbTurn, err := repo.NewChatTurnRepo(fixture.engine.pool).Create(context.Background(), repo.ChatTurn{
+		SessionID:        dbSession.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     dbAgent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &messageID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create db turn: %v", err)
+	}
+
+	fixture.session.OrganizationID = org.ID
+	fixture.session.ID = dbSession.ID
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.session.CurrentTurnID = &dbTurn.ID
+	fixture.chat.session = fixture.session
+	fixture.chat.turns[dbTurn.ID] = &chat.ChatTurn{
+		ID:               dbTurn.ID,
+		SessionID:        dbSession.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     dbAgent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &messageID,
+		RetryCount:       0,
+	}
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, dbTurn.ID)
+
+	provider, err := repo.NewModelProviderRepo(fixture.engine.pool).Create(context.Background(), repo.ModelProvider{
+		Slug:        "recover-retried-agent-turn-leak-provider",
+		DisplayName: "Recover Retried Agent Turn Leak Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create model provider: %v", err)
+	}
+	completedAt := fixture.engine.now().UTC().Add(-10 * time.Second)
+	if _, err := repo.NewModelInvocationRepo(fixture.engine.pool).Create(context.Background(), repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   provider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "completed",
+		ModelName:         "test-model",
+		SessionID:         &dbSession.ID,
+		TurnID:            &dbTurn.ID,
+		CompletedAt:       &completedAt,
+	}); err != nil {
+		t.Fatalf("create recent completed invocation: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := fixture.engine.pool.QueryRow(context.Background(), `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, claimed_by, claimed_at, attempts, updated_at)
+		VALUES ('agent_turn', 'claimed', $1::jsonb, now(), 70, 'test-worker', now(), 2, now())
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, dbSession.ID, messageID)).Scan(&jobID); err != nil {
+		t.Fatalf("insert claimed agent_turn job: %v", err)
+	}
+
+	recovered, err := fixture.engine.recoverRetriedAgentTurnLeak(
+		context.Background(),
+		fixture.session,
+		messageID,
+		dbAgent.ID,
+		0,
+		&jobID,
+		fixture.chat.turns[dbTurn.ID],
+	)
+	if err != nil {
+		t.Fatalf("recoverRetriedAgentTurnLeak: %v", err)
+	}
+	if recovered {
+		t.Fatal("recovered = true, want false when a recent completed invocation exists")
 	}
 
 	storedTurn, err := fixture.chat.GetTurn(context.Background(), dbTurn.ID)

@@ -46,11 +46,11 @@ const (
 	postModelOrphanTurnThreshold   = 30 * time.Second
 	claimedAgentTurnHeartbeatGrace = 30 * time.Second
 
-	agentTurnRateLimitMinBackoff = 30 * time.Second
-	agentTurnRateLimitBackoffCap = 30 * time.Minute
-	agentTurnRateLimitMaxRetries = 6
-	legacyRateLimitJitterFloor   = 5 * time.Minute
-	legacyRateLimitJitterMax     = 30 * time.Second
+	agentTurnRateLimitMinBackoff    = 30 * time.Second
+	agentTurnRateLimitBackoffCap    = 30 * time.Minute
+	agentTurnRateLimitMaxRetries    = 6
+	legacyRateLimitJitterFloor      = 5 * time.Minute
+	legacyRateLimitJitterMax        = 30 * time.Second
 	maxInFlightProjectContinuations = 4
 )
 
@@ -1367,7 +1367,7 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 			"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
 			"Inspect the current task tree and immediately queue or otherwise advance the next runnable bounded draft task.",
 		}, " "),
-		Status: "pending",
+		Status:   "pending",
 		Metadata: json.RawMessage(`{"source":"project_execution_continuation","auto_continue":true,"synthetic_user_message":true}`),
 	})
 	if err != nil {
@@ -3073,8 +3073,14 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			FROM model_invocation mi
 			JOIN chat_session cs
 			  ON cs.id = mi.session_id
+			LEFT JOIN chat_turn ct
+			  ON ct.id = mi.turn_id
 			WHERE mi.status = 'in_flight'
 			  AND cs.scope_type = 'project'
+			  AND (
+			        mi.turn_id IS NULL
+			     OR ct.status IN ('pending', 'in_progress')
+			      )
 		),
 		ranked AS (
 			SELECT id,
