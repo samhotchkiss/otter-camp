@@ -3171,6 +3171,35 @@ func TestBootstrapFirstWaveSelectableTasksSkipsParentsAndDeferredFinalizationTas
 	}
 }
 
+func TestBootstrapFirstWaveSelectableTasksSkipsOrchestrationOnlyParentWithoutChildren(t *testing.T) {
+	parentID := uuid.New()
+	selectableID := uuid.New()
+
+	selectable := bootstrapFirstWaveSelectableTasks([]repo.ProjectTask{
+		{
+			ID:         parentID,
+			TaskNumber: 9,
+			Title:      "WS1: Pipeline Configuration & Scaffold",
+			WorkStatus: "draft",
+			Metadata:   json.RawMessage(`{"decomposition":{"applied":true,"mode":"parallel_children","orchestration_only":true}}`),
+		},
+		{
+			ID:         selectableID,
+			TaskNumber: 13,
+			Title:      "A1: Create pipeline config and environment template",
+			WorkStatus: "draft",
+			Metadata:   json.RawMessage(`{}`),
+		},
+	})
+
+	if len(selectable) != 1 {
+		t.Fatalf("selectable task count = %d, want 1", len(selectable))
+	}
+	if selectable[0].ID != selectableID {
+		t.Fatalf("selectable task id = %s, want %s", selectable[0].ID, selectableID)
+	}
+}
+
 func TestBootstrapFirstWaveSelectableTasksExcludingBlockedSkipsDependencyBlockedTasks(t *testing.T) {
 	blockedID := uuid.New()
 	selectableID := uuid.New()

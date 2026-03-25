@@ -2,12 +2,103 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 13:22 MDT update
+
+- deployed runtime commit is `7252a20b` on `origin/main`
+- dedicated tmux runtime is still `codex-e2e-20260324`
+- `./bin/ottercamp health` is green
+- the old rerun-47 failure note below is stale historical context, not the current live seam
+- pre-test gate audit against `issues/plan-0325a.md` is now complete again and the focused gate slice is green
+
+### Plan-0325A gate status
+
+- task worktree isolation: implemented and covered
+  - `internal/tools/native/task_worktree.go`
+  - `internal/tools/native/task_worktree_test.go`
+  - `internal/tools/native/native_integration_test.go`
+- execution entry-head capture: implemented and covered
+  - `internal/flow/execution_service.go`
+  - `internal/flow/execution_service_test.go`
+- deferred later-wave wakeup protection: implemented and covered
+  - `internal/flow/execution_service.go`
+  - `internal/flow/execution_service_test.go`
+  - `internal/turn/engine_integration_test.go`
+- bootstrap profile rotation: implemented and covered
+  - `internal/bootstrap/bootstrap.go`
+  - `internal/bootstrap/bootstrap_integration_test.go`
+
+### Verification completed at this checkpoint
+
+- `go test ./internal/tools/native -run 'TestEnsureTaskWorktreeFailsClosedWhenMainWorktreeOwnsTaskBranch|TestTaskCreateBoundedFollowOnChildAddsDependencyOnPreviousSibling|TestTaskCreateBootstrapTopLevelOrchestrationParentUsesSetupTasksWithoutSessionMetadata|TestTaskCreateDuringBootstrapTopLevelOrchestrationParentSkipsPlanningHeuristics' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegration(ProjectTaskSessionUsesTaskSpecificWorktree|FlowAdvanceCreatesCanonicalCommitWhenCommitSHAOmitted|FlowReviewDecisionApproveCreatesEmptyCanonicalCommit|FlowReviewDecisionRejectCreatesCanonicalRejectionCommit|FlowRecoveryDecisionRetryCreatesFreshExecution|ParentTaskCanCreateBoundedFollowOnChild|ConcurrentParentChildCreatesSerializeDependencyChain)' -count=1`
+- `go test ./internal/flow -run 'Test(EnsureActiveExecutionCapturesEntryHeadSHA(WhenBindingSession|FromTaskBranchRef|FromTaskWorktreeWhenBranchNameMissing)|ActivateDraftDependentsAfterTaskDone(KeepsDeferredLaterWaveTasksDraft|QueuesExplicitFirstWaveTaskWhenReady)|ActivateDraftOrchestrationParentAfterChildDoneKeepsDeferredLaterWaveParentDraft)' -count=1`
+- `go test -tags=integration ./internal/bootstrap -run 'TestBootstrapRun(SeedsAndIsIdempotent|PreservesExistingCurrentModelProfileVersion|RotatesCurrentModelProfileVersionWhenSeedChanges)' -count=1`
+
+### Current next step
+
+- rebuild/restart the tmux runtime on commit `7252a20b`
+- note that deployed commit in `issues/log-0325a.md`
+- start a fresh operator canary under `issues/plan-0325b.md`
+- treat the first new runtime seam in that operator run as the next product fix target
+
+## 2026-03-25 13:24 MDT update
+
+- rerun-48 is the first fresh `plan-0325b` operator canary after the pre-test gate audit
+- fresh project creation worked through the real org session
+  - project id: `57eeb40d-5905-4d1e-bd36-02adcb8b2232`
+  - slug: `speaker-pipeline-ops-validation-fresh-20260325-rerun-48`
+  - project session id: `3764d5d5-8c0e-45b4-87be-0b94c16e58e3`
+
+### First real rerun-48 seam
+
+- bootstrap progressed cleanly through setup tasks `2-6`
+- the first failure seam is in `bootstrap.setup.persist` first-wave selection
+- the live PM selected top-level orchestration parents before any bounded executable child tasks existed:
+  - task `9` `WS1: Pipeline Configuration & Scaffold`
+  - task `10` `WS2: Execution Lifecycle Validation`
+- those parent tasks were wrongly accepted as `first_wave_task_ids` and got:
+  - `bootstrap_first_wave_selected = true`
+  - no assignee
+  - no flow template
+- bootstrap then failed with:
+  - `kickoff validation failed: first-wave task 10 (WS2: Execution Lifecycle Validation) has no assigned agent, so bootstrap cannot queue runnable execution`
+
+### Root cause
+
+- `internal/tools/native/mutation_tools.go`
+  - `bootstrapFirstWaveSelectableTasksExcludingBlocked(...)` only excluded decomposition parents that already had child rows
+  - orchestration-only parent containers with `decomposition.orchestration_only=true` but zero child rows were still considered selectable
+  - explicit `first_wave_task_ids` validation also lacked a reject path for these parent containers
+
+### New fix staged locally
+
+- patched [`internal/tools/native/mutation_tools.go`](../internal/tools/native/mutation_tools.go)
+  - first-wave selectable-task filtering now excludes any task where `taskRequiresBoundedChildren(...)` is true
+  - explicit `select-first-wave` validation now rejects orchestration-only parent containers with actionable guidance to select bounded executable child tasks instead
+- added focused coverage in:
+  - [`internal/tools/native/mutation_tools_test.go`](../internal/tools/native/mutation_tools_test.go)
+    - `TestBootstrapFirstWaveSelectableTasksSkipsOrchestrationOnlyParentWithoutChildren`
+  - [`internal/tools/native/native_integration_test.go`](../internal/tools/native/native_integration_test.go)
+    - `TestIntegrationBootstrapSetupPersistRejectsOrchestrationOnlyParentSelection`
+
+### Verification completed in this stretch
+
+- `go test ./internal/tools/native -run 'Test(BootstrapFirstWaveSelectableTasks(SkipsParentsAndDeferredFinalizationTasks|SkipsOrchestrationOnlyParentWithoutChildren)|TaskCreateBootstrapTopLevelOrchestrationParentUsesSetupTasksWithoutSessionMetadata)' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegration(BootstrapSetupPersistRejects(DependencyBlockedFirstWaveSelection|OrchestrationOnlyParentSelection)|ProjectTaskSessionUsesTaskSpecificWorktree)' -count=1`
+
+### Current next step
+
+- commit and push this bootstrap-selection fix slice
+- rebuild/restart `codex-e2e-20260324`
+- start fresh rerun-49
+- verify that first-wave selection no longer accepts orchestration parent containers before bounded child-task materialization
+
 ## 2026-03-25 13:03 MDT update
 
-- deployed runtime has another uncommitted native bootstrap-parent patch on top of pushed commit `660fd4c4`
-- dedicated tmux runtime is still `codex-e2e-20260324`
-- health is green after the latest rebuild/restart
-- fresh rerun-47 is now the current clean proof target and has already advanced far enough to prove the latest parent-task slice
+- deployed runtime at that time had another uncommitted native bootstrap-parent patch on top of pushed commit `660fd4c4`
+- dedicated tmux runtime was `codex-e2e-20260324`
+- health was green after the latest rebuild/restart
+- fresh rerun-47 was the current clean proof target and had advanced far enough to prove the latest parent-task slice
 
 ### What rerun-46 proved live
 

@@ -6351,6 +6351,95 @@ func TestIntegrationBootstrapSetupPersistRejectsDependencyBlockedFirstWaveSelect
 	}
 }
 
+func TestIntegrationBootstrapSetupPersistRejectsOrchestrationOnlyParentSelection(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap First Wave Parent Rejection",
+		"slug":        "bootstrap-first-wave-parent-" + uuid.NewString()[:8],
+		"description": "Verify select-first-wave rejects orchestration-only parent containers.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap first-wave parent rejection",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	parentDescription := "Parent orchestration container for validation workstream. Does not perform execution work directly."
+	parentTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		Title:          "WS1: Pipeline Configuration & Scaffold",
+		Description:    &parentDescription,
+		WorkStatus:     "draft",
+		CreatedByType:  "agent",
+		CreatedByID:    &actor.ID,
+		Metadata:       json.RawMessage(`{"decomposition":{"applied":true,"mode":"parallel_children","orchestration_only":true}}`),
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	childDescription := "Bounded executable child task."
+	childTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "A1: Create pipeline config and environment template",
+		Description:     &childDescription,
+		WorkStatus:      "draft",
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create child task: %v", err)
+	}
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs":    []string{"select-first-wave"},
+		"first_wave_task_numbers": []string{strconv.Itoa(parentTask.TaskNumber)},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist with orchestration parent selection: %v", err)
+	}
+	if out["error"] != "invalid_first_wave_selection" {
+		t.Fatalf("error = %v, want invalid_first_wave_selection", out["error"])
+	}
+	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "orchestration-only parent container") {
+		t.Fatalf("message = %q, want orchestration parent guidance", got)
+	}
+	hints, ok := out["selectable_first_wave_tasks"].([]map[string]any)
+	if !ok || len(hints) != 1 {
+		t.Fatalf("selectable_first_wave_tasks = %#v, want 1 task hint", out["selectable_first_wave_tasks"])
+	}
+	if got := fmt.Sprintf("%v", hints[0]["task_number"]); got != strconv.Itoa(childTask.TaskNumber) {
+		t.Fatalf("hint task number = %q, want %d", got, childTask.TaskNumber)
+	}
+
+	reloadedParent, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, parentTask.ID)
+	if err != nil {
+		t.Fatalf("reload parent task: %v", err)
+	}
+	if selected, ok := metadataObject(reloadedParent.Metadata)["bootstrap_first_wave_selected"].(bool); ok && selected {
+		t.Fatalf("parent task bootstrap_first_wave_selected = %v, want unset/false", selected)
+	}
+}
+
 func TestIntegrationBootstrapSetupPersistInfersFirstWaveSelectionFromFWAndLWTitles(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

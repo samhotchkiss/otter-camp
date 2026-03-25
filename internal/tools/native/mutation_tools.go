@@ -3221,6 +3221,13 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 				if !ok {
 					continue
 				}
+				if bootstrapFirstWaveTaskRequiresChildren(task) {
+					return map[string]any{
+						"error":                       "invalid_first_wave_selection",
+						"message":                     fmt.Sprintf("Task %d (%s) is still an orchestration-only parent container. Select its bounded executable child tasks into the first wave instead of the parent.", task.TaskNumber, task.Title),
+						"selectable_first_wave_tasks": selectionHints,
+					}, nil
+				}
 				if strings.EqualFold(strings.TrimSpace(task.BlocksScope), "all") {
 					return map[string]any{
 						"error":                       "invalid_first_wave_selection",
@@ -3418,6 +3425,9 @@ func bootstrapFirstWaveSelectableTasksExcludingBlocked(tasks []repo.ProjectTask,
 		if bootstrapGateTask(task) || bootstrapSetupTask(task) {
 			continue
 		}
+		if bootstrapFirstWaveTaskRequiresChildren(task) {
+			continue
+		}
 		if strings.EqualFold(strings.TrimSpace(task.BlocksScope), "all") {
 			continue
 		}
@@ -3433,6 +3443,10 @@ func bootstrapFirstWaveSelectableTasksExcludingBlocked(tasks []repo.ProjectTask,
 		selectable = append(selectable, task)
 	}
 	return selectable
+}
+
+func bootstrapFirstWaveTaskRequiresChildren(task repo.ProjectTask) bool {
+	return taskRequiresBoundedChildren(task)
 }
 
 func (e *NativeToolExecutor) loadBootstrapBlockedTaskIDs(ctx context.Context, projectID uuid.UUID) (map[uuid.UUID]struct{}, error) {
