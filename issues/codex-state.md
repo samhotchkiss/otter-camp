@@ -472,6 +472,52 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 - restart the worker so the next rerouted continuation on rerun-65-restart uses `project_bootstrap`
 - verify the live bootstrap lane stops attempting generic post-bootstrap execution mutations and instead follows the bootstrap repair path
 
+## 2026-03-25 15:33 MDT update
+
+- latest local runtime is now patch-on-top of pushed commit `0d7095bf`
+- the next live blocker is narrowed further: stale retry recovery for project sessions must swap off bad inherited `project_execution_continuation` messages when bootstrap is still active
+- the follow-on worker fix is in code with focused integration coverage and is ready to deploy
+
+### New local patch: stale project-session retries now resolve back to bootstrap messages when bootstrap is still active
+
+- root cause:
+  - after deploying `0d7095bf`, the live rerun-65-restart session still re-entered the bad post-bootstrap path because stale-triggered retry recovery reused the old message id:
+    - `cd0989b9-b078-4bd9-afc9-b5aa0dd631b8`
+    - `source = project_execution_continuation`
+  - even though the session bootstrap metadata still said `project_bootstrap.status = active`
+  - the new turn `089cab0e-95b1-4701-8aab-89003b082c1e` therefore retried the wrong message instead of switching back to the original bootstrap handoff / bootstrap continuation
+- behavior:
+  - `internal/jobqueue/worker.go`
+  - `resolveStaleTriggeredRetryMessageID(...)` now handles `scope_type = project`
+  - when bootstrap is still active and the retry message source is not `project_bootstrap`, it resolves back through `ensureProjectContinuationMessage(...)`, which now returns a bootstrap message for active bootstrap sessions
+  - this keeps stale retry recovery aligned with the actual bootstrap state instead of blindly reusing a bad inherited project-execution message
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessageKeepsBootstrapContinuationWhileBootstrapActive|ResolveStaleTriggeredRetryMessageIDSwitchesProjectExecutionToBootstrapWhileBootstrapActive|RequeueActiveProjectSessionsWithoutTurns|FailStaleModelInvocations(RequeuesTriggeredProjectSession|RecoversInheritedAsyncProjectInvocationAfterWorkerRestart|SkipsActiveAsyncOrganizationSession))$' -count=1`
+
+### Live state before redeploy
+
+- session:
+  - `16b95db3-58bf-4e6d-905c-a75fe2c6d1dc`
+- stale recovered turn:
+  - `cf8baad7-263e-4eec-9c6d-82cf76be0a72`
+  - failed with `recovered stale in-progress message turn without live job or execution; scheduling a fresh retry`
+- bad retry turn created after that recovery:
+  - `089cab0e-95b1-4701-8aab-89003b082c1e`
+  - trigger message still `cd0989b9-b078-4bd9-afc9-b5aa0dd631b8`
+  - source still `project_execution_continuation`
+- bootstrap metadata at the same time remained:
+  - `status = active`
+  - `current_phase = staffing_persisted`
+
+### Current next step
+
+- commit/push this retry-message-resolution slice
+- restart the worker again
+- verify the same rerun-65-restart session recovers onto `project_bootstrap` instead of the bad `project_execution_continuation` message
+
 ## 2026-03-25 14:12 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `76537eb9`

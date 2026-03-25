@@ -8209,6 +8209,77 @@ func TestJobWorkerEnsureProjectContinuationMessageKeepsBootstrapContinuationWhil
 	}
 }
 
+func TestJobWorkerResolveStaleTriggeredRetryMessageIDSwitchesProjectExecutionToBootstrapWhileBootstrapActive(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "resolve-stale-triggered-bootstrap-active",
+		DisplayName: "Resolve Stale Triggered Bootstrap Active",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "resolve-stale-triggered-bootstrap-active-project",
+		DisplayName:    "Resolve Stale Triggered Bootstrap Active Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	bootstrapMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue bootstrap.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create bootstrap message: %v", err)
+	}
+	badContinuationMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","auto_continue":true,"synthetic_user_message":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create bad continuation message: %v", err)
+	}
+
+	retryMessageID, err := worker.resolveStaleTriggeredRetryMessageID(ctx, session.ID, "project", badContinuationMessage.ID)
+	if err != nil {
+		t.Fatalf("resolveStaleTriggeredRetryMessageID: %v", err)
+	}
+	if retryMessageID != bootstrapMessage.ID {
+		t.Fatalf("retryMessageID = %s, want bootstrap message %s", retryMessageID, bootstrapMessage.ID)
+	}
+}
+
 func TestJobWorkerClearCompletedSessionCurrentTurnsEnablesRequeue(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

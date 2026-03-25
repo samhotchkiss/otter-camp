@@ -2200,7 +2200,37 @@ func (w *Worker) resolveStaleTriggeredRetryMessageID(ctx context.Context, sessio
 	if sessionID == uuid.Nil || messageID == uuid.Nil {
 		return messageID, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(scopeType), "organization") {
+	scopeType = strings.TrimSpace(scopeType)
+	if strings.EqualFold(scopeType, "project") {
+		var (
+			source          string
+			bootstrapStatus string
+		)
+		if err := w.pool.QueryRow(ctx, `
+			SELECT COALESCE(cm.metadata->>'source', ''),
+			       COALESCE(cs.metadata->'project_bootstrap'->>'status', '')
+			FROM chat_session cs
+			LEFT JOIN chat_message cm ON cm.id = $2
+			WHERE cs.id = $1
+		`, sessionID, messageID).Scan(&source, &bootstrapStatus); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return messageID, nil
+			}
+			return uuid.Nil, err
+		}
+		if strings.EqualFold(strings.TrimSpace(bootstrapStatus), "active") &&
+			!strings.EqualFold(strings.TrimSpace(source), "project_bootstrap") {
+			retryMessageID, err := w.ensureProjectContinuationMessage(ctx, sessionID)
+			if err != nil {
+				return uuid.Nil, err
+			}
+			if retryMessageID != uuid.Nil {
+				return retryMessageID, nil
+			}
+		}
+		return messageID, nil
+	}
+	if !strings.EqualFold(scopeType, "organization") {
 		return messageID, nil
 	}
 
