@@ -158,6 +158,7 @@ type modelProfileSeed struct {
 	LogicalProfileID    string
 	ProviderSlug        string
 	ModelName           string
+	DisplayName         string
 	ContextWindowTokens int
 	MaxOutputTokens     int
 	SupportsStreaming   bool
@@ -981,6 +982,7 @@ func defaultProfileSeeds() []modelProfileSeed {
 			LogicalProfileID:    "high-capability",
 			ProviderSlug:        "anthropic",
 			ModelName:           "claude-opus-4-6",
+			DisplayName:         "Claude Opus 4.6",
 			ContextWindowTokens: 200000,
 			MaxOutputTokens:     4096,
 			SupportsStreaming:   true,
@@ -991,6 +993,7 @@ func defaultProfileSeeds() []modelProfileSeed {
 			LogicalProfileID:    "standard",
 			ProviderSlug:        "anthropic",
 			ModelName:           "claude-sonnet-4-20250514",
+			DisplayName:         "Claude Sonnet 4",
 			ContextWindowTokens: 200000,
 			MaxOutputTokens:     4096,
 			SupportsStreaming:   true,
@@ -1001,6 +1004,7 @@ func defaultProfileSeeds() []modelProfileSeed {
 			LogicalProfileID:    "haiku",
 			ProviderSlug:        "anthropic",
 			ModelName:           "claude-haiku-4-5-20251001",
+			DisplayName:         "Claude Haiku 4.5",
 			ContextWindowTokens: 200000,
 			MaxOutputTokens:     4096,
 			SupportsStreaming:   true,
@@ -1081,6 +1085,7 @@ func (b *Bootstrapper) upsertOrgProfile(ctx context.Context, organizationID uuid
 			IsCurrent:           true,
 			ProviderID:          providerID,
 			ModelName:           seed.ModelName,
+			DisplayName:         seed.DisplayName,
 			ContextWindowTokens: seed.ContextWindowTokens,
 			MaxOutputTokens:     seed.MaxOutputTokens,
 			SupportsStreaming:   seed.SupportsStreaming,
@@ -1092,7 +1097,19 @@ func (b *Bootstrapper) upsertOrgProfile(ctx context.Context, organizationID uuid
 	current, err := b.getCurrentOrgProfile(ctx, organizationID, seed.LogicalProfileID)
 	switch {
 	case err == nil:
-		return current, nil
+		if !profileNeedsRotation(current, providerID, seed) {
+			return current, nil
+		}
+		return b.profileRepo.Deprecate(ctx, current.ID, repo.ModelProfile{
+			ProviderID:          providerID,
+			ModelName:           seed.ModelName,
+			DisplayName:         seed.DisplayName,
+			ContextWindowTokens: seed.ContextWindowTokens,
+			MaxOutputTokens:     seed.MaxOutputTokens,
+			SupportsStreaming:   seed.SupportsStreaming,
+			SupportsVision:      seed.SupportsVision,
+			InvocationPurpose:   seed.InvocationPurpose,
+		})
 	case errors.Is(err, repo.ErrNotFound):
 		orgID := organizationID
 		return b.profileRepo.Create(ctx, repo.ModelProfile{
@@ -1102,6 +1119,7 @@ func (b *Bootstrapper) upsertOrgProfile(ctx context.Context, organizationID uuid
 			IsCurrent:           true,
 			ProviderID:          providerID,
 			ModelName:           seed.ModelName,
+			DisplayName:         seed.DisplayName,
 			ContextWindowTokens: seed.ContextWindowTokens,
 			MaxOutputTokens:     seed.MaxOutputTokens,
 			SupportsStreaming:   seed.SupportsStreaming,
@@ -1111,6 +1129,34 @@ func (b *Bootstrapper) upsertOrgProfile(ctx context.Context, organizationID uuid
 	default:
 		return repo.ModelProfile{}, err
 	}
+}
+
+func profileNeedsRotation(current repo.ModelProfile, providerID uuid.UUID, seed modelProfileSeed) bool {
+	if current.ProviderID != providerID {
+		return true
+	}
+	if strings.TrimSpace(current.ModelName) != strings.TrimSpace(seed.ModelName) {
+		return true
+	}
+	if strings.TrimSpace(current.DisplayName) != strings.TrimSpace(seed.DisplayName) {
+		return true
+	}
+	if current.ContextWindowTokens != seed.ContextWindowTokens {
+		return true
+	}
+	if current.MaxOutputTokens != seed.MaxOutputTokens {
+		return true
+	}
+	if current.SupportsStreaming != seed.SupportsStreaming {
+		return true
+	}
+	if current.SupportsVision != seed.SupportsVision {
+		return true
+	}
+	if strings.TrimSpace(current.InvocationPurpose) != strings.TrimSpace(seed.InvocationPurpose) {
+		return true
+	}
+	return false
 }
 
 func (b *Bootstrapper) getCurrentOrgProfile(ctx context.Context, organizationID uuid.UUID, logicalID string) (repo.ModelProfile, error) {

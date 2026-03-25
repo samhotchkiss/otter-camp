@@ -4592,3 +4592,40 @@ The next move from here:
 - current truth:
   - Frank is now actually routing `agent_turn` traffic through `claude-opus-4-6`
   - if Frank verbally reports a different model again, trust `model_invocation.model_name`, not the assistant text
+
+## 2026-03-25 Plan 0325A pre-test audit and bootstrap rotation checkpoint
+
+- current plan context:
+  - following `issues/plan-0325a.md` / `issues/plan-0325b.md` now
+  - pre-test audit result:
+    - gate 1 (`task worktree fail closed`) already appears implemented
+    - gate 3 (`later-wave draft protection`) appears partially implemented but still needs fuller regression coverage
+    - gate 4 (`bootstrap org-profile rotation`) was still open
+    - gate 2 (`execution entry_head from actual task branch/worktree`) is still the next runtime fix after the bootstrap slice
+
+- bootstrap rotation fix landed:
+  - [`internal/bootstrap/bootstrap.go`](/Users/sam/dev/otter-camp/internal/bootstrap/bootstrap.go)
+    - restored explicit org-profile rotation checks via `profileNeedsRotation(...)`
+    - reruns now preserve current rows only when the seeded provider/model/display/window/capability fields still match
+    - changed seed values now deprecate the current row and create a fresh current version
+    - default profile seeds now include explicit display names:
+      - `Claude Opus 4.6`
+      - `Claude Sonnet 4`
+      - `Claude Haiku 4.5`
+  - [`internal/bootstrap/bootstrap_integration_test.go`](/Users/sam/dev/otter-camp/internal/bootstrap/bootstrap_integration_test.go)
+    - `TestBootstrapRunPreservesExistingCurrentModelProfileVersion`
+      - now proves unchanged seed reruns keep the same current row and no extra history version is created
+    - `TestBootstrapRunRotatesCurrentModelProfileVersionWhenSeedChanges`
+      - proves changed seed values rotate to a new current version with the new model/display values
+
+- verification:
+  - `go test -tags=integration ./internal/bootstrap -run 'TestBootstrapRun(SeedsAndIsIdempotent|PreservesExistingCurrentModelProfileVersion|RotatesCurrentModelProfileVersionWhenSeedChanges)$' -count=1`
+
+- live/runtime state:
+  - backend tmux remains:
+    - `ottercamp-anthropic-fix:0.0` service
+    - `ottercamp-anthropic-fix:0.1` worker `--concurrency 24`
+  - `./bin/ottercamp health` was green before starting the plan work
+
+- next seam:
+  - tighten execution-owned `entry_head_sha` capture so it is sourced from the actual task worktree/branch context used by the execution, then add/fill the deferred later-wave wakeup regressions before starting the operator-style test run

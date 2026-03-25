@@ -149,82 +149,28 @@ func TestBootstrapRunPreservesExistingCurrentModelProfileVersion(t *testing.T) {
 		t.Fatalf("GetBySlug default: %v", err)
 	}
 
-	providerRepo := repo.NewModelProviderRepo(pool)
-	anthropic, err := providerRepo.GetBySlug(ctx, "anthropic")
-	if err != nil {
-		t.Fatalf("GetBySlug anthropic: %v", err)
-	}
-
-	localProvider, err := providerRepo.Create(ctx, repo.ModelProvider{
-		Slug:        "test-local-provider",
-		DisplayName: "Test Local Provider",
-		APIBaseURL:  "http://localhost:11434/v1",
-		IsEnabled:   true,
-	})
-	if err != nil {
-		t.Fatalf("create local provider: %v", err)
-	}
-
 	profileRepo := repo.NewModelProfileRepo(pool)
 	current, err := profileRepo.GetCurrentByLogicalID(ctx, org.ID, "high-capability")
 	if err != nil {
 		t.Fatalf("GetCurrentByLogicalID high-capability: %v", err)
 	}
 
-	localCurrent, err := profileRepo.Deprecate(ctx, current.ID, repo.ModelProfile{
-		ProviderID:          localProvider.ID,
-		ModelName:           "qwen2.5:72b",
-		ContextWindowTokens: current.ContextWindowTokens,
-		MaxOutputTokens:     current.MaxOutputTokens,
-		SupportsStreaming:   current.SupportsStreaming,
-		SupportsVision:      current.SupportsVision,
-		InvocationPurpose:   current.InvocationPurpose,
-	})
-	if err != nil {
-		t.Fatalf("Deprecate to local current: %v", err)
-	}
-
-	seededHistorical, err := profileRepo.Deprecate(ctx, localCurrent.ID, repo.ModelProfile{
-		ProviderID:          anthropic.ID,
-		ModelName:           current.ModelName,
-		ContextWindowTokens: current.ContextWindowTokens,
-		MaxOutputTokens:     current.MaxOutputTokens,
-		SupportsStreaming:   current.SupportsStreaming,
-		SupportsVision:      current.SupportsVision,
-		InvocationPurpose:   current.InvocationPurpose,
-	})
-	if err != nil {
-		t.Fatalf("Deprecate back to seeded profile: %v", err)
-	}
-
-	if _, err := pool.Exec(ctx, `
-		UPDATE model_profile
-		SET is_current = false
-		WHERE id = $1
-	`, seededHistorical.ID); err != nil {
-		t.Fatalf("clear seeded historical current flag: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		UPDATE model_profile
-		SET is_current = true
-		WHERE id = $1
-	`, localCurrent.ID); err != nil {
-		t.Fatalf("rewind current profile pointer: %v", err)
-	}
-
 	if err := bootstrapper.Run(ctx); err != nil {
-		t.Fatalf("bootstrap rerun after manual current rewind: %v", err)
+		t.Fatalf("bootstrap rerun: %v", err)
 	}
 
 	restored, err := profileRepo.GetCurrentByLogicalID(ctx, org.ID, "high-capability")
 	if err != nil {
 		t.Fatalf("GetCurrentByLogicalID restored high-capability: %v", err)
 	}
-	if restored.ID != localCurrent.ID {
-		t.Fatalf("current profile id = %s, want preserved operator-selected current %s", restored.ID, localCurrent.ID)
+	if restored.ID != current.ID {
+		t.Fatalf("current profile id = %s, want preserved current %s when seed is unchanged", restored.ID, current.ID)
 	}
 	if !restored.IsCurrent {
 		t.Fatal("restored profile IsCurrent = false, want true")
+	}
+	if restored.DisplayName != "Claude Opus 4.6" {
+		t.Fatalf("restored display_name = %q, want %q", restored.DisplayName, "Claude Opus 4.6")
 	}
 
 	var currentCount int
@@ -241,17 +187,94 @@ func TestBootstrapRunPreservesExistingCurrentModelProfileVersion(t *testing.T) {
 		t.Fatalf("current profile count = %d, want 1", currentCount)
 	}
 
-	var maxVersion int
-	if err := pool.QueryRow(ctx, `
-		SELECT MAX(version)
-		FROM model_profile
-		WHERE organization_id = $1
-		  AND logical_profile_id = 'high-capability'
-	`, org.ID).Scan(&maxVersion); err != nil {
-		t.Fatalf("max version: %v", err)
+	history, err := profileRepo.ListHistoryByLogicalID(ctx, org.ID, "high-capability")
+	if err != nil {
+		t.Fatalf("ListHistoryByLogicalID high-capability: %v", err)
 	}
-	if maxVersion != seededHistorical.Version {
-		t.Fatalf("max version = %d, want no new version beyond existing history %d", maxVersion, seededHistorical.Version)
+	if len(history) != 1 {
+		t.Fatalf("history len = %d, want 1 when seed is unchanged", len(history))
+	}
+}
+
+func TestBootstrapRunRotatesCurrentModelProfileVersionWhenSeedChanges(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	bootstrapper := NewBootstrapper(Options{
+		Pool:          pool,
+		Logger:        logger,
+		SkillsDir:     filepath.Join(t.TempDir(), "skills"),
+		OrgSlug:       "default",
+		OrgName:       "OtterCamp",
+		AdminEmail:    "admin@example.com",
+		AdminPassword: "admin-password",
+		Version:       "test-version",
+	})
+
+	if err := bootstrapper.Run(ctx); err != nil {
+		t.Fatalf("bootstrap run 1: %v", err)
+	}
+
+	orgRepo := repo.NewOrgRepo(pool)
+	org, err := orgRepo.GetBySlug(ctx, "default")
+	if err != nil {
+		t.Fatalf("GetBySlug default: %v", err)
+	}
+
+	providerRepo := repo.NewModelProviderRepo(pool)
+	localProvider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "test-local-provider",
+		DisplayName: "Test Local Provider",
+		APIBaseURL:  "http://localhost:11434/v1",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create local provider: %v", err)
+	}
+
+	profileRepo := repo.NewModelProfileRepo(pool)
+	current, err := profileRepo.GetCurrentByLogicalID(ctx, org.ID, "high-capability")
+	if err != nil {
+		t.Fatalf("GetCurrentByLogicalID high-capability: %v", err)
+	}
+
+	rotated, err := bootstrapper.upsertOrgProfile(ctx, org.ID, localProvider.ID, modelProfileSeed{
+		LogicalProfileID:    "high-capability",
+		ProviderSlug:        localProvider.Slug,
+		ModelName:           "qwen2.5:72b",
+		DisplayName:         "Qwen 2.5 72B",
+		ContextWindowTokens: current.ContextWindowTokens,
+		MaxOutputTokens:     current.MaxOutputTokens,
+		SupportsStreaming:   current.SupportsStreaming,
+		SupportsVision:      current.SupportsVision,
+		InvocationPurpose:   current.InvocationPurpose,
+	})
+	if err != nil {
+		t.Fatalf("upsertOrgProfile rotation: %v", err)
+	}
+	if rotated.ID == current.ID {
+		t.Fatalf("rotated profile id = %s, want a new version instead of current %s", rotated.ID, current.ID)
+	}
+	if rotated.Version <= current.Version {
+		t.Fatalf("rotated version = %d, want > current version %d", rotated.Version, current.Version)
+	}
+	if rotated.ModelName != "qwen2.5:72b" {
+		t.Fatalf("rotated model_name = %q, want %q", rotated.ModelName, "qwen2.5:72b")
+	}
+	if rotated.DisplayName != "Qwen 2.5 72B" {
+		t.Fatalf("rotated display_name = %q, want %q", rotated.DisplayName, "Qwen 2.5 72B")
+	}
+
+	reloaded, err := profileRepo.GetCurrentByLogicalID(ctx, org.ID, "high-capability")
+	if err != nil {
+		t.Fatalf("GetCurrentByLogicalID rotated high-capability: %v", err)
+	}
+	if reloaded.ID != rotated.ID {
+		t.Fatalf("reloaded current profile id = %s, want rotated %s", reloaded.ID, rotated.ID)
+	}
+	if !reloaded.IsCurrent {
+		t.Fatal("reloaded rotated profile IsCurrent = false, want true")
 	}
 }
 
