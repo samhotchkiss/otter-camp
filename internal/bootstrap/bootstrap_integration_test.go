@@ -278,6 +278,87 @@ func TestBootstrapRunRotatesCurrentModelProfileVersionWhenSeedChanges(t *testing
 	}
 }
 
+func TestBootstrapRunPreservesOperatorSelectedCurrentProfileWhenSeedVersionAlreadyExists(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	bootstrapper := NewBootstrapper(Options{
+		Pool:          pool,
+		Logger:        logger,
+		SkillsDir:     filepath.Join(t.TempDir(), "skills"),
+		OrgSlug:       "default",
+		OrgName:       "OtterCamp",
+		AdminEmail:    "admin@example.com",
+		AdminPassword: "admin-password",
+		Version:       "test-version",
+	})
+
+	if err := bootstrapper.Run(ctx); err != nil {
+		t.Fatalf("bootstrap run 1: %v", err)
+	}
+
+	orgRepo := repo.NewOrgRepo(pool)
+	org, err := orgRepo.GetBySlug(ctx, "default")
+	if err != nil {
+		t.Fatalf("GetBySlug default: %v", err)
+	}
+
+	providerRepo := repo.NewModelProviderRepo(pool)
+	localProvider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "test-local-preserve-provider",
+		DisplayName: "Test Local Preserve Provider",
+		APIBaseURL:  "http://localhost:11434/v1",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create local provider: %v", err)
+	}
+
+	profileRepo := repo.NewModelProfileRepo(pool)
+	current, err := profileRepo.GetCurrentByLogicalID(ctx, org.ID, "high-capability")
+	if err != nil {
+		t.Fatalf("GetCurrentByLogicalID high-capability: %v", err)
+	}
+
+	operatorSelected, err := profileRepo.Deprecate(ctx, current.ID, repo.ModelProfile{
+		ProviderID:          localProvider.ID,
+		ModelName:           "qwen2.5:72b",
+		DisplayName:         "Local Qwen 72B",
+		ContextWindowTokens: current.ContextWindowTokens,
+		MaxOutputTokens:     current.MaxOutputTokens,
+		SupportsStreaming:   current.SupportsStreaming,
+		SupportsVision:      current.SupportsVision,
+		InvocationPurpose:   current.InvocationPurpose,
+	})
+	if err != nil {
+		t.Fatalf("Deprecate to operator-selected profile: %v", err)
+	}
+
+	if err := bootstrapper.Run(ctx); err != nil {
+		t.Fatalf("bootstrap rerun: %v", err)
+	}
+
+	restored, err := profileRepo.GetCurrentByLogicalID(ctx, org.ID, "high-capability")
+	if err != nil {
+		t.Fatalf("GetCurrentByLogicalID restored high-capability: %v", err)
+	}
+	if restored.ID != operatorSelected.ID {
+		t.Fatalf("current profile id = %s, want preserved operator-selected current %s", restored.ID, operatorSelected.ID)
+	}
+	if restored.ModelName != "qwen2.5:72b" {
+		t.Fatalf("restored model_name = %q, want %q", restored.ModelName, "qwen2.5:72b")
+	}
+
+	history, err := profileRepo.ListHistoryByLogicalID(ctx, org.ID, "high-capability")
+	if err != nil {
+		t.Fatalf("ListHistoryByLogicalID high-capability: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want 2 after operator override is preserved", len(history))
+	}
+}
+
 func TestBootstrapRunSkipsAdminUserWhenCredentialsMissing(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

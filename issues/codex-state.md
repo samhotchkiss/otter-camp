@@ -2,6 +2,71 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 13:39 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `4bcbdc2b`
+- dedicated tmux runtime is still `codex-e2e-20260324`
+- service health is green
+- the next real seam is no longer bootstrap first-wave parent selection
+- the current live seam was a bootstrap/model-profile preservation regression, and it is now fixed in code and live-proven
+
+### New product fix: bootstrap restarts must not clobber operator-selected current profiles
+
+- root cause:
+  - `internal/bootstrap/bootstrap.go`
+  - `upsertOrgProfile(...)` treated any current-profile mismatch as a reason to rotate back to the seeded Anthropic default
+  - restarting the worker at `13:34:39 MDT` reran bootstrap step 5 and silently created new current Anthropic rows:
+    - `haiku` -> version `9`
+    - `standard` -> version `9`
+    - `high-capability` -> version `9`
+  - this immediately broke the local-model fallback plan because fresh org turns kept resolving `claude-haiku-4-5-20251001` and failing with Anthropic 429s even after the operator had switched the current profiles to qwen
+
+### Code change
+
+- patched [`internal/bootstrap/bootstrap.go`](../internal/bootstrap/bootstrap.go)
+  - if the desired seeded version already exists in org profile history, bootstrap now preserves the current operator-selected profile instead of rotating back to the seed
+  - true unseen seed upgrades still rotate when needed
+- added focused integration coverage in [`internal/bootstrap/bootstrap_integration_test.go`](../internal/bootstrap/bootstrap_integration_test.go)
+  - `TestBootstrapRunPreservesOperatorSelectedCurrentProfileWhenSeedVersionAlreadyExists`
+
+### Verification completed
+
+- `go test -tags=integration ./internal/bootstrap -run 'TestBootstrapRun(SeedsAndIsIdempotent|PreservesExistingCurrentModelProfileVersion|RotatesCurrentModelProfileVersionWhenSeedChanges|PreservesOperatorSelectedCurrentProfileWhenSeedVersionAlreadyExists)$' -count=1`
+
+### Live proof after redeploy
+
+- switched all three logical profiles back to qwen through the supported model-profile API
+  - `haiku` -> version `10` -> `qwen2.5:72b`
+  - `standard` -> version `10` -> `qwen2.5:72b`
+  - `high-capability` -> version `10` -> `qwen2.5:72b`
+- restarted the worker again after the patch
+- queried the live DB afterward and bootstrap step 5 had preserved the qwen current rows:
+  - `haiku|10|t|qwen2.5:72b`
+  - `standard|10|t|qwen2.5:72b`
+  - `high-capability|10|t|qwen2.5:72b`
+- importantly, no new Anthropic `version 11` rows were created on restart
+
+### Current live canary state
+
+- fresh async org session: `b1000247-b94d-4c14-a942-4b90dc7e8727`
+- latest fresh create-project request:
+  - message `0db25069-6be1-4f7c-9454-a5f52cd60236`
+- active turn:
+  - turn `4033be87-f829-4d23-9548-2448f4a745a0`
+  - status `in_progress`
+- active model invocation:
+  - invocation `11c97a3f-6ca4-45e1-915b-aa8d549308d9`
+  - status `in_flight`
+  - model `qwen2.5:72b`
+  - provider connection `34b13633-46b0-4471-ba52-1c0ad20cd36b`
+- no fresh rerun-52 project row exists yet
+
+### Current next step
+
+- let the rerun-52 qwen-backed org turn complete
+- if it creates the requested fresh project cleanly, proceed with the `plan-0325b` operator run from there
+- if it produces another malformed org result or stalls, treat the org-session/qwen path as the next runtime seam and patch that next
+
 ## 2026-03-25 13:22 MDT update
 
 - deployed runtime commit is `7252a20b` on `origin/main`

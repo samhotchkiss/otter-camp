@@ -1100,6 +1100,16 @@ func (b *Bootstrapper) upsertOrgProfile(ctx context.Context, organizationID uuid
 		if !profileNeedsRotation(current, providerID, seed) {
 			return current, nil
 		}
+		// Preserve an operator-selected current profile when the seeded version
+		// already exists in history. This lets bootstrap restarts remain
+		// idempotent without clobbering an explicit model override.
+		seedExists, seedErr := b.orgProfileSeedVersionExists(ctx, organizationID, providerID, seed)
+		if seedErr != nil {
+			return repo.ModelProfile{}, seedErr
+		}
+		if seedExists {
+			return current, nil
+		}
 		return b.profileRepo.Deprecate(ctx, current.ID, repo.ModelProfile{
 			ProviderID:          providerID,
 			ModelName:           seed.ModelName,
@@ -1129,6 +1139,35 @@ func (b *Bootstrapper) upsertOrgProfile(ctx context.Context, organizationID uuid
 	default:
 		return repo.ModelProfile{}, err
 	}
+}
+
+func (b *Bootstrapper) orgProfileSeedVersionExists(ctx context.Context, organizationID uuid.UUID, providerID uuid.UUID, seed modelProfileSeed) (bool, error) {
+	if b.rowQuerier == nil {
+		return false, fmt.Errorf("row querier is not configured")
+	}
+
+	var exists bool
+	err := b.rowQuerier.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM model_profile
+			WHERE organization_id = $1
+			  AND logical_profile_id = $2
+			  AND provider_id = $3
+			  AND model_name = $4
+			  AND display_name = $5
+			  AND context_window_tokens = $6
+			  AND max_output_tokens = $7
+			  AND supports_streaming = $8
+			  AND supports_vision = $9
+			  AND invocation_purpose = $10
+			LIMIT 1
+		)
+	`, organizationID, seed.LogicalProfileID, providerID, seed.ModelName, seed.DisplayName, seed.ContextWindowTokens, seed.MaxOutputTokens, seed.SupportsStreaming, seed.SupportsVision, seed.InvocationPurpose).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func profileNeedsRotation(current repo.ModelProfile, providerID uuid.UUID, seed modelProfileSeed) bool {
