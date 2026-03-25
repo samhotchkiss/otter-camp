@@ -116,6 +116,38 @@ func TestPromptAssemblerLayer2RequiresDirectContextInspection(t *testing.T) {
 	}
 }
 
+func TestPromptAssemblerLayer2IncludesCurrentTurnModel(t *testing.T) {
+	orgID := uuid.New()
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session: repo.ChatSession{ID: uuid.New(), OrganizationID: orgID, ScopeType: "organization", ScopeID: orgID, Mode: "sync"},
+		agent:   repo.Agent{ID: uuid.New(), OrganizationID: orgID, SystemPrompt: "Agent"},
+		messages: []repo.ChatMessage{
+			{SequenceNumber: 1, Role: "user", Content: "What model are you using?"},
+		},
+		modelProfile: repo.ModelProfile{
+			LogicalProfileID:    "high-capability",
+			DisplayName:         "Claude Opus 4.6",
+			ModelName:           "claude-opus-4-6",
+			ContextWindowTokens: defaultContextWindowTokens,
+		},
+	})
+
+	assembled, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID:      assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:        assembler.agents.(*fakeAgentRepo).agent.ID,
+		ModelProfileID: "high-capability",
+	})
+	if err != nil {
+		t.Fatalf("Assemble error = %v", err)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "Current turn model: Claude Opus 4.6 (claude-opus-4-6).") {
+		t.Fatalf("system prompt missing current turn model line:\n%s", assembled.SystemPrompt)
+	}
+	if !strings.Contains(assembled.SystemPrompt, "do not guess") {
+		t.Fatalf("system prompt missing self-report guard:\n%s", assembled.SystemPrompt)
+	}
+}
+
 func TestPromptAssemblerTaskContextBlockFormat(t *testing.T) {
 	assembled := assembleTaskContextPrompt(t)
 	expectedLines := []string{

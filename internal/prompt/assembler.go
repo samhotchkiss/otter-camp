@@ -516,7 +516,7 @@ func (a *PromptAssembler) Assemble(ctx context.Context, input AssemblyInput) (*A
 	}
 
 	layer1 := buildLayer1(agentRecord)
-	layer2 := a.buildLayer2(ctx, session, agentRecord, input.ToolDescriptors)
+	layer2 := a.buildLayer2(ctx, session, agentRecord, modelProfile, input.ToolDescriptors)
 	layer3 := a.buildLayer3(ctx, session, taskCtx)
 	layer4 := a.buildLayer4(ctx, session, taskCtx, agentRecord.ID, input.ToolDescriptors, &assembled.Errors)
 	layer5 := "## Relevant Context\n(none)"
@@ -627,7 +627,7 @@ func buildLayer1(agentRecord repo.Agent) string {
 	return systemPrompt + "\n\nOperator instructions:\n" + operator
 }
 
-func (a *PromptAssembler) buildLayer2(ctx context.Context, session repo.ChatSession, agentRecord repo.Agent, toolDescriptors []tools.ToolDescriptor) string {
+func (a *PromptAssembler) buildLayer2(ctx context.Context, session repo.ChatSession, agentRecord repo.Agent, profile *repo.ModelProfile, toolDescriptors []tools.ToolDescriptor) string {
 	trustTier := "standard"
 	if v := readTrustTier(session.Metadata); strings.TrimSpace(v) != "" {
 		trustTier = v
@@ -638,6 +638,16 @@ func (a *PromptAssembler) buildLayer2(ctx context.Context, session repo.ChatSess
 		"You have access to OtterCamp native tools. When the user asks you to perform an action — create a project, assign a task, manage workflows, send a message, etc. — USE your available tools to do it. Do not tell the user to do it themselves or say you cannot do it through this interface.",
 		"If you need repo files, workspace artifacts, planning docs, prior deliverables, or other project context that is already available through OtterCamp tools, inspect those materials yourself. Do not ask the operator to go read existing docs, summarize accessible files for you, or manually restart the same step just to provide context you can fetch directly.",
 		"Ask the operator only for information that is truly unavailable to you through the current project context or for real product-direction decisions that require human judgment.",
+	}
+	if profile != nil {
+		display := strings.TrimSpace(profile.DisplayName)
+		modelName := strings.TrimSpace(profile.ModelName)
+		switch {
+		case display != "" && modelName != "":
+			lines = append(lines, fmt.Sprintf("Current turn model: %s (%s). If asked which model you are using, answer from this line exactly and do not guess.", display, modelName))
+		case modelName != "":
+			lines = append(lines, fmt.Sprintf("Current turn model: %s. If asked which model you are using, answer from this line exactly and do not guess.", modelName))
+		}
 	}
 
 	if a.policies == nil {
