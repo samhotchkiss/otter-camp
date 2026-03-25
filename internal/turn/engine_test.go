@@ -6127,6 +6127,87 @@ func TestRecoverRetriedAgentTurnLeakKeepsRecentCompletedInvocation(t *testing.T)
 	}
 }
 
+func TestTryActivateProjectBootstrapKickoffIsSingleWinner(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(fixture.engine.pool).Create(ctx, repo.Organization{
+		Slug:        "try-activate-project-bootstrap-kickoff-single-winner",
+		DisplayName: "Try Activate Project Bootstrap Kickoff Single Winner",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(fixture.engine.pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "try-activate-project-bootstrap-kickoff-single-winner-project",
+		DisplayName:    "Try Activate Project Bootstrap Kickoff Single Winner Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(fixture.engine.pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	now := fixture.engine.now().UTC()
+	state := projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		CurrentPhase:     "kickoff_handoff",
+		InitialMessageID: uuid.NewString(),
+		StartedAt:        &now,
+		UpdatedAt:        &now,
+	}
+	acquired, err := fixture.engine.tryActivateProjectBootstrapKickoff(ctx, &chat.ChatSession{
+		ID:             session.ID,
+		OrganizationID: session.OrganizationID,
+		ScopeType:      session.ScopeType,
+		ScopeID:        session.ScopeID,
+		Mode:           session.Mode,
+		Status:         session.Status,
+		Metadata:       session.Metadata,
+	}, state)
+	if err != nil {
+		t.Fatalf("first tryActivateProjectBootstrapKickoff: %v", err)
+	}
+	if !acquired {
+		t.Fatal("first activation acquired = false, want true")
+	}
+
+	reloaded, err := repo.NewChatSessionRepo(fixture.engine.pool).GetByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	acquired, err = fixture.engine.tryActivateProjectBootstrapKickoff(ctx, &chat.ChatSession{
+		ID:             reloaded.ID,
+		OrganizationID: reloaded.OrganizationID,
+		ScopeType:      reloaded.ScopeType,
+		ScopeID:        reloaded.ScopeID,
+		Mode:           reloaded.Mode,
+		Status:         reloaded.Status,
+		Metadata:       reloaded.Metadata,
+	}, state)
+	if err != nil {
+		t.Fatalf("second tryActivateProjectBootstrapKickoff: %v", err)
+	}
+	if acquired {
+		t.Fatal("second activation acquired = true, want false")
+	}
+}
+
 func TestShouldBlockTaskExecutionOffTargetEvidenceTool(t *testing.T) {
 	t.Parallel()
 

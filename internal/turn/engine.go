@@ -996,6 +996,30 @@ func (e *TurnEngine) maybeSeedProjectBootstrapKickoffFromHumanMessage(ctx contex
 	if !strings.EqualFold(strings.TrimSpace(triggerMessage.Role), "user") {
 		return false, nil
 	}
+	now := e.now().UTC()
+	state := projectBootstrapStateFromMetadata(session.Metadata)
+	state.Status = projectBootstrapStatusActive
+	state.CurrentPhase = "kickoff_handoff"
+	state.InitialMessageID = payload.MessageID.String()
+	state.LastTurnID = ""
+	state.AutoTurnCount = 0
+	state.StartedAt = &now
+	state.UpdatedAt = &now
+	state.CompletedAt = nil
+	state.FailedAt = nil
+	state.FailureCategory = ""
+	state.FailureClass = ""
+	state.FailurePhase = ""
+	state.FailureReason = ""
+	state.ProviderFailureClass = ""
+	state.ProviderFailureReason = ""
+	acquired, err := e.tryActivateProjectBootstrapKickoff(ctx, session, state)
+	if err != nil {
+		return false, err
+	}
+	if !acquired {
+		return true, nil
+	}
 
 	frankID, err := e.resolveFrankStarterID(ctx, session.OrganizationID)
 	if err != nil || frankID == uuid.Nil {
@@ -1036,24 +1060,8 @@ func (e *TurnEngine) maybeSeedProjectBootstrapKickoffFromHumanMessage(ctx contex
 	if err != nil {
 		return false, err
 	}
-
-	now := e.now().UTC()
-	state := projectBootstrapStateFromMetadata(session.Metadata)
-	state.Status = projectBootstrapStatusActive
-	state.CurrentPhase = "kickoff_handoff"
 	state.InitialMessageID = projectBootstrapWorkflowMessageID(handoff).String()
-	state.LastTurnID = ""
-	state.AutoTurnCount = 0
-	state.StartedAt = &now
 	state.UpdatedAt = &now
-	state.CompletedAt = nil
-	state.FailedAt = nil
-	state.FailureCategory = ""
-	state.FailureClass = ""
-	state.FailurePhase = ""
-	state.FailureReason = ""
-	state.ProviderFailureClass = ""
-	state.ProviderFailureReason = ""
 	if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
 		return false, err
 	}
@@ -1068,6 +1076,38 @@ func (e *TurnEngine) maybeSeedProjectBootstrapKickoffFromHumanMessage(ctx contex
 		AgentID:   &nextAgentID,
 	}, nil)
 	return true, err
+}
+
+func (e *TurnEngine) tryActivateProjectBootstrapKickoff(ctx context.Context, session *chat.ChatSession, state projectBootstrapState) (bool, error) {
+	if e == nil || e.pool == nil || session == nil || session.ID == uuid.Nil {
+		return false, nil
+	}
+	previous := projectBootstrapStateFromMetadata(session.Metadata)
+	state = normalizeProjectBootstrapStateCounts(state)
+	state = projectBootstrapStateWithDerived(previous, state)
+	metadata, err := projectBootstrapMetadataJSON(session.Metadata, state)
+	if err != nil {
+		return false, err
+	}
+	tag, err := e.pool.Exec(ctx, `
+		UPDATE chat_session
+		SET metadata = $2::jsonb
+		WHERE id = $1
+		  AND COALESCE(metadata->'project_bootstrap'->>'status', '') <> $3
+	`, session.ID, metadata, projectBootstrapStatusActive)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	session.Metadata = metadata
+	if strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") && session.ScopeID != uuid.Nil {
+		if err := e.updateProjectBootstrapProjectState(ctx, session.ScopeID, state); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) resolveNonSelfLoopResponder(ctx context.Context, session *chat.ChatSession, event eventbus.DomainEvent, responderID uuid.UUID) uuid.UUID {

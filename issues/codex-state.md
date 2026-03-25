@@ -63,8 +63,57 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
   - session `d4d47045-01bc-4b7a-843b-f2e4383c3a91` now has `current_turn_id = cfa24fc7-f48c-4e77-bee3-8295f1efb9ea`
   - live invocation `cf93c11f-f99a-469e-9da3-9214294f58c4` is `in_flight` on `qwen2.5:72b`
 - remaining seam:
-  - the project session still emits duplicate synthetic `project_bootstrap` handoff messages (`343af243-...` and `e6bc050e-...`)
-  - but the starvation seam is fixed: the surviving bootstrap job is now claimable and actively running
+  - at this checkpoint the duplicate kickoff handoff seam still looked open, but later live investigation narrowed it to an operational multi-worker problem, not just the bootstrap code path
+  - the starvation seam is fixed: the surviving bootstrap job is now claimable and actively running
+
+## 2026-03-25 14:42 MDT update
+
+- latest local runtime is now patch-on-top of pushed commit `664ff7bd`
+- health is green after another rebuild/restart
+- rerun-62 proved the duplicate kickoff-handoff symptom disappears when only one live worker process remains
+
+### New local patch: bootstrap kickoff seeding now has a session-level single-winner guard
+
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- behavior:
+  - `maybeSeedProjectBootstrapKickoffFromHumanMessage(...)` now calls `tryActivateProjectBootstrapKickoff(...)` before appending the first synthetic kickoff handoff
+  - the guard flips `project_bootstrap.status=active` on the session row only if it was not already active, so late duplicate consumers lose the race before they can append another kickoff handoff
+- focused verification:
+  - `go test ./internal/turn -run 'Test(ProjectBootstrapWatchdogTimeoutForModel|RecoverProjectTaskStaleInboundTurnWithoutRunKeepsLiveInvocation|RecoverRetriedAgentTurnLeakKeepsRecentCompletedInvocation|TryActivateProjectBootstrapKickoffIsSingleWinner)$' -count=1`
+
+### Live root cause: duplicate kickoff handoffs were being driven by multiple worker processes
+
+- direct process inspection showed two extra worker processes were still alive outside the current tmux pane:
+  - stale worker `53734`
+  - stale worker `56814`
+  - active tmux worker `93337`
+- that explained rerun-61:
+  - fresh project `f6165049-70d8-45b4-bfdf-5012ab053b7a`
+  - session `6e05b77d-154a-43a8-ab68-414483fd9e99`
+  - original user request `65162dda-e876-47e0-b09b-77a156127b9d`
+  - duplicate kickoff handoffs:
+    - `618f5954-d014-47a9-ac70-9575a1c83e62`
+    - `ced49a65-7250-47fa-80fe-fa7fb6e35f40`
+  - both handoffs were authored by the same Frank agent id and emitted within milliseconds, consistent with duplicate event consumption
+
+### Live proof after removing stray workers
+
+- killed stale workers `53734` and `56814`
+- rerun-62 fresh project:
+  - project `4b4431da-0f3d-47bc-8474-c71736f7881f`
+  - session `60c80309-8f66-4d90-b53b-86113b6bcca7`
+  - original user request `605095e9-a187-4f21-83bc-146cd9f337d1`
+- clean outcome under a single live worker:
+  - exactly one kickoff handoff message exists:
+    - `8a15ed24-981f-4267-afec-d125079d1ca1`
+  - there is no second `project_bootstrap` handoff message on the session
+  - current turn is active:
+    - `0fa698b6-f76f-4d56-b3b9-af40ff168386`
+- conclusion:
+  - the fresh duplicate kickoff symptom is not reproducible once the stale extra worker processes are removed
+  - the single-winner guard remains a reasonable defensive hardening, but the live symptom was primarily operational multi-worker drift
 
 ## 2026-03-25 14:12 MDT update
 
