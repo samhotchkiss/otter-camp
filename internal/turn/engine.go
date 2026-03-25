@@ -14766,13 +14766,27 @@ func ensureTurnTaskWorktree(ctx context.Context, projectRoot, worktreeRoot, bran
 	}
 	if turnBranchExists(ctx, projectRoot, branchName) {
 		_, err := turnGitOutput(ctx, projectRoot, "worktree", "add", "--force", worktreeRoot, branchName)
+		if turnRecoverableWorktreeAddError(err) {
+			if removeErr := os.RemoveAll(worktreeRoot); removeErr != nil {
+				return removeErr
+			}
+			_, err = turnGitOutput(ctx, projectRoot, "worktree", "add", "--force", worktreeRoot, branchName)
+		}
 		return err
 	}
 	args := []string{"worktree", "add", "--force", "-b", branchName, worktreeRoot}
 	if baseBranch != "" && turnBranchExists(ctx, projectRoot, baseBranch) {
 		args = append(args, baseBranch)
+	} else if !turnGitHeadExists(ctx, projectRoot) {
+		args = []string{"worktree", "add", "--force", "--orphan", "-b", branchName, worktreeRoot}
 	}
 	_, err := turnGitOutput(ctx, projectRoot, args...)
+	if turnRecoverableWorktreeAddError(err) {
+		if removeErr := os.RemoveAll(worktreeRoot); removeErr != nil {
+			return removeErr
+		}
+		_, err = turnGitOutput(ctx, projectRoot, args...)
+	}
 	return err
 }
 
@@ -14872,6 +14886,11 @@ func turnGitBranchName(ctx context.Context, repoRoot string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+func turnGitHeadExists(ctx context.Context, repoRoot string) bool {
+	_, err := turnGitOutput(ctx, repoRoot, "rev-parse", "--verify", "HEAD")
+	return err == nil
+}
+
 func pruneTurnTaskWorktrees(ctx context.Context, projectRoot string) error {
 	_, err := turnGitOutput(ctx, projectRoot, "worktree", "prune", "--expire", "now")
 	return err
@@ -14892,7 +14911,17 @@ func turnRecoverableWorktreeRemoveError(err error) bool {
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "is not a working tree") ||
 		(strings.Contains(lower, "validation failed, cannot remove working tree") &&
-			(strings.Contains(lower, "is not a .git file") || strings.Contains(lower, "not a git repository")))
+			(strings.Contains(lower, "is not a .git file") ||
+				strings.Contains(lower, "not a git repository") ||
+				strings.Contains(lower, ".git' does not exist")))
+}
+
+func turnRecoverableWorktreeAddError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "already exists")
 }
 
 func turnGitOutput(ctx context.Context, root string, args ...string) (string, error) {

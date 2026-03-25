@@ -84,6 +84,11 @@ func TestTurnRecoverableWorktreeRemoveError(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "missing dot git",
+			err:  errors.New("git worktree remove --force /tmp/task-10: exit status 128: fatal: validation failed, cannot remove working tree: '/tmp/task-10/.git' does not exist"),
+			want: true,
+		},
+		{
 			name: "unrelated git error",
 			err:  errors.New("git worktree remove --force /tmp/task-10: exit status 128: fatal: branch is currently checked out"),
 			want: false,
@@ -103,6 +108,82 @@ func TestTurnRecoverableWorktreeRemoveError(t *testing.T) {
 				t.Fatalf("turnRecoverableWorktreeRemoveError(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestTurnRecoverableWorktreeAddError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "path already exists",
+			err:  errors.New("git worktree add --force -b task/15 /tmp/task-15: exit status 128: fatal: '/tmp/task-15' already exists"),
+			want: true,
+		},
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "unrelated",
+			err:  errors.New("git worktree add --force -b task/15 /tmp/task-15: exit status 128: fatal: not a git repository"),
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := turnRecoverableWorktreeAddError(tc.err); got != tc.want {
+				t.Fatalf("turnRecoverableWorktreeAddError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnsureTurnTaskWorktreeCreatesOrphanBranchForUnbornRepo(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repoRoot := t.TempDir()
+	worktreeRoot := filepath.Join(t.TempDir(), "task-12")
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	run(repoRoot, "init", "-b", "main")
+
+	if err := ensureTurnTaskWorktree(ctx, repoRoot, worktreeRoot, "task/12", "main"); err != nil {
+		t.Fatalf("ensureTurnTaskWorktree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreeRoot, ".git")); err != nil {
+		t.Fatalf("worktree .git missing: %v", err)
+	}
+	cmd := exec.CommandContext(ctx, "git", "symbolic-ref", "--short", "HEAD")
+	cmd.Dir = worktreeRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git symbolic-ref failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "task/12" {
+		t.Fatalf("branch = %q, want task/12", got)
 	}
 }
 

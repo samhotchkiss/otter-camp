@@ -76,9 +76,6 @@ func (e *NativeToolExecutor) taskWorkspaceRoot(ctx context.Context, taskRecord r
 	branchName := taskBranchName(taskRecord)
 	worktreeRoot := filepath.Join(workspace.ResolveDataDir(e.dataDir), "task-worktrees", strings.TrimSpace(projectRecord.Slug), "task-"+strconv.Itoa(taskRecord.TaskNumber))
 	if err := ensureTaskWorktree(ctx, projectRoot, worktreeRoot, branchName, "main", e.command); err != nil {
-		if errors.Is(err, errBranchAttachedToMainWorktree) {
-			return projectRoot, nil
-		}
 		return "", err
 	}
 	return worktreeRoot, nil
@@ -130,14 +127,28 @@ func ensureTaskWorktree(ctx context.Context, projectRoot, worktreeRoot, branchNa
 	}
 	if branchExists(ctx, projectRoot, branchName, command) {
 		_, err := runGitCommand(ctx, projectRoot, command, "worktree", "add", "--force", worktreeRoot, branchName)
+		if isRecoverableWorktreeAddError(err) {
+			if removeErr := os.RemoveAll(worktreeRoot); removeErr != nil {
+				return removeErr
+			}
+			_, err = runGitCommand(ctx, projectRoot, command, "worktree", "add", "--force", worktreeRoot, branchName)
+		}
 		return err
 	}
 
 	args := []string{"worktree", "add", "--force", "-b", branchName, worktreeRoot}
 	if baseBranch != "" && branchExists(ctx, projectRoot, baseBranch, command) {
 		args = append(args, baseBranch)
+	} else if !gitHeadExists(ctx, projectRoot, command) {
+		args = []string{"worktree", "add", "--force", "--orphan", "-b", branchName, worktreeRoot}
 	}
 	_, err := runGitCommand(ctx, projectRoot, command, args...)
+	if isRecoverableWorktreeAddError(err) {
+		if removeErr := os.RemoveAll(worktreeRoot); removeErr != nil {
+			return removeErr
+		}
+		_, err = runGitCommand(ctx, projectRoot, command, args...)
+	}
 	return err
 }
 
@@ -237,6 +248,11 @@ func gitBranchName(ctx context.Context, repoRoot string, command commandContextF
 	return strings.TrimSpace(out), nil
 }
 
+func gitHeadExists(ctx context.Context, repoRoot string, command commandContextFunc) bool {
+	_, err := runGitCommand(ctx, repoRoot, command, "rev-parse", "--verify", "HEAD")
+	return err == nil
+}
+
 func removeTaskWorktree(ctx context.Context, projectRoot, worktreeRoot string, command commandContextFunc) error {
 	_, err := runGitCommand(ctx, projectRoot, command, "worktree", "remove", "--force", worktreeRoot)
 	if isRecoverableWorktreeRemoveError(err) {
@@ -252,7 +268,17 @@ func isRecoverableWorktreeRemoveError(err error) bool {
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "is not a working tree") ||
 		(strings.Contains(lower, "validation failed, cannot remove working tree") &&
-			(strings.Contains(lower, "is not a .git file") || strings.Contains(lower, "not a git repository")))
+			(strings.Contains(lower, "is not a .git file") ||
+				strings.Contains(lower, "not a git repository") ||
+				strings.Contains(lower, ".git' does not exist")))
+}
+
+func isRecoverableWorktreeAddError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "already exists")
 }
 
 func pruneTaskWorktrees(ctx context.Context, projectRoot string, command commandContextFunc) error {

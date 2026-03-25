@@ -4663,3 +4663,117 @@ The next move from here:
 
 - next step:
   - commit/push this runtime slice, rebuild/restart the backend, verify `./bin/ottercamp health`, and then move into the operator-style `issues/plan-0325b.md` end-to-end run without patching code unless the run exposes a new real product seam
+
+## 2026-03-25 Plan 0325B run-prep checkpoint
+
+- latest deployed commit:
+  - `59a956ae` `Expose current turn model in prompt`
+
+- dedicated test runtime:
+  - tmux session: `codex-e2e-20260324`
+    - `0.0` service
+    - `0.3` worker `--concurrency 24`
+    - `0.1` operator shell
+    - `0.2` inspection shell
+  - the old `ottercamp-anthropic-fix` backend session was replaced so the test run has its own clean tmux layout
+
+- rebuild / restart verification:
+  - `go build -o ./bin/ottercamp ./cmd/ottercamp`
+  - `./bin/ottercamp health` -> pass
+  - `curl http://localhost:4110/health/live` -> `{"data":{"status":"ok"}}`
+
+- current operator surface:
+  - active organization session still exists:
+    - session `0cca8ad7-76ee-4c09-be0b-871a701ce6d5`
+  - no fresh Plan 0325B proof project has been created yet in this checkpoint
+
+- immediate next action:
+  - create a brand-new fresh validation project through the real chat/product surface, then begin logging Phase 1 bootstrap / project continuation evidence in `issues/log-0325a.md`
+
+## 2026-03-25 Plan 0325B fresh run checkpoint: rerun-40
+
+- real operator run started from the dedicated tmux stack and product chat surface
+- org session request created:
+  - project `85c6f2ad-ce59-425f-b9f9-ce4f81b5d545`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-40`
+  - async project session `856ae42a-5ed8-4c53-bf70-53dc6a9e0c46`
+
+- bootstrap succeeded materially before the first code seam:
+  - staffing persisted with PM `54857b82-8e7b-457c-ada7-123357bbede8` plus workers `1a5d4d3d-529a-492f-84fb-596b104a2114`, `c4713758-cfaa-42bc-bc4a-300e517028e1`, reviewer `7fec0bf7-a943-4cbb-ad60-13b56f87656b`
+  - bounded child tasks 12-20 created under orchestration parents 9-11
+  - first-wave subset selected and promoted to execution: 12, 15, 18
+  - later-wave tasks 13, 14, 16, 17, 19, 20 remained `draft`
+
+- first-wave execution proof before the break:
+  - task 12 session `99174c1a-be05-428f-9c5c-abbff9a42d7d` execution `f7bd6baa-9a8a-4fce-b57d-46d00fd0cea9`
+  - task 15 session `b584efd9-b81e-4290-9a69-3b1cdc8eb38e` execution `8935d900-3d1a-49b5-a18e-38b71c263fc3`
+  - task 18 session `6a6f29fc-06ff-47d4-a2b6-28cd8a34c454` execution `12a9f7b9-2f11-4648-8871-2093398965c2`
+
+- real product seam exposed by the clean run:
+  - task 12 worktree repair loop failed on:
+    - `git worktree remove --force .../task-12 ... validation failed, cannot remove working tree: '.../.git' does not exist`
+  - task 15 worktree creation loop failed on:
+    - `git worktree add --force -b task/15 ... fatal: '.../task-15' already exists`
+  - task 18 did not hard-fail, but it still drifted into broad context gathering (`planning/...`, `git.log`, `git.status`, `cli.execute ls -la`) before any deliverable write
+
+- fix landed for the first-wave worktree seam:
+  - [`internal/tools/native/task_worktree.go`](/Users/sam/dev/otter-camp/internal/tools/native/task_worktree.go)
+    - recoverable worktree-remove detection now treats `.../.git does not exist` as stale-repairable corruption
+    - recoverable worktree-add detection now treats `fatal: '.../path' already exists` as stale-directory debris and retries after deleting the leftover directory
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - mirrored the same add/remove recovery logic in the turn-engine worktree path so task-session execution and recovery use identical repair behavior
+  - test coverage:
+    - [`internal/tools/native/task_worktree_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/task_worktree_test.go)
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added explicit regressions for:
+      - remove error with `.git does not exist`
+      - add error with `already exists`
+
+- focused verification:
+  - `go test ./internal/tools/native -run 'Test(IsRecoverableWorktree(Remove|Add)Error|EnsureTaskWorktreeFailsClosedWhenMainWorktreeOwnsTaskBranch)$' -count=1`
+  - `go test ./internal/turn -run 'Test(TurnRecoverableWorktree(Remove|Add)Error|TaskWorkspaceRootFailsClosedWhenMainWorktreeOwnsTaskBranch)$' -count=1`
+
+- current next step:
+  - rebuild and restart the dedicated `codex-e2e-20260324` stack
+  - verify the fresh binary clears task-12 / task-15 stale directories and re-enters first-wave execution without operator cheating
+  - then continue the Plan 0325B operator run from the same project
+
+## 2026-03-25 Plan 0325B live follow-up: stale-worktree fix proven, empty-repo seam exposed
+
+- live proof after the first rebuild/restart:
+  - task 15 no longer wedged on `... already exists`; it advanced to `review`
+  - fresh review session: `d86e3327-30d2-4cc3-b505-2f0e8aecc4c2`
+  - branch `task/15` now has a work commit:
+    - `60cef3fd521edbf856a66d8559bae73f0e438fca`
+  - task 12 resumed into fresh recovery/work session:
+    - `92453e7e-7d73-4494-a835-60e46264c987`
+
+- next real product seam exposed by the same fresh run:
+  - task 12 still could not create a task worktree on a brand-new project repo whose `HEAD` points at `refs/heads/main` but has no commits yet
+  - runtime failure:
+    - `git worktree add --force -b task/12 ... fatal: invalid reference: HEAD`
+    - git hint explicitly recommended `git worktree add --orphan -b task/12 ...`
+  - because runtime did not handle that state, the live agent attempted a bad workaround with `cli.execute`:
+    - `git init`
+    - empty `Initial commit`
+  - that manual repo repair is not acceptable product behavior, so the correct fix is in runtime worktree provisioning
+
+- fix landed for empty-repo task worktrees:
+  - [`internal/tools/native/task_worktree.go`](/Users/sam/dev/otter-camp/internal/tools/native/task_worktree.go)
+    - when the base branch does not exist and `HEAD` is unborn / invalid, task worktree creation now uses `git worktree add --force --orphan -b task/N ...`
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - mirrored the same unborn-HEAD/orphan logic for turn-engine task worktree provisioning
+  - tests added:
+    - [`internal/tools/native/task_worktree_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/task_worktree_test.go)
+      - `TestEnsureTaskWorktreeCreatesOrphanBranchForUnbornRepo`
+    - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+      - `TestEnsureTurnTaskWorktreeCreatesOrphanBranchForUnbornRepo`
+
+- focused verification:
+  - `go test ./internal/tools/native -run 'Test(IsRecoverableWorktree(Remove|Add)Error|EnsureTaskWorktree(FailsClosedWhenMainWorktreeOwnsTaskBranch|CreatesOrphanBranchForUnbornRepo))$' -count=1`
+  - `go test ./internal/turn -run 'Test(TurnRecoverableWorktree(Remove|Add)Error|EnsureTurnTaskWorktreeCreatesOrphanBranchForUnbornRepo|TaskWorkspaceRootFailsClosedWhenMainWorktreeOwnsTaskBranch)$' -count=1`
+
+- next step:
+  - commit/push this combined worktree runtime slice
+  - rebuild/restart again
+  - verify task 12 no longer needs `git init` / empty-commit self-repair and that the next recovery turn goes straight into deliverable writing
