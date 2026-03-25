@@ -171,6 +171,44 @@ func normalizeWorkspacePath(value string) string {
 	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(trimmed)))
 }
 
+func looksLikeBootstrapOrchestrationParent(title string, description *string) bool {
+	titleText := strings.ToLower(strings.TrimSpace(title))
+	if titleText == "" {
+		return false
+	}
+	descriptionText := ""
+	if description != nil && strings.TrimSpace(*description) != "" {
+		descriptionText = strings.ToLower(strings.TrimSpace(*description))
+	}
+	text := titleText
+	if descriptionText != "" {
+		text += "\n" + descriptionText
+	}
+	titleLooksLikeBootstrapWorkstream := strings.HasPrefix(titleText, "workstream ") || strings.HasPrefix(titleText, "ws")
+	signals := []string{
+		"parent orchestration task",
+		"parent orchestration container",
+		"orchestration container",
+		"does not do execution work itself",
+		"does not perform execution work itself",
+		"does not perform execution work directly",
+		"validates that child tasks",
+		"validates child task outputs",
+		"validates child outputs",
+		"owns integration verification of its children",
+	}
+	matches := 0
+	for _, signal := range signals {
+		if strings.Contains(text, signal) {
+			matches++
+		}
+	}
+	if matches >= 2 {
+		return true
+	}
+	return titleLooksLikeBootstrapWorkstream && matches >= 1
+}
+
 func parseExplicitDeliverablePath(taskRecord repo.ProjectTask) string {
 	if taskRecord.Description == nil {
 		return ""
@@ -2192,8 +2230,21 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		inheritedFlowTemplateID := *parentTask.FlowTemplateID
 		flowTemplateID = &inheritedFlowTemplateID
 	}
+	var projectTasks []repo.ProjectTask
+	bootstrapSetupActive := false
+	if parentTask == nil {
+		projectTasks, err = e.tasks.ListByProject(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		bootstrapSetupActive = bootstrapSetupStillActive(projectTasks)
+	}
 	bootstrapSessionActive := parentTask == nil && e.activeProjectBootstrapSession(ctx, scope, projectID)
-	if parentTask == nil && flowTemplateID == nil && bootstrapSessionActive {
+	bootstrapTopLevelOrchestrationParent := parentTask == nil &&
+		(bootstrapSessionActive || bootstrapSetupActive) &&
+		flowTemplateID == nil &&
+		looksLikeBootstrapOrchestrationParent(title, description)
+	if parentTask == nil && flowTemplateID == nil && bootstrapSessionActive && !bootstrapTopLevelOrchestrationParent {
 		resolvedBootstrapFlowTemplateID, err := e.resolveBootstrapWorkstreamFlowTemplate(ctx, scope, projectID)
 		if err != nil {
 			return nil, err
@@ -2202,19 +2253,27 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			flowTemplateID = resolvedBootstrapFlowTemplateID
 		}
 	}
-	planning, resolvedFlowTemplateID, enrichedMetadata, err := e.applyReviewRefinementPlanning(
-		ctx,
-		scope.organizationID,
-		projectID,
-		title,
-		description,
-		flowTemplateID,
-		metadata,
-	)
-	if err != nil {
-		return nil, err
+	planning := taskplan.Plan{}
+	resolvedFlowTemplateID := flowTemplateID
+	enrichedMetadata := metadata
+	if bootstrapTopLevelOrchestrationParent {
+		enrichedMetadata = taskdecomp.ApplyOrchestrationOnlyMetadata(enrichedMetadata)
 	}
-	if parentTask == nil && resolvedFlowTemplateID == nil {
+	if !bootstrapTopLevelOrchestrationParent {
+		planning, resolvedFlowTemplateID, enrichedMetadata, err = e.applyReviewRefinementPlanning(
+			ctx,
+			scope.organizationID,
+			projectID,
+			title,
+			description,
+			flowTemplateID,
+			metadata,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if parentTask == nil && resolvedFlowTemplateID == nil && !bootstrapTopLevelOrchestrationParent {
 		resolvedFlowTemplateID, err = e.resolveBootstrapWorkstreamFlowTemplate(ctx, scope, projectID)
 		if err != nil {
 			return nil, err
@@ -2293,11 +2352,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		enrichedMetadata = taskdecomp.ApplyChildMetadata(enrichedMetadata, parentTask.ID, nextManualChildWorkstreamIndex(*parentTask, children))
 	}
 	if parentTask == nil && scope.sessionID != nil && *scope.sessionID != uuid.Nil && scope.projectID != nil && *scope.projectID == projectID {
-		projectTasks, listErr := e.tasks.ListByProject(ctx, projectID)
-		if listErr != nil {
-			return nil, listErr
-		}
-		if bootstrapSetupStillActive(projectTasks) {
+		if bootstrapSetupActive {
 			if assignedAgentID == nil && resolvedFlowTemplateID != nil {
 				assignedAgentID, err = e.inferBootstrapExecutableAssignee(ctx, projectID)
 				if err != nil {

@@ -3930,6 +3930,197 @@ func TestTaskCreateDuringBootstrapWithoutAssignedAgentUsesBootstrapFlowBeforePla
 	}
 }
 
+func TestTaskCreateDuringBootstrapTopLevelOrchestrationParentSkipsPlanningHeuristics(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+	sessionID := uuid.New()
+
+	tasks := &mockTaskRepo{
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             uuid.New(),
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "draft",
+				Metadata:       json.RawMessage(`{"bootstrap_setup_task":true}`),
+			},
+		},
+	}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "ops-project",
+				DisplayName:    "Ops Project",
+			},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+				Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+			},
+		},
+	}
+	if _, err := executor.ensureProjectRepoBinding(context.Background(), projectID); err != nil {
+		t.Fatalf("ensureProjectRepoBinding: %v", err)
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	out, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id":  projectID.String(),
+		"title":       "WS1: Work-to-Review Approval Validation",
+		"description": "Parent orchestration task for validating the standard work-to-review approval flow. This task validates that child tasks complete successfully through the work→review→merge cycle. Does not do execution work itself.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if _, ok := out["planning"]; ok {
+		t.Fatalf("planning output = %v, want omitted during bootstrap orchestration parent creation", out["planning"])
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
+	}
+	created := tasks.createdTasks[0]
+	if created.FlowTemplateID != nil {
+		t.Fatalf("flow_template_id = %v, want nil for bootstrap orchestration parent", created.FlowTemplateID)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(created.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if _, ok := metadata["planning"]; ok {
+		t.Fatalf("planning metadata = %v, want omitted during bootstrap orchestration parent creation", metadata["planning"])
+	}
+	decomp, _ := metadata["decomposition"].(map[string]any)
+	if orchestrationOnly, _ := decomp["orchestration_only"].(bool); !orchestrationOnly {
+		t.Fatalf("orchestration_only = %v, want true", decomp["orchestration_only"])
+	}
+}
+
+func TestTaskCreateBootstrapTopLevelOrchestrationParentUsesSetupTasksWithoutSessionMetadata(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+	sessionID := uuid.New()
+
+	tasks := &mockTaskRepo{
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             uuid.New(),
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "draft",
+				Metadata:       json.RawMessage(`{"bootstrap_setup_task":true}`),
+			},
+		},
+	}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "ops-project",
+				DisplayName:    "Ops Project",
+			},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+	if _, err := executor.ensureProjectRepoBinding(context.Background(), projectID); err != nil {
+		t.Fatalf("ensureProjectRepoBinding: %v", err)
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	out, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id":  projectID.String(),
+		"title":       "Workstream B: Review Path Validation",
+		"description": "Parent/orchestration task for review path validation. Validates that child tasks exercise real approve/reject/retry/recovery review flows. Does not do execution work itself.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if _, ok := out["planning"]; ok {
+		t.Fatalf("planning output = %v, want omitted during bootstrap orchestration parent creation", out["planning"])
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
+	}
+	created := tasks.createdTasks[0]
+	if created.FlowTemplateID != nil {
+		t.Fatalf("flow_template_id = %v, want nil for bootstrap orchestration parent", created.FlowTemplateID)
+	}
+}
+
+func TestLooksLikeBootstrapOrchestrationParentMatchesLiveBootstrapContainers(t *testing.T) {
+	tests := []struct {
+		name        string
+		title       string
+		description string
+		want        bool
+	}{
+		{
+			name:        "container direct work phrasing",
+			title:       "Workstream A: Pipeline Configuration and Validation",
+			description: "Parent orchestration container for speaker pipeline configuration tasks. Validates that all child tasks produce correct configuration artifacts and integration tests. Does not perform execution work directly.",
+			want:        true,
+		},
+		{
+			name:        "container child output phrasing",
+			title:       "Workstream B: Operational Flow Verification",
+			description: "Parent orchestration container for tasks that verify operational flow behaviors: work-to-review approval, review rejection-and-retry, and stranded execution recovery. Validates child task outputs for completeness.",
+			want:        true,
+		},
+		{
+			name:        "ordinary executable task",
+			title:       "Create speaker pipeline configuration schema",
+			description: "Write the schema file and tests for the speaker pipeline inputs.",
+			want:        false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			description := tc.description
+			got := looksLikeBootstrapOrchestrationParent(tc.title, &description)
+			if got != tc.want {
+				t.Fatalf("looksLikeBootstrapOrchestrationParent(%q) = %v, want %v", tc.title, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTaskCreateDuringBootstrapNormalizesExecutableBlocksScopeFromAllToNone(t *testing.T) {
 	projectID := uuid.New()
 	orgID := uuid.New()

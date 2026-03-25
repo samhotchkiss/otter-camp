@@ -2,6 +2,90 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 13:03 MDT update
+
+- deployed runtime has another uncommitted native bootstrap-parent patch on top of pushed commit `660fd4c4`
+- dedicated tmux runtime is still `codex-e2e-20260324`
+- health is green after the latest rebuild/restart
+- fresh rerun-47 is now the current clean proof target and has already advanced far enough to prove the latest parent-task slice
+
+### What rerun-46 proved live
+
+- rerun-46 project id: `f56c456f-870a-4647-be30-c9d256e0ea12`
+- rerun-46 project session id: `db21265f-c37d-40e4-9ed5-13def09970f8`
+- bootstrap staffing now persisted successfully under the newest code in that run:
+  - task `2` `Bind repo and environment` -> `done`
+  - task `3` `Staff the project` -> `done`
+- top-level parent workstream tasks `9-11` were created in live traffic:
+  - task `9` `Workstream A: Pipeline Scaffold Setup`
+  - task `10` `Workstream B: Review Path Validation`
+  - task `11` `Workstream C: Wave Gating Validation`
+
+### Remaining live seam after rerun-46
+
+- the bootstrap-parent bypass is still not complete in production behavior
+- live tool results for rerun-46 messages `27-29` show the parent `task.create` calls still emitted planning artifacts:
+  - task `9` returned `planning.prd_spec` artifacts under `planning/prd-spec/oc-9-*`
+  - task `10` returned `planning.discovery_plan` artifacts under `planning/discovery-plan/oc-10-*`
+  - task `11` returned `planning.discovery_plan` artifacts under `planning/discovery-plan/oc-11-*`
+- persisted task rows confirm the contamination survived creation:
+  - tasks `9-11` all have assigned worker `79d81743-a6fe-4899-85c5-e74748f34ce4`
+  - tasks `9-11` all have flow template `9a60dfee-1fc7-4e3a-bd05-f9da1bb97552`
+  - tasks `9-11` all still carry non-empty `planning` metadata
+- bootstrap then failed immediately afterward with:
+  - `kickoff validation failed: bootstrap setup persisted staffing but did not yet materialize any executable non-bootstrap project tasks`
+- rerun-46 project-session metadata now records:
+  - `project_bootstrap.status = failed`
+  - `current_phase = task_tree_persisted`
+  - `last_checkpoint = flow_templates_persisted`
+
+### Latest code change not yet live-proven
+
+- patched [`internal/tools/native/mutation_tools.go`](../internal/tools/native/mutation_tools.go)
+  - bootstrap top-level orchestration-parent bypass now keys off either:
+    - active bootstrap session metadata, or
+    - an actually-active bootstrap task tree (`bootstrap_setup_task` rows still incomplete)
+  - this removes the earlier dependency on session-scoped bootstrap metadata being present in every tool execution context
+- added focused coverage in [`internal/tools/native/mutation_tools_test.go`](../internal/tools/native/mutation_tools_test.go)
+  - `TestTaskCreateBootstrapTopLevelOrchestrationParentUsesSetupTasksWithoutSessionMetadata`
+  - plus the earlier matcher/orchestration-parent tests
+
+### Verification completed in this stretch
+
+- `go test ./internal/tools/native -run 'Test(TaskCreate(DuringBootstrap(TopLevelOrchestrationParentSkipsPlanningHeuristics|WithoutAssignedAgentUsesBootstrapFlowBeforePlanningHeuristics)|BootstrapTopLevelOrchestrationParentUsesSetupTasksWithoutSessionMetadata)|LooksLikeBootstrapOrchestrationParentMatchesLiveBootstrapContainers|TaskCreateWithExplicitFlowTemplateDoesNotApplyPlanningHeuristics)$' -count=1`
+- rebuilt `./bin/ottercamp`
+- restarted `serve` and `worker --concurrency 24` in tmux
+- `./bin/ottercamp health` passed after restart
+
+### Live proof on rerun-47
+
+- rerun-47 project id: `22fbefae-35e3-4b6c-a2f4-157969ec04cf`
+- rerun-47 project session id: `036be1aa-1440-42a8-829d-23fed43df696`
+- top-level parent workstreams were finally created cleanly under the latest binary:
+  - task `9` `Workstream A: Pipeline Scaffold & Configuration`
+  - task `10` `Workstream B: Validation Scripts & Tests`
+  - task `11` `Workstream C: Review & Recovery Path Demonstration`
+  - task `12` `Workstream D: Wave Gating & Final Documentation`
+- the live parent `task.create` tool results for messages `26-29` returned only plain `task` payloads
+  - no `planning` payload was returned on any of those four creates
+- the persisted task rows also show the new intended behavior:
+  - tasks `9-12` all have `assigned_agent_id = null`
+  - descriptions are explicit orchestration-container descriptions
+  - they were not force-attached to worker assignment at creation time
+
+### Current next seam
+
+- the bootstrap-parent contamination bug is now proven fixed in live traffic
+- rerun-47 still fails immediately afterward in bootstrap validation timing
+- current session metadata now records:
+  - `project_bootstrap.status = failed`
+  - `current_phase = task_tree_persisted`
+  - `validation_failure_reason = kickoff validation failed: bootstrap setup persisted staffing but did not yet materialize any executable non-bootstrap project tasks`
+- that means the next product seam is no longer top-level parent planning contamination
+- the next seam is that bootstrap validation is firing too early, before the same still-running kickoff turn has finished materializing bounded executable child tasks under the new parent workstreams
+
+## 2026-03-25 12:43 MDT update
+
 ## 2026-03-25 12:39 MDT update
 
 - fresh rerun-42 canary is active on project `a39624fe-f1d8-4ee2-b6fa-c47a2853b3b6`
