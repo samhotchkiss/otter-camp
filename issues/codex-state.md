@@ -314,6 +314,58 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 - rebuild and restart the worker
 - verify the same rerun-65-restart session now claims only one bootstrap dispatch per resume cycle
 - if that holds, continue watching whether bootstrap finally moves past `staffing_persisted` instead of churning duplicate bootstrap resume prompts
+
+## 2026-03-25 15:53 MDT update
+
+- deployed runtime is now patch-on-top of pushed commit `03ef507d`
+- health stayed green after the latest worker restart
+- the duplicate bootstrap dispatch-claim seam did not recur after that restart
+- the same rerun-65-restart canary immediately exposed the next live bootstrap seam: stale `bootstrap_initial_message_id` inheritance keeps new bootstrap auto-continue prompts rooted to the old bad execution-continuation message
+
+### New local patch: bootstrap auto-continue messages now sanitize inherited non-bootstrap roots
+
+- root cause:
+  - `internal/turn/engine.go`
+  - new `project_bootstrap` continuation messages were still inheriting `bootstrap_initial_message_id = cd0989b9-b078-4bd9-afc9-b5aa0dd631b8` from the old bad `project_execution_continuation` path
+  - live proof on rerun-65-restart:
+    - message `d8e3750f-2884-4027-94b3-fe5e921f828b` metadata:
+      - `source = project_bootstrap`
+      - `bootstrap_auto_turn_count = 3`
+      - `bootstrap_initial_message_id = cd0989b9-b078-4bd9-afc9-b5aa0dd631b8`
+    - message `36a9a854-1e5c-4ca8-8372-ef03af258edd` metadata:
+      - `source = project_bootstrap`
+      - `bootstrap_auto_turn_count = 2`
+      - `bootstrap_initial_message_id = cd0989b9-b078-4bd9-afc9-b5aa0dd631b8`
+  - that meant the bootstrap lane’s history root could stay anchored to the stale post-bootstrap execution prompt even after the worker retry-message fix had switched live retries back onto `project_bootstrap`
+- behavior:
+  - `appendProjectBootstrapContinuationMessageWithContent(...)` now sanitizes the inherited `bootstrap_initial_message_id`
+  - if the candidate root does not resolve to a `project_bootstrap` user message in the same session, the engine falls back to the earliest real bootstrap user message in that session instead of preserving the stale execution-continuation root
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- focused verification:
+  - `go test ./internal/turn -run 'Test(BootstrapAutoContinue(SanitizesInheritedNonBootstrapInitialMessageID|TurnAppendsResumeStateBeforeFirstModelCall)|ContinuationTurnAppendsCompactBootstrapActionPromptAfterCompression|ContinuationTurnSynthesizesBootstrapResumeStateWhenMetadataIsStale)$' -count=1`
+
+### Live rerun-65-restart terminal state after the claim-race fix
+
+- session `16b95db3-58bf-4e6d-905c-a75fe2c6d1dc` is now closed
+- project bootstrap metadata ended:
+  - `status = failed`
+  - `current_phase = staffing_persisted`
+- final failure message:
+  - `f6536b3e-8c76-47ad-b4e8-5ca1805e7583`
+  - `[Project bootstrap failed: kickoff validation failed: automatic bootstrap restart recreated only the canonical bootstrap scaffold and never persisted staffed executable work, so the restart was archived ...]`
+- persisted project state at failure remained scaffold-only:
+  - tasks `1-8` only
+  - `agent_project_assignment` count `0`
+  - `flow_template` count `1`
+
+### Current next step
+
+- commit/push the bootstrap-root sanitization patch
+- rebuild and restart the worker
+- launch a fresh bootstrap/restart probe so the next bootstrap auto-continue turn is generated fully under the sanitized root logic
+- verify the new bootstrap messages no longer carry `bootstrap_initial_message_id = cd0989b9-...`
   - `project_bootstrap.status = failed`
   - `project_bootstrap.current_phase = staffing_persisted`
   - `last_successful_checkpoint = project_created`

@@ -4670,6 +4670,35 @@ func projectBootstrapWorkflowMessageID(message *repo.ChatMessage) uuid.UUID {
 	return message.ID
 }
 
+func (e *TurnEngine) sanitizeProjectBootstrapInitialMessageID(ctx context.Context, sessionID uuid.UUID, candidateID string) string {
+	candidateID = strings.TrimSpace(candidateID)
+	if e == nil || e.messages == nil || sessionID == uuid.Nil {
+		return candidateID
+	}
+	if parsed, err := uuid.Parse(candidateID); err == nil && parsed != uuid.Nil {
+		if message, getErr := e.messages.GetByID(ctx, parsed); getErr == nil &&
+			message.SessionID == sessionID &&
+			strings.EqualFold(strings.TrimSpace(message.Role), "user") &&
+			strings.EqualFold(strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["source"])), projectBootstrapSource) {
+			return projectBootstrapWorkflowMessageID(&message).String()
+		}
+	}
+	messages, err := e.messages.ListBySession(ctx, sessionID)
+	if err != nil {
+		return candidateID
+	}
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(stringValue(messageMetadataMap(message.Metadata)["source"])), projectBootstrapSource) {
+			continue
+		}
+		return message.ID.String()
+	}
+	return candidateID
+}
+
 func (e *TurnEngine) appendProjectBootstrapContinuationMessage(ctx context.Context, sessionID, authorAgentID uuid.UUID, initialMessageID string, autoTurnCount int) (*chat.ChatMessage, error) {
 	content := buildProjectBootstrapContinuationPrompt(autoTurnCount)
 	if e != nil && e.chat != nil {
@@ -4713,6 +4742,7 @@ func (e *TurnEngine) appendProjectBootstrapContinuationMessageWithContent(ctx co
 	if e == nil || sessionID == uuid.Nil {
 		return nil, repo.ErrNotFound
 	}
+	initialMessageID = e.sanitizeProjectBootstrapInitialMessageID(ctx, sessionID, initialMessageID)
 	metadataMap := map[string]any{
 		"source":                       projectBootstrapSource,
 		"auto_continue":                true,

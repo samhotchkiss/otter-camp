@@ -10168,6 +10168,89 @@ func TestBootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall(t *test
 	}
 }
 
+func TestBootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+
+	badRoot := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Continue the active project execution now.",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","auto_continue":true}`),
+	})
+
+	metadata, err := json.Marshal(map[string]any{
+		projectBootstrapMetadataKey: map[string]any{
+			"status":                      projectBootstrapStatusActive,
+			"current_phase":               projectBootstrapCheckpointFirstWaveExecutions,
+			"last_successful_checkpoint":  projectBootstrapCheckpointFirstWaveSelected,
+			"assignment_count":            2,
+			"planned_task_count":          9,
+			"planned_flow_template_count": 1,
+			"first_wave_task_count":       4,
+			"validation_status":           projectBootstrapValidationPassed,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal metadata: %v", err)
+	}
+	fixture.session.Metadata = metadata
+	fixture.chat.session.Metadata = metadata
+
+	messageMetadata, err := json.Marshal(map[string]any{
+		"source":                       projectBootstrapSource,
+		"auto_continue":                true,
+		"bootstrap_initial_message_id": badRoot.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("Marshal message metadata: %v", err)
+	}
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, messageMetadata); err != nil {
+		t.Fatalf("UpdateMetadata user message: %v", err)
+	}
+	if _, err := fixture.messages.UpdateContent(context.Background(), fixture.userMessageID, "Continue the active project bootstrap from the persisted state above."); err != nil {
+		t.Fatalf("UpdateContent user message: %v", err)
+	}
+
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	for _, msg := range messages {
+		if !strings.Contains(msg.Content, "Continue the active project bootstrap from the persisted state above.") {
+			continue
+		}
+		if msg.ID == fixture.userMessageID {
+			continue
+		}
+		meta := messageMetadataMap(msg.Metadata)
+		initialMessageID := strings.TrimSpace(stringValue(meta["bootstrap_initial_message_id"]))
+		if initialMessageID == "" {
+			t.Fatal("bootstrap action prompt missing bootstrap_initial_message_id")
+		}
+		if initialMessageID == badRoot.ID.String() {
+			t.Fatalf("bootstrap_initial_message_id = %s, want bootstrap root %s instead of non-bootstrap source", initialMessageID, fixture.userMessageID)
+		}
+		if initialMessageID != fixture.userMessageID.String() {
+			t.Fatalf("bootstrap_initial_message_id = %s, want bootstrap root %s", initialMessageID, fixture.userMessageID)
+		}
+		return
+	}
+	t.Fatal("bootstrap action prompt missing after sanitizing inherited initial message id")
+}
+
 func TestBuildProjectBootstrapResumeStateMessageUsesCompactRosterForLateFirstWaveState(t *testing.T) {
 	state := projectBootstrapState{
 		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
