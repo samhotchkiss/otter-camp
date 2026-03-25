@@ -10275,6 +10275,8 @@ func TestBootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall(t *test
 	}
 	var sawResume bool
 	var sawAction bool
+	var actionRole string
+	var actionStatus string
 	for _, msg := range messages {
 		if strings.Contains(msg.Content, "[Project bootstrap resume]") {
 			sawResume = true
@@ -10284,6 +10286,8 @@ func TestBootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall(t *test
 		}
 		if strings.Contains(msg.Content, "Continue the active project bootstrap from the persisted state above.") {
 			sawAction = true
+			actionRole = msg.Role
+			actionStatus = msg.Status
 		}
 	}
 	if !sawResume {
@@ -10291,6 +10295,12 @@ func TestBootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall(t *test
 	}
 	if !sawAction {
 		t.Fatal("bootstrap resume action prompt missing for bootstrap auto-continue turn")
+	}
+	if actionRole != "system" {
+		t.Fatalf("bootstrap resume action prompt role = %q, want system", actionRole)
+	}
+	if actionStatus != "final" {
+		t.Fatalf("bootstrap resume action prompt status = %q, want final", actionStatus)
 	}
 	if fixture.model.continuationSummaryCalls != 0 {
 		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)

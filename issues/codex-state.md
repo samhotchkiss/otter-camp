@@ -6207,3 +6207,45 @@ The next move from here:
   - rebuild `./bin/ottercamp`
   - restart tmux `codex-e2e-20260324` serve and worker
   - continue with a fresh bootstrap probe to verify a live project/bootstrap turn with an `in_flight` retry invocation is no longer recovered prematurely
+
+## 2026-03-25 16:39 MDT: rerun-69 proves the stale-recovery fix and exposes duplicate bootstrap resume dispatches
+
+- fresh live probe:
+  - project `2bd73022-23ad-4405-ba38-75a48d6cef2e`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-69`
+  - async session `7a9c47fa-fa00-4b03-8244-cada6c773768`
+  - kickoff bootstrap handoff `da8dca06-3462-4d78-ba71-199de34091d9`
+
+- live proof of the previous worker fix:
+  - kickoff turn `f8543137-d73b-4d2e-8668-03585811eb36` completed instead of being reclaimed as stale
+  - session stayed active and advanced into a second bootstrap turn
+  - bootstrap materially progressed:
+    - task 2 `Bind repo and environment` is `done`
+    - bootstrap metadata advanced to `auto_turn_count = 1`
+    - `project_bootstrap.status` remained `active`
+
+- next seam exposed on the live resume path:
+  - turn 2 `4ae43d81-7d1b-486c-9246-8ec312eeed63` was dispatched from continuation user message `686df201-d98d-47b0-be2a-f4175e1e140d`
+  - while that same turn was assembling, the engine also appended:
+    - a system resume message `5d22554a-6265-460f-a82d-ce7e65d7d702`
+    - a second pending continuation user message `d8dc6a0e-3e65-4148-ab6b-afa404f867fb`
+  - worker queue state then showed:
+    - claimed active dispatch for `686df201-...`
+    - a second pending `agent_turn` job `a62e71b0-8b0f-483f-934c-ef1207a77eac` already queued for `d8dc6a0e-...`
+  - the live turn’s `trigger_message_id` was rebased onto the system resume message, not the original continuation user message
+
+- fix landed locally and verified:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - bootstrap resume action prompts are now appended as in-turn `system` messages with the sanitized `bootstrap_initial_message_id` metadata preserved
+    - that keeps the direct-action instruction in the running turn without queuing a second synthetic user dispatch
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - `TestBootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall` now asserts the resume action prompt is a final system message
+    - the existing inherited-root sanitization test still passes on the new path
+
+- focused verification passed:
+  - `go test ./internal/turn -run 'Test(BootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall|HandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt|BootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID|ContinuationTurnAppendsCompactBootstrapActionPromptAfterCompression|ContinuationTurnSynthesizesBootstrapResumeStateWhenMetadataIsStale)' -count=1`
+
+- next deployment step:
+  - rebuild `./bin/ottercamp`
+  - restart tmux `codex-e2e-20260324` serve and worker
+  - start a fresh bootstrap probe to verify the duplicate pending bootstrap continuation job no longer appears

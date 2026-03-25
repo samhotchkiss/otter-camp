@@ -7714,16 +7714,31 @@ func (e *TurnEngine) appendProjectBootstrapResumeActionPrompt(ctx context.Contex
 	if strings.TrimSpace(initialMessageID) == "" {
 		initialMessageID = projectBootstrapWorkflowMessageID(&repo.ChatMessage{ID: message.ID, Metadata: message.Metadata}).String()
 	}
-	compacted, err := e.appendProjectBootstrapContinuationMessageWithContent(
-		ctx,
-		rt.session.ID,
-		rt.agent.ID,
-		initialMessageID,
-		state.AutoTurnCount,
-		buildProjectBootstrapResumeActionPrompt(state, snapshot),
-	)
+	initialMessageID = e.sanitizeProjectBootstrapInitialMessageID(ctx, rt.session.ID, initialMessageID)
+	systemMetadata, err := json.Marshal(map[string]any{
+		"source":                       projectBootstrapSource,
+		"auto_continue":                true,
+		"bootstrap_initial_message_id": strings.TrimSpace(initialMessageID),
+		"bootstrap_auto_turn_count":    state.AutoTurnCount,
+	})
 	if err != nil {
 		return nil, false, err
+	}
+	compacted, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: rt.session.ID,
+		TurnID:    &rt.turn.ID,
+		Role:      "system",
+		Content:   strings.TrimSpace(buildProjectBootstrapResumeActionPrompt(state, snapshot)),
+		Metadata:  systemMetadata,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if err := e.chat.UpdateMessageStatus(ctx, compacted.ID, "streaming", ""); err != nil {
+		return nil, false, fmt.Errorf("appendProjectBootstrapResumeActionPrompt pending->streaming: %w", err)
+	}
+	if err := e.chat.UpdateMessageStatus(ctx, compacted.ID, "final", ""); err != nil {
+		return nil, false, fmt.Errorf("appendProjectBootstrapResumeActionPrompt streaming->final: %w", err)
 	}
 	return compacted, true, nil
 }
