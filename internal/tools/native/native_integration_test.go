@@ -7404,6 +7404,20 @@ func TestIntegrationParentTaskCanCreateBoundedFollowOnChild(t *testing.T) {
 	if childIDs[1] != createdChild.ID {
 		t.Fatalf("parent child_task_ids[1] = %s, want %s", childIDs[1], createdChild.ID)
 	}
+	var dependencyCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task_dependency
+		WHERE source_type = 'project_task'
+		  AND source_id = $1
+		  AND depends_on_type = 'project_task'
+		  AND depends_on_id = $2
+	`, createdChild.ID, existingChild.ID).Scan(&dependencyCount); err != nil {
+		t.Fatalf("count dependency row: %v", err)
+	}
+	if dependencyCount != 1 {
+		t.Fatalf("follow-on child dependency count = %d, want 1", dependencyCount)
+	}
 }
 
 func TestIntegrationParentTaskCanDecomposeBroadFollowOnChildRequest(t *testing.T) {

@@ -2268,6 +2268,9 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		if reusableChild, ok, reuseErr := e.findReusableParentScopedChildTask(ctx, *parentTask, children, desiredChild); reuseErr != nil {
 			return nil, reuseErr
 		} else if ok {
+			if err := e.ensureParentChildTaskDependencyChain(ctx, *parentTask); err != nil {
+				return nil, err
+			}
 			response := map[string]any{
 				"task": map[string]any{
 					"id":           reusableChild.ID,
@@ -2410,6 +2413,9 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			return nil, updateErr
 		}
 		parentTask = &updatedParent
+		if err := e.ensureParentChildTaskDependencyChain(ctx, *parentTask); err != nil {
+			return nil, err
+		}
 	}
 	if planning.HasSelection() {
 		created, planning, err = e.syncPlanningArtifacts(ctx, created, actor)
@@ -2609,7 +2615,11 @@ func (e *NativeToolExecutor) createDecomposedParentChildren(ctx context.Context,
 	}
 	parentTask.Metadata = taskdecomp.ApplyMetadata(parentTask.Metadata, prepared.Plan, prepared.SourceDescription, childTaskIDs)
 	parentTask.BlocksScope = "none"
-	if _, err := e.tasks.Update(ctx, parentTask); err != nil {
+	updatedParent, err := e.tasks.Update(ctx, parentTask)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.ensureParentChildTaskDependencyChain(ctx, updatedParent); err != nil {
 		return nil, err
 	}
 
@@ -2642,6 +2652,27 @@ func (e *NativeToolExecutor) ensureProjectTaskDependency(ctx context.Context, so
 		CreatedByID:   actor.createdByPtr,
 	})
 	return err
+}
+
+func (e *NativeToolExecutor) ensureParentChildTaskDependencyChain(ctx context.Context, parentTask repo.ProjectTask) error {
+	children, err := e.listDecompositionChildren(ctx, parentTask)
+	if err != nil {
+		return err
+	}
+	ordered := make([]repo.ProjectTask, 0, len(children))
+	for _, child := range children {
+		if _, ok := decompositionWorkstreamIndex(child, parentTask.ID); !ok {
+			continue
+		}
+		ordered = append(ordered, child)
+	}
+	actor := actorFromContext(ctx)
+	for idx := 1; idx < len(ordered); idx++ {
+		if err := e.ensureProjectTaskDependency(ctx, ordered[idx].ID, ordered[idx-1].ID, actor); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[string]any) (map[string]any, error) {

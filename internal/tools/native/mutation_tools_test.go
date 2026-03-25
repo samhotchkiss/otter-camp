@@ -1860,6 +1860,14 @@ type mockDependencyRepo struct {
 }
 
 func (m *mockDependencyRepo) Add(_ context.Context, dependency repo.ProjectTaskDependency) (repo.ProjectTaskDependency, error) {
+	for _, existing := range m.added {
+		if existing.SourceType == dependency.SourceType &&
+			existing.SourceID == dependency.SourceID &&
+			existing.DependsOnType == dependency.DependsOnType &&
+			existing.DependsOnID == dependency.DependsOnID {
+			return existing, nil
+		}
+	}
 	if dependency.ID == uuid.Nil {
 		dependency.ID = uuid.New()
 	}
@@ -2772,6 +2780,77 @@ func TestTaskCreateChildClearsParentProjectGate(t *testing.T) {
 	}
 	if got := taskOut["blocks_scope"]; got != "none" {
 		t.Fatalf("child blocks_scope = %v, want none", got)
+	}
+}
+
+func TestTaskCreateBoundedFollowOnChildAddsDependencyOnPreviousSibling(t *testing.T) {
+	parentTaskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	existingChildID := uuid.New()
+	description := "Coordinate the validation workstream and delegate executable child tasks."
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             parentTaskID,
+			OrganizationID: uuid.New(),
+			ProjectID:      projectID,
+			Title:          "Validation execution parent",
+			Description:    &description,
+			WorkStatus:     "draft",
+			BlocksScope:    "all",
+			FlowTemplateID: &flowTemplateID,
+		},
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             parentTaskID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				Title:          "Validation execution parent",
+				Description:    &description,
+				WorkStatus:     "draft",
+				BlocksScope:    "all",
+				FlowTemplateID: &flowTemplateID,
+			},
+			{
+				ID:             existingChildID,
+				OrganizationID: uuid.New(),
+				ProjectID:      projectID,
+				TaskNumber:     2,
+				Title:          "Run bounded simulation check",
+				Description: func() *string {
+					value := "Execute a bounded validation check against the pipeline."
+					return &value
+				}(),
+				WorkStatus:     "draft",
+				FlowTemplateID: &flowTemplateID,
+				Metadata:       taskdecomp.ApplyChildMetadata(json.RawMessage(`{}`), parentTaskID, 2),
+			},
+		},
+	}
+	dependencies := &mockDependencyRepo{}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.dependencies = dependencies
+
+	out, err := executor.Execute(testExecCtx(), "task.create", map[string]any{
+		"project_id":     projectID.String(),
+		"parent_task_id": parentTaskID.String(),
+		"title":          "Capture validation summary",
+		"description":    "Document the validation summary after the bounded simulation completes.",
+	})
+	if err != nil {
+		t.Fatalf("task.create child: %v", err)
+	}
+	taskOut, ok := out["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task output = %T, want map[string]any", out["task"])
+	}
+	createdChildID := mustUUIDFromAny(t, taskOut["id"])
+	if len(dependencies.added) != 1 {
+		t.Fatalf("dependency adds = %d, want 1", len(dependencies.added))
+	}
+	if dependencies.added[0].SourceID != createdChildID || dependencies.added[0].DependsOnID != existingChildID {
+		t.Fatalf("dependency = %s -> %s, want %s -> %s", dependencies.added[0].SourceID, dependencies.added[0].DependsOnID, createdChildID, existingChildID)
 	}
 }
 

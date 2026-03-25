@@ -54,6 +54,44 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
   - create a brand-new fresh validation project
   - verify bounded child tasks come out with the sequential dependency graph before execution starts
 
+## 2026-03-25 12:28 MDT update
+
+- fresh rerun-41 canary is active on project `567d4066-f928-40c2-bab2-fa48760e3f54`
+- fresh project session is `991c637d-8613-408e-adc0-49e723e9adb3`
+- rerun-41 proved the first dependency patch only covered siblings created inside the same decomposition batch
+
+### New follow-on child dependency repair
+
+- patched [`internal/tools/native/mutation_tools.go`](../internal/tools/native/mutation_tools.go)
+  - added `ensureParentChildTaskDependencyChain(...)`
+  - parent-scoped child create/reuse paths now resync the full sibling dependency chain after any child creation, not just within a single decomposition batch
+- added focused coverage in [`internal/tools/native/mutation_tools_test.go`](../internal/tools/native/mutation_tools_test.go)
+  - `TestTaskCreateBoundedFollowOnChildAddsDependencyOnPreviousSibling`
+- extended integration coverage in [`internal/tools/native/native_integration_test.go`](../internal/tools/native/native_integration_test.go)
+  - `TestIntegrationParentTaskCanCreateBoundedFollowOnChild`
+
+### Fresh live proof before the second fix
+
+- rerun-41 cleanly created the staffed bootstrap tree and child task set `14-22`
+- fresh dependency rows showed only the batch-created pairs:
+  - `16 -> 15`
+  - `18 -> 17`
+  - `21 -> 20`
+- missing edge on the clean project:
+  - task `19` had no `19 -> 18` dependency because it was appended later under the same parent after the earlier `17/18` batch
+
+### Verification completed in this stretch
+
+- `go test ./internal/tools/native -run 'Test(TaskCreate(BoundedFollowOnChildAddsDependencyOnPreviousSibling|DecomposedChildrenAddSequentialDependenciesDuringBootstrap)|TaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegration(ParentTaskCanCreateBoundedFollowOnChild|BootstrapParentDecompositionAddsSequentialChildDependencies|ParentTaskCanDecomposeBroadFollowOnChildRequest)$' -count=1`
+
+### Current next seam
+
+- the clean rerun has already exposed the next operator-visible issue independently of the dependency fix:
+  - top-level workstream parents `9-13` still picked up planning-playbook artifacts on creation even though this is bootstrap execution work
+  - rerun-41 bootstrap then had to recover from oversized child requests while materializing the child tree
+- immediate next action is still to redeploy the latest dependency-chain fix and re-check rerun-41 under the new binary, but the likely next product seam after that is the lingering planning contamination on fresh bootstrap parent creation
+
 ## 2026-03-25 09:05 MDT update
 
 - rerun-38 project `fc4a025d-e7c9-4b88-9485-17d2b6328e52` is still the main fresh canary
