@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -2224,6 +2225,11 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		resolvedFlowTemplateID = &inheritedFlowTemplateID
 	}
 	actor := actorFromContext(ctx)
+	unlockParentTask := func() {}
+	if parentTask != nil {
+		unlockParentTask = e.lockParentTaskMutation(parentTask.ID)
+		defer unlockParentTask()
+	}
 	if metadataWithProcess, processUpdate, processErr := applyPlanningProcessInput(enrichedMetadata, input, actor); processErr != nil {
 		if errors.Is(processErr, taskplan.ErrPlanningStateRequired) || errors.Is(processErr, taskplan.ErrPlanningOverrideNotNeeded) {
 			return map[string]any{"error": processErr.Error()}, nil
@@ -2673,6 +2679,19 @@ func (e *NativeToolExecutor) ensureParentChildTaskDependencyChain(ctx context.Co
 		}
 	}
 	return nil
+}
+
+func (e *NativeToolExecutor) lockParentTaskMutation(parentTaskID uuid.UUID) func() {
+	if e == nil || parentTaskID == uuid.Nil {
+		return func() {}
+	}
+	lockValue, _ := e.parentTaskLocks.LoadOrStore(parentTaskID, &sync.Mutex{})
+	mu, _ := lockValue.(*sync.Mutex)
+	if mu == nil {
+		return func() {}
+	}
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[string]any) (map[string]any, error) {

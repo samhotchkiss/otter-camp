@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -7417,6 +7418,94 @@ func TestIntegrationParentTaskCanCreateBoundedFollowOnChild(t *testing.T) {
 	}
 	if dependencyCount != 1 {
 		t.Fatalf("follow-on child dependency count = %d, want 1", dependencyCount)
+	}
+}
+
+func TestIntegrationConcurrentParentChildCreatesSerializeDependencyChain(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Concurrent child validation parent",
+		Description:    stringPtr("Validate sequential dependency chaining under concurrent child creation."),
+		WorkStatus:     "draft",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "agent",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	if _, err := executor.ensureProjectRepoBinding(ctx, project.ID); err != nil {
+		t.Fatalf("ensureProjectRepoBinding: %v", err)
+	}
+	execCtx := integrationExecCtxWith(orgID, agent.ID)
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	createChild := func(title, description string) {
+		defer wg.Done()
+		<-start
+		_, execErr := executor.Execute(execCtx, "task.create", map[string]any{
+			"project_id":     project.ID.String(),
+			"parent_task_id": parentTask.ID.String(),
+			"title":          title,
+			"description":    description,
+		})
+		errCh <- execErr
+	}
+
+	wg.Add(2)
+	go createChild("Implement bounded concurrent child A", "Create the first bounded concurrent child.")
+	go createChild("Implement bounded concurrent child B", "Create the second bounded concurrent child.")
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for execErr := range errCh {
+		if execErr != nil {
+			t.Fatalf("concurrent task.create: %v", execErr)
+		}
+	}
+
+	children, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListByProject: %v", err)
+	}
+	var created []repo.ProjectTask
+	for _, taskRecord := range children {
+		if taskdecomp.ParseParentTaskID(taskRecord.Metadata) == parentTask.ID {
+			created = append(created, taskRecord)
+		}
+	}
+	if len(created) != 2 {
+		t.Fatalf("created child count = %d, want 2", len(created))
+	}
+	sort.Slice(created, func(i, j int) bool {
+		return created[i].TaskNumber < created[j].TaskNumber
+	})
+
+	var dependencyCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM project_task_dependency
+		WHERE source_type = 'project_task'
+		  AND source_id = $1
+		  AND depends_on_type = 'project_task'
+		  AND depends_on_id = $2
+	`, created[1].ID, created[0].ID).Scan(&dependencyCount); err != nil {
+		t.Fatalf("count dependency row: %v", err)
+	}
+	if dependencyCount != 1 {
+		t.Fatalf("concurrent child dependency count = %d, want 1", dependencyCount)
 	}
 }
 

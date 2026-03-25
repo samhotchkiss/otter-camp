@@ -2,6 +2,78 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 12:39 MDT update
+
+- fresh rerun-42 canary is active on project `a39624fe-f1d8-4ee2-b6fa-c47a2853b3b6`
+- fresh project session is `f7f706bd-94e9-4b5d-9a4a-3b40ef314226`
+- rerun-42 reproduced the dependency seam again on a clean project, but more precisely than before:
+  - parent `9` has child ids `13,14` persisted, but no `14 -> 13` dependency row
+  - parent `11` has child ids `17,18,19` persisted, but no `19 -> 18` dependency row
+  - the dependency table only contained:
+    - `16 -> 15`
+    - `18 -> 17`
+
+### Root cause: concurrent sibling child creation under one parent
+
+- the earlier follow-on child repair worked in focused tests but still failed live when multiple `task.create` calls under the same parent executed in parallel inside one model turn
+- parent metadata was eventually correct (`child_task_ids` and `decomposition_parent_task_id` were present), but the dependency repair pass raced before sibling tasks were all visible, so no later repair filled the missing direct edge
+
+### New fix: serialize parent-scoped child mutation per parent task
+
+- patched [`internal/tools/native/executor.go`](../internal/tools/native/executor.go)
+  - added executor-scoped parent task mutex storage
+- patched [`internal/tools/native/mutation_tools.go`](../internal/tools/native/mutation_tools.go)
+  - parent-scoped `task.create` now acquires a per-parent mutation lock before child reuse/create, parent metadata append, and dependency-chain repair
+  - this forces sibling child creation under the same parent to serialize even when the model emits multiple `task.create` calls in one turn
+- added focused regression coverage in [`internal/tools/native/native_integration_test.go`](../internal/tools/native/native_integration_test.go)
+  - `TestIntegrationConcurrentParentChildCreatesSerializeDependencyChain`
+
+### Verification completed in this stretch
+
+- `go test ./internal/tools/native -run 'TestTaskCreateBoundedFollowOnChildAddsDependencyOnPreviousSibling$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegration(ParentTaskCanCreateBoundedFollowOnChild|ConcurrentParentChildCreatesSerializeDependencyChain)$' -count=1`
+
+### Current next step
+
+- rebuild/restart the dedicated tmux runtime on top of this lock-based fix
+- start fresh rerun-43
+- verify on the new clean project that parent-scoped child creation now yields the missing live edges (`14 -> 13`, `19 -> 18`) before first-wave execution starts
+
+## 2026-03-25 12:43 MDT update
+
+- fresh rerun-43 canary is active on project `79cd4362-8caf-4037-a03c-f369e3f5ee41`
+- fresh project session is `24f8024b-e6f0-47ba-a912-f4da2f0ea06e`
+- the parent-scoped child-creation race fix is now proven in live traffic on a clean project
+
+### Live proof of the serialized child-chain repair
+
+- rerun-43 created the clean child set:
+  - `13`, `14` under parent `9`
+  - `15`, `16` under parent `10`
+  - `17` under parent `11`
+  - `18`, `19` under parent `12` decomposition output
+- the live dependency table now contains the missing direct sibling edges:
+  - `14 -> 13`
+  - `16 -> 15`
+  - `19 -> 18`
+- this is the first clean rerun where the previously-missing direct-create edge and the previously-missing later follow-on edge both appeared under the latest binary
+
+### What remains visible on the same clean run
+
+- top-level parent workstream creation is still contaminated by planning/playbook inference:
+  - task `9` got discovery-plan artifacts under `planning/discovery-plan/oc-9-*`
+  - task `10` got discovery-plan artifacts under `planning/discovery-plan/oc-10-*`
+  - task `11` got discovery-plan artifacts under `planning/discovery-plan/oc-11-*`
+  - task `12` got metrics-framework artifacts under `planning/metrics-framework/oc-12-*`
+- bootstrap is also still mis-resuming at first-wave selection:
+  - the resume prompt explicitly instructs `bootstrap.setup.persist` first
+  - the PM still begins with blocked broad rereads (`project.list`), causing the engine to end the turn and retry
+
+### Current next seam
+
+- the dependency-chain bug is fixed
+- the next operator-visible product seam is now the lingering planning contamination on top-level bootstrap parent creation, plus the stubborn bootstrap resume compliance issue at first-wave selection
+
 ## 2026-03-25 12:24 MDT update
 
 - active operator canary is still rerun-40 project `85c6f2ad-ce59-425f-b9f9-ce4f81b5d545`

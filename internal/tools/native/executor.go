@@ -281,6 +281,8 @@ type NativeToolExecutor struct {
 
 	mu         sync.Mutex
 	workspaces map[string]SessionWorkDir
+
+	parentTaskLocks sync.Map
 }
 
 func NewExecutor(opts ExecutorOptions) *NativeToolExecutor {
