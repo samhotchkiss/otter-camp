@@ -38,6 +38,7 @@ const (
 	anthropicClaudeCodeUserAgent    = "claude-cli/2.1.2 (external, cli)"
 	anthropicSubscriptionBeta       = "claude-code-20250219,oauth-2025-04-20"
 	anthropicTokenRefreshSkew       = 5 * time.Minute
+	anthropicClaudeCodeIdentityText = "You are Claude Code, Anthropic's official CLI for Claude."
 )
 
 const (
@@ -179,6 +180,10 @@ type anthropicTokenRefreshResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int64  `json:"expires_in"`
+}
+
+type providerBodyOptions struct {
+	AnthropicSubscription bool
 }
 
 func (g *LiveModelGateway) StreamComplete(ctx context.Context, req turn.ModelRequest, onChunk func(string) error) (turn.ModelResponse, error) {
@@ -640,15 +645,16 @@ func (g *LiveModelGateway) callProvider(
 		return providerCallResult{}, err
 	}
 
-	body, err := buildProviderBody(providerType, req, stream)
-	if err != nil {
-		return providerCallResult{}, err
-	}
-
 	if providerType == "anthropic" {
 		authConfig, authErr := anthropicAuthConfigFromConnection(connection)
 		if authErr != nil {
 			return providerCallResult{}, authErr
+		}
+		body, err := buildProviderBody(providerType, req, stream, providerBodyOptions{
+			AnthropicSubscription: authConfig.Mode == anthropicAuthModeSubscription,
+		})
+		if err != nil {
+			return providerCallResult{}, err
 		}
 		if authConfig.Mode == anthropicAuthModeSubscription {
 			return g.callAnthropicSubscriptionProvider(ctx, orgID, endpointURL, body, stream, onChunk, connection.ID, authConfig)
@@ -660,6 +666,10 @@ func (g *LiveModelGateway) callProvider(
 		return g.executeProviderCall(ctx, endpointURL, providerType, body, stream, onChunk, func(httpReq *http.Request) {
 			applyAuthHeaders(httpReq, providerType, apiKey)
 		})
+	}
+	body, err := buildProviderBody(providerType, req, stream, providerBodyOptions{})
+	if err != nil {
+		return providerCallResult{}, err
 	}
 
 	apiKey, err := g.secrets.ResolveRef(ctx, orgID, connection.APIKeyRef)
@@ -1560,7 +1570,8 @@ func providerEndpoint(baseURL string, providerType string) (string, error) {
 	return parsed.String(), nil
 }
 
-func buildProviderBody(providerType string, req turn.ModelRequest, stream bool) ([]byte, error) {
+func buildProviderBody(providerType string, req turn.ModelRequest, stream bool, opts providerBodyOptions) ([]byte, error) {
+	includeTools := modelPurposeAllowsTools(req.Purpose)
 	switch providerType {
 	case "anthropic":
 		systemPrompt, messages := anthropicMessages(req)
@@ -1574,11 +1585,13 @@ func buildProviderBody(providerType string, req turn.ModelRequest, stream bool) 
 			"max_tokens": maxTokens,
 			"stream":     stream,
 		}
-		if systemPrompt != "" {
-			payload["system"] = systemPrompt
+		if systemPayload := anthropicSystemPayload(systemPrompt, opts.AnthropicSubscription); systemPayload != nil {
+			payload["system"] = systemPayload
 		}
-		if toolDefs := anthropicTools(req); len(toolDefs) > 0 {
-			payload["tools"] = toolDefs
+		if includeTools {
+			if toolDefs := anthropicTools(req); len(toolDefs) > 0 {
+				payload["tools"] = toolDefs
+			}
 		}
 		return json.Marshal(payload)
 	default:
@@ -1593,11 +1606,57 @@ func buildProviderBody(providerType string, req turn.ModelRequest, stream bool) 
 		if stream {
 			payload["stream_options"] = map[string]any{"include_usage": true}
 		}
-		if toolDefs := openAITools(req); len(toolDefs) > 0 {
-			payload["tools"] = toolDefs
-			payload["tool_choice"] = "auto"
+		if includeTools {
+			if toolDefs := openAITools(req); len(toolDefs) > 0 {
+				payload["tools"] = toolDefs
+				payload["tool_choice"] = "auto"
+			}
 		}
 		return json.Marshal(payload)
+	}
+}
+
+func anthropicSystemPayload(systemPrompt string, subscription bool) any {
+	systemPrompt = strings.TrimSpace(systemPrompt)
+	if !subscription {
+		if systemPrompt == "" {
+			return nil
+		}
+		return systemPrompt
+	}
+
+	blocks := []map[string]any{{
+		"type": "text",
+		"text": anthropicClaudeCodeIdentityText,
+		"cache_control": map[string]any{
+			"type": "ephemeral",
+		},
+	}}
+	if systemPrompt != "" {
+		blocks = append(blocks, map[string]any{
+			"type": "text",
+			"text": systemPrompt,
+			"cache_control": map[string]any{
+				"type": "ephemeral",
+			},
+		})
+	}
+	return blocks
+}
+
+func modelPurposeAllowsTools(purpose string) bool {
+	switch strings.TrimSpace(strings.ToLower(purpose)) {
+	case "listening_eval",
+		"continuation_summary",
+		"memory_extraction",
+		"memory_distillation",
+		"memory_entity_synthesis",
+		"memory_retrieval",
+		"summarization",
+		"skill_summarization":
+		return false
+	default:
+		return true
 	}
 }
 

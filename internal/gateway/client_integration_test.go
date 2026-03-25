@@ -1223,6 +1223,21 @@ func TestLiveModelGatewayCompleteAnthropicSubscriptionAuth(t *testing.T) {
 			http.Error(w, "deprecated fine-grained-tool-streaming beta header must be omitted", http.StatusBadRequest)
 			return
 		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		systemBlocks, ok := payload["system"].([]any)
+		if !ok || len(systemBlocks) < 2 {
+			http.Error(w, "subscription auth requires Claude Code system blocks", http.StatusBadRequest)
+			return
+		}
+		firstSystem, ok := systemBlocks[0].(map[string]any)
+		if !ok || strings.TrimSpace(fmt.Sprint(firstSystem["text"])) != anthropicClaudeCodeIdentityText {
+			http.Error(w, "missing Claude Code identity system block", http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":4,"output_tokens":1}}`))
 	}))

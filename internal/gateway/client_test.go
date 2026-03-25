@@ -23,7 +23,7 @@ func TestBuildProviderBodyOpenAIIncludesTools(t *testing.T) {
 		},
 	}
 
-	body, err := buildProviderBody("openai", req, true)
+	body, err := buildProviderBody("openai", req, true, providerBodyOptions{})
 	if err != nil {
 		t.Fatalf("buildProviderBody() error = %v", err)
 	}
@@ -69,7 +69,7 @@ func TestBuildProviderBodyAnthropicIncludesTools(t *testing.T) {
 		},
 	}
 
-	body, err := buildProviderBody("anthropic", req, false)
+	body, err := buildProviderBody("anthropic", req, false, providerBodyOptions{})
 	if err != nil {
 		t.Fatalf("buildProviderBody() error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestBuildProviderBodyAnthropicCoalescesConsecutiveUserMessages(t *testing.T
 		},
 	}
 
-	body, err := buildProviderBody("anthropic", req, false)
+	body, err := buildProviderBody("anthropic", req, false, providerBodyOptions{})
 	if err != nil {
 		t.Fatalf("buildProviderBody() error = %v", err)
 	}
@@ -125,6 +125,67 @@ func TestBuildProviderBodyAnthropicCoalescesConsecutiveUserMessages(t *testing.T
 	}
 	if msg["content"] != "first\n\nsecond\n\nthird" {
 		t.Fatalf("messages[0].content = %v, want merged user content", msg["content"])
+	}
+}
+
+func TestBuildProviderBodyAnthropicSubscriptionUsesClaudeCodeSystemBlocks(t *testing.T) {
+	req := turn.ModelRequest{
+		Profile: repo.ModelProfile{ModelName: "claude-opus-4-20250514"},
+		Prompt: &prompt.AssembledPrompt{
+			Messages: []prompt.PromptMessage{
+				{Role: "system", Content: "You are Frank."},
+				{Role: "user", Content: "hello"},
+			},
+			ToolDescriptors: []tools.ToolDescriptor{{
+				Name:        "file.read",
+				Description: "Read file contents",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+			}},
+		},
+	}
+
+	body, err := buildProviderBody("anthropic", req, true, providerBodyOptions{AnthropicSubscription: true})
+	if err != nil {
+		t.Fatalf("buildProviderBody() error = %v", err)
+	}
+
+	payload := decodeBody(t, body)
+	systemBlocks := expectArray(t, payload, "system")
+	if len(systemBlocks) != 2 {
+		t.Fatalf("len(system) = %d, want 2", len(systemBlocks))
+	}
+	first := expectMapValue(t, systemBlocks[0], "system[0]")
+	if first["text"] != anthropicClaudeCodeIdentityText {
+		t.Fatalf("system[0].text = %v, want Claude Code identity", first["text"])
+	}
+	second := expectMapValue(t, systemBlocks[1], "system[1]")
+	if second["text"] != "You are Frank." {
+		t.Fatalf("system[1].text = %v, want original system prompt", second["text"])
+	}
+	if _, ok := first["cache_control"]; !ok {
+		t.Fatalf("system[0].cache_control missing")
+	}
+}
+
+func TestBuildProviderBodyAnthropicAPIKeyKeepsStringSystemPrompt(t *testing.T) {
+	req := turn.ModelRequest{
+		Profile: repo.ModelProfile{ModelName: "claude-sonnet-4-5-20250929"},
+		Prompt: &prompt.AssembledPrompt{
+			Messages: []prompt.PromptMessage{
+				{Role: "system", Content: "You are Frank."},
+				{Role: "user", Content: "hello"},
+			},
+		},
+	}
+
+	body, err := buildProviderBody("anthropic", req, false, providerBodyOptions{})
+	if err != nil {
+		t.Fatalf("buildProviderBody() error = %v", err)
+	}
+
+	payload := decodeBody(t, body)
+	if got := payload["system"]; got != "You are Frank." {
+		t.Fatalf("system = %v, want string system prompt", got)
 	}
 }
 
@@ -147,7 +208,7 @@ func TestBuildProviderBodyOmitsToolsWhenNoDescriptors(t *testing.T) {
 				},
 			}
 
-			body, err := buildProviderBody(tc.providerType, req, false)
+			body, err := buildProviderBody(tc.providerType, req, false, providerBodyOptions{})
 			if err != nil {
 				t.Fatalf("buildProviderBody() error = %v", err)
 			}
@@ -158,6 +219,47 @@ func TestBuildProviderBodyOmitsToolsWhenNoDescriptors(t *testing.T) {
 			}
 			if _, exists := payload["tool_choice"]; exists {
 				t.Fatalf("payload.tool_choice exists; expected omitted")
+			}
+		})
+	}
+}
+
+func TestBuildProviderBodyOmitsToolsForListeningEval(t *testing.T) {
+	testCases := []struct {
+		name         string
+		providerType string
+		model        string
+	}{
+		{name: "openai", providerType: "openai", model: "gpt-4o-mini"},
+		{name: "anthropic", providerType: "anthropic", model: "claude-3-5-sonnet"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := turn.ModelRequest{
+				Purpose: "listening_eval",
+				Profile: repo.ModelProfile{ModelName: tc.model},
+				Prompt: &prompt.AssembledPrompt{
+					Messages: []prompt.PromptMessage{{Role: "user", Content: "hello"}},
+					ToolDescriptors: []tools.ToolDescriptor{{
+						Name:        "project.create",
+						Description: "Create a project",
+						InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}}}`),
+					}},
+				},
+			}
+
+			body, err := buildProviderBody(tc.providerType, req, false, providerBodyOptions{})
+			if err != nil {
+				t.Fatalf("buildProviderBody() error = %v", err)
+			}
+
+			payload := decodeBody(t, body)
+			if _, exists := payload["tools"]; exists {
+				t.Fatalf("payload.tools exists; expected omitted for listening_eval")
+			}
+			if _, exists := payload["tool_choice"]; exists {
+				t.Fatalf("payload.tool_choice exists; expected omitted for listening_eval")
 			}
 		})
 	}
@@ -225,7 +327,7 @@ func TestOpenAIToolsSanitizesNames(t *testing.T) {
 					}},
 				},
 			}
-			body, err := buildProviderBody("openai", req, false)
+			body, err := buildProviderBody("openai", req, false, providerBodyOptions{})
 			if err != nil {
 				t.Fatalf("buildProviderBody() error = %v", err)
 			}
@@ -251,7 +353,7 @@ func TestAnthropicToolsSanitizesNames(t *testing.T) {
 			}},
 		},
 	}
-	body, err := buildProviderBody("anthropic", req, false)
+	body, err := buildProviderBody("anthropic", req, false, providerBodyOptions{})
 	if err != nil {
 		t.Fatalf("buildProviderBody() error = %v", err)
 	}
