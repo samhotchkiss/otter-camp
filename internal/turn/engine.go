@@ -16598,7 +16598,31 @@ func (e *TurnEngine) handleProjectBootstrapTerminalTurnFailure(ctx context.Conte
 	return true, nil
 }
 
-func (e *TurnEngine) projectBootstrapStreamWatchdog(ctx context.Context, rt *turnRuntime) (projectBootstrapWatchdog, bool, error) {
+func projectBootstrapWatchdogTimeoutForModel(modelName string, base time.Duration) time.Duration {
+	if base <= 0 {
+		return base
+	}
+	normalized := strings.ToLower(strings.TrimSpace(modelName))
+	switch {
+	case normalized == "":
+		return base
+	case strings.HasPrefix(normalized, "claude-"):
+		return base
+	case strings.HasPrefix(normalized, "gpt-"):
+		return base
+	case strings.HasPrefix(normalized, "o1"):
+		return base
+	case strings.HasPrefix(normalized, "o3"):
+		return base
+	case strings.Contains(normalized, ":"):
+		if base < 4*time.Minute {
+			return 4 * time.Minute
+		}
+	}
+	return base
+}
+
+func (e *TurnEngine) projectBootstrapStreamWatchdog(ctx context.Context, rt *turnRuntime, profile repo.ModelProfile) (projectBootstrapWatchdog, bool, error) {
 	if e == nil || rt == nil || rt.session == nil || rt.session.ScopeID == uuid.Nil || e.projectBootstrapTurnTimeout <= 0 {
 		return projectBootstrapWatchdog{}, false, nil
 	}
@@ -16633,13 +16657,14 @@ func (e *TurnEngine) projectBootstrapStreamWatchdog(ctx context.Context, rt *tur
 		return projectBootstrapWatchdog{}, false, nil
 	}
 
+	timeout := projectBootstrapWatchdogTimeoutForModel(profile.ModelName, e.projectBootstrapTurnTimeout)
 	elapsed := e.now().UTC().Sub(rt.startedAt)
-	remaining := e.projectBootstrapTurnTimeout - elapsed
+	remaining := timeout - elapsed
 	if remaining <= 0 {
 		remaining = time.Millisecond
 	}
 	return projectBootstrapWatchdog{
-		Timeout:   e.projectBootstrapTurnTimeout,
+		Timeout:   timeout,
 		Remaining: remaining,
 	}, true, nil
 }
@@ -17828,7 +17853,7 @@ func (e *TurnEngine) callMainModel(
 		streamCtx := ctx
 		asyncWatchdogTimeout := time.Duration(0)
 		watchdogStream := projectBootstrapWatchdogStream{ctx: ctx}
-		watchdog, watchdogActive, err := e.projectBootstrapStreamWatchdog(ctx, rt)
+		watchdog, watchdogActive, err := e.projectBootstrapStreamWatchdog(ctx, rt, profile)
 		if err != nil {
 			return ModelResponse{}, err
 		}

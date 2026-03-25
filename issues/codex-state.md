@@ -67,6 +67,84 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 - if it creates the requested fresh project cleanly, proceed with the `plan-0325b` operator run from there
 - if it produces another malformed org result or stalls, treat the org-session/qwen path as the next runtime seam and patch that next
 
+## 2026-03-25 13:54 MDT update
+
+- bootstrap model-profile preservation fix is committed and pushed on `main`
+  - commit `12a9e773`
+  - message: `Preserve operator-selected bootstrap model profiles`
+- the next runtime seam after that was the bootstrap watchdog policy for slow local models
+
+### New product fix: bootstrap watchdog must not kill qwen kickoff turns after 90 seconds
+
+- root cause:
+  - `internal/turn/engine.go`
+  - bootstrap stream watchdog always used the base `projectBootstrapTurnTimeout` (`90s`)
+  - clean local qwen kickoffs were still legitimately `in_flight`, but the watchdog failed them after `1m30s`
+  - those false stalled failures then triggered automatic bootstrap restart behavior, creating unwanted `-restart` projects
+
+### Failing live proof before the fix
+
+- clean `rerun-54` project:
+  - project `3385c7bf-49df-4dc1-927a-f10161bfb3dd`
+  - session `ecbba5e1-898b-42ca-a430-ba8fe58c9fdb`
+  - turn `01919eb1-b18d-47cb-88b6-ae38f41e2b89`
+  - invocation `672ff280-46a1-44a1-a325-e8ffef9e9b90`
+- live failure:
+  - turn failed at `13:48:44 MDT`
+  - failure reason: `bootstrap setup watchdog timed out after 1m30s with zero persisted staffing drafts, project assignments, scoped tasks, or flow templates; model invocation 672ff280-46a1-44a1-a325-e8ffef9e9b90 remained in_flight`
+  - automatic restart project was created:
+    - `f2268c0f-8468-494f-8bc9-39c4012d5246`
+    - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-54-restart`
+
+### Code change
+
+- patched [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - bootstrap watchdog timeout now expands from `90s` to `4m` for slow local model names such as `qwen2.5:72b` and `mistral-nemo:latest`
+  - hosted fast model names (`claude-*`, `gpt-*`, `o1*`, `o3*`) still use the base timeout
+- added focused coverage in [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - `TestProjectBootstrapWatchdogTimeoutForModel`
+
+### Verification completed
+
+- `go test ./internal/turn -run 'Test(ProjectBootstrapWatchdogTimeoutForModel|HandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueueFailure)' -count=1`
+
+### Live proof after redeploy
+
+- fresh clean `rerun-55` project:
+  - project `675a2529-59e0-4580-ac5c-deea4486371b`
+  - session `9265afdd-0930-409e-bb9c-d347ffdebe12`
+  - kickoff turn `d6fcbaa2-97b4-4c3d-bf15-16eedbffde0f`
+  - kickoff invocation `9efaf0f6-3a38-477f-8db7-7ff67f8992aa`
+- live worker log at kickoff showed:
+  - `project bootstrap watchdog configured ... model_name=qwen2.5:72b ... effective_timeout=4m0s`
+- the fix is real but only partial:
+  - after waiting past the old 90-second boundary, kickoff turn `d6fcbaa2-97b4-4c3d-bf15-16eedbffde0f` was still `in_progress` and invocation `9efaf0f6-3a38-477f-8db7-7ff67f8992aa` was still `in_flight`
+  - that kickoff turn later completed cleanly at `13:54:13 MDT`
+  - the immediate bootstrap resume turn then regressed to the old 90-second timeout path:
+    - turn `aa411ab3-de7f-4d1f-af7a-5b61524dfbf5`
+    - invocation `8cf8c7ab-9eb7-4aef-b86d-dcadc0e132f8`
+    - failed at `13:55:43 MDT` with `bootstrap setup watchdog timed out after 1m30s with zero persisted staffing drafts, project assignments, scoped tasks, or flow templates; model invocation 8cf8c7ab-9eb7-4aef-b86d-dcadc0e132f8 remained in_flight`
+  - automatic restart project was then created:
+    - `e46671c6-c5dc-4ca5-85f1-7ffc1973226e`
+    - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-55-restart`
+
+### Current live state
+
+- qwen remains the current org profile for all three logical profiles:
+  - `haiku|10|qwen2.5:72b`
+  - `standard|10|qwen2.5:72b`
+  - `high-capability|10|qwen2.5:72b`
+- worker concurrency is still `2` in tmux `codex-e2e-20260324`
+- active clean proof target is now the narrower seam inside `rerun-55`
+  - kickoff timeout extension is proven
+  - bootstrap resume follow-on still incorrectly times out after `1m30s`
+
+### Current next step
+
+- commit/push the kickoff-timeout slice to `origin/main` as a meaningful checkpoint
+- patch the bootstrap resume/follow-on path so it also uses the slow-model watchdog timeout instead of falling back to `1m30s`
+- rerun from a fresh clean project after that resume-path fix
+
 ## 2026-03-25 13:22 MDT update
 
 - deployed runtime commit is `7252a20b` on `origin/main`

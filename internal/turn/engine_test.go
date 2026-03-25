@@ -5855,6 +5855,22 @@ func TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueue
 	}
 }
 
+func TestProjectBootstrapWatchdogTimeoutForModel(t *testing.T) {
+	base := 90 * time.Second
+	if got := projectBootstrapWatchdogTimeoutForModel("qwen2.5:72b", base); got != 4*time.Minute {
+		t.Fatalf("qwen timeout = %s, want %s", got, 4*time.Minute)
+	}
+	if got := projectBootstrapWatchdogTimeoutForModel("mistral-nemo:latest", base); got != 4*time.Minute {
+		t.Fatalf("mistral timeout = %s, want %s", got, 4*time.Minute)
+	}
+	if got := projectBootstrapWatchdogTimeoutForModel("claude-haiku-4-5-20251001", base); got != base {
+		t.Fatalf("claude timeout = %s, want %s", got, base)
+	}
+	if got := projectBootstrapWatchdogTimeoutForModel("gpt-4o", base); got != base {
+		t.Fatalf("gpt timeout = %s, want %s", got, base)
+	}
+}
+
 func TestRecoverProjectTaskStaleInboundTurnWithoutRunKeepsLiveInvocation(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.engine.pool = testdb.New(t)
