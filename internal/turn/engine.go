@@ -16598,26 +16598,12 @@ func (e *TurnEngine) handleProjectBootstrapTerminalTurnFailure(ctx context.Conte
 	return true, nil
 }
 
-func projectBootstrapWatchdogTimeoutForModel(modelName string, base time.Duration) time.Duration {
+func projectBootstrapWatchdogTimeoutForModel(_ string, base time.Duration) time.Duration {
 	if base <= 0 {
 		return base
 	}
-	normalized := strings.ToLower(strings.TrimSpace(modelName))
-	switch {
-	case normalized == "":
-		return base
-	case strings.HasPrefix(normalized, "claude-"):
-		return base
-	case strings.HasPrefix(normalized, "gpt-"):
-		return base
-	case strings.HasPrefix(normalized, "o1"):
-		return base
-	case strings.HasPrefix(normalized, "o3"):
-		return base
-	case strings.Contains(normalized, ":"):
-		if base < 4*time.Minute {
-			return 4 * time.Minute
-		}
+	if base < 4*time.Minute {
+		return 4 * time.Minute
 	}
 	return base
 }

@@ -2,6 +2,80 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 14:12 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `76537eb9`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after the latest rebuild/restart
+- the old bootstrap tool-set conflict seam is fixed in code with focused tests
+- the current live blocker is now fresh project-session handoff dispatch: the queued Frank handoff jobs are being suppressed/purged before a turn starts
+
+### Live proof: the earlier watchdog heuristic slice was still insufficient
+
+- clean rerun-56 project:
+  - project `8cd0efe8-cab7-4dc6-8848-702f4993ea1b`
+  - session `bf0fc527-28f6-49e5-ba21-546a61699058`
+  - turn `a8602608-1187-40dc-a2d0-cc79c676a645`
+  - invocation `95c72b71-8999-44d7-8790-ee2b2672f667`
+- result:
+  - the very first bootstrap turn still failed at `14:04:39 MDT`
+  - failure reason: `bootstrap setup watchdog timed out after 1m30s with zero persisted staffing drafts, project assignments, scoped tasks, or flow templates; model invocation 95c72b71-8999-44d7-8790-ee2b2672f667 remained in_flight`
+- conclusion:
+  - the model-name heuristic from commit `76537eb9` was not sufficient in live traffic
+
+### New local patch: bootstrap watchdog now uses a hard 4-minute floor for all async bootstrap turns
+
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- behavior:
+  - bootstrap watchdog now uses `max(base, 4m)` for every async project-bootstrap turn, regardless of model name
+  - this removes the unreliable model-name branch that still allowed live qwen bootstrap turns to time out at `1m30s`
+- focused verification:
+  - `go test ./internal/turn -run 'Test(ProjectBootstrapWatchdogTimeoutForModel|HandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueueFailure)' -count=1`
+- live repro status:
+  - not fully reproved yet because the next fresh canaries were blocked earlier by a newer handoff-dispatch seam before any bootstrap turn could start cleanly
+
+### New local patch: session tool-set cache creation now tolerates active-row conflicts
+
+- root cause:
+  - fresh rerun-58 bootstrap session `defebd4f-538b-4be1-9682-563d1e5c3844` reached the first live bootstrap turn and then failed immediately with:
+    - `getSessionToolSet: repo: conflict: duplicate key value violates unique constraint "session_tool_set_active_unique_idx"`
+  - the session then closed and canceled the just-created qwen invocation
+- code:
+  - [`internal/tools/resolver.go`](../internal/tools/resolver.go)
+  - [`internal/tools/resolver_test.go`](../internal/tools/resolver_test.go)
+- behavior:
+  - `ToolResolver.GetSessionToolSet(...)` now treats `repo.ErrConflict` on cache insert as a winner-loser race and re-reads the active cache row instead of failing the turn
+- focused verification:
+  - `go test ./internal/tools -run 'TestGetSessionToolSet(CreateConflictFallsBackToActiveCache|PropagatesCreateError|CacheLookupError|RejectsInvalidCachedJSON)' -count=1`
+
+### Current live blocker
+
+- fresh rerun-59 project:
+  - project `deda1a3b-7f04-475c-8ef3-fc01940222f9`
+  - session `16a6c236-75ab-4753-b058-6a1948ab59d8`
+- current state:
+  - the session has no current turn and no model invocation
+  - two synthetic Frank handoff messages were created
+  - one corresponding job was dead-lettered and the surviving handoff job remains/purges without ever starting a turn
+- evidence:
+  - session rows show:
+    - `331e426b-f7dc-4766-8146-09283efcce29` -> `dead_letter`
+    - `162132d1-f9d0-4fae-a83f-78dac686ed0c` -> `pending`
+  - worker log repeatedly reports:
+    - `job queue: suppressed duplicate active dispatch` for the rerun-59 handoff jobs
+    - then `job queue: no pending jobs`
+    - later `job queue: purged stale agent_turn jobs`
+- conclusion:
+  - the next real seam is in fresh project-session handoff dispatch / agent-turn dedupe-purge behavior, not in the tool-set conflict path anymore
+
+### Current next step
+
+- patch the worker enqueue/claim/purge path so the surviving fresh project-session Frank handoff job is claimable and not purged as a phantom duplicate
+- rerun a fresh clean project session after that fix
+- then reprove that the new 4-minute bootstrap watchdog floor survives the old `1m30s` boundary in live traffic
+
 ## 2026-03-25 13:39 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `4bcbdc2b`

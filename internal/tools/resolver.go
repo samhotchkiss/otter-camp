@@ -221,6 +221,12 @@ func (r *ToolResolver) GetSessionToolSet(ctx context.Context, sessionID, agentID
 	}
 	created, err := r.sessionToolSets.Create(ctx, sessionID, agentID, encoded)
 	if err != nil {
+		if errors.Is(err, repo.ErrConflict) {
+			cached, cacheErr := r.sessionToolSets.GetActive(ctx, sessionID, agentID)
+			if cacheErr == nil {
+				return decodeToolSet(cached.ToolSet)
+			}
+		}
 		return nil, err
 	}
 	return decodeToolSet(created.ToolSet)

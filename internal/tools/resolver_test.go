@@ -128,6 +128,40 @@ func TestGetSessionToolSetPropagatesCreateError(t *testing.T) {
 	}
 }
 
+func TestGetSessionToolSetCreateConflictFallsBackToActiveCache(t *testing.T) {
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.New()
+
+	resolver := newResolverFixture()
+	resolver.sessions.items[sessionID] = repo.ChatSession{
+		ID:             sessionID,
+		OrganizationID: orgID,
+		ScopeType:      "organization",
+		ScopeID:        orgID,
+	}
+	resolver.agents.items[agentID] = repo.Agent{ID: agentID}
+	resolver.toolDefs.items = []repo.ToolDefinition{
+		{Name: "memory.query", ToolTier: "tier1", ToolDomain: "memory", IsEnabled: true},
+	}
+	key := sessionID.String() + "|" + agentID.String()
+	resolver.sessionSets.createErr = repo.ErrConflict
+	resolver.sessionSets.active[key] = &repo.SessionToolSet{
+		ID:        uuid.New(),
+		SessionID: sessionID,
+		AgentID:   agentID,
+		ToolSet:   json.RawMessage(`[{"name":"memory.query","description":"Memory query","input_schema":{},"tier":"tier1","domain":"memory","source":"native","is_enabled":true,"priority":1}]`),
+	}
+
+	got, err := resolver.resolver.GetSessionToolSet(context.Background(), sessionID, agentID)
+	if err != nil {
+		t.Fatalf("GetSessionToolSet: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "memory.query" {
+		t.Fatalf("resolved tool set = %+v, want cached memory.query", got)
+	}
+}
+
 func TestGetSessionToolSetPropagatesSessionLookupError(t *testing.T) {
 	sessionID := uuid.New()
 	agentID := uuid.New()
