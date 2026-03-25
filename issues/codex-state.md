@@ -6249,3 +6249,84 @@ The next move from here:
   - rebuild `./bin/ottercamp`
   - restart tmux `codex-e2e-20260324` serve and worker
   - start a fresh bootstrap probe to verify the duplicate pending bootstrap continuation job no longer appears
+
+## 2026-03-25 16:46 MDT: rerun-70 proves duplicate bootstrap continuation jobs are gone
+
+- fresh live probe:
+  - project `c575c6e4-8cef-49b8-9ee0-173c2752c7a8`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-70`
+  - async session `ea6b17ee-4146-4726-8a90-0ad79b4bf6df`
+
+- live result under pushed commit `8fbcd377`:
+  - kickoff turn `e2e4f71f-1afb-478b-b8f3-72cef3bd5f0f` completed
+  - bootstrap materially progressed again:
+    - task 2 `Bind repo and environment` is `done`
+    - bootstrap metadata advanced to `auto_turn_count = 1`
+  - first follow-on turn `29c60fd8-791a-4871-bea9-af5a609c8e11` is active
+
+- key proof:
+  - rerun-69 had both:
+    - continuation user message `686df201-...`
+    - extra second pending continuation user message `d8dc6a0e-...`
+    - plus a second pending `agent_turn` job behind the live turn
+  - rerun-70 now has only one continuation user message:
+    - `23c1ef43-943a-4e2d-b6c9-53b745d4bbb2`
+  - the current turn contains:
+    - one resume state system message `37ab0bc9-0b60-452c-8d57-f29ec6fe8f89`
+    - one direct-action system message `72ad26a6-42b6-4a33-9931-48b14b7b33c6`
+    - no extra second pending bootstrap continuation user message
+  - job queue for the session likewise shows:
+    - completed kickoff job `183eea7a-265f-4721-bfe5-a7f84335a15a`
+    - completed memory extract `14955e8b-68e0-49f8-8891-9ae5500c119d`
+    - one claimed live follow-on dispatch `5a02618e-0df8-4634-8a00-54a1e3dd9ab3` for message `23c1ef43-...`
+    - no second pending bootstrap continuation dispatch behind it
+
+- remaining live wrinkle:
+  - the active follow-on turn still has `trigger_message_id = 37ab0bc9-...`, the system resume message, rather than the continuation user message `23c1ef43-...`
+  - this no longer creates duplicate queue work, but it may still matter for retry/history semantics if later recovery paths key off trigger message lineage
+
+- current next question:
+  - keep rerun-70 running to see whether that system-message trigger root causes any real failure
+  - if it does, the next targeted fix is to separate bootstrap history-rooting from `chat_turn.trigger_message_id`
+
+## 2026-03-25 17:06 MDT: rerun-70 exposes project-scope bootstrap project-identity loss
+
+- current local checkpoint:
+  - base pushed commit: `8fbcd377`
+  - new local patch pending deploy in [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - focused tests added/updated in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+
+- rerun-70 new live evidence:
+  - second follow-on turn `29c60fd8-791a-4871-bea9-af5a609c8e11` completed at `16:59:23 MDT`
+  - instead of advancing bootstrap, it ended with generic non-action assistant text:
+    - message `23115e82-407e-477b-afd1-7cc184266bcb`
+  - the next follow-on turn `ba59540a-bcb4-42d8-b508-5a58c6f06d42` started cleanly from user continuation message `95449df3-f427-4766-a098-639422d9fe87`
+  - but inside that project-scoped bootstrap turn, the model was still able to call `project.create`
+  - that created a second project:
+    - `e0940944-df39-46f2-812a-168d0e1e4636`
+    - slug `new-project-00db53`
+  - the same turn then emitted another generic function-call coaching reply:
+    - message `b18ea760-cdae-48a4-b899-e2f57cc5a4b7`
+
+- root cause:
+  - `rt.projectIdentity` was only being loaded from prior `project.create` tool results tied to the current trigger message lineage
+  - project-scoped bootstrap sessions did not preload identity from `chat_session.scope_id`
+  - that left `project.create` unguarded inside a project session even though the session already represented a concrete project
+
+- fix landed locally:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - `beginTurn` now falls back to `loadProjectIdentityForSession(...)` when message-root identity is absent
+    - `loadProjectIdentityForSession(...)` loads the concrete project id/slug from the project-scoped session itself
+    - this makes the existing `project.create` conflict guard apply inside project/bootstrap sessions too
+  - generic bootstrap follow-on retry hardening is also included in the same local patch:
+    - completed bootstrap turns that return a generic non-action reply now get retried with a stronger bootstrap-resume prompt, not treated as success
+
+- focused verification passed locally:
+  - `go test ./internal/turn -run 'Test(HandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt|HandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity|BootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall|BootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID|ContinuationTurnAppendsCompactBootstrapActionPromptAfterCompression|ContinuationTurnSynthesizesBootstrapResumeStateWhenMetadataIsStale)' -count=1`
+  - `go test ./internal/turn -run 'Test(ShouldStopAfterBlockedProjectKickoffSessionCreate|ShouldBlockProjectBootstrapSetupTaskChildCreate)' -count=1`
+
+- next step:
+  - rebuild/restart tmux on this patch
+  - run a fresh bootstrap probe and verify:
+    - project-scoped bootstrap can no longer create a second project
+    - generic non-action bootstrap follow-on replies now enqueue a fresh bootstrap-resume retry instead of counting as successful progress

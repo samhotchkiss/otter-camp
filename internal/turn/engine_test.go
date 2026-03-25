@@ -2121,6 +2121,105 @@ func TestHandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootst
 	}
 }
 
+func TestHandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700001000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = "project"
+	fixture.chat.session.Mode = "async"
+	fixture.session.ScopeID = uuid.New()
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+
+	state := projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		InitialMessageID: fixture.userMessageID.String(),
+		AutoTurnCount:    0,
+	}
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		projectBootstrapMetadataKey: state,
+	})
+	fixture.chat.session.Metadata = fixture.session.Metadata
+
+	userMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	userMessage.Metadata = mustRawJSON(t, map[string]any{"source": projectBootstrapSource})
+	fixture.messages.upsert(userMessage)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	reply := "Sure! Could you please provide me with the specific details or context for which you need a function call? What do you need me to do?"
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, reply)
+
+	turns, err := fixture.engine.turns.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	latestCompleted := latestCompletedTurn(turns)
+	if latestCompleted == nil || latestCompleted.ID != turnID {
+		t.Fatalf("latestCompleted = %#v, want turn %s", latestCompleted, turnID)
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	assistant := latestAssistantFinalForTurn(messages, turnID)
+	if assistant == nil {
+		t.Fatal("assistant message missing")
+	}
+	progress := projectBootstrapProgress{ValidationStatus: projectBootstrapValidationPending}
+
+	handled, err := fixture.engine.handleCompletedProjectBootstrapEmptyAssistantTurn(
+		context.Background(),
+		fixture.session,
+		latestCompleted,
+		&userMessage,
+		assistant,
+		messages,
+		state,
+		progress,
+		base,
+	)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectBootstrapEmptyAssistantTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	retryPrompt, err := fixture.messages.GetByID(context.Background(), jobs[0].payload.MessageID)
+	if err != nil {
+		t.Fatalf("GetByID retry prompt: %v", err)
+	}
+	if !strings.Contains(retryPrompt.Content, "generic non-action reply instead of acting directly") {
+		t.Fatalf("retry prompt = %q, want generic-reply warning", retryPrompt.Content)
+	}
+	if !strings.Contains(retryPrompt.Content, "Do not ask for details, ask what to do next") {
+		t.Fatalf("retry prompt = %q, want explicit no-question warning", retryPrompt.Content)
+	}
+
+	messages, err = fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages after retry: %v", err)
+	}
+	var sawSystem bool
+	for _, msg := range messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "Bootstrap follow-on turn returned a generic non-action reply") {
+			sawSystem = true
+			break
+		}
+	}
+	if !sawSystem {
+		t.Fatal("missing bootstrap generic-reply retry system message")
+	}
+}
+
 func TestHandleTurnCompletedEventAutoRejectsExplicitReviewDecision(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 
@@ -4577,6 +4676,76 @@ func TestHandleUserMessageProjectScopeBootstrapScaffoldStartsWithLori(t *testing
 	}
 	if turn.RespondingID != loriID {
 		t.Fatalf("turn responding_id = %s, want Lori %s", turn.RespondingID, loriID)
+	}
+}
+
+func TestHandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {
+			ID:             projectID,
+			OrganizationID: fixture.session.OrganizationID,
+			Slug:           "existing-project",
+			DisplayName:    "Existing Project",
+		},
+	}}
+
+	var dispatched []string
+	fixture.engine.dispatcher = &fakeDispatcher{
+		tier1Fn: func(_ context.Context, call ToolCall) (ToolResult, error) {
+			dispatched = append(dispatched, call.Name)
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: "unexpected_dispatch"}, nil
+		},
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "create-reopen",
+				Name: "project.create",
+				Tier: "tier1",
+				Arguments: map[string]any{
+					"name": "New Project",
+					"slug": "new-project",
+				},
+			}}}, nil
+		default:
+			return ModelResponse{Content: "Continuing with the existing project."}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(dispatched) != 0 {
+		t.Fatalf("dispatched tools = %v, want none", dispatched)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var hasBlockedReopen bool
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		if message.ToolCallID == nil || *message.ToolCallID != "create-reopen" {
+			continue
+		}
+		if strings.Contains(message.Content, "project already created in this flow as slug=existing-project project_id="+projectID.String()) {
+			hasBlockedReopen = true
+			break
+		}
+	}
+	if !hasBlockedReopen {
+		t.Fatal("missing blocked project.create tool_result for project-scoped session identity")
 	}
 }
 

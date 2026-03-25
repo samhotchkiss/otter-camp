@@ -1619,7 +1619,10 @@ func (e *TurnEngine) handleCompletedProjectBootstrapEmptyAssistantTurn(
 	if !strings.EqualFold(strings.TrimSpace(stringValue(messageMetadataMap(latestUser.Metadata)["source"])), projectBootstrapSource) {
 		return false, nil
 	}
-	if strings.TrimSpace(assistant.Content) != "" || turnHasSuccessfulToolResult(messages, latestCompleted.ID) {
+	assistantContent := strings.TrimSpace(assistant.Content)
+	emptyAssistant := assistantContent == ""
+	genericAssistant := looksLikeGenericTaskRecoveryReply(assistantContent)
+	if (!emptyAssistant && !genericAssistant) || turnHasSuccessfulToolResult(messages, latestCompleted.ID) {
 		return false, nil
 	}
 
@@ -1649,7 +1652,13 @@ func (e *TurnEngine) handleCompletedProjectBootstrapEmptyAssistantTurn(
 	if err := e.updateProjectBootstrapState(ctx, session, state); err != nil {
 		return true, err
 	}
-	if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, "[Bootstrap follow-on turn returned empty assistant output. Retrying with a fresh bootstrap-resume prompt that requires concrete tool action or a concrete blocker.]"); err != nil {
+	notice := "[Bootstrap follow-on turn returned empty assistant output. Retrying with a fresh bootstrap-resume prompt that requires concrete tool action or a concrete blocker.]"
+	retryTail := " Your last bootstrap follow-on turn returned empty assistant output. Do not reply with blank text, acknowledgement, or a state summary. Your next assistant action must either emit the concrete tool calls that materially advance bootstrap or explain one concrete blocker preventing those tool calls."
+	if genericAssistant {
+		notice = "[Bootstrap follow-on turn returned a generic non-action reply. Retrying with a fresh bootstrap-resume prompt that requires direct bootstrap action.]"
+		retryTail = " Your last bootstrap follow-on turn returned a generic non-action reply instead of acting directly. Do not ask for details, ask what to do next, or ask what function call is needed. Your next assistant action must either emit the concrete tool calls that materially advance bootstrap or explain one concrete blocker preventing those tool calls."
+	}
+	if _, err := e.appendSystemMessage(ctx, latestCompleted.ID, session.ID, notice); err != nil {
 		return true, err
 	}
 	if queued, err := e.hasQueuedAgentTurnForSession(ctx, session.ID, nil); err != nil {
@@ -1662,8 +1671,7 @@ func (e *TurnEngine) handleCompletedProjectBootstrapEmptyAssistantTurn(
 	if err != nil {
 		return true, err
 	}
-	retryPrompt := strings.TrimSpace(buildProjectBootstrapResumeActionPrompt(state, snapshot) +
-		" Your last bootstrap follow-on turn returned empty assistant output. Do not reply with blank text, acknowledgement, or a state summary. Your next assistant action must either emit the concrete tool calls that materially advance bootstrap or explain one concrete blocker preventing those tool calls.")
+	retryPrompt := strings.TrimSpace(buildProjectBootstrapResumeActionPrompt(state, snapshot) + retryTail)
 	continuationAgentID := e.projectBootstrapContinuationAgent(ctx, session, latestCompleted.RespondingID)
 	continuationMessage, err := e.appendProjectBootstrapContinuationMessageWithContent(
 		ctx,
@@ -5686,6 +5694,9 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		runtime.recoveryTargetPath = e.latestRecoveryTargetPathForSession(ctx, session.ID)
 	}
 	runtime.projectIdentity = e.loadProjectIdentityForMessage(ctx, sessionID, messageID)
+	if runtime.projectIdentity == nil {
+		runtime.projectIdentity = e.loadProjectIdentityForSession(ctx, session)
+	}
 	if messageRequestsFreshKickoff(session, message) {
 		runtime.historyStartID = &message.ID
 		runtime.disableMemory = true
@@ -16113,6 +16124,27 @@ func (e *TurnEngine) loadProjectIdentityForMessage(ctx context.Context, sessionI
 		}
 	}
 	return nil
+}
+
+func (e *TurnEngine) loadProjectIdentityForSession(ctx context.Context, session *chat.ChatSession) *projectIdentity {
+	if e == nil || e.projects == nil || session == nil {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project") {
+		return nil
+	}
+	if session.ScopeID == uuid.Nil {
+		return nil
+	}
+	project, err := e.projects.GetByID(ctx, session.ScopeID)
+	if err != nil {
+		return nil
+	}
+	slug := strings.TrimSpace(project.Slug)
+	if slug == "" {
+		return nil
+	}
+	return &projectIdentity{id: project.ID, slug: slug}
 }
 
 func parseProjectIdentityFromMessage(message repo.ChatMessage) (*projectIdentity, bool) {
