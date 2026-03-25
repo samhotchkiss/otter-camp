@@ -134,6 +134,7 @@ type Worker struct {
 	cleanupEnqueuePeriod time.Duration
 	listenReconnectDelay time.Duration
 	clock                clock.Clock
+	startupAt            time.Time
 
 	handlersMu sync.RWMutex
 	handlers   map[string]JobHandler
@@ -194,6 +195,7 @@ func New(pool *pgxpool.Pool, logger *slog.Logger, cfg Config) *Worker {
 		cleanupEnqueuePeriod: cfg.CleanupEnqueuePeriod,
 		listenReconnectDelay: cfg.ListenReconnectDelay,
 		clock:                cfg.Clock,
+		startupAt:            cfg.Clock.Now().UTC(),
 		handlers:             make(map[string]JobHandler),
 		slots:                make(chan struct{}, cfg.BatchSize),
 	}
@@ -1377,6 +1379,10 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 }
 
 func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
+	startedBefore := w.clock.Now().UTC().Add(-claimedAgentTurnHeartbeatGrace)
+	if !w.startupAt.IsZero() {
+		startedBefore = w.startupAt.Add(-claimedAgentTurnHeartbeatGrace)
+	}
 	rows, err := w.pool.Query(ctx, `
 		SELECT mi.id,
 		       mi.turn_id,
@@ -1469,8 +1475,21 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		          )
 		      )
 		    )
+		    OR (
+		      EXISTS (
+		        SELECT 1
+		        FROM chat_turn ct
+		        JOIN chat_session cs ON cs.id = ct.session_id
+		        WHERE ct.id = mi.turn_id
+		          AND ct.status = 'in_progress'
+		          AND cs.status = 'active'
+		          AND cs.mode = 'async'
+		          AND cs.current_turn_id = ct.id
+		          AND mi.created_at < $5
+		      )
+		    )
 		  )
-	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold))
+	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold), startedBefore)
 	if err != nil {
 		return 0, fmt.Errorf("list stale model invocations: %w", err)
 	}

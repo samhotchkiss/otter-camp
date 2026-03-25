@@ -275,6 +275,61 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 - keep the fresh restart lane (`rerun-65-restart`) under observation on the new timeout policy
 - if that lane still fails before materializing staffing, capture the next bootstrap-progress seam rather than treating timeout policy as the blocker anymore
 
+## 2026-03-25 15:12 MDT update
+
+- commit `9ab856c0` is now pushed to `origin/main`
+- tmux `serve` / `worker` were rebuilt and restarted on that commit at `15:05 MDT`
+- the next live seam is not the bootstrap timeout anymore; it is restart recovery for inherited async project invocations
+
+### Deployed checkpoint
+
+- pushed commit:
+  - `9ab856c0` `Extend bootstrap watchdog for slow models`
+- live processes after redeploy:
+  - `88670 ./bin/ottercamp serve`
+  - `88679 ./bin/ottercamp worker --concurrency 24`
+- `./bin/ottercamp health` is green on this deployment
+
+### New local patch: worker startup cleanup now treats inherited pre-start async invocations as orphaned
+
+- root cause:
+  - after the redeploy, restart session `16b95db3-58bf-4e6d-905c-a75fe2c6d1dc` kept:
+    - turn `ac270264-4c1d-4bb1-853b-be37411a70a0`
+    - invocation `d64052eb-19ac-430f-80a1-38c76554754b`
+    - status `in_progress` / `in_flight`
+  - there was no `run` row and no worker claim activity, but `FailStaleModelInvocations(...)` would still wait for the generic `15m` continuation threshold because the session remained active/current and the invocation still looked `in_flight`
+  - on a worker restart, those pre-start invocations are inherited from a dead process and should be reclaimed promptly, not left wedged for a quarter hour
+- behavior:
+  - `internal/jobqueue/worker.go`
+  - `Worker` now records `startupAt`
+  - stale-model cleanup now treats async invocations created meaningfully before the current worker startup (`startupAt - claimedAgentTurnHeartbeatGrace`) as inherited/orphaned candidates, so startup cleanup can fail and clear them promptly
+  - invocations started by the current worker are still protected by the normal thresholds
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerFailStaleModelInvocations(RequeuesTriggeredProjectSession|RecoversInheritedAsyncProjectInvocationAfterWorkerRestart|SkipsActiveAsyncOrganizationSession)$' -count=1`
+
+### Current live target
+
+- restart project:
+  - `2ed2fcef-b110-4171-bd50-4b574a059a2f`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-65-restart`
+- restart session:
+  - `16b95db3-58bf-4e6d-905c-a75fe2c6d1dc`
+- pre-fix wedged state captured at `15:06 MDT`:
+  - current turn `ac270264-4c1d-4bb1-853b-be37411a70a0`
+  - inherited invocation `d64052eb-19ac-430f-80a1-38c76554754b`
+  - no `run` row
+  - no worker claim activity for that session after restart
+
+### Current next step
+
+- commit and push this worker restart-recovery slice
+- rebuild/restart the worker on top of `9ab856c0`
+- confirm the inherited rerun-65-restart invocation is failed/cleared quickly and the session gets a fresh retry under the current build
+- then continue the fresh restart lane until the next real bootstrap-progress seam appears
+
 ## 2026-03-25 14:12 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `76537eb9`
