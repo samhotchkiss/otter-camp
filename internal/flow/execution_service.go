@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 const maxDependencyTraversalDepth = 100
@@ -194,6 +196,7 @@ type Options struct {
 	SessionBridge  flowSessionBridge
 	Environments   projectEnvironmentRepository
 	PlanningAssets planningArtifactRepository
+	DataDir        string
 }
 
 type FlowExecutionService interface {
@@ -232,6 +235,7 @@ type service struct {
 	sessionBridge  flowSessionBridge
 	environments   projectEnvironmentRepository
 	planningAssets planningArtifactRepository
+	dataDir        string
 	executionLocks sync.Map
 }
 
@@ -341,6 +345,7 @@ func NewService(opts Options) (FlowExecutionService, error) {
 	} else {
 		svc.users = repo.NewHumanUserRepo(opts.Pool)
 	}
+	svc.dataDir = strings.TrimSpace(opts.DataDir)
 	svc.sessionBridge = opts.SessionBridge
 	tasksvc.AttachFlowReviewActions(flowReviewBindTarget, taskReviewFlowAdapter{flow: svc})
 
@@ -759,6 +764,9 @@ func (s *service) activateDraftOrchestrationParentAfterChildDone(ctx context.Con
 	if err != nil || !strings.EqualFold(strings.TrimSpace(parentTask.WorkStatus), "draft") {
 		return
 	}
+	if !taskEligibleForAutomaticDraftActivation(parentTask) {
+		return
+	}
 	lister, ok := s.tasks.(interface {
 		ListByProject(context.Context, uuid.UUID, ...string) ([]repo.ProjectTask, error)
 	})
@@ -841,6 +849,9 @@ func (s *service) activateDraftDependentsAfterTaskDone(ctx context.Context, task
 
 		dependentTask, err := s.tasks.GetByID(ctx, dependency.SourceID)
 		if err != nil || !strings.EqualFold(strings.TrimSpace(dependentTask.WorkStatus), "draft") {
+			continue
+		}
+		if !taskEligibleForAutomaticDraftActivation(dependentTask) {
 			continue
 		}
 		ready, err := s.areTaskDependenciesSatisfied(ctx, dependentTask.ID)
@@ -1778,7 +1789,17 @@ func (s *service) ensureExecutionEntryHead(ctx context.Context, execution *repo.
 	if repoPath == "" {
 		return nil
 	}
-	headSHA, err := flowcommit.HeadSHA(ctx, repoPath)
+	projectRecord := repo.Project{}
+	if s.projects != nil {
+		loadedProject, projectErr := s.projects.GetByID(ctx, taskRecord.ProjectID)
+		if projectErr != nil && !errors.Is(projectErr, repo.ErrNotFound) {
+			return projectErr
+		}
+		if projectErr == nil {
+			projectRecord = loadedProject
+		}
+	}
+	headSHA, err := executionEntryHeadSHA(ctx, repoPath, projectRecord, taskRecord, s.dataDir)
 	if err != nil {
 		return nil
 	}
@@ -1796,6 +1817,81 @@ func (s *service) ensureExecutionEntryHead(ctx context.Context, execution *repo.
 
 func (s *service) ensureExecutionSessionBestEffort(ctx context.Context, execution *repo.FlowNodeExecution) {
 	_ = s.ensureExecutionSession(ctx, execution)
+}
+
+func executionEntryHeadSHA(ctx context.Context, repoPath string, projectRecord repo.Project, taskRecord repo.ProjectTask, dataDir string) (string, error) {
+	if worktreeRoot := executionTaskWorktreeRoot(dataDir, projectRecord, taskRecord); worktreeRoot != "" {
+		if _, err := os.Stat(filepath.Join(worktreeRoot, ".git")); err == nil {
+			if sha, err := flowcommit.HeadSHA(ctx, worktreeRoot); err == nil && strings.TrimSpace(sha) != "" {
+				return strings.TrimSpace(sha), nil
+			}
+		}
+	}
+	branchName := strings.TrimSpace(taskBranchName(taskRecord))
+	if branchName != "" {
+		if sha, err := flowcommit.RefSHA(ctx, repoPath, "refs/heads/"+branchName); err == nil && strings.TrimSpace(sha) != "" {
+			return strings.TrimSpace(sha), nil
+		}
+		if sha, err := flowcommit.RefSHA(ctx, repoPath, branchName); err == nil && strings.TrimSpace(sha) != "" {
+			return strings.TrimSpace(sha), nil
+		}
+	}
+	return flowcommit.HeadSHA(ctx, repoPath)
+}
+
+func executionTaskWorktreeRoot(dataDir string, projectRecord repo.Project, taskRecord repo.ProjectTask) string {
+	slug := strings.TrimSpace(projectRecord.Slug)
+	if slug == "" || taskRecord.TaskNumber <= 0 {
+		return ""
+	}
+	return filepath.Join(workspace.ResolveDataDir(dataDir), "task-worktrees", slug, fmt.Sprintf("task-%d", taskRecord.TaskNumber))
+}
+
+func taskBranchName(taskRecord repo.ProjectTask) string {
+	if taskRecord.BranchName == nil {
+		return ""
+	}
+	return strings.TrimSpace(*taskRecord.BranchName)
+}
+
+func taskEligibleForAutomaticDraftActivation(taskRecord repo.ProjectTask) bool {
+	selected, known := bootstrapFirstWaveSelectionHint(taskRecord)
+	return !known || selected
+}
+
+func bootstrapFirstWaveSelectionHint(task repo.ProjectTask) (bool, bool) {
+	if len(task.Metadata) > 0 {
+		var metadata map[string]any
+		if err := json.Unmarshal(task.Metadata, &metadata); err == nil {
+			if raw, ok := metadata["bootstrap_first_wave_selected"]; ok {
+				if selected, valid := raw.(bool); valid {
+					return selected, true
+				}
+			}
+		}
+	}
+
+	title := strings.ToLower(strings.TrimSpace(task.Title))
+	switch {
+	case strings.HasPrefix(title, "fw-"),
+		strings.HasPrefix(title, "fw:"),
+		strings.HasPrefix(title, "[fw]"),
+		strings.HasPrefix(title, "[fw-"),
+		strings.Contains(title, "first-wave"),
+		strings.Contains(title, "first wave"):
+		return true, true
+	case strings.HasPrefix(title, "lw-"),
+		strings.HasPrefix(title, "lw:"),
+		strings.HasPrefix(title, "[lw]"),
+		strings.HasPrefix(title, "[lw-"),
+		strings.Contains(title, "later-wave"),
+		strings.Contains(title, "later wave"),
+		strings.Contains(title, "deferred"),
+		strings.Contains(title, "next wave"):
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func activeProjectRepoPath(environments []repo.ProjectEnvironment) string {

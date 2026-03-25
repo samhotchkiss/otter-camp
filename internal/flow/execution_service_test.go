@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 func TestNextVisitNumberUsesMaxPlusOne(t *testing.T) {
@@ -218,6 +221,184 @@ func TestEnsureActiveExecutionCapturesEntryHeadSHAWhenBindingSession(t *testing.
 	}
 }
 
+func TestEnsureActiveExecutionCapturesEntryHeadSHAFromTaskBranchRef(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	currentNodeID := uuid.New()
+
+	repoPath := t.TempDir()
+	runFlowCmd(t, repoPath, "git", "init", "-b", "main")
+	runFlowCmd(t, repoPath, "git", "config", "user.name", "Test User")
+	runFlowCmd(t, repoPath, "git", "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runFlowCmd(t, repoPath, "git", "add", "README.md")
+	runFlowCmd(t, repoPath, "git", "commit", "-m", "init")
+	mainSHA := strings.TrimSpace(runFlowCmd(t, repoPath, "git", "rev-parse", "HEAD"))
+	runFlowCmd(t, repoPath, "git", "checkout", "-b", "task/12")
+	if err := os.WriteFile(filepath.Join(repoPath, "task.txt"), []byte("task\n"), 0o644); err != nil {
+		t.Fatalf("write task file: %v", err)
+	}
+	runFlowCmd(t, repoPath, "git", "add", "task.txt")
+	runFlowCmd(t, repoPath, "git", "commit", "-m", "task")
+	taskSHA := strings.TrimSpace(runFlowCmd(t, repoPath, "git", "rev-parse", "HEAD"))
+	if taskSHA == mainSHA {
+		t.Fatalf("task branch head = %q, want different from main %q", taskSHA, mainSHA)
+	}
+	runFlowCmd(t, repoPath, "git", "checkout", "main")
+
+	executions := &fakeExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {},
+		},
+	}
+	branchName := "task/12"
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					ProjectID:         projectID,
+					OrganizationID:    uuid.New(),
+					FlowTemplateID:    &flowTemplateID,
+					CurrentFlowNodeID: &currentNodeID,
+					WorkStatus:        "review",
+					BranchName:        &branchName,
+				},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				currentNodeID: {ID: currentNodeID, NodeType: "review"},
+			},
+		},
+		executions:    executions,
+		sessionBridge: &fakeFlowSessionBridge{},
+		environments: &fakeProjectEnvironmentRepo{
+			items: map[uuid.UUID][]repo.ProjectEnvironment{
+				projectID: {{
+					Name: "workspace",
+					RepoPath: func() *string {
+						path := repoPath
+						return &path
+					}(),
+					IsActive: true,
+				}},
+			},
+		},
+	}
+
+	activeExecution, err := svc.EnsureActiveExecution(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("EnsureActiveExecution: %v", err)
+	}
+	if activeExecution == nil {
+		t.Fatal("EnsureActiveExecution returned nil execution")
+	}
+	if got := repo.FlowExecutionEntryHeadSHAFromMetadata(activeExecution.Metadata); got != taskSHA {
+		t.Fatalf("entry head sha = %q, want task branch sha %q", got, taskSHA)
+	}
+}
+
+func TestEnsureActiveExecutionCapturesEntryHeadSHAFromTaskWorktreeWhenBranchNameMissing(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	currentNodeID := uuid.New()
+	dataDir := t.TempDir()
+
+	projectRecord := repo.Project{ID: projectID, Slug: "entry-head-worktree"}
+	repoPath, err := workspace.ProjectRoot(dataDir, projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatalf("mkdir repo path: %v", err)
+	}
+	runFlowCmd(t, repoPath, "git", "init", "-b", "main")
+	runFlowCmd(t, repoPath, "git", "config", "user.name", "Test User")
+	runFlowCmd(t, repoPath, "git", "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runFlowCmd(t, repoPath, "git", "add", "README.md")
+	runFlowCmd(t, repoPath, "git", "commit", "-m", "init")
+	mainSHA := strings.TrimSpace(runFlowCmd(t, repoPath, "git", "rev-parse", "HEAD"))
+	runFlowCmd(t, repoPath, "git", "checkout", "-b", "task/12")
+	if err := os.WriteFile(filepath.Join(repoPath, "task.txt"), []byte("task\n"), 0o644); err != nil {
+		t.Fatalf("write task file: %v", err)
+	}
+	runFlowCmd(t, repoPath, "git", "add", "task.txt")
+	runFlowCmd(t, repoPath, "git", "commit", "-m", "task")
+	taskSHA := strings.TrimSpace(runFlowCmd(t, repoPath, "git", "rev-parse", "HEAD"))
+	runFlowCmd(t, repoPath, "git", "checkout", "main")
+
+	worktreeRoot := executionTaskWorktreeRoot(dataDir, projectRecord, repo.ProjectTask{TaskNumber: 12})
+	if err := os.MkdirAll(filepath.Dir(worktreeRoot), 0o755); err != nil {
+		t.Fatalf("mkdir worktree dir: %v", err)
+	}
+	runFlowCmd(t, repoPath, "git", "worktree", "add", worktreeRoot, "task/12")
+
+	executions := &fakeExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {},
+		},
+	}
+	svc := &service{
+		dataDir: dataDir,
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					TaskNumber:        12,
+					ProjectID:         projectID,
+					OrganizationID:    uuid.New(),
+					FlowTemplateID:    &flowTemplateID,
+					CurrentFlowNodeID: &currentNodeID,
+					WorkStatus:        "review",
+				},
+			},
+		},
+		projects: &fakeProjectRepo{
+			items: map[uuid.UUID]repo.Project{
+				projectID: projectRecord,
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				currentNodeID: {ID: currentNodeID, NodeType: "review"},
+			},
+		},
+		executions:    executions,
+		sessionBridge: &fakeFlowSessionBridge{},
+		environments: &fakeProjectEnvironmentRepo{
+			items: map[uuid.UUID][]repo.ProjectEnvironment{
+				projectID: {{
+					Name: "workspace",
+					RepoPath: func() *string {
+						path := repoPath
+						return &path
+					}(),
+					IsActive: true,
+				}},
+			},
+		},
+	}
+
+	activeExecution, err := svc.EnsureActiveExecution(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("EnsureActiveExecution: %v", err)
+	}
+	if activeExecution == nil {
+		t.Fatal("EnsureActiveExecution returned nil execution")
+	}
+	if got := repo.FlowExecutionEntryHeadSHAFromMetadata(activeExecution.Metadata); got != taskSHA {
+		t.Fatalf("entry head sha = %q, want task worktree sha %q (main=%q)", got, taskSHA, mainSHA)
+	}
+}
+
 func TestEnsureActiveExecutionRejectsTaskRuntimeStatusMismatch(t *testing.T) {
 	taskID := uuid.New()
 	flowTemplateID := uuid.New()
@@ -259,6 +440,116 @@ func TestEnsureActiveExecutionRejectsTaskRuntimeStatusMismatch(t *testing.T) {
 	}
 	if executions.createCalls != 0 {
 		t.Fatalf("create calls = %d, want 0", executions.createCalls)
+	}
+}
+
+func TestActivateDraftDependentsAfterTaskDoneKeepsDeferredLaterWaveTasksDraft(t *testing.T) {
+	completedTaskID := uuid.New()
+	dependentTaskID := uuid.New()
+	projectID := uuid.New()
+	deferredMetadata := json.RawMessage(`{"bootstrap_first_wave_selected":false}`)
+	tasks := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {ID: completedTaskID, ProjectID: projectID, WorkStatus: "done"},
+			dependentTaskID: {ID: dependentTaskID, ProjectID: projectID, WorkStatus: "draft", Metadata: deferredMetadata, Title: "Later wave task"},
+		},
+	}
+	coordinator := &fakeTaskCoordinator{tasks: tasks}
+	svc := &service{
+		tasks:       tasks,
+		taskService: coordinator,
+		dependencies: &fakeDependencyRepo{
+			inbound: map[uuid.UUID][]repo.ProjectTaskDependency{
+				completedTaskID: {{
+					SourceType: "project_task",
+					SourceID:   dependentTaskID,
+				}},
+			},
+		},
+	}
+
+	svc.activateDraftDependentsAfterTaskDone(context.Background(), completedTaskID)
+
+	if len(coordinator.transitions) != 0 {
+		t.Fatalf("queued deferred later-wave task unexpectedly: %+v", coordinator.transitions)
+	}
+	if got := tasks.items[dependentTaskID].WorkStatus; got != "draft" {
+		t.Fatalf("dependent task status = %q, want draft", got)
+	}
+}
+
+func TestActivateDraftDependentsAfterTaskDoneQueuesExplicitFirstWaveTaskWhenReady(t *testing.T) {
+	completedTaskID := uuid.New()
+	dependentTaskID := uuid.New()
+	projectID := uuid.New()
+	selectedMetadata := json.RawMessage(`{"bootstrap_first_wave_selected":true}`)
+	tasks := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {ID: completedTaskID, ProjectID: projectID, WorkStatus: "done"},
+			dependentTaskID: {ID: dependentTaskID, ProjectID: projectID, WorkStatus: "draft", Metadata: selectedMetadata, Title: "Explicit first wave task"},
+		},
+	}
+	coordinator := &fakeTaskCoordinator{tasks: tasks}
+	svc := &service{
+		tasks:       tasks,
+		taskService: coordinator,
+		dependencies: &fakeDependencyRepo{
+			inbound: map[uuid.UUID][]repo.ProjectTaskDependency{
+				completedTaskID: {{
+					SourceType: "project_task",
+					SourceID:   dependentTaskID,
+				}},
+			},
+		},
+	}
+
+	svc.activateDraftDependentsAfterTaskDone(context.Background(), completedTaskID)
+
+	if len(coordinator.transitions) != 1 {
+		t.Fatalf("queued transitions = %+v, want one first-wave activation", coordinator.transitions)
+	}
+	if got := tasks.items[dependentTaskID].WorkStatus; got != "queued" {
+		t.Fatalf("dependent task status = %q, want queued", got)
+	}
+}
+
+func TestActivateDraftOrchestrationParentAfterChildDoneKeepsDeferredLaterWaveParentDraft(t *testing.T) {
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	childTaskID := uuid.New()
+	parentMetadata := json.RawMessage(fmt.Sprintf(`{"bootstrap_first_wave_selected":false,"decomposition":{"orchestration_only":true},"child_task_ids":["%s"]}`, childTaskID))
+	childMetadata := json.RawMessage(fmt.Sprintf(`{"parent_task_id":"%s"}`, parentTaskID))
+	tasks := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			parentTaskID: {
+				ID:         parentTaskID,
+				ProjectID:  projectID,
+				WorkStatus: "draft",
+				Metadata:   parentMetadata,
+				Title:      "Later wave orchestration parent",
+			},
+			childTaskID: {
+				ID:         childTaskID,
+				ProjectID:  projectID,
+				WorkStatus: "done",
+				Metadata:   childMetadata,
+				Title:      "Completed child",
+			},
+		},
+	}
+	coordinator := &fakeTaskCoordinator{tasks: tasks}
+	svc := &service{
+		tasks:       tasks,
+		taskService: coordinator,
+	}
+
+	svc.activateDraftOrchestrationParentAfterChildDone(context.Background(), childTaskID)
+
+	if len(coordinator.transitions) != 0 {
+		t.Fatalf("queued deferred orchestration parent unexpectedly: %+v", coordinator.transitions)
+	}
+	if got := tasks.items[parentTaskID].WorkStatus; got != "draft" {
+		t.Fatalf("parent task status = %q, want draft", got)
 	}
 }
 
@@ -1320,6 +1611,7 @@ func (f *fakeExecutionRepo) UpdateMetadata(_ context.Context, id uuid.UUID, meta
 }
 
 type fakeDependencyRepo struct {
+	inbound  map[uuid.UUID][]repo.ProjectTaskDependency
 	outbound map[uuid.UUID][]repo.ProjectTaskDependency
 }
 
@@ -1330,8 +1622,8 @@ func (f *fakeDependencyRepo) Remove(context.Context, uuid.UUID) error { return n
 func (f *fakeDependencyRepo) ListOutbound(_ context.Context, _ string, sourceID uuid.UUID) ([]repo.ProjectTaskDependency, error) {
 	return f.outbound[sourceID], nil
 }
-func (f *fakeDependencyRepo) ListInbound(context.Context, string, uuid.UUID) ([]repo.ProjectTaskDependency, error) {
-	return nil, nil
+func (f *fakeDependencyRepo) ListInbound(_ context.Context, _ string, dependencyID uuid.UUID) ([]repo.ProjectTaskDependency, error) {
+	return f.inbound[dependencyID], nil
 }
 
 type fakeSubtaskRepo struct {
@@ -1414,6 +1706,16 @@ func (f *fakeTaskRepo) UpdateMetadata(_ context.Context, id uuid.UUID, metadata 
 	item.Metadata = metadata
 	f.items[id] = item
 	return item, nil
+}
+
+func (f *fakeTaskRepo) ListByProject(_ context.Context, projectID uuid.UUID, _ ...string) ([]repo.ProjectTask, error) {
+	tasks := make([]repo.ProjectTask, 0)
+	for _, item := range f.items {
+		if item.ProjectID == projectID {
+			tasks = append(tasks, item)
+		}
+	}
+	return tasks, nil
 }
 
 type fakeNodeRepo struct {

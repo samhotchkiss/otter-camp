@@ -4629,3 +4629,37 @@ The next move from here:
 
 - next seam:
   - tighten execution-owned `entry_head_sha` capture so it is sourced from the actual task worktree/branch context used by the execution, then add/fill the deferred later-wave wakeup regressions before starting the operator-style test run
+
+## 2026-03-25 Plan 0325A runtime isolation / entry-head checkpoint
+
+- current repo checkpoint before this slice:
+  - pushed bootstrap rotation commit: `370ba629` `Restore bootstrap model profile rotation`
+
+- runtime fixes landed:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - removed the remaining `projectRoot` fallback from `taskWorkspaceRoot(...)`; task-lane worktree acquisition now fails closed instead of silently reusing the shared project root
+    - `syncBoundFlowExecutionTurnOwnership(...)` now overwrites stale `entry_head_sha` metadata with the bound task worktree head when the task worktree head differs from the previously recorded value
+  - [`internal/flow/execution_service.go`](/Users/sam/dev/otter-camp/internal/flow/execution_service.go)
+    - `ensureExecutionEntryHead(...)` now prefers the managed task worktree head when that worktree already exists, instead of only using repo-path branch refs / shared repo HEAD
+    - flow service now carries `DataDir` so managed task worktree paths can be derived consistently
+  - [`internal/flow/execution_service_test.go`](/Users/sam/dev/otter-camp/internal/flow/execution_service_test.go)
+    - added:
+      - `TestEnsureActiveExecutionCapturesEntryHeadSHAFromTaskWorktreeWhenBranchNameMissing`
+      - `TestActivateDraftDependentsAfterTaskDoneQueuesExplicitFirstWaveTaskWhenReady`
+      - `TestActivateDraftOrchestrationParentAfterChildDoneKeepsDeferredLaterWaveParentDraft`
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added `TestTaskWorkspaceRootFailsClosedWhenMainWorktreeOwnsTaskBranch`
+
+- verification:
+  - `go test ./internal/flow -run 'Test(EnsureActiveExecutionCapturesEntryHeadSHA(WhenBindingSession|FromTaskBranchRef|FromTaskWorktreeWhenBranchNameMissing)|ActivateDraftDependentsAfterTaskDone(KeepsDeferredLaterWaveTasksDraft|QueuesExplicitFirstWaveTaskWhenReady)|ActivateDraftOrchestrationParentAfterChildDoneKeepsDeferredLaterWaveParentDraft)$' -count=1`
+  - `go test ./internal/turn -run 'Test(TaskWorkspaceRootFailsClosedWhenMainWorktreeOwnsTaskBranch|WorkerModelEscalatesToHighCapabilityAfterTransientRetry|ResolveModelProfileWorkerDefaultsToStandardWithoutOverrides)$' -count=1`
+  - `go test -tags=integration ./internal/tools/native -run 'TestIntegration(FlowAdvanceCreatesCanonicalCommitWhenCommitSHAOmitted|FlowReviewDecisionApproveCreatesEmptyCanonicalCommit|FlowReviewDecisionRejectCreatesCanonicalRejectionCommit|FlowRecoveryDecisionRetryCreatesFreshExecution|FlowRecoveryDecisionRetryFromReviewCreatesFreshWorkExecution)$' -count=1`
+
+- pre-test gate status after this slice:
+  - gate 1 fail-closed worktree isolation: implemented in native + turn runtime
+  - gate 2 execution entry-head capture / canonical close lineage: hardened and reverified
+  - gate 3 deferred later-wave protection: negative + positive + orchestration-parent regressions now covered
+  - gate 4 bootstrap profile rotation: restored in prior slice
+
+- next step:
+  - commit/push this runtime slice, rebuild/restart the backend, verify `./bin/ottercamp health`, and then move into the operator-style `issues/plan-0325b.md` end-to-end run without patching code unless the run exposes a new real product seam

@@ -14727,9 +14727,6 @@ func (e *TurnEngine) taskWorkspaceRoot(ctx context.Context, taskRecord repo.Proj
 	}
 	worktreeRoot := filepath.Join(workspace.ResolveDataDir(e.dataDir), "task-worktrees", strings.TrimSpace(projectRecord.Slug), fmt.Sprintf("task-%d", taskRecord.TaskNumber))
 	if err := ensureTurnTaskWorktree(ctx, projectRoot, worktreeRoot, branchName, "main"); err != nil {
-		if errors.Is(err, errTurnBranchAttachedToMainWorktree) {
-			return projectRoot, nil
-		}
 		return "", err
 	}
 	return worktreeRoot, nil
@@ -19987,8 +19984,8 @@ func (e *TurnEngine) syncBoundFlowExecutionTurnOwnership(ctx context.Context, se
 		return err
 	}
 	updatedMetadata := execution.Metadata
-	if entryHead := repo.FlowExecutionEntryHeadSHAFromMetadata(updatedMetadata); entryHead == "" {
-		if head := e.boundExecutionEntryHeadSHA(ctx, session); head != "" {
+	if head := e.boundExecutionEntryHeadSHA(ctx, session); head != "" {
+		if entryHead := repo.FlowExecutionEntryHeadSHAFromMetadata(updatedMetadata); strings.TrimSpace(entryHead) != strings.TrimSpace(head) {
 			updatedMetadata = repo.FlowExecutionMetadataWithEntryHeadSHA(updatedMetadata, head)
 		}
 	}

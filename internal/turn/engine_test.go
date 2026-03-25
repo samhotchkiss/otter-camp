@@ -11301,6 +11301,75 @@ func TestWorkerModelEscalatesToHighCapabilityAfterTransientRetry(t *testing.T) {
 	}
 }
 
+func TestTaskWorkspaceRootFailsClosedWhenMainWorktreeOwnsTaskBranch(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	ctx := context.Background()
+	repoRoot := t.TempDir()
+	projectID := uuid.New()
+	taskID := uuid.New()
+
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	run(repoRoot, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write readme: %v", err)
+	}
+	run(repoRoot, "add", "README.md")
+	run(repoRoot, "commit", "-m", "base")
+	run(repoRoot, "checkout", "-b", "task/10")
+	if err := os.WriteFile(filepath.Join(repoRoot, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	projects := fixture.engine.projects.(*fakeProjectRepo)
+	projects.items = map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, Slug: "turn-fail-closed"},
+	}
+	tasks := fixture.engine.tasks.(*fakeTaskRepo)
+	branchName := "task/10"
+	tasks.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:         taskID,
+			ProjectID:  projectID,
+			TaskNumber: 10,
+			BranchName: &branchName,
+		},
+	}
+	fixture.engine.environments = &fakeTurnProjectEnvironmentRepo{
+		items: map[uuid.UUID][]repo.ProjectEnvironment{
+			projectID: {{
+				Name: "workspace",
+				RepoPath: func() *string {
+					path := repoRoot
+					return &path
+				}(),
+				IsActive: true,
+			}},
+		},
+	}
+
+	root, err := fixture.engine.taskWorkspaceRoot(ctx, tasks.items[taskID])
+	if err == nil {
+		t.Fatal("taskWorkspaceRoot error = nil, want fail-closed worktree acquisition error")
+	}
+	if strings.TrimSpace(root) != "" {
+		t.Fatalf("taskWorkspaceRoot root = %q, want empty root on fail-closed worktree acquisition", root)
+	}
+}
+
 func TestContinuationTurnRecoversWhenTurnAlreadyCompleted(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.assembler.results = []assembleResult{
@@ -15572,6 +15641,18 @@ func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project
 		return item, nil
 	}
 	return repo.Project{}, repo.ErrNotFound
+}
+
+type fakeTurnProjectEnvironmentRepo struct {
+	items map[uuid.UUID][]repo.ProjectEnvironment
+	err   error
+}
+
+func (f *fakeTurnProjectEnvironmentRepo) ListByProject(_ context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]repo.ProjectEnvironment(nil), f.items[projectID]...), nil
 }
 
 type fakeOrganizationRepo struct {
