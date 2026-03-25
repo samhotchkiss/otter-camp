@@ -7878,14 +7878,6 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsIgnoresCompletedBootst
 	}); err != nil {
 		t.Fatalf("create draft task: %v", err)
 	}
-	if _, err := worker.Enqueue(ctx, nil, agentTurnJobType, 70, agentTurnKeyPayload{
-		SessionID:  session.ID,
-		MessageID:  bootstrapMessage.ID,
-		RetryCount: 0,
-	}, nil); err != nil {
-		t.Fatalf("enqueue bootstrap job: %v", err)
-	}
-
 	requeued, err := worker.RequeueActiveProjectSessionsWithoutTurns(ctx)
 	if err != nil {
 		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
@@ -8112,6 +8104,108 @@ func TestJobWorkerPurgeStaleAgentTurnJobsDropsLegacyTaskDispatchWithoutExecution
 	}
 	if !strings.Contains(lastError, "legacy task dispatch without execution ownership") {
 		t.Fatalf("legacy job last_error = %q, want purge marker", lastError)
+	}
+}
+
+func TestJobWorkerEnsureProjectContinuationMessageKeepsBootstrapContinuationWhileBootstrapActive(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-project-session-bootstrap-active",
+		DisplayName: "Requeue Active Project Session Bootstrap Active",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-project-session-bootstrap-active-project",
+		DisplayName:    "Requeue Active Project Session Bootstrap Active Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	bootstrapMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue bootstrap.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create stale bootstrap message: %v", err)
+	}
+	creatorID := uuid.New()
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     1,
+		Title:          "Bootstrap task",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		CreatedByID:    &creatorID,
+	}); err != nil {
+		t.Fatalf("create bootstrap draft task: %v", err)
+	}
+	messageID, err := worker.ensureProjectContinuationMessage(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessage: %v", err)
+	}
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want synthesized bootstrap continuation")
+	}
+
+	var (
+		sessionID  uuid.UUID
+		source     string
+		content    string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT cm.id,
+		       cm.session_id,
+		       COALESCE(cm.metadata->>'source', ''),
+		       cm.content
+		FROM chat_message cm
+		WHERE cm.id = $1
+		LIMIT 1
+	`, messageID).Scan(&messageID, &sessionID, &source, &content); err != nil {
+		t.Fatalf("query bootstrap continuation message: %v", err)
+	}
+	if messageID != bootstrapMessage.ID {
+		t.Fatalf("message_id = %s, want existing bootstrap message %s", messageID, bootstrapMessage.ID)
+	}
+	if sessionID != session.ID {
+		t.Fatalf("message session_id = %s, want %s", sessionID, session.ID)
+	}
+	if source != "project_bootstrap" {
+		t.Fatalf("continuation source = %q, want project_bootstrap", source)
+	}
+	if !strings.Contains(content, "Continue bootstrap.") {
+		t.Fatalf("continuation content = %q, want bootstrap continuation message", content)
 	}
 }
 

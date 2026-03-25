@@ -1341,6 +1341,38 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 		return uuid.Nil, nil
 	}
 
+	var bootstrapStatus string
+	if err := w.pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata->'project_bootstrap'->>'status', '')
+		FROM chat_session
+		WHERE id = $1
+	`, sessionID).Scan(&bootstrapStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, nil
+		}
+		return uuid.Nil, fmt.Errorf("load project session bootstrap status: %w", err)
+	}
+	activeBootstrap := strings.EqualFold(strings.TrimSpace(bootstrapStatus), "active")
+
+	source := "project_execution_continuation"
+	content := strings.Join([]string{
+		"Continue the active project execution now.",
+		"Bootstrap is complete and draft project work remains.",
+		"Your next response must take direct project action instead of generic chat.",
+		"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
+		"Inspect the current task tree and immediately queue or otherwise advance the next runnable bounded draft task.",
+	}, " ")
+	if activeBootstrap {
+		source = "project_bootstrap"
+		content = strings.Join([]string{
+			"Continue the active project bootstrap from the persisted state above.",
+			"Bootstrap is not complete yet; do not treat this session as post-bootstrap project execution.",
+			"Your next response must take direct bootstrap action instead of generic chat.",
+			"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
+			"Inspect the persisted bootstrap task tree and immediately repair staffing, bounded task decomposition, assignment, or flow attachment using bootstrap-compatible task mutations.",
+		}, " ")
+	}
+
 	var existingMessageID uuid.UUID
 	err := w.pool.QueryRow(ctx, `
 		SELECT id
@@ -1348,10 +1380,10 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 		WHERE session_id = $1
 		  AND role = 'user'
 		  AND status = 'pending'
-		  AND COALESCE(metadata->>'source', '') = 'project_execution_continuation'
+		  AND COALESCE(metadata->>'source', '') = $2
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
-	`, sessionID).Scan(&existingMessageID)
+	`, sessionID, source).Scan(&existingMessageID)
 	if err == nil {
 		return existingMessageID, nil
 	}
@@ -1362,15 +1394,9 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 	message, err := repo.NewChatMessageRepo(w.pool).Create(ctx, repo.ChatMessage{
 		SessionID: sessionID,
 		Role:      "user",
-		Content: strings.Join([]string{
-			"Continue the active project execution now.",
-			"Bootstrap is complete and draft project work remains.",
-			"Your next response must take direct project action instead of generic chat.",
-			"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
-			"Inspect the current task tree and immediately queue or otherwise advance the next runnable bounded draft task.",
-		}, " "),
+		Content: content,
 		Status:   "pending",
-		Metadata: json.RawMessage(`{"source":"project_execution_continuation","auto_continue":true,"synthetic_user_message":true}`),
+		Metadata: json.RawMessage(fmt.Sprintf(`{"source":"%s","auto_continue":true,"synthetic_user_message":true}`, source)),
 	})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create project continuation message: %w", err)

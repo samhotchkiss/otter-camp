@@ -330,6 +330,148 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 - confirm the inherited rerun-65-restart invocation is failed/cleared quickly and the session gets a fresh retry under the current build
 - then continue the fresh restart lane until the next real bootstrap-progress seam appears
 
+## 2026-03-25 15:16 MDT update
+
+- pushed commit `fc6fa5cb` is now deployed in the worker
+- the inherited-invocation restart seam is fixed live
+- rerun-65-restart is back on a fresh continuation turn under the current build
+
+### Deployed checkpoint
+
+- pushed commit:
+  - `fc6fa5cb` `Recover inherited async invocations on worker restart`
+- live worker after redeploy:
+  - `worker started` at `15:14:27 MDT`
+- startup logs on the new worker:
+  - `job queue: failed stale model invocations on startup count=3`
+  - `job queue: requeued active project sessions without turns on startup count=1`
+
+### Live proof: inherited restart invocation was reclaimed
+
+- pre-fix wedged session:
+  - `16b95db3-58bf-4e6d-905c-a75fe2c6d1dc`
+- inherited turn / invocation now failed by startup cleanup:
+  - turn `ac270264-4c1d-4bb1-853b-be37411a70a0`
+  - invocation `d64052eb-19ac-430f-80a1-38c76554754b`
+  - invocation failure:
+    - `stale_model_invocation`
+    - `worker cleanup failed stale in_flight model invocation without live in-progress turn`
+- session state after cleanup:
+  - `current_turn_id = NULL` at `15:14:27 MDT`
+
+### Live proof: session resumed under the new build
+
+- worker periodic cleanup then picked the session back up as an active project session without turns
+- the runtime synthesized a fresh project continuation message:
+  - message `cd0989b9-b078-4bd9-afc9-b5aa0dd631b8`
+  - metadata:
+    - `source = project_execution_continuation`
+    - `auto_continue = true`
+    - `synthetic_user_message = true`
+- fresh recovery dispatch / turn:
+  - claimed job `da806cf9-bac9-4357-b4e7-9bde009c46cd`
+  - new turn `cf8baad7-263e-4eec-9c6d-82cf76be0a72`
+  - new invocation `dc32ac9b-53b1-4620-8679-e539fb973665`
+  - model `qwen2.5:72b`
+- session state at `15:15:48 MDT`:
+  - `status = active`
+  - `current_turn_id = cf8baad7-263e-4eec-9c6d-82cf76be0a72`
+
+### Current live target
+
+- project:
+  - `2ed2fcef-b110-4171-bd50-4b574a059a2f`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-65-restart`
+- current question:
+  - whether the fresh qwen continuation turn now survives past the old `4m0s` watchdog boundary and begins to materialize staffing/bootstrap progress
+
+## 2026-03-25 15:20 MDT update
+
+- the fresh rerun-65-restart continuation turn has now crossed the old `4m0s` failure boundary live
+- the old bootstrap watchdog seam is therefore broken in production for this continuation path
+- bootstrap still has not materialized staffing/task-tree progress beyond `project_created`, so the next seam remains the slower bootstrap-progress path itself, not inherited invocation cleanup or the previous timeout ceiling
+
+### Live proof: fresh continuation survived past the old 4-minute cutoff
+
+- fresh turn:
+  - `cf8baad7-263e-4eec-9c6d-82cf76be0a72`
+  - started at `15:15:27 MDT`
+- live checks:
+  - at `15:19:08 MDT`, the same turn was still `in_progress`
+  - at `15:19:42 MDT`, the same turn was still `in_progress`
+  - current session remained `active`
+  - current invocation `4085f21f-9e38-41ec-a324-4a7aab3794e6` was still `in_flight`
+- same-turn multi-invocation proof:
+  - invocation `dc32ac9b-53b1-4620-8679-e539fb973665` completed at `15:16:33 MDT`
+  - follow-on invocation `4085f21f-9e38-41ec-a324-4a7aab3794e6` began immediately afterward inside the same turn
+
+### Current live state
+
+- restart project remains:
+  - `2ed2fcef-b110-4171-bd50-4b574a059a2f`
+- project bootstrap metadata is still:
+  - `status = active`
+  - `current_phase = staffing_persisted`
+  - `last_successful_checkpoint = project_created`
+- seeded bootstrap tasks `1-8` still remain draft at this checkpoint
+- no staffed project assignments or scoped executable tasks have materialized yet
+
+### Current next step
+
+- keep the same rerun-65-restart lane running
+- capture the first real post-4-minute bootstrap-progress seam if it still stalls
+- if staffing or task-tree state finally persists, continue into the next Plan 0325B verification phase from this same project
+
+## 2026-03-25 15:29 MDT update
+
+- latest local runtime is now patch-on-top of pushed commit `fc6fa5cb`
+- the next live blocker is prompt routing, not timeouts or inherited invocation cleanup
+- a new worker fix is in code with focused integration coverage and is ready to deploy
+
+### New local patch: active bootstrap project-session recovery no longer synthesizes post-bootstrap execution prompts
+
+- root cause:
+  - rerun-65-restart project `2ed2fcef-b110-4171-bd50-4b574a059a2f` is still in:
+    - `project_bootstrap.status = active`
+    - `current_phase = staffing_persisted`
+  - but after inherited-invocation recovery, the worker synthesized:
+    - message `cd0989b9-b078-4bd9-afc9-b5aa0dd631b8`
+    - `source = project_execution_continuation`
+    - content beginning `Continue the active project execution now. Bootstrap is complete and draft project work remains.`
+  - that wrong routing directly caused the live turn to behave like post-bootstrap execution:
+    - `task.list`
+    - invalid `subtask.create`
+    - invalid `task.create` lacking an active project assignee
+    - repeated generic assistant narration instead of bootstrap repair
+- behavior:
+  - `internal/jobqueue/worker.go`
+  - `ensureProjectContinuationMessage(...)` now checks the session bootstrap status
+  - if bootstrap is still `active`, it reuses or emits a `project_bootstrap` continuation instead of `project_execution_continuation`
+  - completed-bootstrap sessions still keep the normal `project_execution_continuation` path
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessageKeepsBootstrapContinuationWhileBootstrapActive|RequeueActiveProjectSessionsWithoutTurns|FailStaleModelInvocations(RequeuesTriggeredProjectSession|RecoversInheritedAsyncProjectInvocationAfterWorkerRestart|SkipsActiveAsyncOrganizationSession))$' -count=1`
+
+### Live state before redeploy
+
+- same rerun-65-restart continuation turn is still active:
+  - turn `cf8baad7-263e-4eec-9c6d-82cf76be0a72`
+  - current invocation `569576c1-3660-4690-9f94-da35b7f163e9`
+- turn history proves the wrong prompt routing:
+  - tool_result `184ed6f5-cb76-4259-bf4e-1064cd31f433` listed the bootstrap tasks
+  - assistant `5cf88ff2-34b7-4afd-8677-b3a3579b6fc5` tried bootstrap `subtask.create`
+  - tool_result `3cc83512-9445-4d56-9365-47dad92eec46` returned `flow_node_execution_not_found`
+  - tool_result `2ac81746-5f56-4f21-bd0d-7b55d45a9002` returned `bootstrap executable non-bootstrap tasks must include assigned_agent_id`
+- the turn has already survived the old `4m0s` cutoff, so the blocker is now the wrong continuation prompt, not the timeout budget
+
+### Current next step
+
+- commit/push this prompt-routing slice
+- restart the worker so the next rerouted continuation on rerun-65-restart uses `project_bootstrap`
+- verify the live bootstrap lane stops attempting generic post-bootstrap execution mutations and instead follows the bootstrap repair path
+
 ## 2026-03-25 14:12 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `76537eb9`
