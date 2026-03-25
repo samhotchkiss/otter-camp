@@ -135,6 +135,66 @@ func TestTaskServiceIntegrationStatusLifecycleAndEvents(t *testing.T) {
 	}
 }
 
+func TestTaskServiceIntegrationDoneTransitionClearsRecoveryCheckpointMetadata(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Done clears recovery checkpoint",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	checkpointed, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    "Work/OC-10-DONE-CLEARS-RECOVERY-CHECKPOINT.md",
+		ArtifactPath:  ".ottercamp/recovery/Work/OC-10-DONE-CLEARS-RECOVERY-CHECKPOINT.md",
+		FailureReason: "assistant draft described intent to write the deliverable instead of the file body",
+		HaltTurnID:    uuid.NewString(),
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRecord.Metadata = checkpointed
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update checkpointed task: %v", err)
+	}
+
+	doneTask, err := svc.TransitionStatus(ctx, created.ID, "done", Actor{Type: "system", AllowDoneBypass: true})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(doneTask.Metadata); ok {
+		t.Fatalf("expected recovery checkpoint cleared on done transition, metadata=%s", string(doneTask.Metadata))
+	}
+
+	reloaded, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID reloaded task: %v", err)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(reloaded.Metadata); ok {
+		t.Fatalf("expected persisted recovery checkpoint cleared on done transition, metadata=%s", string(reloaded.Metadata))
+	}
+}
+
 func TestTaskServiceIntegrationAllowsReviewToBlockedWithFlowContext(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

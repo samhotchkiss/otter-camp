@@ -414,6 +414,57 @@ func TestResumeValidationBlockedTaskRequiresResumableBlockedState(t *testing.T) 
 	}
 }
 
+func TestClassifyTaskResumeDecisionAllowsHistoricalReviewDecisionBlockerWithoutGuard(t *testing.T) {
+	decision := classifyTaskResumeDecision(repo.ProjectTask{
+		ID:         uuid.New(),
+		WorkStatus: "blocked",
+		Metadata:   json.RawMessage(`{}`),
+	}, "review turn completed without calling flow.review_decision")
+
+	if !decision.resumable {
+		t.Fatal("decision.resumable = false, want true")
+	}
+	if decision.blockerClass != RecoveryBlockerClassValidationLoop {
+		t.Fatalf("blockerClass = %q, want %q", decision.blockerClass, RecoveryBlockerClassValidationLoop)
+	}
+	if !decision.clearValidationGuard {
+		t.Fatal("clearValidationGuard = false, want true")
+	}
+	if decision.validationGuard == nil {
+		t.Fatal("validationGuard = nil, want synthetic guard")
+	}
+	if decision.validationGuard.ToolName != "flow.review_decision" {
+		t.Fatalf("validationGuard.ToolName = %q, want flow.review_decision", decision.validationGuard.ToolName)
+	}
+	if decision.validationGuard.FailureCode != "review_decision_required" {
+		t.Fatalf("validationGuard.FailureCode = %q, want review_decision_required", decision.validationGuard.FailureCode)
+	}
+}
+
+func TestClassifyTaskResumeDecisionAllowsHistoricalReviewDecisionBlockerWithDetailSuffix(t *testing.T) {
+	decision := classifyTaskResumeDecision(repo.ProjectTask{
+		ID:         uuid.New(),
+		WorkStatus: "blocked",
+		Metadata:   json.RawMessage(`{}`),
+	}, "review turn completed without calling flow.review_decision: git worktree remove --force /tmp/task-10: exit status 128")
+
+	if !decision.resumable {
+		t.Fatal("decision.resumable = false, want true")
+	}
+	if decision.blockerClass != RecoveryBlockerClassValidationLoop {
+		t.Fatalf("blockerClass = %q, want %q", decision.blockerClass, RecoveryBlockerClassValidationLoop)
+	}
+	if !decision.clearValidationGuard {
+		t.Fatal("clearValidationGuard = false, want true")
+	}
+	if decision.validationGuard == nil {
+		t.Fatal("validationGuard = nil, want synthetic guard")
+	}
+	if decision.validationGuard.ToolName != "flow.review_decision" {
+		t.Fatalf("validationGuard.ToolName = %q, want flow.review_decision", decision.validationGuard.ToolName)
+	}
+}
+
 func TestResumeValidationBlockedTaskRejectsNonBlockedTask(t *testing.T) {
 	taskID := uuid.New()
 	taskRepo := &fakeTaskRepo{

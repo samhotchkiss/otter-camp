@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,24 @@ import (
 type stubMemoryQueryService struct {
 	called bool
 	last   memory.RetrievalRequest
+}
+
+type stubChatSessionReader struct{}
+
+func (stubChatSessionReader) Create(_ context.Context, session repo.ChatSession) (repo.ChatSession, error) {
+	return session, nil
+}
+
+func (stubChatSessionReader) GetByID(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+	return repo.ChatSession{ID: id}, nil
+}
+
+func (stubChatSessionReader) ListByOrg(_ context.Context, organizationID uuid.UUID) ([]repo.ChatSession, error) {
+	return nil, nil
+}
+
+func (stubChatSessionReader) Close(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+	return repo.ChatSession{ID: id}, nil
 }
 
 func (s *stubMemoryQueryService) Query(_ context.Context, req memory.RetrievalRequest) (memory.RetrievalResult, error) {
@@ -67,5 +86,41 @@ func TestMemoryQueryDelegatesToService(t *testing.T) {
 	}
 	if memories[0]["content"] != "remember this" {
 		t.Fatalf("memory content = %v, want remember this", memories[0]["content"])
+	}
+}
+
+func TestSessionListBlockedInReviewTaskSession(t *testing.T) {
+	orgID := uuid.New()
+	agentID := uuid.New()
+	taskID := uuid.New()
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      uuid.New(),
+			Title:          "Review validation sign-off",
+			WorkStatus:     "review",
+		},
+	}
+	executor.chatSessions = stubChatSessionReader{}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		TaskID:         &taskID,
+	})
+
+	out, err := executor.Execute(ctx, "session.list", map[string]any{"limit": 10})
+	if err != nil {
+		t.Fatalf("session.list: %v", err)
+	}
+	if out["error"] != "review_action_required" {
+		t.Fatalf("error = %v, want review_action_required", out["error"])
+	}
+	message, _ := out["message"].(string)
+	if !strings.Contains(message, "flow.review_decision") {
+		t.Fatalf("message = %q, want flow.review_decision guidance", message)
 	}
 }

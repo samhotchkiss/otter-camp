@@ -184,6 +184,9 @@ func (e *NativeToolExecutor) handleGitLog(ctx context.Context, input map[string]
 		if isNotGitRepoError(out, err) {
 			return map[string]any{"error": "not_a_git_repo"}, nil
 		}
+		if isUnbornGitHistoryError(out, err) {
+			return map[string]any{"commits": []map[string]any{}}, nil
+		}
 		return nil, err
 	}
 
@@ -230,6 +233,15 @@ func isNotGitRepoError(output string, err error) bool {
 	}
 	text := strings.ToLower(strings.TrimSpace(output))
 	return strings.Contains(text, "not a git repository") || strings.Contains(text, "fatal: not a git repository")
+}
+
+func isUnbornGitHistoryError(output string, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(output))
+	return strings.Contains(text, "does not have any commits yet") ||
+		strings.Contains(text, "fatal: your current branch") && strings.Contains(text, "does not have any commits yet")
 }
 
 func splitGitLines(output string) []string {

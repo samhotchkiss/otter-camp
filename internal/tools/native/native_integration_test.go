@@ -444,6 +444,68 @@ func TestIntegrationFileReadAllowsSubstantiveExplicitDeliverable(t *testing.T) {
 	}
 }
 
+func TestIntegrationFileReadRejectsDeliverableCompletionSummaryWithoutBody(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Design boundary test for rate limits and max pipeline capacity. Deliverable: Test/oc-21-boundary-test-design.md"
+	plan := taskplan.Analyze("Design boundary test: rate limits and max pipeline capacity", &description)
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:       "Design boundary test: rate limits and max pipeline capacity",
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:    pool,
+		DataDir: dataDir,
+	})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	targetPath := "Test/oc-21-boundary-test-design.md"
+	targetAbs := filepath.Join(dataDir, "workspaces", projectRecord.Slug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	summary := `Design complete. OC-21 boundary test design substantive deliverables produced:
+
+**Test Design (Test/oc-21-boundary-test-design.md)**: 8.6 KB
+- Rate-limit test scenario (100+ req/min -> HTTP 429 responses)
+
+**Planning Artifacts** (all substantive, no scaffolds):
+1. **PRD** (planning/prd-spec/oc-21-prd.md): 5 concrete goals
+2. **Acceptance Criteria** (planning/prd-spec/oc-21-acceptance-criteria.md): 3 test scenarios
+3. **Implementation Plan** (planning/prc-spec/oc-21-implementation-plan.md): 5 execution phases
+4. **Dependency Log** (planning/prd-spec/oc-21-dependency-log.md): critical path analysis
+
+**Quality Status**: Design phase complete; ready for internal review gate after execution completes.
+`
+	if err := os.WriteFile(targetAbs, []byte(summary), 0o644); err != nil {
+		t.Fatalf("write summary target: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["error"]; got != "placeholder_deliverable" {
+		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
+	}
+	if _, ok := out["content"]; ok {
+		t.Fatalf("content should be omitted for completion-summary placeholder reads: %#v", out["content"])
+	}
+}
+
 func TestIntegrationFileReadRejectsPlanningRereadWhenExplicitDeliverableAlreadyExists(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
@@ -747,6 +809,74 @@ func TestIntegrationFileReadRejectsPlaceholderRecoveryTargetWithoutExplicitDeliv
 	}
 	if got := out["error"]; got != "placeholder_deliverable" {
 		t.Fatalf("error = %v, want placeholder_deliverable", got)
+	}
+	if got := out["deliverable_path"]; got != targetPath {
+		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
+	}
+}
+
+func TestIntegrationFileReadRejectsSemanticMismatchForRecoveryTarget(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	description := "Execute all error scenarios. Verify error messages, retry logic, fallback paths. Record whether each error is caught, logged, and recoverable."
+	plan := taskplan.Analyze("Validation Execution: Run error-handling scenarios and validate recovery", &description)
+	metadata, err := json.Marshal(map[string]any{
+		"planning": plan,
+		"recovery_file_write_checkpoint": map[string]any{
+			"version":       1,
+			"target_path":   "Work/oc-10-timeout-recovery-execution.md",
+			"artifact_path": ".ottercamp/recovery/Work/oc-10-timeout-recovery-execution.md",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		Title:       "Validation Execution: Run error-handling scenarios and validate recovery",
+		Description: &description,
+		Metadata:    metadata,
+	})
+	agent := testutil.MakeAgent(t, pool, orgID)
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task.ID)
+	dataDir := t.TempDir()
+
+	executor := NewExecutor(ExecutorOptions{
+		Pool:    pool,
+		DataDir: dataDir,
+	})
+	ctx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	targetPath := "Work/oc-10-timeout-recovery-execution.md"
+	targetAbs := filepath.Join(dataDir, "workspaces", projectRecord.Slug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	wrongDraft := strings.TrimSpace(`
+# OC-10: Duplicate Email Submission - Execution Log
+
+## Objective
+Validate duplicate email handling and duplicate key rejection.
+
+## Findings
+- Duplicate email submission returned 409 conflict twice.
+- Duplicate key violation was logged for the email collision path.
+- The database rejected the duplicate at the constraint layer, not by application logic.
+`)
+	if err := os.WriteFile(targetAbs, []byte(wrongDraft), 0o644); err != nil {
+		t.Fatalf("write mismatched target: %v", err)
+	}
+
+	out, err := executor.Execute(ctx, "file.read", map[string]any{"path": targetPath})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := out["error"]; got != "mismatched_deliverable_context" {
+		t.Fatalf("error = %v, want mismatched_deliverable_context", got)
 	}
 	if got := out["deliverable_path"]; got != targetPath {
 		t.Fatalf("deliverable_path = %v, want %s", got, targetPath)
@@ -3909,6 +4039,152 @@ func TestIntegrationProjectCreateReusesArchivedSlugThroughProjectService(t *test
 	}
 }
 
+func TestIntegrationProjectCreateNormalizesExecutionFirstDeliveryMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "project.create", map[string]any{
+		"name":          "Execution First Project",
+		"slug":          "execution-first-project",
+		"delivery_mode": "execution_first",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+
+	projectOut, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", out["project"])
+	}
+	createdID := mustUUIDValue(t, projectOut["id"])
+	created, err := repo.NewProjectRepo(pool).GetByID(ctx, createdID)
+	if err != nil {
+		t.Fatalf("GetByID created project: %v", err)
+	}
+	if created.DeliveryMode != "gated" {
+		t.Fatalf("created delivery_mode = %q, want gated", created.DeliveryMode)
+	}
+}
+
+func TestIntegrationProjectCreateNormalizesValidationDeliveryMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "project.create", map[string]any{
+		"name":          "Validation Mode Project",
+		"slug":          "validation-mode-project",
+		"delivery_mode": "validation",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+
+	projectOut, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", out["project"])
+	}
+	createdID := mustUUIDValue(t, projectOut["id"])
+	created, err := repo.NewProjectRepo(pool).GetByID(ctx, createdID)
+	if err != nil {
+		t.Fatalf("GetByID created project: %v", err)
+	}
+	if created.DeliveryMode != "gated" {
+		t.Fatalf("created delivery_mode = %q, want gated", created.DeliveryMode)
+	}
+}
+
+func TestIntegrationProjectCreateNormalizesAgileDeliveryMode(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "project.create", map[string]any{
+		"name":          "Agile Mode Project",
+		"slug":          "agile-mode-project",
+		"delivery_mode": "agile",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+
+	projectOut, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", out["project"])
+	}
+	createdID := mustUUIDValue(t, projectOut["id"])
+	created, err := repo.NewProjectRepo(pool).GetByID(ctx, createdID)
+	if err != nil {
+		t.Fatalf("GetByID created project: %v", err)
+	}
+	if created.DeliveryMode != "gated" {
+		t.Fatalf("created delivery_mode = %q, want gated", created.DeliveryMode)
+	}
+}
+
+func TestIntegrationProjectCreateRetriesGeneratedSlugAfterCollision(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	projectRepo := repo.NewProjectRepo(pool)
+	if _, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: orgID,
+		Slug:           "speaker-pipeline-ops-validation-fresh-20260324-rerun-29",
+		DisplayName:    "Existing Collision Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "human_user",
+		CreatedByID:    uuid.Nil,
+	}); err != nil {
+		t.Fatalf("seed colliding project: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "project.create", map[string]any{
+		"name": "Speaker Pipeline Ops Validation Fresh 20260324 Rerun 29",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+
+	projectOut, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", out["project"])
+	}
+	gotSlug := strings.TrimSpace(fmt.Sprintf("%v", projectOut["slug"]))
+	if gotSlug == "speaker-pipeline-ops-validation-fresh-20260324-rerun-29" {
+		t.Fatalf("created slug = %q, want suffixed retry slug after collision", gotSlug)
+	}
+	if !strings.HasPrefix(gotSlug, "speaker-pipeline-ops-validation-fresh-20260324-rerun-29-") {
+		t.Fatalf("created slug = %q, want suffixed retry slug prefix", gotSlug)
+	}
+
+	createdID := mustUUIDValue(t, projectOut["id"])
+	created, err := projectRepo.GetByID(ctx, createdID)
+	if err != nil {
+		t.Fatalf("GetByID created project: %v", err)
+	}
+	if created.Slug != gotSlug {
+		t.Fatalf("persisted slug = %q, want %q", created.Slug, gotSlug)
+	}
+
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListByProject bootstrap tasks: %v", err)
+	}
+	if len(tasks) == 0 {
+		t.Fatal("expected bootstrap task tree to be created through native project.create")
+	}
+}
+
 func TestIntegrationSessionCreateTaskBoundAsyncWorkUsesTaskSession(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -4922,6 +5198,200 @@ func TestIntegrationBootstrapGateAllowsPlanningTaskCreateBeforeGateClears(t *tes
 	}
 }
 
+func TestIntegrationProjectTaskSessionUsesTaskSpecificWorktree(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	dataDir := t.TempDir()
+
+	projectRoot, err := workspace.ProjectRoot(dataDir, project.Slug)
+	if err != nil {
+		t.Fatalf("workspace.ProjectRoot: %v", err)
+	}
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    project.ID,
+		Name:         "workspace",
+		DeliveryMode: "gated",
+		RepoPath:     stringPtr(projectRoot),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+	if _, err := flowcommit.CommitAll(ctx, projectRoot, "main", "initial project state", true); err != nil {
+		t.Fatalf("seed main commit: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	task12 := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{Title: "Task 12"})
+	task12Record, err := taskRepo.GetByID(ctx, task12.ID)
+	if err != nil {
+		t.Fatalf("load task 12: %v", err)
+	}
+	task12Record.BranchName = stringPtr("task/12")
+	if _, err := taskRepo.Update(ctx, task12Record); err != nil {
+		t.Fatalf("update task 12 branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "task.txt"), []byte("branch twelve\n"), 0o644); err != nil {
+		t.Fatalf("write task 12 file: %v", err)
+	}
+	if _, err := flowcommit.CommitAll(ctx, projectRoot, "task/12", "task 12 content", false); err != nil {
+		t.Fatalf("commit task 12 branch: %v", err)
+	}
+
+	task19 := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{Title: "Task 19"})
+	task19Record, err := taskRepo.GetByID(ctx, task19.ID)
+	if err != nil {
+		t.Fatalf("load task 19: %v", err)
+	}
+	task19Record.BranchName = stringPtr("task/19")
+	if _, err := taskRepo.Update(ctx, task19Record); err != nil {
+		t.Fatalf("update task 19 branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "task.txt"), []byte("branch nineteen\n"), 0o644); err != nil {
+		t.Fatalf("write task 19 file: %v", err)
+	}
+	if _, err := flowcommit.CommitAll(ctx, projectRoot, "task/19", "task 19 content", false); err != nil {
+		t.Fatalf("commit task 19 branch: %v", err)
+	}
+	checkoutTask12 := exec.CommandContext(ctx, "git", "-C", projectRoot, "checkout", "task/12")
+	if output, err := checkoutTask12.CombinedOutput(); err != nil {
+		t.Fatalf("checkout task/12: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	session := testutil.MakeSession(t, pool, orgID, "project_task", task19.ID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+	sessionCtx := integrationExecCtxWithSession(orgID, agent.ID, session.ID)
+
+	gitStatus, err := executor.Execute(sessionCtx, "git.status", map[string]any{})
+	if err != nil {
+		t.Fatalf("git.status: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", gitStatus["branch"])); got != "task/19" {
+		t.Fatalf("git.status branch = %q, want task/19", got)
+	}
+
+	fileRead, err := executor.Execute(sessionCtx, "file.read", map[string]any{"path": "task.txt"})
+	if err != nil {
+		t.Fatalf("file.read: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", fileRead["content"])); got != "branch nineteen" {
+		t.Fatalf("file.read content = %q, want branch nineteen", got)
+	}
+
+	headBranchBytes, err := exec.CommandContext(ctx, "git", "-C", projectRoot, "rev-parse", "--abbrev-ref", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("shared workspace branch: %v: %s", err, strings.TrimSpace(string(headBranchBytes)))
+	}
+	if got := strings.TrimSpace(string(headBranchBytes)); got != "task/12" {
+		t.Fatalf("shared workspace branch = %q, want task/12", got)
+	}
+}
+
+func TestEnsureTaskWorktreePrunesDuplicateAndStaleMetadata(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	worktreeRoot := filepath.Join(t.TempDir(), "task-17")
+
+	initCmd := exec.CommandContext(ctx, "git", "init", "-b", "main")
+	initCmd.Dir = projectRoot
+	if output, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	if err := ensureTaskWorktree(ctx, projectRoot, worktreeRoot, "task/17", "main", exec.CommandContext); err != nil {
+		t.Fatalf("initial ensureTaskWorktree: %v", err)
+	}
+
+	worktreesDir := filepath.Join(projectRoot, ".git", "worktrees")
+	duplicateDir := filepath.Join(worktreesDir, "task-171")
+	if err := os.MkdirAll(duplicateDir, 0o755); err != nil {
+		t.Fatalf("mkdir duplicate metadata dir: %v", err)
+	}
+	for _, name := range []string{"HEAD", "commondir", "gitdir"} {
+		data, err := os.ReadFile(filepath.Join(worktreesDir, "task-17", name))
+		if err != nil {
+			t.Fatalf("read canonical metadata %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(duplicateDir, name), data, 0o644); err != nil {
+			t.Fatalf("write duplicate metadata %s: %v", name, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(worktreesDir, "task-161"), 0o755); err != nil {
+		t.Fatalf("mkdir stale metadata dir: %v", err)
+	}
+
+	prunePreview, err := exec.CommandContext(ctx, "git", "-C", projectRoot, "worktree", "prune", "-n", "-v").CombinedOutput()
+	if err != nil {
+		t.Fatalf("prune preview before ensure: %v: %s", err, strings.TrimSpace(string(prunePreview)))
+	}
+	previewText := string(prunePreview)
+	if !strings.Contains(previewText, "task-171") || !strings.Contains(previewText, "task-161") {
+		t.Fatalf("prune preview = %q, want duplicate and stale metadata entries", previewText)
+	}
+
+	if err := ensureTaskWorktree(ctx, projectRoot, worktreeRoot, "task/17", "main", exec.CommandContext); err != nil {
+		t.Fatalf("repair ensureTaskWorktree: %v", err)
+	}
+
+	pruneAfter, err := exec.CommandContext(ctx, "git", "-C", projectRoot, "worktree", "prune", "-n", "-v").CombinedOutput()
+	if err != nil {
+		t.Fatalf("prune preview after ensure: %v: %s", err, strings.TrimSpace(string(pruneAfter)))
+	}
+	afterText := string(pruneAfter)
+	if strings.Contains(afterText, "task-171") || strings.Contains(afterText, "task-161") {
+		t.Fatalf("prune preview after ensure = %q, want stale metadata cleared", afterText)
+	}
+
+	listing, err := exec.CommandContext(ctx, "git", "-C", projectRoot, "worktree", "list", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("worktree list: %v: %s", err, strings.TrimSpace(string(listing)))
+	}
+	if count := strings.Count(string(listing), "branch refs/heads/task/17"); count != 1 {
+		t.Fatalf("worktree branch occurrences for task/17 = %d, want 1\n%s", count, string(listing))
+	}
+}
+
+func TestEnsureTaskWorktreeRepairsDanglingGitdirPointer(t *testing.T) {
+	ctx := context.Background()
+	projectRoot := t.TempDir()
+	worktreeRoot := filepath.Join(t.TempDir(), "task-10")
+
+	initCmd := exec.CommandContext(ctx, "git", "init", "-b", "main")
+	initCmd.Dir = projectRoot
+	if output, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	if err := ensureTaskWorktree(ctx, projectRoot, worktreeRoot, "task/10", "main", exec.CommandContext); err != nil {
+		t.Fatalf("initial ensureTaskWorktree: %v", err)
+	}
+
+	if err := os.RemoveAll(filepath.Join(projectRoot, ".git", "worktrees", "task-10")); err != nil {
+		t.Fatalf("remove task-10 metadata dir: %v", err)
+	}
+
+	statusCmd := exec.CommandContext(ctx, "git", "-C", worktreeRoot, "status", "--short", "--branch")
+	if output, err := statusCmd.CombinedOutput(); err == nil || !strings.Contains(strings.ToLower(string(output)), "not a git repository") {
+		t.Fatalf("git status on dangling worktree = %q / %v, want broken gitdir pointer", strings.TrimSpace(string(output)), err)
+	}
+
+	if err := ensureTaskWorktree(ctx, projectRoot, worktreeRoot, "task/10", "main", exec.CommandContext); err != nil {
+		t.Fatalf("repair ensureTaskWorktree: %v", err)
+	}
+
+	statusCmd = exec.CommandContext(ctx, "git", "-C", worktreeRoot, "status", "--short", "--branch")
+	output, err := statusCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status after repair: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+	if !strings.Contains(string(output), "## No commits yet on task/10") {
+		t.Fatalf("git status after repair = %q, want task/10 worktree restored", strings.TrimSpace(string(output)))
+	}
+}
+
 func TestIntegrationBootstrapGateRejectsUnassignedExecutableTaskCreate(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -5639,6 +6109,135 @@ func TestIntegrationBootstrapSetupPersistRejectsProjectWideGateInFirstWaveSelect
 	hints, ok := out["selectable_first_wave_tasks"].([]map[string]any)
 	if !ok || len(hints) != 1 {
 		t.Fatalf("selectable_first_wave_tasks = %#v, want 1 task hint", out["selectable_first_wave_tasks"])
+	}
+}
+
+func TestIntegrationBootstrapSetupPersistRejectsDependencyBlockedFirstWaveSelection(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap First Wave Dependency Rejection",
+		"slug":        "bootstrap-first-wave-dependency-" + uuid.NewString()[:8],
+		"description": "Verify select-first-wave rejects dependency-blocked tasks.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap first-wave dependency rejection",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
+	prereqDescription := "Complete the prerequisite setup."
+	prereqTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "Val-1: Prerequisite task",
+		Description:     &prereqDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create prereq task: %v", err)
+	}
+
+	blockedDescription := "This task depends on the prerequisite and must not be first-wave."
+	blockedTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "Val-2: Dependency-blocked task",
+		Description:     &blockedDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create blocked task: %v", err)
+	}
+
+	runnableDescription := "Runnable first-wave validation task."
+	runnableTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "Val-3: Runnable task",
+		Description:     &runnableDescription,
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create runnable task: %v", err)
+	}
+
+	if _, err := repo.NewProjectTaskDependencyRepo(pool).Add(ctx, repo.ProjectTaskDependency{
+		SourceType:    "project_task",
+		SourceID:      blockedTask.ID,
+		DependsOnType: "project_task",
+		DependsOnID:   prereqTask.ID,
+		CreatedByType: "agent",
+		CreatedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("add dependency: %v", err)
+	}
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs":    []string{"select-first-wave"},
+		"first_wave_task_numbers": []string{strconv.Itoa(blockedTask.TaskNumber)},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist with blocked selection: %v", err)
+	}
+	if out["error"] != "invalid_first_wave_selection" {
+		t.Fatalf("error = %v, want invalid_first_wave_selection", out["error"])
+	}
+	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "unfinished prerequisite work") {
+		t.Fatalf("message = %q, want dependency guidance", got)
+	}
+	hints, ok := out["selectable_first_wave_tasks"].([]map[string]any)
+	if !ok || len(hints) != 2 {
+		t.Fatalf("selectable_first_wave_tasks = %#v, want 2 task hints", out["selectable_first_wave_tasks"])
+	}
+	for _, hint := range hints {
+		if fmt.Sprintf("%v", hint["task_number"]) == strconv.Itoa(blockedTask.TaskNumber) {
+			t.Fatalf("blocked task unexpectedly present in selectable_first_wave_tasks: %#v", hints)
+		}
+	}
+
+	reloadedBlocked, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, blockedTask.ID)
+	if err != nil {
+		t.Fatalf("reload blocked task: %v", err)
+	}
+	if selected, ok := metadataObject(reloadedBlocked.Metadata)["bootstrap_first_wave_selected"].(bool); ok && selected {
+		t.Fatalf("blocked task bootstrap_first_wave_selected = %v, want unset/false", selected)
+	}
+
+	reloadedRunnable, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, runnableTask.ID)
+	if err != nil {
+		t.Fatalf("reload runnable task: %v", err)
+	}
+	if selected, ok := metadataObject(reloadedRunnable.Metadata)["bootstrap_first_wave_selected"].(bool); ok && selected {
+		t.Fatalf("runnable task bootstrap_first_wave_selected = %v before valid selection, want unset/false", selected)
 	}
 }
 
@@ -8731,6 +9330,171 @@ func TestIntegrationFlowReviewDecisionApproveRejectsDirtyWorkspace(t *testing.T)
 	}
 }
 
+func TestIntegrationFlowReviewDecisionApproveAutoCommitsMissingWorkBeforeEmptyReviewCommit(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	projectRecord, err := repo.NewProjectRepo(pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	templateRepo := repo.NewFlowTemplateRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	template, err := templateRepo.Create(ctx, repo.FlowTemplate{
+		OrganizationID: &projectRecord.OrganizationID,
+		ProjectID:      &project.ID,
+		Slug:           "approve-auto-work-commit-" + strings.ToLower(uuid.NewString()[:8]),
+		DisplayName:    "Approve Auto Work Commit " + uuid.NewString()[:8],
+		Description:    "test auto-commit of missing work before review approval",
+		IsCurrent:      true,
+		Version:        1,
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	workNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Work",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create work node: %v", err)
+	}
+	reviewNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       2,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create review node: %v", err)
+	}
+	mergeNode, err := nodeRepo.Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Merge",
+		NodeType:       "merge",
+		Position:       3,
+		MaxVisits:      10,
+	})
+	if err != nil {
+		t.Fatalf("create merge node: %v", err)
+	}
+	workNode.NextNodeID = &reviewNode.ID
+	if _, err := nodeRepo.Update(ctx, workNode); err != nil {
+		t.Fatalf("update work node: %v", err)
+	}
+	reviewNode.NextNodeID = &mergeNode.ID
+	if _, err := nodeRepo.Update(ctx, reviewNode); err != nil {
+		t.Fatalf("update review node: %v", err)
+	}
+	template.StartNodeID = &workNode.ID
+	if _, err := templateRepo.Update(ctx, template); err != nil {
+		t.Fatalf("update template: %v", err)
+	}
+	description := "Define validation scope. Output: validation_scope.md with scenario list, SLAs, and decision criteria."
+	createdBy := uuid.Nil
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       project.ID,
+		Title:           "Scope & Success Criteria Definition",
+		Description:     &description,
+		WorkStatus:      "review",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &createdBy,
+		AssignedAgentID: &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &reviewNode.ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	workExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  workNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create work execution: %v", err)
+	}
+	workExecution, err = executionRepo.Complete(ctx, workExecution.ID)
+	if err != nil {
+		t.Fatalf("complete work execution: %v", err)
+	}
+	reviewExecution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  reviewNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("create review execution: %v", err)
+	}
+
+	workspaceRoot := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", workspaceRoot}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, strings.TrimSpace(string(out)))
+		}
+	}
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGit("add", "README.md")
+	runGit("commit", "-m", "initial")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "validation_scope.md"), []byte("# Validation Scope\n\nSubstantive content.\n"), 0o644); err != nil {
+		t.Fatalf("write deliverable: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: workspaceRoot})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.review_decision", map[string]any{
+		"flow_node_execution_id": reviewExecution.ID.String(),
+		"decision":               "approve",
+	})
+	if err != nil {
+		t.Fatalf("flow.review_decision approve: %v", err)
+	}
+	if got, _ := out["error"].(string); got != "" {
+		t.Fatalf("error = %q, want empty (output=%v)", got, out)
+	}
+
+	reloadedWork, err := executionRepo.GetByID(ctx, workExecution.ID)
+	if err != nil {
+		t.Fatalf("reload work execution: %v", err)
+	}
+	if reloadedWork.CommitSHA == nil || strings.TrimSpace(*reloadedWork.CommitSHA) == "" {
+		t.Fatal("expected completed work execution to receive canonical commit_sha")
+	}
+
+	statusCmd := exec.CommandContext(ctx, "git", "-C", workspaceRoot, "status", "--porcelain")
+	statusOut, err := statusCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v (%s)", err, strings.TrimSpace(string(statusOut)))
+	}
+	if strings.TrimSpace(string(statusOut)) != "" {
+		t.Fatalf("workspace not clean after approval flow: %s", strings.TrimSpace(string(statusOut)))
+	}
+}
+
 func TestIntegrationFlowReviewDecisionRejectCreatesCanonicalRejectionCommit(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -9279,6 +10043,189 @@ func TestIntegrationFlowRecoveryDecisionRetryCreatesFreshExecution(t *testing.T)
 	recoveryDecision, ok = repo.FlowExecutionRecoveryDecisionFromMetadata(updatedOldExecution.Metadata)
 	if !ok || recoveryDecision == nil || recoveryDecision.Decision != "retry" {
 		t.Fatalf("old execution recovery decision = %#v, want retry", recoveryDecision)
+	}
+}
+
+func TestIntegrationFlowRecoveryDecisionRetryFromReviewCreatesFreshWorkExecution(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	if len(nodes) < 2 {
+		t.Fatalf("nodes = %d, want at least work and review", len(nodes))
+	}
+	workNode := nodes[0]
+	reviewNode := nodes[1]
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "blocked",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &reviewNode.ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	now := time.Now().UTC()
+	execution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  reviewNode.ID,
+		VisitNumber: 2,
+		Status:      "rejected",
+		Metadata: repo.FlowExecutionMetadataWithRecoveryCheckpoint(json.RawMessage(`{}`), &repo.FlowExecutionRecoveryCheckpoint{
+			CheckpointType: "stranded_execution",
+			ResumeAction:   "await_pm_decision",
+			FailureClass:   "product_runtime",
+			FailureSummary: "review retry should re-enter work",
+			UpdatedAt:      &now,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.recovery_decision", map[string]any{
+		"flow_node_execution_id": execution.ID.String(),
+		"decision":               "retry",
+		"reason":                 "resume from rejected review back to work",
+	})
+	if err != nil {
+		t.Fatalf("flow.recovery_decision retry: %v", err)
+	}
+	if out["recovery_decision"] != "retry" {
+		t.Fatalf("recovery_decision = %v, want retry", out["recovery_decision"])
+	}
+	newExecutionID, err := uuid.Parse(strings.TrimSpace(fmt.Sprintf("%v", out["flow_node_execution_id"])))
+	if err != nil || newExecutionID == uuid.Nil {
+		t.Fatalf("new execution id = %v, want valid uuid", out["flow_node_execution_id"])
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if updatedTask.WorkStatus != "queued" {
+		t.Fatalf("task work_status = %q, want queued", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != workNode.ID {
+		t.Fatalf("current flow node = %v, want work node %s", updatedTask.CurrentFlowNodeID, workNode.ID)
+	}
+
+	newExecution, err := executionRepo.GetByID(ctx, newExecutionID)
+	if err != nil {
+		t.Fatalf("load new execution: %v", err)
+	}
+	if newExecution.Status != "active" {
+		t.Fatalf("new execution status = %q, want active", newExecution.Status)
+	}
+	if newExecution.FlowNodeID != workNode.ID {
+		t.Fatalf("new execution flow node = %s, want work node %s", newExecution.FlowNodeID, workNode.ID)
+	}
+}
+
+func TestIntegrationFlowRecoveryDecisionRetryFromActiveWorkPreservesInProgress(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("list flow nodes: %v", err)
+	}
+	workNode := nodes[0]
+
+	task := testutil.MakeTask(t, pool, project.ID, testutil.MakeTaskOptions{
+		FlowTemplateID: &template.ID,
+		WorkStatus:     "in_progress",
+		CreatedByType:  "system",
+		CreatedByID: func() *uuid.UUID {
+			value := uuid.Nil
+			return &value
+		}(),
+	})
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.SetFlowNode(ctx, task.ID, &workNode.ID); err != nil {
+		t.Fatalf("set task current flow node: %v", err)
+	}
+
+	executionRepo := repo.NewFlowNodeExecutionRepo(pool)
+	now := time.Now().UTC()
+	execution, err := executionRepo.Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  workNode.ID,
+		VisitNumber: 3,
+		Status:      "active",
+		Metadata: repo.FlowExecutionMetadataWithRecoveryCheckpoint(json.RawMessage(`{}`), &repo.FlowExecutionRecoveryCheckpoint{
+			CheckpointType: "stranded_execution",
+			ResumeAction:   "await_pm_decision",
+			FailureClass:   "product_runtime",
+			FailureSummary: "active work retry should stay in progress",
+			UpdatedAt:      &now,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "flow.recovery_decision", map[string]any{
+		"flow_node_execution_id": execution.ID.String(),
+		"decision":               "retry",
+		"reason":                 "active work retry should not demote to queued",
+	})
+	if err != nil {
+		t.Fatalf("flow.recovery_decision retry: %v", err)
+	}
+	if out["recovery_decision"] != "retry" {
+		t.Fatalf("recovery_decision = %v, want retry", out["recovery_decision"])
+	}
+	if got := fmt.Sprintf("%v", out["task_work_status"]); got != "in_progress" {
+		t.Fatalf("task_work_status = %v, want in_progress", out["task_work_status"])
+	}
+	newExecutionID, err := uuid.Parse(strings.TrimSpace(fmt.Sprintf("%v", out["flow_node_execution_id"])))
+	if err != nil || newExecutionID == uuid.Nil {
+		t.Fatalf("new execution id = %v, want valid uuid", out["flow_node_execution_id"])
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if updatedTask.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updatedTask.WorkStatus)
+	}
+	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != workNode.ID {
+		t.Fatalf("current flow node = %v, want work node %s", updatedTask.CurrentFlowNodeID, workNode.ID)
+	}
+
+	newExecution, err := executionRepo.GetByID(ctx, newExecutionID)
+	if err != nil {
+		t.Fatalf("load new execution: %v", err)
+	}
+	if newExecution.Status != "active" {
+		t.Fatalf("new execution status = %q, want active", newExecution.Status)
+	}
+	if newExecution.FlowNodeID != workNode.ID {
+		t.Fatalf("new execution flow node = %s, want work node %s", newExecution.FlowNodeID, workNode.ID)
 	}
 }
 

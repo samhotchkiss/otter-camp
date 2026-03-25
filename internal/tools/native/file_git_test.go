@@ -274,6 +274,28 @@ func TestGitLogLimitAtMostFive(t *testing.T) {
 	}
 }
 
+func TestGitLogReturnsEmptyOnUnbornBranch(t *testing.T) {
+	executor := NewExecutor(ExecutorOptions{
+		WorkspaceRoot: t.TempDir(),
+		Command: func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+			if len(args) > 0 && args[0] == "log" {
+				return helperCommand(ctx, "git-log-unborn", nil)
+			}
+			t.Fatalf("unexpected git args: %v", args)
+			return nil
+		},
+	})
+
+	out, err := executor.Execute(testExecCtx(), "git.log", map[string]any{"limit": 5})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	commits, _ := out["commits"].([]map[string]any)
+	if len(commits) != 0 {
+		t.Fatalf("commits length = %d, want 0", len(commits))
+	}
+}
+
 func containsArg(args []string, needle string) bool {
 	for _, arg := range args {
 		if arg == needle {
@@ -343,6 +365,9 @@ func TestHelperProcess(t *testing.T) {
 		}
 		fmt.Fprint(os.Stdout, strings.Join(lines, "\n"))
 		os.Exit(0)
+	case "git-log-unborn":
+		fmt.Fprint(os.Stdout, "fatal: your current branch 'main' does not have any commits yet\n")
+		os.Exit(128)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown helper mode: %s", mode)
 		os.Exit(2)

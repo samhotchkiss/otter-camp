@@ -180,7 +180,7 @@ func run(args []string) int {
 	case "stop":
 		return runServerCommand([]string{"stop"})
 	case "worker":
-		return runWorker()
+		return runWorker(remaining[1:])
 	case "bootstrap":
 		return runBootstrap()
 	case "migrate":
@@ -542,7 +542,20 @@ func runServe() int {
 	return 0
 }
 
-func runWorker() int {
+func runWorker(args []string) int {
+	flags := flag.NewFlagSet("worker", flag.ContinueOnError)
+	concurrency := flags.Int("concurrency", 0, "worker concurrency")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "worker argument error: %v\n", err)
+		return 1
+	}
+	if *concurrency > 0 {
+		if err := os.Setenv("OTTERCAMP_WORKER_CONCURRENCY", strconv.Itoa(*concurrency)); err != nil {
+			fmt.Fprintf(os.Stderr, "worker env error: %v\n", err)
+			return 1
+		}
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)

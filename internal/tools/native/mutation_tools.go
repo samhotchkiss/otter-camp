@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -24,8 +25,8 @@ import (
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/assignmentrole"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
-	"github.com/samhotchkiss/otter-camp/internal/flowcommit"
 	flowsvc "github.com/samhotchkiss/otter-camp/internal/flow"
+	"github.com/samhotchkiss/otter-camp/internal/flowcommit"
 	"github.com/samhotchkiss/otter-camp/internal/flowpolicy"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
 	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
@@ -35,7 +36,6 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/toolargs"
-	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
 var slugStripPattern = regexp.MustCompile(`[^a-z0-9\-]+`)
@@ -216,11 +216,22 @@ func looksLikeNarratedTaskFileWritePlaceholder(content string) bool {
 	}
 	if !containsAnySubstring(firstLine,
 		"good.",
+		"good!",
 		"great.",
+		"great!",
 		"excellent.",
+		"excellent!",
 		"perfect.",
+		"perfect!",
+		"the recovery target is",
+		"i can see the situation clearly",
+		"now i understand",
+		"based on the task description",
+		"based on my",
 		"now i have",
 		"i now have",
+		"the boundary test design file exists",
+		"the target file exists",
 		"let me ",
 		"i'll ",
 		"i will ",
@@ -232,28 +243,56 @@ func looksLikeNarratedTaskFileWritePlaceholder(content string) bool {
 		"let me look at",
 		"let me examine",
 		"let me check",
+		"let me read",
 		"let me write",
 		"let me use",
 		"let me try",
+		"let me now write",
+		"let me now execute",
+		"let me now produce",
 		"i'll create",
 		"i will create",
 		"i'll write",
 		"i will write",
 		"i'll begin by",
 		"i will begin by",
+		"i need to execute",
+		"i need to produce",
+		"i need to consolidate",
+		"according to the recovery guidance",
+		"now i need to verify",
+		"let me check the planning artifacts",
+		"writing the comprehensive",
+		"writing the concrete",
+		"writing the boundary test",
 	) {
 		return false
 	}
 	return containsAnySubstring(lower,
 		"deliverable",
 		"document",
+		"placeholder",
+		"recovery target",
+		"planning artifacts",
+		"boundary test design file",
+		"ready for execution phase",
 		"specification",
 		"requirements",
 		"implementation details",
 		"validation logic",
 		"the task requires me to",
+		"task description and recovery instructions",
 		"output: `",
 		"system prompt",
+		"the previous",
+		"was rejected because",
+		"test plan:",
+		"scenario 1",
+		"scenario 2",
+		"scenario 3",
+		"scenario 4",
+		"scenario 5",
+		"acceptance criteria",
 		"with:\n1.",
 		"with:\r\n1.",
 		"1. ",
@@ -261,6 +300,316 @@ func looksLikeNarratedTaskFileWritePlaceholder(content string) bool {
 		"3. ",
 		"4. ",
 	)
+}
+
+func looksLikeExecutionPlanFileWrite(path, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	normalizedPath := strings.ToLower(normalizeWorkspacePath(path))
+	if strings.Contains(normalizedPath, "validation-plan") &&
+		containsAnySubstring(lower,
+			"validation objective",
+			"validation checkpoints",
+			"success criteria",
+			"failure mode registry",
+			"validation execution plan",
+		) {
+		return false
+	}
+	if !strings.Contains(normalizedPath, "test-execution") &&
+		!strings.Contains(normalizedPath, "execution-plan") &&
+		!strings.Contains(lower, "execution plan") {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"scenario execution plan",
+		"## scenario overview",
+		"## execution phases",
+		"## phase 1:",
+	) {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"## acceptance criteria",
+		"## success metrics",
+		"- [ ]",
+		"verification method",
+	) {
+		return false
+	}
+	return !containsAnySubstring(lower,
+		"## observed",
+		"## findings",
+		"## evidence collected",
+		"## execution results",
+		"pass/fail decision",
+	)
+}
+
+func looksLikeExecutionLogWithoutEvidence(path, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	normalizedPath := strings.ToLower(normalizeWorkspacePath(path))
+	if !strings.Contains(normalizedPath, "test-execution-") && !strings.Contains(lower, "execution log") {
+		return false
+	}
+	if containsAnySubstring(lower,
+		"## what is blocked",
+		"## situation summary",
+		"ready to execute — blocked",
+		"ready to execute - blocked",
+		"awaiting input from",
+		"cannot proceed without",
+		"required to proceed",
+		"not available in task context",
+		"status assessment",
+		"work status assessment",
+		"root cause of prior blocking",
+		"recommended actions",
+	) {
+		return true
+	}
+	if containsAnySubstring(lower,
+		"- observed: document the actual outcome",
+		"- result: pass or fail",
+		"- expected: record the intended",
+		"- setup: define the relevant request",
+	) {
+		return true
+	}
+	return false
+}
+
+func looksLikeExecutionSpecCompletionMemoWithoutArtifacts(path, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	normalizedPath := strings.ToLower(normalizeWorkspacePath(path))
+	if strings.HasPrefix(normalizedPath, "planning/") ||
+		strings.HasPrefix(normalizedPath, "review/") ||
+		strings.HasPrefix(normalizedPath, "reviews/") ||
+		strings.HasPrefix(normalizedPath, ".ottercamp/review/") ||
+		strings.HasPrefix(normalizedPath, ".ottercamp/reviews/") {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"- kind: prd_spec",
+		"- playbook: execution_spec",
+	) {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"## goals",
+		"## non-goals",
+		"## scope",
+		"## constraints",
+		"## success metrics",
+	) {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"fixture completeness",
+		"workflow definition",
+		"review templates",
+		"documentation completeness",
+		"environment readiness",
+		"data traceability",
+		"scope is clear",
+		"production-ready",
+		"fixtures are created",
+		"documentation is complete",
+		"✓",
+	) {
+		return false
+	}
+	if containsAnySubstring(lower,
+		"```",
+		"`ottercamp",
+		"`curl",
+		"`git ",
+		"`work/",
+		"`planning/",
+		"`review/",
+		".json",
+		".yaml",
+		".yml",
+		".csv",
+		"work/",
+		"planning/",
+		"review/",
+		"/users/",
+		"{\n",
+		"{\r\n",
+		"[\n",
+		"[\r\n",
+	) {
+		return false
+	}
+	return true
+}
+
+func looksLikeDeliverableCompletionSummaryWithoutBody(path, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	normalizedPath := strings.ToLower(normalizeWorkspacePath(path))
+	if strings.HasPrefix(normalizedPath, "planning/") ||
+		strings.HasPrefix(normalizedPath, "review/") ||
+		strings.HasPrefix(normalizedPath, "reviews/") ||
+		strings.HasPrefix(normalizedPath, ".ottercamp/review/") ||
+		strings.HasPrefix(normalizedPath, ".ottercamp/reviews/") {
+		return false
+	}
+	if strings.Count(lower, ".md") < 2 {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"substantive deliverables produced",
+		"planning artifacts",
+		"quality status",
+		"ready for internal review gate",
+		"deliverable status",
+	) {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"**test design (",
+		"**prd** (",
+		"**acceptance criteria** (",
+		"**implementation plan** (",
+		"**dependency log** (",
+		"primary deliverable",
+		"planning artifacts",
+	) {
+		return false
+	}
+	if containsAnySubstring(lower,
+		"## test cases",
+		"## rate limit",
+		"## capacity",
+		"## expected responses",
+		"## setup",
+		"## acceptance criteria",
+		"## execution steps",
+	) {
+		return false
+	}
+	return true
+}
+
+func taskDraftSemanticallyMismatchesScope(taskRecord repo.ProjectTask, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	taskTokens := taskScopeTokens(taskRecord)
+	if len(taskTokens) < 2 {
+		return false
+	}
+
+	var draftBuilder strings.Builder
+	if heading := leadingMarkdownHeading(trimmed); heading != "" {
+		draftBuilder.WriteString(heading)
+		draftBuilder.WriteByte(' ')
+	}
+	draftBuilder.WriteString(trimmed)
+	draftTokens := draftScopeTokens(draftBuilder.String())
+	if len(draftTokens) == 0 {
+		return false
+	}
+	matchCount := 0
+	for token := range taskTokens {
+		if _, ok := draftTokens[token]; ok {
+			matchCount++
+		}
+	}
+	requiredMatches := 1
+	if len(taskTokens) >= 4 {
+		requiredMatches = 2
+	}
+	return matchCount < requiredMatches
+}
+
+func taskScopeTokens(taskRecord repo.ProjectTask) map[string]struct{} {
+	var raw strings.Builder
+	raw.WriteString(strings.TrimSpace(taskRecord.Title))
+	if taskRecord.Description != nil {
+		if description := strings.TrimSpace(*taskRecord.Description); description != "" {
+			raw.WriteByte(' ')
+			raw.WriteString(description)
+		}
+	}
+	return draftScopeTokens(raw.String())
+}
+
+func draftScopeTokens(raw string) map[string]struct{} {
+	tokens := deliverableMatchTokens(raw)
+	for _, stop := range []string{
+		"about", "actual", "analysis", "baseline", "body", "capture", "caught", "cases",
+		"complete", "completed", "concrete", "coverage", "deliverable", "documented",
+		"evidence", "execute", "executed", "executing", "execution", "findings",
+		"gracefully", "handling", "logged", "messages", "objective", "observed",
+		"outputs", "pass", "phase", "produce", "record", "results", "review",
+		"scenario", "scenarios", "status", "summary", "system", "task", "test",
+		"tests", "validate", "validation", "verify", "work",
+	} {
+		delete(tokens, stop)
+	}
+	return tokens
+}
+
+func leadingMarkdownHeading(content string) string {
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			return strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+		}
+		break
+	}
+	return ""
+}
+
+func deliverableMatchTokens(raw string) map[string]struct{} {
+	cleaned := strings.ToLower(strings.TrimSpace(raw))
+	cleaned = strings.TrimSuffix(cleaned, filepath.Ext(cleaned))
+	replacer := strings.NewReplacer("-", " ", "_", " ", "/", " ", ".", " ", ":", " ")
+	cleaned = replacer.Replace(cleaned)
+	fields := strings.Fields(cleaned)
+	tokens := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		if strings.HasPrefix(field, "oc") && len(field) > 2 {
+			if _, err := strconv.Atoi(strings.TrimLeft(field[2:], "0")); err == nil {
+				continue
+			}
+		}
+		switch field {
+		case "md", "spec", "specification", "document", "draft", "deliverable", "complete", "final", "the", "and":
+			continue
+		}
+		if len(field) < 3 {
+			continue
+		}
+		tokens[field] = struct{}{}
+	}
+	return tokens
 }
 
 func containsAnySubstring(content string, needles ...string) bool {
@@ -350,25 +699,42 @@ func (e *NativeToolExecutor) taskSessionGitCommitBlocked(ctx context.Context, sc
 	}, true, nil
 }
 
-func (e *NativeToolExecutor) taskSessionDirectDoneBlocked(ctx context.Context, scope workspaceScope, taskRecord repo.ProjectTask) (map[string]any, bool, error) {
+func (e *NativeToolExecutor) taskSessionDirectStatusBlocked(ctx context.Context, scope workspaceScope, taskRecord repo.ProjectTask, desiredStatus string) (map[string]any, bool, error) {
 	if e == nil || scope.sessionID == nil || *scope.sessionID == uuid.Nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
 		return nil, false, nil
 	}
 	if taskRecord.ID == uuid.Nil || taskRecord.ID != *scope.taskID || taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {
 		return nil, false, nil
 	}
-	message := "This task is flow-owned. Do not mark it done with task.update. Finish the concrete deliverable work for the current node and let the runtime advance the flow."
+	desiredStatus = strings.ToLower(strings.TrimSpace(desiredStatus))
+	currentStatus := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
+	if desiredStatus == "" || desiredStatus == currentStatus {
+		return nil, false, nil
+	}
+	errorCode := "flow_owned_status_blocked"
+	message := "This task is flow-owned. Do not change work_status with task.update from a task-scoped session. Finish the concrete deliverable work for the current node and let the runtime advance the flow."
+	if desiredStatus == "done" {
+		errorCode = "flow_owned_done_blocked"
+		message = "This task is flow-owned. Do not mark it done with task.update. Finish the concrete deliverable work for the current node and let the runtime advance the flow."
+	}
 	if e.flowNodes != nil {
 		if node, err := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID); err == nil {
 			if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
-				message = "This task is in a review node. Do not mark it done with task.update. Inspect the deliverable and use flow.review_decision to approve or reject the review step."
+				if desiredStatus == "done" {
+					message = "This task is in a review node. Do not mark it done with task.update. Inspect the deliverable and use flow.review_decision to approve or reject the review step."
+				} else {
+					errorCode = "flow_owned_review_status_blocked"
+					message = "This task is in a review node. Do not change work_status with task.update. Inspect the deliverable and use flow.review_decision to approve or reject the review step."
+				}
+			} else if desiredStatus == "review" {
+				message = "This task is flow-owned. Do not move it to review with task.update from a task-scoped session. Finish the concrete deliverable work for the current node and let the runtime advance the flow."
 			}
 		} else if !errors.Is(err, repo.ErrNotFound) {
 			return nil, false, err
 		}
 	}
 	return map[string]any{
-		"error":   "flow_owned_done_blocked",
+		"error":   errorCode,
 		"message": message,
 	}, true, nil
 }
@@ -492,6 +858,26 @@ func (e *NativeToolExecutor) rejectReviewTaskMutation(ctx context.Context, scope
 	return map[string]any{
 		"error":   "review_action_required",
 		"message": fmt.Sprintf("This task is currently in review. Do not modify `%s` from the review lane unless it is a review-scoped markdown artifact. Inspect the existing deliverables, then call `flow.review_decision` with the active `flow_node_execution_id` and `decision=approve` or `decision=reject`. Repo-backed review notes must stay under `review/`, `reviews/`, `.ottercamp/review/`, or `.ottercamp/reviews/` and use CriticMarkup markdown annotations rather than continuing the deliverable implementation.", normalizedPath),
+	}, true, nil
+}
+
+func (e *NativeToolExecutor) rejectReviewTaskCLIExecute(ctx context.Context, scope workspaceScope) (map[string]any, bool, error) {
+	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return nil, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return nil, false, nil
+	}
+	return map[string]any{
+		"error":   "review_action_required",
+		"message": "This task is currently in review. Do not use cli.execute from the review lane. Inspect the existing deliverables with bounded file/git tools, then call `flow.review_decision` with the active `flow_node_execution_id` and `decision=approve` or `decision=reject`.",
 	}, true, nil
 }
 
@@ -1074,6 +1460,30 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 			"message": "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
 		}, nil
 	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeExecutionPlanFileWrite(renderedPath, content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be an execution plan/checklist, not concrete execution evidence. Write the real execution log or results directly.",
+		}, nil
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeExecutionLogWithoutEvidence(renderedPath, content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be an execution-log scaffold or blocked-status memo without concrete execution evidence. Write actual observed results, evidence, and pass/fail outcomes directly.",
+		}, nil
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeExecutionSpecCompletionMemoWithoutArtifacts(renderedPath, content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be a polished execution-spec completion memo without concrete artifact evidence. Write the actual fixture data, commands, paths, or other produced outputs directly.",
+		}, nil
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeDeliverableCompletionSummaryWithoutBody(renderedPath, content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be a completion summary about deliverables and review readiness, not the concrete deliverable body itself. Write the actual task document or produced artifact contents directly.",
+		}, nil
+	}
 	encoding := "utf8"
 	payload := []byte(content)
 	if rawEncoding, ok := readString(normalizedInput, "encoding"); ok && strings.EqualFold(rawEncoding, "base64") {
@@ -1397,6 +1807,15 @@ func (e *NativeToolExecutor) handleCLIExecute(ctx context.Context, input map[str
 	if e.cli == nil {
 		return map[string]any{"error": "cli_executor_unavailable"}, nil
 	}
+	scope, err := e.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if blocked, reject, rejectErr := e.rejectReviewTaskCLIExecute(ctx, scope); rejectErr != nil {
+		return nil, rejectErr
+	} else if reject {
+		return blocked, nil
+	}
 	return e.cli.Execute(ctx, input)
 }
 
@@ -1490,7 +1909,8 @@ func (e *NativeToolExecutor) handleProjectCreate(ctx context.Context, input map[
 		return map[string]any{"error": "name_required"}, nil
 	}
 	slug, ok := readString(input, "slug")
-	if !ok || slug == "" {
+	explicitSlug := ok && strings.TrimSpace(slug) != ""
+	if !explicitSlug {
 		slug = normalizeSlug(name)
 	}
 	description, _ := readString(input, "description")
@@ -1498,42 +1918,65 @@ func (e *NativeToolExecutor) handleProjectCreate(ctx context.Context, input map[
 	if !ok || deliveryMode == "" {
 		deliveryMode = "gated"
 	}
+	deliveryMode = normalizeProjectDeliveryModeInput(deliveryMode)
 	settings, err := applyReviewPolicyInput(json.RawMessage(`{"requires_pm_assignment_before_queue":true}`), input)
 	if err != nil {
 		return map[string]any{"error": err.Error()}, nil
 	}
 	actor := actorFromContext(ctx)
 	var created repo.Project
-	if e.projectService != nil {
-		record, createErr := e.projectService.Create(ctx, projectsvc.CreateProjectRequest{
-			OrganizationID: scope.organizationID,
-			Slug:           slug,
-			DisplayName:    name,
-			Description:    description,
-			DeliveryMode:   deliveryMode,
-			Settings:       settings,
-			CreatedByType:  actor.createdByType,
-			CreatedByID:    actor.createdByID,
-		})
-		if createErr != nil {
+	candidateSlugs := []string{slug}
+	if !explicitSlug {
+		for _, suffix := range []string{
+			strings.ToLower(uuid.NewString()[:6]),
+			strings.ToLower(uuid.NewString()[:8]),
+		} {
+			candidateSlugs = append(candidateSlugs, normalizeSlug(slug+"-"+suffix))
+		}
+	}
+	var createErr error
+	for _, candidateSlug := range candidateSlugs {
+		if e.projectService != nil {
+			var record *projectsvc.Project
+			record, createErr = e.projectService.Create(ctx, projectsvc.CreateProjectRequest{
+				OrganizationID: scope.organizationID,
+				Slug:           candidateSlug,
+				DisplayName:    name,
+				Description:    description,
+				DeliveryMode:   deliveryMode,
+				Settings:       settings,
+				CreatedByType:  actor.createdByType,
+				CreatedByID:    actor.createdByID,
+			})
+			if createErr == nil {
+				created = repo.Project(*record)
+				break
+			}
+		} else {
+			var record repo.Project
+			record, createErr = e.projects.Create(ctx, repo.Project{
+				OrganizationID: scope.organizationID,
+				Slug:           candidateSlug,
+				DisplayName:    name,
+				Description:    description,
+				DeliveryMode:   deliveryMode,
+				CreatedByType:  actor.createdByType,
+				CreatedByID:    actor.createdByID,
+				Settings:       settings,
+			})
+			if createErr == nil {
+				created = record
+				break
+			}
+		}
+		if !errors.Is(createErr, projectsvc.ErrSlugTaken) || explicitSlug {
 			return nil, createErr
 		}
-		created = repo.Project(*record)
-	} else {
-		record, createErr := e.projects.Create(ctx, repo.Project{
-			OrganizationID: scope.organizationID,
-			Slug:           slug,
-			DisplayName:    name,
-			Description:    description,
-			DeliveryMode:   deliveryMode,
-			CreatedByType:  actor.createdByType,
-			CreatedByID:    actor.createdByID,
-			Settings:       settings,
-		})
-		if createErr != nil {
-			return nil, createErr
-		}
-		created = record
+	}
+	if createErr != nil {
+		return nil, createErr
+	}
+	if e.projectService == nil {
 		if _, err := e.ensureProjectRepoBinding(ctx, created.ID); err != nil {
 			return nil, err
 		}
@@ -1598,7 +2041,7 @@ func (e *NativeToolExecutor) handleProjectUpdate(ctx context.Context, input map[
 		current.Description = description
 	}
 	if deliveryMode, ok := readString(input, "delivery_mode"); ok && deliveryMode != "" {
-		current.DeliveryMode = deliveryMode
+		current.DeliveryMode = normalizeProjectDeliveryModeInput(deliveryMode)
 	}
 	if settings, settingsErr := applyReviewPolicyInput(current.Settings, input); settingsErr != nil {
 		return map[string]any{"error": settingsErr.Error()}, nil
@@ -1651,6 +2094,20 @@ func (e *NativeToolExecutor) handleProjectArchive(ctx context.Context, input map
 		"project_id": projectID,
 		"status":     "archived",
 	}, nil
+}
+
+func normalizeProjectDeliveryModeInput(value string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	switch trimmed {
+	case "", "gated":
+		return "gated"
+	case "continuous", "scheduled":
+		return trimmed
+	case "execution_first", "validation", "agile", "execution", "project", "project_task", "async", "autonomous", "canary":
+		return "gated"
+	default:
+		return "gated"
+	}
 }
 
 func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[string]any) (map[string]any, error) {
@@ -1733,6 +2190,16 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 	if parentTask != nil && flowTemplateID == nil && parentTask.FlowTemplateID != nil && *parentTask.FlowTemplateID != uuid.Nil {
 		inheritedFlowTemplateID := *parentTask.FlowTemplateID
 		flowTemplateID = &inheritedFlowTemplateID
+	}
+	bootstrapSessionActive := parentTask == nil && e.activeProjectBootstrapSession(ctx, scope, projectID)
+	if parentTask == nil && flowTemplateID == nil && bootstrapSessionActive {
+		resolvedBootstrapFlowTemplateID, err := e.resolveBootstrapWorkstreamFlowTemplate(ctx, scope, projectID)
+		if err != nil {
+			return nil, err
+		}
+		if resolvedBootstrapFlowTemplateID != nil && *resolvedBootstrapFlowTemplateID != uuid.Nil {
+			flowTemplateID = resolvedBootstrapFlowTemplateID
+		}
 	}
 	planning, resolvedFlowTemplateID, enrichedMetadata, err := e.applyReviewRefinementPlanning(
 		ctx,
@@ -1842,6 +2309,9 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			}
 			if prepared.Applied {
 				return boundedTaskNeedsDecompositionResponse(title, description), nil
+			}
+			if resolvedFlowTemplateID != nil && blocksScope == "all" && !taskMetadataMarksOrchestrationOnly(enrichedMetadata) {
+				blocksScope = "none"
 			}
 		}
 	}
@@ -2213,6 +2683,12 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		}
 		current.BlocksScope = normalized
 	}
+	if _, ok := input["requires_human_review"]; ok {
+		if !strings.EqualFold(strings.TrimSpace(current.WorkStatus), "draft") {
+			return map[string]any{"error": "requires_human_review can only be changed while task is draft"}, nil
+		}
+		current.RequiresHumanReview = readBool(input, "requires_human_review", current.RequiresHumanReview)
+	}
 	if metadata, policyErr := applyReviewPolicyInput(current.Metadata, input); policyErr != nil {
 		return map[string]any{"error": policyErr.Error()}, nil
 	} else if _, ok := input["review_policy"]; ok {
@@ -2351,12 +2827,12 @@ func (e *NativeToolExecutor) handleTaskUpdate(ctx context.Context, input map[str
 		} else if _, hasFeedback := input["reopen_feedback"]; hasFeedback {
 			return map[string]any{"error": "reopen_feedback can only be used when reopening a completed child task"}, nil
 		}
+		if blocked, reject, guardErr := e.taskSessionDirectStatusBlocked(ctx, scope, current, desiredStatus); guardErr != nil {
+			return nil, guardErr
+		} else if reject {
+			return blocked, nil
+		}
 		if strings.EqualFold(desiredStatus, "done") {
-			if blocked, reject, guardErr := e.taskSessionDirectDoneBlocked(ctx, scope, current); guardErr != nil {
-				return nil, guardErr
-			} else if reject {
-				return blocked, nil
-			}
 			if _, validationErr := e.validateTaskDoneTransition(ctx, current); validationErr != nil {
 				return map[string]any{"error": validationErr.Error()}, nil
 			}
@@ -2596,7 +3072,11 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		}, nil
 	}
 	if stringSliceContains(stepSlugs, "select-first-wave") {
-		executableCandidates := bootstrapFirstWaveSelectableTasks(projectTasks)
+		blockedTaskIDs, err := e.loadBootstrapBlockedTaskIDs(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		executableCandidates := bootstrapFirstWaveSelectableTasksExcludingBlocked(projectTasks, blockedTaskIDs)
 		selectionHints := bootstrapFirstWaveSelectionHints(executableCandidates)
 		if !explicitFirstWaveSelection && len(executableCandidates) > 1 {
 			if inferred := inferBootstrapFirstWaveSelection(executableCandidates); len(inferred) > 0 {
@@ -2613,6 +3093,13 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 					return map[string]any{
 						"error":                       "invalid_first_wave_selection",
 						"message":                     fmt.Sprintf("Task %d (%s) uses blocks_scope=all and cannot be selected into the first wave because it would block the rest of the wave from becoming runnable.", task.TaskNumber, task.Title),
+						"selectable_first_wave_tasks": selectionHints,
+					}, nil
+				}
+				if _, blocked := blockedTaskIDs[task.ID]; blocked {
+					return map[string]any{
+						"error":                       "invalid_first_wave_selection",
+						"message":                     fmt.Sprintf("Task %d (%s) still depends on unfinished prerequisite work and cannot be selected into the first wave until that prerequisite is completed or the first-wave subset is corrected.", task.TaskNumber, task.Title),
 						"selectable_first_wave_tasks": selectionHints,
 					}, nil
 				}
@@ -2723,7 +3210,11 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 	sort.Slice(completed, func(i, j int) bool {
 		return fmt.Sprintf("%v", completed[i]["step_slug"]) < fmt.Sprintf("%v", completed[j]["step_slug"])
 	})
-	selectableHints := bootstrapFirstWaveSelectionHints(bootstrapFirstWaveSelectableTasks(projectTasks))
+	blockedTaskIDs, err := e.loadBootstrapBlockedTaskIDs(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	selectableHints := bootstrapFirstWaveSelectionHints(bootstrapFirstWaveSelectableTasksExcludingBlocked(projectTasks, blockedTaskIDs))
 	response := map[string]any{
 		"project_id":               projectID,
 		"status":                   "persisted",
@@ -2785,6 +3276,11 @@ func resolveBootstrapFirstWaveSelection(input map[string]any, tasks []repo.Proje
 }
 
 func bootstrapFirstWaveSelectableTasks(tasks []repo.ProjectTask) []repo.ProjectTask {
+	return bootstrapFirstWaveSelectableTasksExcludingBlocked(tasks, nil)
+}
+
+func bootstrapFirstWaveSelectableTasksExcludingBlocked(tasks []repo.ProjectTask, blockedTaskIDs map[uuid.UUID]struct{}) []repo.ProjectTask {
+	parentTaskIDs := bootstrapDecompositionParentTaskIDs(tasks)
 	selectable := make([]repo.ProjectTask, 0, len(tasks))
 	for _, task := range tasks {
 		if bootstrapGateTask(task) || bootstrapSetupTask(task) {
@@ -2793,9 +3289,69 @@ func bootstrapFirstWaveSelectableTasks(tasks []repo.ProjectTask) []repo.ProjectT
 		if strings.EqualFold(strings.TrimSpace(task.BlocksScope), "all") {
 			continue
 		}
+		if _, isParent := parentTaskIDs[task.ID]; isParent {
+			continue
+		}
+		if _, blocked := blockedTaskIDs[task.ID]; blocked {
+			continue
+		}
+		if bootstrapFirstWaveTaskShouldStayDeferred(task) {
+			continue
+		}
 		selectable = append(selectable, task)
 	}
 	return selectable
+}
+
+func (e *NativeToolExecutor) loadBootstrapBlockedTaskIDs(ctx context.Context, projectID uuid.UUID) (map[uuid.UUID]struct{}, error) {
+	blocked := make(map[uuid.UUID]struct{})
+	if e == nil || e.pool == nil || projectID == uuid.Nil {
+		return blocked, nil
+	}
+	rows, err := e.pool.Query(ctx, `
+		SELECT DISTINCT d.source_id
+		FROM project_task_dependency d
+		JOIN project_task source_task ON source_task.id = d.source_id
+		JOIN project_task depends_on_task ON depends_on_task.id = d.depends_on_id
+		WHERE source_task.project_id = $1
+		  AND d.source_type = 'project_task'
+		  AND d.depends_on_type = 'project_task'
+		  AND lower(trim(depends_on_task.work_status)) NOT IN ('done', 'cancelled')
+	`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var taskID uuid.UUID
+		if scanErr := rows.Scan(&taskID); scanErr != nil {
+			return nil, scanErr
+		}
+		if taskID != uuid.Nil {
+			blocked[taskID] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return blocked, nil
+}
+
+func bootstrapDecompositionParentTaskIDs(tasks []repo.ProjectTask) map[uuid.UUID]struct{} {
+	parentIDs := make(map[uuid.UUID]struct{})
+	for _, task := range tasks {
+		metadata := metadataObject(task.Metadata)
+		parentIDText := strings.TrimSpace(readStringValue(metadata["decomposition_parent_task_id"]))
+		if parentIDText == "" {
+			continue
+		}
+		parentID, err := uuid.Parse(parentIDText)
+		if err != nil || parentID == uuid.Nil {
+			continue
+		}
+		parentIDs[parentID] = struct{}{}
+	}
+	return parentIDs
 }
 
 func bootstrapFirstWaveSelectionHints(tasks []repo.ProjectTask) []map[string]any {
@@ -2868,6 +3424,21 @@ func bootstrapFirstWaveSelectionHint(task repo.ProjectTask) (bool, bool) {
 	default:
 		return false, false
 	}
+}
+
+func bootstrapFirstWaveTaskShouldStayDeferred(task repo.ProjectTask) bool {
+	if selected, known := bootstrapFirstWaveSelectionHint(task); known {
+		return !selected
+	}
+	title := strings.ToLower(strings.TrimSpace(task.Title))
+	if title == "" {
+		return false
+	}
+	return strings.Contains(title, "final report") ||
+		strings.Contains(title, "pass/fail determination") ||
+		strings.Contains(title, "summary & report") ||
+		strings.Contains(title, "summary and report") ||
+		(strings.Contains(title, "risk summary") && strings.Contains(title, "recommendation"))
 }
 
 func bootstrapTaskByID(tasks []repo.ProjectTask, taskID uuid.UUID) (repo.ProjectTask, bool) {
@@ -3121,6 +3692,10 @@ func (e *NativeToolExecutor) applyReviewRefinementPlanning(
 	flowTemplateID *uuid.UUID,
 	metadata json.RawMessage,
 ) (taskplan.Plan, *uuid.UUID, json.RawMessage, error) {
+	if flowTemplateID != nil && *flowTemplateID != uuid.Nil {
+		return taskplan.Plan{}, flowTemplateID, metadata, nil
+	}
+
 	projectSettings := json.RawMessage(`{}`)
 	if e.projects != nil {
 		projectRecord, err := e.projects.GetByID(ctx, projectID)
@@ -4666,6 +5241,18 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 			return nil, err
 		}
 		if dirty {
+			autoCommitted, autoErr := e.autoCommitMissingWorkBeforeReviewApproval(ctx, execution)
+			if autoErr != nil {
+				return nil, autoErr
+			}
+			if autoCommitted {
+				dirty, err = e.reviewExecutionWorkspaceDirty(ctx, execution.TaskID)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		if dirty {
 			return map[string]any{
 				"error":   "review_approval_requires_clean_workspace",
 				"message": "Approval must close with an empty runtime-owned commit. The review workspace still has file changes. Either discard them or reject the review with findings.",
@@ -4792,20 +5379,20 @@ func (e *NativeToolExecutor) resumeExecutionAfterRecoveryDecision(ctx context.Co
 		Type: "agent",
 		ID:   actorFromContext(ctx).createdByID,
 	}, map[string]any{
-		"transition_source":       "flow_recovery_decision",
-		"flow_node_execution_id":  updatedExecution.ID.String(),
-		"recovery_decision":       "resume",
+		"transition_source":        "flow_recovery_decision",
+		"flow_node_execution_id":   updatedExecution.ID.String(),
+		"recovery_decision":        "resume",
 		"recovery_decision_reason": reason,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
-		"task_id":                 taskRecord.ID.String(),
-		"task_work_status":        transitioned.WorkStatus,
-		"flow_node_execution_id":  updatedExecution.ID.String(),
-		"recovery_decision":       "resume",
-		"runtime_substate":        waiting,
+		"task_id":                taskRecord.ID.String(),
+		"task_work_status":       transitioned.WorkStatus,
+		"flow_node_execution_id": updatedExecution.ID.String(),
+		"recovery_decision":      "resume",
+		"runtime_substate":       waiting,
 	}, nil
 }
 
@@ -4824,18 +5411,37 @@ func (e *NativeToolExecutor) retryExecutionAfterRecoveryDecision(ctx context.Con
 		}
 		updatedExecution = abandoned
 	}
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") || node.RequiresHumanReview {
+		retryNodeID, retryNode, retryErr := e.recoveryDecisionRetryNode(ctx, node)
+		if retryErr != nil {
+			return nil, retryErr
+		}
+		if _, err := e.tasks.SetFlowNode(ctx, taskRecord.ID, &retryNodeID); err != nil {
+			return nil, err
+		}
+		taskRecord.CurrentFlowNodeID = &retryNodeID
+		node = retryNode
+	}
 	targetStatus := recoveryDecisionTaskStatus(node)
-	transitioned, err := e.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, targetStatus, tasksvc.Actor{
-		Type: "agent",
-		ID:   actorFromContext(ctx).createdByID,
-	}, map[string]any{
-		"transition_source":       "flow_recovery_decision",
-		"flow_node_execution_id":  updatedExecution.ID.String(),
-		"recovery_decision":       "retry",
-		"recovery_decision_reason": reason,
-	})
-	if err != nil {
-		return nil, err
+	transitionedStatus := strings.TrimSpace(taskRecord.WorkStatus)
+	if !strings.EqualFold(transitionedStatus, targetStatus) {
+		if strings.EqualFold(transitionedStatus, "in_progress") && strings.EqualFold(targetStatus, "queued") {
+			targetStatus = transitionedStatus
+		} else {
+			transitioned, err := e.taskService.TransitionStatusWithPayload(ctx, taskRecord.ID, targetStatus, tasksvc.Actor{
+				Type: "agent",
+				ID:   actorFromContext(ctx).createdByID,
+			}, map[string]any{
+				"transition_source":        "flow_recovery_decision",
+				"flow_node_execution_id":   updatedExecution.ID.String(),
+				"recovery_decision":        "retry",
+				"recovery_decision_reason": reason,
+			})
+			if err != nil {
+				return nil, err
+			}
+			transitionedStatus = transitioned.WorkStatus
+		}
 	}
 	if e.flowService == nil {
 		return map[string]any{"error": "flow_service_unavailable"}, nil
@@ -4845,12 +5451,39 @@ func (e *NativeToolExecutor) retryExecutionAfterRecoveryDecision(ctx context.Con
 		return nil, err
 	}
 	return map[string]any{
-		"task_id":                  taskRecord.ID.String(),
-		"task_work_status":         transitioned.WorkStatus,
-		"previous_execution_id":    updatedExecution.ID.String(),
-		"flow_node_execution_id":   nextExecution.ID.String(),
-		"recovery_decision":        "retry",
+		"task_id":                taskRecord.ID.String(),
+		"task_work_status":       transitionedStatus,
+		"previous_execution_id":  updatedExecution.ID.String(),
+		"flow_node_execution_id": nextExecution.ID.String(),
+		"recovery_decision":      "retry",
 	}, nil
+}
+
+func (e *NativeToolExecutor) recoveryDecisionRetryNode(ctx context.Context, node repo.FlowNode) (uuid.UUID, repo.FlowNode, error) {
+	if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") || node.RequiresHumanReview {
+		if node.RejectNodeID != nil && *node.RejectNodeID != uuid.Nil {
+			rejectNode, err := e.flowNodes.GetByID(ctx, *node.RejectNodeID)
+			if err != nil {
+				return uuid.Nil, repo.FlowNode{}, err
+			}
+			return rejectNode.ID, rejectNode, nil
+		}
+		nodes, err := e.flowNodes.GetByTemplateOrdered(ctx, node.FlowTemplateID)
+		if err != nil {
+			return uuid.Nil, repo.FlowNode{}, err
+		}
+		for i, candidate := range nodes {
+			if candidate.ID != node.ID {
+				continue
+			}
+			if i == 0 {
+				break
+			}
+			rejectNode := nodes[i-1]
+			return rejectNode.ID, rejectNode, nil
+		}
+	}
+	return node.ID, node, nil
 }
 
 func (e *NativeToolExecutor) recordBlockingRecoveryDecision(ctx context.Context, execution repo.FlowNodeExecution, taskRecord repo.ProjectTask, decision, reason string) (map[string]any, error) {
@@ -4932,15 +5565,118 @@ func (e *NativeToolExecutor) reviewExecutionWorkspaceDirty(ctx context.Context, 
 	return flowcommit.WorktreeDirty(ctx, root)
 }
 
-func (e *NativeToolExecutor) taskWorkspaceRoot(ctx context.Context, taskRecord repo.ProjectTask) (string, error) {
-	if trimmed := strings.TrimSpace(e.explicitRoot); trimmed != "" {
-		return filepath.Clean(trimmed), nil
+func (e *NativeToolExecutor) autoCommitMissingWorkBeforeReviewApproval(ctx context.Context, reviewExecution repo.FlowNodeExecution) (bool, error) {
+	if e == nil || e.flowExecs == nil || e.flowNodes == nil {
+		return false, nil
 	}
-	projectRecord, err := e.projects.GetByID(ctx, taskRecord.ProjectID)
+	reviewNode, err := e.flowNodes.GetByID(ctx, reviewExecution.FlowNodeID)
 	if err != nil {
-		return "", err
+		return false, err
 	}
-	return workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+	if !strings.EqualFold(strings.TrimSpace(reviewNode.NodeType), "review") {
+		return false, nil
+	}
+	dirtyPaths, err := e.reviewExecutionWorkspaceDirtyPaths(ctx, reviewExecution.TaskID)
+	if err != nil {
+		return false, err
+	}
+	if len(dirtyPaths) == 0 {
+		return false, nil
+	}
+	for _, path := range dirtyPaths {
+		if reviewScopedWorkspacePath(path) {
+			return false, nil
+		}
+	}
+	executions, err := e.flowExecs.ListByTask(ctx, reviewExecution.TaskID)
+	if err != nil {
+		return false, err
+	}
+	var candidate *repo.FlowNodeExecution
+	for i := range executions {
+		execution := executions[i]
+		if execution.ID == reviewExecution.ID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(execution.Status), "completed") {
+			continue
+		}
+		if execution.CommitSHA != nil && strings.TrimSpace(*execution.CommitSHA) != "" {
+			continue
+		}
+		node, nodeErr := e.flowNodes.GetByID(ctx, execution.FlowNodeID)
+		if nodeErr != nil {
+			return false, nodeErr
+		}
+		if strings.EqualFold(strings.TrimSpace(node.NodeType), "review") {
+			continue
+		}
+		copied := execution
+		candidate = &copied
+	}
+	if candidate == nil {
+		return false, nil
+	}
+	commitResult, err := e.createCanonicalExecutionCommit(ctx, *candidate, "", "")
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(commitResult.SHA) == "" {
+		return false, nil
+	}
+	if _, err := e.flowExecs.RecordCommitSHA(ctx, candidate.ID, commitResult.SHA); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *NativeToolExecutor) reviewExecutionWorkspaceDirtyPaths(ctx context.Context, taskID uuid.UUID) ([]string, error) {
+	taskRecord, err := e.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	root, err := e.taskWorkspaceRoot(ctx, taskRecord)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(output), "\n")
+	paths := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if len(line) < 4 {
+			continue
+		}
+		path := strings.TrimSpace(line[3:])
+		if idx := strings.Index(path, " -> "); idx >= 0 {
+			path = strings.TrimSpace(path[idx+4:])
+		}
+		path = normalizeWorkspacePath(path)
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
+}
+
+func reviewScopedWorkspacePath(path string) bool {
+	normalized := strings.Trim(strings.ToLower(strings.TrimSpace(path)), "/")
+	switch {
+	case strings.HasPrefix(normalized, "review/"),
+		strings.HasPrefix(normalized, "reviews/"),
+		strings.HasPrefix(normalized, ".ottercamp/review/"),
+		strings.HasPrefix(normalized, ".ottercamp/reviews/"):
+		return true
+	default:
+		return false
+	}
 }
 
 func canonicalExecutionCommitMessage(taskRecord repo.ProjectTask, node repo.FlowNode, visitNumber int, decision, summary string) string {

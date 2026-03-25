@@ -1344,6 +1344,9 @@ func (p *TaskQueueProcessor) handleTaskCompletedEvent(ctx context.Context, event
 	}
 	if payload.ProjectID != uuid.Nil {
 		if err := p.processNextEligibleQueuedTask(ctx, event, payload.ProjectID); err != nil {
+			if errors.Is(err, tasksvc.ErrFlowTemplateRequired) {
+				return nil
+			}
 			return err
 		}
 	}
@@ -1386,7 +1389,7 @@ func (p *TaskQueueProcessor) maybeAutoCompleteParentTask(ctx context.Context, co
 		Type:                           "system",
 		AllowOrchestrationAutoComplete: true,
 	})
-	if err == nil || errors.Is(err, repo.ErrConflict) || errors.Is(err, taskorchestration.ErrParentCompletionRequirements) {
+	if err == nil || errors.Is(err, repo.ErrConflict) || errors.Is(err, taskorchestration.ErrParentCompletionRequirements) || errors.Is(err, tasksvc.ErrFlowTemplateRequired) {
 		return nil
 	}
 	var invalidTransition tasksvc.ErrInvalidStatusTransition
@@ -1418,7 +1421,7 @@ func (p *TaskQueueProcessor) maybeAutoCompleteDormantParentTasks(ctx context.Con
 				progressed = true
 				continue
 			}
-			if errors.Is(err, repo.ErrConflict) || errors.Is(err, taskorchestration.ErrParentCompletionRequirements) {
+			if errors.Is(err, repo.ErrConflict) || errors.Is(err, taskorchestration.ErrParentCompletionRequirements) || errors.Is(err, tasksvc.ErrFlowTemplateRequired) {
 				continue
 			}
 			var invalidTransition tasksvc.ErrInvalidStatusTransition
@@ -1450,7 +1453,7 @@ func (p *TaskQueueProcessor) maybeAutoCompleteBootstrapPlanningTasks(ctx context
 			Type:                               "system",
 			AllowBootstrapPlanningAutoComplete: true,
 		})
-		if err == nil || errors.Is(err, repo.ErrConflict) || errors.Is(err, taskplan.ErrPlanningArtifactContractIncomplete) {
+		if err == nil || errors.Is(err, repo.ErrConflict) || errors.Is(err, taskplan.ErrPlanningArtifactContractIncomplete) || errors.Is(err, tasksvc.ErrFlowTemplateRequired) {
 			continue
 		}
 		var invalidTransition tasksvc.ErrInvalidStatusTransition

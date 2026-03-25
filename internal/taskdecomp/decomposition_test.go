@@ -322,6 +322,21 @@ func TestExtractDeliverablesIgnoresBareEstPrefixTimingNotes(t *testing.T) {
 	}
 }
 
+func TestExtractDeliverablesIgnoresDeferredQueueNotes(t *testing.T) {
+	description := strings.Join([]string{
+		"Produce final validation report with pass/fail determination, risk summary, and recommendations",
+		"Deferred task-queued after all test scenarios complete.",
+	}, "\n")
+
+	items := extractDeliverables(description)
+	want := []string{
+		"Produce final validation report with pass/fail determination, risk summary, and recommendations",
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Fatalf("extractDeliverables() = %v, want %v", items, want)
+	}
+}
+
 func TestExtractDeliverablesIgnoresExplanatoryCompanionSentences(t *testing.T) {
 	description := strings.Join([]string{
 		"Use the browser to navigate technonymous.org",

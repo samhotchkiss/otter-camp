@@ -1092,19 +1092,7 @@ func (b *Bootstrapper) upsertOrgProfile(ctx context.Context, organizationID uuid
 	current, err := b.getCurrentOrgProfile(ctx, organizationID, seed.LogicalProfileID)
 	switch {
 	case err == nil:
-		desired := repo.ModelProfile{
-			ProviderID:          providerID,
-			ModelName:           seed.ModelName,
-			ContextWindowTokens: seed.ContextWindowTokens,
-			MaxOutputTokens:     seed.MaxOutputTokens,
-			SupportsStreaming:   seed.SupportsStreaming,
-			SupportsVision:      seed.SupportsVision,
-			InvocationPurpose:   seed.InvocationPurpose,
-		}
-		if !profileNeedsRotation(current, desired) {
-			return current, nil
-		}
-		return b.profileRepo.Deprecate(ctx, current.ID, desired)
+		return current, nil
 	case errors.Is(err, repo.ErrNotFound):
 		orgID := organizationID
 		return b.profileRepo.Create(ctx, repo.ModelProfile{
@@ -1141,7 +1129,7 @@ func (b *Bootstrapper) getCurrentOrgProfile(ctx context.Context, organizationID 
 	}
 
 	row := b.rowQuerier.QueryRow(ctx, `
-		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
+		SELECT id, logical_profile_id, organization_id, version, is_current, provider_id, model_name, display_name, context_window_tokens, max_output_tokens, supports_streaming, supports_vision, temperature, invocation_purpose, fallback_profile_id, created_at, updated_at
 		FROM model_profile
 		WHERE organization_id = $1
 		  AND logical_profile_id = $2
@@ -1149,6 +1137,17 @@ func (b *Bootstrapper) getCurrentOrgProfile(ctx context.Context, organizationID 
 		LIMIT 1
 	`, organizationID, logicalID)
 
+	profile, err := scanBootstrapModelProfile(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repo.ModelProfile{}, repo.ErrNotFound
+	}
+	if err != nil {
+		return repo.ModelProfile{}, err
+	}
+	return profile, nil
+}
+
+func scanBootstrapModelProfile(row pgx.Row) (repo.ModelProfile, error) {
 	var profile repo.ModelProfile
 	err := row.Scan(
 		&profile.ID,
@@ -1158,6 +1157,7 @@ func (b *Bootstrapper) getCurrentOrgProfile(ctx context.Context, organizationID 
 		&profile.IsCurrent,
 		&profile.ProviderID,
 		&profile.ModelName,
+		&profile.DisplayName,
 		&profile.ContextWindowTokens,
 		&profile.MaxOutputTokens,
 		&profile.SupportsStreaming,
@@ -1168,13 +1168,7 @@ func (b *Bootstrapper) getCurrentOrgProfile(ctx context.Context, organizationID 
 		&profile.CreatedAt,
 		&profile.UpdatedAt,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return repo.ModelProfile{}, repo.ErrNotFound
-	}
-	if err != nil {
-		return repo.ModelProfile{}, err
-	}
-	return profile, nil
+	return profile, err
 }
 
 func (b *Bootstrapper) stubForTable(stepNumber int, stepName, tableName string) StepFunc {

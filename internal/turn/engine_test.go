@@ -24,11 +24,14 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/model"
 	"github.com/samhotchkiss/otter-camp/internal/projectfailure"
+	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
+	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"log/slog"
 )
@@ -57,8 +60,308 @@ func TestListeningEvalSkippedForSyncSinglePending(t *testing.T) {
 	}
 }
 
+func TestTurnRecoverableWorktreeRemoveError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "not a working tree",
+			err:  errors.New("git worktree remove --force /tmp/task-10: exit status 128: fatal: '/tmp/task-10' is not a working tree"),
+			want: true,
+		},
+		{
+			name: "legacy git file corruption",
+			err:  errors.New("git worktree remove --force /tmp/task-10: exit status 128: fatal: validation failed, cannot remove working tree: '/tmp/task-10/.git' is not a .git file, error code 7"),
+			want: true,
+		},
+		{
+			name: "legacy not a git repository",
+			err:  errors.New("git worktree remove --force /tmp/task-10: exit status 128: fatal: validation failed, cannot remove working tree: '/tmp/task-10/.git' not a git repository"),
+			want: true,
+		},
+		{
+			name: "unrelated git error",
+			err:  errors.New("git worktree remove --force /tmp/task-10: exit status 128: fatal: branch is currently checked out"),
+			want: false,
+		},
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := turnRecoverableWorktreeRemoveError(tc.err); got != tc.want {
+				t.Fatalf("turnRecoverableWorktreeRemoveError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeInheritedRunAttributionDropsTerminalRun(t *testing.T) {
+	pool := testdb.New(t)
+	engine := &TurnEngine{pool: pool}
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "sanitize-inherited-run-attribution-drops-terminal",
+		DisplayName: "Sanitize Inherited Run Attribution Drops Terminal",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	runID := uuid.New()
+	runStepID := uuid.New()
+	runAttemptID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO run (
+			id, organization_id, principal_type, principal_id, status, trigger_type, version, metadata, completed_at
+		) VALUES (
+			$1, $2, 'agent', $3, 'failed', 'scheduler', 1, '{}'::jsonb, now()
+		)
+	`, runID, org.ID, uuid.New()); err != nil {
+		t.Fatalf("insert failed run: %v", err)
+	}
+
+	gotRunID, gotRunStepID, gotRunAttemptID := engine.sanitizeInheritedRunAttribution(ctx, &runID, &runStepID, &runAttemptID)
+	if gotRunID != nil || gotRunStepID != nil || gotRunAttemptID != nil {
+		t.Fatalf("sanitizeInheritedRunAttribution() = (%v, %v, %v), want nil ids for failed run", gotRunID, gotRunStepID, gotRunAttemptID)
+	}
+}
+
+func TestSanitizeInheritedRunAttributionKeepsActiveRun(t *testing.T) {
+	pool := testdb.New(t)
+	engine := &TurnEngine{pool: pool}
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "sanitize-inherited-run-attribution-keeps-active",
+		DisplayName: "Sanitize Inherited Run Attribution Keeps Active",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+
+	runID := uuid.New()
+	runStepID := uuid.New()
+	runAttemptID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO run (
+			id, organization_id, principal_type, principal_id, status, trigger_type, version, metadata, started_at
+		) VALUES (
+			$1, $2, 'agent', $3, 'in_progress', 'scheduler', 1, '{}'::jsonb, now()
+		)
+	`, runID, org.ID, uuid.New()); err != nil {
+		t.Fatalf("insert active run: %v", err)
+	}
+
+	gotRunID, gotRunStepID, gotRunAttemptID := engine.sanitizeInheritedRunAttribution(ctx, &runID, &runStepID, &runAttemptID)
+	if gotRunID == nil || *gotRunID != runID {
+		t.Fatalf("sanitizeInheritedRunAttribution() runID = %v, want %s", gotRunID, runID)
+	}
+	if gotRunStepID == nil || *gotRunStepID != runStepID {
+		t.Fatalf("sanitizeInheritedRunAttribution() runStepID = %v, want %s", gotRunStepID, runStepID)
+	}
+	if gotRunAttemptID == nil || *gotRunAttemptID != runAttemptID {
+		t.Fatalf("sanitizeInheritedRunAttribution() runAttemptID = %v, want %s", gotRunAttemptID, runAttemptID)
+	}
+}
+
+func TestSyncBoundFlowExecutionTurnOwnershipClearsStaleLiveRunID(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	engine := &TurnEngine{pool: pool}
+
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "sync-bound-flow-execution-turn-ownership-clears-stale-run",
+		DisplayName: "Sync Bound Flow Execution Turn Ownership Clears Stale Run",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "sync-bound-flow-execution-turn-ownership-clears-stale-run-project",
+		DisplayName:    "Sync Bound Flow Execution Turn Ownership Clears Stale Run Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "sync-bound-flow-execution-turn-ownership-clears-stale-run-template",
+		DisplayName:    "Sync Bound Flow Execution Turn Ownership Clears Stale Run Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       1,
+		MaxVisits:      2,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Review task",
+		WorkStatus:     "review",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &org.ID,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	sessionID := uuid.New()
+	staleRunID := uuid.New()
+	turnID := uuid.New()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO chat_session (
+			id, organization_id, scope_type, scope_id, mode, status, metadata, created_by_type, created_by_id
+		) VALUES (
+			$1, $2, 'project_task', $3, 'async', 'active', $4::jsonb, 'system', $5
+		)
+	`, sessionID, org.ID, taskRecord.ID, mustJSONRaw(map[string]any{}), uuid.New()); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	createdExecution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:     taskRecord.ID,
+		FlowNodeID: flowNode.ID,
+		VisitNumber: 1,
+		Status:     "active",
+		SessionID:  &sessionID,
+		Metadata: repo.FlowExecutionMetadataWithLiveOwner(json.RawMessage(`{}`), repo.FlowExecutionLiveOwner{
+		RunID:  &staleRunID,
+		TurnID: nil,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("insert execution: %v", err)
+	}
+	executionID := createdExecution.ID
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_session
+		SET metadata = $2::jsonb
+		WHERE id = $1
+	`, sessionID, mustJSONRaw(map[string]any{"flow_node_execution_id": executionID.String()})); err != nil {
+		t.Fatalf("update session metadata: %v", err)
+	}
+
+	session := &chat.ChatSession{
+		ID:             sessionID,
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		Metadata:       mustJSONRaw(map[string]any{"flow_node_execution_id": executionID.String()}),
+	}
+	if err := engine.syncBoundFlowExecutionTurnOwnership(ctx, session, &turnID, nil); err != nil {
+		t.Fatalf("syncBoundFlowExecutionTurnOwnership: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).GetByID(ctx, executionID)
+	if err != nil {
+		t.Fatalf("reload execution: %v", err)
+	}
+	liveOwner := repo.FlowExecutionLiveOwnerFromMetadata(execution.Metadata)
+	if liveOwner.RunID != nil {
+		t.Fatalf("live owner run_id = %v, want nil", liveOwner.RunID)
+	}
+	if liveOwner.TurnID == nil || *liveOwner.TurnID != turnID {
+		t.Fatalf("live owner turn_id = %v, want %s", liveOwner.TurnID, turnID)
+	}
+}
+
+func TestHasQueuedAgentTurnForSessionIgnoresCompletedBootstrapDispatch(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	engine := &TurnEngine{pool: pool}
+
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "has-queued-agent-turn-ignores-completed-bootstrap",
+		DisplayName: "Has Queued Agent Turn Ignores Completed Bootstrap",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "has-queued-agent-turn-ignores-completed-bootstrap-project",
+		DisplayName:    "Has Queued Agent Turn Ignores Completed Bootstrap Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		Metadata:       mustJSONRaw(map[string]any{"project_bootstrap": map[string]any{"status": "completed"}}),
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue bootstrap from persisted state.",
+		Status:    "pending",
+		Metadata:  mustJSONRaw(map[string]any{"source": "project_bootstrap", "auto_continue": true}),
+	})
+	if err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO job_queue (id, job_type, priority, payload, status, attempts, max_attempts, run_after, created_at, updated_at)
+		VALUES ($1, $2, 100, $3::jsonb, 'pending', 0, 3, now(), now(), now())
+	`, uuid.New(), AgentTurnJobType, mustJSONRaw(map[string]any{
+		"session_id": session.ID.String(),
+		"message_id": message.ID.String(),
+	})); err != nil {
+		t.Fatalf("insert pending agent_turn: %v", err)
+	}
+
+	queued, err := engine.hasQueuedAgentTurnForSession(ctx, session.ID, nil)
+	if err != nil {
+		t.Fatalf("hasQueuedAgentTurnForSession: %v", err)
+	}
+	if queued {
+		t.Fatal("expected completed-bootstrap dispatch to be ignored")
+	}
+}
+
 func TestLogicalMessageCancelledUsesLatestAttemptForTriggerMessage(t *testing.T) {
-	fixture := newUnitFixture(t, "async")
+	fixture := newUnitFixture(t, "sync")
 	messageID := uuid.New()
 	sessionID := fixture.session.ID
 	agentID := fixture.chat.participants[0].ParticipantID
@@ -845,6 +1148,48 @@ func TestHandleTurnJobRateLimitedUsesBackoffWhenNoRetryHint(t *testing.T) {
 	}
 }
 
+func TestHandleTurnJobRateLimitedCapsProviderHintAtMaxBackoff(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+	fixture.engine.modelRetryBudget = 1
+
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, NewRateLimitedError(42*time.Hour, errors.New("http status 429"))
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if jobs[0].runAfter == nil {
+		t.Fatal("retry run_after missing")
+	}
+	wantDelay := jitteredRateLimitRetryDelay(maxRateLimitBackoff, fixture.session.ID, fixture.userMessageID, 0)
+	wantRunAfter := base.Add(wantDelay)
+	if !jobs[0].runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", *jobs[0].runAfter, wantRunAfter)
+	}
+	wantDelayMessage := fmt.Sprintf("[Rate limited, retrying in %s...]", formatRetryDelay(wantDelay))
+	if !fixture.messages.containsContent(wantDelayMessage) {
+		t.Fatal("missing capped rate-limited retry status message")
+	}
+}
+
 func TestHandleTurnJobRateLimitedRetryCapStopsRequeue(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.engine.modelRetryBudget = 1
@@ -1020,6 +1365,7 @@ func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
 	executionID := uuid.New()
+	runID := uuid.New()
 	fixture.session.ScopeType = "project_task"
 	fixture.session.ScopeID = taskID
 	fixture.session.Metadata = mustRawJSON(t, map[string]any{
@@ -1044,9 +1390,20 @@ func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
 	}
 	fixture.chat.turns[turn.ID] = turn
 	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turn.ID)
+	initialMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID initial user message: %v", err)
+	}
+	initialMessage.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_queue_processor",
+		"run_id":                 runID.String(),
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(initialMessage)
 	rt := &turnRuntime{
-		session: fixture.session,
-		turn:    turn,
+		session:          fixture.session,
+		turn:             turn,
+		initialMessageID: fixture.userMessageID,
 	}
 
 	appended, err := fixture.engine.appendReviewActionState(context.Background(), rt, false)
@@ -1068,6 +1425,82 @@ func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
 	}
 	if !strings.Contains(message.Content, executionID.String()) {
 		t.Fatalf("review action prompt = %q, want execution id %s", message.Content, executionID)
+	}
+	if promptRunID := runIDFromMetadata(message.Metadata); promptRunID == nil || *promptRunID != runID {
+		t.Fatalf("review action prompt run_id = %v, want %s", promptRunID, runID)
+	}
+}
+
+func TestHandleCompletedReviewTurnWithoutDecisionRewritesRecoveryResumeToReviewPrompt(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				ProjectID:  uuid.New(),
+				WorkStatus: "review",
+			},
+		},
+	}
+
+	latestCompleted := &repo.ChatTurn{
+		ID:           uuid.New(),
+		SessionID:    fixture.session.ID,
+		Status:       "completed",
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+	latestUser := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "supervisor recovery: resume task",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                 "supervisor",
+			"synthetic_user_message": true,
+			"flow_node_execution_id": executionID.String(),
+		}),
+	}
+	fixture.messages.create(latestUser)
+
+	handled, err := fixture.engine.handleCompletedReviewTurnWithoutDecision(
+		context.Background(),
+		fixture.session,
+		repo.ProjectTask{ID: taskID, WorkStatus: "review"},
+		latestCompleted,
+		&latestUser,
+		"I'm ready to assist as the reviewer.",
+	)
+	if err != nil {
+		t.Fatalf("handleCompletedReviewTurnWithoutDecision: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	retryMessage, getErr := fixture.messages.GetByID(context.Background(), jobs[0].payload.MessageID)
+	if getErr != nil {
+		t.Fatalf("GetByID retry message: %v", getErr)
+	}
+	if !strings.Contains(retryMessage.Content, "flow.review_decision") {
+		t.Fatalf("retry message = %q, want review-decision prompt", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, executionID.String()) {
+		t.Fatalf("retry message = %q, want execution id %s", retryMessage.Content, executionID)
 	}
 }
 
@@ -1130,6 +1563,7 @@ func TestHandleTurnCompletedEventRetriesReviewTurnWithoutDecision(t *testing.T) 
 	taskID := uuid.New()
 	nodeID := uuid.New()
 	executionID := uuid.New()
+	runID := uuid.New()
 	fixture.session.ScopeType = "project_task"
 	fixture.session.ScopeID = taskID
 	fixture.session.Metadata = mustRawJSON(t, map[string]any{
@@ -1156,10 +1590,11 @@ func TestHandleTurnCompletedEventRetriesReviewTurnWithoutDecision(t *testing.T) 
 	if err != nil {
 		t.Fatalf("GetByID user message: %v", err)
 	}
-	message.Content = buildTaskReviewActionPrompt(fixture.session)
+	message.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
 	message.Metadata = mustRawJSON(t, map[string]any{
 		"source":                 "task_review_action",
 		"synthetic_user_message": true,
+		"run_id":                 runID.String(),
 		"flow_node_execution_id": executionID.String(),
 	})
 	fixture.messages.upsert(message)
@@ -1187,6 +1622,93 @@ func TestHandleTurnCompletedEventRetriesReviewTurnWithoutDecision(t *testing.T) 
 	}
 	if jobs[0].runAfter == nil || !jobs[0].runAfter.Equal(base.Add(defaultAutoContinueDelay)) {
 		t.Fatalf("run_after = %v, want %s", jobs[0].runAfter, base.Add(defaultAutoContinueDelay))
+	}
+	retryMessage, err := fixture.messages.GetByID(context.Background(), jobs[0].payload.MessageID)
+	if err != nil {
+		t.Fatalf("GetByID retry message: %v", err)
+	}
+	if retryRunID := runIDFromMetadata(retryMessage.Metadata); retryRunID == nil || *retryRunID != runID {
+		t.Fatalf("retry message run_id = %v, want %s", retryRunID, runID)
+	}
+}
+
+func TestHandleTurnCompletedEventRetriesReviewTurnWithoutDecisionRestoresRunIDFromSessionHistory(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700000001, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	runID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "review"},
+		},
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "Start review on task: historical kickoff",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                 "task_queue_processor",
+			"run_id":                 runID.String(),
+			"flow_node_execution_id": executionID.String(),
+		}),
+	})
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	message.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "I reviewed the deliverables and can now make a decision.")
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	retryMessage, err := fixture.messages.GetByID(context.Background(), jobs[0].payload.MessageID)
+	if err != nil {
+		t.Fatalf("GetByID retry message: %v", err)
+	}
+	if retryRunID := runIDFromMetadata(retryMessage.Metadata); retryRunID == nil || *retryRunID != runID {
+		t.Fatalf("retry message run_id = %v, want restored %s", retryRunID, runID)
 	}
 }
 
@@ -1225,7 +1747,7 @@ func TestHandleTurnCompletedEventBlocksRepeatedReviewTurnWithoutDecision(t *test
 	if err != nil {
 		t.Fatalf("GetByID user message: %v", err)
 	}
-	message.Content = buildTaskReviewActionPrompt(fixture.session)
+	message.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
 	message.Metadata = mustRawJSON(t, map[string]any{
 		"source":                 "task_review_action",
 		"synthetic_user_message": true,
@@ -1262,6 +1784,130 @@ func TestHandleTurnCompletedEventBlocksRepeatedReviewTurnWithoutDecision(t *test
 	}
 	if updated.WorkStatus != "blocked" {
 		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
+	}
+	guard, ok := tasksvc.ParseValidationGuard(updated.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if !guard.Blocked {
+		t.Fatal("expected blocked validation guard")
+	}
+	if guard.ToolName != "flow.review_decision" {
+		t.Fatalf("guard.ToolName = %q, want flow.review_decision", guard.ToolName)
+	}
+	if guard.FailureCode != "review_decision_required" {
+		t.Fatalf("guard.FailureCode = %q, want review_decision_required", guard.FailureCode)
+	}
+	if guard.LastTurnID != turnID.String() {
+		t.Fatalf("guard.LastTurnID = %q, want %s", guard.LastTurnID, turnID)
+	}
+}
+
+func TestHandleTurnCompletedEventRetriesEmptyReviewTurnWithoutDecisionAtRetryLimit(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700002000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	executionID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.engine.tasks = taskRepo
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "review"},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	message.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "")
+	fixture.chat.mu.Lock()
+	fixture.chat.turns[turnID].RetryCount = maxGenericRecoveryReplyRetries
+	fixture.chat.mu.Unlock()
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.RetryCount != maxGenericRecoveryReplyRetries+1 {
+		t.Fatalf("payload.retry_count = %#v, want %d", jobs[0].payload, maxGenericRecoveryReplyRetries+1)
+	}
+	if jobs[0].runAfter == nil || !jobs[0].runAfter.Equal(base.Add(defaultAutoContinueDelay)) {
+		t.Fatalf("run_after = %v, want %s", jobs[0].runAfter, base.Add(defaultAutoContinueDelay))
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updated.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", updated.WorkStatus)
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawSystem bool
+	var retryPrompt *chat.ChatMessage
+	for i := range messages {
+		msg := messages[i]
+		if msg.Role == "system" && strings.Contains(msg.Content, "empty assistant output") {
+			sawSystem = true
+		}
+		if msg.ID == jobs[0].payload.MessageID {
+			retryPrompt = &msg
+		}
+	}
+	if !sawSystem {
+		t.Fatal("missing empty-output retry system message")
+	}
+	if retryPrompt == nil {
+		t.Fatal("missing retry prompt message")
+	}
+	if !strings.Contains(retryPrompt.Content, "flow.review_decision") {
+		t.Fatalf("retry prompt = %q, want flow.review_decision guidance", retryPrompt.Content)
+	}
+	if !strings.Contains(retryPrompt.Content, executionID.String()) {
+		t.Fatalf("retry prompt = %q, want flow execution id %s", retryPrompt.Content, executionID)
 	}
 }
 
@@ -1300,7 +1946,7 @@ func TestHandleTurnCompletedEventAutoRejectsExplicitReviewDecision(t *testing.T)
 	if err != nil {
 		t.Fatalf("GetByID user message: %v", err)
 	}
-	message.Content = buildTaskReviewActionPrompt(fixture.session)
+	message.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
 	message.Metadata = mustRawJSON(t, map[string]any{
 		"source":                 "task_review_action",
 		"synthetic_user_message": true,
@@ -1548,6 +2194,9 @@ func TestHandleTurnCompletedEventAdvancesFlowFromDurableRecoveryWrite(t *testing
 	taskID := uuid.New()
 	nodeID := uuid.New()
 	projectID := uuid.New()
+	projectSlug := "recovery-commit-" + uuid.NewString()[:8]
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
 	fixture.session.ScopeType = "project_task"
 	fixture.session.ScopeID = taskID
 	taskRepo := &fakeTaskRepo{
@@ -1563,11 +2212,33 @@ func TestHandleTurnCompletedEventAdvancesFlowFromDurableRecoveryWrite(t *testing
 	}
 	fixture.engine.tasks = taskRepo
 	fixture.flowAdvancer.tasks = taskRepo
+	fixture.flowAdvancer.activeExecution = &repo.FlowNodeExecution{
+		TaskID:      taskID,
+		FlowNodeID:  nodeID,
+		VisitNumber: 1,
+		Status:      "active",
+	}
 	fixture.engine.flowAdvancer = fixture.flowAdvancer
 	fixture.engine.flowNodes = &fakeFlowNodeRepo{
 		items: map[uuid.UUID]repo.FlowNode{
-			nodeID: {ID: nodeID, NodeType: "work"},
+			nodeID: {ID: nodeID, NodeType: "work", DisplayName: "Work"},
 		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Slug:           projectSlug,
+			},
+		},
+	}
+	projectRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(filepath.Join(projectRoot, "docs", "migration-plan"), 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "docs", "migration-plan", "oc-15-content-migration-plan.md"), []byte("recovery body\n"), 0o644); err != nil {
+		t.Fatalf("write recovery deliverable: %v", err)
 	}
 
 	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
@@ -1599,6 +2270,12 @@ func TestHandleTurnCompletedEventAdvancesFlowFromDurableRecoveryWrite(t *testing
 	if fixture.flowAdvancer.advanceFlowCalls != 1 {
 		t.Fatalf("advance flow calls = %d, want 1", fixture.flowAdvancer.advanceFlowCalls)
 	}
+	if fixture.flowAdvancer.recordNodeCommitCalls != 1 {
+		t.Fatalf("record node commit calls = %d, want 1", fixture.flowAdvancer.recordNodeCommitCalls)
+	}
+	if strings.TrimSpace(fixture.flowAdvancer.lastCommitSHA) == "" {
+		t.Fatal("last commit sha = empty, want canonical runtime commit before recovery advance")
+	}
 	updatedTask, err := taskRepo.GetByID(context.Background(), taskID)
 	if err != nil {
 		t.Fatalf("GetByID task: %v", err)
@@ -1608,6 +2285,103 @@ func TestHandleTurnCompletedEventAdvancesFlowFromDurableRecoveryWrite(t *testing
 	}
 	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
 		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestHandleTurnCompletedEventKickoffDurableWriteRecordsCanonicalCommit(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	projectID := uuid.New()
+	projectSlug := "kickoff-commit-" + uuid.NewString()[:8]
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	description := "Execute happy path test. Output: test_execution_happy_path.md with evidence."
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				TaskNumber:        11,
+				Title:             "Happy Path Test - Core Routing",
+				Description:       &description,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.flowAdvancer.tasks = taskRepo
+	fixture.flowAdvancer.activeExecution = &repo.FlowNodeExecution{
+		TaskID:      taskID,
+		FlowNodeID:  nodeID,
+		VisitNumber: 1,
+		Status:      "active",
+	}
+	fixture.engine.flowAdvancer = fixture.flowAdvancer
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work", DisplayName: "Work"},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Slug:           projectSlug,
+			},
+		},
+	}
+
+	projectRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "test_execution_happy_path.md"), []byte("# execution log\n"), 0o644); err != nil {
+		t.Fatalf("write kickoff deliverable: %v", err)
+	}
+
+	userMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	userMessage.Content = "Start work on task: Happy Path Test - Core Routing\n\nTask description:\nExecute happy path test. Output: test_execution_happy_path.md with evidence."
+	userMessage.Status = "final"
+	fixture.messages.upsert(userMessage)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "I'll update the execution log now.")
+	appendToolResultMessage(t, fixture, turnID, map[string]any{
+		"tool_name": "file.write",
+		"output": map[string]any{
+			"path":      "test_execution_happy_path.md",
+			"byte_size": 16,
+			"created":   false,
+		},
+	})
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if fixture.flowAdvancer.recordNodeCommitCalls != 1 {
+		t.Fatalf("record node commit calls = %d, want 1", fixture.flowAdvancer.recordNodeCommitCalls)
+	}
+	if strings.TrimSpace(fixture.flowAdvancer.lastCommitSHA) == "" {
+		t.Fatal("last commit sha = empty, want canonical runtime commit before kickoff advance")
+	}
+	if fixture.flowAdvancer.advanceFlowCalls != 1 {
+		t.Fatalf("advance flow calls = %d, want 1", fixture.flowAdvancer.advanceFlowCalls)
 	}
 }
 
@@ -2167,6 +2941,73 @@ func TestNormalizeRecoveryCheckpointTargetForTaskKeepsPlanningTargetForNonReport
 	normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
 	if normalized.TargetPath != checkpoint.TargetPath {
 		t.Fatalf("normalized target_path = %q, want unchanged %q", normalized.TargetPath, checkpoint.TargetPath)
+	}
+}
+
+func TestPreferredTaskDeliverablePathInfersTestExecutionLogTarget(t *testing.T) {
+	description := "Execute test scenario 2 (edge cases): test capacity limits, concurrent assignments, boundary conditions. Log all test cases and verify system behavior under stress."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  13,
+		Title:       "OC-4: Execute Test Scenario 2 (Edge Cases)",
+		Description: &description,
+	}
+
+	if got := preferredTaskDeliverablePath(taskRecord); got != "Test/test-execution-oc13-scenario2-edge-cases.md" {
+		t.Fatalf("preferredTaskDeliverablePath = %q, want test execution log target", got)
+	}
+}
+
+func TestPreferredTaskDeliverablePathInfersHappyPathExecutionLogTarget(t *testing.T) {
+	description := "Execute the happy-path scenario end-to-end against the real speaker pipeline product. Capture screenshots, logs, and evidence of successful completion at each step."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  17,
+		Title:       "Execute happy-path scenario",
+		Description: &description,
+	}
+
+	if got := preferredTaskDeliverablePath(taskRecord); got != "Test/test-execution-oc17-happy-path-scenario.md" {
+		t.Fatalf("preferredTaskDeliverablePath = %q, want happy-path execution log target", got)
+	}
+}
+
+func TestPreferredTaskDeliverablePathInfersValidationExecutionLogTarget(t *testing.T) {
+	description := "Execute capacity test: submit registrations when pipeline at 90% and 100% capacity. Verify expected responses and behaviors. Record results. ~25 min."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  27,
+		Title:       "Validation execution: test pipeline capacity rejection",
+		Description: &description,
+	}
+
+	if got := preferredTaskDeliverablePath(taskRecord); got != "Test/test-execution-oc27-test-pipeline-capacity-rejection.md" {
+		t.Fatalf("preferredTaskDeliverablePath = %q, want validation execution log target", got)
+	}
+}
+
+func TestPreferredTaskDeliverablePathInfersCanonicalDocumentTarget(t *testing.T) {
+	taskRecord := repo.ProjectTask{
+		TaskNumber: 17,
+		Title:      "Design scenario: speaker registration with complete profile data",
+	}
+
+	if got := preferredTaskDeliverablePath(taskRecord); got != "Work/OC-17-DESIGN-SCENARIO-SPEAKER-REGISTRATION-WITH-COMPLETE-PROFILE-DATA.md" {
+		t.Fatalf("preferredTaskDeliverablePath = %q, want canonical document target", got)
+	}
+}
+
+func TestInferredTaskExecutionLogDraftBuildsConcreteStarter(t *testing.T) {
+	description := "Execute test scenario 3 (error handling): malformed input, agent unavailability, timeout conditions. Verify system gracefully handles errors."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  14,
+		Title:       "OC-5: Execute Test Scenario 3 (Error Handling)",
+		Description: &description,
+	}
+
+	draft := inferredTaskExecutionLogDraft(taskRecord)
+	if !strings.Contains(draft, "# OC-5: Execute Test Scenario 3 (Error Handling) Execution Log") {
+		t.Fatalf("draft = %q, want execution log heading", draft)
+	}
+	if !strings.Contains(draft, "Malformed input") || !strings.Contains(draft, "Agent unavailability") || !strings.Contains(draft, "Timeout conditions") {
+		t.Fatalf("draft = %q, want concrete scenario coverage", draft)
 	}
 }
 
@@ -3247,6 +4088,38 @@ func TestShouldAppendSyntheticUserPromptSkipsDuplicatePendingSource(t *testing.T
 	}
 }
 
+func TestShouldAppendSyntheticUserPromptIgnoresDuplicateOnCompletedTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	completedTurn, err := fixture.chat.CreateTurn(context.Background(), fixture.session.ID, fixture.chat.participants[0].ParticipantID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chat.StartTurn(context.Background(), completedTurn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	if err := fixture.chat.CompleteTurn(context.Background(), completedTurn.ID); err != nil {
+		t.Fatalf("CompleteTurn: %v", err)
+	}
+	turnID := completedTurn.ID
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Continue the active organization request now from the continuation summary above.",
+		Metadata:  syntheticContinuationActionMessageMetadata(nil, "organization_continuation_resume"),
+	})
+
+	shouldAppend, err := fixture.engine.shouldAppendSyntheticUserPrompt(context.Background(), fixture.session.ID, "organization_continuation_resume")
+	if err != nil {
+		t.Fatalf("shouldAppendSyntheticUserPrompt: %v", err)
+	}
+	if !shouldAppend {
+		t.Fatal("shouldAppendSyntheticUserPrompt = false, want true when duplicate synthetic prompt belongs to completed turn")
+	}
+}
+
 func TestNormalizeRoutedAgentForSessionDropsStaleAsyncTaskOverride(t *testing.T) {
 	agentID := uuid.New()
 	session := &chat.ChatSession{ScopeType: "project_task", Mode: "async"}
@@ -3715,6 +4588,12 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	if !strings.Contains(handoff, "Use at most one staffing.browse_profiles pass per needed category") {
 		t.Fatalf("handoff = %q, want explicit staffing discovery budget", handoff)
 	}
+	if !strings.Contains(handoff, "The project already has the canonical bootstrap task tree seeded for this workflow") {
+		t.Fatalf("handoff = %q, want seeded bootstrap task-tree guidance", handoff)
+	}
+	if !strings.Contains(handoff, "Do not recreate or duplicate those seeded bootstrap tasks.") {
+		t.Fatalf("handoff = %q, want no-duplicate-bootstrap-task guidance", handoff)
+	}
 	if !strings.Contains(handoff, "Do not spend a turn writing a staffing plan, rationale memo, or markdown table before you materialize staff.") {
 		t.Fatalf("handoff = %q, want no-staffing-memo guidance", handoff)
 	}
@@ -3735,6 +4614,108 @@ func TestBuildSyntheticProjectKickoffHandoffPrefersFreshProjectContext(t *testin
 	}
 	if !strings.Contains(handoff, content) {
 		t.Fatalf("handoff = %q, want originating request content", handoff)
+	}
+}
+
+func TestShouldStopAfterBlockedProjectKickoffSessionCreate(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "organization",
+		},
+		projectIdentity: &projectIdentity{
+			id:   uuid.New(),
+			slug: "sam-blog",
+		},
+	}
+
+	if !shouldStopAfterBlockedProjectKickoffSessionCreate(rt, []ToolResult{{
+		Name:  "session.create",
+		Error: "project kickoff is now handoff-only: project already created as slug=sam-blog project_id=11111111-1111-1111-1111-111111111111. Provide Lori the handoff summary and end the turn without additional tool use",
+	}}) {
+		t.Fatal("expected blocked handoff-only session.create to stop the kickoff turn")
+	}
+
+	if shouldStopAfterBlockedProjectKickoffSessionCreate(rt, []ToolResult{{
+		Name:  "browser.open",
+		Error: "project kickoff is now handoff-only: provide Lori the handoff summary and end the turn",
+	}}) {
+		t.Fatal("non-session blocked follow-on tool should not trigger the kickoff stop path")
+	}
+
+	if shouldStopAfterBlockedProjectKickoffSessionCreate(&turnRuntime{
+		session: &chat.ChatSession{ID: uuid.New(), ScopeType: "project"},
+		projectIdentity: &projectIdentity{
+			id:   uuid.New(),
+			slug: "sam-blog",
+		},
+	}, []ToolResult{{
+		Name:  "session.create",
+		Error: "project kickoff is now handoff-only",
+	}}) {
+		t.Fatal("project-scoped sessions should not use the org kickoff stop path")
+	}
+}
+
+func TestShouldBlockProjectBootstrapSetupTaskChildCreate(t *testing.T) {
+	projectID := uuid.New()
+	setupTaskID := uuid.New()
+	normalParentTaskID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			setupTaskID: {
+				ID:         setupTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 4,
+				Title:      "Decompose workstreams into bounded tasks",
+				Metadata:   json.RawMessage(`{"bootstrap_setup_task":true,"bootstrap_step_slug":"decompose-workstreams"}`),
+			},
+			normalParentTaskID: {
+				ID:         normalParentTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 9,
+				Title:      "Validation orchestration",
+				Metadata:   json.RawMessage(`{}`),
+			},
+		},
+	}
+	engine := &TurnEngine{tasks: taskRepo}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ID:        uuid.New(),
+			ScopeType: "project",
+			ScopeID:   projectID,
+			Metadata:  json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+		},
+	}
+
+	blocked, reason := engine.shouldBlockProjectBootstrapSetupTaskChildCreate(context.Background(), rt, "task.create", map[string]any{
+		"project_id": uuid.NewString(),
+		"title":      "Review Test Results & Coverage",
+	})
+	if blocked {
+		t.Fatalf("top-level task.create should remain allowed during active bootstrap, got %q", reason)
+	}
+
+	blocked, reason = engine.shouldBlockProjectBootstrapSetupTaskChildCreate(context.Background(), rt, "task.create", map[string]any{
+		"project_id":     uuid.NewString(),
+		"title":          "Review Test Results & Coverage",
+		"parent_task_id": normalParentTaskID.String(),
+	})
+	if blocked {
+		t.Fatalf("non-bootstrap parents should remain allowed, got %q", reason)
+	}
+
+	blocked, reason = engine.shouldBlockProjectBootstrapSetupTaskChildCreate(context.Background(), rt, "task.create", map[string]any{
+		"project_id":     uuid.NewString(),
+		"title":          "Review Test Results & Coverage",
+		"parent_task_id": setupTaskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected bootstrap setup parent to block child task.create")
+	}
+	if !strings.Contains(reason, "orchestration-only") || !strings.Contains(reason, "bootstrap.setup.persist") {
+		t.Fatalf("guard error = %q, want setup-task child guidance", reason)
 	}
 }
 
@@ -4038,6 +5019,40 @@ func TestBuildProjectBootstrapRecoveryRereadToolGuardErrorLateCompactResume(t *t
 	}
 }
 
+func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksLateCompactResumeWithoutOutstandingBootstrapTask(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AssignmentCount:          3,
+		PlannedTaskCount:         6,
+		PlannedFlowTemplateCount: 2,
+		FirstWaveTaskCount:       3,
+		FirstWavePromotedCount:   0,
+		FirstWaveJobCount:        0,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		ValidationStatus:         projectBootstrapValidationPassed,
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
+		t.Fatal("expected task.list to be blocked during late compact bootstrap resume before any first-wave promotion or jobs exist")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "flow.list_templates", nil) {
+		t.Fatal("expected flow.list_templates to be blocked during late compact bootstrap resume before any first-wave promotion or jobs exist")
+	}
+}
+
 func TestBuildProjectBootstrapRecoveryRereadToolGuardErrorScaffoldOnlyRecovery(t *testing.T) {
 	now := time.Now().UTC()
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
@@ -4068,6 +5083,51 @@ func TestBuildProjectBootstrapRecoveryRereadToolGuardErrorScaffoldOnlyRecovery(t
 	}
 	if !strings.Contains(msg, "Do not reread project state first") {
 		t.Fatalf("guard error = %q, want no-reread guidance", msg)
+	}
+}
+
+func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksScaffoldOnlyRecoveryRereads(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		AssignmentCount:          3,
+		PlannedTaskCount:         0,
+		CurrentPhase:             projectBootstrapCheckpointTaskTreePersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointStaffingPersisted,
+		ValidationStatus:         projectBootstrapValidationFailed,
+		ValidationFailureClass:   projectBootstrapFailureRuntime,
+		ValidationFailureReason:  buildProjectBootstrapScaffoldOnlyFailureReason(),
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		initialMessageText: buildProjectBootstrapScaffoldOnlyFailureReason(),
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "project.get", nil) {
+		t.Fatal("expected project.get to be blocked during scaffold-only bootstrap recovery")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
+		t.Fatal("expected task.list to be blocked during scaffold-only bootstrap recovery")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "flow.list_templates", nil) {
+		t.Fatal("expected flow.list_templates to be blocked during scaffold-only bootstrap recovery")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.search", nil) {
+		t.Fatal("expected file.search to be blocked during scaffold-only bootstrap recovery")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.read", map[string]any{"path": "planning/prd-spec/oc-73.md"}) {
+		t.Fatal("expected planning file.read to be blocked during scaffold-only bootstrap recovery")
+	}
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.create", map[string]any{"title": "Create bounded task"}) {
+		t.Fatal("task.create should remain available during scaffold-only bootstrap recovery")
 	}
 }
 
@@ -4291,6 +5351,50 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksRepeatedTaskList(t *
 	}
 }
 
+func TestBootstrapFirstWaveSelectableTasksSkipsParentsAndDeferredFinalizationTasks(t *testing.T) {
+	parentID := uuid.New()
+	selectableID := uuid.New()
+	reportID := uuid.New()
+	deferredID := uuid.New()
+
+	tasks := []repo.ProjectTask{
+		{
+			ID:         parentID,
+			TaskNumber: 9,
+			Title:      "OC-1: Validate routing",
+			WorkStatus: "draft",
+			Metadata:   json.RawMessage(`{}`),
+		},
+		{
+			ID:         selectableID,
+			TaskNumber: 12,
+			Title:      "OC-2: Execute Test Scenario 1 (Happy Path)",
+			WorkStatus: "draft",
+			Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentID)),
+		},
+		{
+			ID:         reportID,
+			TaskNumber: 10,
+			Title:      "Produce final validation report with pass/fail determination, risk summary, and recommendations",
+			WorkStatus: "draft",
+		},
+		{
+			ID:         deferredID,
+			TaskNumber: 11,
+			Title:      "Deferred task-queued after all test scenarios complete.",
+			WorkStatus: "draft",
+		},
+	}
+
+	selectable := bootstrapFirstWaveSelectableTasks(tasks)
+	if len(selectable) != 1 {
+		t.Fatalf("selectable task count = %d, want 1", len(selectable))
+	}
+	if selectable[0].ID != selectableID {
+		t.Fatalf("selectable task id = %s, want %s", selectable[0].ID, selectableID)
+	}
+}
+
 func TestShouldStopAfterBlockedProjectBootstrapRecoveryReread(t *testing.T) {
 	rt := &turnRuntime{
 		session: &chat.ChatSession{
@@ -4308,6 +5412,570 @@ func TestShouldStopAfterBlockedProjectBootstrapRecoveryReread(t *testing.T) {
 	rt.session.ScopeType = "organization"
 	if shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt, true) {
 		t.Fatal("unexpected stop outside project scope")
+	}
+}
+
+func TestShouldBlockTaskExecutionBroadContextTool(t *testing.T) {
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+	}
+
+	for _, toolName := range []string{"memory.query", "memory.list", "project.get", "project.list", "task.list", "flow.list_templates", "agent.list"} {
+		if !shouldBlockTaskExecutionBroadContextTool(rt, toolName) {
+			t.Fatalf("expected %s to be blocked for task-scoped async execution", toolName)
+		}
+	}
+	if shouldBlockTaskExecutionBroadContextTool(rt, "task.get") {
+		t.Fatal("task.get should remain available for task-scoped execution")
+	}
+	if shouldBlockTaskExecutionBroadContextTool(rt, "flow.get_execution") {
+		t.Fatal("flow.get_execution should remain available for task-scoped execution")
+	}
+}
+
+func TestShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationContextReads(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Orchestration task: Validate that first-wave executable tasks can enter execution, advance through flows, and produce outputs. Parent task for first-wave validation subtasks."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  12,
+				Title:       "V2: Validate First-Wave Task Execution & Flow Advancement",
+				Description: &description,
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	if fixture.engine.shouldBlockTaskExecutionBroadContextTool(context.Background(), rt, "project.get") {
+		t.Fatal("project.get should be allowed for orchestration validation task")
+	}
+	if fixture.engine.shouldBlockTaskExecutionBroadContextTool(context.Background(), rt, "task.list") {
+		t.Fatal("task.list should be allowed for orchestration validation task")
+	}
+	if !fixture.engine.shouldBlockTaskExecutionBroadContextTool(context.Background(), rt, "memory.query") {
+		t.Fatal("memory.query should remain blocked for orchestration validation task")
+	}
+	if !fixture.engine.shouldBlockTaskExecutionBroadContextTool(context.Background(), rt, "agent.list") {
+		t.Fatal("agent.list should remain blocked for orchestration validation task")
+	}
+}
+
+func TestBuildTaskExecutionBroadContextToolGuardError(t *testing.T) {
+	if msg := buildTaskExecutionBroadContextToolGuardError("memory.query"); !strings.Contains(msg, "should not browse org or project memory") {
+		t.Fatalf("memory.query guard = %q, want memory guidance", msg)
+	}
+	if msg := buildTaskExecutionBroadContextToolGuardError("task.list"); !strings.Contains(msg, "should not re-list the broader project task tree") {
+		t.Fatalf("task.list guard = %q, want task-tree guidance", msg)
+	}
+}
+
+func TestShouldBlockProjectExecutionPrematureDoneTool(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	targetTaskID := uuid.New()
+	doneTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	metadata, err := json.Marshal(map[string]any{
+		"project_bootstrap": map[string]any{
+			"status": "completed",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal bootstrap metadata: %v", err)
+	}
+	fixture.session.Metadata = metadata
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			targetTaskID: {
+				ID:         targetTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 12,
+				Title:      "Analysis: Summarize happy-path results and validate coverage",
+				WorkStatus: "draft",
+			},
+			doneTaskID: {
+				ID:         doneTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 16,
+				Title:      "Frank Sign-Off: Record validation results and project completion",
+				WorkStatus: "done",
+			},
+		},
+	}
+
+	blocked, reason := fixture.engine.shouldBlockProjectExecutionPrematureDoneTool(context.Background(), &turnRuntime{session: fixture.session}, "task.update", map[string]any{
+		"task_id":     targetTaskID.String(),
+		"work_status": "done",
+	})
+	if !blocked {
+		t.Fatal("expected project continuation to block premature done update for untouched draft task")
+	}
+	if !strings.Contains(reason, "still has 1 draft tasks remaining") {
+		t.Fatalf("reason = %q, want remaining draft task count", reason)
+	}
+	if !strings.Contains(reason, "task 12") {
+		t.Fatalf("reason = %q, want targeted task label", reason)
+	}
+}
+
+func TestShouldNotBlockProjectExecutionPrematureDoneToolWithoutRemainingDrafts(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	targetTaskID := uuid.New()
+	nodeID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	metadata, err := json.Marshal(map[string]any{
+		"project_bootstrap": map[string]any{
+			"status": "completed",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal bootstrap metadata: %v", err)
+	}
+	fixture.session.Metadata = metadata
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			targetTaskID: {
+				ID:                targetTaskID,
+				ProjectID:         projectID,
+				TaskNumber:        16,
+				Title:             "Frank Sign-Off: Record validation results and project completion",
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+
+	blocked, _ := fixture.engine.shouldBlockProjectExecutionPrematureDoneTool(context.Background(), &turnRuntime{session: fixture.session}, "task.update", map[string]any{
+		"task_id":     targetTaskID.String(),
+		"work_status": "done",
+	})
+	if blocked {
+		t.Fatal("unexpected block when no draft tasks remain and target task is already in flow")
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnAutoQueuesRunnableDraft(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:              completedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      16,
+				Title:           "Frank Sign-Off: Record validation results and project completion",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Design boundary scenario: rate limits and pipeline capacity",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	taskTransitions := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = taskTransitions
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "These remaining draft tasks are auxiliary and not blockers.",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant}
+	completedTurn := &repo.ChatTurn{ID: turnID, SessionID: fixture.session.ID}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected narrative-only project continuation to auto-queue runnable draft task")
+	}
+
+	updatedDraft, err := taskRepo.GetByID(context.Background(), draftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID draft task: %v", err)
+	}
+	if updatedDraft.WorkStatus != "queued" {
+		t.Fatalf("draft task work_status = %q, want queued", updatedDraft.WorkStatus)
+	}
+
+	var sawSystemMessage bool
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	for _, msg := range storedMessages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "system") && strings.Contains(msg.Content, "auto-queued task 19") {
+			sawSystemMessage = true
+			break
+		}
+	}
+	if !sawSystemMessage {
+		t.Fatal("expected system message recording auto-queued runnable draft task")
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueueFailure(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:              completedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      16,
+				Title:           "Frank Sign-Off: Record validation results and project completion",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Design boundary scenario: rate limits and pipeline capacity",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	taskTransitions := &fakeTaskTransitionService{
+		repo: taskRepo,
+		err:  taskdecomp.QueueSizeError{EstimatedMinutes: 50, MaxMinutes: 30, Reason: "split the work into smaller reviewable tasks before queueing"},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = taskTransitions
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "The remaining draft tasks can be wrapped up now.",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant}
+	completedTurn := &repo.ChatTurn{ID: turnID, SessionID: fixture.session.ID}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected bounded-size queue failure to be consumed")
+	}
+
+	updatedDraft, err := taskRepo.GetByID(context.Background(), draftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID draft task: %v", err)
+	}
+	if updatedDraft.WorkStatus != "draft" {
+		t.Fatalf("draft task work_status = %q, want draft after bounded-size queue failure", updatedDraft.WorkStatus)
+	}
+
+	var sawSystemMessage bool
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	for _, msg := range storedMessages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "system") &&
+			strings.Contains(msg.Content, "violates the bounded size policy") &&
+			strings.Contains(msg.Content, "task 19") {
+			sawSystemMessage = true
+			break
+		}
+	}
+	if !sawSystemMessage {
+		t.Fatal("expected system message recording bounded-size auto-queue failure")
+	}
+}
+
+func TestRecoverProjectTaskStaleInboundTurnWithoutRunKeepsLiveInvocation(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+
+	taskID := uuid.New()
+	messageID := uuid.New()
+	agentID := fixture.chat.participants[0].ParticipantID
+
+	org, err := repo.NewOrgRepo(fixture.engine.pool).Create(context.Background(), repo.Organization{
+		Slug:        "recover-stale-live-invocation",
+		DisplayName: "Recover Stale Live Invocation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	dbAgent, err := repo.NewAgentRepo(fixture.engine.pool).Create(context.Background(), repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Recover Stale Live Invocation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Test agent",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	agentID = dbAgent.ID
+	fixture.session.OrganizationID = org.ID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	dbSession, err := repo.NewChatSessionRepo(fixture.engine.pool).Create(context.Background(), repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create db session: %v", err)
+	}
+	dbTurn, err := repo.NewChatTurnRepo(fixture.engine.pool).Create(context.Background(), repo.ChatTurn{
+		SessionID:      dbSession.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   dbAgent.ID,
+		Status:         "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("create db turn: %v", err)
+	}
+
+	fixture.session.ID = dbSession.ID
+	fixture.session.CurrentTurnID = &dbTurn.ID
+	fixture.chat.session = fixture.session
+	fixture.chat.turns[dbTurn.ID] = &chat.ChatTurn{
+		ID:             dbTurn.ID,
+		SessionID:      dbSession.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   dbAgent.ID,
+		Status:         "in_progress",
+	}
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, dbTurn.ID)
+
+	provider, err := repo.NewModelProviderRepo(fixture.engine.pool).Create(context.Background(), repo.ModelProvider{
+		Slug:        "recover-stale-inbound-turn-live-invocation-provider",
+		DisplayName: "Recover Stale Inbound Turn Live Invocation Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create model provider: %v", err)
+	}
+	if _, err := repo.NewModelInvocationRepo(fixture.engine.pool).Create(context.Background(), repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   provider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "in_flight",
+		ModelName:         "test-model",
+		SessionID:         &dbSession.ID,
+		TurnID:            &dbTurn.ID,
+	}); err != nil {
+		t.Fatalf("create live model invocation: %v", err)
+	}
+
+	recovered, err := fixture.engine.recoverProjectTaskStaleInboundTurnWithoutRun(
+		context.Background(),
+		fixture.session,
+		messageID,
+		agentID,
+		0,
+		nil,
+		fixture.chat.turns[dbTurn.ID],
+	)
+	if err != nil {
+		t.Fatalf("recoverProjectTaskStaleInboundTurnWithoutRun: %v", err)
+	}
+	if recovered {
+		t.Fatal("recovered = true, want false when live model invocation exists")
+	}
+
+	storedTurn, err := fixture.chat.GetTurn(context.Background(), dbTurn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn: %v", err)
+	}
+	if storedTurn.Status != "in_progress" {
+		t.Fatalf("turn status = %q, want in_progress", storedTurn.Status)
+	}
+}
+
+func TestShouldBlockTaskExecutionOffTargetEvidenceTool(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	description := "Execute test scenario 2 (edge cases): test capacity limits, concurrent assignments, boundary conditions. Log all test cases and verify system behavior under stress."
+	targetPath := "Test/test-execution-oc13-scenario2-edge-cases.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				ProjectID:      projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				TaskNumber:     13,
+				Title:          "OC-4: Execute Test Scenario 2 (Edge Cases)",
+				WorkStatus:     "in_progress",
+				Description:    &description,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte("# OC-4 Execution Log\n\n## Findings\nSubstantive edge-case evidence.\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+
+	if blocked, _ := fixture.engine.shouldBlockTaskExecutionOffTargetEvidenceTool(context.Background(), rt, "file.read", map[string]any{"path": "planning/discovery-plan/oc-9-validation-plan.md"}); !blocked {
+		t.Fatal("expected off-target planning read to be blocked")
+	}
+	if blocked, _ := fixture.engine.shouldBlockTaskExecutionOffTargetEvidenceTool(context.Background(), rt, "git.log", nil); !blocked {
+		t.Fatal("expected git.log to be blocked when substantive target exists")
+	}
+	if blocked, _ := fixture.engine.shouldBlockTaskExecutionOffTargetEvidenceTool(context.Background(), rt, "file.read", map[string]any{"path": targetPath}); blocked {
+		t.Fatal("expected target file read to be allowed")
+	}
+	if blocked, _ := fixture.engine.shouldBlockTaskExecutionOffTargetEvidenceTool(context.Background(), rt, "file.list", map[string]any{"path": "Test"}); blocked {
+		t.Fatal("expected target directory listing to be allowed")
+	}
+	if blocked, _ := fixture.engine.shouldBlockTaskExecutionOffTargetEvidenceTool(context.Background(), rt, "file.read", map[string]any{"path": "planning/discovery-plan/oc-13-validation-plan.md"}); blocked {
+		t.Fatal("expected same-task planning artifact read to be allowed")
+	}
+
+	if err := os.Remove(targetAbs); err != nil {
+		t.Fatalf("remove target: %v", err)
+	}
+	recoveryAbs := filepath.Join(dataDir, "workspaces", projectSlug, ".ottercamp", "recovery", filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(recoveryAbs), 0o755); err != nil {
+		t.Fatalf("mkdir recovery artifact: %v", err)
+	}
+	if err := os.WriteFile(recoveryAbs, []byte("## Draft Content\n\n# OC-4 Execution Log\n\n## Findings\nRecovered substantive edge-case evidence.\n"), 0o644); err != nil {
+		t.Fatalf("write recovery artifact: %v", err)
+	}
+	if blocked, _ := fixture.engine.shouldBlockTaskExecutionOffTargetEvidenceTool(context.Background(), rt, "file.read", map[string]any{"path": "planning/discovery-plan/oc-9-validation-plan.md"}); !blocked {
+		t.Fatal("expected recovery-artifact-backed off-target planning read to be blocked")
+	}
+}
+
+func TestBuildTaskExecutionOffTargetEvidenceToolGuardError(t *testing.T) {
+	t.Parallel()
+
+	msg := buildTaskExecutionOffTargetEvidenceToolGuardError("Test/test-execution-oc13-scenario2-edge-cases.md", "planning/discovery-plan/oc-9-validation-plan.md", "file.read")
+	if !strings.Contains(msg, "substantive content") || !strings.Contains(msg, "planning/discovery-plan/oc-9-validation-plan.md") {
+		t.Fatalf("file.read guard = %q, want deliverable-focus guidance", msg)
+	}
+	msg = buildTaskExecutionOffTargetEvidenceToolGuardError("Test/test-execution-oc13-scenario2-edge-cases.md", "", "git.log")
+	if !strings.Contains(msg, "Do not inspect git history now") {
+		t.Fatalf("git.log guard = %q, want git-history guidance", msg)
 	}
 }
 
@@ -4422,6 +6090,16 @@ func TestShouldNotStopAfterBlockedProjectBootstrapRecoveryRereadScaffoldOnlyReco
 	}
 }
 
+func TestProjectBootstrapFailureClassForReasonSelectedTaskDependencyBlock(t *testing.T) {
+	reason := buildProjectBootstrapFirstWaveDependencyFailureReason(repo.ProjectTask{
+		TaskNumber: 9,
+		Title:      "Test: Happy Path Scenario",
+	})
+	if got := projectBootstrapFailureClassForReason("", reason); got != projectBootstrapFailureFirstWaveExecution {
+		t.Fatalf("failure class = %q, want %q", got, projectBootstrapFailureFirstWaveExecution)
+	}
+}
+
 func TestIsTransientInfrastructureError(t *testing.T) {
 	if !isTransientInfrastructureError(errors.New("failed to connect to database: FATAL: remaining connection slots are reserved for roles with the SUPERUSER attribute (SQLSTATE 53300)")) {
 		t.Fatal("expected SQLSTATE 53300 connection exhaustion to classify as transient infrastructure error")
@@ -4431,6 +6109,53 @@ func TestIsTransientInfrastructureError(t *testing.T) {
 	}
 	if isTransientInfrastructureError(errors.New("provider auth failed")) {
 		t.Fatal("unexpected infrastructure classification for unrelated error")
+	}
+}
+
+func TestIsTransientModelError(t *testing.T) {
+	if !isTransientModelError(errors.New("stream error: stream ID 135; INTERNAL_ERROR; received from peer")) {
+		t.Fatal("expected provider stream INTERNAL_ERROR reset to classify as transient model error")
+	}
+	if !isTransientModelError(errors.New("request hit timeout while waiting for model response")) {
+		t.Fatal("expected timeout text to classify as transient model error")
+	}
+	if isTransientModelError(errors.New("provider auth failed")) {
+		t.Fatal("unexpected transient model classification for unrelated error")
+	}
+}
+
+func TestShouldAutoClearTransientExecutionRuntimePauseForSession(t *testing.T) {
+	session := &chat.ChatSession{
+		ID:        uuid.New(),
+		ScopeType: "project_task",
+		ScopeID:   uuid.New(),
+	}
+	pauseState := projectpause.State{
+		IsPaused: true,
+		Reason:   "stream error: stream ID 135; INTERNAL_ERROR; received from peer",
+		Metadata: json.RawMessage(`{"source":"execution_runtime","failure_reason":"stream error: stream ID 135; INTERNAL_ERROR; received from peer"}`),
+	}
+
+	if !shouldAutoClearTransientExecutionRuntimePauseForSession(session, pauseState) {
+		t.Fatal("expected transient execution-runtime pause on a task session to auto-clear")
+	}
+
+	projectSession := &chat.ChatSession{
+		ID:        uuid.New(),
+		ScopeType: "project",
+		ScopeID:   uuid.New(),
+	}
+	if shouldAutoClearTransientExecutionRuntimePauseForSession(projectSession, pauseState) {
+		t.Fatal("project-scoped pause should not auto-clear through task-session recovery")
+	}
+
+	authPause := projectpause.State{
+		IsPaused: true,
+		Reason:   "provider auth failed",
+		Metadata: json.RawMessage(`{"source":"execution_runtime","failure_reason":"provider auth failed"}`),
+	}
+	if shouldAutoClearTransientExecutionRuntimePauseForSession(session, authPause) {
+		t.Fatal("non-transient execution-runtime pause should not auto-clear")
 	}
 }
 
@@ -4476,6 +6201,50 @@ func TestIsRecoverableProjectExecutionFailure(t *testing.T) {
 	}
 	if isRecoverableProjectExecutionFailure(nil) {
 		t.Fatal("nil should not be treated as recoverable project execution failure")
+	}
+}
+
+func TestHandleRecoverableProjectExecutionTurnFailureConvertsInvalidTransitionToCleanExit(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	turnID := uuid.New()
+	sessionID := uuid.New()
+	fixture.chat.session = &chat.ChatSession{
+		ID:             sessionID,
+		OrganizationID: fixture.session.OrganizationID,
+		ScopeType:      "project_task",
+		ScopeID:        uuid.New(),
+		Mode:           "async",
+		Status:         "active",
+		CurrentTurnID:  &turnID,
+	}
+	fixture.chat.enforceStatus = true
+	fixture.chat.turns[turnID] = &chat.ChatTurn{
+		ID:        turnID,
+		SessionID: sessionID,
+		Status:    "in_progress",
+	}
+	engine := fixture.engine
+	runtime := &turnRuntime{
+		session: fixture.chat.session,
+		turn:    fixture.chat.turns[turnID],
+	}
+
+	handled, err := engine.handleRecoverableProjectExecutionTurnFailure(context.Background(), runtime, tasksvc.ErrInvalidStatusTransition{From: "review", To: "in_progress"})
+	if err != nil {
+		t.Fatalf("handleRecoverableProjectExecutionTurnFailure: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	current, getErr := fixture.chat.GetTurn(context.Background(), turnID)
+	if getErr != nil {
+		t.Fatalf("GetTurn: %v", getErr)
+	}
+	if current.Status != "failed" {
+		t.Fatalf("turn status = %q, want failed", current.Status)
+	}
+	if fixture.messages.containsContentSubstring("[Turn failed:") {
+		t.Fatal("unexpected generic turn failed system message for recoverable execution race")
 	}
 }
 
@@ -5379,6 +7148,31 @@ func TestBuildProjectBootstrapAutomaticFailureMessageUsesPauseLanguageAfterRecov
 	message := buildProjectBootstrapAutomaticFailureMessage(record)
 	if !strings.Contains(message, "paused automatically because execution had already reached") {
 		t.Fatalf("message = %q, want pause wording", message)
+	}
+}
+
+func TestBuildProjectBootstrapAutomaticFailureRecordUsesStaffingCheckpointForPersistedDrafts(t *testing.T) {
+	record := buildProjectBootstrapAutomaticFailureRecord(projectBootstrapProgress{
+		StaffingDraftCount: 3,
+	}, projectFailureCategoryBootstrap, projectBootstrapFailureStalled, "bootstrap stalled", time.Now().UTC())
+	if record.LastCheckpoint != projectBootstrapCheckpointStaffingPersisted {
+		t.Fatalf("record.LastCheckpoint = %q, want %q", record.LastCheckpoint, projectBootstrapCheckpointStaffingPersisted)
+	}
+	if record.LastSuccessfulCheckpoint != projectBootstrapCheckpointStaffingPersisted {
+		t.Fatalf("record.LastSuccessfulCheckpoint = %q, want %q", record.LastSuccessfulCheckpoint, projectBootstrapCheckpointStaffingPersisted)
+	}
+	if record.SetupPersisted != true {
+		t.Fatalf("record.SetupPersisted = %v, want true", record.SetupPersisted)
+	}
+}
+
+func TestProjectBootstrapRecoveryEndedByRereadGuard(t *testing.T) {
+	messages := []repo.ChatMessage{
+		{Role: "assistant", Content: "I'll inspect the project state first."},
+		{Role: "system", Content: "[Bootstrap validation recovery reread blocked - ending this turn so the next continuation can repair the named blocker directly.]"},
+	}
+	if !projectBootstrapRecoveryEndedByRereadGuard(messages) {
+		t.Fatal("projectBootstrapRecoveryEndedByRereadGuard = false, want true")
 	}
 }
 
@@ -6393,9 +8187,6 @@ func TestContinuationTurnOnContextCompressed(t *testing.T) {
 		if req.Purpose == "continuation_summary" {
 			return ModelResponse{Content: "summary"}, nil
 		}
-		if req.Purpose == "listening_eval" {
-			return ModelResponse{Content: "respond"}, nil
-		}
 		return ModelResponse{}, nil
 	}
 	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
@@ -6463,6 +8254,352 @@ func TestContinuationTurnCapsSummaryBeforeReusingAsHistoryRoot(t *testing.T) {
 	}
 	if len(summaryMessage.Content) > 5000 {
 		t.Fatalf("continuation summary length = %d, want <= 5000 chars", len(summaryMessage.Content))
+	}
+}
+
+func TestContinuationTurnUsesCurrentTriggerMessageForOrganizationContinuationSummary(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "sync")
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}},
+	}
+
+	oldEscalation := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "@Frank escalation: wave 1 specs blocked in review",
+	})
+	currentRequest := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Create a new project named Speaker Pipeline Ops Validation Fresh 20260324 Rerun 18 with slug speaker-pipeline-ops-validation-fresh-20260324-rerun-18.",
+	})
+	fixture.userMessageID = currentRequest.ID
+
+	var continuationHumanMessages []string
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			continuationHumanMessages = append([]string(nil), req.HumanMessages...)
+			return ModelResponse{Content: "Continue with the current project creation request."}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, currentRequest.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.continuationSummaryCalls != 1 {
+		t.Fatalf("continuation summary calls = %d, want 1", fixture.model.continuationSummaryCalls)
+	}
+	if len(continuationHumanMessages) != 1 {
+		t.Fatalf("continuation HumanMessages = %#v, want only current trigger message", continuationHumanMessages)
+	}
+	if continuationHumanMessages[0] != currentRequest.Content {
+		t.Fatalf("continuation HumanMessages[0] = %q, want %q", continuationHumanMessages[0], currentRequest.Content)
+	}
+	for _, message := range continuationHumanMessages {
+		if strings.Contains(message, oldEscalation.Content) {
+			t.Fatalf("continuation HumanMessages unexpectedly included stale prior request: %#v", continuationHumanMessages)
+		}
+	}
+}
+
+func TestContinuationTurnAppendsDirectActionPromptForAsyncOrganizationSession(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}},
+	}
+
+	currentRequest := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Create a new project named Speaker Pipeline Ops Validation Fresh 20260324 Rerun 20 with slug speaker-pipeline-ops-validation-fresh-20260324-rerun-20.",
+	})
+	fixture.userMessageID = currentRequest.ID
+
+	var secondHistoryStart *uuid.UUID
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call == 2 && input.HistoryStartID != nil {
+			copied := *input.HistoryStartID
+			secondHistoryStart = &copied
+		}
+	}
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			return ModelResponse{Content: "Create the new project and continue the bootstrap handoff."}, nil
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, currentRequest.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessageID uuid.UUID
+	var actionPromptFound bool
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, "[Continuation summary]") {
+			summaryMessageID = msg.ID
+		}
+		if strings.Contains(msg.Content, "Continue the active organization request now from the continuation summary above.") {
+			actionPromptFound = true
+			if !strings.Contains(msg.Content, "Do not say that you are ready, ask what to do next, or ask the user what they need.") {
+				t.Fatalf("organization continuation action prompt = %q, want anti-generic-chat guidance", msg.Content)
+			}
+			if !strings.Contains(msg.Content, "If the request is to create a project, your next step should be the concrete project creation and handoff action") {
+				t.Fatalf("organization continuation action prompt = %q, want direct project-creation guidance", msg.Content)
+			}
+		}
+	}
+	if summaryMessageID == uuid.Nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !actionPromptFound {
+		t.Fatal("organization continuation action prompt missing")
+	}
+	if secondHistoryStart == nil || *secondHistoryStart != summaryMessageID {
+		t.Fatalf("second assemble HistoryStartID = %v, want continuation summary %s", secondHistoryStart, summaryMessageID)
+	}
+}
+
+func TestContinuationTurnUsesDeterministicActiveRequestSummaryForAsyncOrganizationSession(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}},
+	}
+
+	currentRequest := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Create a new project named Speaker Pipeline Ops Validation Fresh 20260324 Rerun 22 with slug speaker-pipeline-ops-validation-fresh-20260324-rerun-22.",
+	})
+	fixture.userMessageID = currentRequest.ID
+
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			t.Fatalf("unexpected continuation_summary model call")
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, currentRequest.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessage *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if strings.Contains(message.Content, "[Continuation summary]") {
+			copyMessage := message
+			summaryMessage = &copyMessage
+		}
+	}
+	if summaryMessage == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(summaryMessage.Content, "Active organization request:") {
+		t.Fatalf("continuation summary = %q, want deterministic active-request summary", summaryMessage.Content)
+	}
+	if strings.Contains(strings.ToLower(summaryMessage.Content), "project created") {
+		t.Fatalf("continuation summary = %q, want no fabricated completed state", summaryMessage.Content)
+	}
+	if !strings.Contains(summaryMessage.Content, currentRequest.Content) {
+		t.Fatalf("continuation summary = %q, want original request content", summaryMessage.Content)
+	}
+}
+
+func TestContinuationTurnUsesPriorRealRequestWhenTriggeredBySyntheticOrganizationContinuationPrompt(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}},
+	}
+
+	realRequest := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Create a new project named Speaker Pipeline Ops Validation Fresh 20260324 Rerun 30 with slug speaker-pipeline-ops-validation-fresh-20260324-rerun-30.",
+	})
+	summaryMessage := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Continuation summary] Active organization request: Create a new project named Speaker Pipeline Ops Validation Fresh 20260324 Rerun 30 with slug speaker-pipeline-ops-validation-fresh-20260324-rerun-30.",
+	})
+	continuationPrompt := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Continue the active organization request now from the continuation summary above. Your next response must take direct action instead of generic chat.",
+		Metadata:  json.RawMessage(`{"source":"organization_continuation_resume","synthetic_user_message":true}`),
+	})
+	fixture.userMessageID = continuationPrompt.ID
+	_ = summaryMessage
+
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			t.Fatalf("unexpected continuation_summary model call")
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, continuationPrompt.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var continuationSummary *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if strings.Contains(message.Content, "[Continuation summary]") && message.ID != summaryMessage.ID {
+			copyMessage := message
+			continuationSummary = &copyMessage
+		}
+	}
+	if continuationSummary == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(continuationSummary.Content, realRequest.Content) {
+		t.Fatalf("continuation summary = %q, want original request content", continuationSummary.Content)
+	}
+	if strings.Contains(continuationSummary.Content, continuationPrompt.Content) {
+		t.Fatalf("continuation summary = %q, should not summarize synthetic continuation prompt", continuationSummary.Content)
+	}
+}
+
+func TestContinuationTurnUsesDeterministicActiveRequestSummaryForDirectTaskRecoveryPrompt(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.assembler.results = []assembleResult{
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}, err: prompt.ErrContextCompressed},
+		{prompt: &prompt.AssembledPrompt{Messages: []prompt.PromptMessage{{Role: "system", Content: "x"}}, TotalTokens: 10}},
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				TaskNumber:      12,
+				Title:           "V2: Validate First-Wave Task Execution & Flow Advancement",
+				WorkStatus:      "blocked",
+				AssignedAgentID: &fixture.chat.participants[0].ParticipantID,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	currentRequest := fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "Use flow.recovery_decision now. Decision: retry. flow_node_execution_id: d4e1d332-7b6b-4a15-9f84-92807a59c7fb. Stay pinned to FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md.",
+	})
+	fixture.userMessageID = currentRequest.ID
+
+	fixture.model.completeFn = func(ctx context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "continuation_summary" {
+			t.Fatalf("unexpected continuation_summary model call")
+		}
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, currentRequest.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.continuationSummaryCalls != 0 {
+		t.Fatalf("continuation summary calls = %d, want 0", fixture.model.continuationSummaryCalls)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var summaryMessage *repo.ChatMessage
+	for i := range messages {
+		message := messages[i]
+		if strings.Contains(message.Content, "[Continuation summary]") {
+			copyMessage := message
+			summaryMessage = &copyMessage
+		}
+	}
+	if summaryMessage == nil {
+		t.Fatal("continuation summary message missing")
+	}
+	if !strings.Contains(summaryMessage.Content, "Active task request:") {
+		t.Fatalf("continuation summary = %q, want deterministic active task request summary", summaryMessage.Content)
+	}
+	if !strings.Contains(summaryMessage.Content, "flow.recovery_decision") {
+		t.Fatalf("continuation summary = %q, want preserved recovery tool request", summaryMessage.Content)
+	}
+	if !strings.Contains(summaryMessage.Content, "FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md") {
+		t.Fatalf("continuation summary = %q, want preserved target path", summaryMessage.Content)
 	}
 }
 
@@ -7196,6 +9333,12 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Your next response must take direct project action instead of generic chat.") {
 		t.Fatalf("prompt = %q, want direct project action guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Do not treat a completed gate-review or sign-off task as proof that the whole project is complete") {
+		t.Fatalf("prompt = %q, want sign-off completion guard", prompt)
+	}
+	if !strings.Contains(prompt, "Do not use task.update to mark untouched draft tasks done") {
+		t.Fatalf("prompt = %q, want draft-task done guard", prompt)
+	}
 }
 
 func TestProjectExecutionContinuationFallbackSummary(t *testing.T) {
@@ -7404,6 +9547,22 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsKickoffReadyAssistReply(t *test
 	content := "I'm ready to assist. I'm a Data Integration Tester specializing in end-to-end data flow validation for the Speaker Pipeline Ops project.\n\n**Current Task Context:**\n- **Task ID:** OC-14 (Test speaker list endpoint)\n- **Status:** Blocked (validation work abandoned)\n- **Target Deliverable:** test-result-list.log"
 	if !looksLikeGenericTaskRecoveryReply(content) {
 		t.Fatal("expected kickoff ready-assist reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsContinuationProceedQuestionReply(t *testing.T) {
+	t.Parallel()
+
+	content := "I'm ready to continue OC-13 (Analysis: Evaluate error handling and recovery completeness).\n\n" +
+		"Current situation:\n" +
+		"- Task is in Work phase\n" +
+		"- Dependencies show OC-10 is complete\n\n" +
+		"What I need to proceed:\n" +
+		"1. Should I search the workspace for existing test execution logs?\n" +
+		"2. Or do you want me to focus on a specific error scenario first?\n\n" +
+		"Ready to proceed."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected continuation proceed-question reply to be treated as generic recovery output")
 	}
 }
 
@@ -7910,6 +10069,45 @@ func TestBuildProjectBootstrapResumeActionPromptForExplicitFirstWaveSelection(t 
 	}
 }
 
+func TestProjectBootstrapResumeNeedsExplicitFirstWaveSelectionWhenPhasePending(t *testing.T) {
+	state := projectBootstrapState{
+		CurrentPhase:            projectBootstrapCheckpointFirstWaveSelected,
+		PlannedTaskCount:        12,
+		FirstWaveTaskCount:      0,
+		FirstWavePromotedCount:  0,
+		FirstWaveExecutionCount: 0,
+		FirstWaveJobCount:       0,
+	}
+	if !projectBootstrapResumeNeedsExplicitFirstWaveSelection(state) {
+		t.Fatal("expected first-wave-selected phase with zero selected/promoted/executed work to require explicit first-wave selection guidance")
+	}
+}
+
+func TestBuildProjectBootstrapResumeActionPromptForPendingFirstWaveSelectionWithoutFailure(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		CurrentPhase:            projectBootstrapCheckpointFirstWaveSelected,
+		PlannedTaskCount:        12,
+		FirstWaveTaskCount:      0,
+		FirstWavePromotedCount:  0,
+		FirstWaveExecutionCount: 0,
+		FirstWaveJobCount:       0,
+	}, projectBootstrapResumeSnapshot{
+		SelectableFirstWaveLine: "Selectable first-wave tasks: task 14 id=abc title=\"Build report generator\" assigned_agent_id=worker-1; task 15 id=def title=\"Write dashboard spec\" assigned_agent_id=worker-2",
+	})
+	if !strings.Contains(prompt, "Bootstrap is still waiting on an explicit selected first-wave subset.") {
+		t.Fatalf("prompt = %q, want explicit first-wave pending guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Your first tool call in this resume turn should be bootstrap.setup.persist") {
+		t.Fatalf("prompt = %q, want persist-first guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Use the selectable task ids already listed") {
+		t.Fatalf("prompt = %q, want selectable-task guidance", prompt)
+	}
+	if strings.Contains(prompt, "Do not start with bootstrap.setup.persist on this turn unless you have already repaired the named blocker") {
+		t.Fatalf("prompt = %q, want no conflicting blocker-repair guidance", prompt)
+	}
+}
+
 func TestBuildProjectBootstrapResumeActionPromptForUnassignedFirstWaveTask(t *testing.T) {
 	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
 		CurrentPhase:            projectBootstrapCheckpointFirstWaveExecutions,
@@ -8033,6 +10231,13 @@ func TestProjectBootstrapFailureTaskNumber(t *testing.T) {
 	}
 	if got := projectBootstrapFailureTaskNumber("kickoff validation failed: bootstrap setup persisted staffing but did not emit any executable tasks"); got != 0 {
 		t.Fatalf("task number = %d, want 0", got)
+	}
+}
+
+func TestProjectBootstrapFailureTaskTitlePreservesParentheticalTaskTitle(t *testing.T) {
+	reason := "kickoff validation failed: task 15 (Document scope boundaries: in-scope (routing decisions, load balancing, speaker assignment, error recovery), out-of-scope (UI design, external integrations)) is still a broad parent workstream and must be split into bounded executable child tasks before bootstrap can complete"
+	if got := projectBootstrapFailureTaskTitle(reason); got != "Document scope boundaries: in-scope (routing decisions, load balancing, speaker assignment, error recovery), out-of-scope (UI design, external integrations)" {
+		t.Fatalf("task title = %q", got)
 	}
 }
 
@@ -9383,6 +11588,32 @@ func TestHandleUserMessageBlocksRepeatedToolValidationFailures(t *testing.T) {
 	}
 }
 
+func TestClassifyToolValidationFailureRecognizesNonSubstantiveContent(t *testing.T) {
+	failure, ok := classifyToolValidationFailure(ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "validation_scope.md",
+			"content": "Let me create the substantive content for validation_scope.md:",
+		},
+	}, ToolResult{
+		ToolCallID: "write-1",
+		Name:       "file.write",
+		Output: map[string]any{
+			"error": "non_substantive_content",
+		},
+	})
+	if !ok {
+		t.Fatal("expected non_substantive_content to classify as a validation failure")
+	}
+	if failure.FailureCode != "non_substantive_content" {
+		t.Fatalf("failure code = %q, want non_substantive_content", failure.FailureCode)
+	}
+	if failure.ToolName != "file.write" {
+		t.Fatalf("tool name = %q, want file.write", failure.ToolName)
+	}
+}
+
 func TestHandleUserMessageFailsWhenValidationLoopBlockLacksTaskTransitions(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -9760,6 +11991,1373 @@ func TestHandleRecoveryPopulatedFileWriteOutcomePrefersDeliverablePathFromToolRe
 	}
 }
 
+func TestMaybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatchBlocksReadOnlyRecoveryNarration(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	description := "Write the deliverable. Output: docs/content-strategy.md with the full content strategy."
+	plan := taskplan.Analyze("Write content strategy", &description)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		Title:          "Write content strategy",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+		Metadata:       taskplan.ApplyMetadata(nil, plan),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	handled, err := fixture.engine.maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch(
+		context.Background(),
+		rt,
+		"Let me first check the current state of the target file and recovery artifacts, then write the substantive content strategy document.",
+		[]ModelToolCall{{
+			ID:   "read-1",
+			Name: "file.list",
+			Tier: "tier1",
+			Arguments: map[string]any{
+				"path": ".",
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if strings.TrimSpace(rt.recoveryBlockReason) == "" {
+		t.Fatal("expected recoveryBlockReason to be set")
+	}
+
+	taskRecord, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint")
+	}
+	if checkpoint.TargetPath != "docs/content-strategy.md" {
+		t.Fatalf("TargetPath = %q, want docs/content-strategy.md", checkpoint.TargetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "instead of the file body") {
+		t.Fatalf("FailureReason = %q, want file-body rejection", checkpoint.FailureReason)
+	}
+	if !fixture.messages.containsContentSubstring("Recovery turn halted: recovered file.write") {
+		t.Fatal("expected recovery halt system message")
+	}
+}
+
+func TestMaybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatchAllowsMutationRepairPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	description := "Write the deliverable. Output: docs/content-strategy.md with the full content strategy."
+	plan := taskplan.Analyze("Write content strategy", &description)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		Title:          "Write content strategy",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+		Metadata:       taskplan.ApplyMetadata(nil, plan),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	handled, err := fixture.engine.maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch(
+		context.Background(),
+		rt,
+		"Let me first check the current state of the target file and recovery artifacts, then write the substantive content strategy document.",
+		[]ModelToolCall{{
+			ID:   "write-1",
+			Name: "file.write",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"path": "docs/content-strategy.md",
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch: %v", err)
+	}
+	if handled {
+		t.Fatal("handled = true, want false when a deliverable mutation is present")
+	}
+
+	taskRecord, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+		t.Fatal("unexpected recovery checkpoint")
+	}
+	if fixture.messages.containsContentSubstring("Recovery turn halted: recovered file.write") {
+		t.Fatal("unexpected recovery halt system message")
+	}
+}
+
+func TestMaybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatchSkipsReviewLane(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 13,
+		Title:      "Document success criteria",
+		WorkStatus: "review",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    "OC-13-PASS-FAIL-CHECKLIST.md",
+				"failure_reason": "review lane recovery",
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	handled, err := fixture.engine.maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch(
+		context.Background(),
+		rt,
+		"I'm the reviewer and I will inspect the deliverable before deciding.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch: %v", err)
+	}
+	if handled {
+		t.Fatal("handled = true, want false for review-lane recovery")
+	}
+}
+
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsUsesContinuationSummaryDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Execute test scenario 2 (edge cases): test capacity limits, concurrent assignments, boundary conditions. Log all test cases and verify system behavior under stress."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		Title:          "OC-4: Execute Test Scenario 2 (Edge Cases)",
+		TaskNumber:     13,
+		WorkStatus:     "in_progress",
+		Description:    &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "repeated_non_substantive_recovery_checkpoint",
+				"target_path":    "Test/test-execution-oc13-scenario2-edge-cases.md",
+				"failure_reason": "repeated non-substantive recovery drafts",
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"I'll write the test execution deliverable now using the continuation summary draft above.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != "Test/test-execution-oc13-scenario2-edge-cases.md" {
+		t.Fatalf("path = %q, want inferred target", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["content"]); !strings.Contains(got, "## Test Cases") {
+		t.Fatalf("content = %q, want synthesized continuation draft", got)
+	}
+}
+
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsSkipsWhenMutationAlreadyPresent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			Mode:      "async",
+			ScopeType: "project_task",
+		},
+		turn: &chat.ChatTurn{
+			ID: uuid.New(),
+		},
+		recoveryTurn: true,
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"I'll write it now.",
+		[]ModelToolCall{{
+			ID:   "write-1",
+			Name: "file.write",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"path": "docs/target.md",
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatal("synthesized = true, want false")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].ID != "write-1" {
+		t.Fatalf("toolCalls = %+v, want original tool call", toolCalls)
+	}
+}
+
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsUsesDirectSubstantiveAssistantBody(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	description := "Orchestration task: Validate that first-wave executable tasks can enter execution, advance through flows, and produce outputs. Parent task for first-wave validation subtasks."
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:          taskID,
+		TaskNumber:  12,
+		Title:       "V2: Validate First-Wave Task Execution & Flow Advancement",
+		Description: &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "repeated_non_substantive_recovery_checkpoint",
+				"target_path":    "FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md",
+				"failure_reason": "repeated non-substantive recovery drafts",
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	assistantBody := `# FIRST-WAVE EXECUTION VALIDATION PLAN
+
+## Objective
+Validate that the bounded first-wave task set enters execution, advances through work, review, and merge, and produces durable outputs.
+
+## Validation Checklist
+- Confirm first-wave tasks are queued with executable flow templates.
+- Capture substantive work outputs and commit SHAs.
+- Verify review decisions and terminal done transitions.
+
+## Validation Log
+| Task | Status | Evidence |
+|------|--------|----------|
+| OC-10 | pending | queue entry pending |
+| OC-11 | pending | review pending |
+`
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		assistantBody,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != "FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md" {
+		t.Fatalf("path = %q, want recovery target", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["content"]); !strings.Contains(got, "## Validation Log") {
+		t.Fatalf("content = %q, want direct assistant body", got)
+	}
+}
+
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsOverridesNonMutationDiscoveryCall(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Execute test scenario 2 (edge cases): test capacity limits, concurrent assignments, boundary conditions. Log all test cases and verify system behavior under stress."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		Title:          "OC-4: Execute Test Scenario 2 (Edge Cases)",
+		TaskNumber:     13,
+		WorkStatus:     "in_progress",
+		Description:    &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "repeated_non_substantive_recovery_checkpoint",
+				"target_path":    "Test/test-execution-oc13-scenario2-edge-cases.md",
+				"failure_reason": "repeated non-substantive recovery drafts",
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"I'll write the test execution deliverable now using the continuation summary draft above.",
+		[]ModelToolCall{{
+			ID:   "read-1",
+			Name: "file.list",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"path": "Test",
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want synthesized file.write override", toolCalls)
+	}
+}
+
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsOverridesInvalidMutationWithPersistedDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "happy-path-recovery"
+	orgSlug := "default"
+	targetPath := "test_execution_happy_path.md"
+	targetDraft := strings.TrimSpace(`
+# Happy Path Test Execution
+
+## Task ID
+- task-123
+
+## Routing Trace
+- Request entered intake at 2026-03-24T16:00:00Z
+- Routed to the primary speaker-ops pool
+- Load balancer selected worker-2
+
+## Verdict
+- PASS
+`)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     11,
+		Title:          "Happy Path Test - Core Routing",
+		WorkStatus:     "blocked",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    targetPath,
+				"failure_reason": "recovered file.write for test_execution_happy_path.md failed because the draft was narration instead of the file body",
+			},
+		}),
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetDraft+"\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"I'll execute the Happy Path test now and write the complete test execution log with actual results, timestamps, and validation evidence.",
+		[]ModelToolCall{{
+			ID:   "write-1",
+			Name: "file.write",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"path":    targetPath,
+				"content": "I'll execute the Happy Path test now and write the complete test execution log with actual results, timestamps, and validation evidence.",
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one synthesized file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(toolCalls[0].Arguments["content"]); got != targetDraft {
+		t.Fatalf("content = %q, want persisted target draft", got)
+	}
+}
+
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsUsesPersistedTargetDraftAfterGenericRetryReply(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	targetPath := "Test/test-execution-oc13-scenario2-edge-cases.md"
+	targetDraft := strings.TrimSpace(`
+# OC-4: Execute Test Scenario 2 (Edge Cases) Execution Log
+
+## Objective
+Execute the edge-case routing scenario and capture concrete evidence.
+
+## Test Cases
+- TC1: Capacity limits
+- TC2: Concurrent assignments
+- TC3: Boundary conditions
+
+## Findings
+- Routing remained deterministic under load.
+`)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     13,
+		Title:          "OC-4: Execute Test Scenario 2 (Edge Cases)",
+		WorkStatus:     "blocked",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    targetPath,
+				"failure_reason": "assistant draft for Test/test-execution-oc13-scenario2-edge-cases.md repeated a generic recovery reply instead of the file body",
+			},
+		}),
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetDraft+"\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "I'll help you resume the task. Let me first get the current task context to understand the recovery state.",
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"I'll help you resume the task. Let me first get the current task context to understand the recovery state.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(toolCalls[0].Arguments["content"]); got != targetDraft {
+		t.Fatalf("content = %q, want persisted target draft", got)
+	}
+}
+
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsUsesSubstantiveAssistantDraftBlock(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	targetPath := "FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md"
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	draftBody := strings.TrimSpace(`
+# FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md
+
+## Task Overview
+Validate that first-wave executable tasks can enter execution, advance through flows, and produce concrete outputs.
+
+## Validation Checks
+- Confirm first-wave tasks leave draft and enter execution.
+- Confirm flow advancement reaches review.
+- Confirm concrete output artifacts are produced.
+`)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     12,
+		Title:          "V2: Validate First-Wave Task Execution & Flow Advancement",
+		WorkStatus:     "blocked",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "repeated_non_substantive_recovery_checkpoint",
+				"target_path":    targetPath,
+				"failure_reason": "repeated non-substantive recovery drafts",
+			},
+		}),
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	assistantContent := "Based on task OC-12, here is the deliverable:\n\n```markdown\n" + draftBody + "\n```"
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		assistantContent,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(toolCalls[0].Arguments["content"]); got != draftBody {
+		t.Fatalf("content = %q, want extracted fenced draft body", got)
+	}
+}
+
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsSkipsRejectedPersistedTargetDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	targetPath := "Test/oc-21-boundary-test-design.md"
+	targetDraft := "I'll start work on OC-21 by examining the task context, understanding the previous rejection, and designing the boundary test scenario for rate limits and capacity constraints.\n\n" +
+		"Let me first get the full task details and understand what was previously rejected:"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     0,
+		Title:          "Document boundary test design for rate limits and pipeline capacity",
+		WorkStatus:     "blocked",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    targetPath,
+				"failure_reason": "assistant draft for Test/oc-21-boundary-test-design.md repeated a generic recovery reply instead of the file body",
+			},
+		}),
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetDraft+"\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	turnID := uuid.New()
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		targetDraft,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatal("synthesized = true, want false")
+	}
+	if len(toolCalls) != 0 {
+		t.Fatalf("toolCalls = %+v, want none", toolCalls)
+	}
+}
+
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsPrefersCheckpointTargetOverHistoricalSiblingArtifact(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	targetPath := "Test/oc-21-boundary-test-design.md"
+	siblingPath := "Test/oc-26-pipeline-capacity-test-spec.md"
+	turnID := uuid.New()
+	priorTurnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     21,
+		Title:          "Design boundary test: rate limits and max pipeline capacity",
+		WorkStatus:     "blocked",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    targetPath,
+				"failure_reason": "assistant draft for Test/oc-21-boundary-test-design.md repeated a generic recovery reply instead of the file body",
+			},
+		}),
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	targetBody := strings.TrimSpace(`# Boundary Test Design
+
+## Rate Limit Threshold
+- Submit 120 requests within one minute and expect HTTP 429 after the configured limit is crossed.
+`)
+	if err := os.WriteFile(targetAbs, []byte(targetBody+"\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &priorTurnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":    siblingPath,
+				"content": "# OC-26: Pipeline Max Capacity Threshold Test Specification\n\nSubstantive sibling content.\n",
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	narration := "I'll start work on OC-21 by examining the task context, understanding the previous rejection, and designing the boundary test scenario for rate limits and capacity constraints.\n\n" +
+		"Let me first get the full task details and understand what was previously rejected:"
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		narration,
+		[]ModelToolCall{{
+			ID:   "write-1",
+			Name: "file.write",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"path":    siblingPath,
+				"content": narration,
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want checkpoint target %q", got, targetPath)
+	}
+	if got := stringValue(toolCalls[0].Arguments["content"]); !strings.Contains(got, "## Rate Limit Threshold") {
+		t.Fatalf("content = %q, want checkpoint target draft", got)
+	}
+}
+
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsSkipsReviewLane(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 13,
+		Title:      "Document success criteria",
+		WorkStatus: "review",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    "OC-13-PASS-FAIL-CHECKLIST.md",
+				"failure_reason": "review lane recovery",
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"I'm the reviewer and will decide after inspecting the deliverables.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatal("synthesized = true, want false for review-lane recovery")
+	}
+	if len(toolCalls) != 0 {
+		t.Fatalf("toolCalls = %+v, want none", toolCalls)
+	}
+}
+
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesInferredDraftOnGenericKickoffReply(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Execute the happy-path scenario end-to-end against the real speaker pipeline product. Capture screenshots, logs, and evidence of successful completion at each step."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     17,
+		Title:          "Execute happy-path scenario",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"Excellent! Now I have everything I need. Let me create a comprehensive execution log and begin the happy-path scenario.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one synthesized file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != "Test/test-execution-oc17-happy-path-scenario.md" {
+		t.Fatalf("path = %q, want canonical task execution log target", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["content"]); !strings.Contains(got, "## Test Cases") {
+		t.Fatalf("content = %q, want inferred execution-log draft", got)
+	}
+}
+
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesBadImprovisedWrite(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Execute edge-case scenarios end-to-end against the real speaker pipeline product. Test incomplete data, rejections, resubmissions, and error recovery. Capture evidence at each step."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     18,
+		Title:          "Execute edge-case scenarios",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"Let me create the execution log with a new filename:",
+		[]ModelToolCall{{
+			ID:   "write-1",
+			Name: "file.write",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"path":    "test/OC-18-EDGE-CASE-EXECUTION-PLAN.md",
+				"content": "Perfect! Now I have the complete edge-case execution plan.",
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one synthesized file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != "Test/test-execution-oc18-edge-case-scenarios.md" {
+		t.Fatalf("path = %q, want canonical edge-case execution log target", got)
+	}
+}
+
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsReviewLane(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Execute the happy-path scenario end-to-end against the real speaker pipeline product. Capture screenshots, logs, and evidence of successful completion at each step."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     17,
+		Title:          "Execute happy-path scenario",
+		WorkStatus:     "review",
+		Description:    &description,
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"Now I'll record my review decision with the review-scoped artifact:",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatal("synthesized = true, want false for review lane")
+	}
+	if len(toolCalls) != 0 {
+		t.Fatalf("toolCalls = %+v, want none", toolCalls)
+	}
+}
+
+func TestMaybeSynthesizeTaskReviewDecisionToolCallsUsesExplicitRejectDecision(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 17,
+		Title:      "Execute happy-path scenario",
+		WorkStatus: "review",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskReviewDecisionToolCalls(
+		context.Background(),
+		rt,
+		"## REVIEW ASSESSMENT\n\nThe deliverable is incomplete.\n\nDECISION: REJECT",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskReviewDecisionToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.review_decision" {
+		t.Fatalf("toolCalls = %+v, want one flow.review_decision", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
+		t.Fatalf("decision = %q, want reject", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID)
+	}
+}
+
+func TestMaybeSynthesizeTaskReviewDecisionToolCallsSkipsWhenDecisionToolAlreadyPresent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 17,
+		Title:      "Execute happy-path scenario",
+		WorkStatus: "review",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	original := []ModelToolCall{{
+		ID:   "review-1",
+		Name: "flow.review_decision",
+		Tier: "tier2",
+		Arguments: map[string]any{
+			"flow_node_execution_id": executionID.String(),
+			"decision":               "reject",
+		},
+	}}
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskReviewDecisionToolCalls(
+		context.Background(),
+		rt,
+		"DECISION: REJECT",
+		original,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskReviewDecisionToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatal("synthesized = true, want false")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].ID != "review-1" {
+		t.Fatalf("toolCalls = %+v, want original tool call", toolCalls)
+	}
+}
+
+func TestMaybeSynthesizeTaskReviewDecisionToolCallsInfersRejectFromStrongFindings(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 10,
+		Title:      "Analyze Results and Sign Off",
+		WorkStatus: "review",
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskReviewDecisionToolCalls(
+		context.Background(),
+		rt,
+		"The work deliverable file exists but contains only placeholder text. The required planning artifacts are missing from the workspace.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskReviewDecisionToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.review_decision" {
+		t.Fatalf("toolCalls = %+v, want one flow.review_decision", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["decision"]); got != "reject" {
+		t.Fatalf("decision = %q, want reject", got)
+	}
+}
+
 func TestEnsureRecoveryTurnDurableTaskStateFailsWithoutTaskTransitions(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -9801,6 +13399,93 @@ func TestEnsureRecoveryTurnDurableTaskStateFailsWithoutTaskTransitions(t *testin
 	}
 	if taskRecord.WorkStatus != "in_progress" {
 		t.Fatalf("task work_status = %q, want in_progress", taskRecord.WorkStatus)
+	}
+}
+
+func TestEnsureRecoveryTurnDurableTaskStateIgnoresQueuedInvalidTransition(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Recovery resumed task",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{
+		repo: taskRepo,
+		err:  tasksvc.ErrInvalidStatusTransition{From: "queued", To: "blocked"},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID: uuid.New(),
+		},
+		recoveryBlockReason: "provider auth failed",
+	}
+
+	taskRecord := taskRepo.items[taskID]
+	taskRecord.WorkStatus = "queued"
+	taskRepo.items[taskID] = taskRecord
+
+	if err := fixture.engine.ensureRecoveryTurnDurableTaskState(context.Background(), rt); err != nil {
+		t.Fatalf("ensureRecoveryTurnDurableTaskState error = %v, want nil", err)
+	}
+}
+
+func TestHandleValidationLoopBlockIgnoresQueuedInvalidTransition(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Queued validation task",
+				WorkStatus:     "queued",
+				Metadata:       json.RawMessage(`{}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{
+		repo: taskRepo,
+		err:  tasksvc.ErrInvalidStatusTransition{From: "queued", To: "blocked"},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{ID: "read-1", Name: "file.read"}}
+	results := []ToolResult{{ToolCallID: "read-1", Name: "file.read", Error: "recovery_target_focus_required"}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleAgentTurnValidationFailures error = %v, want nil", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
 	}
 }
 
@@ -9983,6 +13668,36 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			content: "Perfect! Now I understand the task context and I need to resume OC-28 correctly. " +
 				"Let me now create the comprehensive accessibility standards document that unblocks the design system workstream.",
 			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects recovery target narration placeholder",
+			content: "The recovery target is `Test/oc-21-boundary-test-design.md`. " +
+				"Task OC-21 is in the Work node for designing boundary tests for rate limits and max pipeline capacity. " +
+				"Writing the comprehensive boundary test design specification now:",
+			want: "intent to write the deliverable",
+		},
+		{
+			name: "rejects recovery placeholder narration",
+			content: "Perfect. I understand the recovery state. The file exists but is just a placeholder. " +
+				"Let me now write the comprehensive boundary test design specification based on the task requirements.",
+			want: "instead of the file body",
+		},
+		{
+			name: "rejects task-context inspection placeholder",
+			content: "I'll start work on OC-21 by examining the task context, understanding the previous rejection, and designing the boundary test scenario for rate limits and capacity constraints.\n\n" +
+				"Let me first get the full task details and understand what was previously rejected:",
+			targetPath: "Test/oc-21-boundary-test-design.md",
+			want:       "inspect task context instead of the file body",
+		},
+		{
+			name: "rejects review rejection memo reused as execution draft",
+			content: "## REVIEW FINDINGS — OC-15: Error Handling & Rollback Test\n\n" +
+				"### Critical Quality Gate Violation: PRIMARY DELIVERABLE MISSING\n\n" +
+				"**Decision**: ❌ **REJECT**\n\n" +
+				"## REWORK GUIDANCE\n\n" +
+				"Execute the missing error handling scenarios and resubmit the actual deliverable.",
+			targetPath: "error_handling_test.md",
+			want:       "review or rejection memo",
 		},
 		{
 			name: "rejects full context workspace check placeholder narration",
@@ -10170,6 +13885,16 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 			content: "I need the flow node execution ID to continue. Can you provide the flow_node_execution_id for the current task node?\n\n" +
 				"Alternatively, if you'd like me to check the current task state, I can retrieve OC-24 and determine the active flow node:",
 			want: "runtime control-plane input instead of the file body",
+		},
+		{
+			name: "allows validation plan checklist that mentions flow node execution id",
+			content: "# First-Wave Task Execution & Flow Advancement Validation Plan\n\n" +
+				"## Flow Node Advancement Validation\n" +
+				"- [ ] flow_get_execution returns active node = review node after work complete\n" +
+				"- [ ] flow_advance() callable with valid flow_node_execution_id\n" +
+				"- [ ] Transition to review node preserves all task state\n",
+			targetPath: "FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md",
+			want:       "",
 		},
 		{
 			name: "rejects operator choice question placeholder",
@@ -10448,6 +14173,25 @@ func TestRecoveryFileWriteDraftRejectReason(t *testing.T) {
 				"Also, do you want me to pull findings from the completed sibling tasks (OC-10, OC-11, OC-12) and the test execution results documented above, or should I ask you to provide the key findings to synthesize?",
 			targetPath: "Work/OC-13-SYNTHESIZE-VALIDATION-FINDINGS-REPORT.md",
 			want:       "repeated a generic recovery reply instead of the file body",
+		},
+		{
+			name: "rejects p95 planning narration leaked into deliverable",
+			content: "Perfect! Now I understand exactly what I need to deliver. The throughput test is an excellent template—I need to produce a similar comprehensive test execution report for P95 Latency Measurement with 5 baseline routing scenarios.\n\n" +
+				"Let me now execute the P95 latency measurement test and document the results. I'll create a comprehensive test execution with 5 baseline scenarios, measuring end-to-end latency from task creation to agent notification, and then compare against the SLA.\n\n" +
+				"Test Plan:\n1. Scenario 1: Happy Path\n2. Scenario 2: Edge Case - Single Pool at Capacity\n3. Scenario 3: Concurrent Requests\n4. Scenario 4: Network Latency Variance\n5. Scenario 5: Peak Load Stress Test\n",
+			targetPath: "p95_latency_result.md",
+			want:       "described intent to write the deliverable instead of the file body",
+		},
+		{
+			name: "rejects sign-off planning narration leaked into deliverable",
+			content: "Good. Based on my analysis, I can see:\n\n" +
+				"1. Upstream task status is complex\n" +
+				"2. The validation_scope.md is comprehensive and complete\n" +
+				"3. Evidence exists but is fragmented\n" +
+				"4. OC-16 is my responsibility\n\n" +
+				"Let me now produce a comprehensive validation sign-off report that consolidates the validation scope and the evidence from the test execution results I've already read.\n",
+			targetPath: "validation_sign_off.md",
+			want:       "described intent to write the deliverable instead of the file body",
 		},
 		{
 			name:    "accepts first-person file body",
@@ -12482,6 +16226,449 @@ func TestHandleTaskFileWriteWrongPathSkipsNonExecutionFirstTasks(t *testing.T) {
 	}
 }
 
+func TestHandleTaskFileWriteWrongPathRewritesToInferredTestExecutionTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	description := "Execute test scenario 3 (error handling): malformed input, agent unavailability, timeout conditions. Verify system gracefully handles errors. Produce test execution log."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			TaskNumber:  14,
+			Title:       "OC-5: Execute Test Scenario 3 (Error Handling)",
+			Description: &description,
+			WorkStatus:  "in_progress",
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "Error/test-execution-oc14-scenario3-error-handling.md",
+			"content": "# OC-5\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "Test/test-execution-oc14-scenario3-error-handling.md" {
+		t.Fatalf("path = %q, want inferred test execution target", got)
+	}
+}
+
+func TestHandleTaskFileWriteWrongPathRewritesScenarioExecutionPlanToCanonicalTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	description := "Execute the happy-path scenario end-to-end against the real speaker pipeline product. Capture screenshots, logs, and evidence of successful completion at each step."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			TaskNumber:  17,
+			Title:       "Execute happy-path scenario",
+			Description: &description,
+			WorkStatus:  "in_progress",
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "test/OC-17-HAPPY-PATH-EXECUTION-PLAN.md",
+			"content": "# OC-17 plan\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "Test/test-execution-oc17-happy-path-scenario.md" {
+		t.Fatalf("path = %q, want canonical inferred execution target", got)
+	}
+}
+
+func TestHandleTaskFileWriteWrongPathRewritesValidationExecutionDocumentToCanonicalTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	description := "Execute capacity test: submit registrations when pipeline at 90% and 100% capacity. Verify expected responses and behaviors. Record results. ~25 min."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			TaskNumber:  27,
+			Title:       "Validation execution: test pipeline capacity rejection",
+			Description: &description,
+			WorkStatus:  "in_progress",
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "Test/oc-27-capacity-rejection-test-design.md",
+			"content": "# OC-27\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "Test/test-execution-oc27-test-pipeline-capacity-rejection.md" {
+		t.Fatalf("path = %q, want canonical validation execution target", got)
+	}
+}
+
+func TestHandleTaskFileWriteWrongPathRewritesGenericDocumentPathToCanonicalTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:         taskID,
+			TaskNumber: 17,
+			Title:      "Design scenario: speaker registration with complete profile data",
+			WorkStatus: "in_progress",
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "validated",
+			"content": "# OC-17 scenario design\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "Work/OC-17-DESIGN-SCENARIO-SPEAKER-REGISTRATION-WITH-COMPLETE-PROFILE-DATA.md" {
+		t.Fatalf("path = %q, want canonical document target", got)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsExecutionPlanForTaskLog(t *testing.T) {
+	t.Parallel()
+
+	content := `# OC-17: HAPPY-PATH SCENARIO EXECUTION PLAN
+
+## SCENARIO OVERVIEW
+- Nominal input
+
+## ACCEPTANCE CRITERIA
+| ID | Criterion | Verification Method |
+
+## SUCCESS METRICS
+| ID | Metric | Target |
+
+## EXECUTION PHASES
+- [ ] Submit request
+- [ ] Capture evidence
+`
+	reason := recoveryFileWriteDraftRejectReason(content, "Test/test-execution-oc17-happy-path-scenario.md")
+	if !strings.Contains(reason, "execution plan/checklist") {
+		t.Fatalf("reason = %q, want execution plan rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonAllowsValidationExecutionPlanDeliverable(t *testing.T) {
+	t.Parallel()
+
+	content := `# First-Wave Task Execution & Flow Advancement Validation Plan
+
+## Validation Objective
+Confirm first-wave executable tasks enter execution and reach done.
+
+## Validation Checkpoints
+- [ ] Task queued successfully
+- [ ] flow_advance() callable with valid flow_node_execution_id
+
+## Success Criteria
+- First-wave tasks reach done
+
+## Failure Mode Registry
+- Review gate unavailable
+
+## Validation Execution Plan
+1. Observe queued tasks.
+2. Capture durable outputs and decisions.
+`
+	reason := recoveryFileWriteDraftRejectReason(content, "FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md")
+	if reason != "" {
+		t.Fatalf("reason = %q, want empty", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonUsesDraftContentFromRecoveryArtifactWrapper(t *testing.T) {
+	t.Parallel()
+
+	content := `# Recovery file.write artifact
+
+Task: OC-19: Design boundary scenario: rate limits and pipeline capacity
+Target Path: Work/OC-19-DESIGN-BOUNDARY-SCENARIO-RATE-LIMITS-AND-PIPELINE-CAPACITY.md
+
+## Last Write Failure
+
+assistant draft for Work/OC-19-DESIGN-BOUNDARY-SCENARIO-RATE-LIMITS-AND-PIPELINE-CAPACITY.md wrote an execution plan/checklist instead of concrete execution evidence
+
+## Draft Content
+
+# OC-19: Design Boundary Scenario — Rate Limits and Pipeline Capacity
+
+## Scenario Overview
+
+This boundary scenario validates throttling and capacity behavior.
+
+## Scenario 1: Rate Limit Threshold Testing
+
+### Objective
+Validate that the system returns HTTP 429 with Retry-After once the threshold is exceeded.
+
+### Execution Phases
+
+- Submit 10 requests in-window and confirm acceptance.
+- Submit one more request and confirm throttling.
+
+## Success Metrics
+
+- HTTP 429 returned at threshold breach
+- Retry-After header present
+- No data loss during overflow
+
+## Expected Overflow Response Example
+
+HTTP response:
+HTTP/1.1 503 Service Unavailable
+Retry-After: 45
+`
+	reason := recoveryFileWriteDraftRejectReason(content, "Work/OC-19-DESIGN-BOUNDARY-SCENARIO-RATE-LIMITS-AND-PIPELINE-CAPACITY.md")
+	if reason != "" {
+		t.Fatalf("reason = %q, want wrapper draft to stay usable", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsExecutionSpecCompletionMemoWithoutArtifacts(t *testing.T) {
+	t.Parallel()
+
+	content := `# PRD / Requirements Spec: Test Environment Setup (OC-14)
+
+- Kind: prd_spec
+- Playbook: execution_spec
+- Source task: OC-14 (Prepare test environment and fixtures)
+
+## Goals
+
+1. Seed comprehensive test speaker data
+2. Define approval workflow templates
+3. Create review templates
+4. Document environment setup steps
+
+## Non-Goals
+
+- Real speaker recruitment
+- Production environment setup
+
+## Scope
+
+- Test speaker fixture
+- Approval workflow definitions
+- Review templates
+
+## Constraints
+
+- Data format: JSON
+- Setup time: <30 minutes
+
+## Success Metrics
+
+1. Fixture Completeness: All 6 speaker profiles present ✓
+2. Workflow Definition: 2 approval workflows defined ✓
+3. Review Templates: 4 templates created ✓
+4. Documentation Completeness: setup guide complete ✓
+
+## Open Questions
+
+None at this phase. Scope is clear, fixtures are created, documentation is complete.
+`
+	reason := recoveryFileWriteDraftRejectReason(content, "Work/OC-14-PREPARE-TEST-ENVIRONMENT-AND-FIXTURES.md")
+	if !strings.Contains(reason, "execution-spec completion memo") {
+		t.Fatalf("reason = %q, want execution-spec completion memo rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsDeliverableCompletionSummaryWithoutBody(t *testing.T) {
+	t.Parallel()
+
+	content := `Design complete. OC-21 boundary test design substantive deliverables produced:
+
+**Test Design (Test/oc-21-boundary-test-design.md)**: 8.6 KB
+- Rate-limit test scenario (100+ req/min -> HTTP 429 responses)
+
+**Planning Artifacts** (all substantive, no scaffolds):
+1. **PRD** (planning/prd-spec/oc-21-prd.md): 5 concrete goals
+2. **Acceptance Criteria** (planning/prd-spec/oc-21-acceptance-criteria.md): 3 test scenarios
+3. **Implementation Plan** (planning/prc-spec/oc-21-implementation-plan.md): 5 execution phases
+4. **Dependency Log** (planning/prd-spec/oc-21-dependency-log.md): critical path analysis
+
+**Quality Status**: Design phase complete; ready for internal review gate after execution completes.
+`
+	reason := recoveryFileWriteDraftRejectReason(content, "Test/oc-21-boundary-test-design.md")
+	if !strings.Contains(reason, "completion summary") {
+		t.Fatalf("reason = %q, want completion summary rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsRecoveryGuidanceSummaryPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	content := `Excellent! The boundary test design file exists and shows **design phase is complete** with substantive planning artifacts. According to the recovery guidance, this is the durable output I should continue from.
+
+Now I need to verify these artifact files exist and then proceed with the execution test phase. Let me check the planning artifacts:
+`
+	reason := recoveryFileWriteDraftRejectReason(content, "Test/oc-21-boundary-test-design.md")
+	if !strings.Contains(reason, "intent to write") {
+		t.Fatalf("reason = %q, want intent-to-write rejection", reason)
+	}
+}
+
+func TestHandleTaskFileWriteWrongPathRewritesToCheckpointTargetWhenPreferredUnknown(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:         taskID,
+			TaskNumber: 15,
+			Title:      "Define what errors are acceptable",
+			WorkStatus: "in_progress",
+			Metadata: mustRawJSON(t, map[string]any{
+				"recovery_file_write_checkpoint": map[string]any{
+					"version":       1,
+					"target_path":   "planning_spec/oc-15-acceptable-errors-definition.md",
+					"artifact_path": ".ottercamp/recovery/planning_spec/oc-15-acceptable-errors-definition.md",
+				},
+			}),
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "VALIDATION-SUCCESS-CRITERIA-OC13.md",
+			"content": "# Acceptable Errors\n\nSubstantive content.\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "planning_spec/oc-15-acceptable-errors-definition.md" {
+		t.Fatalf("path = %q, want checkpoint target", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftContentUsesPriorTurnDraftAfterCurrentNarration(t *testing.T) {
 	t.Parallel()
 
@@ -12783,6 +16970,437 @@ func TestRecoveryFileOutputContextPrefersExplicitDeliverablePathOverHistoricalPl
 	}
 	if draft != "" {
 		t.Fatalf("draft = %q, want empty explicit-deliverable fallback", draft)
+	}
+}
+
+func TestRecoveryFileOutputContextPrefersInferredTestExecutionTargetOverPlanningArtifacts(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	description := "Execute test scenario 2 (edge cases): test capacity limits, concurrent assignments, boundary conditions. Log all test cases and verify system behavior under stress."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			TaskNumber:  13,
+			Title:       "OC-4: Execute Test Scenario 2 (Edge Cases)",
+			Description: &description,
+		},
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path": "planning/discovery-plan/oc-9-assumption-log.md",
+				"content": strings.TrimSpace(`# Assumption log
+
+- Kind: discovery_plan
+- Source task: OC-9
+`),
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	targetPath, draft, ok := fixture.engine.recoveryFileOutputContext(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery file output context")
+	}
+	if targetPath != "Test/test-execution-oc13-scenario2-edge-cases.md" {
+		t.Fatalf("targetPath = %q, want inferred test execution target", targetPath)
+	}
+	if draft != "" {
+		t.Fatalf("draft = %q, want empty inferred-target fallback", draft)
+	}
+}
+
+func TestLoadRecoveryResumeStateSynthesizesDraftForTestExecutionTask(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	initialMessageID := uuid.New()
+	description := "Execute test scenario 2 (edge cases): test capacity limits, concurrent assignments, boundary conditions. Log all test cases and verify system behavior under stress."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  13,
+				Title:       "OC-4: Execute Test Scenario 2 (Edge Cases)",
+				Description: &description,
+				WorkStatus:  "blocked",
+				Metadata: mustRawJSON(t, map[string]any{
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":        1,
+						"blocker_class":  "repeated_non_substantive_recovery_checkpoint",
+						"target_path":    "Test/test-execution-oc13-scenario2-edge-cases.md",
+						"failure_reason": "repeated non-substantive recovery drafts",
+					},
+				}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: initialMessageID,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if state.targetPath != "Test/test-execution-oc13-scenario2-edge-cases.md" {
+		t.Fatalf("targetPath = %q, want inferred test execution target", state.targetPath)
+	}
+	if !strings.Contains(state.summaryDraft, "## Test Cases") {
+		t.Fatalf("summaryDraft = %q, want synthesized test execution scaffold", state.summaryDraft)
+	}
+}
+
+func TestLoadRecoveryResumeStateRejectsWrongTaskTargetDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	orgID := fixture.session.OrganizationID
+	projectSlug := "resume-state-task-15"
+	orgSlug := "test-org"
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				TaskNumber:     15,
+				Title:          "Define what errors are acceptable",
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "blocked",
+				Metadata: mustRawJSON(t, map[string]any{
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":        1,
+						"blocker_class":  "durable_recovery_checkpoint",
+						"target_path":    "planning_spec/oc-15-acceptable-errors-definition.md",
+						"failure_reason": "repeated non-substantive recovery drafts",
+					},
+				}),
+			},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: orgID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		orgID: {ID: orgID, Slug: orgSlug},
+	}}
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, "planning_spec", "oc-15-acceptable-errors-definition.md")
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	wrongDraft := "The target file OC-16-WHAT-MUST-BE-FIXED.md already exists with substantive, production-ready content."
+	if err := os.WriteFile(targetAbs, []byte(wrongDraft), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if state.targetPath != "planning_spec/oc-15-acceptable-errors-definition.md" {
+		t.Fatalf("targetPath = %q, want checkpoint target", state.targetPath)
+	}
+	if state.targetDraft != "" {
+		t.Fatalf("targetDraft = %q, want wrong-task draft to be rejected", state.targetDraft)
+	}
+	if !strings.Contains(state.targetDraftRejectedReason, "different task") {
+		t.Fatalf("targetDraftRejectedReason = %q, want different-task rejection", state.targetDraftRejectedReason)
+	}
+}
+
+func TestLoadRecoveryResumeStateIncludesValidationSiblingContext(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	task16ID := uuid.New()
+	task17ID := uuid.New()
+	task13ID := uuid.New()
+	description := "Orchestration task: Validate that first-wave executable tasks can enter execution, advance through flows, and produce outputs. Parent task for first-wave validation subtasks."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     12,
+				Title:          "V2: Validate First-Wave Task Execution & Flow Advancement",
+				Description:    &description,
+				WorkStatus:     "in_progress",
+				Metadata: mustRawJSON(t, map[string]any{
+					"recovery_file_write_checkpoint": map[string]any{
+						"version":        1,
+						"blocker_class":  "repeated_non_substantive_recovery_checkpoint",
+						"target_path":    "FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md",
+						"failure_reason": "repeated non-substantive recovery drafts",
+					},
+				}),
+			},
+			task16ID: {
+				ID:             task16ID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     16,
+				Title:          "V2-1b: Execute First-Wave Test & Produce Results",
+				WorkStatus:     "done",
+			},
+			task17ID: {
+				ID:             task17ID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     17,
+				Title:          "V2-2b: Execute Error-Handling Tests & Results",
+				WorkStatus:     "done",
+			},
+			task13ID: {
+				ID:             task13ID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     13,
+				Title:          "V3: Validate Wave Transition & Later-Wave Queuing",
+				WorkStatus:     "draft",
+			},
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if len(state.contextNotes) == 0 {
+		t.Fatal("expected validation sibling context notes")
+	}
+	joined := strings.Join(state.contextNotes, "\n")
+	if !strings.Contains(joined, "Task 16 (V2-1b: Execute First-Wave Test & Produce Results): done") {
+		t.Fatalf("contextNotes = %q, want task 16 status", joined)
+	}
+	if !strings.Contains(joined, "Task 17 (V2-2b: Execute Error-Handling Tests & Results): done") {
+		t.Fatalf("contextNotes = %q, want task 17 status", joined)
+	}
+	if strings.Contains(joined, "Task 13") {
+		t.Fatalf("contextNotes = %q, did not want unrelated V3 task", joined)
+	}
+}
+
+func TestRecoveryDraftClearlyBelongsToDifferentTaskRejectsMixedTaskReferences(t *testing.T) {
+	t.Parallel()
+
+	taskRecord := repo.ProjectTask{
+		TaskNumber: 21,
+		Title:      "Design boundary test: rate limits and max pipeline capacity",
+	}
+	content := strings.TrimSpace(`
+The workspace appears to have minimal work. Based on the context materials, OC-21 was previously rejected for:
+
+1. Scenario specification mismatch — test executed error handling instead of the OC-17 Scenario 3 (Classification Uncertainty)
+2. Empty planning artifacts — all 4 scaffolds with placeholder text
+`)
+	if !recoveryDraftClearlyBelongsToDifferentTask(taskRecord, "Test/oc-21-boundary-test-design.md", content) {
+		t.Fatal("expected mixed OC references to be treated as different-task content")
+	}
+}
+
+func TestRecoveryDraftClearlyBelongsToDifferentTaskRejectsSemanticSiblingScenarioMismatch(t *testing.T) {
+	t.Parallel()
+
+	description := "Execute all error scenarios. Verify error messages, retry logic, fallback paths. Record whether each error is caught, logged, and recoverable."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  10,
+		Title:       "Validation Execution: Run error-handling scenarios and validate recovery",
+		Description: &description,
+	}
+	content := strings.TrimSpace(`
+# OC-10: Duplicate Email Submission - Execution Log
+
+## Objective
+Validate duplicate email handling and duplicate key rejection.
+
+## Findings
+- Duplicate email submission returned 409 conflict twice.
+- Duplicate key violation was logged for the email collision path.
+- The database rejected the duplicate at the constraint layer, not by application logic.
+`)
+
+	if !recoveryDraftClearlyBelongsToDifferentTask(taskRecord, "Work/oc-10-timeout-recovery-execution.md", content) {
+		t.Fatal("expected sibling-scenario execution log to be treated as different-task content")
+	}
+}
+
+func TestRecoveryDraftClearlyBelongsToDifferentTaskAllowsMatchingTaskScopeDraft(t *testing.T) {
+	t.Parallel()
+
+	description := "Execute all error scenarios. Verify error messages, retry logic, fallback paths. Record whether each error is caught, logged, and recoverable."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  10,
+		Title:       "Validation Execution: Run error-handling scenarios and validate recovery",
+		Description: &description,
+	}
+	content := strings.TrimSpace(`
+# OC-10: Error-Handling Recovery Execution Log
+
+## Objective
+Validate timeout recovery, retry logic, and fallback paths across the error-handling scenarios.
+
+## Findings
+- Timeout recovery retried once and recovered without data loss.
+- Fallback path preserved the queued work when the primary operation exceeded the timeout window.
+- Error messages were explicit and the failure remained recoverable.
+`)
+
+	if recoveryDraftClearlyBelongsToDifferentTask(taskRecord, "Work/oc-10-timeout-recovery-execution.md", content) {
+		t.Fatal("matching recovery draft should not be rejected")
+	}
+}
+
+func TestLoadRecoveryResumeStateRejectsSemanticSiblingScenarioDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	projectSlug := "semantic-sibling-recovery"
+	orgSlug := "acme"
+	description := "Execute all error scenarios. Verify error messages, retry logic, fallback paths. Record whether each error is caught, logged, and recoverable."
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     10,
+			Title:          "Validation Execution: Run error-handling scenarios and validate recovery",
+			Description:    &description,
+			WorkStatus:     "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"recovery_file_write_checkpoint": map[string]any{
+					"version":        1,
+					"target_path":    "Work/oc-10-timeout-recovery-execution.md",
+					"artifact_path":  ".ottercamp/recovery/Work/oc-10-timeout-recovery-execution.md",
+					"failure_reason": "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
+				},
+			}),
+		},
+	}}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: orgID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		orgID: {ID: orgID, Slug: orgSlug},
+	}}
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, "Work", "oc-10-timeout-recovery-execution.md")
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	wrongDraft := strings.TrimSpace(`
+# OC-10: Duplicate Email Submission - Execution Log
+
+## Objective
+Validate duplicate email handling and duplicate key rejection.
+
+## Findings
+- Duplicate email submission returned 409 conflict twice.
+- Duplicate key violation was logged for the email collision path.
+- The database rejected the duplicate at the constraint layer, not by application logic.
+`)
+	if err := os.WriteFile(targetAbs, []byte(wrongDraft), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	state, ok := fixture.engine.loadRecoveryResumeState(context.Background(), rt)
+	if !ok {
+		t.Fatal("expected recovery resume state")
+	}
+	if state.targetDraft != "" {
+		t.Fatalf("targetDraft = %q, want semantic sibling draft to be rejected", state.targetDraft)
+	}
+	if !strings.Contains(state.targetDraftRejectedReason, "different task") {
+		t.Fatalf("targetDraftRejectedReason = %q, want different-task rejection", state.targetDraftRejectedReason)
 	}
 }
 
@@ -13712,6 +18330,109 @@ func TestPersistRecoveryFileWriteCheckpointPrefersBetterTaskMatchedExistingTarge
 	}
 }
 
+func TestPersistRecoveryFileWriteCheckpointKeepsCurrentTaskTargetWhenHistoricalSiblingArtifactExists(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	workspaceRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	existingTarget := "FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md"
+	siblingTarget := "BOOTSTRAP-VALIDATION-OC9.md"
+	description := "Orchestration task: Validate that first-wave executable tasks can enter execution, advance through flows, and produce outputs. Parent task for first-wave validation subtasks."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	existingMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:   existingTarget,
+		ArtifactPath: ".ottercamp/recovery/FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				TaskNumber:     12,
+				Title:          "V2: Validate First-Wave Task Execution & Flow Advancement",
+				Description:    &description,
+				ProjectID:      projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				WorkStatus:     "blocked",
+				Metadata:       existingMetadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	existingAbs := filepath.Join(workspaceRoot, filepath.FromSlash(existingTarget))
+	if err := os.MkdirAll(filepath.Dir(existingAbs), 0o755); err != nil {
+		t.Fatalf("mkdir existing target: %v", err)
+	}
+	if err := os.WriteFile(existingAbs, []byte("The recovery system is blocking all reads other than the recovery artifact itself."), 0o644); err != nil {
+		t.Fatalf("write existing target: %v", err)
+	}
+
+	siblingAbs := filepath.Join(workspaceRoot, filepath.FromSlash(siblingTarget))
+	if err := os.MkdirAll(filepath.Dir(siblingAbs), 0o755); err != nil {
+		t.Fatalf("mkdir sibling target: %v", err)
+	}
+	siblingBody := "# Bootstrap Validation Report - OC-9\n\n**Task**: OC-9 (Task #9)\n\nSubstantive bootstrap validation content.\n"
+	if err := os.WriteFile(siblingAbs, []byte(siblingBody), 0o644); err != nil {
+		t.Fatalf("write sibling target: %v", err)
+	}
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":    siblingTarget,
+				"content": siblingBody,
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	if err := fixture.engine.persistRecoveryFileWriteCheckpoint(context.Background(), rt, existingTarget, ".ottercamp/recovery/FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md", "flow rejection max visits exceeded", uuid.New()); err != nil {
+		t.Fatalf("persistRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	updated := taskRepo.items[taskID]
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint")
+	}
+	if checkpoint.TargetPath != existingTarget {
+		t.Fatalf("TargetPath = %q, want %q", checkpoint.TargetPath, existingTarget)
+	}
+}
+
 func TestRewriteRecoveryCLIExecuteWithoutCommandToFileWriteUsesPriorTurnDraft(t *testing.T) {
 	t.Parallel()
 
@@ -13863,6 +18584,93 @@ func TestCompletedWorkSignalFromMessagesIgnoresPlanningArtifactWriteForExecution
 	}
 }
 
+func TestCompletedWorkSignalFromMessagesUsesSubstantiveRecoveryTargetRead(t *testing.T) {
+	t.Parallel()
+
+	taskRecord := repo.ProjectTask{
+		TaskNumber: 21,
+		Title:      "Design boundary test: rate limits and max pipeline capacity",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":     1,
+				"target_path": "Test/oc-21-boundary-test-design.md",
+			},
+		}),
+	}
+	turnID := uuid.New()
+	messages := []repo.ChatMessage{
+		{
+			TurnID: &turnID,
+			Role:   "tool_result",
+			Status: "final",
+			Content: string(mustRawJSON(t, map[string]any{
+				"tool_name": "file.read",
+				"output": map[string]any{
+					"path": "Test/oc-21-boundary-test-design.md",
+					"content": `# OC-21: Boundary Test Design
+
+## Executive Summary
+This boundary test design defines concrete rate-limit and capacity scenarios with measurable success criteria and HTTP response expectations.
+
+## Test Scenarios
+- Scenario A: rate-limit threshold trigger
+- Scenario B: pipeline capacity stress
+
+## Success Criteria
+- HTTP 429 with Retry-After
+- Queue integrity preserved
+- Graceful degradation at capacity
+`,
+				},
+			})),
+		},
+	}
+
+	signal, ok := completedWorkSignalFromMessages(taskRecord, messages, turnID)
+	if !ok {
+		t.Fatal("expected completion signal from substantive recovery target read")
+	}
+	if signal.filesCommitted != 1 {
+		t.Fatalf("filesCommitted = %d, want 1", signal.filesCommitted)
+	}
+}
+
+func TestCompletedWorkSignalFromMessagesIgnoresPlaceholderRecoveryTargetRead(t *testing.T) {
+	t.Parallel()
+
+	taskRecord := repo.ProjectTask{
+		TaskNumber: 21,
+		Title:      "Design boundary test: rate limits and max pipeline capacity",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":     1,
+				"target_path": "Test/oc-21-boundary-test-design.md",
+			},
+		}),
+	}
+	turnID := uuid.New()
+	messages := []repo.ChatMessage{
+		{
+			TurnID: &turnID,
+			Role:   "tool_result",
+			Status: "final",
+			Content: string(mustRawJSON(t, map[string]any{
+				"tool_name": "file.read",
+				"output": map[string]any{
+					"path": "Test/oc-21-boundary-test-design.md",
+					"content": `Excellent! The boundary test design file exists and shows design phase is complete. According to the recovery guidance, this is the durable output I should continue from.
+
+Now I need to verify these artifact files exist and then proceed with the execution test phase. Let me check the planning artifacts:`,
+				},
+			})),
+		},
+	}
+
+	if _, ok := completedWorkSignalFromMessages(taskRecord, messages, turnID); ok {
+		t.Fatal("unexpected completion signal from placeholder recovery target read")
+	}
+}
+
 func TestExplicitExecutionDeliverableWriteCompleted(t *testing.T) {
 	t.Parallel()
 
@@ -13956,6 +18764,37 @@ func TestExplicitExecutionDeliverableWriteCompletedRecognizesDirectoryOutputChil
 	}
 }
 
+func TestExplicitExecutionDeliverableWriteCompletedRecognizesInferredTestExecutionLogTarget(t *testing.T) {
+	t.Parallel()
+
+	description := "Execute test scenario 2 (edge cases): test capacity limits, concurrent assignments, boundary conditions. Log all test cases and verify system behavior under stress."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  13,
+		Title:       "OC-4: Execute Test Scenario 2 (Edge Cases)",
+		Description: &description,
+	}
+
+	if !explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "Test/test-execution-oc13-scenario2-edge-cases.md",
+			"byte_size": 9751,
+		},
+	}) {
+		t.Fatal("expected inferred test execution log path to count as completed work")
+	}
+
+	if explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "planning/discovery-plan/oc-9-validation-plan.md",
+			"byte_size": 9751,
+		},
+	}) {
+		t.Fatal("unexpected completion from unrelated planning artifact write")
+	}
+}
+
 func TestShouldStopAfterExecutionArtifactWriteForPlannedArtifact(t *testing.T) {
 	t.Parallel()
 
@@ -14029,6 +18868,198 @@ func TestShouldStopAfterExecutionArtifactWriteIgnoresUndeclaredPath(t *testing.T
 		},
 	}) {
 		t.Fatal("unexpected stop signal from undeclared path")
+	}
+}
+
+func TestShouldStopAfterExecutionDeliverableWriteStopsForRecoveryCheckpointTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	initialMessageID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				TaskNumber: 21,
+				Title:      "Design boundary test: rate limits and max pipeline capacity",
+				WorkStatus: "blocked",
+			},
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		ID:        initialMessageID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "supervisor recovery: resume task",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                             "supervisor",
+			"recovery_action":                    recoveryActionValidationResume,
+			"recovery_checkpoint_target_path":    "Test/oc-21-boundary-test-design.md",
+			"recovery_checkpoint_failure_reason": "repeated narrated recovery writes",
+		}),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: initialMessageID,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	stop, err := fixture.engine.shouldStopAfterExecutionDeliverableWrite(context.Background(), rt, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "Test/oc-21-boundary-test-design.md",
+			"byte_size": 8192,
+		},
+	})
+	if err != nil {
+		t.Fatalf("shouldStopAfterExecutionDeliverableWrite: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected stop signal from direct recovery write to checkpoint target")
+	}
+	if !rt.recoveryWriteDone {
+		t.Fatal("recoveryWriteDone = false, want true after target write")
+	}
+}
+
+func TestShouldStopAfterExecutionDeliverableWriteIgnoresNonTargetRecoveryWrite(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	initialMessageID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				TaskNumber: 21,
+				Title:      "Design boundary test: rate limits and max pipeline capacity",
+				WorkStatus: "blocked",
+			},
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		ID:        initialMessageID,
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content:   "supervisor recovery: resume task",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                             "supervisor",
+			"recovery_action":                    recoveryActionValidationResume,
+			"recovery_checkpoint_target_path":    "Test/oc-21-boundary-test-design.md",
+			"recovery_checkpoint_failure_reason": "repeated narrated recovery writes",
+		}),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: initialMessageID,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	stop, err := fixture.engine.shouldStopAfterExecutionDeliverableWrite(context.Background(), rt, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "Test/oc-26-pipeline-capacity-test-spec.md",
+			"byte_size": 8192,
+		},
+	})
+	if err != nil {
+		t.Fatalf("shouldStopAfterExecutionDeliverableWrite: %v", err)
+	}
+	if stop {
+		t.Fatal("unexpected stop signal from non-target recovery write")
+	}
+	if rt.recoveryWriteDone {
+		t.Fatal("recoveryWriteDone = true, want false for non-target write")
+	}
+}
+
+func TestBuildTaskReviewActionPromptWithoutArtifactContractWarnsAgainstInventedPlanningRequirements(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Define rate-limit and capacity tests: rapid fire 100+ requests/min to trigger rate limit; submissions when pipeline at 90%, 100% capacity. Document expected HTTP 429 responses and queue behavior. ~10 min."
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": uuid.NewString(),
+	})
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  21,
+				Title:       "Design boundary test: rate limits and max pipeline capacity",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata:    mustRawJSON(t, map[string]any{"bootstrap_first_wave_selected": true}),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "Do not invent companion planning-artifact requirements") {
+		t.Fatalf("prompt = %q, want invented-artifact warning", prompt)
+	}
+}
+
+func TestBuildTaskReviewActionPromptIncludesExplicitArtifactContractPaths(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Prepare environment fixtures."
+	plan := taskplan.Plan{
+		Mode:     taskplan.ModeExecutionFirst,
+		Playbook: taskplan.PlaybookExecutionSpec,
+		Artifacts: []taskplan.PlannedArtifact{
+			{Slug: "prd", Title: "PRD", RepoPath: "planning_spec/oc-14-prd.md"},
+			{Slug: "acceptance", Title: "Acceptance Criteria", RepoPath: "planning_spec/oc-14-acceptance-criteria.md"},
+		},
+	}
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  14,
+				Title:       "Prepare test environment and fixtures",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata:    taskplan.ApplyMetadata(nil, plan),
+			},
+		},
+	}
+
+	prompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	if !strings.Contains(prompt, "PRD") {
+		t.Fatalf("prompt = %q, want artifact contract title", prompt)
+	}
+	if !strings.Contains(prompt, "Do not reject for any other missing sibling files.") {
+		t.Fatalf("prompt = %q, want bounded artifact guidance", prompt)
 	}
 }
 

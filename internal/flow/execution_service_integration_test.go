@@ -18,6 +18,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -120,6 +121,143 @@ func TestFlowExecutionServiceAdvanceThroughTerminalNode(t *testing.T) {
 
 	if nodes[0].ID != executions[0].FlowNodeID || nodes[1].ID != executions[1].FlowNodeID || nodes[2].ID != executions[2].FlowNodeID {
 		t.Fatalf("unexpected flow node execution order")
+	}
+}
+
+func TestFlowExecutionServiceTerminalAdvanceActivatesDraftOrchestrationParent(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, _ := seedLinearTemplate(t, ctx, fixture, false, 5)
+
+	parent := seedFlowTask(t, ctx, fixture, "OC-1: Validate Speaker Pipeline Routing & Assignment", "draft", &template.ID)
+	reportTitle := "Produce final validation report with pass/fail determination, risk summary, and recommendations"
+	reportDescription := reportTitle
+	report := seedFlowTask(t, ctx, fixture, reportTitle, "draft", &template.ID)
+	report.Description = &reportDescription
+	report.Metadata = taskdecomp.ApplyChildMetadata(report.Metadata, parent.ID, 2)
+	if _, err := fixture.taskRepo.Update(ctx, report); err != nil {
+		t.Fatalf("update report child metadata: %v", err)
+	}
+
+	childDescription := "Execute Test Scenario 1 (Happy Path)"
+	child := seedFlowTask(t, ctx, fixture, "OC-2: Execute Test Scenario 1 (Happy Path)", "in_progress", &template.ID)
+	child.Description = &childDescription
+	child.Metadata = taskdecomp.ApplyChildMetadata(child.Metadata, parent.ID, 3)
+	if _, err := fixture.taskRepo.Update(ctx, child); err != nil {
+		t.Fatalf("update active child metadata: %v", err)
+	}
+
+	parent.Metadata = taskdecomp.ApplyMetadata(parent.Metadata, taskdecomp.Plan{
+		RequiresDecomposition: true,
+		PrimaryDeliverable:    "Coordinate all test scenarios, SLA validation, and final consolidation.",
+		Deliverables:          []string{reportTitle, childDescription},
+	}, "Coordinate all test scenarios, SLA validation, and final consolidation.", []uuid.UUID{report.ID, child.ID})
+	if _, err := fixture.taskRepo.Update(ctx, parent); err != nil {
+		t.Fatalf("update parent metadata: %v", err)
+	}
+
+	if _, err := fixture.service.StartFlow(ctx, child.ID); err != nil {
+		t.Fatalf("StartFlow child: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, child.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow child to review: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, child.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow child review: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, child.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow child terminal: %v", err)
+	}
+
+	updatedParent, err := fixture.taskRepo.GetByID(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("GetByID parent: %v", err)
+	}
+	if updatedParent.WorkStatus != "draft" {
+		t.Fatalf("parent work_status = %q, want draft orchestration-only state after activation", updatedParent.WorkStatus)
+	}
+
+	updatedReport, err := fixture.taskRepo.GetByID(ctx, report.ID)
+	if err != nil {
+		t.Fatalf("GetByID report child: %v", err)
+	}
+	if updatedReport.WorkStatus != "queued" {
+		t.Fatalf("report child work_status = %q, want queued after parent activation", updatedReport.WorkStatus)
+	}
+}
+
+func TestFlowExecutionServiceTerminalAdvanceActivatesSatisfiedDraftTaskDependents(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowIntegrationFixture(t, ctx, pool)
+
+	template, _ := seedLinearTemplate(t, ctx, fixture, false, 5)
+
+	prereqA := seedFlowTask(t, ctx, fixture, "Scenario Design A", "in_progress", &template.ID)
+	prereqB := seedFlowTask(t, ctx, fixture, "Scenario Design B", "in_progress", &template.ID)
+	dependent := seedFlowTask(t, ctx, fixture, "Execute Validation", "draft", &template.ID)
+
+	if _, err := fixture.service.AddDependency(ctx, AddDependencyRequest{
+		SourceType:    "project_task",
+		SourceID:      dependent.ID,
+		DependsOnType: "project_task",
+		DependsOnID:   prereqA.ID,
+		CreatedByType: "system",
+	}); err != nil {
+		t.Fatalf("AddDependency dependent->prereqA: %v", err)
+	}
+	if _, err := fixture.service.AddDependency(ctx, AddDependencyRequest{
+		SourceType:    "project_task",
+		SourceID:      dependent.ID,
+		DependsOnType: "project_task",
+		DependsOnID:   prereqB.ID,
+		CreatedByType: "system",
+	}); err != nil {
+		t.Fatalf("AddDependency dependent->prereqB: %v", err)
+	}
+
+	if _, err := fixture.service.StartFlow(ctx, prereqA.ID); err != nil {
+		t.Fatalf("StartFlow prereqA: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, prereqA.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow prereqA to review: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, prereqA.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow prereqA review: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, prereqA.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow prereqA terminal: %v", err)
+	}
+
+	stillDraft, err := fixture.taskRepo.GetByID(ctx, dependent.ID)
+	if err != nil {
+		t.Fatalf("GetByID dependent after prereqA: %v", err)
+	}
+	if stillDraft.WorkStatus != "draft" {
+		t.Fatalf("dependent work_status after first prerequisite = %q, want draft", stillDraft.WorkStatus)
+	}
+
+	if _, err := fixture.service.StartFlow(ctx, prereqB.ID); err != nil {
+		t.Fatalf("StartFlow prereqB: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, prereqB.ID, Actor{Type: "agent", ID: fixture.pmAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow prereqB to review: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, prereqB.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow prereqB review: %v", err)
+	}
+	if _, err := fixture.service.AdvanceFlow(ctx, prereqB.ID, Actor{Type: "agent", ID: fixture.reviewerAgent.ID}); err != nil {
+		t.Fatalf("AdvanceFlow prereqB terminal: %v", err)
+	}
+
+	activated, err := fixture.taskRepo.GetByID(ctx, dependent.ID)
+	if err != nil {
+		t.Fatalf("GetByID dependent after prereqB: %v", err)
+	}
+	if activated.WorkStatus != "queued" {
+		t.Fatalf("dependent work_status after all prerequisites = %q, want queued", activated.WorkStatus)
 	}
 }
 

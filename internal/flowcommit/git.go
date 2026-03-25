@@ -117,6 +117,16 @@ func CommitAllFromBase(ctx context.Context, repoRoot, branchName, baseSHA, messa
 	if err := ensureIdentity(ctx, root); err != nil {
 		return CommitResult{}, err
 	}
+	currentBranch, err := currentBranchName(ctx, root)
+	if err == nil && currentBranch != "" && currentBranch != trimmedBranch {
+		dirty, dirtyErr := WorktreeDirty(ctx, root)
+		if dirtyErr != nil {
+			return CommitResult{}, dirtyErr
+		}
+		if dirty {
+			return commitIndexSnapshotFromBase(ctx, root, trimmedBranch, trimmedBase, message, allowEmpty)
+		}
+	}
 	if err := checkoutBranch(ctx, root, trimmedBranch); err != nil {
 		return CommitResult{}, err
 	}
@@ -157,11 +167,62 @@ func CommitAllFromBase(ctx context.Context, repoRoot, branchName, baseSHA, messa
 	}, nil
 }
 
+func commitIndexSnapshotFromBase(ctx context.Context, root, branchName, baseSHA, message string, allowEmpty bool) (CommitResult, error) {
+	if _, err := gitOutput(ctx, root, "add", "-A"); err != nil {
+		return CommitResult{}, err
+	}
+	filesStaged, err := stagedFileCount(ctx, root)
+	if err != nil {
+		return CommitResult{}, err
+	}
+	treeSHA, err := gitOutput(ctx, root, "write-tree")
+	if err != nil {
+		return CommitResult{}, err
+	}
+	trimmedTree := strings.TrimSpace(treeSHA)
+	trimmedBase := strings.TrimSpace(baseSHA)
+	if trimmedBase != "" && !allowEmpty {
+		baseTree, treeErr := gitOutput(ctx, root, "rev-parse", trimmedBase+"^{tree}")
+		if treeErr != nil {
+			return CommitResult{}, treeErr
+		}
+		if strings.TrimSpace(baseTree) == trimmedTree {
+			return CommitResult{}, fmt.Errorf("git commit-tree: nothing to commit")
+		}
+	}
+	args := []string{"commit-tree", trimmedTree}
+	if trimmedBase != "" {
+		args = append(args, "-p", trimmedBase)
+	}
+	args = append(args, "-m", strings.TrimSpace(message))
+	sha, err := gitOutput(ctx, root, args...)
+	if err != nil {
+		return CommitResult{}, err
+	}
+	trimmedSHA := strings.TrimSpace(sha)
+	if _, err := gitOutput(ctx, root, "update-ref", "refs/heads/"+branchName, trimmedSHA); err != nil {
+		return CommitResult{}, err
+	}
+	if err := checkoutBranch(ctx, root, branchName); err != nil {
+		return CommitResult{}, err
+	}
+	shortSHA := trimmedSHA
+	if len(shortSHA) > 7 {
+		shortSHA = shortSHA[:7]
+	}
+	return CommitResult{
+		SHA:         trimmedSHA,
+		ShortSHA:    shortSHA,
+		FilesStaged: filesStaged,
+		BranchName:  branchName,
+	}, nil
+}
+
 func ensureGitWorkspace(ctx context.Context, root string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	if info, err := os.Stat(filepath.Join(root, ".git")); err == nil && info.IsDir() {
+	if info, err := os.Stat(filepath.Join(root, ".git")); err == nil && (info.IsDir() || info.Mode().IsRegular()) {
 		return nil
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
@@ -187,8 +248,8 @@ func ensureIdentity(ctx context.Context, root string) error {
 }
 
 func checkoutBranch(ctx context.Context, root, branchName string) error {
-	current, err := gitOutput(ctx, root, "rev-parse", "--abbrev-ref", "HEAD")
-	if err == nil && strings.TrimSpace(current) == branchName {
+	current, err := currentBranchName(ctx, root)
+	if err == nil && current == branchName {
 		return nil
 	}
 	if _, err := gitOutput(ctx, root, "show-ref", "--verify", "--quiet", "refs/heads/"+branchName); err == nil {
@@ -197,6 +258,14 @@ func checkoutBranch(ctx context.Context, root, branchName string) error {
 	}
 	_, err = gitOutput(ctx, root, "checkout", "-b", branchName)
 	return err
+}
+
+func currentBranchName(ctx context.Context, root string) (string, error) {
+	current, err := gitOutput(ctx, root, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(current), nil
 }
 
 func stagedFileCount(ctx context.Context, root string) (int, error) {

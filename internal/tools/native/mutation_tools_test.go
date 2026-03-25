@@ -19,6 +19,7 @@ import (
 	agentsvc "github.com/samhotchkiss/otter-camp/internal/agent"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/mcp"
+	projectsvc "github.com/samhotchkiss/otter-camp/internal/project"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
@@ -218,6 +219,668 @@ func TestFileWriteRejectsNarratedTaskPlaceholderContent(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "deliverables", "oc-13-speaker-validation-agent.md")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("deliverable file should not be written for placeholder content, stat err = %v", statErr)
+	}
+}
+
+func TestCLIExecuteBlockedInReviewTaskSession(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	cli := &fakeCLIExecutor{}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.cli = cli
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "review",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "cli.execute", map[string]any{
+		"command": "find . -maxdepth 2 -type f",
+	})
+	if err != nil {
+		t.Fatalf("cli.execute: %v", err)
+	}
+	if out["error"] != "review_action_required" {
+		t.Fatalf("error = %v, want review_action_required", out["error"])
+	}
+	if cli.called {
+		t.Fatal("cli executor should not be invoked in review lane")
+	}
+}
+
+func TestFileWriteRejectsExecutionPlanningNarration(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "p95_latency_result.md",
+		"content": "Perfect! Now I understand exactly what I need to deliver. The throughput test is an excellent template—I need to produce a similar comprehensive test execution report for P95 Latency Measurement with 5 baseline routing scenarios.\n\n" +
+			"Let me now execute the P95 latency measurement test and document the results. I'll create a comprehensive test execution with 5 baseline scenarios, measuring end-to-end latency from task creation to agent notification, and then compare against the SLA.\n\n" +
+			"Test Plan:\n1. Scenario 1: Happy Path\n2. Scenario 2: Edge Case - Single Pool at Capacity\n3. Scenario 3: Concurrent Requests\n4. Scenario 4: Network Latency Variance\n5. Scenario 5: Peak Load Stress Test\n",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteAllowsValidationExecutionPlanDeliverable(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "FIRST-WAVE-EXECUTION-VALIDATION-PLAN.md",
+		"content": `# First-Wave Task Execution & Flow Advancement Validation Plan
+
+## Validation Objective
+Confirm first-wave tasks enter execution, advance through review and merge, and produce durable outputs.
+
+## Validation Checkpoints
+- [ ] Task queued successfully
+- [ ] flow_advance() callable with valid flow_node_execution_id
+
+## Success Criteria
+- First-wave tasks reach done
+
+## Failure Mode Registry
+- Review gate unavailable
+
+## Validation Execution Plan
+1. Observe queued tasks.
+2. Capture durable outputs and decisions.
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("error = %v, want nil", out["error"])
+	}
+}
+
+func TestFileWriteRejectsRecoveryGuidanceSummaryPlaceholder(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "Test/oc-21-boundary-test-design.md",
+		"content": `Excellent! The boundary test design file exists and shows **design phase is complete** with substantive planning artifacts. According to the recovery guidance, this is the durable output I should continue from.
+
+Now I need to verify these artifact files exist and then proceed with the execution test phase. Let me check the planning artifacts:
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsRecoveryTargetNarration(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "Test/oc-21-boundary-test-design.md",
+		"content": "The recovery target is `Test/oc-21-boundary-test-design.md`. " +
+			"Task OC-21 is in the Work node for designing boundary tests for rate limits and max pipeline capacity. " +
+			"Writing the comprehensive boundary test design specification now:",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsRecoveryPlaceholderNarration(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "Test/oc-21-boundary-test-design.md",
+		"content": "Perfect. I understand the recovery state. The file exists but is just a placeholder. " +
+			"Let me now write the comprehensive boundary test design specification based on the task requirements.",
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsExecutionPlanDocumentInsteadOfEvidence(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project_task",
+				ScopeID:        taskID,
+				Mode:           "async",
+				Status:         "active",
+			},
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "Test/test-execution-oc17-happy-path-scenario.md",
+		"content": `# OC-17: HAPPY-PATH SCENARIO EXECUTION PLAN
+
+## SCENARIO OVERVIEW
+- Nominal input
+
+## ACCEPTANCE CRITERIA
+| ID | Criterion | Verification Method |
+
+## SUCCESS METRICS
+| ID | Metric | Target |
+
+## EXECUTION PHASES
+- [ ] Submit request
+- [ ] Capture evidence
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsExecutionLogTemplateWithoutEvidence(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "Test/test-execution-oc18-edge-case-scenarios.md",
+		"content": `# Execute edge-case scenarios Execution Log
+
+## Objective
+Execute edge-case scenarios end-to-end against the real speaker pipeline product.
+
+## Coverage
+- Record the concrete scenario setup, observed routing behavior, and final pass or fail decision.
+
+## Test Cases
+### TC1
+- Scenario: Record the concrete scenario setup, observed routing behavior, and final pass or fail decision.
+- Setup: Define the relevant request, agent-pool state, and prerequisite records.
+- Expected: Record the intended routing, assignment, or failure-handling behavior.
+- Observed: Document the actual outcome, timestamps, and evidence.
+- Result: Pass or fail.
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsBlockedExecutionStatusMemoWithoutEvidence(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "Test/test-execution-oc17-happy-path-scenario.md",
+		"content": `# OC-17: Happy Path Scenario - Work Status Assessment
+
+## SITUATION SUMMARY
+This task has been blocked due to missing product endpoint information.
+
+## WHAT IS BLOCKED
+1. Product Endpoint URL - Not available in task context
+2. API Authentication - Not available in task context
+
+## RECOMMENDED ACTIONS
+Awaiting input from supervisor.
+
+Status: READY TO EXECUTE - BLOCKED
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsExecutionSpecCompletionMemoWithoutArtifacts(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "Work/OC-14-PREPARE-TEST-ENVIRONMENT-AND-FIXTURES.md",
+		"content": `# PRD / Requirements Spec: Test Environment Setup (OC-14)
+
+- Kind: prd_spec
+- Playbook: execution_spec
+- Source task: OC-14 (Prepare test environment and fixtures)
+
+## Goals
+
+1. Seed comprehensive test speaker data
+2. Define approval workflow templates
+3. Create review templates
+4. Document environment setup steps
+
+## Non-Goals
+
+- Real speaker recruitment
+- Production environment setup
+
+## Scope
+
+- Test speaker fixture
+- Approval workflow definitions
+- Review templates
+
+## Constraints
+
+- Data format: JSON
+- Setup time: <30 minutes
+
+## Success Metrics
+
+1. Fixture Completeness: All 6 speaker profiles present ✓
+2. Workflow Definition: 2 approval workflows defined ✓
+3. Review Templates: 4 templates created ✓
+4. Documentation Completeness: setup guide complete ✓
+
+## Open Questions
+
+None at this phase. Scope is clear, fixtures are created, documentation is complete.
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
+func TestFileWriteRejectsDeliverableCompletionSummaryWithoutBody(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "Test/oc-21-boundary-test-design.md",
+		"content": `Design complete. OC-21 boundary test design substantive deliverables produced:
+
+**Test Design (Test/oc-21-boundary-test-design.md)**: 8.6 KB
+- Rate-limit test scenario (100+ req/min -> HTTP 429 responses)
+
+**Planning Artifacts** (all substantive, no scaffolds):
+1. **PRD** (planning/prd-spec/oc-21-prd.md): 5 concrete goals
+2. **Acceptance Criteria** (planning/prd-spec/oc-21-acceptance-criteria.md): 3 test scenarios
+3. **Implementation Plan** (planning/prc-spec/oc-21-implementation-plan.md): 5 execution phases
+4. **Dependency Log** (planning/prd-spec/oc-21-dependency-log.md): critical path analysis
+
+**Quality Status**: Design phase complete; ready for internal review gate after execution completes.
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
 	}
 }
 
@@ -1766,6 +2429,39 @@ func TestTaskUpdateAllowsDraftToQueuedWithFlowTemplate(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateClearsRequiresHumanReviewWhileDraft(t *testing.T) {
+	taskID := uuid.New()
+	tasks := &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:                  taskID,
+			OrganizationID:      uuid.New(),
+			ProjectID:           uuid.New(),
+			Title:               "Review happy path results",
+			WorkStatus:          "draft",
+			RequiresHumanReview: true,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+
+	out, err := executor.Execute(testExecCtx(), "task.update", map[string]any{
+		"task_id":               taskID.String(),
+		"requires_human_review": false,
+	})
+	if err != nil {
+		t.Fatalf("task.update: %v", err)
+	}
+	if out["error"] != nil {
+		t.Fatalf("task.update error = %v, want nil", out["error"])
+	}
+	if tasks.task.RequiresHumanReview {
+		t.Fatal("requires_human_review = true, want false")
+	}
+	if tasks.updateCalls != 1 {
+		t.Fatalf("update calls = %d, want 1", tasks.updateCalls)
+	}
+}
+
 func TestTaskUpdateQueuedOversizedTaskCreatesDecomposedChildWorkUnits(t *testing.T) {
 	taskID := uuid.New()
 	flowTemplateID := uuid.New()
@@ -2226,6 +2922,78 @@ func TestTaskUpdateQueuedOversizedTaskReusesExistingDecomposedChildren(t *testin
 	}
 	if createdEvents != 1 {
 		t.Fatalf("task.created events = %d, want 1 for the missing child task", createdEvents)
+	}
+}
+
+func TestBootstrapFirstWaveSelectableTasksSkipsParentsAndDeferredFinalizationTasks(t *testing.T) {
+	parentID := uuid.New()
+	selectableID := uuid.New()
+	reportID := uuid.New()
+	deferredID := uuid.New()
+
+	selectable := bootstrapFirstWaveSelectableTasks([]repo.ProjectTask{
+		{
+			ID:         parentID,
+			TaskNumber: 9,
+			Title:      "OC-1: Validate routing",
+			WorkStatus: "draft",
+			Metadata:   json.RawMessage(`{}`),
+		},
+		{
+			ID:         selectableID,
+			TaskNumber: 12,
+			Title:      "OC-2: Execute Test Scenario 1 (Happy Path)",
+			WorkStatus: "draft",
+			Metadata:   json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentID)),
+		},
+		{
+			ID:         reportID,
+			TaskNumber: 10,
+			Title:      "Produce final validation report with pass/fail determination, risk summary, and recommendations",
+			WorkStatus: "draft",
+		},
+		{
+			ID:         deferredID,
+			TaskNumber: 11,
+			Title:      "Deferred task-queued after all test scenarios complete.",
+			WorkStatus: "draft",
+		},
+	})
+
+	if len(selectable) != 1 {
+		t.Fatalf("selectable task count = %d, want 1", len(selectable))
+	}
+	if selectable[0].ID != selectableID {
+		t.Fatalf("selectable task id = %s, want %s", selectable[0].ID, selectableID)
+	}
+}
+
+func TestBootstrapFirstWaveSelectableTasksExcludingBlockedSkipsDependencyBlockedTasks(t *testing.T) {
+	blockedID := uuid.New()
+	selectableID := uuid.New()
+
+	selectable := bootstrapFirstWaveSelectableTasksExcludingBlocked([]repo.ProjectTask{
+		{
+			ID:         blockedID,
+			TaskNumber: 18,
+			Title:      "VAL-4a: Measure response time and throughput",
+			WorkStatus: "draft",
+		},
+		{
+			ID:         selectableID,
+			TaskNumber: 15,
+			Title:      "VAL-2b: Execute happy path - task completion",
+			WorkStatus: "draft",
+		},
+	}, map[uuid.UUID]struct{}{
+		blockedID: {},
+	})
+
+	if len(selectable) != 1 {
+		t.Fatalf("selectable task count = %d, want 1", len(selectable))
+	}
+	if selectable[0].ID != selectableID {
+		t.Fatalf("selectable task id = %s, want %s", selectable[0].ID, selectableID)
 	}
 }
 
@@ -2713,6 +3481,334 @@ func TestTaskCreateVerifiableRequestDoesNotAutoAssignReviewRefinementTemplate(t 
 	}
 	if planningMeta["playbook"] != taskplan.PlaybookExecutionSpec {
 		t.Fatalf("playbook = %v, want %s", planningMeta["playbook"], taskplan.PlaybookExecutionSpec)
+	}
+}
+
+func TestTaskCreateWithExplicitFlowTemplateDoesNotApplyPlanningHeuristics(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+	templateID := uuid.New()
+
+	tasks := &mockTaskRepo{}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "ops-project",
+				DisplayName:    "Ops Project",
+			},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			templateID: validExecutableTemplateNodeList(templateID),
+		},
+	}
+
+	out, err := executor.Execute(testExecCtx(), "task.create", map[string]any{
+		"project_id":       projectID.String(),
+		"flow_template_id": templateID.String(),
+		"title":            "Validate webhook retry metrics",
+		"description":      "Execute the validation run and capture routing, retries, and latency evidence.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if _, ok := out["planning"]; ok {
+		t.Fatalf("planning output = %v, want omitted when explicit flow template is supplied", out["planning"])
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
+	}
+	if tasks.createdTasks[0].FlowTemplateID == nil || *tasks.createdTasks[0].FlowTemplateID != templateID {
+		t.Fatalf("flow_template_id = %v, want %s", tasks.createdTasks[0].FlowTemplateID, templateID)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(tasks.createdTasks[0].Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if _, ok := metadata["planning"]; ok {
+		t.Fatalf("planning metadata = %v, want omitted for explicit flow template tasks", metadata["planning"])
+	}
+}
+
+func TestTaskCreateDuringBootstrapWithAssignedAgentUsesBootstrapFlowWithoutPlanningHeuristics(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	templateID := uuid.New()
+	workerID := uuid.New()
+
+	tasks := &mockTaskRepo{
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             uuid.New(),
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "draft",
+				Metadata:       json.RawMessage(`{"bootstrap_setup_task":true}`),
+			},
+		},
+	}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "ops-project",
+				DisplayName:    "Ops Project",
+			},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+				Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+			},
+		},
+	}
+	executor.flowTemplates = &mockFlowTemplateRepo{
+		templates: map[uuid.UUID]repo.FlowTemplate{
+			templateID: {
+				ID:             templateID,
+				OrganizationID: &orgID,
+				Slug:           taskplan.InternalReviewTemplate,
+				DisplayName:    "Validation Work / Review / Merge",
+				Version:        1,
+			},
+		},
+	}
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			templateID: validExecutableTemplateNodeList(templateID),
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	out, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id":            projectID.String(),
+		"assigned_agent_id":     workerID.String(),
+		"title":                 "Validate speaker assignment routing",
+		"description":           "Run the bounded validation scenario and capture evidence.",
+		"requires_human_review": false,
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if _, ok := out["planning"]; ok {
+		t.Fatalf("planning output = %v, want omitted during bootstrap executable task creation", out["planning"])
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
+	}
+	created := tasks.createdTasks[0]
+	if created.FlowTemplateID == nil || *created.FlowTemplateID != templateID {
+		t.Fatalf("flow_template_id = %v, want %s", created.FlowTemplateID, templateID)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(created.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if _, ok := metadata["planning"]; ok {
+		t.Fatalf("planning metadata = %v, want omitted during bootstrap executable task creation", metadata["planning"])
+	}
+}
+
+func TestTaskCreateDuringBootstrapWithoutAssignedAgentUsesBootstrapFlowBeforePlanningHeuristics(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	templateID := uuid.New()
+
+	tasks := &mockTaskRepo{
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             uuid.New(),
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "draft",
+				Metadata:       json.RawMessage(`{"bootstrap_setup_task":true}`),
+			},
+		},
+	}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "ops-project",
+				DisplayName:    "Ops Project",
+			},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+				Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+			},
+		},
+	}
+	executor.flowTemplates = &mockFlowTemplateRepo{
+		templates: map[uuid.UUID]repo.FlowTemplate{
+			templateID: {
+				ID:             templateID,
+				OrganizationID: &orgID,
+				Slug:           taskplan.InternalReviewTemplate,
+				DisplayName:    "Validation Work / Review / Merge",
+				Version:        1,
+			},
+		},
+	}
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			templateID: validExecutableTemplateNodeList(templateID),
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	out, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id":            projectID.String(),
+		"title":                 "Validate speaker assignment routing",
+		"description":           "Run the bounded validation scenario and capture evidence.",
+		"requires_human_review": false,
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if _, ok := out["planning"]; ok {
+		t.Fatalf("planning output = %v, want omitted during bootstrap executable task creation", out["planning"])
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
+	}
+	created := tasks.createdTasks[0]
+	if created.FlowTemplateID == nil || *created.FlowTemplateID != templateID {
+		t.Fatalf("flow_template_id = %v, want %s", created.FlowTemplateID, templateID)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(created.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if _, ok := metadata["planning"]; ok {
+		t.Fatalf("planning metadata = %v, want omitted during bootstrap executable task creation", metadata["planning"])
+	}
+}
+
+func TestTaskCreateDuringBootstrapNormalizesExecutableBlocksScopeFromAllToNone(t *testing.T) {
+	projectID := uuid.New()
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	templateID := uuid.New()
+	workerID := uuid.New()
+
+	tasks := &mockTaskRepo{
+		listByProjectTasks: []repo.ProjectTask{
+			{
+				ID:             uuid.New(),
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "draft",
+				Metadata:       json.RawMessage(`{"bootstrap_setup_task":true}`),
+			},
+		},
+	}
+	projects := &fakeProjectRepo{
+		projects: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: orgID,
+				Slug:           "ops-project",
+				DisplayName:    "Ops Project",
+			},
+		},
+	}
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.tasks = tasks
+	executor.projects = projects
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{
+			{
+				ID:             sessionID,
+				OrganizationID: orgID,
+				ScopeType:      "project",
+				ScopeID:        projectID,
+				Mode:           "async",
+				Status:         "active",
+				Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+			},
+		},
+	}
+	executor.flowTemplates = &mockFlowTemplateRepo{
+		templates: map[uuid.UUID]repo.FlowTemplate{
+			templateID: {
+				ID:             templateID,
+				OrganizationID: &orgID,
+				Slug:           taskplan.InternalReviewTemplate,
+				DisplayName:    "Validation Work / Review / Merge",
+				Version:        1,
+			},
+		},
+	}
+	executor.flowNodes = &mockFlowNodeRepo{
+		templateNodes: map[uuid.UUID][]repo.FlowNode{
+			templateID: validExecutableTemplateNodeList(templateID),
+		},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+	})
+	if _, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id":            projectID.String(),
+		"assigned_agent_id":     workerID.String(),
+		"blocks_scope":          "all",
+		"title":                 "Validate speaker assignment routing",
+		"description":           "Run the bounded validation scenario and capture evidence.",
+		"requires_human_review": false,
+	}); err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if len(tasks.createdTasks) != 1 {
+		t.Fatalf("created task count = %d, want 1", len(tasks.createdTasks))
+	}
+	if got := tasks.createdTasks[0].BlocksScope; got != "none" {
+		t.Fatalf("blocks_scope = %q, want none", got)
 	}
 }
 
@@ -3334,9 +4430,9 @@ func TestTaskSessionDirectDoneBlockedForFlowOwnedTaskSession(t *testing.T) {
 	sessionID := uuid.New()
 	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID}
 
-	out, reject, err := executor.taskSessionDirectDoneBlocked(context.Background(), scope, taskRecord)
+	out, reject, err := executor.taskSessionDirectStatusBlocked(context.Background(), scope, taskRecord, "done")
 	if err != nil {
-		t.Fatalf("taskSessionDirectDoneBlocked: %v", err)
+		t.Fatalf("taskSessionDirectStatusBlocked: %v", err)
 	}
 	if !reject {
 		t.Fatal("expected reject for flow-owned task session")
@@ -3371,9 +4467,9 @@ func TestTaskSessionDirectDoneBlockedForFlowOwnedReviewTaskSession(t *testing.T)
 	sessionID := uuid.New()
 	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID}
 
-	out, reject, err := executor.taskSessionDirectDoneBlocked(context.Background(), scope, taskRecord)
+	out, reject, err := executor.taskSessionDirectStatusBlocked(context.Background(), scope, taskRecord, "done")
 	if err != nil {
-		t.Fatalf("taskSessionDirectDoneBlocked: %v", err)
+		t.Fatalf("taskSessionDirectStatusBlocked: %v", err)
 	}
 	if !reject {
 		t.Fatal("expected reject for flow-owned review task session")
@@ -3383,6 +4479,43 @@ func TestTaskSessionDirectDoneBlockedForFlowOwnedReviewTaskSession(t *testing.T)
 	}
 	if !strings.Contains(fmt.Sprintf("%v", out["message"]), "flow.review_decision") {
 		t.Fatalf("message = %v, want review decision guidance", out["message"])
+	}
+}
+
+func TestTaskSessionDirectReviewBlockedForFlowOwnedWorkTaskSession(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	flowNodeID := uuid.New()
+	taskRecord := repo.ProjectTask{
+		ID:                taskID,
+		OrganizationID:    uuid.New(),
+		ProjectID:         uuid.New(),
+		WorkStatus:        "in_progress",
+		FlowTemplateID:    &flowTemplateID,
+		CurrentFlowNodeID: &flowNodeID,
+		Title:             "Document success criteria",
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.flowNodes = &mockFlowNodeRepo{
+		nodes: map[uuid.UUID]repo.FlowNode{
+			flowNodeID: {ID: flowNodeID, NodeType: "work"},
+		},
+	}
+	sessionID := uuid.New()
+	scope := workspaceScope{sessionID: &sessionID, taskID: &taskID}
+
+	out, reject, err := executor.taskSessionDirectStatusBlocked(context.Background(), scope, taskRecord, "review")
+	if err != nil {
+		t.Fatalf("taskSessionDirectStatusBlocked: %v", err)
+	}
+	if !reject {
+		t.Fatal("expected reject for flow-owned review transition")
+	}
+	if out["error"] != "flow_owned_status_blocked" {
+		t.Fatalf("error = %v, want flow_owned_status_blocked", out["error"])
+	}
+	if !strings.Contains(fmt.Sprintf("%v", out["message"]), "Do not move it to review with task.update") {
+		t.Fatalf("message = %v, want runtime-owned review guidance", out["message"])
 	}
 }
 
@@ -4203,11 +5336,20 @@ func mustUUIDFromAny(t *testing.T, raw any) uuid.UUID {
 type fakeProjectRepo struct {
 	lastCreated repo.Project
 	projects    map[uuid.UUID]repo.Project
+	createErrBySlug map[string]error
+	createdSlugs []string
 }
 
 func (f *fakeProjectRepo) Create(_ context.Context, p repo.Project) (repo.Project, error) {
+	if f.createErrBySlug != nil {
+		if err, ok := f.createErrBySlug[p.Slug]; ok {
+			delete(f.createErrBySlug, p.Slug)
+			return repo.Project{}, err
+		}
+	}
 	p.ID = uuid.New()
 	f.lastCreated = p
+	f.createdSlugs = append(f.createdSlugs, p.Slug)
 	if f.projects == nil {
 		f.projects = make(map[uuid.UUID]repo.Project)
 	}
@@ -4362,6 +5504,15 @@ func (f *fakeAgentService) Unpause(ctx context.Context, _ uuid.UUID, agentID uui
 type fakeChatSessionRepo struct {
 	lastCreated repo.ChatSession
 	sessions    []repo.ChatSession
+}
+
+type fakeCLIExecutor struct {
+	called bool
+}
+
+func (f *fakeCLIExecutor) Execute(context.Context, map[string]any) (map[string]any, error) {
+	f.called = true
+	return map[string]any{"ok": true}, nil
 }
 
 func (f *fakeChatSessionRepo) Create(_ context.Context, s repo.ChatSession) (repo.ChatSession, error) {
@@ -4538,6 +5689,174 @@ func TestProjectCreatePersistsReviewPolicyInSettings(t *testing.T) {
 	}
 	if responsePolicy["mode"] != taskplan.PolicyDelegatedAuthority {
 		t.Fatalf("project.review_policy.mode = %v, want %s", responsePolicy["mode"], taskplan.PolicyDelegatedAuthority)
+	}
+}
+
+func TestProjectCreateNormalizesExecutionFirstDeliveryMode(t *testing.T) {
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	agentID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
+
+	projects := &fakeProjectRepo{}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.projects = projects
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+	})
+
+	out, err := executor.Execute(ctx, "project.create", map[string]any{
+		"name":          "Editorial Engine",
+		"delivery_mode": "execution_first",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	if projects.lastCreated.DeliveryMode != "gated" {
+		t.Fatalf("created delivery_mode = %q, want gated", projects.lastCreated.DeliveryMode)
+	}
+	project, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", out["project"])
+	}
+	if project["status"] != "active" {
+		t.Fatalf("project status = %v, want active", project["status"])
+	}
+}
+
+func TestProjectCreateNormalizesValidationDeliveryMode(t *testing.T) {
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	agentID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
+
+	projects := &fakeProjectRepo{}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.projects = projects
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+	})
+
+	out, err := executor.Execute(ctx, "project.create", map[string]any{
+		"name":          "Validation Project",
+		"delivery_mode": "validation",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	if projects.lastCreated.DeliveryMode != "gated" {
+		t.Fatalf("created delivery_mode = %q, want gated", projects.lastCreated.DeliveryMode)
+	}
+	project, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", out["project"])
+	}
+	if project["status"] != "active" {
+		t.Fatalf("project status = %v, want active", project["status"])
+	}
+}
+
+func TestProjectCreateNormalizesAgileDeliveryMode(t *testing.T) {
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	agentID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
+
+	projects := &fakeProjectRepo{}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.projects = projects
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+	})
+
+	out, err := executor.Execute(ctx, "project.create", map[string]any{
+		"name":          "Agile Project",
+		"delivery_mode": "agile",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	if projects.lastCreated.DeliveryMode != "gated" {
+		t.Fatalf("created delivery_mode = %q, want gated", projects.lastCreated.DeliveryMode)
+	}
+	project, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", out["project"])
+	}
+	if project["status"] != "active" {
+		t.Fatalf("project status = %v, want active", project["status"])
+	}
+}
+
+func TestProjectCreateRetriesGeneratedSlugAfterCollision(t *testing.T) {
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	agentID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
+
+	projects := &fakeProjectRepo{
+		createErrBySlug: map[string]error{
+			"speaker-pipeline-ops-validation-fresh-20260324-rerun-29": projectsvc.ErrSlugTaken,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.projects = projects
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+	})
+
+	out, err := executor.Execute(ctx, "project.create", map[string]any{
+		"name": "Speaker Pipeline Ops Validation Fresh 20260324 Rerun 29",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+
+	if len(projects.createdSlugs) != 1 {
+		t.Fatalf("created slugs attempts = %v, want exactly one successful slug recorded", projects.createdSlugs)
+	}
+	if projects.lastCreated.Slug == "speaker-pipeline-ops-validation-fresh-20260324-rerun-29" {
+		t.Fatalf("created slug = %q, want suffixed retry slug after collision", projects.lastCreated.Slug)
+	}
+	if !strings.HasPrefix(projects.lastCreated.Slug, "speaker-pipeline-ops-validation-fresh-20260324-rerun-29-") {
+		t.Fatalf("created slug = %q, want suffixed retry slug prefix", projects.lastCreated.Slug)
+	}
+
+	project, ok := out["project"].(map[string]any)
+	if !ok {
+		t.Fatalf("project output = %T, want map[string]any", out["project"])
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", project["slug"])); got != projects.lastCreated.Slug {
+		t.Fatalf("project slug = %q, want %q", got, projects.lastCreated.Slug)
+	}
+}
+
+func TestProjectCreateDoesNotRetryExplicitSlugAfterCollision(t *testing.T) {
+	orgID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	agentID := uuid.MustParse("66666666-6666-6666-6666-666666666666")
+
+	projects := &fakeProjectRepo{
+		createErrBySlug: map[string]error{
+			"speaker-pipeline-ops-validation-fresh-20260324-rerun-29": projectsvc.ErrSlugTaken,
+		},
+	}
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: t.TempDir()})
+	executor.projects = projects
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+	})
+
+	_, err := executor.Execute(ctx, "project.create", map[string]any{
+		"name": "Speaker Pipeline Ops Validation Fresh 20260324 Rerun 29",
+		"slug": "speaker-pipeline-ops-validation-fresh-20260324-rerun-29",
+	})
+	if !errors.Is(err, projectsvc.ErrSlugTaken) {
+		t.Fatalf("project.create explicit slug err = %v, want ErrSlugTaken", err)
+	}
+	if len(projects.createdSlugs) != 0 {
+		t.Fatalf("created slugs = %v, want none on explicit slug failure", projects.createdSlugs)
 	}
 }
 

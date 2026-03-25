@@ -1411,6 +1411,172 @@ func TestTaskQueueProcessorHandleTaskCompletedEventAutoCompletesBootstrapPlannin
 	}
 }
 
+func TestTaskQueueProcessorHandleTaskCompletedEventIgnoresFlowTemplateRequiredFromParentAutoComplete(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	parentID := uuid.New()
+	completedFlowTemplateID := uuid.New()
+
+	runService := &fakeTaskQueueRunStarter{}
+	taskService := &fakeTaskQueueStatusTransitioner{
+		onTransition: func(taskID uuid.UUID, toStatus string, actor tasksvc.Actor) error {
+			if taskID == parentID && toStatus == "done" {
+				return tasksvc.ErrFlowTemplateRequired
+			}
+			return nil
+		},
+	}
+	processor := &TaskQueueProcessor{
+		tasks: &fakeTaskQueueTaskRepository{
+			task: repo.ProjectTask{
+				ID:             taskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				WorkStatus:     "done",
+				FlowTemplateID: &completedFlowTemplateID,
+				Metadata:       json.RawMessage(`{"decomposition_parent_task_id":"` + parentID.String() + `"}`),
+			},
+			tasksByProject: []repo.ProjectTask{
+				{
+					ID:             taskID,
+					OrganizationID: orgID,
+					ProjectID:      projectID,
+					WorkStatus:     "done",
+					FlowTemplateID: &completedFlowTemplateID,
+					Metadata:       json.RawMessage(`{"decomposition_parent_task_id":"` + parentID.String() + `"}`),
+				},
+			},
+		},
+		taskService: taskService,
+		runs:        runService,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    taskID,
+		"project_id": projectID,
+		"to_status":  "done",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "task.status_changed",
+		Payload:        payload,
+	}
+	if err := processor.handleTaskCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("handleTaskCompletedEvent: %v", err)
+	}
+
+	if len(taskService.transitionCalls) != 1 {
+		t.Fatalf("TransitionStatus calls = %d, want 1", len(taskService.transitionCalls))
+	}
+	call := taskService.transitionCalls[0]
+	if call.taskID != parentID || call.toStatus != "done" {
+		t.Fatalf("transition call = %+v, want parent done", call)
+	}
+}
+
+func TestTaskQueueProcessorHandleTaskCompletedEventIgnoresFlowTemplateRequiredFromFollowOnQueue(t *testing.T) {
+	ctx := context.Background()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	queuedFollowOnID := uuid.New()
+	completedFlowTemplateID := uuid.New()
+
+	taskRepo := &fakeTaskQueueTaskRepository{
+		task: repo.ProjectTask{
+			ID:             completedTaskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     61,
+			Title:          "Validate OC-13 evidence artifacts meet retention policy",
+			WorkStatus:     "done",
+			FlowTemplateID: &completedFlowTemplateID,
+		},
+		taskLookupSequence: []repo.ProjectTask{
+			{
+				ID:             completedTaskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     61,
+				Title:          "Validate OC-13 evidence artifacts meet retention policy",
+				WorkStatus:     "done",
+				FlowTemplateID: &completedFlowTemplateID,
+			},
+			{
+				ID:             queuedFollowOnID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     62,
+				Title:          "Queued follow-on without executable flow template",
+				WorkStatus:     "queued",
+			},
+		},
+		tasksByProject: []repo.ProjectTask{
+			{
+				ID:             completedTaskID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     61,
+				Title:          "Validate OC-13 evidence artifacts meet retention policy",
+				WorkStatus:     "done",
+				FlowTemplateID: &completedFlowTemplateID,
+			},
+			{
+				ID:             queuedFollowOnID,
+				OrganizationID: orgID,
+				ProjectID:      projectID,
+				TaskNumber:     62,
+				Title:          "Queued follow-on without executable flow template",
+				WorkStatus:     "queued",
+			},
+		},
+	}
+	taskService := &fakeTaskQueueStatusTransitioner{
+		onTransition: func(taskID uuid.UUID, toStatus string, actor tasksvc.Actor) error {
+			if taskID == queuedFollowOnID && toStatus == "in_progress" {
+				return tasksvc.ErrFlowTemplateRequired
+			}
+			return nil
+		},
+	}
+	runService := &fakeTaskQueueRunStarter{}
+	processor := &TaskQueueProcessor{
+		tasks:       taskRepo,
+		taskService: taskService,
+		runs:        runService,
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"task_id":    completedTaskID,
+		"project_id": projectID,
+		"to_status":  "done",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	event := eventbus.DomainEvent{
+		OrganizationID: orgID,
+		EventType:      "task.status_changed",
+		Payload:        payload,
+	}
+
+	if err := processor.handleTaskCompletedEvent(ctx, event); err != nil {
+		t.Fatalf("handleTaskCompletedEvent: %v", err)
+	}
+	if len(taskService.transitionCalls) == 0 {
+		t.Fatal("expected follow-on queue transition attempt")
+	}
+	last := taskService.transitionCalls[len(taskService.transitionCalls)-1]
+	if last.taskID != queuedFollowOnID || last.toStatus != "in_progress" {
+		t.Fatalf("last transition = %+v, want queued follow-on in_progress attempt", last)
+	}
+}
+
 func TestTaskQueueProcessorHandleRunCancellationRequestedEventAutoConfirmsSchedulerAndSupervisor(t *testing.T) {
 	ctx := context.Background()
 	schedulerRunID := uuid.New()

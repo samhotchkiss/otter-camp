@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskcheckpoint"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
@@ -116,6 +117,12 @@ func (e *NativeToolExecutor) handleFileRead(ctx context.Context, input map[strin
 		reject["path"] = renderedPath
 		return reject, nil
 	}
+	if reject, blocked, rejectErr := e.rejectMismatchedTaskDeliverableRead(ctx, scope, renderedPath, content); rejectErr != nil {
+		return nil, rejectErr
+	} else if blocked {
+		reject["path"] = renderedPath
+		return reject, nil
+	}
 
 	return map[string]any{
 		"content":   content,
@@ -149,7 +156,7 @@ func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Contex
 	if normalizedPath == "" {
 		return nil, false, nil
 	}
-	if !looksLikeRejectedDeliverablePlaceholder(content) {
+	if !looksLikeRejectedDeliverablePlaceholder(content) && !looksLikeDeliverableCompletionSummaryWithoutBody(normalizedPath, content) {
 		return nil, false, nil
 	}
 	if deliverablePath == "" {
@@ -166,6 +173,44 @@ func (e *NativeToolExecutor) rejectPlaceholderDeliverableRead(ctx context.Contex
 		"error":            "placeholder_deliverable",
 		"deliverable_path": deliverablePath,
 		"message":          message,
+	}, true, nil
+}
+
+func (e *NativeToolExecutor) rejectMismatchedTaskDeliverableRead(ctx context.Context, scope workspaceScope, relativePath, content string) (map[string]any, bool, error) {
+	if e == nil || e.tasks == nil || scope.taskID == nil || *scope.taskID == uuid.Nil {
+		return nil, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *scope.taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	targetPath := parseExplicitDeliverablePath(taskRecord)
+	if targetPath == "" {
+		if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+			targetPath = normalizeWorkspacePath(checkpoint.TargetPath)
+		}
+	}
+	if targetPath == "" {
+		targetPath = e.latestRecoveryTargetPathForSession(ctx, scope)
+	}
+	normalizedPath := normalizeWorkspacePath(relativePath)
+	if normalizedPath == "" || targetPath == "" || !sameOrNestedWorkspacePath(normalizedPath, targetPath) {
+		return nil, false, nil
+	}
+	if !taskDraftSemanticallyMismatchesScope(taskRecord, content) {
+		return nil, false, nil
+	}
+	return map[string]any{
+		"error":            "mismatched_deliverable_context",
+		"deliverable_path": targetPath,
+		"message": fmt.Sprintf(
+			"The current deliverable `%s` contains content that does not match this task's scope. Do not reuse `%s` as context; overwrite it with content that matches the current task title and description.",
+			targetPath,
+			normalizedPath,
+		),
 	}, true, nil
 }
 

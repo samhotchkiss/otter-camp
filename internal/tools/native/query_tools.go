@@ -348,6 +348,18 @@ func (e *NativeToolExecutor) handleSessionList(ctx context.Context, input map[st
 	if err != nil {
 		return nil, err
 	}
+	if e.tasks != nil && scope.taskID != nil && *scope.taskID != uuid.Nil {
+		taskRecord, taskErr := e.tasks.GetByID(ctx, *scope.taskID)
+		if taskErr != nil && !errors.Is(taskErr, repo.ErrNotFound) {
+			return nil, taskErr
+		}
+		if taskErr == nil && strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+			return map[string]any{
+				"error":   "review_action_required",
+				"message": "This task is currently in review. Do not use session.list from the review lane. Inspect the current deliverables with bounded file/git tools, then call flow.review_decision with the active flow_node_execution_id and decision=approve or decision=reject.",
+			}, nil
+		}
+	}
 	rows, err := e.chatSessions.ListByOrg(ctx, scope.organizationID)
 	if err != nil {
 		return nil, err

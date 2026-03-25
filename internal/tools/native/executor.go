@@ -631,19 +631,32 @@ func (e *NativeToolExecutor) workspaceForContext(ctx context.Context) (SessionWo
 	if root != "" {
 		cacheKey = "explicit:" + root
 	} else {
-		orgSlug, projectSlug, slugErr := e.resolveWorkspaceSlugs(ctx, scope)
-		if slugErr != nil {
-			return SessionWorkDir{}, workspaceScope{}, slugErr
-		}
-		if projectSlug != "" {
-			cacheKey = "org:" + orgSlug + ":project:" + projectSlug
-			root, err = workspace.ProjectRoot(e.dataDir, projectSlug)
+		switch {
+		case scope.taskID != nil && *scope.taskID != uuid.Nil:
+			taskRecord, taskErr := e.tasks.GetByID(ctx, *scope.taskID)
+			if taskErr != nil {
+				return SessionWorkDir{}, workspaceScope{}, taskErr
+			}
+			cacheKey = "task:" + taskRecord.ID.String()
+			root, err = e.taskWorkspaceRoot(ctx, taskRecord)
 			if err != nil {
 				return SessionWorkDir{}, workspaceScope{}, err
 			}
-		} else {
-			cacheKey = "org:" + orgSlug + ":general"
-			root = workspace.GeneralRoot(e.dataDir)
+		default:
+			orgSlug, projectSlug, slugErr := e.resolveWorkspaceSlugs(ctx, scope)
+			if slugErr != nil {
+				return SessionWorkDir{}, workspaceScope{}, slugErr
+			}
+			if projectSlug != "" {
+				cacheKey = "org:" + orgSlug + ":project:" + projectSlug
+				root, err = workspace.ProjectRoot(e.dataDir, projectSlug)
+				if err != nil {
+					return SessionWorkDir{}, workspaceScope{}, err
+				}
+			} else {
+				cacheKey = "org:" + orgSlug + ":general"
+				root = workspace.GeneralRoot(e.dataDir)
+			}
 		}
 	}
 

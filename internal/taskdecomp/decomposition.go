@@ -714,6 +714,7 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		"this is ",
 		"this task ",
 		"these are ",
+		"deferred task",
 		"each is ",
 		"each should ",
 		"commit to repo",
@@ -733,6 +734,9 @@ func isInstructionOnlyDeliverable(normalized string) bool {
 		return true
 	}
 	if strings.Contains(normalized, "up to 60 min") || strings.Contains(normalized, "up to 30 min") {
+		return true
+	}
+	if strings.Contains(normalized, "queued after all test scenarios complete") {
 		return true
 	}
 	if strings.Contains(normalized, "gallery-style") || strings.Contains(normalized, "given prominence") {

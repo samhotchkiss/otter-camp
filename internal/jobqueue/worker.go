@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/clock"
 	"github.com/samhotchkiss/otter-camp/internal/metrics"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
 const (
@@ -42,6 +43,8 @@ const (
 	// not wait for the generic five-minute claim threshold before retrying them.
 	projectBootstrapStaleThreshold = 2 * time.Minute
 	defaultCleanupInterval         = 24 * time.Hour
+	postModelOrphanTurnThreshold   = 30 * time.Second
+	claimedAgentTurnHeartbeatGrace = 30 * time.Second
 
 	agentTurnRateLimitMinBackoff = 30 * time.Second
 	agentTurnRateLimitBackoffCap = 30 * time.Minute
@@ -62,6 +65,13 @@ func staleContinuationThresholdForScope(scopeType string) time.Duration {
 		return defaultStaleThreshold
 	}
 	return staleContinuationThreshold
+}
+
+func (w *Worker) maxExecutionSessionRecoveryBatch() int {
+	if w == nil || w.batchSize <= 1 {
+		return 1
+	}
+	return max(1, min(2, w.batchSize/4))
 }
 
 type JobWorker interface {
@@ -231,6 +241,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if recovered > 0 {
 		w.logger.Info("job queue: recovered stale claims on startup", "count", recovered)
 	}
+	if recovered, err := w.RecoverClaimedAgentTurnsWithoutLiveOwnership(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup non-heartbeating claimed agent_turn recovery failed", "error", err)
+		}
+	} else if recovered > 0 {
+		w.logger.Info("job queue: recovered non-heartbeating claimed agent_turn jobs on startup", "count", recovered)
+	}
 	if repaired, err := w.CloseTerminalProjectTaskAsyncSessions(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup terminal project_task session cleanup failed", "error", err)
@@ -266,6 +283,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: closed orphaned project_task async sessions on startup", "count", repaired)
 	}
+	if repaired, err := w.RetireClosedAsyncSessionRuns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup closed async session run cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: retired closed async session runs on startup", "count", repaired)
+	}
 	if repaired, err := w.ClearInactiveSessionCurrentTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup inactive session current turn cleanup failed", "error", err)
@@ -294,12 +318,26 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if repaired > 0 {
 		w.logger.Info("job queue: failed stale model invocations on startup", "count", repaired)
 	}
+	if repaired, err := w.ClearCompletedSessionCurrentTurns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup post-invocation current turn cleanup failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: cleared completed session current turns after invocation cleanup on startup", "count", repaired)
+	}
 	if repaired, err := w.RecoverStaleInProgressContinuationTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup stale continuation recovery failed", "error", err)
 		}
 	} else if repaired > 0 {
 		w.logger.Info("job queue: recovered stale in-progress continuation turns on startup", "count", repaired)
+	}
+	if repaired, err := w.RecoverStaleInProgressTriggeredTurns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup stale triggered-turn recovery failed", "error", err)
+		}
+	} else if repaired > 0 {
+		w.logger.Info("job queue: recovered stale in-progress triggered turns on startup", "count", repaired)
 	}
 	if requeued, err := w.RequeueStrandedSupervisorRecoveryTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
@@ -328,6 +366,13 @@ func (w *Worker) Start(ctx context.Context) error {
 		}
 	} else if requeued > 0 {
 		w.logger.Info("job queue: requeued active execution sessions without turns on startup", "count", requeued)
+	}
+	if requeued, err := w.RequeueActiveProjectSessionsWithoutTurns(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup active project continuation requeue failed", "error", err)
+		}
+	} else if requeued > 0 {
+		w.logger.Info("job queue: requeued active project sessions without turns on startup", "count", requeued)
 	}
 	if rejittered, err := w.RejitterPendingRateLimitedAgentTurns(runCtx); err != nil {
 		if runCtx.Err() == nil {
@@ -545,7 +590,7 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		    claimed_at = NULL,
 		    last_error = 'purged at worker startup: session closed',
 		    updated_at = now()
-		WHERE jq.status IN ('pending', 'claimed')
+		WHERE jq.status = 'pending'
 		  AND jq.job_type = 'agent_turn'
 		  AND EXISTS (
 		    SELECT 1 FROM chat_session cs
@@ -582,6 +627,23 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		    WHERE cs.id = (jq.payload->>'session_id')::uuid
 		      AND ct.status = 'pending'
 		      AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    JOIN flow_node_execution e
+		      ON e.session_id = cs.id
+		     AND e.status = 'active'
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.scope_type = 'project_task'
+		      AND cs.mode = 'async'
+		      AND cs.status = 'active'
+		      AND NOT EXISTS (
+		        SELECT 1
+		        FROM chat_turn live
+		        WHERE live.session_id = cs.id
+		          AND live.status IN ('pending', 'in_progress')
+		      )
 		  )
 	`)
 	if err != nil {
@@ -701,26 +763,53 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 	}
 
 	// Condition 6: if the exact session/message/retry attempt already has a
-	// live pending/in-progress turn recorded, any extra queued dispatch job
-	// for that same attempt is also stale. Keep the live turn; drop the
-	// duplicate queue entry before it burns a worker slot on should_run=false.
+	// live pending/in-progress turn recorded, keep exactly one backing
+	// dispatch job for that live attempt and dead-letter only true duplicates.
+	// A lone dispatch is still needed to run or heartbeat the live turn.
 	ct6, err := w.pool.Exec(ctx, `
+		WITH ranked AS (
+			SELECT jq.id,
+			       jq.status,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY jq.payload->>'session_id',
+			                        COALESCE(jq.payload->>'retry_count', '0'),
+			                        CASE
+			                            WHEN COALESCE(jq.payload->>'flow_node_execution_id', '') <> ''
+			                                THEN 'flow:' || (jq.payload->>'flow_node_execution_id')
+			                            ELSE 'msg:' || COALESCE(jq.payload->>'message_id', '')
+			                        END
+			           ORDER BY CASE WHEN jq.status = 'claimed' THEN 0 ELSE 1 END,
+			                    jq.created_at DESC,
+			                    jq.id DESC
+			       ) AS rn
+			FROM job_queue jq
+			WHERE jq.status IN ('pending', 'claimed')
+			  AND jq.job_type = 'agent_turn'
+			  AND EXISTS (
+			    SELECT 1
+			    FROM chat_turn ct
+			    LEFT JOIN chat_message cm ON cm.id = ct.trigger_message_id
+			    WHERE ct.session_id = (jq.payload->>'session_id')::uuid
+			      AND ct.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+			      AND ct.status IN ('pending', 'in_progress')
+			      AND (
+			        ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+			        OR (
+			          COALESCE(jq.payload->>'flow_node_execution_id', '') <> ''
+			          AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = (jq.payload->>'flow_node_execution_id')
+			        )
+			      )
+			  )
+		)
 		UPDATE job_queue jq
 		SET status = 'dead_letter',
 		    claimed_by = NULL,
 		    claimed_at = NULL,
 		    last_error = 'purged duplicate live message-attempt dispatch',
 		    updated_at = now()
-		WHERE jq.status IN ('pending', 'claimed')
-		  AND jq.job_type = 'agent_turn'
-		  AND EXISTS (
-		    SELECT 1
-		    FROM chat_turn ct
-		    WHERE ct.session_id = (jq.payload->>'session_id')::uuid
-		      AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
-		      AND ct.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
-		      AND ct.status IN ('pending', 'in_progress')
-		  )
+		FROM ranked
+		WHERE jq.id = ranked.id
+		  AND ranked.rn > 1
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (live message attempts): %w", err)
@@ -879,6 +968,7 @@ func (w *Worker) RequeueStrandedUserMessageTurns(ctx context.Context) (int64, er
 		    SELECT 1
 		    FROM chat_message newer
 		    WHERE newer.session_id = cs.id
+		      AND newer.role = 'user'
 		      AND (
 		        newer.created_at > cm.created_at
 		        OR (newer.created_at = cm.created_at AND newer.id > cm.id)
@@ -1022,86 +1112,95 @@ func (w *Worker) RequeuePendingTurnsWithoutJobs(ctx context.Context) (int64, err
 }
 
 func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context) (int64, error) {
+	limit := w.maxExecutionSessionRecoveryBatch()
 	rows, err := w.pool.Query(ctx, `
-		SELECT DISTINCT ON (cs.id) cs.id,
-		       cm.id,
-		       COALESCE((
-		         SELECT MAX(ct.retry_count) + 1
-		         FROM chat_turn ct
-		         WHERE ct.session_id = cs.id
-		           AND ct.trigger_message_id = cm.id
-		       ), 0) AS next_retry_count
-		FROM chat_session cs
-		JOIN flow_node_execution e
-		  ON e.session_id = cs.id
-		 AND e.status = 'active'
-		JOIN flow_node fn
-		  ON fn.id = e.flow_node_id
-		JOIN chat_message cm
-		  ON cm.session_id = cs.id
-		WHERE cs.scope_type = 'project_task'
-		  AND cs.mode = 'async'
-		  AND cs.status = 'active'
-		  AND cs.current_turn_id IS NULL
-		  AND cm.role = 'user'
-		  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
-		  AND (
-		    (
-		      cm.content = 'supervisor recovery: resume task'
-		      AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
-		    )
-		    OR (
-		      COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
-		      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
-		    )
-		    OR (
-		      COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
-		      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
-		    )
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM chat_turn ct
-		    WHERE ct.session_id = cs.id
-		      AND ct.status IN ('pending', 'in_progress')
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM chat_turn latest
-		    WHERE latest.session_id = cs.id
-		      AND latest.trigger_message_id = cm.id
-		      AND latest.status = 'cancelled'
-		      AND NOT EXISTS (
-		        SELECT 1
-		        FROM chat_turn newer
-		        WHERE newer.session_id = latest.session_id
-		          AND newer.trigger_message_id = latest.trigger_message_id
-		          AND (
-		            newer.turn_number > latest.turn_number
-		            OR (newer.turn_number = latest.turn_number AND newer.retry_count > latest.retry_count)
-		          )
-		      )
-		  )
-		  AND (
-		    COALESCE(fn.node_type, '') = 'review'
-		    OR NOT EXISTS (
-		      SELECT 1
-		      FROM chat_turn halted
-		      WHERE halted.session_id = cs.id
-		        AND halted.trigger_message_id = cm.id
-		        AND halted.status = 'completed'
-		        AND COALESCE(halted.stop_reason, '') = 'recovery_content_required'
-		    )
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM job_queue jq
-		    WHERE jq.job_type = $1
-		      AND jq.status IN ('pending', 'claimed')
-		      AND (jq.payload->>'session_id')::uuid = cs.id
-		  )
-		ORDER BY cs.id, cm.created_at DESC, cm.id DESC
-	`, agentTurnJobType)
+		WITH candidates AS (
+			SELECT DISTINCT ON (cs.id) cs.id,
+			       cm.id AS message_id,
+			       COALESCE((
+			         SELECT MAX(ct.retry_count) + 1
+			         FROM chat_turn ct
+			         WHERE ct.session_id = cs.id
+			           AND ct.trigger_message_id = cm.id
+			       ), 0) AS next_retry_count,
+			       e.started_at AS execution_started_at,
+			       cm.created_at AS message_created_at
+			FROM chat_session cs
+			JOIN flow_node_execution e
+			  ON e.session_id = cs.id
+			 AND e.status = 'active'
+			JOIN flow_node fn
+			  ON fn.id = e.flow_node_id
+			JOIN chat_message cm
+			  ON cm.session_id = cs.id
+			WHERE cs.scope_type = 'project_task'
+			  AND cs.mode = 'async'
+			  AND cs.status = 'active'
+			  AND cs.current_turn_id IS NULL
+			  AND cm.role = 'user'
+			  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
+			  AND (
+			    (
+			      cm.content = 'supervisor recovery: resume task'
+			      AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
+			    )
+			    OR (
+			      COALESCE(cm.metadata->>'source', '') = 'task_queue_processor'
+			      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+			    )
+			    OR (
+			      COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+			      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+			    )
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM chat_turn ct
+			    WHERE ct.session_id = cs.id
+			      AND ct.status IN ('pending', 'in_progress')
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM chat_turn latest
+			    WHERE latest.session_id = cs.id
+			      AND latest.trigger_message_id = cm.id
+			      AND latest.status = 'cancelled'
+			      AND NOT EXISTS (
+			        SELECT 1
+			        FROM chat_turn newer
+			        WHERE newer.session_id = latest.session_id
+			          AND newer.trigger_message_id = latest.trigger_message_id
+			          AND (
+			            newer.turn_number > latest.turn_number
+			            OR (newer.turn_number = latest.turn_number AND newer.retry_count > latest.retry_count)
+			          )
+			      )
+			  )
+			  AND (
+			    COALESCE(fn.node_type, '') = 'review'
+			    OR NOT EXISTS (
+			      SELECT 1
+			      FROM chat_turn halted
+			      WHERE halted.session_id = cs.id
+			        AND halted.trigger_message_id = cm.id
+			        AND halted.status = 'completed'
+			        AND COALESCE(halted.stop_reason, '') = 'recovery_content_required'
+			    )
+			  )
+			  AND NOT EXISTS (
+			    SELECT 1
+			    FROM job_queue jq
+			    WHERE jq.job_type = $1
+			      AND jq.status IN ('pending', 'claimed')
+			      AND (jq.payload->>'session_id')::uuid = cs.id
+			  )
+			ORDER BY cs.id, cm.created_at DESC, cm.id DESC
+		)
+		SELECT id, message_id, next_retry_count
+		FROM candidates
+		ORDER BY execution_started_at ASC, message_created_at ASC, id ASC
+		LIMIT $2
+	`, agentTurnJobType, limit)
 	if err != nil {
 		return 0, fmt.Errorf("list active execution sessions without turns: %w", err)
 	}
@@ -1114,6 +1213,19 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		var retryCount int
 		if err := rows.Scan(&sessionID, &messageID, &retryCount); err != nil {
 			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
+		}
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE run
+			SET status = 'failed',
+			    failure_class = 'transient',
+			    failure_reason = 'recovered active execution session without live task turn ownership',
+			    completed_at = COALESCE(completed_at, now()),
+			    updated_at = now()
+			WHERE session_id = $1
+			  AND status IN ('created', 'in_progress', 'cancelling')
+			  AND turn_id IS NULL
+		`, sessionID); err != nil {
+			return repaired, fmt.Errorf("retire stale active execution runs for session %s: %w", sessionID, err)
 		}
 		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 			SessionID:  sessionID,
@@ -1130,11 +1242,149 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 	return repaired, nil
 }
 
+func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (int64, error) {
+	rows, err := w.pool.Query(ctx, `
+		SELECT DISTINCT ON (cs.id) cs.id,
+		       cm.id,
+		       COALESCE(cm.metadata->>'source', '') AS source,
+		       COUNT(*) FILTER (WHERE pt.work_status NOT IN ('done', 'cancelled')) AS open_task_count,
+		       COALESCE((
+		         SELECT MAX(ct.retry_count) + 1
+		         FROM chat_turn ct
+		         WHERE ct.session_id = cs.id
+		           AND ct.trigger_message_id = cm.id
+		       ), 0) AS next_retry_count
+		FROM chat_session cs
+		JOIN project p
+		  ON p.id = cs.scope_id
+		JOIN chat_message cm
+		  ON cm.session_id = cs.id
+		LEFT JOIN project_task pt
+		  ON pt.project_id = cs.scope_id
+		WHERE cs.scope_type = 'project'
+		  AND cs.mode = 'async'
+		  AND cs.status = 'active'
+		  AND p.status = 'active'
+		  AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
+		  AND cs.current_turn_id IS NULL
+		  AND cm.role = 'user'
+		  AND cm.status = 'pending'
+		  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
+		  AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_bootstrap')
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    WHERE ct.session_id = cs.id
+		      AND ct.status IN ('pending', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    LEFT JOIN chat_message queued_message
+		      ON queued_message.id = (jq.payload->>'message_id')::uuid
+		    WHERE jq.job_type = $1
+		      AND jq.status IN ('pending', 'claimed')
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		      AND NOT (
+		            COALESCE(queued_message.metadata->>'source', '') = 'project_bootstrap'
+		        AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') = 'completed'
+		      )
+		  )
+		GROUP BY cs.id, cm.id, cm.created_at, cm.metadata
+		ORDER BY cs.id, cm.created_at DESC, cm.id DESC
+	`, agentTurnJobType)
+	if err != nil {
+		return 0, fmt.Errorf("list active project sessions without turns: %w", err)
+	}
+	defer rows.Close()
+
+	var repaired int64
+	for rows.Next() {
+		var sessionID uuid.UUID
+		var messageID uuid.UUID
+		var source string
+		var openTaskCount int
+		var retryCount int
+		if err := rows.Scan(&sessionID, &messageID, &source, &openTaskCount, &retryCount); err != nil {
+			return repaired, fmt.Errorf("scan active project session without turn: %w", err)
+		}
+		if strings.EqualFold(strings.TrimSpace(source), "project_bootstrap") && openTaskCount > 0 {
+			synthMessageID, err := w.ensureProjectContinuationMessage(ctx, sessionID)
+			if err != nil {
+				return repaired, fmt.Errorf("ensure project continuation message for session %s: %w", sessionID, err)
+			}
+			if synthMessageID != uuid.Nil {
+				messageID = synthMessageID
+				retryCount = 0
+			}
+		}
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
+			SessionID:  sessionID,
+			MessageID:  messageID,
+			RetryCount: retryCount,
+		}, nil); err != nil {
+			return repaired, fmt.Errorf("requeue active project session without turn for session %s: %w", sessionID, err)
+		}
+		repaired++
+	}
+	if err := rows.Err(); err != nil {
+		return repaired, fmt.Errorf("iterate active project sessions without turns: %w", err)
+	}
+	return repaired, nil
+}
+
+func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID uuid.UUID) (uuid.UUID, error) {
+	if w == nil || w.pool == nil || sessionID == uuid.Nil {
+		return uuid.Nil, nil
+	}
+
+	var existingMessageID uuid.UUID
+	err := w.pool.QueryRow(ctx, `
+		SELECT id
+		FROM chat_message
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->>'source', '') = 'project_execution_continuation'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, sessionID).Scan(&existingMessageID)
+	if err == nil {
+		return existingMessageID, nil
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, fmt.Errorf("query existing project continuation message: %w", err)
+	}
+
+	message, err := repo.NewChatMessageRepo(w.pool).Create(ctx, repo.ChatMessage{
+		SessionID: sessionID,
+		Role:      "user",
+		Content: strings.Join([]string{
+			"Continue the active project execution now.",
+			"Bootstrap is complete and draft project work remains.",
+			"Your next response must take direct project action instead of generic chat.",
+			"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
+			"Inspect the current task tree and immediately queue or otherwise advance the next runnable bounded draft task.",
+		}, " "),
+		Status: "pending",
+		Metadata: json.RawMessage(`{"source":"project_execution_continuation","auto_continue":true,"synthetic_user_message":true}`),
+	})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("create project continuation message: %w", err)
+	}
+	return message.ID, nil
+}
+
 func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 	rows, err := w.pool.Query(ctx, `
 		SELECT mi.id,
 		       mi.turn_id,
 		       mi.session_id,
+		       (
+		         SELECT cs.scope_type
+		         FROM chat_session cs
+		         WHERE cs.id = mi.session_id
+		       ) AS scope_type,
 		       ct.trigger_message_id,
 		       CASE
 		         WHEN mi.session_id IS NULL OR ct.trigger_message_id IS NULL THEN 0
@@ -1162,8 +1412,7 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		      )
 		    )
 		    OR (
-		      mi.created_at < $2
-		      AND EXISTS (
+		      EXISTS (
 		        SELECT 1
 		        FROM chat_turn ct
 		        JOIN chat_session cs ON cs.id = ct.session_id
@@ -1172,14 +1421,25 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		          AND cs.status = 'active'
 		          AND cs.current_turn_id = ct.id
 		          AND (
-		            cs.scope_type <> 'project_task'
-		            OR NOT EXISTS (
-		              SELECT 1
-		              FROM flow_node_execution e
-		              WHERE e.session_id = cs.id
-		                AND e.status = 'active'
+		            (
+		              cs.scope_type = 'project_task'
+		              AND (
+		                NOT EXISTS (
+		                  SELECT 1
+		                  FROM flow_node_execution e
+		                  WHERE e.session_id = cs.id
+		                    AND e.status = 'active'
+		                )
+		                OR mi.created_at < $3
+		              )
 		            )
-		            OR mi.created_at < $3
+		            OR (
+		              cs.scope_type <> 'project_task'
+		              AND (
+		                (cs.mode = 'async' AND mi.created_at < $4)
+		                OR (cs.mode <> 'async' AND mi.created_at < $2)
+		              )
+		            )
 		          )
 		          AND NOT EXISTS (
 		            SELECT 1
@@ -1191,7 +1451,7 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		      )
 		    )
 		  )
-	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-2*time.Minute))
+	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("list stale model invocations: %w", err)
 	}
@@ -1201,13 +1461,14 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		invocationID uuid.UUID
 		turnID       *uuid.UUID
 		sessionID    *uuid.UUID
+		scopeType    *string
 		messageID    *uuid.UUID
 		retryCount   int
 	}
 	var candidates []staleInvocationCandidate
 	for rows.Next() {
 		var item staleInvocationCandidate
-		if err := rows.Scan(&item.invocationID, &item.turnID, &item.sessionID, &item.messageID, &item.retryCount); err != nil {
+		if err := rows.Scan(&item.invocationID, &item.turnID, &item.sessionID, &item.scopeType, &item.messageID, &item.retryCount); err != nil {
 			return 0, fmt.Errorf("scan stale model invocation: %w", err)
 		}
 		candidates = append(candidates, item)
@@ -1261,14 +1522,53 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		}
 		if item.sessionID != nil && *item.sessionID != uuid.Nil {
 			if _, err := w.pool.Exec(ctx, `
+				UPDATE run r
+				SET status = 'failed',
+				    failure_class = 'permanent',
+				    failure_reason = $3,
+				    completed_at = COALESCE(completed_at, now()),
+				    updated_at = now()
+				WHERE session_id = $1
+				  AND status = 'in_progress'
+				  AND (turn_id = $2 OR turn_id IS NULL)
+				  AND NOT EXISTS (
+				    SELECT 1
+				    FROM model_invocation mi_live
+				    WHERE mi_live.run_id = r.id
+				      AND mi_live.status = 'in_flight'
+				      AND mi_live.turn_id IS DISTINCT FROM $2
+				  )
+			`, *item.sessionID, *item.turnID, failureReason); err != nil {
+				return repaired, fmt.Errorf("fail stale model invocation runs for session %s turn %s: %w", *item.sessionID, *item.turnID, err)
+			}
+		}
+		if item.sessionID != nil && *item.sessionID != uuid.Nil {
+			if _, err := w.pool.Exec(ctx, `
 				UPDATE chat_session
 				SET current_turn_id = NULL
 				WHERE id = $1
 				  AND current_turn_id = $2
+				  AND EXISTS (
+				    SELECT 1
+				    FROM chat_turn ct
+				    WHERE ct.id = $2
+				      AND ct.status NOT IN ('pending', 'in_progress')
+				  )
 			`, *item.sessionID, *item.turnID); err != nil {
 				return repaired, fmt.Errorf("clear current turn for stale model invocation session %s: %w", *item.sessionID, err)
 			}
 			if item.messageID != nil && *item.messageID != uuid.Nil {
+				scopeType := ""
+				if item.scopeType != nil {
+					scopeType = *item.scopeType
+				}
+				shouldRequeue, err := w.shouldRequeueRecoveredProjectTrigger(ctx, *item.sessionID, scopeType, *item.messageID)
+				if err != nil {
+					return repaired, fmt.Errorf("check recovered stale model invocation retry eligibility for session %s: %w", *item.sessionID, err)
+				}
+				if !shouldRequeue {
+					continue
+				}
 				hasQueued, err := w.sessionHasQueuedOrClaimedAgentTurn(ctx, *item.sessionID)
 				if err != nil {
 					return repaired, fmt.Errorf("check queued recovered stale model invocation retry for session %s: %w", *item.sessionID, err)
@@ -1292,6 +1592,7 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 	rows, err := w.pool.Query(ctx, `
 		SELECT cs.id,
 		       COALESCE(live_turn.id, ct.id) AS turn_id,
+		       cs.scope_type,
 		       prior.trigger_message_id,
 		       COALESCE((
 		         SELECT MAX(retry_turn.retry_count)
@@ -1314,7 +1615,7 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 			THEN (execution_owner.metadata->>'live_turn_id')::uuid
 			ELSE NULL
 		END
-		JOIN LATERAL (
+		LEFT JOIN LATERAL (
 			SELECT prior_turn.trigger_message_id
 			FROM chat_turn prior_turn
 			WHERE prior_turn.session_id = cs.id
@@ -1346,11 +1647,7 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 		  END
 		  AND (
 		    cs.scope_type NOT IN ('project', 'project_task')
-		    OR (
-		      p.id IS NOT NULL
-		      AND p.status = 'active'
-		      AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
-		    )
+		    OR p.id IS NOT NULL
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
@@ -1368,13 +1665,14 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 	type staleContinuationCandidate struct {
 		sessionID  uuid.UUID
 		turnID     uuid.UUID
+		scopeType  string
 		messageID  uuid.UUID
 		retryCount int
 	}
 	candidates := make([]staleContinuationCandidate, 0)
 	for rows.Next() {
 		var item staleContinuationCandidate
-		if err := rows.Scan(&item.sessionID, &item.turnID, &item.messageID, &item.retryCount); err != nil {
+		if err := rows.Scan(&item.sessionID, &item.turnID, &item.scopeType, &item.messageID, &item.retryCount); err != nil {
 			return 0, fmt.Errorf("scan stale in-progress continuation turn: %w", err)
 		}
 		candidates = append(candidates, item)
@@ -1429,6 +1727,31 @@ func (w *Worker) RecoverStaleInProgressContinuationTurns(ctx context.Context) (i
 			  AND current_turn_id = $2
 		`, item.sessionID, item.turnID); err != nil {
 			return repaired, fmt.Errorf("clear stale continuation current turn for session %s: %w", item.sessionID, err)
+		}
+		if strings.EqualFold(strings.TrimSpace(item.scopeType), "project") && item.messageID == uuid.Nil {
+			synthMessageID, err := w.ensureProjectContinuationMessage(ctx, item.sessionID)
+			if err != nil {
+				return repaired, fmt.Errorf("ensure project continuation retry message for session %s: %w", item.sessionID, err)
+			}
+			if synthMessageID != uuid.Nil {
+				item.messageID = synthMessageID
+				item.retryCount = 0
+			}
+		}
+		shouldRequeue, err := w.shouldRequeueRecoveredProjectTrigger(ctx, item.sessionID, item.scopeType, item.messageID)
+		if err != nil {
+			return repaired, fmt.Errorf("check recovered continuation retry eligibility for session %s: %w", item.sessionID, err)
+		}
+		if !shouldRequeue {
+			if w.logger != nil {
+				w.logger.Info("job queue: suppressed stale project continuation requeue",
+					"session_id", item.sessionID,
+					"turn_id", item.turnID,
+					"scope_type", strings.TrimSpace(item.scopeType),
+				)
+			}
+			repaired++
+			continue
 		}
 		hasQueued, err := w.sessionHasQueuedOrClaimedAgentTurn(ctx, item.sessionID)
 		if err != nil {
@@ -1493,16 +1816,131 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		  AND COALESCE(live_turn.trigger_message_id, ct.trigger_message_id) IS NOT NULL
 		  AND COALESCE(live_turn.started_at, ct.started_at) IS NOT NULL
 		  AND (
-		        (cs.scope_type = 'project_task' AND COALESCE(live_turn.started_at, ct.started_at) < $1)
+		        (
+		          cs.scope_type = 'project_task'
+		          AND EXISTS (
+		            SELECT 1
+		            FROM model_invocation mi
+		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND mi.status = 'completed'
+		              AND COALESCE(mi.completed_at, mi.created_at) < $3
+		          )
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM job_queue jq
+		            WHERE jq.job_type = 'agent_turn'
+		              AND jq.status = 'claimed'
+		              AND (jq.payload->>'session_id')::uuid = cs.id
+		          )
+		        )
+		     OR (
+		          EXISTS (
+		            SELECT 1
+		            FROM job_queue jq
+		            WHERE jq.job_type = 'agent_turn'
+		              AND jq.status = 'claimed'
+		              AND (jq.payload->>'session_id')::uuid = cs.id
+		              AND (jq.payload->>'message_id')::uuid = COALESCE(live_turn.trigger_message_id, ct.trigger_message_id)
+		              AND COALESCE((jq.payload->>'retry_count')::int, 0) = COALESCE(live_turn.retry_count, ct.retry_count, 0)
+		              AND jq.claimed_at < $4
+		              AND jq.updated_at <= jq.claimed_at
+		          )
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM model_invocation mi
+		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND mi.status = 'in_flight'
+		          )
+		          AND (
+		            cs.scope_type <> 'project_task'
+		            OR NOT EXISTS (
+		              SELECT 1
+		              FROM run r
+		              WHERE r.turn_id = COALESCE(live_turn.id, ct.id)
+		                AND r.status IN ('created', 'in_progress')
+		            )
+		          )
+		        )
+		     OR (
+		          EXISTS (
+		            SELECT 1
+		            FROM job_queue jq
+		            WHERE jq.job_type = 'agent_turn'
+		              AND jq.status IN ('pending', 'claimed')
+		              AND (jq.payload->>'session_id')::uuid = cs.id
+		              AND (jq.payload->>'message_id')::uuid = COALESCE(live_turn.trigger_message_id, ct.trigger_message_id)
+		              AND (
+		                    COALESCE((jq.payload->>'retry_count')::int, 0) > COALESCE(live_turn.retry_count, ct.retry_count, 0)
+		                 OR (
+		                      jq.updated_at > COALESCE(live_turn.started_at, ct.started_at)
+		                  AND COALESCE((jq.payload->>'retry_count')::int, 0) = 0
+		                    )
+		                  )
+		          )
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM model_invocation mi
+		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND mi.status = 'in_flight'
+		          )
+		          AND (
+		            cs.scope_type <> 'project_task'
+		            OR NOT EXISTS (
+		              SELECT 1
+		              FROM run r
+		              WHERE r.turn_id = COALESCE(live_turn.id, ct.id)
+		                AND r.status IN ('created', 'in_progress')
+		            )
+		          )
+		        )
+		     OR (
+		          cs.scope_type = 'project_task'
+		          AND EXISTS (
+		            SELECT 1
+		            FROM model_invocation mi
+		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND mi.status = 'completed'
+		              AND COALESCE(mi.completed_at, mi.created_at) < $3
+		          )
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM job_queue jq
+		            WHERE jq.job_type = 'agent_turn'
+		              AND jq.status = 'claimed'
+		              AND (jq.payload->>'session_id')::uuid = cs.id
+		          )
+		        )
+		     OR (
+		          cs.scope_type = 'project_task'
+		          AND COALESCE(live_turn.started_at, ct.started_at) < $4
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM run r
+		            WHERE r.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND r.status IN ('created', 'in_progress')
+		          )
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM model_invocation mi
+		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND mi.status IN ('in_flight', 'completed')
+		          )
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM job_queue jq
+		            WHERE jq.job_type = 'agent_turn'
+		              AND jq.status IN ('pending', 'claimed')
+		              AND (jq.payload->>'session_id')::uuid = cs.id
+		              AND (jq.payload->>'message_id')::uuid = COALESCE(live_turn.trigger_message_id, ct.trigger_message_id)
+		              AND COALESCE((jq.payload->>'retry_count')::int, 0) = COALESCE(live_turn.retry_count, ct.retry_count, 0)
+		          )
+		        )
+		     OR (cs.scope_type = 'project_task' AND COALESCE(live_turn.started_at, ct.started_at) < $1)
 		     OR (cs.scope_type <> 'project_task' AND COALESCE(live_turn.started_at, ct.started_at) < $2)
 		      )
 		  AND (
 		    cs.scope_type NOT IN ('project', 'project_task')
-		    OR (
-		      p.id IS NOT NULL
-		      AND p.status = 'active'
-		      AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
-		    )
+		    OR p.id IS NOT NULL
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
@@ -1520,7 +1958,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		            )
 		          )
 		  )
-	`, w.clock.Now().UTC().Add(-defaultStaleThreshold), w.clock.Now().UTC().Add(-staleContinuationThreshold))
+	`, w.clock.Now().UTC().Add(-defaultStaleThreshold), w.clock.Now().UTC().Add(-staleContinuationThreshold), w.clock.Now().UTC().Add(-postModelOrphanTurnThreshold), w.clock.Now().UTC().Add(-claimedAgentTurnHeartbeatGrace))
 	if err != nil {
 		return 0, fmt.Errorf("list stale in-progress triggered turns: %w", err)
 	}
@@ -1570,6 +2008,19 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		`, item.turnID, failureReason); err != nil {
 			return repaired, fmt.Errorf("fail stale triggered-turn assistant messages for turn %s: %w", item.turnID, err)
 		}
+		if strings.EqualFold(strings.TrimSpace(item.scopeType), "project_task") {
+			if _, err := w.pool.Exec(ctx, `
+				UPDATE run
+				SET status = 'failed',
+				    failure_class = 'transient',
+				    failure_reason = $2,
+				    completed_at = COALESCE(completed_at, now())
+				WHERE turn_id = $1
+				  AND status IN ('created', 'in_progress', 'cancelling')
+			`, item.turnID, failureReason); err != nil {
+				return repaired, fmt.Errorf("fail stale triggered-turn runs for turn %s: %w", item.turnID, err)
+			}
+		}
 		ct, err := w.pool.Exec(ctx, `
 			UPDATE chat_turn
 			SET status = 'failed',
@@ -1592,6 +2043,25 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		`, item.sessionID, item.turnID); err != nil {
 			return repaired, fmt.Errorf("clear stale triggered current turn for session %s: %w", item.sessionID, err)
 		}
+		retryMessageID, err := w.resolveStaleTriggeredRetryMessageID(ctx, item.sessionID, item.scopeType, item.messageID)
+		if err != nil {
+			return repaired, fmt.Errorf("resolve stale triggered retry message for session %s: %w", item.sessionID, err)
+		}
+		shouldRequeue, err := w.shouldRequeueRecoveredProjectTrigger(ctx, item.sessionID, item.scopeType, retryMessageID)
+		if err != nil {
+			return repaired, fmt.Errorf("check recovered trigger requeue eligibility for session %s: %w", item.sessionID, err)
+		}
+		if !shouldRequeue {
+			if w.logger != nil {
+				w.logger.Info("job queue: suppressed stale project trigger requeue",
+					"session_id", item.sessionID,
+					"turn_id", item.turnID,
+					"scope_type", strings.TrimSpace(item.scopeType),
+				)
+			}
+			repaired++
+			continue
+		}
 		hasQueued, err := w.sessionHasQueuedOrClaimedAgentTurn(ctx, item.sessionID)
 		if err != nil {
 			return repaired, fmt.Errorf("check queued recovered triggered retry for session %s: %w", item.sessionID, err)
@@ -1599,7 +2069,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		if !hasQueued {
 			if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 				SessionID:  item.sessionID,
-				MessageID:  item.messageID,
+				MessageID:  retryMessageID,
 				RetryCount: item.retryCount,
 			}, nil); err != nil {
 				return repaired, fmt.Errorf("enqueue recovered stale triggered retry for session %s: %w", item.sessionID, err)
@@ -1616,6 +2086,109 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		repaired++
 	}
 	return repaired, nil
+}
+
+func (w *Worker) shouldRequeueRecoveredProjectTrigger(ctx context.Context, sessionID uuid.UUID, scopeType string, messageID uuid.UUID) (bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(scopeType), "project") {
+		return true, nil
+	}
+
+	var (
+		projectStatus          string
+		projectPaused          bool
+		source                 string
+		projectBootstrapStatus string
+		openTaskCount          int
+	)
+	if err := w.pool.QueryRow(ctx, `
+		SELECT COALESCE(p.status, ''),
+		       COALESCE(p.settings->'pause'->>'is_paused', 'false') = 'true',
+		       COALESCE(cm.metadata->>'source', ''),
+		       COALESCE(cs.metadata->'project_bootstrap'->>'status', ''),
+		       COUNT(*) FILTER (WHERE pt.work_status NOT IN ('done', 'cancelled'))
+		FROM chat_session cs
+		JOIN project p
+		  ON p.id = cs.scope_id
+		LEFT JOIN chat_message cm
+		  ON cm.id = $2
+		LEFT JOIN project_task pt
+		  ON pt.project_id = cs.scope_id
+		WHERE cs.id = $1
+		GROUP BY p.status, p.settings, cm.metadata, cs.metadata
+	`, sessionID, messageID).Scan(&projectStatus, &projectPaused, &source, &projectBootstrapStatus, &openTaskCount); err != nil {
+		return false, fmt.Errorf("load recovered project trigger state: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(projectStatus), "active") || projectPaused {
+		return false, nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "project_bootstrap":
+		return strings.EqualFold(strings.TrimSpace(projectBootstrapStatus), "active"), nil
+	case "project_execution_continuation", "project_continuation_resume":
+		return openTaskCount > 0, nil
+	default:
+		return true, nil
+	}
+}
+
+func (w *Worker) resolveStaleTriggeredRetryMessageID(ctx context.Context, sessionID uuid.UUID, scopeType string, messageID uuid.UUID) (uuid.UUID, error) {
+	if sessionID == uuid.Nil || messageID == uuid.Nil {
+		return messageID, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(scopeType), "organization") {
+		return messageID, nil
+	}
+
+	var role string
+	if err := w.pool.QueryRow(ctx, `
+		SELECT role
+		FROM chat_message
+		WHERE id = $1
+	`, messageID).Scan(&role); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return messageID, nil
+		}
+		return uuid.Nil, err
+	}
+	if strings.EqualFold(strings.TrimSpace(role), "user") {
+		return messageID, nil
+	}
+
+	var retryMessageID uuid.UUID
+	if err := w.pool.QueryRow(ctx, `
+		SELECT cm.id
+		FROM chat_message cm
+		WHERE cm.session_id = $1
+		  AND cm.role = 'user'
+		  AND cm.status = 'pending'
+		  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
+		  AND COALESCE(cm.metadata->>'synthetic_user_message', 'false') = 'true'
+		  AND COALESCE(cm.metadata->>'source', '') = 'organization_continuation_resume'
+		ORDER BY cm.created_at DESC, cm.id DESC
+		LIMIT 1
+	`, sessionID).Scan(&retryMessageID); err == nil {
+		return retryMessageID, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, err
+	}
+
+	if err := w.pool.QueryRow(ctx, `
+		SELECT cm.id
+		FROM chat_message cm
+		WHERE cm.session_id = $1
+		  AND cm.role = 'user'
+		  AND cm.status = 'pending'
+		  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
+		ORDER BY cm.created_at DESC, cm.id DESC
+		LIMIT 1
+	`, sessionID).Scan(&retryMessageID); err == nil {
+		return retryMessageID, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, err
+	}
+
+	return messageID, nil
 }
 
 func (w *Worker) sessionHasQueuedOrClaimedAgentTurn(ctx context.Context, sessionID uuid.UUID) (bool, error) {
@@ -1665,7 +2238,8 @@ func (w *Worker) RejitterPendingRateLimitedAgentTurns(ctx context.Context) (int6
 		       (jq.payload->>'session_id')::uuid,
 		       (jq.payload->>'message_id')::uuid,
 		       COALESCE((jq.payload->>'retry_count')::int, 0),
-		       jq.run_after
+		       jq.run_after,
+		       COALESCE((jq.payload->>'rate_limit_jitter_applied')::boolean, false)
 		FROM job_queue jq
 		JOIN chat_session cs ON cs.id = (jq.payload->>'session_id')::uuid
 		JOIN LATERAL (
@@ -1678,10 +2252,15 @@ func (w *Worker) RejitterPendingRateLimitedAgentTurns(ctx context.Context) (int6
 		WHERE jq.job_type = 'agent_turn'
 		  AND jq.status = 'pending'
 		  AND COALESCE((jq.payload->>'retry_count')::int, 0) > 0
-		  AND COALESCE(jq.payload->>'rate_limit_jitter_applied', 'false') <> 'true'
 		  AND jq.run_after >= now() + interval '5 minutes'
-		  AND latest_msg.content LIKE '[Rate limited, retrying in %'
-	`)
+		  AND (
+		        (
+		          COALESCE(jq.payload->>'rate_limit_jitter_applied', 'false') <> 'true'
+		          AND latest_msg.content LIKE '[Rate limited, retrying in %'
+		        )
+		     OR jq.run_after > now() + $1::interval
+		      )
+	`, agentTurnRateLimitBackoffCap.String())
 	if err != nil {
 		return 0, fmt.Errorf("list pending rate-limited agent turns for rejitter: %w", err)
 	}
@@ -1695,11 +2274,12 @@ func (w *Worker) RejitterPendingRateLimitedAgentTurns(ctx context.Context) (int6
 			messageID  uuid.UUID
 			retryCount int
 			runAfter   time.Time
+			jittered   bool
 		)
-		if err := rows.Scan(&jobID, &sessionID, &messageID, &retryCount, &runAfter); err != nil {
+		if err := rows.Scan(&jobID, &sessionID, &messageID, &retryCount, &runAfter, &jittered); err != nil {
 			return repaired, fmt.Errorf("scan pending rate-limited agent turn: %w", err)
 		}
-		rejitteredRunAfter := rejitteredRateLimitedRunAfter(w.clock.Now().UTC(), runAfter.UTC(), sessionID, messageID, retryCount)
+		rejitteredRunAfter := rejitteredRateLimitedRunAfter(w.clock.Now().UTC(), runAfter.UTC(), sessionID, messageID, retryCount, jittered)
 		tag, err := w.pool.Exec(ctx, `
 			UPDATE job_queue
 			SET run_after = $2,
@@ -1707,7 +2287,6 @@ func (w *Worker) RejitterPendingRateLimitedAgentTurns(ctx context.Context) (int6
 			    updated_at = now()
 			WHERE id = $1
 			  AND status = 'pending'
-			  AND COALESCE(payload->>'rate_limit_jitter_applied', 'false') <> 'true'
 		`, jobID, rejitteredRunAfter)
 		if err != nil {
 			return repaired, fmt.Errorf("update pending rate-limited agent turn %s: %w", jobID, err)
@@ -1720,11 +2299,22 @@ func (w *Worker) RejitterPendingRateLimitedAgentTurns(ctx context.Context) (int6
 	return repaired, nil
 }
 
-func rejitteredRateLimitedRunAfter(now, runAfter time.Time, sessionID, messageID uuid.UUID, retryCount int) time.Time {
-	if runAfter.Sub(now) < legacyRateLimitJitterFloor {
-		return runAfter
+func rejitteredRateLimitedRunAfter(now, runAfter time.Time, sessionID, messageID uuid.UUID, retryCount int, jittered bool) time.Time {
+	if jittered {
+		return clampRateLimitedRunAfter(now, runAfter)
 	}
-	return runAfter.Add(rateLimitRetryJitterOffset(sessionID, messageID, retryCount))
+	if runAfter.Sub(now) < legacyRateLimitJitterFloor {
+		return clampRateLimitedRunAfter(now, runAfter)
+	}
+	return clampRateLimitedRunAfter(now, runAfter.Add(rateLimitRetryJitterOffset(sessionID, messageID, retryCount)))
+}
+
+func clampRateLimitedRunAfter(now, runAfter time.Time) time.Time {
+	maxRunAfter := now.Add(agentTurnRateLimitBackoffCap)
+	if runAfter.After(maxRunAfter) {
+		return maxRunAfter
+	}
+	return runAfter
 }
 
 func rateLimitRetryJitterOffset(sessionID, messageID uuid.UUID, retryCount int) time.Duration {
@@ -1785,6 +2375,88 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("recover stale claims: %w", err)
 	}
 	return ct.RowsAffected(), nil
+}
+
+func (w *Worker) RecoverClaimedAgentTurnsWithoutLiveOwnership(ctx context.Context) (int64, error) {
+	recoverBefore := w.clock.Now().UTC().Add(-claimedAgentTurnHeartbeatGrace)
+	postModelGraceBefore := w.clock.Now().UTC().Add(-postModelOrphanTurnThreshold)
+	tag, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'dead_letter' END,
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    run_after = CASE WHEN attempts < max_attempts THEN now() ELSE run_after END,
+		    last_error = CASE
+		        WHEN attempts < max_attempts THEN COALESCE(NULLIF(last_error, ''), 'recovered non-heartbeating claimed agent_turn without live ownership')
+		        ELSE COALESCE(NULLIF(last_error, ''), 'non-heartbeating claimed agent_turn exceeded max attempts')
+		    END,
+		    updated_at = now()
+		WHERE jq.status = 'claimed'
+		  AND jq.job_type = $1
+		  AND jq.claimed_at < $2
+		  AND jq.updated_at <= jq.claimed_at
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.status = 'active'
+		      AND cs.mode = 'async'
+		      AND (
+		        cs.current_turn_id IS NULL
+		        OR NOT EXISTS (
+		          SELECT 1
+		          FROM chat_turn current_turn
+		          WHERE current_turn.id = cs.current_turn_id
+		            AND current_turn.status IN ('pending', 'in_progress')
+		            AND current_turn.trigger_message_id = (jq.payload->>'message_id')::uuid
+		            AND current_turn.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+		        )
+		        OR EXISTS (
+		          SELECT 1
+		          FROM chat_turn current_turn
+		          WHERE current_turn.id = cs.current_turn_id
+		            AND current_turn.status = 'in_progress'
+		            AND current_turn.trigger_message_id = (jq.payload->>'message_id')::uuid
+		            AND current_turn.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+		            AND NOT EXISTS (
+		              SELECT 1
+		              FROM model_invocation mi
+		              WHERE mi.turn_id = current_turn.id
+		                AND mi.status = 'in_flight'
+		            )
+		            AND NOT EXISTS (
+		              SELECT 1
+		              FROM model_invocation mi
+		              WHERE mi.turn_id = current_turn.id
+		                AND mi.status = 'completed'
+		                AND COALESCE(mi.completed_at, mi.created_at) >= $3
+		            )
+		            AND (
+		              cs.scope_type <> 'project_task'
+		              OR NOT EXISTS (
+		                SELECT 1
+		                FROM run r
+		                WHERE r.turn_id = current_turn.id
+		                  AND r.status IN ('created', 'in_progress')
+		              )
+		            )
+		        )
+		      )
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    JOIN model_invocation mi ON mi.turn_id = ct.id
+		    WHERE ct.session_id = (jq.payload->>'session_id')::uuid
+		      AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+		      AND ct.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+		      AND mi.status = 'in_flight'
+		  )
+	`, agentTurnJobType, recoverBefore, postModelGraceBefore)
+	if err != nil {
+		return 0, fmt.Errorf("recover claimed agent_turn jobs without live ownership: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (w *Worker) CloseSupersededCanonicalAsyncSessions(ctx context.Context) (int64, error) {
@@ -1928,6 +2600,48 @@ func (w *Worker) CloseTerminalProjectTaskAsyncSessions(ctx context.Context) (int
 	return ct.RowsAffected(), nil
 }
 
+func (w *Worker) RetireClosedAsyncSessionRuns(ctx context.Context) (int64, error) {
+	ct, err := w.pool.Exec(ctx, `
+		UPDATE run r
+		SET status = CASE
+		        WHEN cs.scope_type = 'project_task' AND pt.work_status = 'done' THEN 'completed'
+		        WHEN cs.scope_type = 'project_task' AND pt.work_status = 'cancelled' THEN 'cancelled'
+		        ELSE 'failed'
+		    END,
+		    failure_class = CASE
+		        WHEN cs.scope_type = 'project_task' AND pt.work_status IN ('done', 'cancelled') THEN NULL
+		        ELSE 'transient'
+		    END,
+		    failure_reason = CASE
+		        WHEN cs.scope_type = 'project_task' AND pt.work_status IN ('done', 'cancelled') THEN NULL
+		        ELSE 'async session closed without a live task turn'
+		    END,
+		    completed_at = COALESCE(r.completed_at, now()),
+		    updated_at = now()
+		FROM chat_session cs
+		LEFT JOIN project_task pt
+		  ON cs.scope_type = 'project_task'
+		 AND pt.id = cs.scope_id
+		WHERE r.session_id = cs.id
+		  AND cs.mode = 'async'
+		  AND cs.status = 'closed'
+		  AND r.status IN ('created', 'in_progress', 'paused', 'cancelling')
+		  AND (
+		    r.turn_id IS NULL
+		    OR NOT EXISTS (
+		      SELECT 1
+		      FROM chat_turn ct_live
+		      WHERE ct_live.id = r.turn_id
+		        AND ct_live.status IN ('pending', 'in_progress')
+		    )
+		  )
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("retire closed async session runs: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
 func (w *Worker) ClearInactiveSessionCurrentTurns(ctx context.Context) (int64, error) {
 	if _, err := w.pool.Exec(ctx, `
 		UPDATE chat_turn
@@ -2036,6 +2750,14 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 		return err
 	} else if recovered > 0 {
 		w.logger.Info("job queue: recovered stale claims before claim", "count", recovered)
+	}
+	if recovered, err := w.RecoverClaimedAgentTurnsWithoutLiveOwnership(ctx); err != nil {
+		if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+			w.logger.Error("job queue: inline non-heartbeating claimed agent_turn recovery failed", "error", err)
+		}
+		return err
+	} else if recovered > 0 {
+		w.logger.Info("job queue: recovered non-heartbeating claimed agent_turn jobs before claim", "count", recovered)
 	}
 
 	for {
@@ -2333,12 +3055,48 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			       priority,
 			       run_after,
 			       created_at,
+			       CASE
+			           WHEN job_type = '%s'
+			             AND EXISTS (
+			                 SELECT 1
+			                 FROM chat_session cs
+			                 JOIN chat_message cm
+			                   ON cm.id = (job_queue.payload->>'message_id')::uuid
+			                 WHERE cs.id = (job_queue.payload->>'session_id')::uuid
+			                   AND cs.scope_type = 'project'
+			                   AND cs.mode = 'async'
+			                   AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_bootstrap')
+			             )
+			           THEN 1
+			           ELSE 0
+			       END AS agent_turn_claim_bias,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY CASE
 			               WHEN job_type = '%s' THEN COALESCE(payload->>'session_id', id::text)
 			               ELSE id::text
 			           END
-			           ORDER BY priority DESC, run_after ASC, created_at ASC, id ASC
+			           ORDER BY priority DESC,
+			                    CASE
+			                        WHEN job_type = '%s'
+			                          AND EXISTS (
+			                              SELECT 1
+			                              FROM chat_session cs
+			                              JOIN chat_message cm
+			                                ON cm.id = (job_queue.payload->>'message_id')::uuid
+			                              WHERE cs.id = (job_queue.payload->>'session_id')::uuid
+			                                AND cs.scope_type = 'project'
+			                                AND cs.mode = 'async'
+			                                AND COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_bootstrap')
+			                          )
+			                        THEN 1
+			                        ELSE 0
+			                    END ASC,
+			                    CASE WHEN job_type = '%s' THEN run_after END DESC,
+			                    CASE WHEN job_type <> '%s' THEN run_after END ASC,
+			                    CASE WHEN job_type = '%s' THEN created_at END DESC,
+			                    CASE WHEN job_type <> '%s' THEN created_at END ASC,
+			                    CASE WHEN job_type = '%s' THEN id END DESC,
+			                    CASE WHEN job_type <> '%s' THEN id END ASC
 			       ) AS session_rn
 			FROM job_queue
 			WHERE status = 'pending'
@@ -2356,11 +3114,59 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			    job_type <> '%s'
 			    OR NOT EXISTS (
 			      SELECT 1
+			      FROM chat_session cs
+			      LEFT JOIN project p_direct
+			        ON cs.scope_type = 'project'
+			       AND p_direct.id = cs.scope_id
+			      LEFT JOIN project_task pt
+			        ON cs.scope_type = 'project_task'
+			       AND pt.id = cs.scope_id
+			      LEFT JOIN project p_task
+			        ON p_task.id = pt.project_id
+			      WHERE cs.id = (job_queue.payload->>'session_id')::uuid
+			        AND cs.status = 'active'
+			        AND COALESCE(
+			              p_direct.settings->'pause'->>'is_paused',
+			              p_task.settings->'pause'->>'is_paused',
+			              'false'
+			            ) = 'true'
+			    )
+			  )
+			  AND (
+			    job_type <> '%s'
+			    OR NOT EXISTS (
+			      SELECT 1
 			      FROM chat_turn ct
 			      WHERE ct.session_id = (job_queue.payload->>'session_id')::uuid
 			        AND ct.trigger_message_id = (job_queue.payload->>'message_id')::uuid
 			        AND ct.retry_count = COALESCE((job_queue.payload->>'retry_count')::int, 0)
 			        AND ct.status <> 'pending'
+			    )
+			  )
+			  AND (
+			    job_type <> '%s'
+			    OR NOT EXISTS (
+			      SELECT 1
+			      FROM chat_session cs
+			      JOIN chat_message cm
+			        ON cm.id = (job_queue.payload->>'message_id')::uuid
+			      WHERE cs.id = (job_queue.payload->>'session_id')::uuid
+			        AND cs.scope_type = 'project'
+			        AND (
+			              (
+			                COALESCE(cm.metadata->>'source', '') = 'project_bootstrap'
+			                AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') <> 'active'
+			              )
+			           OR (
+			                COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_continuation_resume')
+			                AND NOT EXISTS (
+			                  SELECT 1
+			                  FROM project_task pt
+			                  WHERE pt.project_id = cs.scope_id
+			                    AND pt.work_status NOT IN ('done', 'cancelled')
+			                )
+			              )
+			            )
 			    )
 			  )
 			  AND (
@@ -2437,7 +3243,12 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			SELECT id
 			FROM ranked
 			WHERE session_rn = 1
-			ORDER BY priority DESC, run_after ASC, created_at ASC
+			ORDER BY priority DESC,
+			         agent_turn_claim_bias ASC,
+			         CASE WHEN job_type = 'agent_turn' THEN run_after END DESC,
+			         CASE WHEN job_type <> 'agent_turn' THEN run_after END ASC,
+			         CASE WHEN job_type = 'agent_turn' THEN created_at END DESC,
+			         CASE WHEN job_type <> 'agent_turn' THEN created_at END ASC
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
 		)
@@ -2451,7 +3262,7 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 		WHERE jq.id = claimable.id
 		RETURNING jq.id, jq.job_type, jq.priority, jq.payload, jq.status, jq.claimed_by, jq.claimed_at,
 		          jq.attempts, jq.max_attempts, jq.last_error, jq.run_after, jq.created_at, jq.updated_at
-	`, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
+	`, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
 	if err != nil {
 		return nil, fmt.Errorf("claim pending jobs: %w", err)
 	}
@@ -2489,9 +3300,33 @@ func (w *Worker) executeClaimedJob(ctx context.Context, job Job) error {
 	cancelJob()
 	<-heartbeatDone
 	if err == nil {
-		return w.markDone(ctx, job.ID)
+		if markErr := w.markDone(ctx, job.ID); markErr != nil {
+			return markErr
+		}
+		if strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) {
+			w.launchPostAgentTurnRepairs(job.ID)
+		}
+		return nil
 	}
 	return w.markFailure(ctx, job, err)
+}
+
+func (w *Worker) launchPostAgentTurnRepairs(jobID uuid.UUID) {
+	if w == nil {
+		return
+	}
+	go func() {
+		repairCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if requeued, repairErr := w.RequeueActiveExecutionSessionsWithoutTurns(repairCtx); repairErr != nil {
+			if repairCtx.Err() == nil {
+				w.logger.Warn("job queue: async active execution session repair failed", "job_id", jobID, "error", repairErr)
+			}
+		} else if requeued > 0 {
+			w.logger.Info("job queue: requeued active execution sessions without turns after agent_turn completion", "job_id", jobID, "count", requeued)
+		}
+	}()
 }
 
 func (w *Worker) maintainClaim(ctx context.Context, job Job, cancelExecution context.CancelFunc) {
@@ -2499,12 +3334,8 @@ func (w *Worker) maintainClaim(ctx context.Context, job Job, cancelExecution con
 	if heartbeatInterval <= 0 {
 		return
 	}
-	interval := heartbeatInterval
-	if strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) && interval > 5*time.Second {
-		interval = 5 * time.Second
-	}
 
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
 	lastHeartbeat := time.Time{}
 
@@ -2545,6 +3376,9 @@ func (w *Worker) claimHeartbeatInterval(job Job) time.Duration {
 	threshold := w.staleClaimThreshold
 	if strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) && projectBootstrapStaleThreshold < threshold {
 		threshold = projectBootstrapStaleThreshold
+	}
+	if strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) && claimedAgentTurnHeartbeatGrace < threshold {
+		threshold = claimedAgentTurnHeartbeatGrace
 	}
 	if threshold <= 0 {
 		return 0
@@ -2895,10 +3729,20 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 			} else if repaired > 0 {
 				w.logger.Info("job queue: closed terminal project_task async sessions", "count", repaired)
 			}
+			if repaired, err := w.RetireClosedAsyncSessionRuns(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("closed async session run cleanup failed", "error", err)
+			} else if repaired > 0 {
+				w.logger.Info("job queue: retired closed async session runs", "count", repaired)
+			}
 			if repaired, err := w.FailStaleModelInvocations(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("stale model invocation cleanup failed", "error", err)
 			} else if repaired > 0 {
 				w.logger.Info("job queue: failed stale model invocations", "count", repaired)
+			}
+			if repaired, err := w.ClearCompletedSessionCurrentTurns(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("post-invocation current turn cleanup failed", "error", err)
+			} else if repaired > 0 {
+				w.logger.Info("job queue: cleared completed session current turns after invocation cleanup", "count", repaired)
 			}
 			if requeued, err := w.RequeuePendingTurnsWithoutJobs(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("pending turn repair failed", "error", err)
@@ -2915,10 +3759,20 @@ func (w *Worker) runStaleClaimRecovery(ctx context.Context) {
 			} else if repaired > 0 {
 				w.logger.Info("job queue: recovered stale in-progress triggered turns", "count", repaired)
 			}
+			if recovered, err := w.RecoverClaimedAgentTurnsWithoutLiveOwnership(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("non-heartbeating claimed agent_turn recovery failed", "error", err)
+			} else if recovered > 0 {
+				w.logger.Info("job queue: recovered non-heartbeating claimed agent_turn jobs", "count", recovered)
+			}
 			if requeued, err := w.RequeueActiveExecutionSessionsWithoutTurns(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("active execution session repair failed", "error", err)
 			} else if requeued > 0 {
 				w.logger.Info("job queue: requeued active execution sessions without turns", "count", requeued)
+			}
+			if requeued, err := w.RequeueActiveProjectSessionsWithoutTurns(ctx); err != nil && ctx.Err() == nil {
+				w.logger.Error("active project session repair failed", "error", err)
+			} else if requeued > 0 {
+				w.logger.Info("job queue: requeued active project sessions without turns", "count", requeued)
 			}
 			if rejittered, err := w.RejitterPendingRateLimitedAgentTurns(ctx); err != nil && ctx.Err() == nil {
 				w.logger.Error("rate-limit retry rejitter failed", "error", err)
@@ -3091,6 +3945,9 @@ func agentTurnRateLimitDelay(attempts int, retryAfterHint time.Duration) time.Du
 	}
 
 	if retryAfterHint > delay {
+		if retryAfterHint > agentTurnRateLimitBackoffCap {
+			return agentTurnRateLimitBackoffCap
+		}
 		return retryAfterHint
 	}
 	return delay

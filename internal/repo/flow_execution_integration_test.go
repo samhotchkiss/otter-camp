@@ -31,27 +31,18 @@ func TestFlowNodeExecutionRepoLifecycleAndGetActive(t *testing.T) {
 		t.Fatalf("Create first execution: %v", err)
 	}
 
-	second, err := executionRepo.Create(ctx, FlowNodeExecution{
-		TaskID:      fixture.Task.ID,
-		FlowNodeID:  fixture.FlowNode.ID,
-		VisitNumber: 2,
-	})
-	if err != nil {
-		t.Fatalf("Create second execution: %v", err)
-	}
-
 	active, err := executionRepo.GetActive(ctx, fixture.Task.ID, fixture.FlowNode.ID)
 	if err != nil {
 		t.Fatalf("GetActive: %v", err)
 	}
-	if active.ID != second.ID {
-		t.Fatalf("GetActive ID = %s, want %s", active.ID, second.ID)
+	if active.ID != first.ID {
+		t.Fatalf("GetActive ID = %s, want %s", active.ID, first.ID)
 	}
 	if active.RuntimeSubstate == nil || *active.RuntimeSubstate != "waiting_for_turn" {
 		t.Fatalf("GetActive runtime_substate = %v, want waiting_for_turn", active.RuntimeSubstate)
 	}
 
-	completed, err := executionRepo.Complete(ctx, second.ID)
+	completed, err := executionRepo.Complete(ctx, first.ID)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -62,12 +53,44 @@ func TestFlowNodeExecutionRepoLifecycleAndGetActive(t *testing.T) {
 		t.Fatalf("Complete runtime_substate = %v, want nil", completed.RuntimeSubstate)
 	}
 
-	activeAfterComplete, err := executionRepo.GetActive(ctx, fixture.Task.ID, fixture.FlowNode.ID)
-	if err != nil {
-		t.Fatalf("GetActive after complete: %v", err)
+	if _, err := executionRepo.GetActive(ctx, fixture.Task.ID, fixture.FlowNode.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetActive after complete err = %v, want ErrNotFound", err)
 	}
-	if activeAfterComplete.ID != first.ID {
-		t.Fatalf("GetActive after complete ID = %s, want %s", activeAfterComplete.ID, first.ID)
+}
+
+func TestFlowNodeExecutionRepoRejectsDuplicateActiveExecutionForTaskNode(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	fixture := seedFlowExecutionFixture(t, ctx, pool)
+
+	executionRepo := NewFlowNodeExecutionRepo(pool)
+
+	first, err := executionRepo.Create(ctx, FlowNodeExecution{
+		TaskID:      fixture.Task.ID,
+		FlowNodeID:  fixture.FlowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+	})
+	if err != nil {
+		t.Fatalf("Create first execution: %v", err)
+	}
+
+	_, err = executionRepo.Create(ctx, FlowNodeExecution{
+		TaskID:      fixture.Task.ID,
+		FlowNodeID:  fixture.FlowNode.ID,
+		VisitNumber: 2,
+		Status:      "active",
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("Create duplicate active execution err = %v, want ErrConflict", err)
+	}
+
+	active, err := executionRepo.GetActive(ctx, fixture.Task.ID, fixture.FlowNode.ID)
+	if err != nil {
+		t.Fatalf("GetActive after duplicate conflict: %v", err)
+	}
+	if active.ID != first.ID {
+		t.Fatalf("GetActive ID = %s, want %s", active.ID, first.ID)
 	}
 }
 

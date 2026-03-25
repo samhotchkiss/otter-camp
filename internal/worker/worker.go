@@ -611,6 +611,7 @@ func Run(ctx context.Context, logger *slog.Logger, signalCh <-chan os.Signal) er
 		Pool:        pool.Raw(),
 		RunService:  runService,
 		ChatService: chatService,
+		TaskService: tasks,
 		EventBus:    bus,
 		Logger:      logger,
 	})
@@ -869,7 +870,7 @@ func startupCleanupProjectDrafts(ctx context.Context, taskRepo *repo.ProjectTask
 					continue
 				}
 				var invalidTransition tasksvc.ErrInvalidStatusTransition
-				if errors.As(err, &invalidTransition) {
+				if errors.As(err, &invalidTransition) || errors.Is(err, tasksvc.ErrFlowTemplateRequired) {
 					continue
 				}
 				return parentRepaired, draftSettled, gatesCancelled, err
@@ -888,7 +889,7 @@ func startupCleanupProjectDrafts(ctx context.Context, taskRepo *repo.ProjectTask
 					continue
 				}
 				var invalidTransition tasksvc.ErrInvalidStatusTransition
-				if errors.As(err, &invalidTransition) {
+				if errors.As(err, &invalidTransition) || errors.Is(err, tasksvc.ErrFlowTemplateRequired) {
 					continue
 				}
 				return parentRepaired, draftSettled, gatesCancelled, err

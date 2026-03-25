@@ -155,6 +155,108 @@ func TestPriorityQueueOrdersSyncInteractiveBeforeAsync(t *testing.T) {
 	}
 }
 
+func TestPriorityQueueUsesConnectionMaxConcurrentFromRouter(t *testing.T) {
+	connectionID := uuid.New()
+	orgID := uuid.New()
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+
+	var (
+		mu       sync.Mutex
+		started  []string
+		finished []string
+	)
+
+	queue, err := NewPriorityQueue(QueueOptions{
+		Concurrency: NewConcurrencyManager(5, nil),
+		Router: stubRouter{connection: repo.ProviderConnection{
+			ID:            connectionID,
+			ProviderID:    uuid.New(),
+			MaxConcurrent: 1,
+			IsEnabled:     true,
+		}},
+		Executor: stubExecutor{
+			run: func(ctx context.Context, req GatewayRequest, _ repo.ProviderConnection) (GatewayResponse, error) {
+				mu.Lock()
+				started = append(started, req.InvocationPurpose)
+				mu.Unlock()
+				if req.InvocationPurpose == "first" {
+					close(firstStarted)
+					select {
+					case <-releaseFirst:
+					case <-ctx.Done():
+						return GatewayResponse{}, ctx.Err()
+					}
+				}
+				mu.Lock()
+				finished = append(finished, req.InvocationPurpose)
+				mu.Unlock()
+				return GatewayResponse{}, nil
+			},
+		},
+		PollInterval: 2 * time.Millisecond,
+		Sleep: func(context.Context, time.Duration) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("NewPriorityQueue: %v", err)
+	}
+	defer queue.Close()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, enqueueErr := queue.Enqueue(context.Background(), GatewayRequest{
+			OrganizationID:    orgID,
+			ProfileID:         "standard",
+			InvocationPurpose: "first",
+			Priority:          PriorityAsyncAgent,
+		})
+		firstDone <- enqueueErr
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first invocation did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, enqueueErr := queue.Enqueue(context.Background(), GatewayRequest{
+			OrganizationID:    orgID,
+			ProfileID:         "standard",
+			InvocationPurpose: "second",
+			Priority:          PriorityAsyncAgent,
+		})
+		secondDone <- enqueueErr
+	}()
+
+	time.Sleep(25 * time.Millisecond)
+
+	mu.Lock()
+	if len(started) != 1 || started[0] != "first" {
+		t.Fatalf("started before release = %v, want only first", started)
+	}
+	mu.Unlock()
+
+	close(releaseFirst)
+
+	if enqueueErr := <-firstDone; enqueueErr != nil {
+		t.Fatalf("first enqueue failed: %v", enqueueErr)
+	}
+	if enqueueErr := <-secondDone; enqueueErr != nil {
+		t.Fatalf("second enqueue failed: %v", enqueueErr)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(started) != 2 || started[1] != "second" {
+		t.Fatalf("started = %v, want second to begin only after release", started)
+	}
+	if len(finished) != 2 || finished[0] != "first" || finished[1] != "second" {
+		t.Fatalf("finished = %v, want [first second]", finished)
+	}
+}
+
 func TestPriorityQueueSoftPreemptionCancelsAsync(t *testing.T) {
 	connectionID := uuid.New()
 	orgID := uuid.New()

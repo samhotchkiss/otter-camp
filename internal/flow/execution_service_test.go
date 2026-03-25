@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -145,6 +147,77 @@ func TestEnsureActiveExecutionBackfillsMissingCurrentNodeExecution(t *testing.T)
 	}
 }
 
+func TestEnsureActiveExecutionCapturesEntryHeadSHAWhenBindingSession(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	flowTemplateID := uuid.New()
+	currentNodeID := uuid.New()
+
+	repoPath := t.TempDir()
+	runFlowCmd(t, repoPath, "git", "init", "-b", "main")
+	runFlowCmd(t, repoPath, "git", "config", "user.name", "Test User")
+	runFlowCmd(t, repoPath, "git", "config", "user.email", "test@example.com")
+	if err := os.WriteFile(repoPath+"/README.md", []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runFlowCmd(t, repoPath, "git", "add", "README.md")
+	runFlowCmd(t, repoPath, "git", "commit", "-m", "init")
+	headSHA := strings.TrimSpace(runFlowCmd(t, repoPath, "git", "rev-parse", "HEAD"))
+
+	executions := &fakeExecutionRepo{
+		byTask: map[uuid.UUID][]repo.FlowNodeExecution{
+			taskID: {},
+		},
+	}
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					ProjectID:         projectID,
+					OrganizationID:    uuid.New(),
+					FlowTemplateID:    &flowTemplateID,
+					CurrentFlowNodeID: &currentNodeID,
+					WorkStatus:        "review",
+				},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				currentNodeID: {ID: currentNodeID, NodeType: "review"},
+			},
+		},
+		executions:    executions,
+		sessionBridge: &fakeFlowSessionBridge{},
+		environments: &fakeProjectEnvironmentRepo{
+			items: map[uuid.UUID][]repo.ProjectEnvironment{
+				projectID: {{
+					Name: "workspace",
+					RepoPath: func() *string {
+						path := repoPath
+						return &path
+					}(),
+					IsActive: true,
+				}},
+			},
+		},
+	}
+
+	activeExecution, err := svc.EnsureActiveExecution(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("EnsureActiveExecution: %v", err)
+	}
+	if activeExecution == nil {
+		t.Fatal("EnsureActiveExecution returned nil execution")
+	}
+	if got := repo.FlowExecutionEntryHeadSHAFromMetadata(activeExecution.Metadata); got != headSHA {
+		t.Fatalf("entry head sha = %q, want %q", got, headSHA)
+	}
+	if executions.updateMetadataCalls == 0 {
+		t.Fatal("expected execution metadata update to persist entry head sha")
+	}
+}
+
 func TestEnsureActiveExecutionRejectsTaskRuntimeStatusMismatch(t *testing.T) {
 	taskID := uuid.New()
 	flowTemplateID := uuid.New()
@@ -270,6 +343,118 @@ func TestEnsureActiveExecutionSerializesConcurrentFlowStarts(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("result count = %d, want 2", count)
+	}
+}
+
+func TestEnsureActiveExecutionReturnsExistingActiveAfterCreateConflict(t *testing.T) {
+	taskID := uuid.New()
+	flowTemplateID := uuid.New()
+	currentNodeID := uuid.New()
+	existingExecution := repo.FlowNodeExecution{
+		ID:          uuid.New(),
+		TaskID:      taskID,
+		FlowNodeID:  currentNodeID,
+		VisitNumber: 15,
+		Status:      "active",
+	}
+
+	executions := &conflictThenActiveExecutionRepo{
+		active: existingExecution,
+	}
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:                taskID,
+					ProjectID:         uuid.New(),
+					OrganizationID:    uuid.New(),
+					FlowTemplateID:    &flowTemplateID,
+					CurrentFlowNodeID: &currentNodeID,
+					WorkStatus:        "in_progress",
+				},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				currentNodeID: {ID: currentNodeID, NodeType: "work"},
+			},
+		},
+		executions: executions,
+	}
+
+	activeExecution, err := svc.EnsureActiveExecution(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("EnsureActiveExecution: %v", err)
+	}
+	if activeExecution == nil {
+		t.Fatal("EnsureActiveExecution returned nil execution")
+	}
+	if activeExecution.ID != existingExecution.ID {
+		t.Fatalf("active execution id = %s, want %s", activeExecution.ID, existingExecution.ID)
+	}
+	if executions.createCalls != 1 {
+		t.Fatalf("create calls = %d, want 1", executions.createCalls)
+	}
+	if executions.getActiveCalls < 2 {
+		t.Fatalf("get active calls = %d, want at least 2", executions.getActiveCalls)
+	}
+}
+
+func TestStartFlowReturnsExistingActiveAfterCreateConflict(t *testing.T) {
+	taskID := uuid.New()
+	projectID := uuid.New()
+	orgID := uuid.New()
+	flowTemplateID := uuid.New()
+	startNodeID := uuid.New()
+	existingExecution := repo.FlowNodeExecution{
+		ID:          uuid.New(),
+		TaskID:      taskID,
+		FlowNodeID:  startNodeID,
+		VisitNumber: 1,
+		Status:      "active",
+	}
+
+	executions := &startConflictExecutionRepo{
+		active: existingExecution,
+	}
+	svc := &service{
+		tasks: &fakeTaskRepo{
+			items: map[uuid.UUID]repo.ProjectTask{
+				taskID: {
+					ID:             taskID,
+					ProjectID:      projectID,
+					OrganizationID: orgID,
+					FlowTemplateID: &flowTemplateID,
+					WorkStatus:     "queued",
+				},
+			},
+		},
+		flowTemplates: &fakeFlowTemplateRepo{
+			items: map[uuid.UUID]repo.FlowTemplate{
+				flowTemplateID: {ID: flowTemplateID, StartNodeID: &startNodeID},
+			},
+		},
+		flowNodes: &fakeNodeRepo{
+			items: map[uuid.UUID]repo.FlowNode{
+				startNodeID: {ID: startNodeID, NodeType: "work"},
+			},
+		},
+		executions: executions,
+		events:     &fakeEventBus{},
+	}
+
+	started, err := svc.StartFlow(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+	if started == nil {
+		t.Fatal("StartFlow returned nil execution")
+	}
+	if started.ID != existingExecution.ID {
+		t.Fatalf("started execution id = %s, want %s", started.ID, existingExecution.ID)
+	}
+	if executions.createCalls != 1 {
+		t.Fatalf("create calls = %d, want 1", executions.createCalls)
 	}
 }
 
@@ -522,6 +707,32 @@ func TestAdvanceFlowRejectsSelfReview(t *testing.T) {
 	}
 	if executions.updateMetadataCalls != 0 {
 		t.Fatalf("update metadata calls = %d, want 0", executions.updateMetadataCalls)
+	}
+}
+
+func TestExecutionMetadataWithCompletedByClearsLiveOwner(t *testing.T) {
+	runID := uuid.New()
+	turnID := uuid.New()
+	actorID := uuid.New()
+
+	metadata := executionMetadataWithCompletedBy(
+		repo.FlowExecutionMetadataWithLiveOwner(json.RawMessage(`{}`), repo.FlowExecutionLiveOwner{
+			RunID:  &runID,
+			TurnID: &turnID,
+		}),
+		Actor{Type: "agent", ID: actorID},
+	)
+
+	liveOwner := repo.FlowExecutionLiveOwnerFromMetadata(metadata)
+	if liveOwner.RunID != nil {
+		t.Fatalf("live owner run_id = %v, want nil", liveOwner.RunID)
+	}
+	if liveOwner.TurnID != nil {
+		t.Fatalf("live owner turn_id = %v, want nil", liveOwner.TurnID)
+	}
+	ref := decodeExecutionActorRef(metadata)
+	if ref.Type != "agent" || ref.ID != actorID {
+		t.Fatalf("completed_by = %#v, want agent %s", ref, actorID)
 	}
 }
 
@@ -923,8 +1134,23 @@ type fakeExecutionRepo struct {
 	updateMetadataCalls int
 }
 
+type conflictThenActiveExecutionRepo struct {
+	active         repo.FlowNodeExecution
+	getActiveCalls int
+	createCalls    int
+}
+
+type startConflictExecutionRepo struct {
+	active      repo.FlowNodeExecution
+	createCalls int
+}
+
 type fakeProjectRepo struct {
 	items map[uuid.UUID]repo.Project
+}
+
+type fakeProjectEnvironmentRepo struct {
+	items map[uuid.UUID][]repo.ProjectEnvironment
 }
 
 func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project, error) {
@@ -932,6 +1158,80 @@ func (f *fakeProjectRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Project
 		return item, nil
 	}
 	return repo.Project{}, repo.ErrNotFound
+}
+
+func (f *fakeProjectEnvironmentRepo) ListByProject(_ context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error) {
+	return f.items[projectID], nil
+}
+
+func (r *conflictThenActiveExecutionRepo) Create(context.Context, repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
+	r.createCalls++
+	return repo.FlowNodeExecution{}, repo.ErrConflict
+}
+
+func (r *conflictThenActiveExecutionRepo) GetByID(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, repo.ErrNotFound
+}
+
+func (r *conflictThenActiveExecutionRepo) GetActive(context.Context, uuid.UUID, uuid.UUID) (repo.FlowNodeExecution, error) {
+	r.getActiveCalls++
+	if r.getActiveCalls == 1 {
+		return repo.FlowNodeExecution{}, repo.ErrNotFound
+	}
+	return r.active, nil
+}
+
+func (r *conflictThenActiveExecutionRepo) ListByTask(context.Context, uuid.UUID) ([]repo.FlowNodeExecution, error) {
+	return nil, nil
+}
+
+func (r *conflictThenActiveExecutionRepo) Complete(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (r *conflictThenActiveExecutionRepo) Reject(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (r *conflictThenActiveExecutionRepo) RecordCommitSHA(context.Context, uuid.UUID, string) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (r *conflictThenActiveExecutionRepo) UpdateMetadata(context.Context, uuid.UUID, json.RawMessage) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (r *startConflictExecutionRepo) Create(context.Context, repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
+	r.createCalls++
+	return repo.FlowNodeExecution{}, repo.ErrConflict
+}
+
+func (r *startConflictExecutionRepo) GetByID(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, repo.ErrNotFound
+}
+
+func (r *startConflictExecutionRepo) GetActive(context.Context, uuid.UUID, uuid.UUID) (repo.FlowNodeExecution, error) {
+	return r.active, nil
+}
+
+func (r *startConflictExecutionRepo) ListByTask(context.Context, uuid.UUID) ([]repo.FlowNodeExecution, error) {
+	return nil, nil
+}
+
+func (r *startConflictExecutionRepo) Complete(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (r *startConflictExecutionRepo) Reject(context.Context, uuid.UUID) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (r *startConflictExecutionRepo) RecordCommitSHA(context.Context, uuid.UUID, string) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
+}
+
+func (r *startConflictExecutionRepo) UpdateMetadata(context.Context, uuid.UUID, json.RawMessage) (repo.FlowNodeExecution, error) {
+	return repo.FlowNodeExecution{}, errors.New("not implemented")
 }
 
 func (f *fakeExecutionRepo) Create(_ context.Context, execution repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
@@ -995,10 +1295,26 @@ func (f *fakeExecutionRepo) RecordCommitSHA(_ context.Context, _ uuid.UUID, _ st
 	defer f.mu.Unlock()
 	return f.active, nil
 }
-func (f *fakeExecutionRepo) UpdateMetadata(_ context.Context, _ uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error) {
+func (f *fakeExecutionRepo) UpdateMetadata(_ context.Context, id uuid.UUID, metadata json.RawMessage) (repo.FlowNodeExecution, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.updateMetadataCalls++
+	if item, ok := f.byID[id]; ok {
+		item.Metadata = metadata
+		f.byID[id] = item
+		for taskID, executions := range f.byTask {
+			for i := range executions {
+				if executions[i].ID == id {
+					executions[i].Metadata = metadata
+				}
+			}
+			f.byTask[taskID] = executions
+		}
+		if f.active.ID == id {
+			f.active = item
+		}
+		return item, nil
+	}
 	f.active.Metadata = metadata
 	return f.active, nil
 }
@@ -1205,6 +1521,17 @@ func (f *fakeFlowSessionBridge) EnsureNodeSession(_ context.Context, _ repo.Flow
 
 func (f *fakeFlowSessionBridge) RecordCommitSHA(context.Context, uuid.UUID, string) error {
 	return nil
+}
+
+func runFlowCmd(t *testing.T, dir string, name string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v: %v\n%s", name, args, err, string(out))
+	}
+	return string(out)
 }
 
 func TestCreateSubtaskMissingAgentReturnsErrAgentNotFound(t *testing.T) {

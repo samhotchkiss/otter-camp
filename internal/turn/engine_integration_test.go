@@ -7597,6 +7597,141 @@ func TestTurnEngineIntegrationRecoveryResumeReplacesIntentOnlyFileWriteContentFr
 	}
 }
 
+func TestTurnEngineIntegrationRecoveryResumeBlocksIntentOnlyNarrationBeforeReadOnlyToolDispatch(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, initialUserMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "operator recovery attempt")
+	seed := mustPersistRecoveryResumeFixture(t, ctx, fixture, taskRecord, initialUserMessage.ID)
+
+	taskService, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     fixture.pool,
+		EventBus: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	blockerReason := "recovery halted after assistant draft for docs/content-strategy.md described tool-recovery troubleshooting instead of the file body; resume from .ottercamp/recovery/docs/content-strategy.md and re-queue only after concrete content exists"
+	if _, err := taskService.MarkBlocked(ctx, taskRecord.ID, blockerReason, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+	if _, err := taskService.ResumeValidationBlockedTask(ctx, taskRecord.ID, tasksvc.Actor{Type: "system"}); err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	resumedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID resumed task: %v", err)
+	}
+	resumedTask.WorkStatus = "in_progress"
+	if _, err := taskRepo.Update(ctx, resumedTask); err != nil {
+		t.Fatalf("Update resumed task in_progress: %v", err)
+	}
+
+	authorType := "human_user"
+	recoveryMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    buildTaskQueueKickoffMessageForTest(taskRecord),
+		Metadata: mustJSON(t, map[string]any{
+			"source":                    "task_queue_processor",
+			"recovery_action":           "resume_validation_blocked_task",
+			"validation_tool_name":      "file.write",
+			"validation_failure_code":   "non_substantive_content",
+			"validation_failure_reason": "content appears to narrate intent instead of writing the deliverable body",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage recovery kickoff: %v", err)
+	}
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.list", Tier: "tier1"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		if modelCalls > 1 {
+			t.Fatalf("unexpected extra model call after rejected recovery narration: %d", modelCalls)
+		}
+		return ModelResponse{
+			Content: "Let me first check the current state of the target file and recovery artifacts, then write the substantive content strategy document.",
+			ToolCalls: []ModelToolCall{{
+				ID:   "resume-read-only-list",
+				Name: "file.list",
+				Tier: "tier1",
+				Arguments: map[string]any{
+					"path": ".",
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched++
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"entries": []any{},
+				"total":   0,
+			},
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, recoveryMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage rejected recovery narration: %v", err)
+	}
+
+	if dispatched != 0 {
+		t.Fatalf("tier1 dispatches = %d, want 0", dispatched)
+	}
+
+	updatedTask, err := taskRepo.GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task after rejected recovery narration: %v", err)
+	}
+	if updatedTask.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updatedTask.WorkStatus)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if !sameWorkspaceRelativePath(checkpoint.TargetPath, seed.targetPath) {
+		t.Fatalf("checkpoint target_path = %q, want %q", checkpoint.TargetPath, seed.targetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "instead of the file body") {
+		t.Fatalf("checkpoint failure_reason = %q, want file-body rejection", checkpoint.FailureReason)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	foundHalt := false
+	for _, item := range messages {
+		if item.Role == "system" && strings.Contains(item.Content, "Recovery turn halted: recovered file.write") {
+			foundHalt = true
+		}
+		if item.Role == "tool_result" && strings.Contains(item.Content, `"tool_name":"file.list"`) {
+			t.Fatalf("unexpected file.list dispatch after rejected recovery narration: %s", item.Content)
+		}
+	}
+	if !foundHalt {
+		t.Fatal("expected recovery halt system message")
+	}
+}
+
 func TestTurnEngineIntegrationTaskTurnAutopopulatesFileWriteFromPersistedArtifactDraft(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -13519,6 +13654,124 @@ func TestTurnEngineIntegrationRecoveredLeakedBootstrapRetryUsesValidationContinu
 	}
 }
 
+func TestTurnEngineIntegrationUpdateProjectBootstrapStateClearsBootstrapAutomaticFailureWhenActiveHealthy(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: continue the active bootstrap from persisted state.")
+
+	recordedAt := fixture.engine.now().UTC()
+	project.Settings, _ = projectfailure.Apply(project.Settings, projectfailure.State{
+		Action:                   projectFailureActionPause,
+		Source:                   projectBootstrapSource,
+		FailureCategory:          projectFailureCategoryBootstrap,
+		FailureClass:             projectBootstrapFailureFirstWaveExecution,
+		FailurePhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastCheckpoint:           projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		FailureReason:            "stale bootstrap failure",
+		SetupPersisted:           true,
+		RecordedAt:               &recordedAt,
+	})
+	if _, err := repo.NewProjectRepo(fixture.pool).Update(ctx, project); err != nil {
+		t.Fatalf("Update project with stale automatic failure: %v", err)
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		InitialMessageID:         handoff.ID.String(),
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveJobsClaimed,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveJobsClaimed,
+		AssignmentCount:          4,
+		PlannedTaskCount:         8,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:       1,
+		FirstWaveExecutionCount:  1,
+		FirstWaveJobCount:        1,
+	}); err != nil {
+		t.Fatalf("updateProjectBootstrapState active healthy: %v", err)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if failureState := projectfailure.Parse(storedProject.Settings); failureState.Action != "" || failureState.Source != "" {
+		t.Fatalf("automatic failure state = %+v, want cleared after healthy active bootstrap progress", failureState)
+	}
+	projectBootstrapState := mustProjectBootstrapProjectState(t, storedProject)
+	if projectBootstrapState.Status != projectBootstrapStatusActive {
+		t.Fatalf("project bootstrap status = %q, want %q", projectBootstrapState.Status, projectBootstrapStatusActive)
+	}
+}
+
+func TestTurnEngineIntegrationUpdateProjectBootstrapStateClearsBootstrapAutomaticFailureWhenCompleted(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: bootstrap already completed.")
+
+	recordedAt := fixture.engine.now().UTC()
+	project.Settings, _ = projectfailure.Apply(project.Settings, projectfailure.State{
+		Action:                   projectFailureActionPause,
+		Source:                   projectBootstrapSource,
+		FailureCategory:          projectFailureCategoryBootstrap,
+		FailureClass:             projectBootstrapFailureFirstWaveExecution,
+		FailurePhase:             projectBootstrapCheckpointFirstWaveExecutions,
+		LastCheckpoint:           projectBootstrapCheckpointFirstWaveExecutions,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveSelected,
+		FailureReason:            "stale bootstrap failure",
+		SetupPersisted:           true,
+		RecordedAt:               &recordedAt,
+	})
+	if _, err := repo.NewProjectRepo(fixture.pool).Update(ctx, project); err != nil {
+		t.Fatalf("Update project with stale automatic failure: %v", err)
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, projectBootstrapState{
+		Status:                   projectBootstrapStatusCompleted,
+		InitialMessageID:         handoff.ID.String(),
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+		CompletedAt:              &now,
+		CurrentPhase:             projectBootstrapCheckpointFirstWaveJobsClaimed,
+		LastCheckpoint:           projectBootstrapCheckpointFirstWaveJobsClaimed,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointFirstWaveJobsClaimed,
+		AssignmentCount:          4,
+		PlannedTaskCount:         8,
+		PlannedFlowTemplateCount: 1,
+		FirstWaveTaskCount:       1,
+		FirstWaveExecutionCount:  1,
+		FirstWaveJobCount:        1,
+	}); err != nil {
+		t.Fatalf("updateProjectBootstrapState completed: %v", err)
+	}
+
+	storedProject := mustGetProjectByID(t, ctx, fixture.pool, project.ID)
+	if failureState := projectfailure.Parse(storedProject.Settings); failureState.Action != "" || failureState.Source != "" {
+		t.Fatalf("automatic failure state = %+v, want cleared after completed bootstrap", failureState)
+	}
+	projectBootstrapState := mustProjectBootstrapProjectState(t, storedProject)
+	if projectBootstrapState.Status != projectBootstrapStatusCompleted {
+		t.Fatalf("project bootstrap status = %q, want %q", projectBootstrapState.Status, projectBootstrapStatusCompleted)
+	}
+}
+
 func TestTurnEngineIntegrationHandleTurnJobRecoveredBootstrapRetryEnqueuesFollowOn(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
@@ -14244,6 +14497,155 @@ func TestTurnEngineIntegrationRecoveredProjectTaskStaleInboundTurnWithoutRunEnqu
 	}
 	if !containsSystemMessage(messages, "[Recovered stale in-progress task turn without active run ownership - retrying in a fresh turn.]") {
 		t.Fatal("missing stale project_task recovery system message")
+	}
+}
+
+func TestTurnEngineIntegrationRecoveredProjectTaskStaleInboundTurnWithoutRunKeepsLiveInvocation(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Keep live task inbound turn with invocation",
+		WorkStatus:      "review",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &fixture.agent.ID,
+		AssignedAgentID: &fixture.agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Create task: %v", err)
+	}
+
+	session, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession project_task: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, session.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant agent: %v", err)
+	}
+
+	message, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  session.ID,
+		AuthorType: stringPtr("agent"),
+		AuthorID:   &fixture.agent.ID,
+		Role:       "user",
+		Content:    "Review only. Inspect the deliverable and decide.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage task handoff: %v", err)
+	}
+
+	liveTurn, _, err := fixture.engine.turns.CreateForMessageAttempt(ctx, session.ID, fixture.agent.ID, message.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt live turn: %v", err)
+	}
+	startedTurn, shouldRun, err := fixture.engine.startInboundMessageTurn(ctx, liveTurn)
+	if err != nil {
+		t.Fatalf("startInboundMessageTurn live turn: %v", err)
+	}
+	if !shouldRun {
+		t.Fatal("expected live inbound turn to start initially")
+	}
+
+	provider, err := repo.NewModelProviderRepo(fixture.pool).Create(ctx, repo.ModelProvider{
+		Slug:        "keep-live-task-inbound-turn-provider",
+		DisplayName: "Keep Live Task Inbound Turn Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create model provider: %v", err)
+	}
+	if _, err := repo.NewModelInvocationRepo(fixture.pool).Create(ctx, repo.ModelInvocation{
+		OrganizationID:    fixture.org.ID,
+		ModelProviderID:   provider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "in_flight",
+		ModelName:         "test-model",
+		AgentID:           &fixture.agent.ID,
+		ProjectID:         &project.ID,
+		ProjectTaskID:     &taskRecord.ID,
+		SessionID:         &session.ID,
+		TurnID:            &startedTurn.ID,
+	}); err != nil {
+		t.Fatalf("create live model invocation: %v", err)
+	}
+
+	jobID := testdb.EnqueueJob(t, fixture.pool, AgentTurnJobType, 100, map[string]any{
+		"session_id":  session.ID,
+		"message_id":  message.ID,
+		"retry_count": 0,
+	})
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'claimed',
+		    claimed_by = 'integration-worker',
+		    claimed_at = now(),
+		    attempts = 1,
+		    updated_at = now()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("Update claimed retry job: %v", err)
+	}
+
+	var payload []byte
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT payload
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&payload); err != nil {
+		t.Fatalf("load claimed job payload: %v", err)
+	}
+	claimedJob := jobqueue.Job{
+		ID:      jobID,
+		JobType: AgentTurnJobType,
+		Payload: payload,
+		Status:  "claimed",
+	}
+
+	if err := fixture.engine.HandleTurnJob(ctx, claimedJob); err != nil {
+		t.Fatalf("HandleTurnJob live-invocation retry: %v", err)
+	}
+
+	storedTurn, err := fixture.chatService.GetTurn(ctx, startedTurn.ID)
+	if err != nil {
+		t.Fatalf("GetTurn live turn: %v", err)
+	}
+	if storedTurn.Status != "in_progress" {
+		t.Fatalf("live turn status = %q, want in_progress", storedTurn.Status)
+	}
+
+	storedSession, err := fixture.chatService.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetSession stored session: %v", err)
+	}
+	if storedSession.CurrentTurnID == nil || *storedSession.CurrentTurnID != startedTurn.ID {
+		t.Fatalf("current_turn_id = %v, want live turn %s", storedSession.CurrentTurnID, startedTurn.ID)
+	}
+
+	var pendingJobs int
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = $2
+		  AND status = 'pending'
+		  AND payload->>'session_id' = $1
+	`, session.ID.String(), AgentTurnJobType).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending task agent_turn jobs: %v", err)
+	}
+	if pendingJobs != 0 {
+		t.Fatalf("pending task agent_turn jobs = %d, want 0 when live invocation exists", pendingJobs)
 	}
 }
 
@@ -15573,6 +15975,156 @@ func TestTurnEngineIntegrationTaskCompletionEnqueuesProjectContinuationWhenOnlyD
 	}
 	if !strings.Contains(continuation.Content, "There are 4 remaining draft project tasks") {
 		t.Fatalf("continuation content = %q, want remaining draft task count", continuation.Content)
+	}
+}
+
+func TestTurnEngineIntegrationProjectExecutionContinuationAutoQueuesRunnableDraftAfterNarrativeOnlyTurn(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	project := mustCreateBootstrapProject(t, ctx, fixture)
+	projectSession := mustCreateProjectSession(t, ctx, fixture, project.ID, fixture.agent.ID, lori.ID)
+	handoff := mustAppendProjectBootstrapHandoff(t, ctx, fixture, projectSession.ID, fixture.agent.ID, "Frank handoff: keep project execution moving after each completed wave.")
+
+	pmAgent := mustCreateBootstrapPMAgent(t, ctx, fixture.pool, fixture.org.ID)
+	workerAgent := mustCreateBootstrapWorkerAgent(t, ctx, fixture.pool, fixture.org.ID)
+	assignments := assignment.NewService(repo.NewProjectAssignmentRepo(fixture.pool))
+	for _, item := range []assignment.AssignInput{
+		{ProjectID: project.ID, AgentID: pmAgent.ID, Role: "pm", AssignedByType: "agent", AssignedByID: &lori.ID},
+		{ProjectID: project.ID, AgentID: workerAgent.ID, Role: "worker", AssignedByType: "agent", AssignedByID: &lori.ID},
+	} {
+		if _, err := assignments.Assign(ctx, item); err != nil {
+			t.Fatalf("Assign(%s): %v", item.Role, err)
+		}
+	}
+
+	sessionSnapshot, err := fixture.chatService.GetSession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("GetSession project session: %v", err)
+	}
+	now := fixture.engine.now().UTC()
+	if err := fixture.engine.updateProjectBootstrapState(ctx, sessionSnapshot, projectBootstrapState{
+		Status:                  projectBootstrapStatusCompleted,
+		InitialMessageID:        handoff.ID.String(),
+		StartedAt:               &now,
+		UpdatedAt:               &now,
+		CompletedAt:             &now,
+		LastCheckpoint:          projectBootstrapCheckpointFirstWaveJobsClaimed,
+		CurrentPhase:            projectBootstrapCheckpointFirstWaveJobsClaimed,
+		PlannedTaskCount:        4,
+		FirstWaveTaskCount:      2,
+		FirstWavePromotedCount:  2,
+		FirstWaveExecutionCount: 2,
+		FirstWaveJobCount:       2,
+	}); err != nil {
+		t.Fatalf("updateProjectBootstrapState completed: %v", err)
+	}
+
+	template := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	taskRepo := repo.NewProjectTaskRepo(fixture.pool)
+	completedTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      16,
+		Title:           "Frank Sign-Off: Record validation results and project completion",
+		WorkStatus:      "done",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+		AssignedAgentID: &workerAgent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create completed task: %v", err)
+	}
+	draftTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		TaskNumber:      19,
+		Title:           "Design boundary scenario: rate limits and pipeline capacity",
+		WorkStatus:      "draft",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &lori.ID,
+		AssignedAgentID: &workerAgent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create draft task: %v", err)
+	}
+
+	messageRepo := repo.NewChatMessageRepo(fixture.pool)
+	continuationMetadata := mustJSON(t, map[string]any{
+		"source":            projectExecutionContinuationSource,
+		"auto_continue":     true,
+		"completed_task_id": completedTask.ID.String(),
+	})
+	userMessage, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID: projectSession.ID,
+		Role:      "user",
+		Content:   buildProjectExecutionContinuationPrompt(completedTask, 1),
+		Status:    "pending",
+		Metadata:  continuationMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create continuation message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(fixture.pool).Create(ctx, repo.ChatTurn{
+		SessionID:        projectSession.ID,
+		TurnNumber:       2,
+		RespondingType:   "agent",
+		RespondingID:     lori.ID,
+		Status:           "completed",
+		TriggerMessageID: &userMessage.ID,
+		RetryCount:       1,
+	})
+	if err != nil {
+		t.Fatalf("create continuation turn: %v", err)
+	}
+	if _, err := messageRepo.Create(ctx, repo.ChatMessage{
+		SessionID: projectSession.ID,
+		TurnID:    &turn.ID,
+		Role:      "assistant",
+		Content:   "The remaining draft tasks are auxiliary and are not blockers for the completed project.",
+		Status:    "final",
+	}); err != nil {
+		t.Fatalf("create assistant narrative: %v", err)
+	}
+
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload: mustJSON(t, map[string]any{
+			"session_id": projectSession.ID.String(),
+			"turn_id":    turn.ID.String(),
+		}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent project continuation: %v", err)
+	}
+
+	updatedDraft, err := taskRepo.GetByID(ctx, draftTask.ID)
+	if err != nil {
+		t.Fatalf("GetByID draft task: %v", err)
+	}
+	if updatedDraft.WorkStatus != "queued" {
+		t.Fatalf("draft task work_status = %q, want queued", updatedDraft.WorkStatus)
+	}
+
+	messages, err := messageRepo.ListBySession(ctx, projectSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession project messages: %v", err)
+	}
+	var sawAutoQueue bool
+	for _, msg := range messages {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "system") {
+			continue
+		}
+		if strings.Contains(msg.Content, "auto-queued task 19") {
+			sawAutoQueue = true
+			break
+		}
+	}
+	if !sawAutoQueue {
+		t.Fatal("expected system message noting auto-queued runnable draft task")
 	}
 }
 
@@ -17683,6 +18235,151 @@ func TestTurnEngineIntegrationKickoffBlocksFollowOnToolsAfterProjectCreate(t *te
 	}
 	if !strings.Contains(strings.ToLower(finalAssistant), "handoff to lori") {
 		t.Fatalf("final assistant message = %q, want Lori handoff summary", finalAssistant)
+	}
+}
+
+func TestTurnEngineIntegrationKickoffBlockedSessionCreateStopsAndBackfillsProjectHandoff(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	lori := mustCreateStarterLori(t, ctx, fixture.pool, fixture.org.ID)
+	request := "Create Sam.blog with workstreams for imported legacy posts, design options, content strategy, and photography archive migration."
+	if _, err := repo.NewChatMessageRepo(fixture.pool).UpdateContent(ctx, fixture.userMessage.ID, request); err != nil {
+		t.Fatalf("UpdateContent originating user request: %v", err)
+	}
+	fixture.engine.assembler = &sessionHistoryAssembler{messages: repo.NewChatMessageRepo(fixture.pool)}
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{
+		{Name: "project.create", Tier: "tier1"},
+		{Name: "session.create", Tier: "tier1"},
+	}}
+
+	projectSlug := "sam-blog-kickoff-blocked-session"
+	dispatched := make([]string, 0, 2)
+	var createdProjectID uuid.UUID
+	fixture.dispatcher.tier1Fn = func(_ context.Context, call ToolCall) (ToolResult, error) {
+		dispatched = append(dispatched, call.ID)
+		if call.ID != "create-1" {
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Error:      "unexpected_tool_call",
+			}, nil
+		}
+		project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+		project.Slug = projectSlug
+		project.DisplayName = "Sam.blog"
+		updatedProject, err := repo.NewProjectRepo(fixture.pool).Update(ctx, project)
+		if err != nil {
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Error: err.Error()}, nil
+		}
+		createdProjectID = updatedProject.ID
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output: map[string]any{
+				"project": map[string]any{
+					"id":   updatedProject.ID,
+					"slug": projectSlug,
+					"name": "Sam.blog",
+				},
+			},
+		}, nil
+	}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		switch modelCalls {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "create-1", Name: "project.create", Tier: "tier1", Arguments: map[string]any{
+					"name": "Sam.blog",
+					"slug": projectSlug,
+				}},
+			}}, nil
+		case 2:
+			if createdProjectID == uuid.Nil {
+				t.Fatal("createdProjectID missing before blocked session.create")
+			}
+			return ModelResponse{ToolCalls: []ModelToolCall{
+				{ID: "session-1", Name: "session.create", Tier: "tier1", Arguments: map[string]any{
+					"scope_type": "project",
+					"scope_id":   createdProjectID.String(),
+					"mode":       "async",
+				}},
+			}}, nil
+		default:
+			t.Fatalf("unexpected extra model call %d", modelCalls)
+			return ModelResponse{}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, fixture.session.ID, fixture.userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
+	}
+	if strings.Join(dispatched, ",") != "create-1" {
+		t.Fatalf("dispatched tool calls = %v, want only project.create", dispatched)
+	}
+	if createdProjectID == uuid.Nil {
+		t.Fatal("expected created project id")
+	}
+
+	orgMessages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession org messages: %v", err)
+	}
+	hasBlockedFollowOn := false
+	for _, message := range orgMessages {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") &&
+			message.ToolCallID != nil &&
+			*message.ToolCallID == "session-1" &&
+			strings.Contains(strings.ToLower(message.Content), "handoff-only") {
+			hasBlockedFollowOn = true
+			break
+		}
+	}
+	if !hasBlockedFollowOn {
+		t.Fatal("missing blocked follow-on session.create tool_result")
+	}
+
+	var projectSessionID uuid.UUID
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT id
+		FROM chat_session
+		WHERE organization_id = $1
+		  AND scope_type = 'project'
+		  AND scope_id = $2
+		  AND mode = 'async'
+		  AND status = 'active'
+	`, fixture.org.ID, createdProjectID).Scan(&projectSessionID); err != nil {
+		t.Fatalf("lookup project session: %v", err)
+	}
+
+	projectMessages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, projectSessionID)
+	if err != nil {
+		t.Fatalf("ListBySession project session messages: %v", err)
+	}
+	if len(projectMessages) != 1 {
+		t.Fatalf("project session messages = %d, want 1 synthetic handoff", len(projectMessages))
+	}
+	handoff := projectMessages[0]
+	if !strings.EqualFold(strings.TrimSpace(handoff.Role), "user") {
+		t.Fatalf("handoff role = %q, want user", handoff.Role)
+	}
+	if !strings.Contains(strings.ToLower(handoff.Content), "originating user request:") ||
+		!strings.Contains(strings.ToLower(handoff.Content), "imported legacy posts") ||
+		!strings.Contains(strings.ToLower(handoff.Content), "content strategy") {
+		t.Fatalf("synthetic handoff missing originating request context: %q", handoff.Content)
+	}
+	if jobs := countRunnableAgentTurnJobsForSession(t, ctx, fixture.pool, projectSessionID); jobs != 1 {
+		t.Fatalf("runnable project kickoff jobs = %d, want 1", jobs)
+	}
+	_, payload := dequeueNextAgentTurnForSession(t, ctx, fixture.pool, projectSessionID)
+	if payload.AgentID == nil || *payload.AgentID != lori.ID {
+		t.Fatalf("queued kickoff agent = %v, want Lori %s", payload.AgentID, lori.ID)
 	}
 }
 
@@ -19825,6 +20522,160 @@ func TestTurnEngineIntegrationSmokeTaskWritesOutputAndAdvancesToReview(t *testin
 	if updatedTask.CurrentFlowNodeID == nil || *updatedTask.CurrentFlowNodeID != nodes[1].ID {
 		t.Fatalf("current_flow_node_id = %v, want review node %s", updatedTask.CurrentFlowNodeID, nodes[1].ID)
 	}
+}
+
+func TestTurnEngineIntegrationExplicitDeliverableWriteRecordsCanonicalCommitBeforeReview(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	assigned := fixture.agent.ID
+	createdBy := fixture.user.ID
+	flowTemplate := mustCreateExecutionFlowTemplate(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID)
+	description := "Define validation scope for the current project. Output: validation_scope.md with scenario list, SLAs, and decision criteria."
+	taskRecord, err := repo.NewProjectTaskRepo(fixture.pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  fixture.org.ID,
+		ProjectID:       project.ID,
+		Title:           "Scope & Success Criteria Definition",
+		Description:     &description,
+		WorkStatus:      "in_progress",
+		FlowTemplateID:  &flowTemplate.ID,
+		CreatedByType:   "human_user",
+		CreatedByID:     &createdBy,
+		AssignedAgentID: &assigned,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	flowService, err := flowsvc.NewService(flowsvc.Options{
+		Pool:   fixture.pool,
+		Events: fixture.bus,
+	})
+	if err != nil {
+		t.Fatalf("flow.NewService: %v", err)
+	}
+	if _, err := flowService.StartFlow(ctx, taskRecord.ID); err != nil {
+		t.Fatalf("StartFlow: %v", err)
+	}
+
+	projectRecord, err := repo.NewProjectRepo(fixture.pool).GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	workspaceRoot, err := workspace.ProjectRoot("", projectRecord.Slug)
+	if err != nil {
+		t.Fatalf("workspace root: %v", err)
+	}
+	outputRel := "validation_scope.md"
+	outputAbs := filepath.Join(workspaceRoot, outputRel)
+	if err := os.WriteFile(outputAbs, []byte("# Validation Scope\n\nSubstantive content.\n"), 0o644); err != nil {
+		t.Fatalf("write output file: %v", err)
+	}
+
+	taskSession, err := fixture.chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: fixture.org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession task scope: %v", err)
+	}
+	if _, err := fixture.chatService.AddParticipant(ctx, taskSession.ID, "agent", fixture.agent.ID, "member"); err != nil {
+		t.Fatalf("AddParticipant agent: %v", err)
+	}
+
+	authorType := "human_user"
+	userMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		AuthorType: &authorType,
+		AuthorID:   &fixture.user.ID,
+		Role:       "user",
+		Content:    "finish the current work and write the deliverable",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage user: %v", err)
+	}
+
+	turn, err := fixture.chatService.CreateTurn(ctx, taskSession.ID, fixture.agent.ID)
+	if err != nil {
+		t.Fatalf("CreateTurn: %v", err)
+	}
+	if err := fixture.chatService.StartTurn(ctx, turn.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+
+	assistantType := "agent"
+	assistantMessage, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID:  taskSession.ID,
+		TurnID:     &turn.ID,
+		AuthorType: &assistantType,
+		AuthorID:   &fixture.agent.ID,
+		Role:       "assistant",
+		Content:    "Task complete and ready for review.",
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage assistant: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, assistantMessage.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus assistant: %v", err)
+	}
+
+	fileResult, err := fixture.chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: taskSession.ID,
+		TurnID:    &turn.ID,
+		Role:      "tool_result",
+		Content:   string(mustJSON(t, map[string]any{"tool_name": "file.write", "output": map[string]any{"path": outputRel, "byte_size": 39, "created": true}})),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage file tool_result: %v", err)
+	}
+	if err := fixture.chatService.UpdateMessageStatus(ctx, fileResult.ID, "final", ""); err != nil {
+		t.Fatalf("UpdateMessageStatus file tool_result: %v", err)
+	}
+	if err := fixture.chatService.CompleteTurn(ctx, turn.ID); err != nil {
+		t.Fatalf("CompleteTurn: %v", err)
+	}
+
+	if err := fixture.engine.HandleTurnCompletedEvent(ctx, eventbus.DomainEvent{
+		OrganizationID: fixture.org.ID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustJSON(t, map[string]any{"session_id": taskSession.ID.String(), "turn_id": turn.ID.String()}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", updatedTask.WorkStatus)
+	}
+
+	executions, err := repo.NewFlowNodeExecutionRepo(fixture.pool).ListByTask(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("ListByTask executions: %v", err)
+	}
+	if len(executions) < 2 {
+		t.Fatalf("flow execution count = %d, want >= 2", len(executions))
+	}
+	if strings.TrimSpace(executions[0].CommitSHA) == "" {
+		t.Fatal("expected completed work execution to record canonical commit_sha before review")
+	}
+
+	statusOut, err := exec.CommandContext(ctx, "git", "-C", workspaceRoot, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v (%s)", err, strings.TrimSpace(string(statusOut)))
+	}
+	if strings.TrimSpace(string(statusOut)) != "" {
+		t.Fatalf("workspace not clean after canonical work commit: %s", strings.TrimSpace(string(statusOut)))
+	}
+
+	_ = userMessage
 }
 
 func TestTurnEngineIntegrationDuplicateCompletedWorkSignalDoesNotDuplicateFlowAdvancedEvents(t *testing.T) {

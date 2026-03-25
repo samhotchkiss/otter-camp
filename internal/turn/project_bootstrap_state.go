@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/projectfailure"
 )
 
 const (
@@ -423,12 +424,62 @@ func (e *TurnEngine) updateProjectBootstrapProjectState(ctx context.Context, pro
 	if err != nil {
 		return err
 	}
+	clearAutomaticFailure := shouldClearProjectBootstrapAutomaticFailure(state)
 	_, err = e.pool.Exec(ctx, `
 		UPDATE project
-		SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{project_bootstrap}', $2::jsonb, true)
+		SET settings = CASE
+			WHEN $3::boolean
+				AND COALESCE(settings->'automatic_failure'->>'source', '') = $4
+			THEN jsonb_set(COALESCE(settings, '{}'::jsonb) - 'automatic_failure', '{project_bootstrap}', $2::jsonb, true)
+			ELSE jsonb_set(COALESCE(settings, '{}'::jsonb), '{project_bootstrap}', $2::jsonb, true)
+		END
 		WHERE id = $1
-	`, projectID, payload)
+	`, projectID, payload, clearAutomaticFailure, projectBootstrapSource)
 	return err
+}
+
+func shouldClearProjectBootstrapAutomaticFailure(state projectBootstrapState) bool {
+	switch strings.TrimSpace(state.Status) {
+	case projectBootstrapStatusCompleted:
+		return true
+	case projectBootstrapStatusActive:
+		return strings.TrimSpace(state.ValidationStatus) == "" &&
+			strings.TrimSpace(state.ValidationFailureClass) == "" &&
+			strings.TrimSpace(state.ValidationFailureReason) == "" &&
+			strings.TrimSpace(state.FailureCategory) == "" &&
+			strings.TrimSpace(state.FailureClass) == "" &&
+			strings.TrimSpace(state.FailurePhase) == "" &&
+			strings.TrimSpace(state.FailureReason) == "" &&
+			strings.TrimSpace(state.ProviderFailureClass) == "" &&
+			strings.TrimSpace(state.ProviderFailureReason) == ""
+	default:
+		return false
+	}
+}
+
+func clearBootstrapAutomaticFailureState(settings json.RawMessage) (json.RawMessage, bool) {
+	failure := projectfailure.Parse(settings)
+	if !strings.EqualFold(strings.TrimSpace(failure.Source), projectBootstrapSource) {
+		return settings, false
+	}
+	var payload map[string]json.RawMessage
+	if len(settings) > 0 && json.Valid(settings) {
+		if err := json.Unmarshal(settings, &payload); err != nil {
+			return settings, false
+		}
+	}
+	if payload == nil {
+		return settings, false
+	}
+	if _, ok := payload["automatic_failure"]; !ok {
+		return settings, false
+	}
+	delete(payload, "automatic_failure")
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return settings, false
+	}
+	return json.RawMessage(encoded), true
 }
 
 func cloneTimePointer(value *time.Time) *time.Time {

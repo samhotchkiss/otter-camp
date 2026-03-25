@@ -810,6 +810,13 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 
 	taskRecord.WorkStatus = target
 	if target == "done" || target == "cancelled" {
+		if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+			cleared, clearErr := taskcheckpoint.ClearRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+			if clearErr != nil {
+				return nil, clearErr
+			}
+			taskRecord.Metadata = cleared
+		}
 		completed := s.clock.Now().UTC()
 		taskRecord.CompletedAt = &completed
 	} else {

@@ -1,15 +1,19 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/samhotchkiss/otter-camp/internal/db"
+	"github.com/samhotchkiss/otter-camp/internal/eventbus"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
+	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
 
 func TestWorkerDBMaxConnsDefaultsAboveGlobalFloor(t *testing.T) {
@@ -171,6 +175,95 @@ func TestDraftTaskAutoCompletesRejectsIncompletePlanning(t *testing.T) {
 
 	if draftTaskAutoCompletes(repo.ProjectTask{WorkStatus: "draft", Metadata: updated}) {
 		t.Fatal("draftTaskAutoCompletes = true, want false")
+	}
+}
+
+func TestStartupCleanupProjectDraftsSkipsSatisfiedDraftWithoutFlowTemplate(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "startup-cleanup-skip-missing-flow",
+		DisplayName: "Startup Cleanup Skip Missing Flow",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "startup-cleanup-skip-missing-flow-project",
+		DisplayName:    "Startup Cleanup Skip Missing Flow Project",
+		Description:    "Project for startup cleanup coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	description := "Document findings on sourcing channels, qualification criteria, and intake workflows."
+	plan := taskplan.Analyze("Document sourcing findings", &description)
+	metadata := taskplan.ApplyMetadata(json.RawMessage(`{}`), plan)
+	metadata, _, _, err = taskplan.ApplyProcessUpdate(metadata, taskplan.ProcessUpdate{
+		HasArtifactChanges: true,
+		Artifacts: []taskplan.ArtifactEvidence{
+			{Slug: "prd", Summary: "Scope complete.", Sections: []string{"goals", "non-goals", "scope", "constraints", "success metrics", "open questions"}},
+			{Slug: "implementation-plan", Summary: "Implementation complete.", Sections: []string{"milestones", "phasing", "owners", "rollout"}},
+			{Slug: "acceptance-criteria", Summary: "Acceptance complete.", Sections: []string{"scenarios", "edge cases", "verification"}},
+			{Slug: "dependency-log", Summary: "Dependencies complete.", Sections: []string{"dependencies", "risks", "mitigations"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyProcessUpdate: %v", err)
+	}
+	metadata, err = taskorchestration.Apply(metadata, taskorchestration.Update{
+		OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "The deliverable is complete.", mustTime(t)),
+	})
+	if err != nil {
+		t.Fatalf("taskorchestration.Apply: %v", err)
+	}
+
+	createdByID := uuid.New()
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     1,
+		Title:          "Document sourcing findings",
+		Description:    &description,
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		CreatedByID:    &createdByID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	bus := eventbus.New(pool, nil, eventbus.Config{})
+	tasks, err := tasksvc.NewService(tasksvc.Options{
+		Pool:     pool,
+		EventBus: bus,
+	})
+	if err != nil {
+		t.Fatalf("task service: %v", err)
+	}
+
+	parentRepaired, draftSettled, gatesCancelled, err := startupCleanupProjectDrafts(ctx, repo.NewProjectTaskRepo(pool), tasks, project.ID)
+	if err != nil {
+		t.Fatalf("startupCleanupProjectDrafts: %v", err)
+	}
+	if parentRepaired != 0 || draftSettled != 0 || gatesCancelled != 0 {
+		t.Fatalf("cleanup counts = (%d,%d,%d), want all zero", parentRepaired, draftSettled, gatesCancelled)
+	}
+
+	updated, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if updated.WorkStatus != "draft" {
+		t.Fatalf("work status = %q, want draft", updated.WorkStatus)
 	}
 }
 

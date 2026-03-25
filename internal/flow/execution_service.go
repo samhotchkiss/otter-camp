@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,10 +15,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/flowcommit"
 	"github.com/samhotchkiss/otter-camp/internal/planningasset"
 	"github.com/samhotchkiss/otter-camp/internal/projectpause"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
@@ -400,6 +403,16 @@ func (s *service) startFlowUnlocked(ctx context.Context, taskID uuid.UUID) (*rep
 		RuntimeSubstate: runtimeSubstateForNode(startNode.NodeType, startNode.RequiresHumanReview),
 	})
 	if err != nil {
+		if errors.Is(err, repo.ErrConflict) {
+			existing, getErr := s.executions.GetActive(ctx, taskRecord.ID, *template.StartNodeID)
+			if getErr != nil {
+				return nil, getErr
+			}
+			if err := s.ensureExecutionSession(ctx, &existing); err != nil {
+				return nil, err
+			}
+			return &existing, nil
+		}
 		return nil, err
 	}
 	if err := s.ensureExecutionSession(ctx, &execution); err != nil {
@@ -632,6 +645,8 @@ func (s *service) advanceTerminalFlowTx(ctx context.Context, taskRecord repo.Pro
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	s.activateDraftOrchestrationParentAfterChildDone(ctx, taskRecord.ID)
+	s.activateDraftDependentsAfterTaskDone(ctx, taskRecord.ID)
 	return &completedExecution, nil
 }
 
@@ -726,6 +741,140 @@ func (s *service) advanceNextFlowTx(ctx context.Context, taskRecord repo.Project
 	}
 	s.ensureExecutionSessionBestEffort(ctx, &created)
 	return &created, nil
+}
+
+func (s *service) activateDraftOrchestrationParentAfterChildDone(ctx context.Context, taskID uuid.UUID) {
+	if s == nil || s.tasks == nil || s.taskService == nil || taskID == uuid.Nil {
+		return
+	}
+	childTask, err := s.tasks.GetByID(ctx, taskID)
+	if err != nil {
+		return
+	}
+	parentTaskID := taskdecomp.ParseParentTaskID(childTask.Metadata)
+	if parentTaskID == uuid.Nil {
+		return
+	}
+	parentTask, err := s.tasks.GetByID(ctx, parentTaskID)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(parentTask.WorkStatus), "draft") {
+		return
+	}
+	lister, ok := s.tasks.(interface {
+		ListByProject(context.Context, uuid.UUID, ...string) ([]repo.ProjectTask, error)
+	})
+	if !ok {
+		return
+	}
+	projectTasks, err := lister.ListByProject(ctx, parentTask.ProjectID)
+	if err != nil {
+		return
+	}
+
+	childTaskIDs := taskdecomp.ParseChildTaskIDs(parentTask.Metadata)
+	if len(childTaskIDs) == 0 {
+		return
+	}
+	childSet := make(map[uuid.UUID]struct{}, len(childTaskIDs))
+	for _, childID := range childTaskIDs {
+		childSet[childID] = struct{}{}
+	}
+
+	children := make([]repo.ProjectTask, 0, len(childTaskIDs))
+	for _, projectTask := range projectTasks {
+		if _, ok := childSet[projectTask.ID]; ok || taskdecomp.ParseParentTaskID(projectTask.Metadata) == parentTask.ID {
+			children = append(children, projectTask)
+		}
+	}
+	if len(children) == 0 {
+		return
+	}
+
+	metadata := map[string]any{}
+	_ = json.Unmarshal(parentTask.Metadata, &metadata)
+	decomp, _ := metadata["decomposition"].(map[string]any)
+	orchestrationOnly, _ := decomp["orchestration_only"].(bool)
+	if !orchestrationOnly {
+		return
+	}
+
+	activeChildren := 0
+	for _, child := range children {
+		status := strings.ToLower(strings.TrimSpace(child.WorkStatus))
+		if status == "" || status == "draft" {
+			continue
+		}
+		activeChildren++
+		if status != "done" {
+			return
+		}
+	}
+	if activeChildren == 0 {
+		return
+	}
+
+	activationActor := toTaskActor(Actor{Type: "system"})
+	activationActor.ExpectedFromStatus = "draft"
+	_, _ = s.taskService.TransitionStatusWithPayload(ctx, parentTask.ID, "queued", activationActor, map[string]any{
+		"transition_source":      "flow_child_completion",
+		"completed_child_task_id": taskID.String(),
+	})
+}
+
+func (s *service) activateDraftDependentsAfterTaskDone(ctx context.Context, taskID uuid.UUID) {
+	if s == nil || s.tasks == nil || s.taskService == nil || s.dependencies == nil || taskID == uuid.Nil {
+		return
+	}
+	inbound, err := s.dependencies.ListInbound(ctx, "project_task", taskID)
+	if err != nil {
+		return
+	}
+
+	seen := make(map[uuid.UUID]struct{}, len(inbound))
+	for _, dependency := range inbound {
+		if dependency.SourceType != "project_task" || dependency.SourceID == uuid.Nil {
+			continue
+		}
+		if _, ok := seen[dependency.SourceID]; ok {
+			continue
+		}
+		seen[dependency.SourceID] = struct{}{}
+
+		dependentTask, err := s.tasks.GetByID(ctx, dependency.SourceID)
+		if err != nil || !strings.EqualFold(strings.TrimSpace(dependentTask.WorkStatus), "draft") {
+			continue
+		}
+		ready, err := s.areTaskDependenciesSatisfied(ctx, dependentTask.ID)
+		if err != nil || !ready {
+			continue
+		}
+
+		activationActor := toTaskActor(Actor{Type: "system"})
+		activationActor.ExpectedFromStatus = "draft"
+		_, _ = s.taskService.TransitionStatusWithPayload(ctx, dependentTask.ID, "queued", activationActor, map[string]any{
+			"transition_source":           "flow_dependency_completion",
+			"completed_dependency_task_id": taskID.String(),
+		})
+	}
+}
+
+func (s *service) areTaskDependenciesSatisfied(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	outbound, err := s.dependencies.ListOutbound(ctx, "project_task", taskID)
+	if err != nil {
+		return false, err
+	}
+	for _, dependency := range outbound {
+		if dependency.DependsOnType != "project_task" || dependency.DependsOnID == uuid.Nil {
+			continue
+		}
+		prerequisite, err := s.tasks.GetByID(ctx, dependency.DependsOnID)
+		if err != nil {
+			return false, err
+		}
+		if !strings.EqualFold(strings.TrimSpace(prerequisite.WorkStatus), "done") {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s *service) advanceNextFlowNonTx(ctx context.Context, taskRecord repo.ProjectTask, currentNode repo.FlowNode, activeExecution repo.FlowNodeExecution, nextNode repo.FlowNode, actor Actor) (*repo.FlowNodeExecution, error) {
@@ -1607,11 +1756,66 @@ func (s *service) ensureExecutionSession(ctx context.Context, execution *repo.Fl
 		return err
 	}
 	execution.SessionID = &session.ID
+	return s.ensureExecutionEntryHead(ctx, execution)
+}
+
+func (s *service) ensureExecutionEntryHead(ctx context.Context, execution *repo.FlowNodeExecution) error {
+	if execution == nil || execution.ID == uuid.Nil || s.executions == nil || s.tasks == nil || s.environments == nil {
+		return nil
+	}
+	if repo.FlowExecutionEntryHeadSHAFromMetadata(execution.Metadata) != "" {
+		return nil
+	}
+	taskRecord, err := s.tasks.GetByID(ctx, execution.TaskID)
+	if err != nil {
+		return err
+	}
+	environments, err := s.environments.ListByProject(ctx, taskRecord.ProjectID)
+	if err != nil {
+		return err
+	}
+	repoPath := activeProjectRepoPath(environments)
+	if repoPath == "" {
+		return nil
+	}
+	headSHA, err := flowcommit.HeadSHA(ctx, repoPath)
+	if err != nil {
+		return nil
+	}
+	headSHA = strings.TrimSpace(headSHA)
+	if headSHA == "" {
+		return nil
+	}
+	updated, err := s.executions.UpdateMetadata(ctx, execution.ID, repo.FlowExecutionMetadataWithEntryHeadSHA(execution.Metadata, headSHA))
+	if err != nil {
+		return err
+	}
+	execution.Metadata = updated.Metadata
 	return nil
 }
 
 func (s *service) ensureExecutionSessionBestEffort(ctx context.Context, execution *repo.FlowNodeExecution) {
 	_ = s.ensureExecutionSession(ctx, execution)
+}
+
+func activeProjectRepoPath(environments []repo.ProjectEnvironment) string {
+	fallback := ""
+	for _, environment := range environments {
+		repoPath := ""
+		if environment.RepoPath != nil {
+			repoPath = filepath.Clean(strings.TrimSpace(*environment.RepoPath))
+		}
+		if repoPath == "" {
+			continue
+		}
+		if environment.IsActive {
+			return repoPath
+		}
+		if fallback == "" {
+			fallback = repoPath
+		}
+	}
+	return fallback
 }
 
 func (s *service) ensureProjectNotPaused(ctx context.Context, projectID uuid.UUID) error {
@@ -1714,7 +1918,14 @@ func (s *service) loadActiveFlowState(ctx context.Context, taskID uuid.UUID) (re
 			Status:      "active",
 		})
 		if err != nil {
-			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
+			if errors.Is(err, repo.ErrConflict) {
+				activeExecution, err = s.executions.GetActive(ctx, taskRecord.ID, currentNode.ID)
+				if err != nil {
+					return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
+				}
+			} else {
+				return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
+			}
 		}
 		if err := s.ensureExecutionSession(ctx, &activeExecution); err != nil {
 			return repo.ProjectTask{}, repo.FlowNode{}, repo.FlowNodeExecution{}, err
@@ -1857,9 +2068,13 @@ func (s *service) reviewProgressForTask(ctx context.Context, taskID uuid.UUID, o
 }
 
 func executionMetadataWithCompletedBy(existing json.RawMessage, actor Actor) json.RawMessage {
+	cleared := repo.FlowExecutionMetadataWithLiveOwner(existing, repo.FlowExecutionLiveOwner{
+		RunID:  nil,
+		TurnID: nil,
+	})
 	payload := map[string]any{}
-	if len(existing) > 0 {
-		_ = json.Unmarshal(existing, &payload)
+	if len(cleared) > 0 {
+		_ = json.Unmarshal(cleared, &payload)
 	}
 	completedBy := map[string]any{
 		"type": normalizeTaskActorType(actor.Type),

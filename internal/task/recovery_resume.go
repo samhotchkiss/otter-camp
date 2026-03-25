@@ -31,6 +31,8 @@ const (
 	RecoveryBlockerClassBlockedWithoutResumableState             = "blocked_without_resumable_state"
 
 	recoveryArtifactPathPrefix = ".ottercamp/recovery/"
+
+	reviewDecisionRequiredFailureReason = "review turn completed without calling flow.review_decision"
 )
 
 type TaskResumeBlockedStateError struct {
@@ -96,6 +98,26 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 			validationGuard:      &guardCopy,
 		}
 	}
+	if recoveryResumeReasonMatchesReviewDecisionRequired(blockerReason) {
+		syntheticGuard := ValidationGuardState{
+			Fingerprint:        "flow.review_decision:required",
+			AttemptFingerprint: "flow.review_decision:required:attempt",
+			ToolName:           "flow.review_decision",
+			FailureClass:       "tool_validation",
+			FailureCode:        "review_decision_required",
+			FailureReason:      reviewDecisionRequiredFailureReason,
+			Count:              1,
+			BlockThreshold:     1,
+			Blocked:            true,
+		}
+		return taskResumeDecision{
+			resumable:            true,
+			blockerClass:         RecoveryBlockerClassValidationLoop,
+			blockerReason:        blockerReason,
+			clearValidationGuard: true,
+			validationGuard:      &syntheticGuard,
+		}
+	}
 	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok && hasDurableRecoveryCheckpoint(checkpoint) {
 		checkpointCopy := checkpoint
 		blockerClass := taskcheckpoint.RecoveryFileWriteBlockerClass(&checkpointCopy)
@@ -113,6 +135,18 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 		blockerClass:  RecoveryBlockerClassBlockedWithoutResumableState,
 		blockerReason: blockerReason,
 	}
+}
+
+func recoveryResumeReasonMatchesReviewDecisionRequired(blockerReason string) bool {
+	normalized := strings.TrimSpace(blockerReason)
+	if normalized == "" {
+		return false
+	}
+	if strings.EqualFold(normalized, reviewDecisionRequiredFailureReason) {
+		return true
+	}
+	prefix := reviewDecisionRequiredFailureReason + ":"
+	return strings.HasPrefix(strings.ToLower(normalized), strings.ToLower(prefix))
 }
 
 func hasDurableRecoveryCheckpoint(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) bool {

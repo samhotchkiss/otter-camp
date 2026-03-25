@@ -155,6 +155,7 @@ func (q *PriorityQueue) Enqueue(ctx context.Context, req GatewayRequest) (Gatewa
 	if err != nil {
 		return GatewayResponse{}, err
 	}
+	q.concurrency.SetConnectionLimit(connection.ID, max(1, connection.MaxConcurrent))
 
 	entry := &queueEntry{
 		id:         uuid.New(),
