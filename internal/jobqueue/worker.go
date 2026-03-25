@@ -3259,6 +3259,17 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			    job_type <> '%s'
 			    OR NOT EXISTS (
 			      SELECT 1
+			      FROM job_queue sibling_claim
+			      WHERE sibling_claim.id <> job_queue.id
+			        AND sibling_claim.job_type = '%s'
+			        AND sibling_claim.status = 'claimed'
+			        AND COALESCE(sibling_claim.payload->>'session_id', '') = COALESCE(job_queue.payload->>'session_id', '')
+			    )
+			  )
+			  AND (
+			    job_type <> '%s'
+			    OR NOT EXISTS (
+			      SELECT 1
 			      FROM chat_turn ct
 			      WHERE ct.session_id = (job_queue.payload->>'session_id')::uuid
 			        AND ct.trigger_message_id = (job_queue.payload->>'message_id')::uuid
@@ -3405,7 +3416,7 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 		WHERE jq.id = claimable.id
 		RETURNING jq.id, jq.job_type, jq.priority, jq.payload, jq.status, jq.claimed_by, jq.claimed_at,
 		          jq.attempts, jq.max_attempts, jq.last_error, jq.run_after, jq.created_at, jq.updated_at
-	`, maxInFlightProjectContinuations, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
+	`, maxInFlightProjectContinuations, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, agentTurnJobType, whereFilter), args...)
 	if err != nil {
 		return nil, fmt.Errorf("claim pending jobs: %w", err)
 	}

@@ -4535,6 +4535,127 @@ func TestJobWorkerClaimPendingAgentTurnsPrefersNewestProjectContinuation(t *test
 	}
 }
 
+func TestJobWorkerClaimPendingAgentTurnsSkipsOlderProjectBootstrapWhenNewerSameSessionAlreadyClaimed(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-skips-older-project-bootstrap-claimed",
+		DisplayName: "Claim Skips Older Project Bootstrap Claimed",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-skips-older-project-bootstrap-claimed-" + uuid.NewString()[:8],
+		DisplayName:    "Claim Skips Older Project Bootstrap Claimed",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project session: %v", err)
+	}
+
+	olderMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue bounded project bootstrap turn 2.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create older bootstrap message: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	newerMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue active project bootstrap from persisted state.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create newer bootstrap message: %v", err)
+	}
+
+	var olderJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, olderMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, olderMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, olderMessage.ID, 0),
+	).Scan(&olderJobID); err != nil {
+		t.Fatalf("insert older bootstrap job: %v", err)
+	}
+	var newerJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, newerMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s", session.ID, newerMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, newerMessage.ID, 0),
+	).Scan(&newerJobID); err != nil {
+		t.Fatalf("insert newer bootstrap job: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 1)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns first: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed first jobs = %d, want 1", len(claimed))
+	}
+	if claimed[0].ID != newerJobID {
+		t.Fatalf("first claimed job = %s, want newer bootstrap job %s", claimed[0].ID, newerJobID)
+	}
+
+	claimed, err = worker.claimPendingAgentTurns(ctx, 1)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns second: %v", err)
+	}
+	if len(claimed) != 0 {
+		t.Fatalf("claimed second jobs = %d, want 0 while newer session job is already claimed", len(claimed))
+	}
+
+	var olderStatus, newerStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, olderJobID).Scan(&olderStatus); err != nil {
+		t.Fatalf("query older job: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, newerJobID).Scan(&newerStatus); err != nil {
+		t.Fatalf("query newer job: %v", err)
+	}
+	if olderStatus != "pending" {
+		t.Fatalf("older job status = %q, want pending", olderStatus)
+	}
+	if newerStatus != "claimed" {
+		t.Fatalf("newer job status = %q, want claimed", newerStatus)
+	}
+}
+
 func TestJobWorkerClaimPendingAgentTurnsCapsConcurrentProjectContinuations(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

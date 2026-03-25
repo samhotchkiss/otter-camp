@@ -258,6 +258,62 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
   - failure:
     - `bootstrap setup watchdog timed out after 4m0s with zero persisted staffing drafts, project assignments, scoped tasks, or flow templates; model invocation 0bb28f4e-9757-4a3b-97f1-4c1d55dacaf8 remained in_flight`
 - project metadata after failure:
+
+## 2026-03-25 15:42 MDT update
+
+- deployed runtime is now patch-on-top of pushed commit `9537606b`
+- health is green after the latest worker-only restart
+- the stale retry-message seam is fixed live on rerun-65-restart
+- the next live blocker is claim-time duplicate dispatch on stacked pending bootstrap messages for the same project session
+
+### New local patch: claim-time skips older pending async session jobs when a newer same-session `agent_turn` is already claimed
+
+- root cause:
+  - `internal/jobqueue/worker.go`
+  - `claimPendingByFilter(...)` already ranked pending `agent_turn` jobs per session and preferred the newest message, but a second claim cycle could still grab an older pending message from the same session after the newest one had been claimed and before that claimed dispatch had established `current_turn_id`
+  - live rerun-65-restart showed this twice:
+    - at `15:35:38 MDT`, worker claimed `87b55055-...` and `5688dbfd-...` on the same project session
+    - at `15:36:50 MDT`, worker claimed `168d6c32-...` and `e22d73ce-...` on the same project session
+  - the second dispatch correctly hit `should_run=false`, but the duplicate claim still wasted bootstrap attempts and kept stacking stale pending bootstrap messages/jobs
+- behavior:
+  - claim-time now excludes any pending `agent_turn` job whose session already has another claimed `agent_turn` dispatch
+  - this closes the pre-`current_turn_id` window where an older bootstrap continuation could be claimed behind the newest one
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ClaimPendingAgentTurnsSkipsOlderProjectBootstrapWhenNewerSameSessionAlreadyClaimed|ClaimPendingAgentTurnsPrefersNewestProjectContinuation|EnsureProjectContinuationMessageKeepsBootstrapContinuationWhileBootstrapActive|ResolveStaleTriggeredRetryMessageIDSwitchesProjectExecutionToBootstrapWhileBootstrapActive)$' -count=1`
+
+### Live proof before this new patch
+
+- rerun-65-restart project:
+  - `2ed2fcef-b110-4171-bd50-4b574a059a2f`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-65-restart`
+- async project session:
+  - `16b95db3-58bf-4e6d-905c-a75fe2c6d1dc`
+- proof that stale retry routing is fixed:
+  - fresh pending messages on the session are now all `source=project_bootstrap`
+  - the old bad `project_execution_continuation` message `cd0989b9-b078-4bd9-afc9-b5aa0dd631b8` is no longer the retry target
+- new duplicate-claim seam:
+  - worker startup immediately claimed both:
+    - job `43f0f062-839e-4e22-bfb8-650d3f9c038a` -> message `87b55055-c596-4ed6-a9ee-9b8725da6c01`
+    - job `dfbbfbe0-3614-45c4-b727-ae99f9ea769a` -> message `5688dbfd-980b-4e3f-b1cc-58c94c168893`
+  - both were `project_bootstrap` messages on the same session
+  - both converged on turn `e49db5d9-a7d9-4300-8385-eff0010df124`
+  - the second dispatch hit `should_run=false`, proving the duplicate claim happened before the claimed dispatch had fully established session ownership
+- same seam repeated on the next resume cycle:
+  - worker later claimed:
+    - job `c977b976-75bd-4793-90a1-ca1fb43d3a32` -> message `168d6c32-0085-4917-9e08-058b4884680f`
+    - job `d5ccdd04-b548-4c6e-b4ae-379f8a211d85` -> message `e22d73ce-b510-4ccc-a569-5e4823c2ef53`
+  - both converged on turn `9c26b3ec-5637-41fb-b919-b7a75992d184`
+  - again, the second dispatch hit `should_run=false`
+
+### Current next step
+
+- commit/push the claim-race patch
+- rebuild and restart the worker
+- verify the same rerun-65-restart session now claims only one bootstrap dispatch per resume cycle
+- if that holds, continue watching whether bootstrap finally moves past `staffing_persisted` instead of churning duplicate bootstrap resume prompts
   - `project_bootstrap.status = failed`
   - `project_bootstrap.current_phase = staffing_persisted`
   - `last_successful_checkpoint = project_created`
