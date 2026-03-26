@@ -5809,6 +5809,8 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 		runtime.historyStartID = &message.ID
 		runtime.disableMemory = true
 		runtime.freshKickoff = true
+	} else if projectContinuationResumeMessageRootsHistory(message) {
+		runtime.historyStartID = &message.ID
 	} else if taskContinuationResumeMessageRootsHistory(message) {
 		runtime.historyStartID = &message.ID
 	}
@@ -5817,7 +5819,6 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	} else if handled {
 		return nil
 	}
-
 	cancelCtx, stopCancelWatch := e.watchTurnCancellation(ctx, runtime)
 	defer stopCancelWatch()
 
@@ -6814,7 +6815,6 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		if err := ctx.Err(); err != nil {
 			return e.handleCancellation(ctx, rt)
 		}
-
 		taskComplexity := e.isComplexAgentTurnTask(ctx, rt.session)
 		profile, err := e.resolveModelProfile(ctx, rt.session, rt.agent, "agent_turn", rt.modelRetryUsed, taskComplexity)
 		if err != nil {
@@ -9087,6 +9087,13 @@ func isChatTurnStopReasonConstraintError(err error) bool {
 func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, assembled *prompt.AssembledPrompt) (bool, error) {
 	if rt != nil && rt.session != nil && strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
 		return false, nil
+	}
+	if rt != nil && rt.session != nil && rt.initialMessageID != uuid.Nil &&
+		strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") &&
+		e.messages != nil {
+		if message, err := e.messages.GetByID(ctx, rt.initialMessageID); err == nil && projectContinuationResumeMessageRootsHistory(message) {
+			return false, nil
+		}
 	}
 	if rt != nil && rt.session != nil &&
 		strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") &&
@@ -16783,6 +16790,19 @@ func taskContinuationResumeMessageRootsHistory(message repo.ChatMessage) bool {
 	}
 	rooted, _ := metadata["continuation_root"].(bool)
 	return rooted
+}
+
+func projectContinuationResumeMessageRootsHistory(message repo.ChatMessage) bool {
+	if !strings.EqualFold(strings.TrimSpace(message.Role), "user") {
+		return false
+	}
+	metadata := messageMetadataMap(message.Metadata)
+	switch strings.TrimSpace(stringValue(metadata["source"])) {
+	case projectExecutionContinuationSource, "project_continuation_resume":
+		return true
+	default:
+		return false
+	}
 }
 
 func taskContinuationResumeMessageMetadata(session *chat.ChatSession, attempt int) json.RawMessage {

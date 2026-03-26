@@ -2,6 +2,45 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 02:05 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `e917a7a7`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- rerun-88 project continuation is no longer paying the extra `listening_eval` invocation on synthetic continuation retries
+
+### New local patch: root synthetic project continuations and skip listening-eval on them
+
+- root cause:
+  - rerun-88 project continuation session `1a9edb0a-a817-46b1-975d-4d96c8164bcb` kept replaying the same synthetic continuation message `25a498b8-b1e7-47ab-89c0-bad732ce05a1`
+  - that message already carried `metadata.source = project_execution_continuation`, but the engine still treated it like ordinary async project chat
+  - result:
+    - every retry paid an extra `listening_eval` model call
+    - the continuation prompt inherited hundreds of stale retry/system messages
+    - qwen was stalling on the inflated continuation lane
+- behavior:
+  - synthetic project continuation messages now root history at the continuation user message itself
+  - `runListeningEval(...)` now skips project messages whose source is `project_execution_continuation` or `project_continuation_resume`
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- focused verification:
+  - `go test ./internal/turn -run 'Test(ListeningEvalSkippedForSyntheticProjectContinuationMessage|ListeningEvalSkippedForActiveProjectBootstrapSession|ListeningEvalSkippedForAsyncProjectTaskSession|ListeningEvalRunsForAsyncSession|ListeningEvalWaitReenqueuesAndSkipsPhase2)' -count=1`
+- live proof:
+  - after rebuild/restart, rerun-88 fresh retry turn `04ad64ee-372b-4642-b36a-1998bc3e64eb` shows:
+    - prompt layer 6 history shrunk to `history_message_count=19` instead of hundreds of stale retry/system messages
+    - no new `listening_eval` invocation row for that turn
+    - exactly one live invocation row:
+      - `fb2aa6b5-888e-45ef-bdfa-f09bea0f4557 | in_flight | agent_turn | qwen2.5:72b | 34b13633-46b0-4471-ba52-1c0ad20cd36b`
+  - the previous retry turn `7a0fdb97-9f4d-462e-a8a7-ca874584289c` did create a `listening_eval` invocation before this patch, so the difference is visible in the DB, not just the logs
+
+### Current live seam
+
+- rerun-88 project continuation is now through prompt assembly and directly on the real `agent_turn` call
+- next proof target:
+  - whether live turn `04ad64ee-372b-4642-b36a-1998bc3e64eb` completes cleanly and resumes later-wave project execution
+  - or whether the next seam is now inside the main qwen agent-turn call itself rather than continuation prompt setup
+
 ## 2026-03-26 01:30 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `e917a7a7`

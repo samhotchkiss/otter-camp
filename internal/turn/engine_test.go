@@ -720,6 +720,54 @@ func TestListeningEvalSkippedForActiveProjectBootstrapSession(t *testing.T) {
 	}
 }
 
+func TestListeningEvalSkippedForSyntheticProjectContinuationMessage(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	if _, err := fixture.messages.UpdateMetadata(context.Background(), fixture.userMessageID, json.RawMessage(`{
+		"source":"project_execution_continuation",
+		"synthetic_user_message":true,
+		"auto_continue":true
+	}`)); err != nil {
+		t.Fatalf("UpdateMetadata: %v", err)
+	}
+
+	var assembledHistoryStart *uuid.UUID
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		if call != 1 || input.HistoryStartID == nil {
+			return
+		}
+		copied := *input.HistoryStartID
+		assembledHistoryStart = &copied
+	}
+	fixture.model.completeFn = func(context.Context, ModelRequest) (ModelResponse, error) {
+		t.Fatal("listening eval should be skipped for synthetic project continuation messages")
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if fixture.model.listeningEvalCalls != 0 {
+		t.Fatalf("listening eval calls = %d, want 0", fixture.model.listeningEvalCalls)
+	}
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", fixture.model.streamCalls)
+	}
+	if assembledHistoryStart == nil {
+		t.Fatal("HistoryStartID is nil, want synthetic project continuation message id")
+	}
+	if *assembledHistoryStart != fixture.userMessageID {
+		t.Fatalf("HistoryStartID = %s, want %s", *assembledHistoryStart, fixture.userMessageID)
+	}
+}
+
 func TestHandleUserMessageFailsWhenInvocationCompletionFails(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	fixture.invocations.updateCompletionErr = errors.New("update completion failed")
