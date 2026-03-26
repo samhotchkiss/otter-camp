@@ -9086,12 +9086,26 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsIgnoresStalePendingDis
 		WHERE job_type = 'agent_turn'
 		  AND status = 'pending'
 		  AND (payload->>'session_id')::uuid = $1
-		  AND (payload->>'message_id')::uuid = $2
-	`, session.ID, message.ID).Scan(&pendingJobs); err != nil {
+	`, session.ID).Scan(&pendingJobs); err != nil {
 		t.Fatalf("count pending agent_turn jobs: %v", err)
 	}
 	if pendingJobs != 1 {
 		t.Fatalf("pending agent_turn jobs = %d, want 1 fresh requeue", pendingJobs)
+	}
+	var pendingMessageID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		SELECT (payload->>'message_id')::uuid
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, session.ID).Scan(&pendingMessageID); err != nil {
+		t.Fatalf("query pending agent_turn job message: %v", err)
+	}
+	if pendingMessageID == message.ID {
+		t.Fatalf("pending requeue message_id = %s, want fresh continuation message", pendingMessageID)
 	}
 	var deadLetterJobs int
 	if err := pool.QueryRow(ctx, `
@@ -13532,7 +13546,7 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSupersedesStalePending
 	if staleStatus != "failed" {
 		t.Fatalf("stale continuation status = %q, want failed", staleStatus)
 	}
-	if !strings.Contains(staleError, "superseded by newer completed project task") {
+	if !strings.Contains(staleError, "superseded") {
 		t.Fatalf("stale continuation error = %q, want superseded reason", staleError)
 	}
 	if err := pool.QueryRow(ctx, `
@@ -13569,6 +13583,173 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSupersedesStalePending
 	}
 	if newCompletedTask != newerDone.ID.String() {
 		t.Fatalf("fresh continuation completed_task_id = %q, want %s", newCompletedTask, newerDone.ID)
+	}
+}
+
+func TestJobWorkerEnsureProjectContinuationMessageSupersedesConsumedPendingContinuation(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "ensure-project-continuation-supersedes-consumed-pending",
+		DisplayName: "Ensure Project Continuation Supersedes Consumed Pending",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "ensure-project-continuation-supersedes-consumed-pending-project",
+		DisplayName:    "Ensure Project Continuation Supersedes Consumed Pending Project",
+		Description:    "Project for consumed continuation supersession coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"completed"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue project execution.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "ensure-project-continuation-supersedes-consumed-pending-template",
+		DisplayName:    "Ensure Project Continuation Supersedes Consumed Pending Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	doneTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     12,
+		Title:          "Validate pipeline output format and delivery",
+		WorkStatus:     "done",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create done task: %v", err)
+	}
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		TaskNumber:     13,
+		Title:          "Run end-to-end pipeline integration test",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		CreatedByID:    &agent.ID,
+	}); err != nil {
+		t.Fatalf("create draft task: %v", err)
+	}
+
+	staleMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"project_execution_continuation","auto_continue":true,"synthetic_user_message":true,"completed_task_id":"%s"}`, doneTask.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create stale continuation message: %v", err)
+	}
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "completed",
+		TriggerMessageID: &staleMessage.ID,
+		RetryCount:       3,
+	})
+	if err != nil {
+		t.Fatalf("create completed continuation turn: %v", err)
+	}
+	if completedTurn.TriggerMessageID == nil || *completedTurn.TriggerMessageID != staleMessage.ID {
+		t.Fatalf("completed continuation trigger = %v, want %s", completedTurn.TriggerMessageID, staleMessage.ID)
+	}
+
+	messageID, err := worker.ensureProjectContinuationMessage(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ensureProjectContinuationMessage: %v", err)
+	}
+	if messageID == uuid.Nil {
+		t.Fatal("messageID = nil, want fresh continuation message")
+	}
+	if messageID == staleMessage.ID {
+		t.Fatalf("messageID = %s, want fresh continuation message", messageID)
+	}
+
+	var (
+		status          string
+		errorMessage    string
+		source          string
+		completedTaskID string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_message, '')
+		FROM chat_message
+		WHERE id = $1
+	`, staleMessage.ID).Scan(&status, &errorMessage); err != nil {
+		t.Fatalf("query stale continuation message: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("stale continuation status = %q, want failed", status)
+	}
+	if !strings.Contains(errorMessage, "superseded after prior continuation turn completed") {
+		t.Fatalf("stale continuation error = %q, want consumed supersession reason", errorMessage)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata->>'source', ''),
+		       COALESCE(metadata->>'completed_task_id', '')
+		FROM chat_message
+		WHERE id = $1
+	`, messageID).Scan(&source, &completedTaskID); err != nil {
+		t.Fatalf("query fresh continuation message: %v", err)
+	}
+	if source != "project_execution_continuation" {
+		t.Fatalf("fresh continuation source = %q, want project_execution_continuation", source)
+	}
+	if completedTaskID != doneTask.ID.String() {
+		t.Fatalf("fresh continuation completed_task_id = %q, want %s", completedTaskID, doneTask.ID)
 	}
 }
 

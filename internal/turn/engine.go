@@ -3371,11 +3371,16 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 	if turnHasSuccessfulToolResult(messages, completedTurn.ID) {
 		return false, nil
 	}
+	assistantContent := strings.TrimSpace(assistant.Content)
+	genericAssistant := assistantContent == "" || looksLikeGenericTaskRecoveryReply(assistantContent)
 	nextTask, ok, err := e.nextRunnableDraftProjectTask(ctx, session.ScopeID)
 	if err != nil {
 		return false, err
 	}
 	if !ok {
+		if genericAssistant {
+			return e.retryGenericProjectExecutionContinuation(ctx, session, completedTurn, latestUser)
+		}
 		return false, nil
 	}
 	updated, err := e.taskTransitions.TransitionStatus(ctx, nextTask.ID, "queued", tasksvc.Actor{Type: "system"})
@@ -3403,6 +3408,71 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 		fmt.Sprintf("[Project continuation auto-queued %s after a narrative-only continuation left runnable draft work untouched.]", projectBootstrapTaskLabel(queuedTask)),
 	)
 	return true, nil
+}
+
+func (e *TurnEngine) retryGenericProjectExecutionContinuation(
+	ctx context.Context,
+	session *chat.ChatSession,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+) (bool, error) {
+	if e == nil || session == nil || latestCompleted == nil || latestUser == nil {
+		return false, nil
+	}
+	if latestCompleted.RetryCount >= maxGenericRecoveryReplyRetries {
+		return false, nil
+	}
+	completedTaskID, _ := parseUUIDAny(messageMetadataMap(latestUser.Metadata)["completed_task_id"])
+	var completedTask repo.ProjectTask
+	if completedTaskID != uuid.Nil && e.tasks != nil {
+		if taskRecord, err := e.tasks.GetByID(ctx, completedTaskID); err == nil {
+			completedTask = taskRecord
+		}
+	}
+	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
+	agentID := latestCompleted.RespondingID
+	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks) +
+		" Your last continuation turn returned a generic non-action reply instead of advancing the project." +
+		" Do not ask which function to call, do not offer to format JSON or tool calls, and do not ask the user for more parameters." +
+		" Your next assistant action must either emit the concrete tool calls that advance the project or report one concrete blocker sentence."
+	retryMessage, err := e.appendProjectExecutionContinuationMessage(ctx, session.ID, agentID, completedTaskID, retryPrompt)
+	if err != nil {
+		return false, err
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  retryMessage.ID,
+		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if agentID != uuid.Nil {
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return false, err
+	}
+	return enqueued, nil
+}
+
+func (e *TurnEngine) countProjectDraftTasks(ctx context.Context, projectID uuid.UUID) (int, error) {
+	if e == nil || e.tasks == nil || projectID == uuid.Nil {
+		return 0, nil
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, task := range projectTasks {
+		if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func turnHasSuccessfulToolResult(messages []repo.ChatMessage, turnID uuid.UUID) bool {
@@ -5166,6 +5236,8 @@ func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, rem
 	lines = append(lines,
 		"Your next response must take direct project action instead of generic chat.",
 		"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
+		"Do not ask which function to call, do not offer to format JSON or tool calls, and do not ask the user for parameters that are already in the project session.",
+		"This project already exists. Do not call project.create again unless the user explicitly asks to start a different new project.",
 		"Inspect the current task tree and immediately move the next bounded work forward by selecting, decomposing, assigning, or queueing the correct tasks.",
 		"Do not treat a completed gate-review or sign-off task as proof that the whole project is complete while any draft tasks still remain.",
 		"Do not use task.update to mark untouched draft tasks done; queue or otherwise advance the next runnable task instead.",
@@ -9506,6 +9578,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return false, err
 		}
 		rt.toolCallsUsed += len(blockedCalls)
+		if shouldStopAfterBlockedProjectExecutionCreateConflict(rt, blockedCalls) {
+			return true, nil
+		}
 		if shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt, blockedBootstrapRecoveryReread) {
 			rt.stopReason = stopReasonValidationBlocked
 			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Bootstrap validation recovery reread blocked - ending this turn so the next continuation can repair the named blocker directly.]")
@@ -13112,6 +13187,8 @@ func buildProjectContinuationActionPrompt(summary string) string {
 		"Do not say that you are ready, ask what to do next, or ask the user what they need.",
 		"Do not say that you lack context or ask the user to restate the project when this continuation turn already includes the project session history and continuation summary.",
 		"Do not restate the project state or reread broad project context before acting.",
+		"Do not ask which function to call, do not offer to format JSON or tool calls, and do not ask the user for parameters that are already present in the project session.",
+		"This project already exists. Do not call project.create again unless the user explicitly asks to start a different new project.",
 		"Use the existing task tree, workspace state, planning artifacts, and recent tool results to continue execution directly.",
 		"Prefer direct task.create, task.update, bootstrap.setup.persist, flow, assignment, or file actions over more narration whenever the next step is already clear.",
 		"If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.",
@@ -18003,6 +18080,25 @@ func shouldStopAfterBlockedProjectKickoffSessionCreate(rt *turnRuntime, results 
 			continue
 		}
 		if !strings.Contains(strings.ToLower(strings.TrimSpace(result.Error)), "handoff-only") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func shouldStopAfterBlockedProjectExecutionCreateConflict(rt *turnRuntime, results []ToolResult) bool {
+	if rt == nil || rt.projectIdentity == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	for _, result := range results {
+		if !strings.EqualFold(strings.TrimSpace(result.Name), "project.create") {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(strings.TrimSpace(result.Error)), "project already created in this flow") {
 			continue
 		}
 		return true

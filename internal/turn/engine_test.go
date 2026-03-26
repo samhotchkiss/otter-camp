@@ -5589,6 +5589,9 @@ func TestHandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity(
 	if len(dispatched) != 0 {
 		t.Fatalf("dispatched tools = %v, want none", dispatched)
 	}
+	if round != 1 {
+		t.Fatalf("model rounds = %d, want 1 after blocked project.create in project session", round)
+	}
 
 	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
 	if err != nil {
@@ -7013,6 +7016,116 @@ func TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueue
 	}
 	if !sawSystemMessage {
 		t.Fatal("expected system message recording bounded-size auto-queue failure")
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithFreshMessage(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 19,
+				Title:      "Run end-to-end pipeline integration test",
+				WorkStatus: "done",
+			},
+			draftTaskID: {
+				ID:         draftTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 20,
+				Title:      "Prepare deduplication report for review",
+				WorkStatus: "draft",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "Sure! Could you please specify which function you would like to use and provide the necessary arguments?",
+		SequenceNumber: 11,
+	}
+	messages := []repo.ChatMessage{*latestUser, *assistant}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   1,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected generic project continuation reply to enqueue a fresh retry message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("retry reused original continuation message, want fresh message id")
+	}
+	if jobs[0].payload.RetryCount != 2 {
+		t.Fatalf("retry_count = %d, want 2", jobs[0].payload.RetryCount)
+	}
+
+	storedMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var retryMessage *repo.ChatMessage
+	for i := range storedMessages {
+		msg := &storedMessages[i]
+		if msg.ID == jobs[0].payload.MessageID {
+			retryMessage = msg
+			break
+		}
+	}
+	if retryMessage == nil {
+		t.Fatal("missing appended retry continuation message")
+	}
+	if !strings.Contains(retryMessage.Content, "Your last continuation turn returned a generic non-action reply") {
+		t.Fatalf("retry message = %q, want generic-reply retry guidance", retryMessage.Content)
+	}
+	if !strings.Contains(retryMessage.Content, "Do not ask which function to call") {
+		t.Fatalf("retry message = %q, want anti-function-formatting guidance", retryMessage.Content)
+	}
+	if got := stringValue(messageMetadataMap(retryMessage.Metadata)["completed_task_id"]); got != completedTaskID.String() {
+		t.Fatalf("completed_task_id = %q, want %s", got, completedTaskID)
 	}
 }
 
@@ -10935,6 +11048,12 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Use the existing task tree, workspace state, planning artifacts, and recent tool results to continue execution directly.") {
 		t.Fatalf("prompt = %q, want direct execution guidance", prompt)
 	}
+	if !strings.Contains(prompt, "Do not ask which function to call, do not offer to format JSON or tool calls") {
+		t.Fatalf("prompt = %q, want anti-function-formatting guidance", prompt)
+	}
+	if !strings.Contains(prompt, "This project already exists. Do not call project.create again") {
+		t.Fatalf("prompt = %q, want anti-project-create guidance", prompt)
+	}
 }
 
 func TestWaitingBoundFlowExecutionRuntimeSubstateUsesReviewForReviewTask(t *testing.T) {
@@ -10997,6 +11116,12 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Do not use task.update to mark untouched draft tasks done") {
 		t.Fatalf("prompt = %q, want draft-task done guard", prompt)
+	}
+	if !strings.Contains(prompt, "Do not ask which function to call, do not offer to format JSON or tool calls") {
+		t.Fatalf("prompt = %q, want anti-function-formatting guidance", prompt)
+	}
+	if !strings.Contains(prompt, "This project already exists. Do not call project.create again") {
+		t.Fatalf("prompt = %q, want anti-project-create guidance", prompt)
 	}
 }
 

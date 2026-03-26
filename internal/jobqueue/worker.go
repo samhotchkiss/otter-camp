@@ -1544,10 +1544,17 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 	var (
 		existingMessageID            uuid.UUID
 		existingCompletedTaskIDText string
+		existingMessageConsumed     bool
 	)
 	err := w.pool.QueryRow(ctx, `
 		SELECT id,
-		       COALESCE(metadata->>'completed_task_id', '')
+		       COALESCE(metadata->>'completed_task_id', ''),
+		       EXISTS (
+		         SELECT 1
+		         FROM chat_turn ct
+		         WHERE ct.trigger_message_id = chat_message.id
+		           AND ct.status IN ('completed', 'failed', 'cancelled')
+		       )
 		FROM chat_message
 		WHERE session_id = $1
 		  AND role = 'user'
@@ -1555,24 +1562,30 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 		  AND COALESCE(metadata->>'source', '') = $2
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
-	`, sessionID, source).Scan(&existingMessageID, &existingCompletedTaskIDText)
+	`, sessionID, source).Scan(&existingMessageID, &existingCompletedTaskIDText, &existingMessageConsumed)
 	if err == nil {
 		expectedCompletedTaskID := ""
 		if rawCompletedTaskID, ok := metadataMap["completed_task_id"]; ok {
 			expectedCompletedTaskID = strings.TrimSpace(fmt.Sprintf("%v", rawCompletedTaskID))
 		}
-		if source != "project_execution_continuation" || expectedCompletedTaskID == strings.TrimSpace(existingCompletedTaskIDText) {
+		if source != "project_execution_continuation" {
+			return existingMessageID, nil
+		}
+		if !existingMessageConsumed && expectedCompletedTaskID == strings.TrimSpace(existingCompletedTaskIDText) {
 			return existingMessageID, nil
 		}
 		if _, execErr := w.pool.Exec(ctx, `
 			UPDATE chat_message
 			SET status = 'failed',
-			    error_message = 'superseded by newer completed project task'
+			    error_message = CASE
+			      WHEN $3 THEN 'superseded after prior continuation turn completed'
+			      ELSE 'superseded by newer completed project task'
+			    END
 			WHERE session_id = $1
 			  AND role = 'user'
 			  AND status = 'pending'
 			  AND COALESCE(metadata->>'source', '') = $2
-		`, sessionID, source); execErr != nil {
+		`, sessionID, source, existingMessageConsumed); execErr != nil {
 			return uuid.Nil, fmt.Errorf("fail stale project continuation messages: %w", execErr)
 		}
 	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {

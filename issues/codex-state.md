@@ -2,6 +2,56 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 05:16 MDT update
+
+- deployed runtime now includes fresh local worker + engine patches on top of pushed `385ff7ee`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+
+### New local fixes
+
+- `internal/jobqueue/worker.go`
+  - `ensureProjectContinuationMessage(...)` no longer reuses a pending `project_execution_continuation` message after that message has already driven a terminal turn
+  - consumed pending continuation messages are now failed as superseded and replaced with a fresh continuation message even when `completed_task_id` is unchanged
+- `internal/jobqueue/worker_integration_test.go`
+  - added `TestJobWorkerEnsureProjectContinuationMessageSupersedesConsumedPendingContinuation`
+  - updated stale-dispatch expectations to require a fresh pending continuation message
+- `internal/turn/engine.go`
+  - generic/empty `project_execution_continuation` replies now enqueue a fresh continuation message instead of silently reusing the old trigger
+  - project continuation prompts now explicitly forbid tool-formatting coaching and re-calling `project.create` inside an existing project session
+  - blocked `project.create` conflicts in async project sessions now stop the turn immediately instead of burning another model round
+- `internal/turn/engine_test.go`
+  - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithFreshMessage`
+  - strengthened prompt coverage for the anti-tool-formatting / anti-project-create guidance
+
+### Focused verification
+
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessageSupersedesConsumedPendingContinuation|RequeueActiveProjectSessionsWithoutTurnsSupersedesStalePendingContinuation|RequeueActiveProjectSessionsWithoutTurnsIgnoresStalePendingDispatch)$' -count=1`
+- `go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithFreshMessage|BuildProjectContinuationActionPrompt|BuildProjectExecutionContinuationPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)$' -count=1`
+- rebuilt `./bin/ottercamp`
+- respawned tmux panes with sourced `.env`
+
+### Live proof on rerun-88
+
+- project session `1a9edb0a-a817-46b1-975d-4d96c8164bcb`
+- old recycled continuation message `d4d11a21-8dff-46c6-87a2-b7f999c45e66` is now:
+  - `status=failed`
+  - `error_message=superseded after prior continuation turn completed`
+- fresh continuation message after restart is:
+  - `16a88f39-1487-49a8-b6bf-7c0e80ad5248`
+  - `completed_task_id=f60329ac-163b-4393-ad99-1d64dc31e8fe`
+- fresh dispatched turn is:
+  - `87d1632a-de6d-4fc5-afd2-bb16b02c4b70`
+  - `status=in_progress`
+  - `trigger_message_id=16a88f39-1487-49a8-b6bf-7c0e80ad5248`
+- worker log confirms the active project dispatch is now rooted to `16a88f39-...`, not `d4d11a21-...`
+
+### Current seam
+
+- the stale-message reuse loop is fixed live
+- rerun-88 is now back on a genuinely fresh project continuation turn
+- next blocker is downstream of that fresh turn’s actual model execution outcome, not continuation-message reuse anymore
+
 ## 2026-03-26 04:26 MDT update
 
 - pushed/deployed commit is now `d6c5c536` on `main` / `origin`
