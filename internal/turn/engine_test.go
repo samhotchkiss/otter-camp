@@ -11765,6 +11765,15 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsProjectDraftListingCoachingRepl
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsMetaTaskErrorNarrationReply(t *testing.T) {
+	t.Parallel()
+
+	content := "It looks like there was an error when attempting to create a new meta task for the project session. The issue is that this project session already has remaining draft tasks to advance, and creating a new meta task is not allowed. Instead, inspect the existing draft tasks and directly queue, decompose, assign, or update the correct task."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatalf("expected meta-task error narration reply to be generic recovery text")
+	}
+}
+
 func TestLooksLikeGenericTaskRecoveryReplyDetectsDependencySuccessAckReply(t *testing.T) {
 	t.Parallel()
 

@@ -9161,3 +9161,28 @@ Current narrowed seam:
 - task-29 `Review and Promote Task 20` shells are already pushed and the prompt count had dropped to `4`
 - the newest local patch closes the next adjacent integration-review shell family that produced task `30`
 - next proof target is the next rerun-88 continuation after this deploy, to verify the prompt count drops again and the project lane stops generating integration-review shells around completed task `19`
+
+## 2026-03-26 08:40 MDT
+
+Latest fixes landed locally:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - widened `looksLikeGenericTaskRecoveryReply(...)` to catch the new live post-guard narration shape:
+    - `It looks like there was an error when attempting to create a new meta task...`
+    - `already has remaining draft tasks to advance, and creating a new meta task is not allowed`
+- [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - added a direct regression for that exact meta-task error narration reply
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(ProjectMetaTaskCoachingReply|ProjectDraftListingCoachingReply|MetaTaskErrorNarrationReply)|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+
+Latest live evidence before deploy:
+- rerun-88 current turn `27a961d1-99cb-479c-b7db-f7dade8ecc97` proved the guard in production:
+  - tool result `227397eb-3cdb-4ff8-9b51-f5025e3c4823`
+  - `project_session_meta_task_disallowed`
+- but the same turn’s follow-on qwen invocation drifted into narrated coaching instead of immediately advancing the next real task:
+  - assistant stream begins `It looks like there was an error when attempting to create a new meta task...`
+
+Current narrowed seam:
+- shell-task creation is being blocked correctly in production
+- the newest local patch converts the follow-on narrated error explanation into a generic recovery retry case
+- next proof target is rerun-88 on the rebuilt binary, to verify that this narrated post-guard reply no longer consumes a full project continuation turn
