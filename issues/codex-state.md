@@ -2,6 +2,65 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 03:24 MDT update
+
+- deployed runtime is now a fresh local patch on top of pushed commit `ccbe9843`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+
+### New local patch: stale triggered-turn recovery no longer fails active project-task turns solely on age
+
+- root cause:
+  - `RecoverStaleInProgressTriggeredTurns(...)` still had an unconditional branch:
+    - `cs.scope_type = 'project_task' AND started_at < 5m`
+  - that meant a live async task turn could be selected for stale recovery even when it still had:
+    - a heartbeating claimed `agent_turn`
+    - recent completed model invocations
+  - that exactly matched the live failure pattern on review session `4edc333d-2380-4262-b383-2d9cc53bc5e5`, where turn `22b3391f-9416-4f9a-8758-a8a1a008183e` was failed at `03:17:30 MDT` after multiple successful qwen invocations
+- behavior:
+  - project-task triggered turns are no longer recovered purely because they are older than five minutes
+  - recovery now requires actual orphan signals from the existing narrower branches:
+    - stale non-heartbeating claimed job without live run / invocation
+    - newer queued retry for the same attempt
+    - post-model orphan with no claimed job
+    - no run / no invocation / no queued dispatch
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RecoverStaleInProgressTriggeredTurns(KeepsHeartbeatingClaimedProjectTaskAttemptAfterRecentCompletedInvocation|FailsNonHeartbeatingClaimedAttemptWithoutRun)|RecoverStaleClaimsKeepsClaimedAgentTurnWith(LiveInvocation|CurrentInProgressTurn)|RequeueActiveExecutionSessionsWithoutTurnsSupersedesStalePendingOlderMessage)' -count=1`
+
+### Current live target before restart
+
+### Live proof after restart
+
+- runtime was rebuilt and restarted with:
+  - `set -a && source .env && set +a`
+  - tmux panes:
+    - `codex-e2e-20260324:0.0` serve
+    - `codex-e2e-20260324:0.1` worker `--concurrency 2`
+- review session `4edc333d-2380-4262-b383-2d9cc53bc5e5` immediately re-entered on a fresh task-review prompt:
+  - claimed job `ef9d91b9-c8c5-4f77-bdce-fc35573b1fdb`
+  - turn `695a5cf4-d0fe-4c0e-a73d-4469077b269b`
+- critical production proof:
+  - at `03:29:47 MDT`, turn `695a5cf4-...` was still `in_progress`
+  - session still held `current_turn_id = 695a5cf4-d0fe-4c0e-a73d-4469077b269b`
+  - the same turn had already progressed through multiple qwen invocations without being reaped:
+    - `2e90e807-36c1-46d2-839d-da27358afa04 | completed`
+    - `5e7b08f2-7999-4ec2-8272-ad6c100c7cb7 | completed`
+    - `96fe6509-b734-4b2a-8c48-b898ea4aaf68 | in_flight`
+  - there was no new worker log line for:
+    - `recovered stale in-progress triggered turn ... threshold=5m0s`
+  - this is the live proof that the old age-only 5-minute stale-trigger reap is gone
+
+### Current live seam
+
+- the stale triggered-turn age bug is fixed in live traffic
+- the active review lane is now limited by normal long-running qwen throughput, not by the previous worker sweep
+- next thing to watch is whether this same turn eventually hits a different downstream seam:
+  - likely stale `in_flight` model-invocation cleanup
+  - or review/control-plane transition handling after a later qwen completion
+
 ## 2026-03-26 03:08 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `5185f554`

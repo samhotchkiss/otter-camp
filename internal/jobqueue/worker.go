@@ -2107,7 +2107,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		            FROM model_invocation mi
 		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
 		              AND mi.status = 'completed'
-		              AND COALESCE(mi.completed_at, mi.created_at) < $3
+		              AND COALESCE(mi.completed_at, mi.created_at) < $2
 		          )
 		          AND NOT EXISTS (
 		            SELECT 1
@@ -2126,7 +2126,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		              AND (jq.payload->>'session_id')::uuid = cs.id
 		              AND (jq.payload->>'message_id')::uuid = COALESCE(live_turn.trigger_message_id, ct.trigger_message_id)
 		              AND COALESCE((jq.payload->>'retry_count')::int, 0) = COALESCE(live_turn.retry_count, ct.retry_count, 0)
-		              AND jq.claimed_at < $4
+		              AND jq.claimed_at < $3
 		              AND jq.updated_at <= jq.claimed_at
 		          )
 		          AND NOT EXISTS (
@@ -2184,7 +2184,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		            FROM model_invocation mi
 		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
 		              AND mi.status = 'completed'
-		              AND COALESCE(mi.completed_at, mi.created_at) < $3
+		              AND COALESCE(mi.completed_at, mi.created_at) < $2
 		          )
 		          AND NOT EXISTS (
 		            SELECT 1
@@ -2196,7 +2196,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		        )
 		     OR (
 		          cs.scope_type = 'project_task'
-		          AND COALESCE(live_turn.started_at, ct.started_at) < $4
+		          AND COALESCE(live_turn.started_at, ct.started_at) < $3
 		          AND NOT EXISTS (
 		            SELECT 1
 		            FROM run r
@@ -2219,10 +2219,9 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		              AND COALESCE((jq.payload->>'retry_count')::int, 0) = COALESCE(live_turn.retry_count, ct.retry_count, 0)
 		          )
 		        )
-		     OR (cs.scope_type = 'project_task' AND COALESCE(live_turn.started_at, ct.started_at) < $1)
 		     OR (
 		          cs.scope_type <> 'project_task'
-		          AND COALESCE(live_turn.started_at, ct.started_at) < $2
+		          AND COALESCE(live_turn.started_at, ct.started_at) < $1
 		          AND NOT EXISTS (
 		            SELECT 1
 		            FROM model_invocation mi
@@ -2251,7 +2250,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		            )
 		          )
 		  )
-	`, w.clock.Now().UTC().Add(-defaultStaleThreshold), w.clock.Now().UTC().Add(-staleContinuationThreshold), w.clock.Now().UTC().Add(-postModelOrphanTurnThreshold), w.clock.Now().UTC().Add(-claimedAgentTurnHeartbeatGrace))
+	`, w.clock.Now().UTC().Add(-staleContinuationThreshold), w.clock.Now().UTC().Add(-postModelOrphanTurnThreshold), w.clock.Now().UTC().Add(-claimedAgentTurnHeartbeatGrace))
 	if err != nil {
 		return 0, fmt.Errorf("list stale in-progress triggered turns: %w", err)
 	}
