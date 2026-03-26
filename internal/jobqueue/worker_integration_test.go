@@ -1644,6 +1644,157 @@ func TestJobWorkerRecoverStaleClaimsKeepsClaimedAgentTurnWithLiveInvocation(t *t
 	}
 }
 
+func TestJobWorkerRecoverStaleClaimsKeepsClaimedAgentTurnWithCurrentInProgressTurn(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "stale-claim-current-turn-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		StaleClaimThreshold:  45 * time.Millisecond,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "recover-stale-claims-keeps-current-turn",
+		DisplayName: "Recover Stale Claims Keeps Current Turn",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Current Turn Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue active turns.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "recover-stale-claims-keeps-current-turn-project",
+		DisplayName:    "Recover Stale Claims Keeps Current Turn Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "recover-stale-claims-keeps-current-turn-template",
+		DisplayName:    "Recover Stale Claims Keeps Current Turn Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Keep claimed agent turn with current turn",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active task.",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &message.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("set current turn: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, claimed_by, claimed_at, attempts, max_attempts, run_after, payload)
+		VALUES (
+			'agent_turn',
+			'claimed',
+			'dead-worker',
+			now() - interval '5 minutes',
+			1,
+			3,
+			now(),
+			$1::jsonb
+		)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, message.ID)).Scan(&jobID); err != nil {
+		t.Fatalf("insert claimed agent_turn job: %v", err)
+	}
+
+	time.Sleep(120 * time.Millisecond)
+
+	recovered, err := worker.RecoverStaleClaims(ctx)
+	if err != nil {
+		t.Fatalf("RecoverStaleClaims failed: %v", err)
+	}
+	if recovered != 0 {
+		t.Fatalf("recovered rows = %d, want 0 for claimed agent_turn with current in-progress turn", recovered)
+	}
+
+	var (
+		status    string
+		claimedBy *string
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, claimed_by
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &claimedBy); err != nil {
+		t.Fatalf("query claimed job: %v", err)
+	}
+	if status != "claimed" {
+		t.Fatalf("job status = %q, want claimed", status)
+	}
+	if claimedBy == nil || *claimedBy != "dead-worker" {
+		t.Fatalf("job claimed_by = %v, want dead-worker", claimedBy)
+	}
+}
+
 func TestJobWorkerReleaseClaimsForWorkerRequeuesGracefulShutdownClaims(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

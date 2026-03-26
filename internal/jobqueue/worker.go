@@ -2702,11 +2702,23 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 				JOIN chat_turn ct
 				  ON ct.id = cs.current_turn_id
 				 AND ct.status = 'in_progress'
-				JOIN model_invocation mi
-				  ON mi.turn_id = ct.id
-				 AND mi.status = 'in_flight'
 				WHERE cs.id = (job_queue.payload->>'session_id')::uuid
 				  AND cs.status = 'active'
+				  AND ct.trigger_message_id = (job_queue.payload->>'message_id')::uuid
+				  AND ct.retry_count = COALESCE((job_queue.payload->>'retry_count')::int, 0)
+				  AND (
+					NOT EXISTS (
+						SELECT 1
+						FROM model_invocation mi_any
+						WHERE mi_any.turn_id = ct.id
+					)
+					OR EXISTS (
+						SELECT 1
+						FROM model_invocation mi
+						WHERE mi.turn_id = ct.id
+						  AND mi.status = 'in_flight'
+					)
+				  )
 			)
 		  )
 		  AND (

@@ -105,6 +105,62 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 - next seam:
   - alignment between startup stale-model-invocation cleanup, stale claimed supervisor jobs, and project-task session repair after restart
 
+## 2026-03-26 02:49 MDT update
+
+- follow-up patch-on-top is now deployed locally after pushed commit `42cd450d`
+- health is green after rebuild/restart
+
+### New local patch: stale-claim recovery also skips matching current in-progress turns before invocation creation
+
+- root cause:
+  - the first stale-claim exclusion only skipped claimed `agent_turn` rows once a matching `model_invocation.status = in_flight` row already existed
+  - there is still a brief dispatch window where:
+    - the worker has created the `in_progress` turn
+    - `current_turn_id` is set
+    - but the `model_invocation` row has not been inserted yet
+  - that left one remaining false-positive `recovered stale claims before claim` event on the 30-second scan
+- behavior:
+  - stale-claim recovery now skips claimed `agent_turn` jobs when the session still has a matching:
+    - `current_turn_id`
+    - current turn `status = in_progress`
+    - matching `trigger_message_id`
+    - matching `retry_count`
+  - the exclusion covers both:
+    - no invocation row yet
+    - existing `in_flight` invocation row
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RecoverStaleClaimsKeepsClaimedAgentTurnWith(LiveInvocation|CurrentInProgressTurn)|RecoverStaleInProgressProjectTurnsWithoutOwnership|RequeueActiveExecutionSessionsWithoutTurnsSupersedesStalePendingOlderMessage)' -count=1`
+
+### Live proof
+
+- after the latest rebuild/restart, the worker launched two fresh qwen turns:
+  - session `63819f07-9d76-4877-8235-2b8d31cc4ef3`
+    - turn `b5bcfa03-4767-4a27-89d9-1f4ce63b74df`
+    - invocation `1adaf233-505a-458a-8c26-6dd2f3964fa5`
+  - session `cd3d6165-4183-44ae-8e32-cc6b0ce85873`
+    - turn `b919cda5-cd43-417a-9f2d-b7121584a1ca`
+    - invocation `4856551c-f433-497b-a407-0f920178850f`
+- the claimed job timestamps for those live lanes continued to move via normal heartbeat:
+  - `eac9deac-df73-421f-a787-c9b0698554d3`
+  - `72394ff3-dbbd-4c63-b822-f87f74d1d524`
+- the one remaining `recovered stale claims before claim count=1` event was **not** either live qwen lane
+- DB proof shows it was an unrelated old supervisor dispatch finally aging out:
+  - job `496a3bb7-0ea5-442c-aa97-2c6c1bb9c639`
+  - now `dead_letter`
+  - `last_error = stale claim exceeded max attempts`
+- so the live-qwen false positive is fixed; the remaining startup noise is legacy stale-job cleanup, not reclamation of current live turns
+
+### Current live seam
+
+- stale review-message selection is fixed
+- stale-claim reclamation of live long-running qwen turns is fixed
+- the next seam is no longer claim-heartbeat handling
+- next seam:
+  - startup stale-model-invocation cleanup and stale supervisor/project-task recovery alignment, especially for sessions like `4edc333d-2380-4262-b383-2d9cc53bc5e5` that end a restart with `current_turn_id = NULL`
+
 ## 2026-03-26 02:05 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `e917a7a7`
