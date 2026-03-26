@@ -2669,12 +2669,18 @@ func shouldRejectProjectContinuationMetaTaskCreate(scope workspaceScope, project
 	if scope.projectID == nil || *scope.projectID == uuid.Nil || *scope.projectID != projectID {
 		return false
 	}
+	if parentTask != nil && parentTaskAlreadySatisfied(parentTask.Metadata) && looksLikeParentCloseoutMetaTask(title, description) {
+		return true
+	}
 	if !looksLikeProjectContinuationMetaTask(title, description) {
 		return false
 	}
 	if parentTask != nil {
 		// Do not let project continuations hide duplicate review/results shells under an already-completed parent task.
-		return strings.EqualFold(strings.TrimSpace(parentTask.WorkStatus), "done")
+		if strings.EqualFold(strings.TrimSpace(parentTask.WorkStatus), "done") {
+			return true
+		}
+		return parentTaskAlreadySatisfied(parentTask.Metadata) && looksLikeParentCloseoutMetaTask(title, description)
 	}
 	for _, task := range tasks {
 		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
@@ -2686,6 +2692,40 @@ func shouldRejectProjectContinuationMetaTaskCreate(scope workspaceScope, project
 				continue
 			}
 		}
+		return true
+	}
+	return false
+}
+
+func parentTaskAlreadySatisfied(metadata json.RawMessage) bool {
+	state, ok := taskorchestration.Parse(metadata)
+	if !ok || state.IntegrationCheck == nil || state.OutcomeAssessment == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(state.IntegrationCheck.Status), "passed") && state.OutcomeAssessment.Satisfied
+}
+
+func looksLikeParentCloseoutMetaTask(title string, description *string) bool {
+	normalized := normalizeComparableText(strings.TrimSpace(title) + " " + derefString(description))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "write close out summary") {
+		return true
+	}
+	if strings.Contains(normalized, "write closeout summary") {
+		return true
+	}
+	if strings.Contains(normalized, "close out summary") {
+		return true
+	}
+	if strings.Contains(normalized, "record integration check as passed") {
+		return true
+	}
+	if strings.Contains(normalized, "mark parent") && strings.Contains(normalized, "done") {
+		return true
+	}
+	if strings.Contains(normalized, "workstream is complete") {
 		return true
 	}
 	return false

@@ -345,6 +345,7 @@ type flowNodeRepository interface {
 
 type flowTemplateRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.FlowTemplate, error)
+	ListCurrent(ctx context.Context, organizationID, projectID *uuid.UUID) ([]repo.FlowTemplate, error)
 }
 
 type browserHandoffCompleter interface {
@@ -690,6 +691,14 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 	satisfiedDraftAutoComplete := allowsSatisfiedDraftAutoComplete(taskRecord, from, target, actor)
 	childReopen := allowsCompletedChildReopen(taskRecord, from, target, actor)
 	orchestrationAutoComplete := allowsOrchestrationAutoComplete(taskRecord, from, target, actor)
+	if target == "done" && taskRecord.FlowTemplateID == nil &&
+		(orchestrationAutoComplete || bootstrapPlanningAutoComplete || satisfiedDraftAutoComplete || actor.AllowDoneBypass) {
+		resolvedFlowTemplateID, resolveErr := s.resolveCompletionFlowTemplateID(ctx, taskRecord)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		taskRecord.FlowTemplateID = resolvedFlowTemplateID
+	}
 	if !isTransitionAllowed(from, target) && !bootstrapGateAutoComplete && !bootstrapSetupComplete && !bootstrapPlanningAutoComplete && !satisfiedDraftAutoComplete && !childReopen && !orchestrationAutoComplete {
 		return nil, ErrInvalidStatusTransition{From: from, To: target}
 	}
@@ -711,7 +720,8 @@ func (s *service) transitionTaskRecordTxWithRetry(ctx context.Context, tx pgx.Tx
 			return nil, err
 		}
 	}
-	if statusRequiresFlowTemplate(target) && taskRecord.FlowTemplateID == nil {
+	if statusRequiresFlowTemplate(target) && taskRecord.FlowTemplateID == nil &&
+		!(target == "done" && (orchestrationAutoComplete || bootstrapPlanningAutoComplete || satisfiedDraftAutoComplete || actor.AllowDoneBypass)) {
 		return nil, ErrFlowTemplateRequired
 	}
 	if target == "queued" && taskRecord.FlowTemplateID != nil {
@@ -1636,6 +1646,40 @@ func orchestrationOutcomeSummary(taskRecord repo.ProjectTask) string {
 		return "Parent task outcome satisfied for " + title + "."
 	}
 	return "Parent task outcome is satisfied."
+}
+
+func (s *service) resolveCompletionFlowTemplateID(ctx context.Context, taskRecord repo.ProjectTask) (*uuid.UUID, error) {
+	if taskRecord.FlowTemplateID != nil && *taskRecord.FlowTemplateID != uuid.Nil {
+		return taskRecord.FlowTemplateID, nil
+	}
+	if s.project != nil {
+		projectRecord, err := s.project.GetByID(ctx, taskRecord.ProjectID)
+		if err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return nil, err
+		}
+		if err == nil && projectRecord.DeployFlowTemplateID != nil && *projectRecord.DeployFlowTemplateID != uuid.Nil {
+			return projectRecord.DeployFlowTemplateID, nil
+		}
+	}
+	if s.flowTemplates == nil {
+		return nil, nil
+	}
+	projectTemplates, err := s.flowTemplates.ListCurrent(ctx, &taskRecord.OrganizationID, &taskRecord.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	var selected *uuid.UUID
+	for _, template := range projectTemplates {
+		if !strings.EqualFold(strings.TrimSpace(template.Slug), "bootstrap-governance-gate") {
+			id := template.ID
+			return &id, nil
+		}
+		if selected == nil && template.ID != uuid.Nil {
+			id := template.ID
+			selected = &id
+		}
+	}
+	return selected, nil
 }
 
 func isOrchestrationOnlyParentTask(taskRecord repo.ProjectTask, children []repo.ProjectTask) bool {

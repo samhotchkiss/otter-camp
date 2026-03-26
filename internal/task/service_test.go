@@ -2247,6 +2247,7 @@ type fakeFlowNodeRepo struct {
 
 type fakeFlowTemplateRepo struct {
 	templates  map[uuid.UUID]repo.FlowTemplate
+	current    []repo.FlowTemplate
 	getByIDErr error
 }
 
@@ -2336,6 +2337,13 @@ func (f *fakeFlowTemplateRepo) GetByID(_ context.Context, id uuid.UUID) (repo.Fl
 		return item, nil
 	}
 	return repo.FlowTemplate{ID: id}, nil
+}
+
+func (f *fakeFlowTemplateRepo) ListCurrent(_ context.Context, _ *uuid.UUID, _ *uuid.UUID) ([]repo.FlowTemplate, error) {
+	if len(f.current) == 0 {
+		return nil, nil
+	}
+	return append([]repo.FlowTemplate(nil), f.current...), nil
 }
 
 func (f *fakeQueueRepo) Enqueue(_ context.Context, entry repo.MergeQueueEntry) (repo.MergeQueueEntry, error) {

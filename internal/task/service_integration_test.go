@@ -2114,6 +2114,45 @@ func TestTaskServiceIntegrationOrchestrationOnlyParentAutoCompletesWithSynthesiz
 	}
 }
 
+func TestTaskServiceIntegrationOrchestrationOnlyParentWithoutFlowTemplateAutoCompletes(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	parent, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:     project.ID,
+		Title:         "Close output validation workstream",
+		CreatedByType: "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	parentRecord, children := seedOrchestrationChildrenForParent(t, ctx, svc, taskRepo, parent.ID, project.ID, template.ID, []string{
+		"Validate output formatting",
+		"Validate end-to-end output delivery",
+	})
+	for _, child := range children {
+		child.WorkStatus = "done"
+		if _, updateErr := taskRepo.Update(ctx, child); updateErr != nil {
+			t.Fatalf("Update child %s: %v", child.ID, updateErr)
+		}
+	}
+
+	completed, err := svc.TransitionStatus(ctx, parentRecord.ID, "done", Actor{
+		Type:                           "system",
+		AllowOrchestrationAutoComplete: true,
+	})
+	if err != nil {
+		t.Fatalf("TransitionStatus done: %v", err)
+	}
+	if completed.WorkStatus != "done" {
+		t.Fatalf("work_status = %q, want done", completed.WorkStatus)
+	}
+}
+
 func TestTaskServiceIntegrationOrchestrationAutoCompleteSynthesizesPlanningArtifactEvidence(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

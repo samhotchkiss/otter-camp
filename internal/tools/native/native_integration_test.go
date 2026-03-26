@@ -32,6 +32,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	tasksvc "github.com/samhotchkiss/otter-camp/internal/task"
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
+	"github.com/samhotchkiss/otter-camp/internal/taskorchestration"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 	"github.com/samhotchkiss/otter-camp/internal/testutil"
@@ -5396,6 +5397,104 @@ func TestIntegrationProjectSessionQueueKeepsPlannedTaskSetFlat(t *testing.T) {
 		if task.WorkStatus != "queued" {
 			t.Fatalf("task %q work_status = %q, want queued", task.Title, task.WorkStatus)
 		}
+	}
+}
+
+func TestIntegrationProjectContinuationRejectsCloseoutShellUnderSatisfiedParent(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	parentMeta, err := taskorchestration.Apply(
+		taskdecomp.ApplyMetadata(json.RawMessage(`{}`), taskdecomp.Plan{
+			RequiresDecomposition: true,
+			PrimaryDeliverable:    "Close output validation workstream",
+		}, "Bounded parent close-out.", []uuid.UUID{}),
+		taskorchestration.Update{
+			IntegrationCheck:  taskorchestration.NewIntegrationCheck("passed", "All child outputs verified.", time.Now().UTC()),
+			OutcomeAssessment: taskorchestration.NewOutcomeAssessment(true, "Parent outcome is already satisfied.", time.Now().UTC()),
+		},
+	)
+	if err != nil {
+		t.Fatalf("seed parent metadata: %v", err)
+	}
+	parent, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Pipeline Output and Integration Validation",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		Metadata:       parentMeta,
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childOne, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Validate output format and delivery",
+		WorkStatus:     "done",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s","workstream_index":2}`, parent.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create child one: %v", err)
+	}
+	childTwo, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Run end-to-end pipeline integration test",
+		WorkStatus:     "done",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s","workstream_index":3}`, parent.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create child two: %v", err)
+	}
+	parent.Metadata = taskdecomp.AppendChildTaskID(parent.Metadata, childOne.ID)
+	parent.Metadata = taskdecomp.AppendChildTaskID(parent.Metadata, childTwo.ID)
+	if _, err := taskRepo.Update(ctx, parent); err != nil {
+		t.Fatalf("update parent child ids: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Satisfied parent close-out guard",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, agent.ID, sessionID)
+
+	out, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": parent.ID.String(),
+		"title":          "Write close-out summary confirming the output/integration workstream is complete",
+		"description":    "Summarize child outputs, record integration check as passed, and mark parent done.",
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); got != projectContinuationMetaTaskCreateError {
+		t.Fatalf("task.create error = %q, want %q", got, projectContinuationMetaTaskCreateError)
+	}
+
+	tasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks: %v", err)
+	}
+	if len(tasks) != 3 {
+		t.Fatalf("project task count = %d, want 3 after blocked close-out shell create", len(tasks))
 	}
 }
 
