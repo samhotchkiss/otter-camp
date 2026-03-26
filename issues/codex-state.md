@@ -8758,3 +8758,40 @@ Live proof so far:
 Current narrowed seam:
 - the duplicate `Analyze Results of Integration Test` creation path is now blocked in code and deployed, but this exact widened title family has not yet been re-attempted live
 - the active rerun-88 continuation is now on the new binary, and the next proof target is whether numeric `task.add_dependency` references succeed live instead of returning `invalid_dependency`
+
+## 2026-03-26 06:42 MDT
+
+Latest fixes landed locally:
+- [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+  - `FailStaleModelInvocations(...)` now treats an async `project` local-model invocation as stale when:
+    - it is older than `8m`
+    - it is still the live current turn
+    - and at least two newer same-provider/same-model invocations have already completed after it
+  - this targets wedged local `qwen`/`llama`/`mistral`/`gemma`/`deepseek` project continuations without regressing the existing `20m` slow-project allowance
+- [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - added `TestJobWorkerFailStaleModelInvocationsFailsOvertakenLocalProjectInvocation`
+
+Focused verification passed:
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerFailStaleModelInvocations(FailsOvertakenLocalProjectInvocation|KeepsSlowAsyncProjectSessionInvocation)$' -count=1`
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324` `serve` and `worker --concurrency 2`
+- `./bin/ottercamp health` is green
+
+Live proof:
+- rerun-88 hung continuation turn:
+  - session `1a9edb0a-a817-46b1-975d-4d96c8164bcb`
+  - turn `c9bc72a4-a5e9-4790-b42b-6e88fba82523`
+  - invocation `e35810ff-aabc-4055-8343-eb868570cb82`
+- that invocation was still `in_flight` from `06:26 MDT` onward while newer local qwen invocations on the same provider/model kept completing after it
+- after redeploy, stale cleanup recovered it immediately:
+  - `model_invocation e35810ff-aabc-4055-8343-eb868570cb82` -> `failed`
+  - `chat_turn c9bc72a4-a5e9-4790-b42b-6e88fba82523` -> `failed`
+  - session `1a9edb0a-a817-46b1-975d-4d96c8164bcb` -> `current_turn_id = NULL`
+  - fresh continuation message synthesized:
+    - `4aafdcc2-8fbb-4f08-a1a7-c0e8bf08c2ab`
+
+Current narrowed seam:
+- the runtime is no longer stuck behind the wedged qwen invocation
+- the next proof target is the fresh rerun-88 continuation spawned after that recovery:
+  - confirm whether it now uses the numeric `task.add_dependency` path successfully
+  - or whether the project lane surfaces a different next orchestration error
