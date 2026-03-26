@@ -993,3 +993,25 @@ What this closes:
 
 - a single Anthropic cooldown refusal should now produce one failed invocation row, not a mini burst of same-turn failures
 - provider cooldown windows should consume less quota pressure and less local write churn during exactly the periods when the system is already constrained
+
+Live proof after deploy:
+
+- the restarted runtime produced a fresh Anthropic cooldown refusal on task session `a4a2681b-3118-4e7e-bbad-1ad4e94d7e25`
+- fresh failed turn:
+  - `dd3d768d-fee4-4812-8d6d-7f47be9a0e14`
+  - `retry_count = 5`
+  - `completed_at = 2026-03-26 15:30:54 MDT`
+  - error `model provider rate limited (retry_after=29m5s): all provider connections are rate limited ...`
+- corresponding invocation activity in the last two minutes showed exactly one failed `provider_rate_limited` row for that turn:
+  - `cddff5d6-8b69-4f47-923f-17bb2608114a`
+- the delayed retry still landed correctly:
+  - job `16762ca3-53cf-4d94-8b8a-b5a7932c7c8a`
+  - `status = pending`
+  - `retry_count = 6`
+  - `run_after = 2026-03-26 15:59:59 MDT`
+  - `rate_limit_jitter_applied = true`
+
+This is the live before/after closure for the bug:
+
+- before the fix, recent cooldown traffic was `84` failed invocations across only `28` turns, with the hot turns burning `3` same-turn failures each
+- after the fix, the fresh post-deploy turn above burned `1` failed invocation and then moved directly to its delayed retry
