@@ -1301,6 +1301,9 @@ func TestIntegrationTaskDependencyCreateRemoveAndCycleDetection(t *testing.T) {
 	if got := mustUUIDValue(t, duplicateResp["dependency_id"]); got != dependencyID {
 		t.Fatalf("duplicate dependency_id = %s, want existing %s", got, dependencyID)
 	}
+	if got, _ := duplicateResp["already_exists"].(bool); !got {
+		t.Fatalf("duplicate already_exists = %v, want true", duplicateResp["already_exists"])
+	}
 	if err := pool.QueryRow(context.Background(), `
 		SELECT COUNT(*)
 		FROM project_task_dependency

@@ -8837,3 +8837,40 @@ Current narrowed seam:
 - dependency-number resolution is fixed and proven
 - the next proof target is the new generic-success-ack detector on the next rerun-88 continuation after `b4c47956-...`
 - if the model produces the same dependency-success acknowledgement again, the engine should now enqueue the fresh retry immediately instead of waiting for worker-side `requeued active project sessions without turns`
+
+## 2026-03-26 07:08 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go)
+  - `task.add_dependency` now checks for an existing identical edge before insert and returns:
+    - `dependency_id=<existing-id>`
+    - `already_exists=true`
+    when the dependency is already present
+- [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - duplicate dependency adds now assert `already_exists=true`
+
+Focused verification passed:
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationTaskAddDependency(ResolvesProjectTaskNumbersInProjectScope|AcceptsTaskAliasTypes)$|TestIntegrationTaskAddRemoveDependencyLifecycle$' -count=1`
+
+Live proof achieved in this stretch:
+- the dependency-success acknowledgement drift detector is now proven live on rerun-88:
+  - prior continuation message `b4c47956-3199-4db6-aa95-ed0adb58ab04` is now `failed`
+  - the same lane immediately advanced to a fresh continuation message:
+    - `a541dfbd-1033-4454-8da1-b883d9b768e8`
+  - current replacement turn:
+    - `0ce4d267-e804-41e0-a9d0-fb5ea0a8330b`
+  - current live invocation:
+    - `5083cfa1-cab0-45b6-92ac-66483ba03a65`
+- the completed prior turn `ed9c1856-1bd2-451d-b1df-ef194a187b7e` again repeated the already-existing dependency:
+  - tool result `966e3e06-d5ec-477b-84dd-b1e44911547e`
+  - `dependency_id=3160e783-fd92-4666-b348-8d3f6253f24b`
+  - assistant then drifted into another generic success acknowledgement:
+    - `b75d87c3-bd2c-4306-970f-5925e4772884`
+    - `The task or subtask dependency has been successfully added...`
+- despite that repeated success-ack reply, the engine did not leave the session idle:
+  - it immediately advanced the project lane into the fresh continuation turn above
+
+Current narrowed seam:
+- the success-acknowledgement retry path is fixed and live-proven
+- the next likely loop source is repeated no-op dependency adds, since `19 -> 20` already exists and qwen is still trying to add it again
+- the latest local patch makes duplicate dependency calls explicit no-ops via `already_exists=true`; that patch is tested but not yet deployed to the live rerun-88 lane

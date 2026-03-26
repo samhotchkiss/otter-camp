@@ -5118,6 +5118,14 @@ func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input 
 	if sourceID == dependsOnID {
 		return map[string]any{"error": "self_dependency"}, nil
 	}
+	if existingID, err := e.lookupExistingDependency(ctx, sourceType, sourceID, dependsOnType, dependsOnID); err != nil {
+		return nil, err
+	} else if existingID != uuid.Nil {
+		return map[string]any{
+			"dependency_id":   existingID,
+			"already_exists": true,
+		}, nil
+	}
 	hasCycle, err := e.dependencies.CheckCycle(ctx, sourceType, sourceID, dependsOnID)
 	if err != nil {
 		return nil, err
@@ -5138,6 +5146,28 @@ func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input 
 		return nil, err
 	}
 	return map[string]any{"dependency_id": created.ID}, nil
+}
+
+func (e *NativeToolExecutor) lookupExistingDependency(ctx context.Context, sourceType string, sourceID uuid.UUID, dependsOnType string, dependsOnID uuid.UUID) (uuid.UUID, error) {
+	if e.pool == nil || sourceID == uuid.Nil || dependsOnID == uuid.Nil {
+		return uuid.Nil, nil
+	}
+	var existingID uuid.UUID
+	err := e.pool.QueryRow(ctx, `
+		SELECT id
+		FROM project_task_dependency
+		WHERE source_type = $1
+		  AND source_id = $2
+		  AND depends_on_type = $3
+		  AND depends_on_id = $4
+	`, strings.TrimSpace(sourceType), sourceID, strings.TrimSpace(dependsOnType), dependsOnID).Scan(&existingID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, nil
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return existingID, nil
 }
 
 func (e *NativeToolExecutor) resolveDependencyScopeID(ctx context.Context, input map[string]any, fieldName, scopeType string) (uuid.UUID, bool) {
