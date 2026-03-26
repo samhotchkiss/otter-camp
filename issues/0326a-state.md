@@ -1015,3 +1015,54 @@ This is the live before/after closure for the bug:
 
 - before the fix, recent cooldown traffic was `84` failed invocations across only `28` turns, with the hot turns burning `3` same-turn failures each
 - after the fix, the fresh post-deploy turn above burned `1` failed invocation and then moved directly to its delayed retry
+
+## Update 15:43 MDT
+
+I used the cooldown window to inspect the hottest recent async `project_task` turns for another deterministic waste family.
+
+What I found:
+
+- one hot task turn, `fb6ea882-1514-4987-b538-2f5b6998dc75`, rewrote the same existing file `config/pipeline-config-invalid.yaml` over and over inside one turn
+- the repeated successful writes all returned the same shape:
+  - `tool_name = file.write`
+  - `path = config/pipeline-config-invalid.yaml`
+  - `byte_size = 731`
+  - `created = false`
+- the assistant text between those writes was mostly blank or obvious tool-troubleshooting narration such as:
+  - `Let me use cli_execute to create the test file:`
+  - `It seems like something is off with the function calls.`
+  - `Let me try a different approach`
+
+Why that matters:
+
+- this is not a blocked validation loop
+- it is successful tool churn inside a single async task turn
+- letting the turn keep paying for identical rewrites of the same existing file is wasted model/tool budget and usually a sign that the lane is stuck in the wrong local strategy
+
+New behavior on the latest code:
+
+- async `project_task` turns now classify repeated successful rewrites of the same existing file as same-turn churn when the runtime sees identical `file.write` output path plus identical `byte_size`
+- the first rewrite is tolerated
+- the second identical rewrite seeds the existing validation-guard path
+- the third identical rewrite in the same turn now ends the turn early instead of letting the loop keep burning rounds
+- this is scoped narrowly:
+  - async `project_task` only
+  - not recovery turns
+  - only `file.write`
+  - only when the file already existed (`created = false`)
+  - only when the runtime sees the same normalized output path and identical `byte_size`
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdIdenticalSuccessfulFileWriteInSameTurn|HandleToolValidationResultsIgnoresSuccessfulFileWriteChurnWhenByteSizeChanges|HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFileEditOldStringNotFoundInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFileReadNotFoundInSameTurn)$' -count=1`
+
+What this closes:
+
+- async task turns no longer get an unlimited leash for successful-but-identical file rewrite churn
+- one more high-cost same-turn waste family now routes through the existing early-stop / fresh-continuation machinery instead of relying on max-tool-call caps
+
+Current status of this slice:
+
+- code is implemented and focused tests pass
+- docs are updated
+- runtime rebuild/restart is the next step before the next Anthropic rerun starts

@@ -491,6 +491,29 @@ Use the same rerun-style canary pattern and compare:
 3. Roll out in the order listed above instead of landing all changes blindly.
 4. Validate on the same canary family that exposed the problem.
 
+## Implementation Status
+
+Implemented so far in this spec:
+
+- budget/accounting now includes `cache_read_tokens`
+- async `project` `listening_eval` is disabled
+- active async `project` and `project_task` sessions suppress summarization enqueue, and summarization defers behind provider cooldown
+- async scope-aware prompt/tool budgets are in place for:
+  - async `project`
+  - async `project_task` review
+  - async `project_task` work
+- repeated deterministic same-turn validation failures now stop early for multiple high-cost blocker families
+- recovery resumes now stop early on repeated focus drift, repeated target drift, repeated empty mutations, and repeated read-only rediscovery
+- provider cooldown telemetry and retry scheduling are preserved across turn failure and runtime restart
+- same-turn retries on `provider_rate_limited` are removed
+- async task lanes now also stop early on repeated successful rewrites of the same existing file when the runtime sees identical `file.write` output path plus `byte_size` churn in one turn
+
+Still pending from this spec:
+
+- deeper canary validation on fresh Anthropic traffic after cooldown windows clear
+- any additional recovery-specific fingerprints that remain after the current async task guardrails
+- operator-facing top-session / top-turn token diagnostics beyond the current shell report
+
 ## Deferred Follow-Up, Not In This Spec
 
 The idea of a manager-specialist or planner-specialist runtime is worth exploring, but it should not be part of this first correction pass. First we need to make the current task abstraction behave like a true bounded-execution container. Only after that should we consider adding a more explicit two-layer execution model.

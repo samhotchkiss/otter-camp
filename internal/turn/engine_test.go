@@ -18426,6 +18426,240 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFileEd
 	}
 }
 
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdIdenticalSuccessfulFileWriteInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	path := "config/pipeline-config-invalid.yaml"
+	byteSize := 731
+	attemptFingerprint := successfulFileWriteChurnAttemptFingerprint(path, byteSize, false)
+	reason := fmt.Sprintf("repeated successful file.write rewrote `%s` with identical byte_size=%d in the same turn", path, byteSize)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.write:" + duplicateSuccessfulFileWriteChurnCode,
+		AttemptFingerprint: attemptFingerprint,
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        duplicateSuccessfulFileWriteChurnCode,
+		FailureReason:      reason,
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate config loading and environment overrides",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	payload := mustRawJSON(t, map[string]any{
+		"tool_name": "file.write",
+		"output": map[string]any{
+			"path":      path,
+			"byte_size": byteSize,
+			"created":   false,
+		},
+	})
+	priorCallID1 := "write-prev-1"
+	priorCallID2 := "write-prev-2"
+	currentCallID := "write-1"
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Let me use cli_execute to create the test file:",
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:  fixture.session.ID,
+		TurnID:     &turnID,
+		Role:       "tool_result",
+		Status:     "final",
+		ToolCallID: &priorCallID1,
+		Content:    string(payload),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:  fixture.session.ID,
+		TurnID:     &turnID,
+		Role:       "tool_result",
+		Status:     "final",
+		ToolCallID: &priorCallID2,
+		Content:    string(payload),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:  fixture.session.ID,
+		TurnID:     &turnID,
+		Role:       "tool_result",
+		Status:     "final",
+		ToolCallID: &currentCallID,
+		Content:    string(payload),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:        currentCallID,
+		Name:      "file.write",
+		Arguments: map[string]any{"path": "tests/test_config_loader.py", "content": "print('hi')"},
+	}}
+	results := []ToolResult{{
+		ToolCallID: currentCallID,
+		Name:       "file.write",
+		Output: map[string]any{
+			"path":      path,
+			"byte_size": byteSize,
+			"created":   false,
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if updated.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updated.WorkStatus)
+	}
+	guard, ok := parseTaskValidationGuard(updated.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if guard.Count != validationLoopTurnStopThreshold {
+		t.Fatalf("guard.Count = %d, want %d", guard.Count, validationLoopTurnStopThreshold)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated identical successful file.write churn in this turn") {
+		t.Fatal("expected repeated successful file.write churn early-stop validation message")
+	}
+}
+
+func TestHandleToolValidationResultsIgnoresSuccessfulFileWriteChurnWhenByteSizeChanges(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	path := "config/pipeline-config-invalid.yaml"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate config loading and environment overrides",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	for idx, size := range []int{731, 732} {
+		callID := fmt.Sprintf("write-prev-%d", idx+1)
+		payload := mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"path":      path,
+				"byte_size": size,
+				"created":   false,
+			},
+		})
+		fixture.messages.create(repo.ChatMessage{
+			SessionID:  fixture.session.ID,
+			TurnID:     &turnID,
+			Role:       "tool_result",
+			Status:     "final",
+			ToolCallID: &callID,
+			Content:    string(payload),
+		})
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:        "write-1",
+		Name:      "file.write",
+		Arguments: map[string]any{"path": "tests/test_config_loader.py", "content": "print('hi')"},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "write-1",
+		Name:       "file.write",
+		Output: map[string]any{
+			"path":      path,
+			"byte_size": 733,
+			"created":   false,
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if handled {
+		t.Fatal("handled = true, want false")
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if _, ok := parseTaskValidationGuard(updated.Metadata); ok {
+		t.Fatal("expected no validation guard metadata for differing byte_size writes")
+	}
+}
+
 func TestHandleToolValidationResultsPersistsRecoveryCheckpointOnRepeatedFocusFailureStop(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

@@ -101,6 +101,7 @@ const (
 	asyncProjectTaskReviewPromptGuardrail     = 20000
 	validationLoopBlockThreshold              = 3
 	validationLoopTurnStopThreshold           = 2
+	duplicateSuccessfulFileWriteChurnCode     = "duplicate_successful_write_churn"
 	validationLoopSuppressionReason           = "validation_loop_blocked"
 	recoveryCLIRepairBudget                   = 1
 	recoveryFileWriteRepairBudget             = 1
@@ -16867,6 +16868,11 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	}
 
 	failures := collectToolValidationFailures(calls, results)
+	churnFailures, err := e.collectAsyncTaskToolResultChurnFailures(ctx, rt, results)
+	if err != nil {
+		return false, err
+	}
+	failures = append(failures, churnFailures...)
 	current, ok := parseTaskValidationGuard(taskRecord.Metadata)
 	recoveryCheckpoint, hasRecoveryCheckpoint := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
 	if len(failures) == 0 {
@@ -17067,6 +17073,52 @@ func (e *TurnEngine) retryReviewValidationLoop(ctx context.Context, rt *turnRunt
 	return true, nil
 }
 
+func (e *TurnEngine) collectAsyncTaskToolResultChurnFailures(ctx context.Context, rt *turnRuntime, results []ToolResult) ([]toolValidationFailure, error) {
+	if e == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return nil, nil
+	}
+	if rt.recoveryTurn ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return nil, nil
+	}
+
+	hasWrite := false
+	for _, result := range results {
+		if strings.EqualFold(strings.TrimSpace(result.Name), "file.write") {
+			hasWrite = true
+			break
+		}
+	}
+	if !hasWrite {
+		return nil, nil
+	}
+
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return nil, err
+	}
+	turnMessages := messagesForTurn(messages, rt.turn.ID)
+	failures := make([]toolValidationFailure, 0, len(results))
+	seen := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		failure, ok := classifyRepeatedSuccessfulFileWriteChurn(turnMessages, result)
+		if !ok {
+			continue
+		}
+		key := strings.TrimSpace(failure.AttemptFingerprint)
+		if key == "" {
+			key = strings.TrimSpace(failure.Fingerprint)
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		failures = append(failures, failure)
+	}
+	return failures, nil
+}
+
 func collectToolValidationFailures(calls []ToolCall, results []ToolResult) []toolValidationFailure {
 	if len(results) == 0 {
 		return nil
@@ -17092,6 +17144,66 @@ func collectToolValidationFailures(calls []ToolCall, results []ToolResult) []too
 		}
 	}
 	return failures
+}
+
+func classifyRepeatedSuccessfulFileWriteChurn(turnMessages []repo.ChatMessage, result ToolResult) (toolValidationFailure, bool) {
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.write") || strings.TrimSpace(result.Error) != "" {
+		return toolValidationFailure{}, false
+	}
+	path := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
+	byteSize := anyInt(result.Output["byte_size"])
+	created, _ := boolValue(result.Output["created"])
+	if path == "" || byteSize <= 0 || created {
+		return toolValidationFailure{}, false
+	}
+
+	matchCount := 0
+	currentRecorded := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" || !strings.EqualFold(strings.TrimSpace(toolName), "file.write") {
+			continue
+		}
+		writtenPath := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		if !sameWorkspaceRelativePath(writtenPath, path) {
+			continue
+		}
+		if anyInt(output["byte_size"]) != byteSize {
+			continue
+		}
+		messageCreated, _ := boolValue(output["created"])
+		if messageCreated != created {
+			continue
+		}
+		matchCount++
+		if message.ToolCallID != nil &&
+			strings.TrimSpace(*message.ToolCallID) != "" &&
+			strings.TrimSpace(*message.ToolCallID) == strings.TrimSpace(result.ToolCallID) {
+			currentRecorded = true
+		}
+	}
+	if !currentRecorded {
+		matchCount++
+	}
+	if matchCount < 2 {
+		return toolValidationFailure{}, false
+	}
+
+	reason := fmt.Sprintf("repeated successful file.write rewrote `%s` with identical byte_size=%d in the same turn", path, byteSize)
+	return buildToolValidationFailure(
+		"file.write",
+		duplicateSuccessfulFileWriteChurnCode,
+		reason,
+		successfulFileWriteChurnAttemptFingerprint(path, byteSize, created),
+		path,
+	), true
+}
+
+func successfulFileWriteChurnAttemptFingerprint(path string, byteSize int, created bool) string {
+	return fmt.Sprintf("file.write:success:%s:%d:%t", normalizeWorkspaceRelativePath(path), byteSize, created)
 }
 
 func turnHasSuccessfulFileMutation(results []ToolResult) bool {
@@ -17451,6 +17563,9 @@ func buildValidationLoopBlockReason(state taskValidationGuardState) string {
 		reason = strings.TrimSpace(state.FailureCode)
 	}
 	toolName := strings.TrimSpace(state.ToolName)
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateSuccessfulFileWriteChurnCode) {
+		return fmt.Sprintf("deterministic same-turn successful file.write churn blocked after %d identical rewrites: %s", state.Count, reason)
+	}
 	if toolName == "" {
 		return fmt.Sprintf("deterministic tool validation loop blocked after %d identical failures: %s", state.Count, reason)
 	}
@@ -17629,6 +17744,9 @@ func buildValidationLoopTurnStopSystemMessage(state taskValidationGuardState) st
 		reason = strings.TrimSpace(state.FailureCode)
 	}
 	toolName := strings.TrimSpace(state.ToolName)
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateSuccessfulFileWriteChurnCode) {
+		return fmt.Sprintf("[Repeated identical successful file.write churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
+	}
 	if toolName == "" {
 		return fmt.Sprintf("[Repeated identical tool validation failure in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
 	}
