@@ -79,6 +79,7 @@ const (
 	defaultSummarizeLayerBudget               = 0
 	chunkPollSteerEveryNChunks                = 10
 	maxContinuationTurnDepth                  = 3
+	maxReadOnlyDiscoveryCapTurns             = 5
 	defaultTurnConsumerName                   = "turn-engine.user-message"
 	defaultReactionConsumerName               = "turn-engine.reactions"
 	defaultTurnCompletedName                  = "turn-engine.turn-completed"
@@ -7397,6 +7398,13 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 					return e.ensureRecoveryTurnDurableTaskState(ctx, rt)
 				}
 			}
+			blocked, err := e.maybeBlockRepeatedReadOnlyDiscoveryCapTurns(ctx, rt)
+			if err != nil {
+				return fmt.Errorf("maybeBlockRepeatedReadOnlyDiscoveryCapTurns: %w", err)
+			}
+			if blocked {
+				return nil
+			}
 			shouldContinue, err := e.shouldContinueMaxToolCalls(ctx, rt)
 			if err != nil {
 				return fmt.Errorf("shouldContinueMaxToolCalls: %w", err)
@@ -9290,6 +9298,249 @@ func (e *TurnEngine) shouldContinueMaxToolCalls(ctx context.Context, rt *turnRun
 		return false, err
 	}
 	return continuations < maxContinuationTurnDepth, nil
+}
+
+func (e *TurnEngine) maybeBlockRepeatedReadOnlyDiscoveryCapTurns(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return false, nil
+	}
+	blockReason, systemMessage, ok, err := e.repeatedReadOnlyDiscoveryCapTurnReason(ctx, rt)
+	if err != nil || !ok {
+		return false, err
+	}
+	taskRecord, err := e.lookupSessionTask(ctx, rt.session)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if e.taskTransitions == nil {
+		return false, fmt.Errorf(errMissingTaskTransitionServiceForValidationBlock)
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		if _, err := e.taskTransitions.MarkBlocked(ctx, taskRecord.ID, blockReason, tasksvc.Actor{Type: "system"}); err != nil {
+			var transitionErr tasksvc.ErrInvalidStatusTransition
+			if errors.As(err, &transitionErr) {
+				refreshed, refreshErr := e.tasks.GetByID(ctx, taskRecord.ID)
+				if refreshErr == nil {
+					nextStatus := strings.ToLower(strings.TrimSpace(refreshed.WorkStatus))
+					if nextStatus == "blocked" || nextStatus == "queued" || nextStatus == "in_progress" || nextStatus == "done" || nextStatus == "cancelled" {
+						rt.stopReason = stopReasonValidationBlocked
+						if _, msgErr := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); msgErr != nil {
+							return false, msgErr
+						}
+						if err := e.completeTurn(ctx, rt); err != nil {
+							return false, err
+						}
+						return true, nil
+					}
+				}
+			}
+			return false, err
+		}
+	}
+	rt.stopReason = stopReasonValidationBlocked
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
+		return false, err
+	}
+	if err := e.completeTurn(ctx, rt); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) repeatedReadOnlyDiscoveryCapTurnReason(ctx context.Context, rt *turnRuntime) (string, string, bool, error) {
+	if e == nil || e.turns == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
+		return "", "", false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(rt.stopReason), stopReasonMaxToolCalls) ||
+		rt.recoveryTurn {
+		return "", "", false, nil
+	}
+	taskRecord, err := e.lookupSessionTask(ctx, rt.session)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return "", "", false, nil
+		}
+		return "", "", false, err
+	}
+	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return "", "", false, nil
+	}
+
+	turns, err := e.turns.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return "", "", false, err
+	}
+	recentTurnIDs := recentConsecutiveMaxToolCallTurnIDs(turns, rt.turn, maxReadOnlyDiscoveryCapTurns)
+	if len(recentTurnIDs) < maxReadOnlyDiscoveryCapTurns {
+		return "", "", false, nil
+	}
+
+	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
+	if err != nil {
+		return "", "", false, err
+	}
+	toolNames := map[string]struct{}{}
+	errorCodes := map[string]struct{}{}
+	for _, turnID := range recentTurnIDs {
+		turnToolNames, turnErrorCodes, ok := summarizeReadOnlyDiscoveryTurn(messages, turnID)
+		if !ok {
+			return "", "", false, nil
+		}
+		for _, toolName := range turnToolNames {
+			toolNames[toolName] = struct{}{}
+		}
+		for _, errorCode := range turnErrorCodes {
+			errorCodes[errorCode] = struct{}{}
+		}
+	}
+	sortedToolNames := sortedSetValues(toolNames)
+	sortedErrorCodes := sortedSetValues(errorCodes)
+	reason := fmt.Sprintf(
+		"repeated read-only discovery churn across %d consecutive max-tool-call turns using %s",
+		len(recentTurnIDs),
+		joinQuotedStrings(sortedToolNames),
+	)
+	if len(sortedErrorCodes) > 0 {
+		reason += fmt.Sprintf(" with recurring %s", joinQuotedStrings(sortedErrorCodes))
+	}
+	reason += " and no mutation tools"
+	systemMessage := fmt.Sprintf(
+		"[Repeated read-only discovery churn across %d consecutive max-tool-call turns using %s",
+		len(recentTurnIDs),
+		joinQuotedStrings(sortedToolNames),
+	)
+	if len(sortedErrorCodes) > 0 {
+		systemMessage += fmt.Sprintf(" with recurring %s", joinQuotedStrings(sortedErrorCodes))
+	}
+	systemMessage += ". Ending this task lane here instead of auto-continuing another discovery-only pass. Resume only when the next attempt can take a concrete mutation step on the deliverable.]"
+	return reason, systemMessage, true, nil
+}
+
+func recentConsecutiveMaxToolCallTurnIDs(turns []repo.ChatTurn, currentTurn *chat.ChatTurn, threshold int) []uuid.UUID {
+	if currentTurn == nil || currentTurn.ID == uuid.Nil || threshold <= 0 {
+		return nil
+	}
+	ordered := make([]repo.ChatTurn, 0, len(turns))
+	for _, turn := range turns {
+		ordered = append(ordered, turn)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].TurnNumber == ordered[j].TurnNumber {
+			return ordered[i].ID.String() > ordered[j].ID.String()
+		}
+		return ordered[i].TurnNumber > ordered[j].TurnNumber
+	})
+
+	collected := make([]uuid.UUID, 0, threshold)
+	started := false
+	for _, turn := range ordered {
+		if turn.ID == currentTurn.ID {
+			collected = append(collected, turn.ID)
+			started = true
+			if len(collected) >= threshold {
+				break
+			}
+			continue
+		}
+		if !started {
+			continue
+		}
+		if turn.TurnNumber >= currentTurn.TurnNumber {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(turn.Status), "completed") || turn.StopReason == nil || !strings.EqualFold(strings.TrimSpace(*turn.StopReason), stopReasonMaxToolCalls) {
+			return nil
+		}
+		collected = append(collected, turn.ID)
+		if len(collected) >= threshold {
+			break
+		}
+	}
+	if len(collected) < threshold {
+		return nil
+	}
+	return collected
+}
+
+func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUID) ([]string, []string, bool) {
+	if turnID == uuid.Nil {
+		return nil, nil, false
+	}
+	toolNames := map[string]struct{}{}
+	errorCodes := map[string]struct{}{}
+	toolResults := 0
+	for _, message := range messagesForTurn(messages, turnID) {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || !strings.EqualFold(strings.TrimSpace(message.Status), "final") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+		if !isReadOnlyDiscoveryTool(normalizedToolName) {
+			return nil, nil, false
+		}
+		toolResults++
+		toolNames[normalizedToolName] = struct{}{}
+		errorCode := normalizeValidationFailureCode(errText)
+		if errorCode == "" {
+			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+		}
+		if errorCode != "" {
+			errorCodes[errorCode] = struct{}{}
+		}
+	}
+	if toolResults == 0 {
+		return nil, nil, false
+	}
+	return sortedSetValues(toolNames), sortedSetValues(errorCodes), true
+}
+
+func isReadOnlyDiscoveryTool(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.list", "file.read", "git.log", "git.diff", "task.get", "flow.get_template":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortedSetValues(values map[string]struct{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func joinQuotedStrings(values []string) string {
+	if len(values) == 0 {
+		return "no tools"
+	}
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		quoted = append(quoted, "`"+trimmed+"`")
+	}
+	if len(quoted) == 0 {
+		return "no tools"
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func projectBootstrapRecoverableMaxToolCallFailure(progress projectBootstrapProgress) bool {
@@ -21759,6 +22010,9 @@ func parseToolResultMessage(content string) (string, map[string]any, string, boo
 	}
 	output, _ := payload["output"].(map[string]any)
 	errText := strings.TrimSpace(anyString(payload["error"]))
+	if errText == "" && output != nil {
+		errText = strings.TrimSpace(anyString(output["error"]))
+	}
 	return toolName, output, errText, true
 }
 

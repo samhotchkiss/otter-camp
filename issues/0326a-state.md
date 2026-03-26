@@ -1216,3 +1216,53 @@ What it does not prove yet:
 
 - it does not prove the task finished successfully
 - it does prove the runtime is now willing to cut a hot turn over to a fresh turn instead of letting one task turn expand without bound
+
+## Update 16:28 MDT
+
+I used the fresh Anthropic traffic to look for the next safe hardening slice instead of guessing.
+
+What the live report showed:
+
+- `scripts/token-usage-report.sh --hours 0.25 --limit 6` now reports completed turns by `stop_reason`
+- in the last 15 minutes:
+  - `129` async `project_task` turns completed with `stop_reason=max_tool_calls`
+  - only `5` async `project_task` turns completed with `stop_reason=validation_loop_blocked`
+  - there were still `0` rate-limit failures and `0` `listening_eval` invocations
+
+The important discovery was a new cross-turn churn family:
+
+- hot session `f0157711-35ea-43cc-8b2d-76cd940d96c9` kept burning many tiny async task turns
+- recent turns were a long chain of `3` completed model invocations each, all ending on `max_tool_calls`
+- the tool mix across those turns was read-only discovery only:
+  - `file.list`
+  - `git.log`
+  - `task.get`
+  - `file.read`
+  - `git.diff`
+  - occasional `flow.get_template`
+- recurring non-progress errors included `path_traversal` and `exit status 128`
+
+That is not healthy bounded execution. It is cross-turn discovery churn that survives the same-turn guards.
+
+I built the next runtime slice for that exact family:
+
+- async `project_task` work lanes now stop after `5` consecutive `max_tool_calls` turns when every turn in the sequence is read-only discovery only
+- the runtime marks the task lane `blocked` instead of auto-continuing another discovery-only pass
+- the operator report now also reads native validation failures from `output.error`, which fixes a diagnostics blind spot around native tool results
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(ParseToolResultMessageUsesOutputErrorFallback|MaybeBlockRepeatedReadOnlyDiscoveryCapTurns|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsIgnoresMutationTurns)$' -count=1`
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdIdenticalSuccessfulFileWriteInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFileReadNotFoundInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFileEditOldStringNotFoundInSameTurn|ParseToolResultMessageUsesOutputErrorFallback|MaybeBlockRepeatedReadOnlyDiscoveryCapTurns|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsIgnoresMutationTurns)$' -count=1`
+
+Current status of this slice:
+
+- code complete
+- focused tests green
+- docs/spec updated
+- not yet rebuilt/restarted into the live runtime
+
+Why I stopped here:
+
+- this is the first new slice after Anthropic recovered that is clearly data-backed and narrow
+- deploying it will interrupt the current live runtime, so I kept this as a clean checkpoint first

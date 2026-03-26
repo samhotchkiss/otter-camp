@@ -261,7 +261,15 @@ tool_results AS (
     cm.turn_id,
     cm.session_id,
     cm.created_at,
-    cm.content::jsonb AS payload
+    cm.content::jsonb AS payload,
+    NULLIF(
+      COALESCE(
+        cm.content::jsonb->>'error',
+        cm.content::jsonb->'output'->>'error',
+        ''
+      ),
+      ''
+    ) AS tool_error
   FROM chat_message cm
   JOIN chat_session cs ON cs.id = cm.session_id
   CROSS JOIN params p
@@ -284,7 +292,7 @@ successful_writes AS (
     MAX(created_at) AS last_seen
   FROM tool_results
   WHERE COALESCE(payload->>'tool_name', '') = 'file.write'
-    AND COALESCE(payload->>'error', '') = ''
+    AND tool_error IS NULL
     AND COALESCE(payload->'output'->>'path', '') <> ''
     AND COALESCE((payload->'output'->>'byte_size')::int, 0) > 0
   GROUP BY turn_id, session_id, payload->'output'->>'path', COALESCE((payload->'output'->>'byte_size')::int, 0), COALESCE((payload->'output'->>'created')::boolean, false)
@@ -301,6 +309,46 @@ SELECT
 FROM successful_writes
 WHERE write_count > 1
 ORDER BY write_count DESC, last_seen DESC
+LIMIT :'limit_rows'::int;
+
+\echo
+\echo '== Completed Turns By Stop Reason =='
+WITH params AS (
+  SELECT
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
+    NULLIF(:'org_id', '')::uuid AS org_id
+),
+turn_rollup AS (
+  SELECT
+    ct.id AS turn_id,
+    cs.scope_type,
+    cs.mode,
+    COALESCE(NULLIF(ct.stop_reason, ''), '∅') AS stop_reason,
+    COUNT(mi.id) FILTER (WHERE mi.status = 'completed') AS completed_invocations,
+    COUNT(mi.id) FILTER (WHERE mi.status = 'failed') AS failed_invocations,
+    COALESCE(SUM(COALESCE(mi.input_tokens, 0) + COALESCE(mi.output_tokens, 0) + COALESCE(mi.cache_read_tokens, 0)), 0) AS total_tokens,
+    MAX(COALESCE(mi.created_at, ct.completed_at, ct.started_at)) AS last_seen
+  FROM chat_turn ct
+  JOIN chat_session cs ON cs.id = ct.session_id
+  LEFT JOIN model_invocation mi ON mi.turn_id = ct.id
+  CROSS JOIN params p
+  WHERE ct.status = 'completed'
+    AND COALESCE(ct.completed_at, ct.started_at) >= p.since_at
+    AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+  GROUP BY ct.id, cs.scope_type, cs.mode, COALESCE(NULLIF(ct.stop_reason, ''), '∅')
+)
+SELECT
+  COALESCE(scope_type, '∅') AS scope_type,
+  COALESCE(mode, '∅') AS mode,
+  stop_reason,
+  COUNT(*) AS turns,
+  SUM(completed_invocations) AS completed_invocations,
+  SUM(failed_invocations) AS failed_invocations,
+  SUM(total_tokens) AS total_tokens,
+  MAX(last_seen) AS last_seen
+FROM turn_rollup
+GROUP BY COALESCE(scope_type, '∅'), COALESCE(mode, '∅'), stop_reason
+ORDER BY total_tokens DESC, turns DESC, stop_reason
 LIMIT :'limit_rows'::int;
 
 \echo

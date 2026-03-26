@@ -20052,6 +20052,234 @@ func TestLooksLikeRecoveryFileDraftRejectsLongImperativeNarration(t *testing.T) 
 	}
 }
 
+func mustMarshalJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	return encoded
+}
+
+func TestParseToolResultMessageUsesOutputErrorFallback(t *testing.T) {
+	t.Parallel()
+
+	content := string(mustMarshalJSON(t, map[string]any{
+		"tool_name": "file.write",
+		"output": map[string]any{
+			"error":   "path_required",
+			"message": "file.write requires a non-empty path.",
+		},
+	}))
+	toolName, output, errText, ok := parseToolResultMessage(content)
+	if !ok {
+		t.Fatal("parseToolResultMessage returned ok=false")
+	}
+	if toolName != "file.write" {
+		t.Fatalf("toolName = %q, want file.write", toolName)
+	}
+	if errText != "path_required" {
+		t.Fatalf("errText = %q, want path_required", errText)
+	}
+	if got := anyString(output["message"]); !strings.Contains(got, "non-empty path") {
+		t.Fatalf("output.message = %q, want non-empty path guidance", got)
+	}
+}
+
+func TestMaybeBlockRepeatedReadOnlyDiscoveryCapTurns(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fakeTaskRepo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		ProjectID:  projectID,
+		TaskNumber: 13,
+		Title:      "Validate pipeline metrics and alerting hooks",
+		WorkStatus: "in_progress",
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	var currentTurn *chat.ChatTurn
+	for i := 1; i <= maxReadOnlyDiscoveryCapTurns; i++ {
+		turnID := uuid.New()
+		status := "completed"
+		var stopReason *string
+		if i < maxReadOnlyDiscoveryCapTurns {
+			reason := stopReasonMaxToolCalls
+			stopReason = &reason
+		} else {
+			status = "in_progress"
+		}
+		turn := &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: i,
+			Status:     status,
+			StopReason: stopReason,
+		}
+		fixture.chat.turns[turnID] = turn
+		fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+		if i == maxReadOnlyDiscoveryCapTurns {
+			currentTurn = turn
+		}
+		for _, payload := range []map[string]any{
+			{"tool_name": "file.list", "output": map[string]any{"path": "scripts"}},
+			{"tool_name": "git.log", "output": map[string]any{"error": "path_traversal"}},
+			{"tool_name": "task.get", "output": map[string]any{"task_number": 13}},
+		} {
+			fixture.messages.create(repo.ChatMessage{
+				SessionID:     fixture.session.ID,
+				TurnID:        &turnID,
+				Role:          "tool_result",
+				Content:       string(mustMarshalJSON(t, payload)),
+				ContentFormat: "text",
+				Status:        "final",
+			})
+		}
+	}
+	if currentTurn == nil {
+		t.Fatal("missing current turn")
+	}
+
+	rt := &turnRuntime{
+		session:    fixture.session,
+		turn:       currentTurn,
+		stopReason: stopReasonMaxToolCalls,
+	}
+
+	blocked, err := fixture.engine.maybeBlockRepeatedReadOnlyDiscoveryCapTurns(context.Background(), rt)
+	if err != nil {
+		t.Fatalf("maybeBlockRepeatedReadOnlyDiscoveryCapTurns: %v", err)
+	}
+	if !blocked {
+		t.Fatal("expected repeated read-only discovery churn to block the task lane")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked calls = %d, want 1", len(blocker.calls))
+	}
+	if !strings.Contains(blocker.calls[0].reason, "repeated read-only discovery churn across 5 consecutive max-tool-call turns") {
+		t.Fatalf("block reason = %q, want repeated read-only discovery churn", blocker.calls[0].reason)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated read-only discovery churn across 5 consecutive max-tool-call turns") {
+		t.Fatal("expected repeated discovery churn system message")
+	}
+	completed := fixture.chat.turnByID(currentTurn.ID)
+	if completed == nil || !strings.EqualFold(strings.TrimSpace(completed.Status), "completed") {
+		t.Fatalf("current turn status = %v, want completed", completed)
+	}
+}
+
+func TestMaybeBlockRepeatedReadOnlyDiscoveryCapTurnsIgnoresMutationTurns(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fakeTaskRepo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		ProjectID:  projectID,
+		TaskNumber: 18,
+		Title:      "Implement pipeline config JSON schema with defaults",
+		WorkStatus: "in_progress",
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	var currentTurn *chat.ChatTurn
+	for i := 1; i <= maxReadOnlyDiscoveryCapTurns; i++ {
+		turnID := uuid.New()
+		status := "completed"
+		var stopReason *string
+		if i < maxReadOnlyDiscoveryCapTurns {
+			reason := stopReasonMaxToolCalls
+			stopReason = &reason
+		} else {
+			status = "in_progress"
+		}
+		turn := &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: i,
+			Status:     status,
+			StopReason: stopReason,
+		}
+		fixture.chat.turns[turnID] = turn
+		fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+		if i == maxReadOnlyDiscoveryCapTurns {
+			currentTurn = turn
+		}
+
+		payloads := []map[string]any{
+			{"tool_name": "file.list", "output": map[string]any{"path": "scripts"}},
+			{"tool_name": "task.get", "output": map[string]any{"task_number": 18}},
+		}
+		if i == maxReadOnlyDiscoveryCapTurns-1 {
+			payloads = append(payloads, map[string]any{"tool_name": "file.write", "output": map[string]any{"path": "scripts/pipeline_config.py", "byte_size": 262}})
+		} else {
+			payloads = append(payloads, map[string]any{"tool_name": "git.log", "output": map[string]any{"error": "path_traversal"}})
+		}
+		for _, payload := range payloads {
+			fixture.messages.create(repo.ChatMessage{
+				SessionID:     fixture.session.ID,
+				TurnID:        &turnID,
+				Role:          "tool_result",
+				Content:       string(mustMarshalJSON(t, payload)),
+				ContentFormat: "text",
+				Status:        "final",
+			})
+		}
+	}
+	if currentTurn == nil {
+		t.Fatal("missing current turn")
+	}
+
+	rt := &turnRuntime{
+		session:    fixture.session,
+		turn:       currentTurn,
+		stopReason: stopReasonMaxToolCalls,
+	}
+
+	blocked, err := fixture.engine.maybeBlockRepeatedReadOnlyDiscoveryCapTurns(context.Background(), rt)
+	if err != nil {
+		t.Fatalf("maybeBlockRepeatedReadOnlyDiscoveryCapTurns: %v", err)
+	}
+	if blocked {
+		t.Fatal("expected mutation-bearing history not to trigger read-only discovery block")
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked calls = %d, want 0", len(blocker.calls))
+	}
+	if fixture.messages.containsContentSubstring("Repeated read-only discovery churn") {
+		t.Fatal("unexpected repeated discovery churn system message")
+	}
+}
+
 type unitFixture struct {
 	engine        *TurnEngine
 	events        *fakeEventBus

@@ -513,13 +513,19 @@ Implemented so far in this spec:
 - `scripts/token-usage-report.sh` now surfaces:
   - hot turns with repeated rate-limit failures
   - duplicate successful `file.write` churn grouped by turn/path/byte-size
+  - completed turns grouped by `stop_reason`
   - `listening_eval` grouped by session scope/mode
   - sessions with active summarization backoff metadata
   - fractional `--hours` windows for short live checks such as `--hours 0.25`
+- tool-result parsing and operator diagnostics now treat native validation failures stored in `output.error` as real tool errors instead of silently classifying them as successes
+- async `project_task` work lanes now have a session-level cutoff for cross-turn read-only discovery churn:
+  - after `5` consecutive `max_tool_calls` turns
+  - when every turn is limited to read-only discovery tools such as `file.list`, `file.read`, `git.log`, `git.diff`, `task.get`, and `flow.get_template`
+  - the runtime blocks the task lane instead of auto-continuing another discovery-only pass
 
 Still pending from this spec:
 
-- deeper canary validation on fresh Anthropic traffic after cooldown windows clear
+- live deployment and Anthropic-canary proof for the new cross-turn read-only discovery cutoff
 - any additional recovery-specific fingerprints that remain after the current async task guardrails
 - richer operator diagnostics directly in product surfaces instead of shell-only reporting
 
