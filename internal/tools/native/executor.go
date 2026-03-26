@@ -549,6 +549,8 @@ type workspaceScope struct {
 	sessionID      *uuid.UUID
 	projectID      *uuid.UUID
 	taskID         *uuid.UUID
+	sessionScope   string
+	sessionMode    string
 }
 
 func (e *NativeToolExecutor) resolveScope(ctx context.Context) (workspaceScope, error) {
@@ -579,6 +581,8 @@ func (e *NativeToolExecutor) resolveScope(ctx context.Context) (workspaceScope, 
 	}
 
 	scopeType := strings.TrimSpace(strings.ToLower(session.ScopeType))
+	scope.sessionScope = scopeType
+	scope.sessionMode = strings.TrimSpace(strings.ToLower(session.Mode))
 	switch scopeType {
 	case "project":
 		projectID := session.ScopeID

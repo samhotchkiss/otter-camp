@@ -9212,3 +9212,28 @@ Current narrowed seam:
 - project-continuation retries are now getting past narrated meta-task errors and into real task-tree inspection
 - the newest local patch converts the follow-on task-list narration into another generic recovery retry case
 - next proof target is rerun-88 on the rebuilt binary, to verify that this task-list summary no longer consumes a full continuation turn
+
+## 2026-03-26 08:59 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/query_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/query_tools.go)
+  - default `task.list` behavior inside async `project` sessions now hides continuation-shell draft tasks, bootstrap gate drafts, and bootstrap setup drafts unless `include_meta_drafts=true` is explicitly requested
+  - this keeps the raw tool payload aligned with the prompt-side “4 actionable draft tasks” count instead of re-exposing historical shell drafts 21-30
+- [`internal/tools/native/executor.go`](/Users/sam/dev/otter-camp/internal/tools/native/executor.go)
+  - extended resolved workspace scope with session scope/mode so query tools can distinguish async project-session defaults from general org/task contexts
+- [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - added coverage proving async project-session `task.list` hides continuation meta drafts by default but still returns them when `include_meta_drafts=true`
+
+Focused verification passed:
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationTaskList(DefaultsToCurrentProjectSessionScope|HidesProjectContinuationMetaDraftsByDefault)$' -count=1`
+
+Latest live evidence before deploy:
+- rerun-88 already proved the earlier narration detector:
+  - turn `3050966c-80ea-4702-a38c-6226b32ac26e` failed after assistant message `55040b62-198e-425b-98c3-4cfa14060aee` began `Based on the list of tasks provided...`
+  - the session advanced to retry turn `c70fe25d-2489-48cf-8df2-15b8bdc38b70`
+- the remaining structural issue is that raw `task.list` output still contains historical shell drafts (`21`-`30`) even though prompt-side counting already excludes them
+
+Current narrowed seam:
+- generic narration of `task.list` output is now retried instead of consumed
+- the newest local patch removes the noisy shell drafts from the default async project-session `task.list` payload itself
+- next proof target is rerun-88 on the rebuilt binary, to verify qwen now sees only the actionable project draft set when it re-lists tasks

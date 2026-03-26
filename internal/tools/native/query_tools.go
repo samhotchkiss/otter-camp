@@ -197,6 +197,9 @@ func (e *NativeToolExecutor) handleTaskList(ctx context.Context, input map[strin
 		if statusFilter != "" && !strings.EqualFold(task.WorkStatus, statusFilter) {
 			continue
 		}
+		if shouldHideFromDefaultProjectTaskList(scope, input, task) {
+			continue
+		}
 		filtered = append(filtered, task)
 	}
 	sort.Slice(filtered, func(i, j int) bool {
@@ -236,6 +239,118 @@ func (e *NativeToolExecutor) handleTaskList(ctx context.Context, input map[strin
 		"tasks": items,
 		"meta":  map[string]any{"cursor": nextCursor},
 	}, nil
+}
+
+func shouldHideFromDefaultProjectTaskList(scope workspaceScope, input map[string]any, task repo.ProjectTask) bool {
+	if scope.sessionScope != "project" || scope.sessionMode != "async" {
+		return false
+	}
+	if _, ok := readUUID(input, "project_id"); ok {
+		return false
+	}
+	if readBool(input, "include_meta_drafts", false) {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+		return false
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(task.Metadata, &metadata); err == nil {
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			return true
+		}
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); setupTask {
+			return true
+		}
+	}
+	return looksLikeProjectContinuationMetaDraft(task.Title, task.Description)
+}
+
+func looksLikeProjectContinuationMetaDraft(title string, description *string) bool {
+	descriptionText := ""
+	if description != nil {
+		descriptionText = *description
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(title+" "+descriptionText)), " "))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "review and promote draft tasks") {
+		return true
+	}
+	if strings.Contains(normalized, "review and validate integration test results") {
+		return true
+	}
+	if strings.Contains(normalized, "analyze results of integration test") {
+		return true
+	}
+	if strings.Contains(normalized, "review and update pipeline test results") {
+		return true
+	}
+	if strings.Contains(normalized, "review and validate pipeline integration test results") {
+		return true
+	}
+	if strings.Contains(normalized, "analyze test results and document findings") {
+		return true
+	}
+	if strings.Contains(normalized, "select and decompose next bounded task") {
+		return true
+	}
+	if strings.Contains(normalized, "review and prepare for next phase") {
+		return true
+	}
+	if strings.Contains(normalized, "review and promote task ") {
+		return true
+	}
+	if strings.Contains(normalized, "prepare for next phase of project execution") {
+		return true
+	}
+	if strings.Contains(normalized, "end to end pipeline integration test") &&
+		(strings.Contains(normalized, "review") ||
+			strings.Contains(normalized, "validate") ||
+			strings.Contains(normalized, "verify the outcomes") ||
+			strings.Contains(normalized, "analyze") ||
+			strings.Contains(normalized, "inspect") ||
+			strings.Contains(normalized, "update") ||
+			strings.Contains(normalized, "document findings") ||
+			strings.Contains(normalized, "document detailed findings") ||
+			strings.Contains(normalized, "identify any issues or anomalies") ||
+			strings.Contains(normalized, "identify any issues or failures") ||
+			strings.Contains(normalized, "document any findings") ||
+			strings.Contains(normalized, "required updates") ||
+			strings.Contains(normalized, "all components are functioning correctly") ||
+			strings.Contains(normalized, "results")) {
+		return true
+	}
+	if strings.Contains(normalized, "next runnable bounded task") &&
+		(strings.Contains(normalized, "decompose") ||
+			strings.Contains(normalized, "assign") ||
+			strings.Contains(normalized, "queue it for execution")) {
+		return true
+	}
+	if strings.Contains(normalized, "prepare the next set of tasks") &&
+		(strings.Contains(normalized, "inspect the results") ||
+			strings.Contains(normalized, "integration test") ||
+			strings.Contains(normalized, "next phase")) {
+		return true
+	}
+	if strings.Contains(normalized, "transition it to the next phase") &&
+		(strings.Contains(normalized, "mark as complete") ||
+			strings.Contains(normalized, "review the output of task")) {
+		return true
+	}
+	if strings.Contains(normalized, "remaining draft task") &&
+		(strings.Contains(normalized, "review") ||
+			strings.Contains(normalized, "promote") ||
+			strings.Contains(normalized, "runnable") ||
+			strings.Contains(normalized, "next phase")) {
+		return true
+	}
+	if strings.Contains(normalized, "draft project task") &&
+		(strings.Contains(normalized, "inspect") || strings.Contains(normalized, "promote")) {
+		return true
+	}
+	return false
 }
 
 func (e *NativeToolExecutor) handleTaskGet(ctx context.Context, input map[string]any) (map[string]any, error) {

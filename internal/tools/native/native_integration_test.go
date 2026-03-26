@@ -4716,6 +4716,128 @@ func TestIntegrationTaskListDefaultsToCurrentProjectSessionScope(t *testing.T) {
 	}
 }
 
+func TestIntegrationTaskListHidesProjectContinuationMetaDraftsByDefault(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	realDraft, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Speaker Ingestion Workflow Validation",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("create actionable draft task: %v", err)
+	}
+	hiddenDraft, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Review and Promote Draft Tasks",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("create hidden meta draft task: %v", err)
+	}
+	doneTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Bind repo and environment",
+		WorkStatus:     "done",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("create completed task: %v", err)
+	}
+
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	projectSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Metadata:       json.RawMessage(`{"source":"native-task-list-meta-filter-test"}`),
+	})
+	if err != nil {
+		t.Fatalf("create project session: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWithSession(orgID, actor.ID, projectSession.ID), "task.list", map[string]any{})
+	if err != nil {
+		t.Fatalf("task.list: %v", err)
+	}
+
+	tasksPayload, ok := out["tasks"].([]map[string]any)
+	if !ok {
+		raw, ok := out["tasks"].([]any)
+		if !ok {
+			t.Fatalf("task.list tasks payload = %T, want []map[string]any", out["tasks"])
+		}
+		tasksPayload = make([]map[string]any, 0, len(raw))
+		for _, item := range raw {
+			record, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("task.list task item = %T, want map[string]any", item)
+			}
+			tasksPayload = append(tasksPayload, record)
+		}
+	}
+	seen := map[uuid.UUID]bool{}
+	for _, record := range tasksPayload {
+		seen[mustUUIDValue(t, record["id"])] = true
+	}
+
+	if !seen[realDraft.ID] {
+		t.Fatalf("task.list hid actionable draft task %s", realDraft.ID)
+	}
+	if !seen[doneTask.ID] {
+		t.Fatalf("task.list hid completed task %s", doneTask.ID)
+	}
+	if seen[hiddenDraft.ID] {
+		t.Fatalf("task.list returned hidden project continuation meta draft %s", hiddenDraft.ID)
+	}
+
+	includeMetaOut, err := executor.Execute(integrationExecCtxWithSession(orgID, actor.ID, projectSession.ID), "task.list", map[string]any{
+		"include_meta_drafts": true,
+	})
+	if err != nil {
+		t.Fatalf("task.list include_meta_drafts: %v", err)
+	}
+	tasksPayload, ok = includeMetaOut["tasks"].([]map[string]any)
+	if !ok {
+		raw, ok := includeMetaOut["tasks"].([]any)
+		if !ok {
+			t.Fatalf("task.list include_meta_drafts payload = %T, want []map[string]any", includeMetaOut["tasks"])
+		}
+		tasksPayload = make([]map[string]any, 0, len(raw))
+		for _, item := range raw {
+			record, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("task.list include_meta_drafts item = %T, want map[string]any", item)
+			}
+			tasksPayload = append(tasksPayload, record)
+		}
+	}
+	seen = map[uuid.UUID]bool{}
+	for _, record := range tasksPayload {
+		seen[mustUUIDValue(t, record["id"])] = true
+	}
+	if !seen[hiddenDraft.ID] {
+		t.Fatalf("task.list include_meta_drafts hid project continuation meta draft %s", hiddenDraft.ID)
+	}
+}
+
 func TestIntegrationTaskCreateRejectsNonBootstrapWorkWhileBootstrapGateIsOpen(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -4978,10 +5100,10 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	projectCtx := integrationExecCtxWithSession(orgID, agent.ID, sessionID)
 
 	out, err := executor.Execute(projectCtx, "task.create", map[string]any{
-		"project_id":             project.ID.String(),
-		"title":                  "Review and Promote Draft Tasks",
-		"description":            "Inspect the 5 remaining draft tasks, ensure they are ready for execution, and promote them to runnable status as appropriate.",
-		"requires_human_review":  true,
+		"project_id":            project.ID.String(),
+		"title":                 "Review and Promote Draft Tasks",
+		"description":           "Inspect the 5 remaining draft tasks, ensure they are ready for execution, and promote them to runnable status as appropriate.",
+		"requires_human_review": true,
 	})
 	if err != nil {
 		t.Fatalf("task.create: %v", err)
@@ -5002,9 +5124,9 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	}
 
 	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
-		"project_id":   project.ID.String(),
-		"title":        "Review and validate integration test results",
-		"description":  "Verify the outcomes of the end-to-end pipeline integration test to ensure all expected behaviors are met.",
+		"project_id":  project.ID.String(),
+		"title":       "Review and validate integration test results",
+		"description": "Verify the outcomes of the end-to-end pipeline integration test to ensure all expected behaviors are met.",
 	})
 	if err != nil {
 		t.Fatalf("task.create second variant: %v", err)
@@ -5022,9 +5144,9 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	}
 
 	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
-		"project_id":   project.ID.String(),
-		"title":        "Analyze Results of Integration Test",
-		"description":  "Review and analyze the results from the end-to-end pipeline integration test. Identify any issues, errors, or areas for improvement.",
+		"project_id":  project.ID.String(),
+		"title":       "Analyze Results of Integration Test",
+		"description": "Review and analyze the results from the end-to-end pipeline integration test. Identify any issues, errors, or areas for improvement.",
 	})
 	if err != nil {
 		t.Fatalf("task.create third variant: %v", err)
@@ -5042,9 +5164,9 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	}
 
 	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
-		"project_id":   project.ID.String(),
-		"title":        "Review and update pipeline test results",
-		"description":  "Inspect the results from the end-to-end pipeline integration test and document any findings or required updates.",
+		"project_id":  project.ID.String(),
+		"title":       "Review and update pipeline test results",
+		"description": "Inspect the results from the end-to-end pipeline integration test and document any findings or required updates.",
 	})
 	if err != nil {
 		t.Fatalf("task.create fourth variant: %v", err)
@@ -5083,9 +5205,9 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	}
 
 	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
-		"project_id":   project.ID.String(),
-		"title":        "Select and Decompose Next Bounded Task",
-		"description":  "Inspect the current task tree, identify the next runnable bounded task, decompose it if necessary, and assign or queue it for execution.",
+		"project_id":  project.ID.String(),
+		"title":       "Select and Decompose Next Bounded Task",
+		"description": "Inspect the current task tree, identify the next runnable bounded task, decompose it if necessary, and assign or queue it for execution.",
 	})
 	if err != nil {
 		t.Fatalf("task.create sixth variant: %v", err)
@@ -5103,9 +5225,9 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	}
 
 	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
-		"project_id":   project.ID.String(),
-		"title":        "Review and Prepare for Next Phase",
-		"description":  "Inspect the results from task 19 (Run end-to-end pipeline integration test) and prepare the next set of tasks.",
+		"project_id":  project.ID.String(),
+		"title":       "Review and Prepare for Next Phase",
+		"description": "Inspect the results from task 19 (Run end-to-end pipeline integration test) and prepare the next set of tasks.",
 	})
 	if err != nil {
 		t.Fatalf("task.create seventh variant: %v", err)
@@ -5123,9 +5245,9 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	}
 
 	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
-		"project_id":   project.ID.String(),
-		"title":        "Review and Promote Task 20",
-		"description":  "Review the output of task 20, conduct any necessary follow-up, and transition it to the next phase or mark as complete.",
+		"project_id":  project.ID.String(),
+		"title":       "Review and Promote Task 20",
+		"description": "Review the output of task 20, conduct any necessary follow-up, and transition it to the next phase or mark as complete.",
 	})
 	if err != nil {
 		t.Fatalf("task.create eighth variant: %v", err)
@@ -5143,9 +5265,9 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	}
 
 	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
-		"project_id":   project.ID.String(),
-		"title":        "Review and validate pipeline integration test results",
-		"description":  "Review the output from task 19 (Run end-to-end pipeline integration test) to ensure all components are functioning correctly. Identify any issues or failures that need to be addressed.",
+		"project_id":  project.ID.String(),
+		"title":       "Review and validate pipeline integration test results",
+		"description": "Review the output from task 19 (Run end-to-end pipeline integration test) to ensure all components are functioning correctly. Identify any issues or failures that need to be addressed.",
 	})
 	if err != nil {
 		t.Fatalf("task.create ninth variant: %v", err)
