@@ -2,6 +2,60 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 04:22 MDT update
+
+- deployed runtime is now a fresh local patch on top of pushed commit `af5a38b4`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart with:
+  - `set -a && . ./.env && set +a`
+
+### New local patch: dirty review retry detection now recognizes the persisted tool-call shape used in live traffic
+
+- root cause:
+  - `handleCompletedReviewTurnWithoutDecision(...)` now has the dirty-workspace reject/approve retry logic, but the live rerun-88 lane still kept getting the generic review prompt
+  - the detector `assistantEmittedReviewDecisionCall(...)` only matched assistant tool-call metadata named `flow.review_decision`
+  - live stored assistant messages on this lane use `flow_review_decision` instead
+  - result:
+    - focused unit tests passed under the dotted fixture shape
+    - live dirty-workspace retries silently missed the specialized prompt path
+- behavior:
+  - `assistantEmittedReviewDecisionCall(...)` now accepts both:
+    - `flow.review_decision`
+    - `flow_review_decision`
+  - the dirty-workspace reject-path retry prompt also no longer repeats the literal `decision=approve` string in its negative instruction
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- focused verification:
+  - `go test ./internal/turn -run '^TestHandleCompletedReviewTurnWithoutDecisionRetriesWithResolvedApprovePromptAfterDirtyWorkspaceFailure$' -count=1`
+  - `go test ./internal/turn -run '^TestHandleCompletedReviewTurnWithoutDecisionRetriesWithRejectPromptWhileWorkspaceStillDirty$' -count=1`
+
+### Live proof after restart
+
+- rebuilt `./bin/ottercamp`
+- respawned tmux panes with sourced `.env`:
+  - `codex-e2e-20260324:0.0` serve
+  - `codex-e2e-20260324:0.1` worker `--concurrency 2`
+- health passed after restart
+- rerun-88 review session `4edc333d-2380-4262-b383-2d9cc53bc5e5` was recovered onto:
+  - turn `472d5b25-9db8-4bd6-9936-2bf3dd8afb0e`
+  - trigger message `733a3f90-d6ce-4708-a7c8-12939dcb5daa`
+  - retry `1`
+- important nuance:
+  - this fresh turn was created by stale-turn recovery on restart, so it reused the last generic `task_review_action` message content
+  - it therefore did not yet prove the new dirty-workspace retry prompt in live traffic
+
+### Current live seam
+
+- the live/fixture tool-call-name mismatch is fixed in code and covered by focused tests
+- the remaining blocker is now the worker/recovery path:
+  - restart recovery reused the old generic review prompt instead of synthesizing the newer dirty-workspace-specific retry prompt
+  - active live lane remains:
+    - session `4edc333d-2380-4262-b383-2d9cc53bc5e5`
+    - execution `39ca89e3-1e66-4f97-9712-aafd018a21f1`
+    - turn `472d5b25-9db8-4bd6-9936-2bf3dd8afb0e`
+  - next patch target is stale review-turn recovery / requeue behavior after dirty approval failures, not the review-turn detector itself
+
 ## 2026-03-26 04:01 MDT update
 
 - deployed runtime is now a fresh local patch on top of pushed commit `c039930a`

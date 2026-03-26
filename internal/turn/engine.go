@@ -1522,7 +1522,7 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 				"\nYour last review turn returned empty assistant output." +
 				" Do not reply with blank text, acknowledgement, or a review plan." +
 				" Your next assistant action must either emit the concrete flow.review_decision tool call for this review step or provide one short blocker sentence explaining why bounded review could not complete."
-			if resolvedPrompt, ok, promptErr := e.resolvedReviewApprovalRetryPrompt(ctx, session, taskRecord, latestUser); promptErr != nil {
+			if resolvedPrompt, ok, promptErr := e.reviewApprovalRetryPrompt(ctx, session, taskRecord, latestUser); promptErr != nil {
 				return true, promptErr
 			} else if ok {
 				retryPrompt = resolvedPrompt
@@ -1589,6 +1589,11 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 		} else if taskReviewActionMessage(*latestUser) {
 			retryMetadata = e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, session, "task_review_action", latestUser.Metadata)
 		}
+		if resolvedPrompt, ok, promptErr := e.reviewApprovalRetryPrompt(ctx, session, taskRecord, latestUser); promptErr != nil {
+			return true, promptErr
+		} else if ok {
+			retryContent = resolvedPrompt
+		}
 		retryMessage, appendErr := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 			SessionID: session.ID,
 			TurnID:    &latestCompleted.ID,
@@ -1621,7 +1626,7 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 	return enqueued, nil
 }
 
-func (e *TurnEngine) resolvedReviewApprovalRetryPrompt(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask, latestUser *repo.ChatMessage) (string, bool, error) {
+func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask, latestUser *repo.ChatMessage) (string, bool, error) {
 	if e == nil || e.messages == nil || latestUser == nil {
 		return "", false, nil
 	}
@@ -1633,9 +1638,6 @@ func (e *TurnEngine) resolvedReviewApprovalRetryPrompt(ctx context.Context, sess
 	if err != nil {
 		return "", false, err
 	}
-	if !clean {
-		return "", false, nil
-	}
 	messages, err := e.messages.ListBySession(ctx, session.ID)
 	if err != nil {
 		return "", false, err
@@ -1643,7 +1645,16 @@ func (e *TurnEngine) resolvedReviewApprovalRetryPrompt(ctx context.Context, sess
 	if !latestReviewApprovalAttemptBlockedOnDirtyWorkspace(messages, executionID) {
 		return "", false, nil
 	}
-	retryPrompt := e.buildTaskReviewActionPrompt(ctx, session) +
+	basePrompt := e.buildTaskReviewActionPrompt(ctx, session)
+	if !clean {
+		retryPrompt := basePrompt +
+			"\nYour previous approve attempt for this exact review step failed because the workspace is still dirty." +
+			" Do not explain the error, summarize the runtime message, or attempt approval again while file changes remain." +
+			" Inspect the dirty deliverable state and reissue flow.review_decision immediately with decision=reject and concise findings for flow_node_execution_id " + executionID.String() + "." +
+			" Do not reply with narration, a plan, or placeholder arguments."
+		return retryPrompt, true, nil
+	}
+	retryPrompt := basePrompt +
 		"\nYour previous approve attempt for this exact review step failed only because the workspace was dirty." +
 		" The workspace is now clean." +
 		" Reissue flow.review_decision immediately with decision=approve and flow_node_execution_id " + executionID.String() + "." +
@@ -1683,7 +1694,6 @@ func latestReviewApprovalAttemptBlockedOnDirtyWorkspace(messages []repo.ChatMess
 			if assistantEmittedReviewDecisionCall(assistant.Metadata, executionID, "approve") {
 				return true
 			}
-			break
 		}
 	}
 	return false
@@ -1715,7 +1725,8 @@ func assistantEmittedReviewDecisionCall(metadata json.RawMessage, executionID uu
 		return false
 	}
 	for _, call := range payload.ToolCalls {
-		if !strings.EqualFold(strings.TrimSpace(call.Name), "flow.review_decision") {
+		name := strings.TrimSpace(call.Name)
+		if !strings.EqualFold(name, "flow.review_decision") && !strings.EqualFold(name, "flow_review_decision") {
 			continue
 		}
 		if !strings.EqualFold(strings.TrimSpace(stringValue(call.Arguments["decision"])), decision) {
