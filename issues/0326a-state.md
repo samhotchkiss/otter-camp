@@ -1066,3 +1066,34 @@ Current status of this slice:
 - code is implemented and focused tests pass
 - docs are updated
 - runtime rebuild/restart is the next step before the next Anthropic rerun starts
+
+## Update 15:48 MDT
+
+I also upgraded the operator token report so the churn we just hardened is visible without ad hoc SQL.
+
+New report sections in [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh):
+
+- `Hot Rate-Limit Turns`
+- `Duplicate Successful File Writes By Turn`
+
+Smoke run:
+
+- `scripts/token-usage-report.sh --hours 6 --limit 5`
+
+Useful fresh output from that real run:
+
+- repeated same-turn rate-limit amplification is now trivially visible in the report:
+  - turn `2323b41a-5499-40cf-97fb-ba994322fcc3` -> `3` failed rate-limit invocations
+- duplicate-write churn is now visible in one place:
+  - turn `fb6ea882-1514-4987-b538-2f5b6998dc75`
+  - path `config/pipeline-config-invalid.yaml`
+  - `byte_size = 731`
+  - `write_count = 11`
+- the report also surfaced two more script-write churn families that the new runtime guardrail should now catch on future reruns:
+  - `scripts/validate-stage-execution.sh` with `write_count = 14`
+  - `scripts/validate-error-handling.sh` with `write_count = 9`
+
+Why this matters:
+
+- the runtime hardening is no longer a one-off anecdote from manual SQL spelunking
+- we now have a repeatable operator report that can show whether the next Anthropic canary actually reduces these same-turn churn patterns

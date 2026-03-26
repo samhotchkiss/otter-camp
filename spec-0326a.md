@@ -507,12 +507,15 @@ Implemented so far in this spec:
 - provider cooldown telemetry and retry scheduling are preserved across turn failure and runtime restart
 - same-turn retries on `provider_rate_limited` are removed
 - async task lanes now also stop early on repeated successful rewrites of the same existing file when the runtime sees identical `file.write` output path plus `byte_size` churn in one turn
+- `scripts/token-usage-report.sh` now surfaces:
+  - hot turns with repeated rate-limit failures
+  - duplicate successful `file.write` churn grouped by turn/path/byte-size
 
 Still pending from this spec:
 
 - deeper canary validation on fresh Anthropic traffic after cooldown windows clear
 - any additional recovery-specific fingerprints that remain after the current async task guardrails
-- operator-facing top-session / top-turn token diagnostics beyond the current shell report
+- richer operator diagnostics directly in product surfaces instead of shell-only reporting
 
 ## Deferred Follow-Up, Not In This Spec
 
