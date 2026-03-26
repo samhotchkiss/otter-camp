@@ -509,7 +509,15 @@ func looksLikeReviewerAssessmentInDeliverable(path, content string) bool {
 		return false
 	}
 	if !containsAnySubstring(lower,
+		"i have a complete picture",
+		"the evidence is clear",
 		"here is my review assessment",
+		"here is my assessment",
+		"the evidence is conclusive",
+		"review findings for oc-",
+		"review complete",
+		"task now blocked",
+		"root cause summary for pm escalation",
 		"rejected — task is now blocked",
 		"rejected - task is now blocked",
 		"the rejection has been recorded",
@@ -533,6 +541,21 @@ func looksLikeReviewerAssessmentInDeliverable(path, content string) bool {
 		"planning artifacts remain unpopulated scaffolds",
 		"planning artifacts are all bare scaffolds",
 		"this task cannot be approved",
+		"there is nothing to approve",
+		"no deliverable exists",
+		"no deliverable produced",
+		"work file is self-referential review text",
+		"all four planning artifacts are empty scaffolds",
+		"12 work iterations",
+		"10+ rejections",
+		"no progress",
+		"systemic failure",
+		"terminal loop",
+		"no further reject-rework loops are permitted",
+		"the task is now blocked because",
+		"rejecting.",
+		"worker was stuck in a loop",
+		"further rejection cycles are unlikely",
 		"work file content |",
 		"core deliverable (",
 	)
@@ -5501,11 +5524,6 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	}
 	reason, _ := readString(input, "reason")
 	findings, _ := readString(input, "findings")
-	if updatedExecution, err := e.recordReviewDecisionMetadata(ctx, execution, decision, reason, findings); err != nil {
-		return nil, err
-	} else {
-		execution = updatedExecution
-	}
 	if decision == "approve" {
 		dirty, err := e.reviewExecutionWorkspaceDirty(ctx, execution.TaskID)
 		if err != nil {
@@ -5524,10 +5542,20 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 			}
 		}
 		if dirty {
+			if updatedExecution, clearErr := e.clearReviewDecisionMetadata(ctx, execution); clearErr != nil {
+				return nil, clearErr
+			} else {
+				execution = updatedExecution
+			}
 			return map[string]any{
 				"error":   "review_approval_requires_clean_workspace",
 				"message": "Approval must close with an empty runtime-owned commit. The review workspace still has file changes. Either discard them or reject the review with findings.",
 			}, nil
+		}
+		if updatedExecution, err := e.recordReviewDecisionMetadata(ctx, execution, decision, reason, findings); err != nil {
+			return nil, err
+		} else {
+			execution = updatedExecution
 		}
 		commitResult, err := e.createCanonicalExecutionCommit(ctx, execution, "approve", "")
 		if err != nil {
@@ -5551,6 +5579,11 @@ func (e *NativeToolExecutor) handleFlowReviewDecision(ctx context.Context, input
 	rejectionSummary := strings.TrimSpace(reason)
 	if rejectionSummary == "" {
 		rejectionSummary = strings.TrimSpace(findings)
+	}
+	if updatedExecution, err := e.recordReviewDecisionMetadata(ctx, execution, decision, reason, findings); err != nil {
+		return nil, err
+	} else {
+		execution = updatedExecution
 	}
 	commitResult, err := e.createCanonicalExecutionCommit(ctx, execution, "reject", rejectionSummary)
 	if err != nil {
@@ -6040,6 +6073,13 @@ func (e *NativeToolExecutor) recordReviewDecisionMetadata(ctx context.Context, e
 		DecidedAt: &now,
 	})
 	return e.flowExecs.UpdateMetadata(ctx, execution.ID, metadata)
+}
+
+func (e *NativeToolExecutor) clearReviewDecisionMetadata(ctx context.Context, execution repo.FlowNodeExecution) (repo.FlowNodeExecution, error) {
+	if e.flowExecs == nil || execution.ID == uuid.Nil {
+		return execution, nil
+	}
+	return e.flowExecs.UpdateMetadata(ctx, execution.ID, repo.FlowExecutionMetadataWithReviewDecision(execution.Metadata, nil))
 }
 
 func (e *NativeToolExecutor) recordCommitCloseFailure(ctx context.Context, execution repo.FlowNodeExecution, commitErr error) error {

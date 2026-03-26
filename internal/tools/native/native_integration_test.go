@@ -9685,6 +9685,14 @@ func TestIntegrationFlowReviewDecisionApproveRejectsDirtyWorkspace(t *testing.T)
 	if err != nil {
 		t.Fatalf("create review execution: %v", err)
 	}
+	now := time.Now().UTC()
+	reviewExecution, err = executionRepo.UpdateMetadata(ctx, reviewExecution.ID, repo.FlowExecutionMetadataWithReviewDecision(reviewExecution.Metadata, &repo.FlowExecutionReviewDecision{
+		Decision:  "approve",
+		DecidedAt: &now,
+	}))
+	if err != nil {
+		t.Fatalf("seed stale review decision metadata: %v", err)
+	}
 
 	workspaceRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "review-notes.md"), []byte("dirty"), 0o644); err != nil {
@@ -9700,6 +9708,13 @@ func TestIntegrationFlowReviewDecisionApproveRejectsDirtyWorkspace(t *testing.T)
 	}
 	if got, _ := out["error"].(string); got != "review_approval_requires_clean_workspace" {
 		t.Fatalf("error = %q, want review_approval_requires_clean_workspace (output=%v)", got, out)
+	}
+	updatedExecution, err := executionRepo.GetByID(ctx, reviewExecution.ID)
+	if err != nil {
+		t.Fatalf("load updated execution: %v", err)
+	}
+	if decision, ok := repo.FlowExecutionReviewDecisionFromMetadata(updatedExecution.Metadata); ok && decision != nil {
+		t.Fatalf("review decision metadata = %#v, want absent after dirty-workspace approval failure", decision)
 	}
 }
 

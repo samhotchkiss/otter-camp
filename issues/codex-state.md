@@ -2,6 +2,63 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 03:54 MDT update
+
+- deployed runtime is now a fresh local patch on top of pushed commit `3495bee8`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+
+### New local patch: dirty review approvals no longer poison execution metadata with fake resolved decisions
+
+- root cause:
+  - `flow.review_decision(decision=approve)` recorded `metadata.review_decision=approve` before checking whether review approval could actually close
+  - when the workspace was dirty, the tool returned:
+    - `review_approval_requires_clean_workspace`
+  - but the active review execution still kept the persisted `approve` decision
+  - later worker/supervisor logic then treated that execution as resolved even though the approval had never completed
+- behavior:
+  - approve decisions are now persisted only after the workspace is confirmed clean
+  - if an approve attempt hits the dirty-workspace guard, any preexisting stale `review_decision` metadata is actively cleared
+  - reject decisions still persist before commit-close work so stalled rejection-close paths keep their structured review intent
+- code:
+  - [`internal/tools/native/mutation_tools.go`](../internal/tools/native/mutation_tools.go)
+  - [`internal/tools/native/native_integration_test.go`](../internal/tools/native/native_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/tools/native -run 'TestIntegrationFlowReviewDecisionApproveRejectsDirtyWorkspace' -count=1`
+  - `go test -tags=integration ./internal/tools/native -run 'TestIntegrationFlowReviewDecision(ApproveRejectsDirtyWorkspace|ApproveCreatesCanonicalApprovalCommit|RejectCreatesCanonicalRejectionCommit)' -count=1`
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RecoverStaleInProgressTriggeredTurnsKeepsHeartbeatingClaimedProjectTaskAttemptAfterRecentCompletedInvocation|RecoverStaleInProgressProjectTurnsWithoutOwnership|RequeueActiveExecutionSessionsWithoutTurnsSupersedesStalePendingOlderMessage|ClaimPendingAgentTurnsPrefersNewestTaskSessionMessage)' -count=1`
+
+### Important correction
+
+- the earlier local-only worker/supervisor suppression patch for any execution carrying `review_decision` was reverted
+- that guard was masking the symptom, not fixing the product bug
+- active review executions can legitimately carry review-decision metadata during commit-close failure / recovery paths, so they must not be globally suppressed
+
+### Live result after restart
+
+- runtime was rebuilt and restarted with:
+  - `set -a && source .env && set +a`
+  - tmux panes:
+    - `codex-e2e-20260324:0.0` serve
+    - `codex-e2e-20260324:0.1` worker `--concurrency 2`
+- rerun-88 review session `4edc333d-2380-4262-b383-2d9cc53bc5e5` re-entered again on a fresh review-action prompt instead of being suppressed as already-resolved
+  - restart at `03:53 MDT`
+  - claimed job `39335198-ba95-4fdf-9965-d9893a6137ae`
+  - fresh turn `985c9b2e-f99c-4055-8176-51214a8bd017`
+  - trigger message `5c65ac23-80e3-4d19-a587-ff28cf096397`
+- current active execution is still:
+  - `39ca89e3-1e66-4f97-9712-aafd018a21f1 | active | runtime_substate=running`
+  - metadata still currently shows legacy stale `review_decision=approve`
+  - `live_turn_id` now points to the fresh post-fix turn `985c9b2e-f99c-4055-8176-51214a8bd017`
+
+### Current live seam
+
+- the fake-resolved-review root cause is now fixed in code for new and repeated dirty approve attempts
+- the deployed rerun-88 lane is back on a real live review turn under the corrected binary
+- the remaining proof gap is live confirmation:
+  - either the lane settles cleanly
+  - or, if it hits `review_approval_requires_clean_workspace` again, the legacy stale `review_decision=approve` must be cleared automatically instead of poisoning recovery again
+
 ## 2026-03-26 03:24 MDT update
 
 - deployed runtime is now a fresh local patch on top of pushed commit `ccbe9843`
@@ -56,10 +113,29 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 ### Current live seam
 
 - the stale triggered-turn age bug is fixed in live traffic
-- the active review lane is now limited by normal long-running qwen throughput, not by the previous worker sweep
-- next thing to watch is whether this same turn eventually hits a different downstream seam:
-  - likely stale `in_flight` model-invocation cleanup
-  - or review/control-plane transition handling after a later qwen completion
+- task-review retry requeue on the completed review-action message is now also suppressed locally:
+  - pending retry job `2085bf87-ded2-4ba7-b64c-4fce003b1682` is `dead_letter`
+- the remaining live blocker is narrower and different:
+  - supervisor recovery message `5bc1a851-3285-4ef2-a166-bdeff8e3ef9b` already existed on the same session before the latest guard landed
+  - it is still being reclaimed on restart / recovery even though flow execution `39ca89e3-1e66-4f97-9712-aafd018a21f1` now has:
+    - `metadata.review_decision.decision = approve`
+  - latest bad turn from that stale supervisor path:
+    - `ccf6eb6e-a47d-478a-aa91-3d647b0d5a43`
+    - failed with `worker cleanup failed stale in_flight model invocation without live in-progress turn`
+- new local-only patches now exist on top of pushed commit `3495bee8`:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+    - `RequeueActiveExecutionSessionsWithoutTurns(...)` now skips active review executions whose metadata already has `review_decision`
+    - `claimPendingAgentTurns(...)` now dead-letters claimed review/supervisor dispatches when their referenced execution already has `review_decision`
+  - [`internal/controlplane/stranded_execution.go`](../internal/controlplane/stranded_execution.go)
+    - supervisor recovery now returns early when the targeted execution already carries a concrete review decision
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+    - `TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsResolvedReviewDecision`
+    - `TestJobWorkerClaimPendingAgentTurnsDeadLettersResolvedReviewRecoveryDispatch`
+- focused verification that passed for the new worker-side patches:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ClaimPendingAgentTurnsDeadLettersResolvedReviewRecoveryDispatch|RequeueActiveExecutionSessionsWithoutTurnsSkipsResolvedReviewDecision|RecoverStaleInProgressTriggeredTurnsKeepsHeartbeatingClaimedProjectTaskAttemptAfterRecentCompletedInvocation)' -count=1`
+- control-plane note:
+  - broad `go test -tags=integration ./internal/controlplane -run 'TestSupervisor_StrandedActiveExecution.*' -count=1` still hits existing failure `TestSupervisor_StrandedActiveExecutionSkipsUnresolvedRecoveryCheckpoint`
+  - I did not force that unrelated unresolved-checkpoint path through
 
 ## 2026-03-26 03:08 MDT update
 
