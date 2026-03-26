@@ -7732,3 +7732,53 @@ Current critical path:
   - project session and task-review session both have pending supervisor recovery prompts
   - the project session still carries the obsolete task-12 continuation alongside the supervisor PM-recovery message
   - task `16` review now needs the next repair, not task `15`
+
+## 2026-03-26 00:46 MDT
+
+New worker startup-recovery hardening in this stretch:
+- [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+  - `PurgeStaleAgentTurnJobs(...)` now preserves `source=supervisor` PM-recovery jobs on active async `project` sessions when the message metadata is `supervisor_pm_recovery=true`
+- focused integration coverage added in:
+  - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - `TestJobWorkerPurgeStaleAgentTurnJobsKeepsProjectSupervisorPMRecoveryJob`
+
+Focused verification passed:
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(PurgeStaleAgentTurnJobs(KeepsProjectSupervisorPMRecoveryJob|KeepsSupervisorRecoveryJobForActiveExecutionWithoutTurn|KeepsLiveSupervisorRecoveryTurn|KeepsSupervisorRetryJob)|EnsureProjectContinuationMessageSupersedesStalePendingContinuation|RequeueActiveProjectSessionsWithoutTurnsSupersedesStalePendingContinuation)' -count=1`
+
+Live proof after redeploy:
+- rerun-88 project session:
+  - `1a9edb0a-a817-46b1-975d-4d96c8164bcb`
+- stale task-12 continuation is now definitively superseded in production:
+  - message `5d3b20af-8a51-4421-8aca-4e6c4185dad2`
+  - status `failed`
+  - error `superseded by newer completed project task`
+- fresh project continuation now targets the latest completed task instead:
+  - message `e70e7a1a-0408-4b4d-a600-4620178c51b2`
+  - source `project_execution_continuation`
+  - completed task id `3e153770-235e-4785-87fc-8fa33c81af33` (task 18)
+- project-session supervisor PM-recovery message also survived startup purge this time:
+  - `4292acb2-3149-454b-8699-c17b2fff365d`
+  - source `supervisor`
+  - `supervisor_pm_recovery = true`
+- the worker then claimed the fresh project continuation instead of killing the lane at startup:
+  - job `d264a4f5-6a42-48a6-959c-2076b57e649a`
+  - current turn `cfeaaae8-2442-48a4-9fe9-ebac83a2ba5a`
+  - current live invocation `1cb4af0c-2e90-4f64-99b8-da6ac42baa65`
+  - model `qwen2.5:72b`
+- task 16 review lane also survived the same restart:
+  - session `67cba2bb-a0be-4e1c-a504-f133e99178f2`
+  - current review turn `79cac1ec-780d-46f7-8e5a-c59e84eedcff`
+  - current live invocation `9ec0ad4c-e7f2-44a8-9c2b-438b9b1fab22`
+
+Current narrowed live seam:
+- the two worker startup-recovery bugs are fixed:
+  - stale project continuation reuse
+  - project-session PM-recovery startup purge
+- rerun-88 is now back to real live execution rather than restart churn
+- current open lanes:
+  - project continuation turn `cfeaaae8-2442-48a4-9fe9-ebac83a2ba5a`
+  - task-16 review turn `79cac1ec-780d-46f7-8e5a-c59e84eedcff`
+
+Current critical path:
+- no new code failure is proven yet after the latest restart
+- the immediate next blocker is simply whichever of the two live qwen turns fails or completes next

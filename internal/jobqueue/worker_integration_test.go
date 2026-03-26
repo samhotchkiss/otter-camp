@@ -2055,6 +2055,82 @@ func TestJobWorkerPurgeStaleAgentTurnJobsKeepsSupervisorRecoveryJobForActiveExec
 	}
 }
 
+func TestJobWorkerPurgeStaleAgentTurnJobsKeepsProjectSupervisorPMRecoveryJob(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "purge-project-supervisor-pm-recovery",
+		DisplayName: "Purge Project Supervisor PM Recovery",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "purge-project-supervisor-pm-recovery-project",
+		DisplayName:    "Purge Project Supervisor PM Recovery Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "supervisor recovery: inspect stranded execution and use flow.recovery_decision",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"supervisor","supervisor_pm_recovery":true,"recovery_disposition":"await_pm_decision","flow_node_execution_id":"11111111-1111-1111-1111-111111111111"}`),
+	})
+	if err != nil {
+		t.Fatalf("create project supervisor message: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now(), 70)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, message.ID)).Scan(&jobID); err != nil {
+		t.Fatalf("insert project supervisor recovery job: %v", err)
+	}
+
+	purged, err := worker.PurgeStaleAgentTurnJobs(ctx)
+	if err != nil {
+		t.Fatalf("PurgeStaleAgentTurnJobs: %v", err)
+	}
+	if purged != 0 {
+		t.Fatalf("purged jobs = %d, want 0", purged)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, jobID).Scan(&status); err != nil {
+		t.Fatalf("query project supervisor recovery job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("project supervisor recovery job status = %q, want pending", status)
+	}
+}
+
 func TestJobWorkerRejitterPendingRateLimitedAgentTurns(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

@@ -648,6 +648,17 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		          AND live.status IN ('pending', 'in_progress')
 		      )
 		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    JOIN chat_message cm
+		      ON cm.id = (jq.payload->>'message_id')::uuid
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.scope_type = 'project'
+		      AND cs.mode = 'async'
+		      AND cs.status = 'active'
+		      AND COALESCE(cm.metadata->>'supervisor_pm_recovery', '') = 'true'
+		  )
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (supervisor messages): %w", err)
