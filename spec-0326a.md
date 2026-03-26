@@ -360,6 +360,7 @@ Completed so far:
    - async `project_task` turns now stop after the second identical deterministic validation failure within the same turn
    - that repeated same-turn cutoff now explicitly covers `cli.execute` shell-injection denials and `file.read` `not_found` misses using attempt fingerprints scoped to the exact command or path
    - that same-turn cutoff now also covers repeated `file.list` `not_found` misses with path-aware fingerprints, plus repeated task-lane `git.commit -> task_git_commit_blocked` failures
+   - repeated task-lane broad-context probes (`task.list`, `memory.query`) and repeated `file.read -> mismatched_deliverable_context` failures now also enter the same-turn cutoff path
    - async `project_task` lanes now preflight-block `subtask.create` when the session has no active `flow_node_execution_id`
    - when an async `project_task` lane does have an active `flow_node_execution_id`, missing `subtask.create` arguments are hydrated from the bound session execution instead of burning a correction round
    - repeated same-turn recovery-focus failures now persist the named deliverable checkpoint before stopping

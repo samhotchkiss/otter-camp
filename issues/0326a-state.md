@@ -688,6 +688,35 @@ What is still pending after this slice:
 - live proof on a fresh Anthropic or resumed canary task turn after the rebuild
 - broader repeated-recovery cutoffs beyond focus / target-drift / repeated read-only discovery handling
 
+## Update 14:40 MDT
+
+The next deterministic-cutoff widening slice is now in code and focused-test green.
+
+New behavior:
+
+- repeated same-turn async `project_task` validation stops now also catch task-lane broad-context drift on:
+  - `task.list` when the runtime already told the lane not to re-list the broader project task tree
+  - `memory.query` when the runtime already told the lane not to browse org/project memory for unrelated prior work
+- repeated same-turn async `project_task` validation stops now also catch `file.read -> mismatched_deliverable_context`
+- those broad-context tool detections reuse the existing per-tool attempt fingerprinting, while the mismatched-deliverable read path still benefits from `file.read` path-aware fingerprints
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalTaskListBroadContextFailureInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalMismatchedDeliverableContextInSameTurn)$' -count=1`
+
+Why this slice was next:
+
+- after the last widening, the top remaining deterministic families inside the `other` bucket from the current top async task turns were:
+  - task-lane broad-context probes (`task.list`, `memory.query`)
+  - `file.read -> mismatched_deliverable_context`
+  - smaller residual `file.edit -> old_string_not_found`
+
+What is still pending after this slice:
+
+- rebuild / restart on this newest deterministic-cutoff widening
+- live proof on a fresh Anthropic or resumed canary task turn after the rebuild
+- any further widening should probably focus on `file.edit -> old_string_not_found` only if it still survives after the shipped task-list / memory / read-context cutoffs
+
 ## Update 14:09 MDT
 
 The operator-diagnostics slice is now in the product surface, not just the shell script.

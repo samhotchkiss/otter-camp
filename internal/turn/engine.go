@@ -17102,6 +17102,27 @@ func classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawEr
 		}
 		return "task_git_commit_blocked", reason, true
 	}
+	if normalizedToolName == "file.read" && normalizedErrorCode == "mismatched_deliverable_context" {
+		reason := strings.TrimSpace(rawErrorCode)
+		if reason == "" {
+			reason = "mismatched_deliverable_context"
+		}
+		return "mismatched_deliverable_context", reason, true
+	}
+	if (normalizedToolName == "task.list" || normalizedToolName == "memory.query") &&
+		containsAny(normalizedReason,
+			"task execution should not re-list the broader project task tree",
+			"task execution should not browse org or project memory",
+		) {
+		reason := strings.TrimSpace(rawReason)
+		if reason == "" {
+			reason = strings.TrimSpace(rawErrorCode)
+		}
+		if reason == "" {
+			reason = "task_execution_broad_context_blocked"
+		}
+		return "task_execution_broad_context_blocked", reason, true
+	}
 	return "", "", false
 }
 
