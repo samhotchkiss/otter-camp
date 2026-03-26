@@ -9564,6 +9564,9 @@ func (e *TurnEngine) shouldStopAfterExecutionDeliverableWrite(ctx context.Contex
 		return false, nil
 	}
 	if rt.recoveryTurn && e.recoveryDirectTargetWriteShouldStop(ctx, rt, result) {
+		if err := e.persistResolvedRecoveryTargetWritePath(ctx, rt, result); err != nil {
+			return false, err
+		}
 		rt.recoveryWriteDone = true
 		return true, nil
 	}
@@ -9573,6 +9576,43 @@ func (e *TurnEngine) shouldStopAfterExecutionDeliverableWrite(ctx context.Contex
 		return false, err
 	}
 	return shouldStopAfterExecutionArtifactWrite(taskRecord, result), nil
+}
+
+func (e *TurnEngine) persistResolvedRecoveryTargetWritePath(ctx context.Context, rt *turnRuntime, result ToolResult) error {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return nil
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return nil
+	}
+	writtenPath := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
+	if writtenPath == "" {
+		return nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if ok && sameWorkspaceRelativePath(strings.TrimSpace(checkpoint.TargetPath), writtenPath) {
+		return nil
+	}
+	var next taskcheckpoint.RecoveryFileWriteCheckpoint
+	if ok {
+		next = checkpoint
+	}
+	next.TargetPath = writtenPath
+	merged, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, next)
+	if err != nil {
+		return err
+	}
+	taskRecord.Metadata = merged
+	_, err = updateTurnTaskMetadata(ctx, e.tasks, taskRecord)
+	return err
 }
 
 func (e *TurnEngine) recoveryDirectTargetWriteShouldStop(ctx context.Context, rt *turnRuntime, result ToolResult) bool {
@@ -11759,6 +11799,10 @@ func recoveryTaskTargetPathScore(taskRecord repo.ProjectTask, targetPath, draft 
 func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) taskcheckpoint.RecoveryFileWriteCheckpoint {
 	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	targetPath := strings.TrimSpace(checkpoint.TargetPath)
+	if targetPath != "" && !looksLikeExplicitDeliverablePath(normalizeWorkspaceRelativePath(targetPath), targetPath) {
+		checkpoint.TargetPath = ""
+		targetPath = ""
+	}
 	if preferred := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord)); preferred != "" {
 		if sameWorkspaceRelativePath(preferred, targetPath) {
 			return checkpoint
@@ -19822,7 +19866,30 @@ func explicitDeliverablePath(taskRecord repo.ProjectTask) string {
 	if len(matches) < 2 {
 		return ""
 	}
-	return normalizeWorkspaceRelativePath(matches[1])
+	candidate := normalizeWorkspaceRelativePath(matches[1])
+	if !looksLikeExplicitDeliverablePath(candidate, matches[1]) {
+		return ""
+	}
+	return candidate
+}
+
+func looksLikeExplicitDeliverablePath(normalized, raw string) bool {
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "/") || strings.Contains(filepath.Base(normalized), ".") {
+		return true
+	}
+	trimmedRaw := strings.TrimSpace(raw)
+	if trimmedRaw == "" {
+		return false
+	}
+	for _, r := range trimmedRaw {
+		if r >= 'A' && r <= 'Z' {
+			return true
+		}
+	}
+	return false
 }
 
 func explicitExecutionDeliverableWriteCompleted(taskRecord repo.ProjectTask, result ToolResult) bool {
@@ -20345,10 +20412,52 @@ func (e *TurnEngine) validationLoopBlockerForSession(ctx context.Context, sessio
 	if !ok || !guard.Blocked {
 		return false, taskValidationGuardState{}, nil
 	}
+	if invalidated, updatedTask, invalidateErr := e.invalidateStaleRecoveryFocusValidationGuard(ctx, taskRecord, guard); invalidateErr != nil {
+		return false, taskValidationGuardState{}, invalidateErr
+	} else if invalidated {
+		taskRecord = updatedTask
+		return false, taskValidationGuardState{}, nil
+	}
 	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
 		return false, taskValidationGuardState{}, nil
 	}
 	return true, guard, nil
+}
+
+func (e *TurnEngine) invalidateStaleRecoveryFocusValidationGuard(ctx context.Context, taskRecord repo.ProjectTask, guard taskValidationGuardState) (bool, repo.ProjectTask, error) {
+	if e == nil || e.tasks == nil {
+		return false, taskRecord, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(guard.FailureCode), "recovery_target_focus_required") {
+		return false, taskRecord, nil
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		return false, taskRecord, nil
+	}
+	targetPath := strings.TrimSpace(checkpoint.TargetPath)
+	if targetPath == "" {
+		return false, taskRecord, nil
+	}
+	if looksLikeExplicitDeliverablePath(normalizeWorkspaceRelativePath(targetPath), targetPath) {
+		return false, taskRecord, nil
+	}
+	cleared, err := clearTaskValidationGuardMetadata(taskRecord.Metadata)
+	if err != nil {
+		return false, taskRecord, err
+	}
+	taskRecord.Metadata = cleared
+	checkpoint.TargetPath = ""
+	merged, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, checkpoint)
+	if err != nil {
+		return false, taskRecord, err
+	}
+	taskRecord.Metadata = merged
+	updatedTask, err := updateTurnTaskMetadata(ctx, e.tasks, taskRecord)
+	if err != nil {
+		return false, taskRecord, err
+	}
+	return true, updatedTask, nil
 }
 
 func (e *TurnEngine) enqueueAgentTurnIfActive(ctx context.Context, session *chat.ChatSession, payload AgentTurnPayload, runAfter *time.Time) (bool, error) {

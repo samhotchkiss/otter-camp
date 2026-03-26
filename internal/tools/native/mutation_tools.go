@@ -217,7 +217,30 @@ func parseExplicitDeliverablePath(taskRecord repo.ProjectTask) string {
 	if len(matches) < 2 {
 		return ""
 	}
-	return normalizeWorkspacePath(matches[1])
+	candidate := normalizeWorkspacePath(matches[1])
+	if !looksLikeExplicitDeliverablePath(candidate, matches[1]) {
+		return ""
+	}
+	return candidate
+}
+
+func looksLikeExplicitDeliverablePath(normalized, raw string) bool {
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "/") || strings.Contains(filepath.Base(normalized), ".") {
+		return true
+	}
+	trimmedRaw := strings.TrimSpace(raw)
+	if trimmedRaw == "" {
+		return false
+	}
+	for _, r := range trimmedRaw {
+		if r >= 'A' && r <= 'Z' {
+			return true
+		}
+	}
+	return false
 }
 
 func sameOrNestedWorkspacePath(path, root string) bool {

@@ -1197,6 +1197,17 @@ func TestFileWriteRejectsPlanningArtifactMutationForExecutionFirstTaskWithDirect
 	}
 }
 
+func TestParseExplicitDeliverablePathRejectsNonPathOutputAdjective(t *testing.T) {
+	t.Parallel()
+
+	description := "Create and validate pipeline configuration files (YAML/JSON). Verify environment variables, connection strings, and runtime settings are correct. Output: validated config files committed to workspace. ~20 min."
+	taskRecord := repo.ProjectTask{Description: &description}
+
+	if got := parseExplicitDeliverablePath(taskRecord); got != "" {
+		t.Fatalf("parseExplicitDeliverablePath() = %q, want empty for non-path output hint", got)
+	}
+}
+
 func TestFileEditRejectsPlanningArtifactMutationForExecutionFirstTaskWithExplicitDeliverable(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

@@ -357,7 +357,11 @@ func parseRecoveryTargetPath(content string) string {
 			continue
 		}
 		target := strings.TrimSpace(strings.TrimPrefix(trimmed, "Target file:"))
-		return normalizeWorkspacePath(target)
+		normalized := normalizeWorkspacePath(target)
+		if !looksLikeExplicitDeliverablePath(normalized, target) {
+			return ""
+		}
+		return normalized
 	}
 	return ""
 }

@@ -7080,3 +7080,41 @@ Current rerun-88 task board:
 Current critical path:
 - verify that task `12` now re-enters work cleanly after the live review rejection
 - then confirm later-wave release continues from the task-12/task-13 outcomes
+
+## 2026-03-25 20:22 MDT
+
+Three more runtime hardenings landed in this stretch:
+
+- `internal/tools/native/mutation_tools.go`
+  - `Output:` / `Deliverable:` parsing now rejects non-path adjectives or status words like `validated`
+  - real paths still pass (`foo.md`, `docs/x.md`, `Test`, `Metrics`, etc.)
+- `internal/tools/native/file_tools.go`
+  - recovery `Target file:` parsing now ignores non-path placeholders, so stale prompts do not keep poisoning recovery focus
+- `internal/turn/engine.go`
+  - stale blocked `recovery_target_focus_required` validation guards are auto-invalidated when the stored checkpoint target is no longer a plausible path
+  - recovery direct-target writes now persist the resolved target path before the turn stops, so post-turn completion can recognize the write as real work
+
+Focused verification passed:
+- `go test ./internal/tools/native -run 'Test(ParseExplicitDeliverablePathRejectsNonPathOutputAdjective|FileWriteRejectsPlanningArtifactMutationForExecutionFirstTaskWithDirectoryOutput|FileWriteRejectsAlternateMutationForExecutionFirstTaskWithExplicitOutput)$' -count=1`
+- `go test ./internal/turn -run 'Test(ExplicitExecutionDeliverableWriteCompleted(RecognizesOutputPath|IgnoresNonPathOutputHint)|NormalizeRecoveryCheckpointTargetForTaskClearsNonPathOutputHint|ValidationLoopBlockerForSessionClearsStaleRecoveryTargetFocusGuard|PersistResolvedRecoveryTargetWritePathStoresWrittenPath)$' -count=1`
+
+Live proof:
+- task `12` no longer gets re-blocked by the bogus recovery target `validated`
+- the task metadata now has:
+  - cleared validation guard
+  - `recovery_file_write_checkpoint.target_path = ""`
+- after restart, the same task-12 recovery session ran again under the new build:
+  - session `d16348f6-3307-4920-8eb5-258fcfc1f2eb`
+  - turn `e3ab6648-c5a6-423c-8d41-bcf919d0feb4`
+  - invocation `16570523-c224-49bd-be2d-28c08f047a8c`
+- that turn completed and wrote a real deliverable:
+  - run `59b60ac5-d47f-42df-a79f-a1da7af60b24`
+  - file `Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md`
+
+Current blocker after that live proof:
+- task `12` is still `blocked`
+- no new `flow_node_execution` was created and the old session still points at abandoned execution `3811e727-7346-422b-9ceb-dc9a00b229bc`
+- the remaining seam is now post-write stale execution handoff:
+  - successful recovery write completed
+  - session returned to no-turn idle
+  - task flow did not advance from the abandoned execution root

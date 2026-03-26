@@ -19971,6 +19971,177 @@ func TestExplicitExecutionDeliverableWriteCompletedRecognizesOutputPath(t *testi
 	}
 }
 
+func TestExplicitExecutionDeliverableWriteCompletedIgnoresNonPathOutputHint(t *testing.T) {
+	t.Parallel()
+
+	description := "Create and validate pipeline configuration files (YAML/JSON). Verify environment variables, connection strings, and runtime settings are correct. Output: validated config files committed to workspace. ~20 min."
+	plan := taskplan.Analyze("Create and validate pipeline configuration files", &description)
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+
+	if explicitExecutionDeliverableWriteCompleted(taskRecord, ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "validated",
+			"byte_size": 1024,
+		},
+	}) {
+		t.Fatal("unexpected completion from non-path output hint")
+	}
+}
+
+func TestNormalizeRecoveryCheckpointTargetForTaskClearsNonPathOutputHint(t *testing.T) {
+	t.Parallel()
+
+	description := "Create and validate pipeline configuration files (YAML/JSON). Verify environment variables, connection strings, and runtime settings are correct. Output: validated config files committed to workspace. ~20 min."
+	plan := taskplan.Analyze("Create and validate pipeline configuration files", &description)
+	taskRecord := repo.ProjectTask{
+		Description: &description,
+		Metadata:    taskplan.ApplyMetadata(nil, plan),
+	}
+
+	checkpoint := normalizeRecoveryCheckpointTargetForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: "validated",
+	})
+	if checkpoint.TargetPath != "" {
+		t.Fatalf("TargetPath = %q, want empty", checkpoint.TargetPath)
+	}
+}
+
+func TestValidationLoopBlockerForSessionClearsStaleRecoveryTargetFocusGuard(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	description := "Create and validate pipeline configuration files (YAML/JSON). Verify environment variables, connection strings, and runtime settings are correct. Output: validated config files committed to workspace. ~20 min."
+	plan := taskplan.Analyze("Create and validate pipeline configuration files", &description)
+	metadata := taskplan.ApplyMetadata(nil, plan)
+	var err error
+	metadata, err = mergeTaskValidationGuardMetadata(metadata, taskValidationGuardState{
+		ToolName:           "file.read",
+		FailureClass:       "tool_validation",
+		FailureCode:        "recovery_target_focus_required",
+		FailureReason:      "recovery_target_focus_required",
+		Fingerprint:        "file.read:recovery_target_focus_required",
+		AttemptFingerprint: "file.read",
+		Count:              3,
+		BlockThreshold:     3,
+		Blocked:            true,
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+	metadata, err = taskcheckpoint.MergeRecoveryFileWriteCheckpoint(metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: "validated",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fakeTaskRepo")
+	}
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			ProjectID:   projectID,
+			TaskNumber:  12,
+			Title:       "Create and validate pipeline configuration files",
+			Description: &description,
+			WorkStatus:  "blocked",
+			Metadata:    metadata,
+		},
+	}
+
+	blocked, _, err := fixture.engine.validationLoopBlockerForSession(context.Background(), fixture.session)
+	if err != nil {
+		t.Fatalf("validationLoopBlockerForSession: %v", err)
+	}
+	if blocked {
+		t.Fatal("expected stale recovery target focus guard to be invalidated")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if _, ok := parseTaskValidationGuard(updated.Metadata); ok {
+		t.Fatal("expected validation guard metadata to be cleared")
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected checkpoint metadata to remain present")
+	}
+	if checkpoint.TargetPath != "" {
+		t.Fatalf("checkpoint.TargetPath = %q, want empty", checkpoint.TargetPath)
+	}
+}
+
+func TestPersistResolvedRecoveryTargetWritePathStoresWrittenPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fakeTaskRepo")
+	}
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: "",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:         taskID,
+			ProjectID:  projectID,
+			TaskNumber: 12,
+			Title:      "Create and validate pipeline configuration files",
+			WorkStatus: "blocked",
+			Metadata:   metadata,
+		},
+	}
+
+	rt := &turnRuntime{
+		session:      fixture.session,
+		recoveryTurn: true,
+	}
+	result := ToolResult{
+		Name: "file.write",
+		Output: map[string]any{
+			"path":      "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md",
+			"byte_size": 1024,
+		},
+	}
+
+	if err := fixture.engine.persistResolvedRecoveryTargetWritePath(context.Background(), rt, result); err != nil {
+		t.Fatalf("persistResolvedRecoveryTargetWritePath: %v", err)
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected checkpoint metadata")
+	}
+	if checkpoint.TargetPath != "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md" {
+		t.Fatalf("checkpoint.TargetPath = %q", checkpoint.TargetPath)
+	}
+}
+
 func TestExplicitExecutionDeliverableWriteCompletedRecognizesDirectoryOutputChildFile(t *testing.T) {
 	t.Parallel()
 
