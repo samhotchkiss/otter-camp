@@ -448,6 +448,48 @@ func looksLikeExecutionLogWithoutEvidence(path, content string) bool {
 	return false
 }
 
+func looksLikeExecutionResultsScaffoldWithoutEvidence(path, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	normalizedPath := strings.ToLower(normalizeWorkspacePath(path))
+	if strings.HasPrefix(normalizedPath, "planning/") ||
+		strings.HasPrefix(normalizedPath, "review/") ||
+		strings.HasPrefix(normalizedPath, "reviews/") ||
+		strings.HasPrefix(normalizedPath, ".ottercamp/review/") ||
+		strings.HasPrefix(normalizedPath, ".ottercamp/reviews/") {
+		return false
+	}
+	if !strings.HasPrefix(normalizedPath, "work/") &&
+		!containsAnySubstring(normalizedPath, "results", "validation", "report") {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"## validation criteria",
+		"## evidence expectations",
+		"- define explicit pass/fail checks for each relevant stage.",
+		"- note the required evidence or observable outputs for each check.",
+		"- call out key failure conditions or edge cases reviewers should expect to verify.",
+		"- reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.",
+	) {
+		return false
+	}
+	return !containsAnySubstring(lower,
+		"## execution results",
+		"## observed results",
+		"## findings",
+		"## evidence collected",
+		"## test cases",
+		"- observed:",
+		"- result:",
+		"pass/fail decision",
+		"evidence file:",
+		"evidence path:",
+	)
+}
+
 func looksLikeExecutionSpecCompletionMemoWithoutArtifacts(path, content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
@@ -1532,6 +1574,12 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 		return map[string]any{
 			"error":   "non_substantive_content",
 			"message": "file.write content appears to be an execution-log scaffold or blocked-status memo without concrete execution evidence. Write actual observed results, evidence, and pass/fail outcomes directly.",
+		}, nil
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeExecutionResultsScaffoldWithoutEvidence(renderedPath, content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be a generic validation-results scaffold without concrete observed outcomes or evidence. Write actual results, findings, and pass/fail evidence directly.",
 		}, nil
 	}
 	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeExecutionSpecCompletionMemoWithoutArtifacts(renderedPath, content) {

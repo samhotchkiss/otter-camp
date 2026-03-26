@@ -11256,6 +11256,9 @@ func (e *TurnEngine) maybeSynthesizeTaskExecutionFileWriteToolCalls(ctx context.
 	if targetPath == "" || draft == "" {
 		return toolCalls, false, nil
 	}
+	if strings.TrimSpace(recoveryFileWriteDraftRejectReason(draft, targetPath)) != "" {
+		return toolCalls, false, nil
+	}
 	rejectReason := strings.TrimSpace(recoveryFileWriteDraftRejectReason(assistantContent, targetPath))
 	if rejectReason == "" && !taskExecutionToolCallsNeedSynthesis(toolCalls, targetPath) {
 		return toolCalls, false, nil
@@ -14141,6 +14144,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeExecutionPlanForTaskLog(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote an execution plan/checklist instead of concrete execution evidence", path)
 	}
+	if looksLikeExecutionResultsScaffoldWithoutEvidence(path, trimmed) {
+		return fmt.Sprintf("assistant draft for %s wrote a generic validation-results scaffold without concrete observed outcomes or evidence", path)
+	}
 	if looksLikeExecutionSpecCompletionMemoWithoutArtifacts(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote a self-certified execution-spec completion memo without concrete artifact evidence", path)
 	}
@@ -14547,6 +14553,48 @@ func looksLikeExecutionSpecCompletionMemoWithoutArtifacts(targetPath, content st
 		return false
 	}
 	return true
+}
+
+func looksLikeExecutionResultsScaffoldWithoutEvidence(targetPath, content string) bool {
+	path := strings.ToLower(strings.TrimSpace(targetPath))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(path, "planning/") ||
+		strings.HasPrefix(path, "review/") ||
+		strings.HasPrefix(path, "reviews/") ||
+		strings.HasPrefix(path, ".ottercamp/review/") ||
+		strings.HasPrefix(path, ".ottercamp/reviews/") {
+		return false
+	}
+	if !strings.HasPrefix(path, "work/") &&
+		!containsAny(path, "results", "validation", "report") {
+		return false
+	}
+	if !containsAny(lower,
+		"## validation criteria",
+		"## evidence expectations",
+		"- define explicit pass/fail checks for each relevant stage.",
+		"- note the required evidence or observable outputs for each check.",
+		"- call out key failure conditions or edge cases reviewers should expect to verify.",
+		"- reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.",
+	) {
+		return false
+	}
+	return !containsAny(lower,
+		"## execution results",
+		"## observed results",
+		"## findings",
+		"## evidence collected",
+		"## test cases",
+		"- observed:",
+		"- result:",
+		"pass/fail decision",
+		"evidence file:",
+		"evidence path:",
+	)
 }
 
 func looksLikeDeliverableCompletionSummaryWithoutBody(targetPath, content string) bool {

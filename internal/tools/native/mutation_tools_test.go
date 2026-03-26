@@ -884,6 +884,66 @@ func TestFileWriteRejectsDeliverableCompletionSummaryWithoutBody(t *testing.T) {
 	}
 }
 
+func TestFileWriteRejectsExecutionResultsScaffoldWithoutEvidence(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "Work/OC-18-VALIDATE-PIPELINE-OUTPUT-FORMAT-AND-DELIVERY.md",
+		"content": `# Validate pipeline output format and delivery
+
+## Objective
+Validate pipeline output format and downstream data delivery. Verify output records match expected schema and are delivered to the correct destination.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+- Note the required evidence or observable outputs for each check.
+- Call out key failure conditions or edge cases reviewers should expect to verify.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
 func TestFileWriteRejectsProjectSessionExecutionDeliverableMutation(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

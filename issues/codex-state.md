@@ -2,6 +2,71 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 21:28 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `0c0b51d3`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- rerun-88 exposed a new correctness bug in execution-first results lanes: generic markdown scaffolds were still being accepted as completed work on `Work/...` result documents
+
+### New local patch: generic validation-results scaffolds no longer count as substantive work on `Work/...` result documents
+
+- root cause:
+  - `internal/turn/engine.go`
+  - `inferredTaskDeliverableDraft(...)` produces a generic markdown starter for report-style task outputs
+  - `internal/tools/native/mutation_tools.go`
+  - native `file.write` validation only rejected empty/scaffold execution logs on `Test/test-execution-...` style paths, not on `Work/...` result documents like:
+    - `Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md`
+    - `Work/OC-18-VALIDATE-PIPELINE-OUTPUT-FORMAT-AND-DELIVERY.md`
+  - live proof showed those generic scaffolds were being committed as completed work and then repeatedly rejected by review
+- behavior:
+  - new helper `looksLikeExecutionResultsScaffoldWithoutEvidence(...)` now rejects generic result scaffolds that only restate:
+    - `## Validation Criteria`
+    - `## Evidence Expectations`
+    - generic “define pass/fail checks / reference evidence” bullets
+  - the native `file.write` layer now returns `non_substantive_content` for those `Work/...` results scaffolds
+  - the engine’s recovery-draft classifier now rejects the same content family when it appears in persisted recovery drafts
+  - kickoff synthesis now skips auto-synthesizing these non-substantive report starters, leaving the original kickoff tool calls untouched instead of auto-writing fake completed work
+- code:
+  - [`internal/tools/native/mutation_tools.go`](../internal/tools/native/mutation_tools.go)
+  - [`internal/tools/native/mutation_tools_test.go`](../internal/tools/native/mutation_tools_test.go)
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- focused verification:
+  - `go test ./internal/tools/native -run 'Test(FileWriteRejectsExecutionResultsScaffoldWithoutEvidence|FileWriteRejectsDeliverableCompletionSummaryWithoutBody|FileWriteRejectsNarratedTaskPlaceholderContent)' -count=1`
+  - `go test ./internal/turn -run 'Test(MaybeSynthesizeTaskExecutionFileWriteToolCalls(SkipsNonSubstantiveResultsDraft|SkipsCLIExecuteKickoffPlanForNonSubstantiveResultsDraft|SkipsReadOnlyKickoffPlanForNonSubstantiveResultsDraft)|RecoveryFileWriteDraftRejectReason(RejectsExecutionResultsScaffoldWithoutEvidence|RejectsExecutionSpecCompletionMemoWithoutArtifacts|RejectsDeliverableCompletionSummaryWithoutBody))' -count=1`
+
+### Live state on rerun-88 after deploy
+
+- project:
+  - rerun-88 project `3ee5af44-f1b6-4f03-9664-ef3116fad9ee`
+- task 15:
+  - task id `4a4aaac6-9f18-4f63-a911-0ebc0cb5a65a`
+  - current status `blocked`
+  - current metadata now carries:
+    - `recovery_file_write_checkpoint.target_path = Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md`
+    - `failure_reason = flow rejection max visits exceeded`
+  - real `task resume` is currently rejected by the public surface:
+    - `422 task_resume_flow_rejection_max_visits`
+  - interpretation:
+    - this lane is polluted by pre-fix scaffold acceptances and review rejections
+    - the new scaffold gate is in code, but rerun-88 task 15 is no longer the cleanest proof target for it
+- task 18:
+  - task id `3e153770-235e-4785-87fc-8fa33c81af33`
+  - current status `in_progress`
+  - current active execution `4da6904a-9732-43b3-9415-388e9aade025`
+  - active session `e6ea1fbd-bf30-4d13-97f3-783b9bee1662`
+  - active session currently has no `current_turn_id`, but this is not a new orphan-control-plane bug:
+    - message trace shows assistant turn `9` failed
+    - system message `10` recorded `[Rate limited, retrying in 30m11s...]`
+    - so the missing live turn is explained by a legitimate provider retry window, not by a lost dispatch
+- current seam:
+  - the scaffold-acceptance bug is fixed in code and deployed
+  - rerun-88 is now a partially polluted proof target because task 15 already exhausted visits on pre-fix fake work
+  - the next clean proof should come either from:
+    - a fresh rerun under the new gate, or
+    - a later post-rate-limit rerun-88 lane that has not already exhausted its visit budget
+
 ## 2026-03-25 21:18 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `c07ff934`

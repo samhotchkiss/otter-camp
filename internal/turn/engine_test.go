@@ -14688,7 +14688,7 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesBadImprovisedWri
 	}
 }
 
-func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesReadOnlyKickoffPlan(t *testing.T) {
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsReadOnlyKickoffPlanForNonSubstantiveResultsDraft(t *testing.T) {
 	t.Parallel()
 
 	fixture := newUnitFixture(t, "async")
@@ -14743,18 +14743,15 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesReadOnlyKickoffP
 	if err != nil {
 		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
 	}
-	if !synthesized {
-		t.Fatal("synthesized = false, want true")
+	if synthesized {
+		t.Fatalf("synthesized = true, want false with non-substantive inferred results draft; toolCalls=%+v", toolCalls)
 	}
-	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
-		t.Fatalf("toolCalls = %+v, want one synthesized file.write", toolCalls)
-	}
-	if got := stringValue(toolCalls[0].Arguments["path"]); got != "Work/OC-14-TEST-SPEAKER-INGESTION-WITH-VALID-INPUTS.md" {
-		t.Fatalf("path = %q, want canonical report path", got)
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.read" {
+		t.Fatalf("toolCalls = %+v, want original file.read call preserved", toolCalls)
 	}
 }
 
-func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesCLIExecuteKickoffPlan(t *testing.T) {
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsCLIExecuteKickoffPlanForNonSubstantiveResultsDraft(t *testing.T) {
 	t.Parallel()
 
 	fixture := newUnitFixture(t, "async")
@@ -14809,14 +14806,67 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesCLIExecuteKickof
 	if err != nil {
 		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
 	}
-	if !synthesized {
-		t.Fatal("synthesized = false, want true")
+	if synthesized {
+		t.Fatalf("synthesized = true, want false with non-substantive inferred results draft; toolCalls=%+v", toolCalls)
 	}
-	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
-		t.Fatalf("toolCalls = %+v, want one synthesized file.write", toolCalls)
+	if len(toolCalls) != 1 || toolCalls[0].Name != "cli.execute" {
+		t.Fatalf("toolCalls = %+v, want original cli.execute call preserved", toolCalls)
 	}
-	if got := stringValue(toolCalls[0].Arguments["path"]); got != "Work/OC-18-VALIDATE-PIPELINE-OUTPUT-FORMAT-AND-DELIVERY.md" {
-		t.Fatalf("path = %q, want canonical report path", got)
+}
+
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsSkipsNonSubstantiveResultsDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Validate pipeline output format and downstream data delivery. Verify output records match expected schema and are delivered to the correct destination. Output: output validation results. ~20 min."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     18,
+		Title:          "Validate pipeline output format and delivery",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": "execution_first",
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"I'll start by understanding the full context of this task. Let me gather the planning artifacts, current workspace state, and flow execution details.",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatalf("synthesized = true, want false with non-substantive inferred results scaffold; toolCalls=%+v", toolCalls)
+	}
+	if toolCalls != nil {
+		t.Fatalf("toolCalls = %+v, want nil", toolCalls)
 	}
 }
 
@@ -18394,6 +18444,28 @@ None at this phase. Scope is clear, fixtures are created, documentation is compl
 	reason := recoveryFileWriteDraftRejectReason(content, "Work/OC-14-PREPARE-TEST-ENVIRONMENT-AND-FIXTURES.md")
 	if !strings.Contains(reason, "execution-spec completion memo") {
 		t.Fatalf("reason = %q, want execution-spec completion memo rejection", reason)
+	}
+}
+
+func TestRecoveryFileWriteDraftRejectReasonRejectsExecutionResultsScaffoldWithoutEvidence(t *testing.T) {
+	targetPath := "Work/OC-18-VALIDATE-PIPELINE-OUTPUT-FORMAT-AND-DELIVERY.md"
+	content := `# Validate pipeline output format and delivery
+
+## Objective
+Validate pipeline output format and downstream data delivery. Verify output records match expected schema and are delivered to the correct destination.
+
+## Validation Criteria
+- Define explicit pass/fail checks for each relevant stage.
+- Note the required evidence or observable outputs for each check.
+- Call out key failure conditions or edge cases reviewers should expect to verify.
+
+## Evidence Expectations
+- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.
+`
+
+	got := recoveryFileWriteDraftRejectReason(content, targetPath)
+	if !strings.Contains(got, "generic validation-results scaffold") {
+		t.Fatalf("reason = %q, want generic validation-results scaffold rejection", got)
 	}
 }
 
