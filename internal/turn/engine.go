@@ -80,6 +80,7 @@ const (
 	chunkPollSteerEveryNChunks                = 10
 	maxContinuationTurnDepth                  = 3
 	maxReadOnlyDiscoveryCapTurns             = 5
+	maxReadOnlyDiscoveryCapTurnsReview       = 3
 	defaultTurnConsumerName                   = "turn-engine.user-message"
 	defaultReactionConsumerName               = "turn-engine.reactions"
 	defaultTurnCompletedName                  = "turn-engine.turn-completed"
@@ -9378,8 +9379,9 @@ func (e *TurnEngine) repeatedReadOnlyDiscoveryCapTurnReason(ctx context.Context,
 	if err != nil {
 		return "", "", false, err
 	}
-	recentTurnIDs := recentConsecutiveMaxToolCallTurnIDs(turns, rt.turn, maxReadOnlyDiscoveryCapTurns)
-	if len(recentTurnIDs) < maxReadOnlyDiscoveryCapTurns {
+	threshold := readOnlyDiscoveryCapTurnThreshold(reviewLane)
+	recentTurnIDs := recentConsecutiveMaxToolCallTurnIDs(turns, rt.turn, threshold)
+	if len(recentTurnIDs) < threshold {
 		return "", "", false, nil
 	}
 
@@ -9422,6 +9424,13 @@ func (e *TurnEngine) repeatedReadOnlyDiscoveryCapTurnReason(ctx context.Context,
 	}
 	systemMessage += ". Ending this task lane here instead of auto-continuing another discovery-only pass. Resume only when the next attempt can take a concrete mutation step on the deliverable.]"
 	return reason, systemMessage, true, nil
+}
+
+func readOnlyDiscoveryCapTurnThreshold(reviewLane bool) int {
+	if reviewLane {
+		return maxReadOnlyDiscoveryCapTurnsReview
+	}
+	return maxReadOnlyDiscoveryCapTurns
 }
 
 func recentConsecutiveMaxToolCallTurnIDs(turns []repo.ChatTurn, currentTurn *chat.ChatTurn, threshold int) []uuid.UUID {
@@ -10243,9 +10252,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 	}
 	if rt.toolCallsUsed >= toolBudget {
-		rt.stopReason = stopReasonMaxToolCalls
-		_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
-		return true, nil
+		return e.stopForMaxToolCalls(ctx, rt)
 	}
 
 	tier1 := make([]ToolCall, 0, len(toolCalls))
@@ -10265,9 +10272,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return true, nil
 		}
 		if rt.toolCallsUsed >= toolBudget {
-			rt.stopReason = stopReasonMaxToolCalls
-			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
-			return true, nil
+			return e.stopForMaxToolCalls(ctx, rt)
 		}
 		runCalls := tier1
 		budgetRemaining := toolBudget - rt.toolCallsUsed
@@ -10307,9 +10312,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return true, nil
 		}
 		if rt.toolCallsUsed >= toolBudget {
-			rt.stopReason = stopReasonMaxToolCalls
-			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
-			return true, nil
+			return e.stopForMaxToolCalls(ctx, rt)
 		}
 	}
 
@@ -10320,9 +10323,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return true, nil
 		}
 		if rt.toolCallsUsed >= toolBudget {
-			rt.stopReason = stopReasonMaxToolCalls
-			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
-			return true, nil
+			return e.stopForMaxToolCalls(ctx, rt)
 		}
 		handled, stop, err := e.handleRecoveryCLIExecuteWithoutCommand(ctx, rt, call)
 		if err != nil {
@@ -10492,13 +10493,27 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return true, nil
 		}
 		if rt.toolCallsUsed >= toolBudget {
-			rt.stopReason = stopReasonMaxToolCalls
-			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
-			return true, nil
+			return e.stopForMaxToolCalls(ctx, rt)
 		}
 	}
 
 	return false, nil
+}
+
+func (e *TurnEngine) stopForMaxToolCalls(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if rt == nil {
+		return true, nil
+	}
+	rt.stopReason = stopReasonMaxToolCalls
+	blocked, err := e.maybeBlockRepeatedReadOnlyDiscoveryCapTurns(ctx, rt)
+	if err != nil {
+		return false, err
+	}
+	if blocked {
+		return true, nil
+	}
+	_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Max tool calls reached. Turn ended.]")
+	return true, nil
 }
 
 func (e *TurnEngine) shouldStopAfterBootstrapPersist(ctx context.Context, rt *turnRuntime, results []ToolResult) (bool, error) {

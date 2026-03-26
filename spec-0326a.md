@@ -523,11 +523,12 @@ Implemented so far in this spec:
   - when every turn is limited to read-only discovery tools such as `file.list`, `file.read`, `file.search`, `git.log`, `git.diff`, `git.status`, `task.get`, `project.get`, `flow.get_template`, and `flow.get_execution`
   - the same cutoff now also recognizes read-only `cli.execute` turns by parsing persisted assistant `tool_calls` metadata and allowlisting inspection-only shell commands such as `pwd`, `ls`, `cat`, `rg`, `git diff`, and `git log`
   - the runtime blocks the task lane instead of auto-continuing another discovery-only pass
-  - review lanes are no longer exempt from that cutoff; when review churn hits the same pattern, the runtime ends the hot turn and queues a fresh `task_review_action` prompt instead of letting review keep burning `max_tool_calls`
+  - review lanes are no longer exempt from that cutoff; their threshold is tighter at `3` consecutive `max_tool_calls` turns, and when review churn hits the same pattern, the runtime ends the hot turn and queues a fresh `task_review_action` prompt instead of letting review keep burning `max_tool_calls`
+  - the `max_tool_calls` budget-hit path now routes through the same cutoff helper inside `dispatchTools(...)`, so capped review turns cannot skip the classifier just because the stop happened before the outer turn-finalization branch
 
 Still pending from this spec:
 
-- stronger live proof that the new shell-based read-only discovery cutoff is catching fresh Anthropic task churn, not just the direct read-tool variant; the direct read-tool cutoff is now live-proven on review lanes
+- stronger live proof that the new shell-based read-only discovery cutoff is catching fresh Anthropic task churn, not just the direct read-tool variant; the direct read-tool cutoff is live-proven on review lanes, and the tighter budget-path routing is implemented and tested but still waiting on fresh post-restart traffic
 - any additional recovery-specific fingerprints that remain after the current async task guardrails
 - richer operator diagnostics directly in product surfaces instead of shell-only reporting
 

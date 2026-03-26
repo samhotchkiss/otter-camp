@@ -20536,11 +20536,11 @@ func TestMaybeBlockRepeatedReadOnlyDiscoveryCapTurnsRetriesReviewLane(t *testing
 	fixture.engine.taskTransitions = blocker
 
 	var currentTurn *chat.ChatTurn
-	for i := 1; i <= maxReadOnlyDiscoveryCapTurns; i++ {
+	for i := 1; i <= maxReadOnlyDiscoveryCapTurnsReview; i++ {
 		turnID := uuid.New()
 		status := "completed"
 		var stopReason *string
-		if i < maxReadOnlyDiscoveryCapTurns {
+		if i < maxReadOnlyDiscoveryCapTurnsReview {
 			reason := stopReasonMaxToolCalls
 			stopReason = &reason
 		} else {
@@ -20555,7 +20555,7 @@ func TestMaybeBlockRepeatedReadOnlyDiscoveryCapTurnsRetriesReviewLane(t *testing
 		}
 		fixture.chat.turns[turnID] = turn
 		fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
-		if i == maxReadOnlyDiscoveryCapTurns {
+		if i == maxReadOnlyDiscoveryCapTurnsReview {
 			currentTurn = turn
 		}
 		payloads := []map[string]any{
@@ -20563,7 +20563,7 @@ func TestMaybeBlockRepeatedReadOnlyDiscoveryCapTurnsRetriesReviewLane(t *testing
 			{"tool_name": "git.log", "output": map[string]any{"error": "path_traversal"}},
 			{"tool_name": "task.get", "output": map[string]any{"task_number": 13}},
 		}
-		if i == maxReadOnlyDiscoveryCapTurns-2 {
+		if i == maxReadOnlyDiscoveryCapTurnsReview-1 {
 			payloads = append(payloads, map[string]any{"tool_name": "cli.execute", "output": map[string]any{"error": "review_action_required"}})
 		}
 		for _, payload := range payloads {
@@ -20597,7 +20597,7 @@ func TestMaybeBlockRepeatedReadOnlyDiscoveryCapTurnsRetriesReviewLane(t *testing
 	if len(blocker.calls) != 0 {
 		t.Fatalf("blocked calls = %d, want 0 for review retry path", len(blocker.calls))
 	}
-	if !fixture.messages.containsContentSubstring("Repeated read-only discovery churn across 5 consecutive max-tool-call turns") {
+	if !fixture.messages.containsContentSubstring("Repeated read-only discovery churn across 3 consecutive max-tool-call turns") {
 		t.Fatal("expected repeated discovery churn system message")
 	}
 	if !fixture.messages.containsContentSubstring("Review only. Inspect the current deliverables and use flow.review_decision") {
@@ -20606,6 +20606,119 @@ func TestMaybeBlockRepeatedReadOnlyDiscoveryCapTurnsRetriesReviewLane(t *testing
 	completed := fixture.chat.turnByID(currentTurn.ID)
 	if completed == nil || !strings.EqualFold(strings.TrimSpace(completed.Status), "completed") {
 		t.Fatalf("current turn status = %v, want completed", completed)
+	}
+}
+
+func TestDispatchToolsMaxToolCallsStopsReviewDiscoveryChurn(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	executionID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.session.Metadata = mustMarshalJSON(t, map[string]any{"flow_node_execution_id": executionID.String()})
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fakeTaskRepo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		ProjectID:  projectID,
+		TaskNumber: 13,
+		Title:      "Validate pipeline metrics and alerting hooks",
+		WorkStatus: "review",
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.taskTransitions = blocker
+
+	var currentTurn *chat.ChatTurn
+	for i := 1; i <= maxReadOnlyDiscoveryCapTurnsReview; i++ {
+		turnID := uuid.New()
+		status := "completed"
+		var stopReason *string
+		if i < maxReadOnlyDiscoveryCapTurnsReview {
+			reason := stopReasonMaxToolCalls
+			stopReason = &reason
+		} else {
+			status = "in_progress"
+		}
+		turn := &chat.ChatTurn{
+			ID:         turnID,
+			SessionID:  fixture.session.ID,
+			TurnNumber: i,
+			Status:     status,
+			StopReason: stopReason,
+		}
+		fixture.chat.turns[turnID] = turn
+		fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+		if i == maxReadOnlyDiscoveryCapTurnsReview {
+			currentTurn = turn
+		}
+
+		payloads := []map[string]any{
+			{"tool_name": "file.list", "output": map[string]any{"path": "scripts"}},
+			{"tool_name": "file.read", "output": map[string]any{"path": "scripts/validate-metrics.sh", "content": "echo ok", "byte_size": 7}},
+			{"tool_name": "git.log", "output": map[string]any{"commits": []any{}}},
+			{"tool_name": "task.get", "output": map[string]any{"task_number": 13}},
+		}
+		if i == maxReadOnlyDiscoveryCapTurnsReview-1 {
+			payloads = append(payloads, map[string]any{"tool_name": "cli.execute", "output": map[string]any{"error": "review_action_required"}})
+		} else {
+			payloads = append(payloads, map[string]any{"tool_name": "git.diff", "output": map[string]any{"error": "exit status 128"}})
+		}
+		for _, payload := range payloads {
+			fixture.messages.create(repo.ChatMessage{
+				SessionID:     fixture.session.ID,
+				TurnID:        &turnID,
+				Role:          "tool_result",
+				Content:       string(mustMarshalJSON(t, payload)),
+				ContentFormat: "text",
+				Status:        "final",
+			})
+		}
+	}
+	if currentTurn == nil {
+		t.Fatal("missing current turn")
+	}
+
+	rt := &turnRuntime{
+		session:       fixture.session,
+		turn:          currentTurn,
+		stopReason:    "",
+		startedAt:     time.Now(),
+		toolCallsUsed: fixture.engine.turnToolBudget(context.Background(), &turnRuntime{session: fixture.session}),
+	}
+
+	stop, err := fixture.engine.dispatchTools(context.Background(), rt, []ModelToolCall{{
+		ID:   uuid.NewString(),
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": "scripts/validate-metrics.sh",
+		},
+	}})
+	if err != nil {
+		t.Fatalf("dispatchTools: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected dispatchTools to stop after max tool calls")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked calls = %d, want 0 for review retry path", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("Repeated read-only discovery churn across 3 consecutive max-tool-call turns") {
+		t.Fatal("expected repeated discovery churn system message")
+	}
+	if !fixture.messages.containsContentSubstring("Review only. Inspect the current deliverables and use flow.review_decision") {
+		t.Fatal("expected fresh review action prompt")
 	}
 }
 

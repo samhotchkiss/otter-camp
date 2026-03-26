@@ -1396,3 +1396,17 @@ Current remaining proof gap:
 
 - I still do not have equivalent live proof for the shell-wrapped `cli.execute` read-only discovery variant
 - the direct read-tool family is now proven in production
+
+Follow-up hardening since that proof:
+
+- review-lane cross-turn discovery churn now trips at `3` consecutive `max_tool_calls` turns instead of `5`
+- the `dispatchTools(...)` budget-hit branch now calls the same read-only discovery cutoff helper before it appends `[Max tool calls reached. Turn ended.]`
+- focused coverage now includes `TestDispatchToolsMaxToolCallsStopsReviewDiscoveryChurn`, which reproduces the exact budget-path miss that let review turns `59`/`60`/`61` end as plain `max_tool_calls`
+
+Current live-proof status for that narrower fix:
+
+- code is built, tested, and deployed
+- the restart that rolled it out closed the two hot review sessions I was using as proof targets:
+  - `fc516b1d-0343-450b-bf1c-dea4351c7c07`
+  - `8dbd053a-b40a-4036-a59e-f33f66b8b9f5`
+- so the new budget-path routing fix still needs fresh post-restart Anthropic traffic for live proof
