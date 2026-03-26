@@ -11774,6 +11774,15 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsMetaTaskErrorNarrationReply(t *
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsTaskListNarrationReply(t *testing.T) {
+	t.Parallel()
+
+	content := "Based on the list of tasks provided, there are several draft tasks remaining and some completed tasks. The next step would be to review these tasks and decide which one to advance."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatalf("expected task-list narration reply to be generic recovery text")
+	}
+}
+
 func TestLooksLikeGenericTaskRecoveryReplyDetectsDependencySuccessAckReply(t *testing.T) {
 	t.Parallel()
 

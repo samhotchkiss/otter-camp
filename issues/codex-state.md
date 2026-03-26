@@ -9186,3 +9186,29 @@ Current narrowed seam:
 - shell-task creation is being blocked correctly in production
 - the newest local patch converts the follow-on narrated error explanation into a generic recovery retry case
 - next proof target is rerun-88 on the rebuilt binary, to verify that this narrated post-guard reply no longer consumes a full project continuation turn
+
+## 2026-03-26 08:47 MDT
+
+Latest fixes landed locally:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - widened `looksLikeGenericTaskRecoveryReply(...)` again to catch task-list narration summaries like:
+    - `Based on the list of tasks provided...`
+    - `The list of tasks provided shows...`
+    - `From the list of tasks provided...`
+- [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - added a direct regression for that exact task-list narration reply
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(ProjectMetaTaskCoachingReply|ProjectDraftListingCoachingReply|MetaTaskErrorNarrationReply|TaskListNarrationReply)|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+
+Latest live evidence before deploy:
+- rerun-88 retry turn `3050966c-80ea-4702-a38c-6226b32ac26e` is materially better than the previous one:
+  - qwen successfully called `task.list`
+  - tool result `44a0d8dc-b4aa-441a-b440-f13cfcb5ae87`
+- but the follow-on assistant stream started narrating the list instead of taking direct project action:
+  - pending assistant begins `Based on the list of tasks provided...`
+
+Current narrowed seam:
+- project-continuation retries are now getting past narrated meta-task errors and into real task-tree inspection
+- the newest local patch converts the follow-on task-list narration into another generic recovery retry case
+- next proof target is rerun-88 on the rebuilt binary, to verify that this task-list summary no longer consumes a full continuation turn

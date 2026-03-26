@@ -20494,6 +20494,10 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"which error scenarios to prioritize",
 		"let me gather the available test artifacts",
 		"let me gather the error scenario test results first",
+		"based on the list of tasks provided",
+		"the list of tasks provided shows",
+		"from the list of tasks provided",
+		"here's a breakdown of the tasks provided",
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(normalized, pattern) {
