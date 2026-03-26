@@ -40,6 +40,8 @@ func AttemptFingerprint(toolName string, input map[string]any) string {
 		return fileWriteAttemptFingerprint(input, normalized)
 	case "file.read":
 		return fileReadAttemptFingerprint(input, normalized)
+	case "file.list":
+		return fileListAttemptFingerprint(input, normalized)
 	case "cli.execute":
 		return cliExecuteAttemptFingerprint(input, normalized)
 	default:
@@ -136,6 +138,29 @@ func fileReadAttemptFingerprint(original, normalized map[string]any) string {
 	return "file.read:" + hashString(builder.String())
 }
 
+func fileListAttemptFingerprint(original, normalized map[string]any) string {
+	pathValue, hasPath := stringField(normalized, "path")
+	recursiveValue, hasRecursive := boolField(normalized, "recursive")
+
+	builder := strings.Builder{}
+	builder.WriteString("tool=file.list")
+	builder.WriteString("\npath=")
+	if hasPath {
+		builder.WriteString(pathValue)
+	}
+	builder.WriteString("\nrecursive=")
+	if hasRecursive {
+		builder.WriteString(strconv.FormatBool(recursiveValue))
+	}
+	if !hasPath && original != nil {
+		if raw, ok := rawArgumentString(original); ok {
+			builder.WriteString("\nraw_sha=")
+			builder.WriteString(hashString(raw))
+		}
+	}
+	return "file.list:" + hashString(builder.String())
+}
+
 func canonicalToolName(toolName string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(toolName))
 	switch trimmed {
@@ -143,6 +168,8 @@ func canonicalToolName(toolName string) string {
 		return "file.write"
 	case "file_read":
 		return "file.read"
+	case "file_list":
+		return "file.list"
 	case "cli_execute":
 		return "cli.execute"
 	default:

@@ -17085,6 +17085,23 @@ func classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawEr
 		}
 		return "not_found", reason, true
 	}
+	if normalizedToolName == "file.list" && normalizedErrorCode == "not_found" {
+		reason := strings.TrimSpace(rawErrorCode)
+		if reason == "" {
+			reason = "not_found"
+		}
+		return "not_found", reason, true
+	}
+	if normalizedToolName == "git.commit" && normalizedErrorCode == "task_git_commit_blocked" {
+		reason := strings.TrimSpace(rawErrorCode)
+		if reason == "" {
+			reason = strings.TrimSpace(rawReason)
+		}
+		if reason == "" {
+			reason = "task_git_commit_blocked"
+		}
+		return "task_git_commit_blocked", reason, true
+	}
 	return "", "", false
 }
 

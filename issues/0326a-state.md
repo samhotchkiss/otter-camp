@@ -657,6 +657,37 @@ What is still pending after this slice:
 - live proof on a fresh Anthropic 429 after the rebuild
 - broader repeated-recovery cutoffs beyond focus / target-drift / repeated read-only discovery handling
 
+## Update 14:30 MDT
+
+The next deterministic-cutoff widening slice is now in code and focused-test green.
+
+New behavior:
+
+- repeated same-turn async `project_task` validation stops now also classify `file.list -> not_found` as deterministic churn
+- `file.list` attempt fingerprints are now path-aware, so the early stop only triggers when the model repeats the same missing list target instead of collapsing unrelated list misses together
+- repeated same-turn async `project_task` validation stops now also classify `git.commit -> task_git_commit_blocked` as deterministic churn
+- that means task lanes that keep trying to commit after the runtime already told them commits are flow-owned now stop early instead of paying another full round
+
+Focused verification that passed:
+
+- `go test ./internal/toolargs -run 'Test(FileListAttemptFingerprintTracksPath|CanonicalToolNameNormalizesFileListAlias)$' -count=1`
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFileListNotFoundInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalTaskGitCommitBlockedInSameTurn)$' -count=1`
+
+Why this slice was next:
+
+- in the current top 10 async `project_task` turns from the last 6 hours, the biggest remaining repeated deterministic families after the already-shipped cutoffs were:
+  - `cli.execute` shell-injection denials: `30`
+  - generic/remaining other deterministic errors: `29`
+  - `file.read` `not_found`: `11`
+  - `recovery_target_focus_required`: `10`
+- drilling into those same top turns showed repeated `task_git_commit_blocked` and `file.list -> not_found` patterns as the next highest deterministic drains
+
+What is still pending after this slice:
+
+- rebuild / restart on this newest deterministic-cutoff widening
+- live proof on a fresh Anthropic or resumed canary task turn after the rebuild
+- broader repeated-recovery cutoffs beyond focus / target-drift / repeated read-only discovery handling
+
 ## Update 14:09 MDT
 
 The operator-diagnostics slice is now in the product surface, not just the shell script.

@@ -156,6 +156,28 @@ func TestFileReadAttemptFingerprintTracksPath(t *testing.T) {
 	}
 }
 
+func TestFileListAttemptFingerprintTracksPath(t *testing.T) {
+	first := AttemptFingerprint("file.list", map[string]any{
+		"path":      "scripts",
+		"recursive": true,
+	})
+	second := AttemptFingerprint("file_list", map[string]any{
+		"path":      "scripts",
+		"recursive": true,
+	})
+	third := AttemptFingerprint("file.list", map[string]any{
+		"path":      "config",
+		"recursive": true,
+	})
+
+	if first != second {
+		t.Fatalf("same path fingerprints differ: %q vs %q", first, second)
+	}
+	if first == third {
+		t.Fatalf("different file.list paths should not share fingerprint: %q", first)
+	}
+}
+
 func TestCanonicalToolNameNormalizesFileWriteAlias(t *testing.T) {
 	if got := canonicalToolName("file_write"); got != "file.write" {
 		t.Fatalf("canonicalToolName(file_write) = %q, want file.write", got)
@@ -165,6 +187,12 @@ func TestCanonicalToolNameNormalizesFileWriteAlias(t *testing.T) {
 func TestCanonicalToolNameNormalizesFileReadAlias(t *testing.T) {
 	if got := canonicalToolName("file_read"); got != "file.read" {
 		t.Fatalf("canonicalToolName(file_read) = %q, want file.read", got)
+	}
+}
+
+func TestCanonicalToolNameNormalizesFileListAlias(t *testing.T) {
+	if got := canonicalToolName("file_list"); got != "file.list" {
+		t.Fatalf("canonicalToolName(file_list) = %q, want file.list", got)
 	}
 }
 
