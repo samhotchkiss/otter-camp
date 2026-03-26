@@ -9471,10 +9471,12 @@ func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUI
 	if turnID == uuid.Nil {
 		return nil, nil, false
 	}
+	turnMessages := messagesForTurn(messages, turnID)
+	toolCalls := parseTurnAssistantToolCalls(turnMessages)
 	toolNames := map[string]struct{}{}
 	errorCodes := map[string]struct{}{}
 	toolResults := 0
-	for _, message := range messagesForTurn(messages, turnID) {
+	for _, message := range turnMessages {
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || !strings.EqualFold(strings.TrimSpace(message.Status), "final") {
 			continue
 		}
@@ -9483,7 +9485,17 @@ func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUI
 			continue
 		}
 		normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
-		if !isReadOnlyDiscoveryTool(normalizedToolName) {
+		switch {
+		case isReadOnlyDiscoveryTool(normalizedToolName):
+		case strings.EqualFold(normalizedToolName, "cli.execute"):
+			if message.ToolCallID == nil {
+				return nil, nil, false
+			}
+			call, exists := toolCalls[strings.TrimSpace(*message.ToolCallID)]
+			if !exists || !isReadOnlyDiscoveryCLIExecuteCall(call.Arguments) {
+				return nil, nil, false
+			}
+		default:
 			return nil, nil, false
 		}
 		toolResults++
@@ -9504,7 +9516,183 @@ func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUI
 
 func isReadOnlyDiscoveryTool(toolName string) bool {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "file.list", "file.read", "git.log", "git.diff", "task.get", "flow.get_template":
+	case "file.list", "file.read", "file.search", "git.log", "git.diff", "git.status", "task.get", "project.get", "flow.get_template", "flow.get_execution":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseTurnAssistantToolCalls(messages []repo.ChatMessage) map[string]storedAssistantToolCall {
+	if len(messages) == 0 {
+		return nil
+	}
+	calls := map[string]storedAssistantToolCall{}
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") || len(message.Metadata) == 0 {
+			continue
+		}
+		var meta struct {
+			ToolCalls []storedAssistantToolCall `json:"tool_calls"`
+		}
+		if err := json.Unmarshal(message.Metadata, &meta); err != nil {
+			continue
+		}
+		for _, call := range meta.ToolCalls {
+			id := strings.TrimSpace(call.ID)
+			if id == "" {
+				continue
+			}
+			calls[id] = call
+		}
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	return calls
+}
+
+type storedAssistantToolCall struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
+func isReadOnlyDiscoveryCLIExecuteCall(arguments map[string]any) bool {
+	if len(arguments) == 0 {
+		return false
+	}
+	normalized := toolargs.Normalize("cli.execute", cloneMap(arguments))
+	command := strings.TrimSpace(anyString(normalized["command"]))
+	if command == "" {
+		return false
+	}
+	return isReadOnlyCLICommand(command)
+}
+
+func isReadOnlyCLICommand(command string) bool {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, marker := range []string{
+		">",
+		"<<",
+		"tee ",
+		"apply_patch",
+		" chmod ",
+		" chown ",
+		" mkdir ",
+		" touch ",
+		" rm ",
+		" mv ",
+		" cp ",
+		" install ",
+		" patch ",
+		"python -c",
+		"python3 -c",
+		"node -e",
+		"perl -e",
+		"perl -0pi",
+		"ruby -e",
+		"git add",
+		"git commit",
+		"git checkout",
+		"git restore",
+		"git reset",
+		"git clean",
+		"git switch",
+		"git stash",
+		"git cherry-pick",
+		"git merge",
+		"git rebase",
+	} {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	replacer := strings.NewReplacer("&&", "\n", "||", "\n", ";", "\n", "|", "\n")
+	segments := strings.Split(replacer.Replace(trimmed), "\n")
+	seen := false
+	for _, segment := range segments {
+		part := strings.TrimSpace(segment)
+		if part == "" {
+			continue
+		}
+		seen = true
+		if !isReadOnlyCLISegment(strings.ToLower(part)) {
+			return false
+		}
+	}
+	return seen
+}
+
+func isReadOnlyCLISegment(segment string) bool {
+	switch {
+	case segment == "pwd":
+		return true
+	case strings.HasPrefix(segment, "cd "):
+		return true
+	case strings.HasPrefix(segment, "ls"):
+		return true
+	case strings.HasPrefix(segment, "find "):
+		return true
+	case strings.HasPrefix(segment, "stat "):
+		return true
+	case strings.HasPrefix(segment, "wc "):
+		return true
+	case strings.HasPrefix(segment, "head "):
+		return true
+	case strings.HasPrefix(segment, "tail "):
+		return true
+	case strings.HasPrefix(segment, "cat "):
+		return true
+	case strings.HasPrefix(segment, "sed "):
+		return !strings.Contains(segment, " -i")
+	case strings.HasPrefix(segment, "grep "):
+		return true
+	case strings.HasPrefix(segment, "rg "):
+		return true
+	case strings.HasPrefix(segment, "git status"):
+		return true
+	case strings.HasPrefix(segment, "git diff"):
+		return true
+	case strings.HasPrefix(segment, "git log"):
+		return true
+	case strings.HasPrefix(segment, "git show"):
+		return true
+	case strings.HasPrefix(segment, "git rev-parse"):
+		return true
+	case strings.HasPrefix(segment, "git branch"):
+		return true
+	case strings.HasPrefix(segment, "git ls-tree"):
+		return true
+	case strings.HasPrefix(segment, "git grep"):
+		return true
+	case strings.HasPrefix(segment, "test "):
+		return true
+	case strings.HasPrefix(segment, "[ "):
+		return true
+	case strings.HasPrefix(segment, "[[ "):
+		return true
+	case strings.HasPrefix(segment, "realpath "):
+		return true
+	case strings.HasPrefix(segment, "readlink "):
+		return true
+	case strings.HasPrefix(segment, "basename "):
+		return true
+	case strings.HasPrefix(segment, "dirname "):
+		return true
+	case strings.HasPrefix(segment, "file "):
+		return true
+	case strings.HasPrefix(segment, "which "):
+		return true
+	case strings.HasPrefix(segment, "command -v "):
+		return true
+	case strings.HasPrefix(segment, "echo "):
+		return true
+	case strings.HasPrefix(segment, "printf "):
 		return true
 	default:
 		return false

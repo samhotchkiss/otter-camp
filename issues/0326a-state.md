@@ -1266,3 +1266,64 @@ Why I stopped here:
 
 - this is the first new slice after Anthropic recovered that is clearly data-backed and narrow
 - deploying it will interrupt the current live runtime, so I kept this as a clean checkpoint first
+
+## Update 16:42 MDT
+
+I extended the cross-turn read-only discovery cutoff so it can catch the shell-based discovery turns that were still escaping the direct read-tool allowlist.
+
+Why this was necessary:
+
+- the fresh post-recovery capped turns were no longer always using `file.read` / `git.log` / `task.get` directly
+- some of the hottest async `project_task` turns were spending the entire tool budget on `cli.execute` just to inspect the workspace:
+  - `pwd`
+  - `ls`
+  - `cat`
+  - `git diff`
+  - `git log`
+- because the existing cutoff only recognized direct read-only tools, those shell-wrapped discovery turns could still chain through `max_tool_calls`
+
+What I changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - the read-only discovery cutoff now also treats these tools as read-only discovery:
+    - `file.search`
+    - `git.status`
+    - `project.get`
+    - `flow.get_execution`
+  - it now parses persisted assistant `tool_calls` metadata on the turn and classifies `cli.execute` as read-only discovery only when the normalized command is inspection-only
+  - the CLI classifier is conservative: it allowlists shell inspection commands such as `pwd`, `ls`, `cat`, `sed` (without `-i`), `grep`, `rg`, `git diff`, `git log`, and `git status`, and rejects mutation markers such as redirection, heredocs, `python -c`, `git commit`, `mv`, `cp`, `rm`, and similar write paths
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving:
+    - read-only `cli.execute` counts toward the cross-turn discovery cutoff
+    - mutating `cli.execute` does not
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(MaybeBlockRepeatedReadOnlyDiscoveryCapTurns|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsIgnoresMutationTurns|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsTreatsReadOnlyCLIExecuteAsDiscovery|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsIgnoresMutatingCLIExecute)$' -count=1`
+
+Deployment status:
+
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324` serve/worker with `.env` loaded and `OTTERCAMP_MODE=development`
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+Fresh post-restart live window:
+
+- `scripts/token-usage-report.sh --hours 0.08 --limit 8`
+- still `0` rate-limit failures
+- still `0` `listening_eval`
+- fresh async `project_task` `validation_loop_blocked` turns are still showing up on the hardened build
+
+What is proven vs not yet proven:
+
+- proven:
+  - the new shell-based read-only discovery classifier is implemented, tested, and live
+  - the runtime restarted cleanly on the new build
+- not yet proven:
+  - a fresh Anthropic task lane has not yet emitted a stop message explicitly showing the new repeated read-only `cli.execute` cutoff firing in production
+  - the latest blocked turns in the post-restart window were still older guard families:
+    - repeated `file.list (not_found)`
+    - repeated `cli.execute (shell_injection)`
+    - repeated identical successful `file.write` churn
+
+So this slice is live, but its new proof target is still pending: a capped shell-discovery task lane needs to actually hit the new stop path.
