@@ -1452,3 +1452,51 @@ Deployment status for this newest package-install cutoff:
 
 - code and tests are complete locally
 - I have not restarted the runtime on this latest slice yet, because the goal in this cooldown window was to batch offline hardening before the next fresh Anthropic run instead of repeatedly churning live sessions
+
+## Update 17:42 MDT
+
+The next offline hardening slice is now in code and unit-tested: async execution lanes no longer burn same-turn retries on ordinary provider-transient failures.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async `project_task` and non-bootstrap async `project` turns now treat `provider_transient_failure` as delayed retry work instead of retrying again inside the same turn
+  - the new path enqueues a fresh `agent_turn` retry with backoff and ends the hot turn immediately
+  - active project bootstrap sessions are explicitly excluded so they keep their existing bootstrap-specific provider failure handling
+  - sync sessions are also excluded so normal interactive turns keep the old inline transient retry behavior
+
+Why this was worth doing:
+
+- recent live analysis showed that once a turn hit its first provider-transient failure, recovery inside the same turn was very rare
+- the expensive pattern was late-turn tail churn:
+  - useful work had already happened earlier in the turn
+  - then the same turn paid for one or more transient failures before finally rate-limiting or exiting
+- that makes async cross-turn retry a better fit than in-turn retry for this failure family
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(ShouldDeferTransientModelTurnFailure|HandleTurnJobAsyncProjectTaskTransientProviderEnqueuesRetryWithoutSameTurnRetry|HandleTurnJobAsyncProjectTaskTransientProviderRetryCapStopsRequeue|HandleTurnJobRateLimitedDoesNotRetryInsideSingleTurn|HandleTurnJobTransientInfrastructureEnqueuesRetry|HandleTurnJobTransientInfrastructureRetryCapStopsRequeue)$' -count=1`
+
+What those tests prove:
+
+- async `project_task` transient provider failures now produce exactly one failed invocation for the turn and then schedule delayed retry work
+- transient provider retries now cap cleanly with a distinct exhausted-retries message
+- the existing rate-limit and transient-infrastructure retry behavior still passes unchanged
+- the helper gate correctly excludes:
+  - sync task lanes
+  - active project bootstrap sessions
+  - rate-limited failures
+
+What is still not proven:
+
+- I have not yet restarted the runtime on this newest transient-provider slice
+- so there is not yet fresh production evidence showing a real Anthropic `provider_transient_failure` that:
+  - produces only one failed invocation row for the turn
+  - then lands on the delayed retry path instead of same-turn churn
+
+Current status:
+
+- code complete
+- unit-tested
+- docs updated
+- waiting for the next deliberate runtime roll so it can be proven on fresh Anthropic traffic

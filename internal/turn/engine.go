@@ -70,6 +70,7 @@ const (
 	maxRateLimitRetries                       = 5
 	rateLimitRetryJitterThreshold             = 5 * time.Minute
 	maxRateLimitRetryJitter                   = 30 * time.Second
+	maxTransientModelRetries                  = 5
 	defaultTransientInfraBackoff              = 15 * time.Second
 	maxTransientInfraBackoff                  = 5 * time.Minute
 	maxTransientInfraRetries                  = 5
@@ -79,8 +80,8 @@ const (
 	defaultSummarizeLayerBudget               = 0
 	chunkPollSteerEveryNChunks                = 10
 	maxContinuationTurnDepth                  = 3
-	maxReadOnlyDiscoveryCapTurns             = 5
-	maxReadOnlyDiscoveryCapTurnsReview       = 3
+	maxReadOnlyDiscoveryCapTurns              = 5
+	maxReadOnlyDiscoveryCapTurnsReview        = 3
 	defaultTurnConsumerName                   = "turn-engine.user-message"
 	defaultReactionConsumerName               = "turn-engine.reactions"
 	defaultTurnCompletedName                  = "turn-engine.turn-completed"
@@ -6232,6 +6233,11 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 			return nil
 		}
 	}
+	if handled, handleErr := e.handleTransientModelTurnFailure(ctx, runtime, messageID, effectiveRoutedAgentID, retryCount, err); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
 	if isTransientInfrastructureError(err) {
 		handled, handleErr := e.handleTransientInfrastructureTurnFailure(ctx, runtime, messageID, effectiveRoutedAgentID, retryCount, err)
 		if handleErr != nil {
@@ -7081,6 +7087,75 @@ func (e *TurnEngine) handleTransientInfrastructureTurnFailure(
 
 	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
 	message := fmt.Sprintf("[Infrastructure temporarily unavailable, retrying in %s...]", formatRetryDelay(retryDelay))
+	if !enqueued {
+		message = "[Project paused - retry deferred until resume.]"
+	}
+	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, message)
+	return true, nil
+}
+
+func shouldDeferTransientModelTurnFailure(rt *turnRuntime, cause error) bool {
+	if rt == nil || rt.session == nil || cause == nil {
+		return false
+	}
+	if errors.Is(cause, ErrRateLimited) || !isTransientModelError(cause) {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(rt.session.ScopeType)) {
+	case "project_task":
+		return true
+	case "project":
+		return !projectBootstrapStateActive(projectBootstrapStateFromMetadata(rt.session.Metadata))
+	default:
+		return false
+	}
+}
+
+func (e *TurnEngine) handleTransientModelTurnFailure(
+	ctx context.Context,
+	runtime *turnRuntime,
+	messageID uuid.UUID,
+	routedAgentID *uuid.UUID,
+	retryCount int,
+	cause error,
+) (bool, error) {
+	if runtime == nil || runtime.turn == nil || runtime.session == nil {
+		return false, nil
+	}
+	if !shouldDeferTransientModelTurnFailure(runtime, cause) {
+		return false, nil
+	}
+	if retryCount < 0 {
+		retryCount = 0
+	}
+	if retryCount >= maxTransientModelRetries {
+		_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
+		_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Turn failed: temporary model provider retries exhausted after %d attempts.]", maxTransientModelRetries))
+		return true, nil
+	}
+
+	nextPayload := AgentTurnPayload{
+		SessionID:  runtime.session.ID,
+		MessageID:  messageID,
+		RetryCount: retryCount + 1,
+	}
+	if routedAgentID != nil && *routedAgentID != uuid.Nil {
+		agentID := *routedAgentID
+		nextPayload.AgentID = &agentID
+	}
+
+	retryDelay := transientInfrastructureRetryDelay(retryCount)
+	runAfter := e.now().Add(retryDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, runtime.session, nextPayload, &runAfter)
+	if err != nil {
+		return false, fmt.Errorf("enqueue transient provider retry: %w", err)
+	}
+
+	_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
+	message := fmt.Sprintf("[Provider temporarily unavailable, retrying in %s...]", formatRetryDelay(retryDelay))
 	if !enqueued {
 		message = "[Project paused - retry deferred until resume.]"
 	}
@@ -20697,6 +20772,10 @@ func (e *TurnEngine) callMainModel(
 				return ModelResponse{}, callErr
 			}
 			if isTransientModelError(callErr) {
+				if shouldDeferTransientModelTurnFailure(rt, callErr) {
+					_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", callErr.Error())
+					return ModelResponse{}, callErr
+				}
 				rt.modelRetryUsed++
 				if rt.modelRetryUsed >= e.modelRetryBudget {
 					_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", callErr.Error())

@@ -509,6 +509,10 @@ Implemented so far in this spec:
 - recovery resumes now stop early on repeated focus drift, repeated target drift, repeated empty mutations, and repeated read-only rediscovery
 - provider cooldown telemetry and retry scheduling are preserved across turn failure and runtime restart
 - same-turn retries on `provider_rate_limited` are removed
+- async execution lanes (`project_task` and non-bootstrap `project`) no longer spend same-turn model retries on ordinary provider-transient failures:
+  - they now fail the hot turn immediately
+  - enqueue a delayed cross-turn retry with bounded backoff
+  - keep sync turns and active project bootstrap on the old path
 - async task lanes now also stop early on repeated successful rewrites of the same existing file when the runtime sees identical `file.write` output path plus `byte_size` churn in one turn
 - async task lanes now also stop early on repeated `cli.execute` package-install churn for the same package spec in one turn instead of spending multiple rounds on `pip` / `python -m pip install` variants
 - `scripts/token-usage-report.sh` now surfaces:

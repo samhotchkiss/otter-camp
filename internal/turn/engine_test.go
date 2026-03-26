@@ -1869,6 +1869,155 @@ func TestHandleTurnJobTransientInfrastructureRetryCapStopsRequeue(t *testing.T) 
 	}
 }
 
+func TestShouldDeferTransientModelTurnFailure(t *testing.T) {
+	asyncTask := &turnRuntime{session: &chat.ChatSession{Mode: "async", ScopeType: "project_task"}}
+	if !shouldDeferTransientModelTurnFailure(asyncTask, ErrModelTransient) {
+		t.Fatal("async project_task transient failure should defer to delayed retry")
+	}
+
+	asyncProject := &turnRuntime{session: &chat.ChatSession{Mode: "async", ScopeType: "project"}}
+	if !shouldDeferTransientModelTurnFailure(asyncProject, ErrModelTransient) {
+		t.Fatal("non-bootstrap async project transient failure should defer to delayed retry")
+	}
+
+	activeBootstrap := &turnRuntime{session: &chat.ChatSession{
+		Mode:      "async",
+		ScopeType: "project",
+		Metadata:  mustJSONRaw(map[string]any{projectBootstrapMetadataKey: map[string]any{"status": projectBootstrapStatusActive}}),
+	}}
+	if shouldDeferTransientModelTurnFailure(activeBootstrap, ErrModelTransient) {
+		t.Fatal("active bootstrap project transient failure should keep bootstrap-specific handling")
+	}
+
+	syncTask := &turnRuntime{session: &chat.ChatSession{Mode: "sync", ScopeType: "project_task"}}
+	if shouldDeferTransientModelTurnFailure(syncTask, ErrModelTransient) {
+		t.Fatal("sync task transient failure should keep inline retry behavior")
+	}
+
+	if shouldDeferTransientModelTurnFailure(asyncTask, NewRateLimitedError(0, errors.New("http status 429"))) {
+		t.Fatal("rate-limited failures should use the rate-limit retry path, not transient provider deferral")
+	}
+}
+
+func TestHandleTurnJobAsyncProjectTaskTransientProviderEnqueuesRetryWithoutSameTurnRetry(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+	fixture.engine.modelRetryBudget = 3
+	projectID := uuid.New()
+	taskID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:              taskID,
+			OrganizationID:  fixture.session.OrganizationID,
+			ProjectID:       projectID,
+			AssignedAgentID: &assignedID,
+			WorkStatus:      "in_progress",
+		},
+	}}
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, ErrModelTransient
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", fixture.model.streamCalls)
+	}
+	if len(fixture.invocations.creates) != 1 {
+		t.Fatalf("invocation creates = %d, want 1", len(fixture.invocations.creates))
+	}
+	if len(fixture.invocations.failures) != 1 {
+		t.Fatalf("invocation failure updates = %d, want 1", len(fixture.invocations.failures))
+	}
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry payload = %+v, want retry_count=1", jobs[0].payload)
+	}
+	if jobs[0].runAfter == nil {
+		t.Fatal("retry run_after missing")
+	}
+	wantRunAfter := base.Add(defaultTransientInfraBackoff)
+	if !jobs[0].runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", *jobs[0].runAfter, wantRunAfter)
+	}
+	if !fixture.messages.containsContent("[Provider temporarily unavailable, retrying in 15s...]") {
+		t.Fatal("missing transient provider retry status message")
+	}
+	if fixture.messages.containsContentSubstring("[Turn failed:") {
+		t.Fatal("unexpected generic turn failed message for transient provider retry")
+	}
+}
+
+func TestHandleTurnJobAsyncProjectTaskTransientProviderRetryCapStopsRequeue(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.modelRetryBudget = 3
+	projectID := uuid.New()
+	taskID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:              taskID,
+			OrganizationID:  fixture.session.OrganizationID,
+			ProjectID:       projectID,
+			AssignedAgentID: &assignedID,
+			WorkStatus:      "in_progress",
+		},
+	}}
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, ErrModelTransient
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID:  fixture.session.ID,
+		MessageID:  fixture.userMessageID,
+		RetryCount: maxTransientModelRetries,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", fixture.model.streamCalls)
+	}
+	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
+		t.Fatalf("agent_turn retries = %d, want 0", len(jobs))
+	}
+	if !fixture.messages.containsContent("[Turn failed: temporary model provider retries exhausted after 5 attempts.]") {
+		t.Fatal("missing transient provider retries exhausted status message")
+	}
+}
+
 func TestHandleTurnCompletedEventEnqueuesAutoContinuation(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700000000, 0).UTC()
