@@ -9098,3 +9098,34 @@ Current narrowed seam:
 - top-level meta-task and earlier shell-task families are already blocked live
 - the newest local patch closes the adjacent `next phase` shell-task family that produced task `28`
 - next proof target is the first rerun-88 continuation generated after this deploy, to verify the prompt count drops again to the truly actionable draft set
+
+## 2026-03-26 08:20 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go)
+  - widened the project-session meta-task guard again to block task-specific promotion shells like:
+    - `Review and Promote Task 20`
+    - `transition it to the next phase or mark as complete`
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - actionable-draft filtering now excludes the same task-specific review/promote shell family
+- [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+  - worker-side continuation prompt generation now excludes the same task-specific review/promote shell family
+- direct regression coverage now includes the exact task-29 wording in:
+  - [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetectsProjectDraftListingCoachingReply|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemain$' -count=1`
+
+Latest live evidence before deploy:
+- rerun-88 advanced past the task-28 family but immediately created another shell:
+  - task `29`
+  - title `Review and Promote Task 20`
+  - description `Review the output of task 20, conduct any necessary follow-up, and transition it to the next phase or mark as complete.`
+- the fresh continuation prompt still reported `5 remaining draft project tasks`, which is now explained by task `29`
+
+Current narrowed seam:
+- task-28 `next phase` shells are now pushed and live
+- the newest local patch closes the adjacent task-specific review/promote shell family that produced task `29`
+- next proof target is the first rerun-88 continuation after this deploy, to verify the count drops again and the project lane stops manufacturing review/promote shells around task `20`

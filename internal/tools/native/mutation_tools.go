@@ -2717,6 +2717,9 @@ func looksLikeProjectContinuationMetaTask(title string, description *string) boo
 	if strings.Contains(normalized, "review and prepare for next phase") {
 		return true
 	}
+	if strings.Contains(normalized, "review and promote task ") {
+		return true
+	}
 	if strings.Contains(normalized, "prepare for next phase of project execution") {
 		return true
 	}
@@ -2730,6 +2733,11 @@ func looksLikeProjectContinuationMetaTask(title string, description *string) boo
 		(strings.Contains(normalized, "inspect the results") ||
 			strings.Contains(normalized, "integration test") ||
 			strings.Contains(normalized, "next phase")) {
+		return true
+	}
+	if strings.Contains(normalized, "transition it to the next phase") &&
+		(strings.Contains(normalized, "mark as complete") ||
+			strings.Contains(normalized, "review the output of task")) {
 		return true
 	}
 	if strings.Contains(normalized, "end to end pipeline integration test") &&
