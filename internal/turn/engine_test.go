@@ -36,6 +36,26 @@ import (
 	"log/slog"
 )
 
+func initializeTurnTestGitRepo(t *testing.T, repoRoot string) {
+	t.Helper()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoRoot
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	run("init", "-b", "main")
+}
+
 func TestListeningEvalSkippedForSyncSinglePending(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
@@ -2584,6 +2604,7 @@ func TestHandleTurnCompletedEventCreatesCanonicalCommitFromDeliverableWrite(t *t
 	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
 		t.Fatalf("mkdir project root: %v", err)
 	}
+	initializeTurnTestGitRepo(t, projectRoot)
 	if err := os.WriteFile(filepath.Join(projectRoot, "deliverable.md"), []byte("deliverable body\n"), 0o644); err != nil {
 		t.Fatalf("write deliverable: %v", err)
 	}
@@ -2616,7 +2637,15 @@ func TestHandleTurnCompletedEventCreatesCanonicalCommitFromDeliverableWrite(t *t
 		t.Fatalf("advance flow calls = %d, want 1", fixture.flowAdvancer.advanceFlowCalls)
 	}
 
-	messageBytes, err := exec.Command("git", "-C", projectRoot, "log", "-1", "--pretty=%B").CombinedOutput()
+	updatedTask, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	workspaceRoot, err := fixture.engine.taskWorkspaceRoot(context.Background(), updatedTask)
+	if err != nil {
+		t.Fatalf("taskWorkspaceRoot: %v", err)
+	}
+	messageBytes, err := exec.Command("git", "-C", workspaceRoot, "log", "-1", "--pretty=%B").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git log latest commit: %v: %s", err, strings.TrimSpace(string(messageBytes)))
 	}
@@ -2675,6 +2704,7 @@ func TestHandleTurnCompletedEventAdvancesFlowFromDurableRecoveryWrite(t *testing
 	if err := os.MkdirAll(filepath.Join(projectRoot, "docs", "migration-plan"), 0o755); err != nil {
 		t.Fatalf("mkdir project root: %v", err)
 	}
+	initializeTurnTestGitRepo(t, projectRoot)
 	if err := os.WriteFile(filepath.Join(projectRoot, "docs", "migration-plan", "oc-15-content-migration-plan.md"), []byte("recovery body\n"), 0o644); err != nil {
 		t.Fatalf("write recovery deliverable: %v", err)
 	}
@@ -2723,6 +2753,114 @@ func TestHandleTurnCompletedEventAdvancesFlowFromDurableRecoveryWrite(t *testing
 	}
 	if jobs := fixture.enqueuer.agentTurnJobs(); len(jobs) != 0 {
 		t.Fatalf("agent_turn jobs = %d, want 0", len(jobs))
+	}
+}
+
+func TestHandleTurnCompletedEventAdvancesFlowFromBlockedRecoveryWrite(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	projectID := uuid.New()
+	projectSlug := "blocked-recovery-" + uuid.NewString()[:8]
+	dataDir := t.TempDir()
+	fixture.engine.dataDir = dataDir
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	checkpointMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	description := "Create and validate pipeline configuration files. Output: validated config files committed to workspace."
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				TaskNumber:        12,
+				Title:             "Create and validate pipeline configuration files",
+				Description:       &description,
+				Metadata:          checkpointMetadata,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         projectID,
+				WorkStatus:        "blocked",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.flowAdvancer.tasks = taskRepo
+	fixture.flowAdvancer.activeExecution = &repo.FlowNodeExecution{
+		TaskID:      taskID,
+		FlowNodeID:  nodeID,
+		VisitNumber: 2,
+		Status:      "active",
+	}
+	fixture.engine.flowAdvancer = fixture.flowAdvancer
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work", DisplayName: "Work"},
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Slug:           projectSlug,
+			},
+		},
+	}
+	projectRoot := filepath.Join(dataDir, "workspaces", projectSlug)
+	if err := os.MkdirAll(filepath.Join(projectRoot, "Work"), 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+	initializeTurnTestGitRepo(t, projectRoot)
+	if err := os.WriteFile(filepath.Join(projectRoot, "Work", "OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md"), []byte("validated recovery body\n"), 0o644); err != nil {
+		t.Fatalf("write recovery deliverable: %v", err)
+	}
+
+	message, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	message.Metadata = mustRawJSON(t, map[string]any{"recovery_action": recoveryActionValidationResume})
+	fixture.messages.upsert(message)
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "Writing the recovery deliverable now.")
+	appendToolResultMessage(t, fixture, turnID, map[string]any{
+		"tool_name": "file.write",
+		"output": map[string]any{
+			"path":      "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md",
+			"byte_size": 24,
+			"created":   false,
+		},
+	})
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	if fixture.flowAdvancer.advanceFlowCalls != 1 {
+		t.Fatalf("advance flow calls = %d, want 1", fixture.flowAdvancer.advanceFlowCalls)
+	}
+	if fixture.flowAdvancer.recordNodeCommitCalls != 1 {
+		t.Fatalf("record node commit calls = %d, want 1", fixture.flowAdvancer.recordNodeCommitCalls)
+	}
+	updatedTask, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review after blocked recovery write", updatedTask.WorkStatus)
 	}
 }
 
@@ -2781,6 +2919,7 @@ func TestHandleTurnCompletedEventKickoffDurableWriteRecordsCanonicalCommit(t *te
 	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
 		t.Fatalf("mkdir project root: %v", err)
 	}
+	initializeTurnTestGitRepo(t, projectRoot)
 	if err := os.WriteFile(filepath.Join(projectRoot, "test_execution_happy_path.md"), []byte("# execution log\n"), 0o644); err != nil {
 		t.Fatalf("write kickoff deliverable: %v", err)
 	}

@@ -1251,29 +1251,6 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	} else if continued {
 		return nil
 	}
-	taskStatus := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
-	if taskStatus != "in_progress" && taskStatus != "review" {
-		return nil
-	}
-	if taskRecord.CurrentFlowNodeID == nil {
-		return nil
-	}
-
-	currentNode, err := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			return nil
-		}
-		return err
-	}
-	nodeType := strings.ToLower(strings.TrimSpace(currentNode.NodeType))
-	if taskStatus == "in_progress" && nodeType != "work" {
-		return nil
-	}
-	if taskStatus == "review" && nodeType != "review" {
-		return nil
-	}
-
 	turns, err := e.turns.ListBySession(ctx, session.ID)
 	if err != nil {
 		return err
@@ -1290,11 +1267,49 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	if err != nil {
 		return err
 	}
-	if taskStatus == "review" {
+	latestUser := latestUserMessage(messages)
+
+	taskStatus := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
+	blockedRecoveryLane := false
+	if taskStatus == "blocked" && latestUser != nil {
+		blockedRecoveryLane = isRecoveryResumeMessage(*latestUser) || taskContinuationResumeMessageRootsHistory(*latestUser)
+	}
+	if taskStatus != "in_progress" && taskStatus != "review" && !blockedRecoveryLane {
+		return nil
+	}
+	if taskRecord.CurrentFlowNodeID == nil {
+		return nil
+	}
+
+	currentNode, err := e.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	nodeType := strings.ToLower(strings.TrimSpace(currentNode.NodeType))
+	effectiveTaskStatus := taskStatus
+	if blockedRecoveryLane {
+		switch nodeType {
+		case "work":
+			effectiveTaskStatus = "in_progress"
+		case "review":
+			effectiveTaskStatus = "review"
+		default:
+			return nil
+		}
+	}
+	if effectiveTaskStatus == "in_progress" && nodeType != "work" {
+		return nil
+	}
+	if effectiveTaskStatus == "review" && nodeType != "review" {
+		return nil
+	}
+	if effectiveTaskStatus == "review" {
 		if reviewTurnCompletedWithDecision(messages, payload.TurnID) {
 			return nil
 		}
-		latestUser := latestUserMessage(messages)
 		if latestUser == nil {
 			return nil
 		}
@@ -1313,7 +1328,6 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	if shouldSuppressAutoContinuationForRecoveryHalt(messages, payload.TurnID, taskRecord.Metadata) {
 		return nil
 	}
-	latestUser := latestUserMessage(messages)
 	if latestUser == nil {
 		return nil
 	}
@@ -1389,7 +1403,7 @@ func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 		return false, nil
 	}
 	sessionMessages := messagesFromTaskSession(ctx, e, session)
-	if recoveryTurnProducedDurableWrite(messagesForTurn(sessionMessages, latestCompleted.ID), taskRecord.Metadata) {
+	if recoveryTurnProducedDurableWrite(taskRecord, messagesForTurn(sessionMessages, latestCompleted.ID)) {
 		if e.flowAdvancer != nil && latestCompleted.RespondingID != uuid.Nil {
 			if commitSHA, commitErr := e.ensureCanonicalTaskExecutionCommit(ctx, taskRecord); commitErr != nil {
 				return true, commitErr
@@ -1850,23 +1864,44 @@ func messagesForTurn(messages []repo.ChatMessage, turnID uuid.UUID) []repo.ChatM
 	return filtered
 }
 
-func recoveryTurnProducedDurableWrite(messages []repo.ChatMessage, metadata json.RawMessage) bool {
+func recoveryTurnProducedDurableWrite(taskRecord repo.ProjectTask, messages []repo.ChatMessage) bool {
 	if len(messages) == 0 {
 		return false
 	}
-	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(metadata); ok {
-		return false
-	}
+	checkpoint, hasCheckpoint := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
 	for _, message := range messages {
 		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
 			continue
 		}
-		toolName, _, errText, ok := parseToolResultMessage(message.Content)
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
 		if !ok || strings.TrimSpace(errText) != "" {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(toolName), "file.write") {
+		result := ToolResult{Name: toolName, Output: output}
+		if substantiveExecutionDeliverableReadCompleted(taskRecord, result) || explicitExecutionDeliverableWriteCompleted(taskRecord, result) {
 			return true
+		}
+		if !hasCheckpoint && strings.EqualFold(strings.TrimSpace(toolName), "file.write") && anyInt(output["byte_size"]) > 0 {
+			return true
+		}
+		targetPath := ""
+		if hasCheckpoint {
+			targetPath = normalizeWorkspaceRelativePath(checkpoint.TargetPath)
+		}
+		if targetPath == "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.write":
+			writtenPath := normalizeWorkspaceRelativePath(anyString(output["path"]))
+			if writtenPath != "" && sameWorkspaceRelativePath(writtenPath, targetPath) && anyInt(output["byte_size"]) > 0 {
+				return true
+			}
+		case "file.read":
+			readPath := normalizeWorkspaceRelativePath(anyString(output["path"]))
+			if readPath != "" && sameWorkspaceRelativePath(readPath, targetPath) && strings.TrimSpace(anyString(output["content"])) != "" {
+				return true
+			}
 		}
 	}
 	return false

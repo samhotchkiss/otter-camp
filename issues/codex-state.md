@@ -2,6 +2,65 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 20:46 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `dd0048c3`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- the stale task-12 recovery lane is no longer stuck on the abandoned execution after a successful recovery write
+
+### New local patch: blocked recovery completions now advance flow and canonical commit closing even when the task is still `blocked`
+
+- root cause:
+  - `internal/turn/engine.go`
+  - `HandleTurnCompletedEvent(...)` returned immediately for any `project_task` whose runtime status was not already `in_progress` or `review`
+  - live task 12 had a completed recovery write turn on active session `d16348f6-3307-4920-8eb5-258fcfc1f2eb`, but the task row was still `blocked`, so the completed turn was ignored before the durable-write/advance path could run
+  - separately, `recoveryTurnProducedDurableWrite(...)` had been written to return `false` whenever recovery checkpoint metadata existed, which suppressed the exact success case after the new target-path persistence logic
+- behavior:
+  - blocked `project_task` turns whose latest user message is a recovery-resume prompt now enter the normal work/review completion path, using the current flow node type to infer the effective runtime lane
+  - durable recovery-write detection now validates the actual tool results:
+    - normal explicit/preferred deliverable writes still count
+    - legacy no-checkpoint recovery writes still count
+    - checkpoint-backed recovery writes now count when the `file.write`/`file.read` path matches the checkpoint target instead of being suppressed just because checkpoint metadata exists
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- focused verification:
+  - `go test ./internal/turn -run 'Test(HandleTurnCompletedEvent(AdvancesFlowFromDurableRecoveryWrite|AdvancesFlowFromBlockedRecoveryWrite|CreatesCanonicalCommitFromDeliverableWrite|KickoffDurableWriteRecordsCanonicalCommit)|ExplicitExecutionDeliverableWriteCompletedIgnoresNonPathOutputHint|NormalizeRecoveryCheckpointTargetForTaskClearsNonPathOutputHint|ValidationLoopBlockerForSessionClearsStaleRecoveryTargetFocusGuard|PersistResolvedRecoveryTargetWritePathStoresWrittenPath)$' -count=1`
+
+### Live proof on rerun-88 task 12
+
+- target task:
+  - task id `e1840ae1-0fbf-4d6c-9ea9-6df5035f7e35`
+  - title `Create and validate pipeline configuration files`
+- pre-fix live state:
+  - task remained `blocked`
+  - active session `d16348f6-3307-4920-8eb5-258fcfc1f2eb` was still bound to abandoned work execution `3811e727-7346-422b-9ceb-dc9a00b229bc`
+  - the recovery write turn had already succeeded:
+    - turn `e3ab6648-c5a6-423c-8d41-bcf919d0feb4`
+    - run `59b60ac5-d47f-42df-a79f-a1da7af60b24`
+    - tool result wrote `Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md`
+  - but no flow advancement happened
+- operator re-drive:
+  - used the real product surface:
+    - `./bin/ottercamp task resume e1840ae1-0fbf-4d6c-9ea9-6df5035f7e35`
+- post-fix live result:
+  - stale session `d16348f6-3307-4920-8eb5-258fcfc1f2eb` is now `closed`
+  - stale execution `3811e727-7346-422b-9ceb-dc9a00b229bc` remains `abandoned`, but no longer owns the runtime lane
+  - the previously stranded work write is now reflected in fresh completed work execution:
+    - `5cc22312-c740-4b77-bed6-2643d2d5813e`
+    - status `completed`
+    - visit `3`
+    - commit `de6317ccddbe7f71c174e29846feaa308bc4a772`
+  - task 12 is now `review`
+  - fresh review execution/session are live:
+    - execution `07e4b507-cfad-4731-99e3-e05644c43690`
+    - session `8727f5d0-fe78-4038-91c3-c1a3d5505034`
+    - review turn `c8f1568e-2aeb-4713-8df9-c5534119bdd6`
+- current seam:
+  - task 12 is no longer blocked on stale work-execution ownership
+  - the next live seam, if any, is now in the fresh review lane rather than recovery-write completion
+
 ## 2026-03-25 14:32 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `f4721c1b`
