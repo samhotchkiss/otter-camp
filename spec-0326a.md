@@ -510,9 +510,11 @@ Implemented so far in this spec:
 - provider cooldown telemetry and retry scheduling are preserved across turn failure and runtime restart
 - same-turn retries on `provider_rate_limited` are removed
 - async task lanes now also stop early on repeated successful rewrites of the same existing file when the runtime sees identical `file.write` output path plus `byte_size` churn in one turn
+- async task lanes now also stop early on repeated `cli.execute` package-install churn for the same package spec in one turn instead of spending multiple rounds on `pip` / `python -m pip install` variants
 - `scripts/token-usage-report.sh` now surfaces:
   - hot turns with repeated rate-limit failures
   - duplicate successful `file.write` churn grouped by turn/path/byte-size
+  - repeated package-install attempts grouped by turn
   - completed turns grouped by `stop_reason`
   - `listening_eval` grouped by session scope/mode
   - sessions with active summarization backoff metadata

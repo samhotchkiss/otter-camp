@@ -104,6 +104,7 @@ const (
 	validationLoopBlockThreshold              = 3
 	validationLoopTurnStopThreshold           = 2
 	duplicateSuccessfulFileWriteChurnCode     = "duplicate_successful_write_churn"
+	duplicatePackageInstallChurnCode          = "duplicate_package_install_churn"
 	validationLoopSuppressionReason           = "validation_loop_blocked"
 	recoveryCLIRepairBudget                   = 1
 	recoveryFileWriteRepairBudget             = 1
@@ -17541,38 +17542,33 @@ func (e *TurnEngine) collectAsyncTaskToolResultChurnFailures(ctx context.Context
 		return nil, nil
 	}
 
-	hasWrite := false
-	for _, result := range results {
-		if strings.EqualFold(strings.TrimSpace(result.Name), "file.write") {
-			hasWrite = true
-			break
-		}
-	}
-	if !hasWrite {
-		return nil, nil
-	}
-
 	messages, err := e.messages.ListBySession(ctx, rt.session.ID)
 	if err != nil {
 		return nil, err
 	}
 	turnMessages := messagesForTurn(messages, rt.turn.ID)
+	assistantCalls := parseTurnAssistantToolCalls(turnMessages)
 	failures := make([]toolValidationFailure, 0, len(results))
 	seen := make(map[string]struct{}, len(results))
 	for _, result := range results {
-		failure, ok := classifyRepeatedSuccessfulFileWriteChurn(turnMessages, result)
-		if !ok {
-			continue
+		candidates := make([]toolValidationFailure, 0, 2)
+		if failure, ok := classifyRepeatedSuccessfulFileWriteChurn(turnMessages, result); ok {
+			candidates = append(candidates, failure)
 		}
-		key := strings.TrimSpace(failure.AttemptFingerprint)
-		if key == "" {
-			key = strings.TrimSpace(failure.Fingerprint)
+		if failure, ok := classifyRepeatedPackageInstallChurn(turnMessages, assistantCalls, result); ok {
+			candidates = append(candidates, failure)
 		}
-		if _, exists := seen[key]; exists {
-			continue
+		for _, failure := range candidates {
+			key := strings.TrimSpace(failure.AttemptFingerprint)
+			if key == "" {
+				key = strings.TrimSpace(failure.Fingerprint)
+			}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			failures = append(failures, failure)
 		}
-		seen[key] = struct{}{}
-		failures = append(failures, failure)
 	}
 	return failures, nil
 }
@@ -17662,6 +17658,134 @@ func classifyRepeatedSuccessfulFileWriteChurn(turnMessages []repo.ChatMessage, r
 
 func successfulFileWriteChurnAttemptFingerprint(path string, byteSize int, created bool) string {
 	return fmt.Sprintf("file.write:success:%s:%d:%t", normalizeWorkspaceRelativePath(path), byteSize, created)
+}
+
+func classifyRepeatedPackageInstallChurn(turnMessages []repo.ChatMessage, assistantCalls map[string]storedAssistantToolCall, result ToolResult) (toolValidationFailure, bool) {
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "cli.execute") {
+		return toolValidationFailure{}, false
+	}
+	callID := strings.TrimSpace(result.ToolCallID)
+	if callID == "" || len(assistantCalls) == 0 {
+		return toolValidationFailure{}, false
+	}
+	currentCall, ok := assistantCalls[callID]
+	if !ok {
+		return toolValidationFailure{}, false
+	}
+	packageSpec, ok := packageInstallSpecFromCLIExecuteArguments(currentCall.Arguments)
+	if !ok {
+		return toolValidationFailure{}, false
+	}
+
+	matchCount := 0
+	currentRecorded := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || message.ToolCallID == nil {
+			continue
+		}
+		messageCallID := strings.TrimSpace(*message.ToolCallID)
+		if messageCallID == "" {
+			continue
+		}
+		toolName, _, _, parsed := parseToolResultMessage(message.Content)
+		if !parsed || !strings.EqualFold(strings.TrimSpace(toolName), "cli.execute") {
+			continue
+		}
+		priorCall, exists := assistantCalls[messageCallID]
+		if !exists {
+			continue
+		}
+		priorPackageSpec, ok := packageInstallSpecFromCLIExecuteArguments(priorCall.Arguments)
+		if !ok || priorPackageSpec != packageSpec {
+			continue
+		}
+		matchCount++
+		if messageCallID == callID {
+			currentRecorded = true
+		}
+	}
+	if !currentRecorded {
+		matchCount++
+	}
+	if matchCount < 2 {
+		return toolValidationFailure{}, false
+	}
+
+	reason := fmt.Sprintf("repeated package-install attempts for `%s` in the same turn", packageSpec)
+	return buildToolValidationFailure(
+		"cli.execute",
+		duplicatePackageInstallChurnCode,
+		reason,
+		packageInstallChurnAttemptFingerprint(packageSpec),
+		"",
+	), true
+}
+
+func packageInstallChurnAttemptFingerprint(packageSpec string) string {
+	return "cli.execute:package-install:" + strings.ToLower(strings.TrimSpace(packageSpec))
+}
+
+func packageInstallSpecFromCLIExecuteArguments(arguments map[string]any) (string, bool) {
+	if len(arguments) == 0 {
+		return "", false
+	}
+	normalized := toolargs.Normalize("cli.execute", cloneMap(arguments))
+	command := strings.TrimSpace(anyString(normalized["command"]))
+	if command == "" {
+		return "", false
+	}
+	return packageInstallSpecFromCLICommand(command)
+}
+
+func packageInstallSpecFromCLICommand(command string) (string, bool) {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) == 0 {
+		return "", false
+	}
+
+	start := -1
+	switch {
+	case strings.EqualFold(fields[0], "pip"), strings.EqualFold(fields[0], "pip3"):
+		if len(fields) >= 2 && strings.EqualFold(fields[1], "install") {
+			start = 2
+		}
+	case len(fields) >= 4 && fields[1] == "-m" && strings.EqualFold(fields[2], "pip") && strings.EqualFold(fields[3], "install"):
+		start = 4
+	}
+	if start < 0 {
+		return "", false
+	}
+
+	packages := make([]string, 0, 2)
+	skipNext := false
+	for i := start; i < len(fields); i++ {
+		token := strings.TrimSpace(fields[i])
+		if token == "" {
+			continue
+		}
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if token == "|" || token == "||" || token == "&&" || token == ";" {
+			break
+		}
+		if strings.Contains(token, ">&") || strings.HasPrefix(token, ">") || strings.HasPrefix(token, "<") {
+			break
+		}
+		if strings.HasPrefix(token, "-") {
+			switch strings.ToLower(token) {
+			case "-r", "--requirement", "-c", "--constraint", "-i", "--index-url", "--extra-index-url", "--find-links", "-t", "--target":
+				skipNext = true
+			}
+			continue
+		}
+		packages = append(packages, strings.ToLower(token))
+	}
+	if len(packages) == 0 {
+		return "", false
+	}
+	return strings.Join(packages, ","), true
 }
 
 func turnHasSuccessfulFileMutation(results []ToolResult) bool {
@@ -18024,6 +18148,9 @@ func buildValidationLoopBlockReason(state taskValidationGuardState) string {
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateSuccessfulFileWriteChurnCode) {
 		return fmt.Sprintf("deterministic same-turn successful file.write churn blocked after %d identical rewrites: %s", state.Count, reason)
 	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicatePackageInstallChurnCode) {
+		return fmt.Sprintf("deterministic same-turn package-install churn blocked after %d identical attempts: %s", state.Count, reason)
+	}
 	if toolName == "" {
 		return fmt.Sprintf("deterministic tool validation loop blocked after %d identical failures: %s", state.Count, reason)
 	}
@@ -18205,6 +18332,9 @@ func buildValidationLoopTurnStopSystemMessage(state taskValidationGuardState) st
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateSuccessfulFileWriteChurnCode) {
 		return fmt.Sprintf("[Repeated identical successful file.write churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
 	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicatePackageInstallChurnCode) {
+		return fmt.Sprintf("[Repeated identical cli.execute package-install churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
+	}
 	if toolName == "" {
 		return fmt.Sprintf("[Repeated identical tool validation failure in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
 	}
@@ -18219,6 +18349,9 @@ func buildValidationLoopSystemMessage(state taskValidationGuardState) string {
 	toolName := strings.TrimSpace(state.ToolName)
 	if toolName == "" {
 		return fmt.Sprintf("[Deterministic tool validation loop blocked after %d identical failures: %s]", state.Count, reason)
+	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicatePackageInstallChurnCode) {
+		return fmt.Sprintf("[Deterministic same-turn package-install churn blocked after %d identical attempts: %s]", state.Count, reason)
 	}
 	return fmt.Sprintf("[Deterministic tool validation loop blocked after %d identical failures: %s (%s)]", state.Count, toolName, reason)
 }

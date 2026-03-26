@@ -18660,6 +18660,249 @@ func TestHandleToolValidationResultsIgnoresSuccessfulFileWriteChurnWhenByteSizeC
 	}
 }
 
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdPackageInstallAttemptInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	packageSpec := "pyyaml"
+	attemptFingerprint := packageInstallChurnAttemptFingerprint(packageSpec)
+	reason := fmt.Sprintf("repeated package-install attempts for `%s` in the same turn", packageSpec)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "cli.execute:" + duplicatePackageInstallChurnCode,
+		AttemptFingerprint: attemptFingerprint,
+		ToolName:           "cli.execute",
+		FailureClass:       "tool_validation",
+		FailureCode:        duplicatePackageInstallChurnCode,
+		FailureReason:      reason,
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate config loader imports and metrics wiring",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	commands := []string{
+		"pip install pyyaml 2>&1 | tail -3",
+		"pip3 install pyyaml 2>&1 | tail -3",
+		"/usr/bin/python3 -m pip install --user pyyaml 2>&1 | tail -5",
+	}
+	callIDs := []string{"pkg-prev-1", "pkg-prev-2", "pkg-1"}
+	for idx, callID := range callIDs {
+		command := commands[idx]
+		fixture.messages.create(repo.ChatMessage{
+			SessionID: fixture.session.ID,
+			TurnID:    &turnID,
+			Role:      "assistant",
+			Status:    "final",
+			Content:   "Trying another package install path.",
+			Metadata: mustMarshalJSON(t, map[string]any{
+				"tool_calls": []map[string]any{{
+					"id":   callID,
+					"name": "cli_execute",
+					"arguments": map[string]any{
+						"command": command,
+					},
+				}},
+			}),
+		})
+		fixture.messages.create(repo.ChatMessage{
+			SessionID:  fixture.session.ID,
+			TurnID:     &turnID,
+			Role:       "tool_result",
+			Status:     "final",
+			ToolCallID: &callID,
+			Content: string(mustRawJSON(t, map[string]any{
+				"tool_name": "cli.execute",
+				"output": map[string]any{
+					"duration_ms": 15,
+					"exit_code":   0,
+				},
+			})),
+		})
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:   "pkg-1",
+		Name: "cli.execute",
+		Arguments: map[string]any{
+			"command": commands[2],
+		},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "pkg-1",
+		Name:       "cli.execute",
+		Output: map[string]any{
+			"duration_ms": 15,
+			"exit_code":   0,
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	guard, ok := parseTaskValidationGuard(updated.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if guard.Count != validationLoopTurnStopThreshold {
+		t.Fatalf("guard.Count = %d, want %d", guard.Count, validationLoopTurnStopThreshold)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated identical cli.execute package-install churn in this turn") {
+		t.Fatal("expected repeated package-install early-stop validation message")
+	}
+}
+
+func TestHandleToolValidationResultsIgnoresPackageInstallChurnWhenPackageChanges(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate config loader imports and metrics wiring",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	commands := []string{
+		"pip install pyyaml 2>&1 | tail -3",
+		"pip install requests 2>&1 | tail -3",
+	}
+	callIDs := []string{"pkg-prev-1", "pkg-1"}
+	for idx, callID := range callIDs {
+		command := commands[idx]
+		fixture.messages.create(repo.ChatMessage{
+			SessionID: fixture.session.ID,
+			TurnID:    &turnID,
+			Role:      "assistant",
+			Status:    "final",
+			Content:   "Trying a package install.",
+			Metadata: mustMarshalJSON(t, map[string]any{
+				"tool_calls": []map[string]any{{
+					"id":   callID,
+					"name": "cli_execute",
+					"arguments": map[string]any{
+						"command": command,
+					},
+				}},
+			}),
+		})
+		fixture.messages.create(repo.ChatMessage{
+			SessionID:  fixture.session.ID,
+			TurnID:     &turnID,
+			Role:       "tool_result",
+			Status:     "final",
+			ToolCallID: &callID,
+			Content: string(mustRawJSON(t, map[string]any{
+				"tool_name": "cli.execute",
+				"output": map[string]any{
+					"duration_ms": 15,
+					"exit_code":   0,
+				},
+			})),
+		})
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:   "pkg-1",
+		Name: "cli.execute",
+		Arguments: map[string]any{
+			"command": commands[1],
+		},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "pkg-1",
+		Name:       "cli.execute",
+		Output: map[string]any{
+			"duration_ms": 15,
+			"exit_code":   0,
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if handled {
+		t.Fatal("handled = true, want false")
+	}
+	if fixture.messages.containsContentSubstring("package-install churn") {
+		t.Fatal("did not expect package-install churn validation message")
+	}
+}
+
 func TestHandleToolValidationResultsPersistsRecoveryCheckpointOnRepeatedFocusFailureStop(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

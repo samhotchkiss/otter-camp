@@ -312,6 +312,59 @@ ORDER BY write_count DESC, last_seen DESC
 LIMIT :'limit_rows'::int;
 
 \echo
+\echo '== Repeated Package Install Attempts By Turn =='
+WITH params AS (
+  SELECT
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
+    NULLIF(:'org_id', '')::uuid AS org_id
+),
+assistant_calls AS (
+  SELECT
+    cm.turn_id,
+    cm.session_id,
+    cm.created_at,
+    lower(COALESCE(call->'arguments'->>'command', '')) AS command
+  FROM chat_message cm
+  JOIN chat_session cs ON cs.id = cm.session_id
+  CROSS JOIN params p
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(cm.metadata::jsonb->'tool_calls', '[]'::jsonb)) AS call
+  WHERE cm.created_at >= p.since_at
+    AND cm.turn_id IS NOT NULL
+    AND cm.role = 'assistant'
+    AND cm.status = 'final'
+    AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+),
+package_attempts AS (
+  SELECT
+    turn_id,
+    session_id,
+    trim(
+      regexp_replace(
+        regexp_replace(command, '^.*?\binstall\b\s+', '', 'i'),
+        '\s*(\||;|&&|2>&1).*$',
+        '',
+        'i'
+      )
+    ) AS install_tail,
+    created_at
+  FROM assistant_calls
+  WHERE command ~ '(^|[[:space:]])(pip|pip3)[[:space:]]+install([[:space:]]|$)'
+     OR command ~ '(^|[[:space:]])[^[:space:]]+[[:space:]]+-m[[:space:]]+pip[[:space:]]+install([[:space:]]|$)'
+)
+SELECT
+  turn_id,
+  session_id,
+  COUNT(*) AS install_attempts,
+  string_agg(DISTINCT left(install_tail, 120), ' | ') AS attempted_specs,
+  MIN(created_at) AS first_seen,
+  MAX(created_at) AS last_seen
+FROM package_attempts
+GROUP BY turn_id, session_id
+HAVING COUNT(*) > 1
+ORDER BY install_attempts DESC, last_seen DESC
+LIMIT :'limit_rows'::int;
+
+\echo
 \echo '== Completed Turns By Stop Reason =='
 WITH params AS (
   SELECT

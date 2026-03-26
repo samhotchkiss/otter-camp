@@ -1410,3 +1410,41 @@ Current live-proof status for that narrower fix:
   - `fc516b1d-0343-450b-bf1c-dea4351c7c07`
   - `8dbd053a-b40a-4036-a59e-f33f66b8b9f5`
 - so the new budget-path routing fix still needs fresh post-restart Anthropic traffic for live proof
+
+## Update 17:18 MDT
+
+I kept working offline while Anthropic stayed constrained and added one more deterministic same-turn cutoff plus a matching operator report view.
+
+What shipped in code:
+
+- async `project_task` turns now classify repeated `cli.execute` package-install attempts for the same package spec as same-turn churn
+- the new fingerprint covers the concrete family we saw in the hottest recent turns:
+  - `pip install pyyaml`
+  - `pip3 install pyyaml`
+  - `/usr/bin/python3 -m pip install --user pyyaml`
+  - similar `python -m pip install` variants for the same package
+- the stop is intentionally narrow: it does not target productive same-file script construction, only repeated package-install retries for the same package target in the same turn
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdPackageInstallAttemptInSameTurn|HandleToolValidationResultsIgnoresPackageInstallChurnWhenPackageChanges|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdIdenticalSuccessfulFileWriteInSameTurn|DispatchToolsMaxToolCallsStopsReviewDiscoveryChurn)$' -count=1`
+
+Operator diagnostics now also include:
+
+- `Repeated Package Install Attempts By Turn` in [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+
+Fresh report proof on the recent two-hour window:
+
+- turn `d40b49ee-a369-4f95-98d5-aa2b2ca08bbc` now shows up cleanly with `6` repeated install attempts in one turn
+- the report surfaces the full variant set instead of forcing ad hoc SQL:
+  - `pip install pyyaml`
+  - `pip3 install pyyaml`
+  - `/usr/bin/python3 -m pip install pyyaml`
+  - `/Library/Developer/CommandLineTools/usr/bin/python3 -m pip install pyyaml`
+  - `python3 -m pip install --user pyyaml`
+  - `python3 -m pip install --target=./lib pyyaml`
+
+Deployment status for this newest package-install cutoff:
+
+- code and tests are complete locally
+- I have not restarted the runtime on this latest slice yet, because the goal in this cooldown window was to batch offline hardening before the next fresh Anthropic run instead of repeatedly churning live sessions
