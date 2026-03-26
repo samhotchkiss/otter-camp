@@ -1169,3 +1169,23 @@ What this closes:
 - both background summarization entry points now preserve cooldown before model invocation:
   - `chat_summarize`
   - cleanup `summary_consolidation`
+
+## Update 16:27 MDT
+
+I also tightened the operator report for live monitoring:
+
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh) now accepts fractional `--hours` values, so short windows like `--hours 0.25` work instead of erroring on integer casts
+
+Why this matters:
+
+- short-window live checks are the fastest way to confirm whether fresh runtime changes are reducing churn on real Anthropic traffic
+- the old integer-only window made it clumsy to inspect "just the last 15 minutes" without ad hoc SQL
+
+Fresh proof from the new short-window report:
+
+- `scripts/token-usage-report.sh --hours 0.25 --limit 3`
+- in that 15-minute window:
+  - `0` rate-limit failures
+  - `0` `listening_eval` invocations
+  - `0` sessions with active summarization backoff metadata
+- the report still highlights the hot recent task sessions and turns, but now at the exact live-monitoring granularity needed for the next rerun

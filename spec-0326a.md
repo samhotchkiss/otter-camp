@@ -515,6 +515,7 @@ Implemented so far in this spec:
   - duplicate successful `file.write` churn grouped by turn/path/byte-size
   - `listening_eval` grouped by session scope/mode
   - sessions with active summarization backoff metadata
+  - fractional `--hours` windows for short live checks such as `--hours 0.25`
 
 Still pending from this spec:
 

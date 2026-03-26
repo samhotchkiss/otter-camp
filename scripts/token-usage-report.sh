@@ -12,6 +12,9 @@ Usage: scripts/token-usage-report.sh [--hours N] [--limit N] [--org UUID]
 Reports recent model-invocation usage directly from PostgreSQL, including
 cache-read tokens in all totals.
 
+Notes:
+  --hours accepts fractional values such as 0.25 for 15 minutes
+
 Environment:
   OTTERCAMP_DATABASE_URL   Preferred PostgreSQL connection string
   DATABASE_URL             Legacy fallback if OTTERCAMP_DATABASE_URL is unset
@@ -71,7 +74,7 @@ psql \
 \echo '== Token Usage Overview =='
 WITH params AS (
   SELECT
-    now() - make_interval(hours => :'window_hours'::int) AS since_at,
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
     NULLIF(:'org_id', '')::uuid AS org_id
 ),
 scoped AS (
@@ -105,7 +108,7 @@ FROM scoped;
 \echo '== Usage by Purpose / Model / Connection =='
 WITH params AS (
   SELECT
-    now() - make_interval(hours => :'window_hours'::int) AS since_at,
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
     NULLIF(:'org_id', '')::uuid AS org_id
 )
 SELECT
@@ -131,7 +134,7 @@ LIMIT :'limit_rows'::int;
 \echo '== Listening Eval By Scope =='
 WITH params AS (
   SELECT
-    now() - make_interval(hours => :'window_hours'::int) AS since_at,
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
     NULLIF(:'org_id', '')::uuid AS org_id
 )
 SELECT
@@ -158,7 +161,7 @@ LIMIT :'limit_rows'::int;
 \echo '== Top Sessions =='
 WITH params AS (
   SELECT
-    now() - make_interval(hours => :'window_hours'::int) AS since_at,
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
     NULLIF(:'org_id', '')::uuid AS org_id
 )
 SELECT
@@ -187,7 +190,7 @@ LIMIT :'limit_rows'::int;
 \echo '== Top Turns =='
 WITH params AS (
   SELECT
-    now() - make_interval(hours => :'window_hours'::int) AS since_at,
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
     NULLIF(:'org_id', '')::uuid AS org_id
 )
 SELECT
@@ -214,7 +217,7 @@ LIMIT :'limit_rows'::int;
 \echo '== Hot Rate-Limit Turns =='
 WITH params AS (
   SELECT
-    now() - make_interval(hours => :'window_hours'::int) AS since_at,
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
     NULLIF(:'org_id', '')::uuid AS org_id
 ),
 rate_limited AS (
@@ -250,7 +253,7 @@ LIMIT :'limit_rows'::int;
 \echo '== Duplicate Successful File Writes By Turn =='
 WITH params AS (
   SELECT
-    now() - make_interval(hours => :'window_hours'::int) AS since_at,
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
     NULLIF(:'org_id', '')::uuid AS org_id
 ),
 tool_results AS (
@@ -326,7 +329,7 @@ LIMIT :'limit_rows'::int;
 \echo '== Most Common Failures =='
 WITH params AS (
   SELECT
-    now() - make_interval(hours => :'window_hours'::int) AS since_at,
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
     NULLIF(:'org_id', '')::uuid AS org_id
 )
 SELECT
