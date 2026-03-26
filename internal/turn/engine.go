@@ -9578,7 +9578,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return false, err
 		}
 		rt.toolCallsUsed += len(blockedCalls)
-		if shouldStopAfterBlockedProjectExecutionCreateConflict(rt, blockedCalls) {
+		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, blockedCalls) {
 			return true, nil
 		}
 		if shouldStopAfterBlockedProjectBootstrapRecoveryReread(rt, blockedBootstrapRecoveryReread) {
@@ -9628,6 +9628,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		if err := e.appendToolResults(ctx, rt, results); err != nil {
 			return false, err
+		}
+		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, results) {
+			return true, nil
 		}
 		failedBootstrap, err := e.handleProjectBootstrapChildTaskFailure(ctx, rt, results)
 		if err != nil {
@@ -9781,6 +9784,9 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		}
 		if err := e.appendToolResults(ctx, rt, []ToolResult{result}); err != nil {
 			return false, err
+		}
+		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {
+			return true, nil
 		}
 		if rt.recoveryTurn && rt.recoveryWriteDone {
 			rt.toolCallsUsed++
@@ -18087,21 +18093,29 @@ func shouldStopAfterBlockedProjectKickoffSessionCreate(rt *turnRuntime, results 
 	return false
 }
 
-func shouldStopAfterBlockedProjectExecutionCreateConflict(rt *turnRuntime, results []ToolResult) bool {
-	if rt == nil || rt.projectIdentity == nil || rt.session == nil {
+func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, results []ToolResult) bool {
+	if rt == nil || rt.session == nil {
 		return false
 	}
 	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
 		return false
 	}
 	for _, result := range results {
-		if !strings.EqualFold(strings.TrimSpace(result.Name), "project.create") {
-			continue
+		name := strings.ToLower(strings.TrimSpace(result.Name))
+		errText := strings.ToLower(strings.TrimSpace(result.Error))
+		switch name {
+		case "project.create":
+			if rt.projectIdentity == nil {
+				continue
+			}
+			if strings.Contains(errText, "project already created in this flow") {
+				return true
+			}
+		case "task.create":
+			if strings.Contains(errText, "non-bootstrap tasks with blocks_scope=all must include an assigned agent") {
+				return true
+			}
 		}
-		if !strings.Contains(strings.ToLower(strings.TrimSpace(result.Error)), "project already created in this flow") {
-			continue
-		}
-		return true
 	}
 	return false
 }
@@ -20356,6 +20370,9 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"the error message indicates that the dependency is invalid",
 		"could you please check if the task or subtask ids are correct and try again",
 		"if you need further assistance, feel free to ask",
+		"for tasks with blocks_scope=all, you must specify either an assigned agent, an executable flow template, or a human review path",
+		"could you please provide one of these options so i can try creating the task again",
+		"let me know which option you'd like to proceed with, and i'll make the necessary adjustments",
 		"planning playbook state is required before planning artifacts can be recorded",
 		"some initial setup or configuration needs to be completed before",
 		"i'll give an example by creating a task in a project",

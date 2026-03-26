@@ -5615,6 +5615,76 @@ func TestHandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity(
 	}
 }
 
+func TestHandleUserMessageProjectScopeStopsAfterBlockedTaskCreateAllScopeMutation(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	var dispatched []string
+	fixture.engine.dispatcher = &fakeDispatcher{
+		tier1Fn: func(_ context.Context, call ToolCall) (ToolResult, error) {
+			dispatched = append(dispatched, call.Name)
+			return ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Error:      "non-bootstrap tasks with blocks_scope=all must include an assigned agent, executable flow template, or human review path",
+			}, nil
+		},
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "call_task_create_all_scope",
+				Name: "task.create",
+				Tier: "tier1",
+				Arguments: map[string]any{
+							"title":        "Prepare for next phase of project execution",
+							"project_id":   "your_project_id_here",
+							"description":  "Identify and prepare tasks required to advance the project based on recent completion of task 19.",
+							"blocks_scope": "all",
+				},
+			}}}, nil
+		default:
+			return ModelResponse{Content: "unexpected second round"}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(dispatched) != 1 || dispatched[0] != "task.create" {
+		t.Fatalf("dispatched tools = %v, want one task.create", dispatched)
+	}
+	if round != 1 {
+		t.Fatalf("model rounds = %d, want 1 after blocked task.create all-scope mutation", round)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawBlockedTaskCreate bool
+	for _, msg := range messages {
+		if msg.Role != "tool_result" {
+			continue
+		}
+		if msg.ToolCallID == nil || *msg.ToolCallID != "call_task_create_all_scope" {
+			continue
+		}
+		if !strings.Contains(msg.Content, "non-bootstrap tasks with blocks_scope=all must include an assigned agent") {
+			continue
+		}
+		sawBlockedTaskCreate = true
+	}
+	if !sawBlockedTaskCreate {
+		t.Fatal("missing blocked task.create tool_result for project-scoped session")
+	}
+}
+
 func TestShouldBlockFreshKickoffPreCreateTool(t *testing.T) {
 	rt := &turnRuntime{
 		freshKickoff: true,
@@ -7209,6 +7279,100 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesDependencyErrorCo
 	}
 	if !handled {
 		t.Fatal("expected dependency-error coaching reply to enqueue a fresh retry message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("retry reused original continuation message, want fresh message id")
+	}
+	if jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", jobs[0].payload.RetryCount)
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesAllScopeTaskCreateCoachingReplyWithFreshMessage(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 19,
+				Title:      "Run end-to-end pipeline integration test",
+				WorkStatus: "done",
+			},
+			draftTaskID: {
+				ID:         draftTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 20,
+				Title:      "Prepare deduplication report for review",
+				WorkStatus: "draft",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		Content:        `{"tool_name":"task.create","output":{},"error":"non-bootstrap tasks with blocks_scope=all must include an assigned agent, executable flow template, or human review path"}`,
+		SequenceNumber: 11,
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "It appears there was an issue when attempting to create the task. The error message indicates that for tasks with `blocks_scope=all`, you must specify either an assigned agent, an executable flow template, or a human review path. Could you please provide one of these options so I can try creating the task again? Let me know which option you'd like to proceed with, and I'll make the necessary adjustments.",
+		SequenceNumber: 12,
+	}
+	messages := []repo.ChatMessage{*latestUser, *toolResult, *assistant}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected all-scope task.create coaching reply to enqueue a fresh retry message")
 	}
 
 	jobs := fixture.enqueuer.jobs

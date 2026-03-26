@@ -2,6 +2,52 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 05:51 MDT update
+
+- deployed runtime now includes an additional local `internal/turn/engine.go` guard/detector patch on top of pushed `0c0ff960`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+
+### New local fix
+
+- `internal/turn/engine.go`
+  - async `project` turns now stop immediately after an executed `task.create` failure with:
+    - `non-bootstrap tasks with blocks_scope=all must include an assigned agent, executable flow template, or human review path`
+  - `looksLikeGenericTaskRecoveryReply(...)` now also catches the follow-on coaching variant that asks the operator to provide one of those options
+- `internal/turn/engine_test.go`
+  - added `TestHandleUserMessageProjectScopeStopsAfterBlockedTaskCreateAllScopeMutation`
+  - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesAllScopeTaskCreateCoachingReplyWithFreshMessage`
+
+### Focused verification
+
+- `go test ./internal/turn -run 'Test(HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity|HandleUserMessageProjectScopeStopsAfterBlockedTaskCreateAllScopeMutation|HandleCompletedProjectExecutionContinuationTurnRetriesDependencyErrorCoachingReplyWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnRetriesAllScopeTaskCreateCoachingReplyWithFreshMessage|BuildProjectContinuationActionPrompt|BuildProjectExecutionContinuationPrompt)$' -count=1`
+- rebuilt `./bin/ottercamp`
+- respawned tmux panes with sourced `.env`
+
+### Latest live evidence on rerun-88
+
+- session `1a9edb0a-a817-46b1-975d-4d96c8164bcb`
+- prior completed turn `57b88fd3-1ac8-4823-8599-e858ebdd77c2` proved the next seam before this patch:
+  - first invocation attempted bogus top-level `task.create`
+    - title `Prepare for next phase of project execution`
+    - placeholder `project_id=your_project_id_here`
+    - `blocks_scope=all`
+  - tool result failed with:
+    - `non-bootstrap tasks with blocks_scope=all must include an assigned agent, executable flow template, or human review path`
+  - second invocation then fell back to generic coaching asking the operator to provide an agent/template/review path
+- current live retry after restart:
+  - fresh message `1e3b0279-45b2-4254-9cd1-f70d180083a8`
+  - fresh turn `4157a5e8-cdfb-40c3-83b5-313ffe5a9b85`
+  - live invocation `34840676-b699-485a-b484-4fc1fbce562f`
+  - model `qwen2.5:72b`
+  - status `in_flight`
+
+### Current seam
+
+- the new blocked-mutation stop path and coaching-reply retry path are deployed and tested
+- live proof is still pending because the fresh rerun-88 qwen turn `4157a5e8-...` is still running
+- next proof target is whether that turn avoids the old two-step `task.create blocks_scope=all` + operator-coaching loop
+
 ## 2026-03-26 05:41 MDT update
 
 - deployed runtime now includes an additional local `internal/jobqueue/worker.go` stale-model threshold patch on top of pushed `2de2a1ae`
