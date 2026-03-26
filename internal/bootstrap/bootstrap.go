@@ -992,8 +992,8 @@ func defaultProfileSeeds() []modelProfileSeed {
 		{
 			LogicalProfileID:    "standard",
 			ProviderSlug:        "anthropic",
-			ModelName:           "claude-sonnet-4-20250514",
-			DisplayName:         "Claude Sonnet 4",
+			ModelName:           "claude-sonnet-4-6",
+			DisplayName:         "Claude Sonnet 4.6",
 			ContextWindowTokens: 200000,
 			MaxOutputTokens:     4096,
 			SupportsStreaming:   true,

@@ -2,6 +2,80 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 22:33 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `724f447f`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- Anthropic failover is now using the new setup-token connection `pearl-swh-me`
+- rerun-88 task 15 is no longer dead-ended on `task_resume_flow_rejection_max_visits`
+
+### New local patch: Anthropic standard profile and bootstrap seed now use `claude-sonnet-4-6`
+
+- root cause:
+  - the current org `standard` profile row still pointed at `claude-sonnet-4`
+  - fresh live traffic on the new Anthropic setup-token connection exposed this immediately with upstream 404s:
+    - `provider http 404 ... model: claude-sonnet-4`
+  - official Anthropic model docs now list the current Sonnet API ID as `claude-sonnet-4-6`
+- behavior:
+  - bootstrap default seed for the `standard` logical profile now uses:
+    - `model_name = claude-sonnet-4-6`
+    - `display_name = Claude Sonnet 4.6`
+  - the current live org profile row was also updated in-place so active retries stop requesting the invalid upstream model id
+- code:
+  - [`internal/bootstrap/bootstrap.go`](../internal/bootstrap/bootstrap.go)
+  - [`internal/bootstrap/bootstrap_integration_test.go`](../internal/bootstrap/bootstrap_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/bootstrap -run 'TestBootstrapRun(SeedsAndIsIdempotent|PreservesExistingCurrentModelProfileVersion)$' -count=1`
+- live proof:
+  - completed invocation `16fe0846-e4db-4dac-a2ce-7e1200374757`
+  - session `7d05682a-9e68-4932-9af7-a154c5c42470`
+  - model `claude-sonnet-4-6`
+  - provider connection `pearl-swh-me`
+
+### New local patch: flow-rejection resume now also heals durable checkpoints whose recovery write reported success but the target file was initially missing
+
+- root cause:
+  - `internal/task/recovery_resume.go`
+  - the legacy max-visit carveout only reopened blocked tasks when the current target file still contained the old generic scaffold
+  - rerun-88 task 15 had a different durable-checkpoint shape:
+    - blocker reason still `flow rejection max visits exceeded`
+    - checkpoint failure reason:
+      - `recovered file.write reported success but Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md was not found on disk`
+    - later inspection showed the target file and recovery artifact both existed, so the old scaffold-only carveout never matched and the public resume surface kept returning 422
+- behavior:
+  - the max-visit legacy-heal path now also resumes when the durable checkpoint failure reason is the missing-target-after-reported-write case
+  - that carveout now works whether:
+    - the target file is still missing but the recovery artifact exists
+    - or the target file has since appeared on disk
+- code:
+  - [`internal/task/recovery_resume.go`](../internal/task/recovery_resume.go)
+  - [`internal/task/service_integration_test.go`](../internal/task/service_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationResumeValidationBlockedTask(RepairsLegacyFlowRejectionScaffold|RepairsMissingTargetAfterReportedRecoveryWrite|RepairsRecoveredTargetAfterReportedRecoveryWrite)$' -count=1`
+
+### Live proof after deploy
+
+- Anthropic routing:
+  - current preferred connection:
+    - `pearl-swh-me` `a61ed950-69e0-4693-b555-a8b5f1f87f7e`
+  - recent invocations are landing there for both Haiku and Opus, not on the old rate-limited primary
+- rerun-88 task 15:
+  - task id `4a4aaac6-9f18-4f63-a911-0ebc0cb5a65a`
+  - before deploy:
+    - `./bin/ottercamp task resume 4a4aaac6-9f18-4f63-a911-0ebc0cb5a65a`
+    - returned `422 task_resume_flow_rejection_max_visits`
+  - after deploy:
+    - the same public resume call succeeds
+    - task 15 moved back to `review`
+    - task `updated_at = 2026-03-25 22:32:08 MDT`
+- rerun-88 task 18:
+  - task id `3e153770-235e-4785-87fc-8fa33c81af33`
+  - the earlier `claude-sonnet-4` failures are fixed as a model-profile issue, not a gateway/auth issue
+  - but the current `blocked` state is substantive, not resumability-related:
+    - the latest work session wrote reviewer notes into the deliverable
+    - the latest review session rejected that output and exhausted visits
+
 ## 2026-03-25 22:08 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `1a358a67`

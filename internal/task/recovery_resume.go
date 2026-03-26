@@ -160,8 +160,21 @@ func (s *service) maybeResumeLegacyNonSubstantiveFlowRejection(ctx context.Conte
 	if err != nil {
 		return taskResumeDecision{}, false, err
 	}
-	if !exists || !looksLikeLegacyNonSubstantiveExecutionResultsScaffold(targetPath, targetBody) {
-		return taskResumeDecision{}, false, nil
+	missingTargetAfterReportedWrite := looksLikeMissingTargetAfterReportedRecoveryWrite(blockerReason, checkpoint.FailureReason)
+	if exists {
+		if !missingTargetAfterReportedWrite && !looksLikeLegacyNonSubstantiveExecutionResultsScaffold(targetPath, targetBody) {
+			return taskResumeDecision{}, false, nil
+		}
+	} else {
+		artifactPath := strings.TrimSpace(checkpoint.ArtifactPath)
+		if !missingTargetAfterReportedWrite || artifactPath == "" {
+			return taskResumeDecision{}, false, nil
+		}
+		if _, artifactExists, readErr := readRecoveryWorkspaceFile(roots, artifactPath); readErr != nil {
+			return taskResumeDecision{}, false, readErr
+		} else if !artifactExists {
+			return taskResumeDecision{}, false, nil
+		}
 	}
 	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	return taskResumeDecision{
@@ -170,6 +183,12 @@ func (s *service) maybeResumeLegacyNonSubstantiveFlowRejection(ctx context.Conte
 		blockerReason: blockerReason,
 		checkpoint:    &checkpoint,
 	}, true, nil
+}
+
+func looksLikeMissingTargetAfterReportedRecoveryWrite(blockerReason, failureReason string) bool {
+	combined := strings.ToLower(strings.TrimSpace(blockerReason) + "\n" + strings.TrimSpace(failureReason))
+	return strings.Contains(combined, "reported success") &&
+		strings.Contains(combined, "not found on disk")
 }
 
 func recoveryResumeReasonMatchesReviewDecisionRequired(blockerReason string) bool {
