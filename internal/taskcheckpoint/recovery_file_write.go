@@ -191,6 +191,22 @@ func RecoveryFileWriteFailureIsRepeatedTargetDrift(reason string) bool {
 	return strings.Contains(lower, "repeated recovery target drift")
 }
 
+func RecoveryFileWriteFailureIsMissingContent(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(lower, "file.write") &&
+		(strings.Contains(lower, "retried without `content`") ||
+			strings.Contains(lower, "retried without content") ||
+			strings.Contains(lower, "without content"))
+}
+
+func RecoveryFileWriteFailureIsMissingCommand(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(lower, "cli.execute") &&
+		(strings.Contains(lower, "retried without `command`") ||
+			strings.Contains(lower, "retried without command") ||
+			strings.Contains(lower, "without command"))
+}
+
 func RecoveryFileWriteFailureIsIntentOnly(reason string) bool {
 	lower := strings.ToLower(strings.TrimSpace(reason))
 	return strings.Contains(lower, "intent to write the deliverable") ||
@@ -238,6 +254,12 @@ func RecoveryFileWritePromptStrategyLines(checkpoint *RecoveryFileWriteCheckpoin
 		}
 		if RecoveryFileWriteFailureIsRepeatedTargetDrift(failure) {
 			lines = append(lines, "- The checkpoint already rejected recovery target drift. Do not switch to a different file path unless a new authoritative validation failure explicitly names it.")
+		}
+		if RecoveryFileWriteFailureIsMissingContent(failure) {
+			lines = append(lines, "- The prior recovery halt already proved the turn reached `file.write` without a file body. Do not emit another empty `file.write` retry.")
+		}
+		if RecoveryFileWriteFailureIsMissingCommand(failure) {
+			lines = append(lines, "- The prior recovery halt already proved `cli.execute` was missing `command`. Retry only with a concrete command string or a populated `file.write`.")
 		}
 	}
 	lines = append(lines, "- If the target file already exists, continue from that durable output instead of restarting the same failed write.")

@@ -891,3 +891,35 @@ What is still pending:
 
 - a fresh post-deploy Anthropic 429 should still be observed end-to-end to confirm the streamed failure classification and persisted cooldown path together on a new real invocation
 - the next remaining `0326a` runtime gap is still broader repeated-recovery fingerprint handling beyond the already-shipped focus-failure, target-drift, and repeated read-only discovery stops
+
+## Update 15:18 MDT
+
+The next `0326a` slice narrows another specific recovery churn family: repeated empty file-mutation retries across explicit recovery resumes.
+
+New behavior:
+
+- when a recovery checkpoint already shows `file.write` previously retried without `content`, the next recovery turn now halts immediately on the first repeated empty `file.write` instead of spending another correction round
+- when a recovery checkpoint already shows `cli.execute` previously retried without `command` for a file-output repair, the next recovery turn now halts immediately on the first repeated empty `cli.execute` instead of spending another correction round
+- recovery file-output context now treats the checkpoint target path itself as sufficient context even when no artifact or target draft exists yet, so these resume-level halts still fire from a durable checkpoint rather than silently degrading back into another retry message
+- recovery prompt strategy lines now explicitly warn against repeating empty `file.write` and empty `cli.execute` retries once the checkpoint has already proven those shapes are dead ends
+
+Focused verification that passed:
+
+- `go test ./internal/taskcheckpoint -run 'TestRecoveryFileWritePromptStrategyLines(HardensRejectedDraftResume|HardensEmptyMutationResume)$' -count=1`
+- `go test ./internal/turn -run 'Test(HandleRecoveryFileWriteWithoutContentStopsAfterRepeatedResumeFailure|HandleRecoveryCLIExecuteWithoutCommandStopsAfterRepeatedResumeFailure|HandleToolValidationResultsStopsRecoveryTurnAfterRepeatedFocusFailureAcrossResumes|HandleToolValidationResultsStopsRecoveryTurnAfterRepeatedTargetDriftAcrossResumes)$' -count=1`
+
+What this closes:
+
+- a recovery lane no longer needs to spend a new correction round rediscovering that it still has no file body
+- a recovery lane no longer needs to spend a new correction round rediscovering that it still has no `cli.execute.command`
+
+Current status of this slice:
+
+- code and focused tests are complete locally
+- this slice has not been rebuilt/redeployed yet
+- I intentionally kept it out of the live runtime until the current cooldown-window batch is worth restarting for
+
+What is still pending after this slice:
+
+- broader repeated-recovery fingerprints beyond the shipped focus-failure, target-drift, repeated empty-mutation, and repeated read-only discovery stops
+- another real post-deploy Anthropic rate-limit event to prove the durable provider-cooldown telemetry path end-to-end in live traffic

@@ -10805,6 +10805,11 @@ func (e *TurnEngine) handleRecoveryCLIExecuteWithoutCommand(ctx context.Context,
 	if rewritten, err := e.rewriteRecoveryCLIExecuteWithoutCommandToFileWrite(ctx, rt, &call); rewritten || err != nil {
 		return rewritten, false, err
 	}
+	if e.recoveryCheckpointShowsMissingCommand(ctx, rt) {
+		if halted, err := e.haltRecoveryCLIExecuteWithoutCommand(ctx, rt); halted || err != nil {
+			return halted, true, err
+		}
+	}
 	if rt.recoveryCLIFixes >= recoveryCLIRepairBudget {
 		if halted, err := e.haltRecoveryCLIExecuteWithoutCommand(ctx, rt); halted {
 			return true, true, err
@@ -10883,6 +10888,7 @@ func (e *TurnEngine) haltRecoveryCLIExecuteWithoutCommand(ctx context.Context, r
 
 	artifactDraft := strings.TrimSpace(historyDraft)
 	failureReason := buildRecoveryCLIExecuteFileOutputFailureReason(targetPath)
+	failureReason = e.strengthenRecoveryMissingCommandFailureReason(ctx, rt, targetPath, failureReason)
 	if currentDraft, draftOK := e.latestRecoveryAssistantDraftContent(ctx, rt); draftOK {
 		switch rejectReason := recoveryFileWriteDraftRejectReason(currentDraft, targetPath); {
 		case strings.TrimSpace(rejectReason) != "":
@@ -10925,6 +10931,14 @@ func buildRecoveryCLIExecuteFileOutputFailureReason(targetPath string) string {
 		path = "the requested workspace file"
 	}
 	return fmt.Sprintf("cli.execute for %s was retried without `command` after one bounded correction; persist the full file body before retrying the final workspace mutation", path)
+}
+
+func buildRecoveryFileWriteMissingContentFailureReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	return fmt.Sprintf("file.write for %s was retried without `content` after one bounded correction; persist the full file body before retrying the final write", path)
 }
 
 func buildRecoveryCLIExecuteRejectedDraftFailureReason(targetPath, rejectReason string) string {
@@ -11089,26 +11103,12 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 		return e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, draft, rejectReason)
 	}
 
+	if e.recoveryCheckpointShowsMissingContent(ctx, rt, targetPath) {
+		return e.haltRecoveryFileWriteWithoutContent(ctx, rt, targetPath)
+	}
+
 	if rt.recoveryFileFixes >= recoveryFileWriteRepairBudget {
-		rt.stopReason = stopReasonRecoveryFileRejected
-		artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, "", "")
-		if artifactErr != nil {
-			e.logger.Warn("recovery: failed to persist file.write artifact",
-				"session_id", rt.session.ID,
-				"turn_id", rt.turn.ID,
-				"path", targetPath,
-				"error", artifactErr,
-			)
-		}
-		message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, ""))
-		if err != nil {
-			return true, true, err
-		}
-		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, "", message.ID); checkpointErr != nil {
-			return true, true, checkpointErr
-		}
-		rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, "")
-		return true, true, nil
+		return e.haltRecoveryFileWriteWithoutContent(ctx, rt, targetPath)
 	}
 
 	rt.recoveryFileFixes++
@@ -11116,6 +11116,33 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 		return true, false, err
 	}
 	return true, false, nil
+}
+
+func (e *TurnEngine) haltRecoveryFileWriteWithoutContent(ctx context.Context, rt *turnRuntime, targetPath string) (bool, bool, error) {
+	if e == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, false, nil
+	}
+	failureReason := e.strengthenRecoveryMissingContentFailureReason(ctx, rt, targetPath, buildRecoveryFileWriteMissingContentFailureReason(targetPath))
+	rt.stopReason = stopReasonRecoveryFileRejected
+	artifactPath, artifactErr := e.persistRecoveryFileWriteArtifact(ctx, rt, targetPath, "", failureReason)
+	if artifactErr != nil {
+		e.logger.Warn("recovery: failed to persist file.write artifact",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+			"error", artifactErr,
+		)
+	}
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReason))
+	if err != nil {
+		return true, true, err
+	}
+	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, failureReason, message.ID); checkpointErr != nil {
+		return true, true, checkpointErr
+	}
+	rt.recoveryBlockReason = buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureReason)
+	_ = e.cancelRecoveryResumeDispatch(ctx, rt, rt.recoveryBlockReason)
+	return true, true, nil
 }
 
 func (e *TurnEngine) handleRecoveryMalformedFileEditWithoutPath(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
@@ -13564,6 +13591,7 @@ func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRunt
 					return targetPath, recoveryArtifactDraftContent(draft), true
 				}
 			}
+			return targetPath, "", true
 		}
 	}
 	if targetPath, draft, ok := e.recoveryHistoricalSubstantiveOutputContext(ctx, rt); ok {
@@ -15817,6 +15845,72 @@ func (e *TurnEngine) strengthenRecoveryDraftRejectFailureReason(ctx context.Cont
 		return fmt.Sprintf("repeated intent-only recovery drafts for %s across explicit resume attempts; latest %s", path, current)
 	}
 	return fmt.Sprintf("repeated non-substantive recovery drafts for %s across explicit resume attempts; latest %s", path, current)
+}
+
+func (e *TurnEngine) strengthenRecoveryMissingContentFailureReason(ctx context.Context, rt *turnRuntime, targetPath, currentReason string) string {
+	current := strings.TrimSpace(currentReason)
+	if current == "" || !taskcheckpoint.RecoveryFileWriteFailureIsMissingContent(current) {
+		return current
+	}
+	priorReason := ""
+	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
+		priorReason = strings.TrimSpace(checkpoint.FailureReason)
+	}
+	if !taskcheckpoint.RecoveryFileWriteFailureIsMissingContent(priorReason) {
+		return current
+	}
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	return fmt.Sprintf("repeated recovery file.write without content for %s across explicit resume attempts; latest retry again omitted the full file body", path)
+}
+
+func (e *TurnEngine) strengthenRecoveryMissingCommandFailureReason(ctx context.Context, rt *turnRuntime, targetPath, currentReason string) string {
+	current := strings.TrimSpace(currentReason)
+	if current == "" || !taskcheckpoint.RecoveryFileWriteFailureIsMissingCommand(current) {
+		return current
+	}
+	priorReason := ""
+	if checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt); ok {
+		priorReason = strings.TrimSpace(checkpoint.FailureReason)
+	}
+	if !taskcheckpoint.RecoveryFileWriteFailureIsMissingCommand(priorReason) {
+		return current
+	}
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	return fmt.Sprintf("repeated recovery cli.execute without command for %s across explicit resume attempts; latest retry again omitted cli.execute.command", path)
+}
+
+func (e *TurnEngine) recoveryCheckpointShowsMissingContent(ctx context.Context, rt *turnRuntime, targetPath string) bool {
+	if e == nil || rt == nil {
+		return false
+	}
+	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	if !ok {
+		return false
+	}
+	if target := strings.TrimSpace(targetPath); target != "" {
+		checkpointTarget := strings.TrimSpace(checkpoint.TargetPath)
+		if checkpointTarget != "" && !sameWorkspaceRelativePath(checkpointTarget, target) {
+			return false
+		}
+	}
+	return taskcheckpoint.RecoveryFileWriteFailureIsMissingContent(checkpoint.FailureReason)
+}
+
+func (e *TurnEngine) recoveryCheckpointShowsMissingCommand(ctx context.Context, rt *turnRuntime) bool {
+	if e == nil || rt == nil {
+		return false
+	}
+	checkpoint, ok := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	if !ok {
+		return false
+	}
+	return taskcheckpoint.RecoveryFileWriteFailureIsMissingCommand(checkpoint.FailureReason)
 }
 
 func (e *TurnEngine) recoveryCheckpointPriorFailureReasons(ctx context.Context, rt *turnRuntime, currentReason string) []string {

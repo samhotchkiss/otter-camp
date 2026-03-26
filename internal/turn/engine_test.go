@@ -18648,6 +18648,148 @@ func TestHandleToolValidationResultsStopsRecoveryTurnAfterRepeatedTargetDriftAcr
 	}
 }
 
+func TestHandleRecoveryFileWriteWithoutContentStopsAfterRepeatedResumeFailure(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	targetPath := "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{"existing":"value"}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		FailureReason: buildRecoveryFileWriteMissingContentFailureReason(targetPath),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Create and validate pipeline configuration files",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		recoveryTurn:     true,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{ID: "write-1", Name: "file.write", Arguments: map[string]any{"path": targetPath}}
+
+	handled, abort, err := fixture.engine.handleRecoveryFileWriteWithoutContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleRecoveryFileWriteWithoutContent: %v", err)
+	}
+	if !handled || !abort {
+		t.Fatalf("handled=%v abort=%v, want true/true", handled, abort)
+	}
+	if rt.stopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonRecoveryFileRejected)
+	}
+	if fixture.messages.containsContentSubstring("[Recovery correction: file.write") {
+		t.Fatal("unexpected correction retry message on repeated resume failure")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if !strings.Contains(checkpoint.FailureReason, "repeated recovery file.write without content") {
+		t.Fatalf("checkpoint.FailureReason = %q, want repeated empty file.write failure", checkpoint.FailureReason)
+	}
+}
+
+func TestHandleRecoveryCLIExecuteWithoutCommandStopsAfterRepeatedResumeFailure(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	targetPath := "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{"existing":"value"}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		FailureReason: buildRecoveryCLIExecuteFileOutputFailureReason(targetPath),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Create and validate pipeline configuration files",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		recoveryTurn:     true,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := ToolCall{ID: "cli-1", Name: "cli.execute", Arguments: map[string]any{}}
+
+	handled, abort, err := fixture.engine.handleRecoveryCLIExecuteWithoutCommand(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleRecoveryCLIExecuteWithoutCommand: %v", err)
+	}
+	if !handled || !abort {
+		t.Fatalf("handled=%v abort=%v, want true/true", handled, abort)
+	}
+	if rt.stopReason != stopReasonRecoveryFileRejected {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonRecoveryFileRejected)
+	}
+	if fixture.messages.containsContentSubstring("[Recovery correction: cli.execute") {
+		t.Fatal("unexpected correction retry message on repeated resume failure")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if !strings.Contains(checkpoint.FailureReason, "repeated recovery cli.execute without command") {
+		t.Fatalf("checkpoint.FailureReason = %q, want repeated empty cli.execute failure", checkpoint.FailureReason)
+	}
+}
+
 func TestHandleToolValidationResultsBlocksTaskOnThirdIdenticalFailureEvenInSameTurn(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

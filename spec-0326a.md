@@ -367,10 +367,13 @@ Completed so far:
    - repeated same-turn recovery-focus failures now persist the named deliverable checkpoint before stopping
    - recovery turns that already carry a repeated target-drift checkpoint now stop on the first new focus miss across explicit resume attempts instead of paying another rediscovery cycle
    - recovery turns now also stop after the second read-only discovery cycle in the same turn instead of rereading artifacts/context repeatedly without attempting the deliverable write
+   - recovery turns that already carry an empty-write checkpoint now stop on the first repeated `file.write`-without-`content` retry across explicit resume attempts instead of paying another correction round
+   - recovery turns that already carry an empty-command checkpoint now stop on the first repeated `cli.execute`-without-`command` retry across explicit resume attempts instead of paying another correction round
+   - recovery file-output context now treats the checkpoint target path itself as sufficient recovery context, even when no artifact or target draft exists yet, so empty-command recovery halts can fire from durable checkpoints instead of falling back to another correction round
    - ordinary async `project_task` execution lanes now preflight-block `task.create`; only explicit orchestration-only parent tasks may decompose further, and only beneath themselves via `parent_task_id = current_task`
    - blocked task-lane decomposition attempts now end the turn immediately instead of paying for another model round
    - existing third-strike blocked-task behavior remains intact
-   - broader repeated-recovery cutoffs are still pending beyond the shipped focus-failure, repeated-target-drift, and same-turn repeated read-only discovery stops
+   - broader repeated-recovery cutoffs are still pending beyond the shipped focus-failure, repeated-target-drift, repeated empty-mutation, and same-turn repeated read-only discovery stops
 
 5. Scope-aware per-turn budgets, first pass
    - async `project` turns now cap at `8` tool/model cycles and `25k` prompt tokens
@@ -388,7 +391,7 @@ Completed so far:
 
 Still pending from this spec:
 
-- broader repeated-recovery fingerprint cutoffs beyond focus / target-drift / repeated read-only discovery failures
+- broader repeated-recovery fingerprint cutoffs beyond focus / target-drift / repeated empty-mutation / repeated read-only discovery failures
 - stronger tool-surface narrowing where canary drift still survives beyond the new task-lane `task.create` boundary
 - live proof of the new durable provider-cooldown path on a fresh post-deploy Anthropic 429
 - live proof that the same fix fully suppresses repeated project-bootstrap repair churn past the next scheduled retry boundary

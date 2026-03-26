@@ -107,6 +107,28 @@ func TestRecoveryFileWritePromptStrategyLinesHardensRejectedDraftResume(t *testi
 	}
 }
 
+func TestRecoveryFileWritePromptStrategyLinesHardensEmptyMutationResume(t *testing.T) {
+	lines := RecoveryFileWritePromptStrategyLines(&RecoveryFileWriteCheckpoint{
+		TargetPath:    "docs/content-strategy.md",
+		ArtifactPath:  ".ottercamp/recovery/docs/content-strategy.md",
+		FailureReason: "repeated recovery file.write without content for docs/content-strategy.md across explicit resume attempts; latest retry again omitted the full file body",
+	})
+	text := strings.Join(lines, "\n")
+	if !strings.Contains(text, "without a file body") {
+		t.Fatalf("prompt lines missing empty file.write hardening:\n%s", text)
+	}
+
+	lines = RecoveryFileWritePromptStrategyLines(&RecoveryFileWriteCheckpoint{
+		TargetPath:    "docs/content-strategy.md",
+		ArtifactPath:  ".ottercamp/recovery/docs/content-strategy.md",
+		FailureReason: "repeated recovery cli.execute without command for docs/content-strategy.md across explicit resume attempts; latest retry again omitted cli.execute.command",
+	})
+	text = strings.Join(lines, "\n")
+	if !strings.Contains(text, "missing `command`") {
+		t.Fatalf("prompt lines missing empty cli.execute hardening:\n%s", text)
+	}
+}
+
 func TestRecoveryFileWriteFailureHistoryDeduplicatesCurrentFailure(t *testing.T) {
 	checkpoint := NormalizeRecoveryFileWriteCheckpoint(RecoveryFileWriteCheckpoint{
 		TargetPath:          "docs/content-strategy.md",
