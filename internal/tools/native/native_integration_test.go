@@ -5645,6 +5645,78 @@ func TestIntegrationBootstrapPlanningTaskCreateRejectsBroadTopLevelTaskNeedingDe
 	}
 }
 
+func TestIntegrationBootstrapPlanningTaskCreateRejectsGeneratedChildStillNeedingDecomposition(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	assignee := testutil.MakeAgent(t, pool, orgID)
+	dataDir := t.TempDir()
+	seedReviewRefinementSystemTemplate(t, ctx, pool)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, DataDir: dataDir})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Generated Child Rejection",
+		"slug":        "bootstrap-generated-child-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap task.create rejects auto-generated child tasks that still require decomposition.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		AgentID:        assignee.ID,
+		ProjectID:      projectID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign worker: %v", err)
+	}
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap generated child planning",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	beforeTasks, err := taskRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list project tasks before create: %v", err)
+	}
+
+	description := strings.Join([]string{
+		"- Validate output/delivery stage: verify final output format, delivery mechanism, and consumer data completeness.",
+		"- Produce validation-output.md.",
+	}, "\n")
+	out, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":  projectID.String(),
+		"title":       "WS2: Stage-by-Stage Pipeline Validation",
+		"description": description,
+	})
+	if err != nil {
+		t.Fatalf("task.create generated-child decomposition rejection: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", out["error"])); !strings.Contains(got, "requires decomposition into bounded child tasks") && !strings.Contains(got, "bounded size policy") {
+		t.Fatalf("task.create error = %q, want decomposition rejection", got)
+	}
+
+	afterTasks, err := taskRepo.ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list project tasks after create: %v", err)
+	}
+	if len(afterTasks) != len(beforeTasks) {
+		t.Fatalf("project task count = %d, want %d after rejected generated-child bootstrap task", len(afterTasks), len(beforeTasks))
+	}
+}
+
 func TestIntegrationBootstrapPlanningTaskCreateSupportsMultipleParentWorkstreamsInSameProjectSession(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

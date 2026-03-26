@@ -6731,3 +6731,153 @@ The next move from here:
 - current live seam:
   - bootstrap continuation is still in progress on rerun-78
   - the old false “3 consecutive follow-on turns” archive after checklist-only progress appears fixed
+
+## 2026-03-25 19:12 MDT: live org profiles are back on Anthropic, and rerun-84 is the clean active bootstrap proof target
+
+- no new code patch landed in this slice; this is a runtime/config checkpoint using the normal product admin surface
+- health remained green while switching the live current model profiles
+
+### Live profile correction
+
+- before correction, the current org profiles had drifted back to local Ollama while still carrying Claude display names:
+  - `haiku|10|qwen2.5:72b|Claude Haiku 4.5`
+  - `standard|10|qwen2.5:72b|Claude Sonnet 4`
+  - `high-capability|10|qwen2.5:72b|Claude Opus 4.6`
+- corrected through the authenticated HTTP admin API:
+  - `PATCH /v1/model/profiles/high-capability`
+  - `PATCH /v1/model/profiles/standard`
+  - `PATCH /v1/model/profiles/haiku`
+- current rows are now:
+  - `haiku|11|claude-haiku-4-5-20251001|Claude Haiku 4.5`
+  - `standard|11|claude-sonnet-4|Claude Sonnet 4`
+  - `high-capability|11|claude-opus-4-6|Claude Opus 4.6`
+
+### Anthropic probe rerun-83: useful runtime proof, but tainted by weak operator input
+
+- project:
+  - `9b049072-f054-4cbd-ac30-bc280bbd0596`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-83`
+- session:
+  - `9fc2dd4d-c227-4cb2-9c0b-f038c83223f9`
+- kickoff turn:
+  - `31a39276-8d93-49ca-8497-13fa81643f21`
+- first invocation:
+  - `19bbaf0b-0c37-47ff-ac7a-8641e08c3063`
+  - model `claude-opus-4-6`
+
+- what it proved:
+  - Anthropic tool-using bootstrap turns are alive again on the deployed runtime
+  - kickoff no longer stalled in the qwen empty/generic loop
+  - the same turn performed real staffing work:
+    - discovery
+    - staffing budget exhaustion guard
+    - PM/worker/reviewer creation
+    - project assignment calls
+
+- why it is not the clean proof target:
+  - the project description was operator-noisy:
+    - `Fresh canary after restoring Anthropic current profiles...`
+  - that weak input led the model into a low-quality synthetic task tree (`9-19`) that is not representative of the intended validation project
+  - so rerun-83 is useful proof that Anthropic bootstrap execution is healthy, but not the right canary for judging task-tree quality
+
+### Clean active proof target: rerun-84
+
+- project:
+  - `bd09e3ec-5a1d-4c46-b25a-df165c159a09`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-84`
+  - description:
+    - `Validate the speaker pipeline ops workflow end-to-end. Reuse the seeded bootstrap tasks, create staffed bounded work, attach validation flow templates, select a runnable first wave, and carry the project into execution.`
+- async project session:
+  - `b2d0a48e-91a7-4a06-a4cd-a9485993c559`
+- bootstrap handoff message:
+  - `c19aa88e-4b90-4234-9dcf-4543aee19a41`
+- kickoff turn:
+  - `f1ee80f5-78b2-4fa1-8998-ec2874dd8d5c`
+- live invocation sequence:
+  - `b6add900-dc7a-4c33-9f19-5fea9eddd893` completed on `claude-opus-4-6`
+  - `12991444-70f8-4ecc-aae8-9691d525b8af` completed on `claude-opus-4-6`
+  - `779b1892-6b4b-47b7-a87d-82acd45c2319` completed on `claude-opus-4-6`
+  - latest live invocation at this checkpoint:
+    - `bc9944ea-48cf-4e68-b4c9-510d91530199`
+    - status `in_flight`
+    - model `claude-opus-4-6`
+
+- live proof so far:
+  - one kickoff handoff, one active turn, no dead-letter or duplicate-claim failure
+  - the model is making real bootstrap progress inside the kickoff turn:
+    - gathered current project/task/template context
+    - hit the intended bootstrap staffing discovery budget guard instead of endlessly browsing
+    - created PM `1995f0e9-7708-47bf-8e56-2e5ba3a6f23b`
+    - created worker `8d6f222c-15a9-428f-814a-920b53d7f19f`
+    - created reviewer `53e9f40c-9992-474b-a81c-31d5f43d4931`
+    - began assignment in the same kickoff turn
+  - current project task tree is still just seeded bootstrap tasks `1-8`, which means the canary is still at the staffing/materialization step and has not yet committed to a non-bootstrap task tree
+
+- current seam:
+  - no runtime failure yet on rerun-84
+  - the next proof target is whether this Anthropic-backed kickoff can carry bootstrap past staffing into bounded task/flow materialization cleanly, instead of regressing into the earlier empty/generic follow-on behavior
+
+### Operational note
+
+- scratch project/session `rerun-83b` was created accidentally while compressing a shell command
+- it is not part of the active proof chain and can be ignored
+
+## 2026-03-25 19:18 MDT: generated bootstrap child tasks now fail closed if they are still compound
+
+- new local patch on top of the current tree; not yet pushed at this note
+- focused tests are green:
+  - `go test ./internal/taskdecomp -run 'TestPrepareQueueDecomposition(RejectsOversizedGeneratedChild|RejectsGeneratedChildThatStillNeedsDecomposition|AutoAppliesForCompoundWorkWithoutExplicitMode)' -count=1`
+  - `go test ./internal/taskdecomp -count=1`
+  - `go test -tags=integration ./internal/tools/native -run 'TestIntegrationBootstrapPlanningTaskCreateRejects(GeneratedChildStillNeedingDecomposition|BroadTopLevelTaskNeedingDecomposition|OversizedTopLevelTask)' -count=1`
+
+### Live proof from rerun-84 that exposed the bug
+
+- project:
+  - `bd09e3ec-5a1d-4c46-b25a-df165c159a09`
+- session:
+  - `b2d0a48e-91a7-4a06-a4cd-a9485993c559`
+- kickoff turn:
+  - `f1ee80f5-78b2-4fa1-8998-ec2874dd8d5c`
+
+- what happened live:
+  - Anthropic kickoff materially advanced bootstrap:
+    - task `2` (`Bind repo and environment`) -> `done`
+    - task `3` (`Staff the project`) -> `done`
+    - active project assignments -> `3`
+    - non-bootstrap tasks `9-17` were created
+  - bootstrap then failed validation on:
+    - task `15`
+    - `Validate output/delivery stage: verify final output format, delivery mechanism, and consumer data completeness`
+  - that task had been created as an auto-generated decomposition child, but later bootstrap validation still recognized it as a broad parent that needed further splitting
+
+- recovery behavior after the failure:
+  - recovery turn `2cd11e55-0dcb-4938-b921-6ef5fe8598b1`
+  - recovery turn `0da88ba6-19a0-4f82-8825-bd4defdf8d0e`
+  - recovery turn `b61b41bf-0842-4a1d-b163-7d6209e0a2e3`
+  - each recovery attempted forbidden rereads (`task.get` / `project.list`) and hit the intended reread guard instead of repairing task `15` directly
+  - session is still `active`, but bootstrap metadata is currently failed on that broad-task reason and there is no live current turn now
+
+### Root cause
+
+- `PrepareQueueDecomposition(...)` already rejected:
+  - oversized unsplittable work
+  - oversized generated children
+- but it did **not** reject a generated child that was still compound/decomposable while remaining under the simple size threshold
+- that allowed bootstrap to create child task `15`, only for late bootstrap validation to reject the same task as still broad
+
+### Patch
+
+- [`internal/taskdecomp/decomposition.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition.go)
+  - after generating child drafts, `PrepareQueueDecomposition(...)` now re-runs `Analyze(...)` on each generated child
+  - if a generated child still requires decomposition, the parent task creation now fails closed with `ErrBoundedTaskTooLarge`
+- [`internal/taskdecomp/decomposition_test.go`](/Users/sam/dev/otter-camp/internal/taskdecomp/decomposition_test.go)
+  - added `TestPrepareQueueDecompositionRejectsGeneratedChildThatStillNeedsDecomposition`
+- [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - added `TestIntegrationBootstrapPlanningTaskCreateRejectsGeneratedChildStillNeedingDecomposition`
+
+### Next step
+
+- commit/push this generated-child rejection slice
+- rebuild/restart tmux `serve` and `worker`
+- launch a fresh post-fix Anthropic canary
+- verify the `rerun-84 task 15` shape is rejected during bootstrap task creation instead of surviving until late validation

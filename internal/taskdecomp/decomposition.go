@@ -422,6 +422,13 @@ func PrepareQueueDecomposition(input QueueDecompositionInput) (QueueDecompositio
 		if sizingErr := validateBoundedTaskSize(childDraft.Title, childDraft.Description, true); sizingErr != nil {
 			return QueueDecomposition{}, sizingErr
 		}
+		if childPlan := Analyze(childDraft.Title, childDraft.Description); childPlan.RequiresDecomposition {
+			return QueueDecomposition{}, QueueSizeError{
+				EstimatedMinutes: defaultMaxTaskMinutes + 15,
+				MaxMinutes:       defaultMaxTaskMinutes,
+				Reason:           fmt.Sprintf("generated child task %q still requires decomposition into narrower executable work", strings.TrimSpace(childDraft.Title)),
+			}
+		}
 	}
 
 	return QueueDecomposition{

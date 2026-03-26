@@ -511,6 +511,23 @@ func TestPrepareQueueDecompositionRejectsOversizedGeneratedChild(t *testing.T) {
 	}
 }
 
+func TestPrepareQueueDecompositionRejectsGeneratedChildThatStillNeedsDecomposition(t *testing.T) {
+	description := strings.Join([]string{
+		"- Validate output/delivery stage: verify final output format, delivery mechanism, and consumer data completeness.",
+		"- Produce validation-output.md.",
+	}, "\n")
+
+	_, err := PrepareQueueDecomposition(QueueDecompositionInput{
+		ParentTaskID: uuid.New(),
+		Title:        "WS2: Stage-by-Stage Pipeline Validation",
+		Description:  &description,
+		Metadata:     json.RawMessage(`{}`),
+	})
+	if !errors.Is(err, ErrBoundedTaskTooLarge) {
+		t.Fatalf("PrepareQueueDecomposition err = %v, want ErrBoundedTaskTooLarge when generated child still requires decomposition", err)
+	}
+}
+
 func TestValidateBoundedTaskSizeRejectsEnumeratedStrategyDefinitionTask(t *testing.T) {
 	title := "Define the 5 content pillars with detailed descriptions: (1) Ethics & the Internet, (2) Parenting in a Digital World, (3) AI/Orchestration & Technical Deep-Dives, (4) Thought Leadership / Industry Commentary, (5) Photography Archive"
 	description := title
