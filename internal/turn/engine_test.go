@@ -18213,6 +18213,101 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalMismat
 	}
 }
 
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFileEditOldStringNotFoundInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	path := "scripts/validate-stage-execution.sh"
+	attemptFingerprint := toolargs.AttemptFingerprint("file.edit", map[string]any{
+		"path":       path,
+		"old_string": "set -e",
+		"new_string": "set -euo pipefail",
+	})
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.edit:old_string_not_found",
+		AttemptFingerprint: attemptFingerprint,
+		ToolName:           "file.edit",
+		FailureClass:       "tool_validation",
+		FailureCode:        "old_string_not_found",
+		FailureReason:      "old_string_not_found",
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write validation artifact",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:   "edit-1",
+		Name: "file.edit",
+		Arguments: map[string]any{
+			"path":       path,
+			"old_string": "set -e",
+			"new_string": "set -euo pipefail",
+		},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "edit-1",
+		Name:       "file.edit",
+		Output: map[string]any{
+			"error": "old_string_not_found",
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("old_string_not_found") {
+		t.Fatal("expected repeated file.edit old_string_not_found early-stop validation message")
+	}
+}
+
 func TestHandleToolValidationResultsPersistsRecoveryCheckpointOnRepeatedFocusFailureStop(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

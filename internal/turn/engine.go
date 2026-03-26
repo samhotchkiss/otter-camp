@@ -17109,6 +17109,13 @@ func classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawEr
 		}
 		return "mismatched_deliverable_context", reason, true
 	}
+	if normalizedToolName == "file.edit" && normalizedErrorCode == "old_string_not_found" {
+		reason := strings.TrimSpace(rawErrorCode)
+		if reason == "" {
+			reason = "old_string_not_found"
+		}
+		return "old_string_not_found", reason, true
+	}
 	if (normalizedToolName == "task.list" || normalizedToolName == "memory.query") &&
 		containsAny(normalizedReason,
 			"task execution should not re-list the broader project task tree",

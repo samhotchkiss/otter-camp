@@ -717,6 +717,34 @@ What is still pending after this slice:
 - live proof on a fresh Anthropic or resumed canary task turn after the rebuild
 - any further widening should probably focus on `file.edit -> old_string_not_found` only if it still survives after the shipped task-list / memory / read-context cutoffs
 
+## Update 14:43 MDT
+
+The next deterministic-cutoff widening slice is now in code and focused-test green.
+
+New behavior:
+
+- repeated same-turn async `project_task` validation stops now also catch `file.edit -> old_string_not_found`
+- `file.edit` attempt fingerprints are now scoped to:
+  - path
+  - `old_string`
+  - `new_string`
+- that keeps the early stop tied to the same failed edit attempt instead of collapsing unrelated file edits together
+
+Focused verification that passed:
+
+- `go test ./internal/toolargs -run 'Test(FileEditAttemptFingerprintTracksPathAndOldString|CanonicalToolNameNormalizesFileEditAlias)$' -count=1`
+- `go test ./internal/turn -run 'TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFileEditOldStringNotFoundInSameTurn$' -count=1`
+
+Why this matters:
+
+- after the last widening, `file.edit -> old_string_not_found` was the last obvious recurring structured file-mutation churn family still visible in the evidence set from the highest-cost async task turns
+
+What is still pending after this slice:
+
+- rebuild / restart on this newest deterministic-cutoff widening
+- live proof on a fresh Anthropic or resumed canary task turn after the rebuild
+- the remaining open work is now less about obvious deterministic same-turn churn and more about live provider windows plus any deeper recovery-specific loops that still survive these guardrails
+
 ## Update 14:09 MDT
 
 The operator-diagnostics slice is now in the product surface, not just the shell script.

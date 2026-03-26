@@ -40,6 +40,8 @@ func AttemptFingerprint(toolName string, input map[string]any) string {
 		return fileWriteAttemptFingerprint(input, normalized)
 	case "file.read":
 		return fileReadAttemptFingerprint(input, normalized)
+	case "file.edit":
+		return fileEditAttemptFingerprint(input, normalized)
 	case "file.list":
 		return fileListAttemptFingerprint(input, normalized)
 	case "cli.execute":
@@ -161,6 +163,34 @@ func fileListAttemptFingerprint(original, normalized map[string]any) string {
 	return "file.list:" + hashString(builder.String())
 }
 
+func fileEditAttemptFingerprint(original, normalized map[string]any) string {
+	pathValue, hasPath := stringField(normalized, "path")
+	oldStringValue, hasOldString := stringField(normalized, "old_string")
+	newStringValue, hasNewString := stringField(normalized, "new_string")
+
+	builder := strings.Builder{}
+	builder.WriteString("tool=file.edit")
+	builder.WriteString("\npath=")
+	if hasPath {
+		builder.WriteString(pathValue)
+	}
+	builder.WriteString("\nold_string_sha=")
+	if hasOldString {
+		builder.WriteString(hashString(oldStringValue))
+	}
+	builder.WriteString("\nnew_string_sha=")
+	if hasNewString {
+		builder.WriteString(hashString(newStringValue))
+	}
+	if (!hasPath || !hasOldString) && original != nil {
+		if raw, ok := rawArgumentString(original); ok {
+			builder.WriteString("\nraw_sha=")
+			builder.WriteString(hashString(raw))
+		}
+	}
+	return "file.edit:" + hashString(builder.String())
+}
+
 func canonicalToolName(toolName string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(toolName))
 	switch trimmed {
@@ -168,6 +198,8 @@ func canonicalToolName(toolName string) string {
 		return "file.write"
 	case "file_read":
 		return "file.read"
+	case "file_edit":
+		return "file.edit"
 	case "file_list":
 		return "file.list"
 	case "cli_execute":

@@ -178,6 +178,31 @@ func TestFileListAttemptFingerprintTracksPath(t *testing.T) {
 	}
 }
 
+func TestFileEditAttemptFingerprintTracksPathAndOldString(t *testing.T) {
+	first := AttemptFingerprint("file.edit", map[string]any{
+		"path":       "scripts/validate-stage-execution.sh",
+		"old_string": "set -e",
+		"new_string": "set -euo pipefail",
+	})
+	second := AttemptFingerprint("file_edit", map[string]any{
+		"path":       "scripts/validate-stage-execution.sh",
+		"old_string": "set -e",
+		"new_string": "set -euo pipefail",
+	})
+	third := AttemptFingerprint("file.edit", map[string]any{
+		"path":       "scripts/validate-stage-execution.sh",
+		"old_string": "set -x",
+		"new_string": "set -euo pipefail",
+	})
+
+	if first != second {
+		t.Fatalf("same file.edit attempt fingerprints differ: %q vs %q", first, second)
+	}
+	if first == third {
+		t.Fatalf("different file.edit old_string values should not share fingerprint: %q", first)
+	}
+}
+
 func TestCanonicalToolNameNormalizesFileWriteAlias(t *testing.T) {
 	if got := canonicalToolName("file_write"); got != "file.write" {
 		t.Fatalf("canonicalToolName(file_write) = %q, want file.write", got)
@@ -193,6 +218,12 @@ func TestCanonicalToolNameNormalizesFileReadAlias(t *testing.T) {
 func TestCanonicalToolNameNormalizesFileListAlias(t *testing.T) {
 	if got := canonicalToolName("file_list"); got != "file.list" {
 		t.Fatalf("canonicalToolName(file_list) = %q, want file.list", got)
+	}
+}
+
+func TestCanonicalToolNameNormalizesFileEditAlias(t *testing.T) {
+	if got := canonicalToolName("file_edit"); got != "file.edit" {
+		t.Fatalf("canonicalToolName(file_edit) = %q, want file.edit", got)
 	}
 }
 
