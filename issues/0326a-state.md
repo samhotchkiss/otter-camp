@@ -1538,3 +1538,45 @@ What is still not proven:
 
 - this newest shell-builder cutoff is not deployed yet
 - so there is not yet live evidence showing one of the known hot script-construction turns getting cut off by the new guardrail
+
+## Update 17:48 MDT
+
+I kept going on the same shell-driven churn family and added a narrower follow-on cutoff for repeated readbacks of the same shell-built target.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async `project_task` turns now classify repeated rereads of the same shell-built `scripts/`, `config/`, or `results/` path as same-turn churn
+  - the new cutoff activates only after the turn has already successfully shell-built that exact target path
+  - it currently covers:
+    - successful `file.read` on that same exact path
+    - successful read-only `cli.execute` inspection on that same exact path, such as:
+      - `cat`
+      - `sed`
+      - `head`
+      - `tail`
+      - `grep`
+      - `rg`
+      - `wc`
+      - `stat`
+      - `file`
+
+Why this was worth doing:
+
+- the operator report still showed hot turns that were no longer mostly creating the same script again, but were still burning extra rounds rereading the exact same generated target
+- examples from the live report included turns with combinations like:
+  - `3` shell file builds
+  - `4` to `7` readback checks
+- that is a safer thing to cut than general project/task reads because it is scoped to:
+  - async task lanes only
+  - a same-turn shell-built target only
+  - repeated inspection of that same target only
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdShellFileReadbackInSameTurn|ShellFileReadbackTargetFromCLICommandRecognizesReadOnlyCatCommand|HandleToolValidationResultsIgnoresShellFileReadbackChurnWithoutPriorShellBuild|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdShellFileBuildAttemptInSameTurn|HandleToolValidationResultsIgnoresShellFileBuildChurnWhenTargetPathChanges)$' -count=1`
+
+What is still not proven:
+
+- this newest shell-file readback cutoff is not deployed yet
+- so there is not yet live evidence showing one of the known shell-builder/readback turns ending early on the new `duplicate_shell_file_readback_churn` path

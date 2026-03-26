@@ -19198,6 +19198,250 @@ func TestHandleToolValidationResultsIgnoresShellFileBuildChurnWhenTargetPathChan
 	}
 }
 
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdShellFileReadbackInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "scripts/validate-stage-execution.sh"
+	attemptFingerprint := shellFileReadbackChurnAttemptFingerprint(targetPath)
+	reason := fmt.Sprintf("repeated readback of shell-built file `%s` in the same turn", targetPath)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.read:" + duplicateShellFileReadbackChurnCode,
+		AttemptFingerprint: attemptFingerprint,
+		ToolName:           "file.read",
+		FailureClass:       "tool_validation",
+		FailureCode:        duplicateShellFileReadbackChurnCode,
+		FailureReason:      reason,
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate stage execution ordering",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	buildCallID := "build-1"
+	buildCommand := "cat > scripts/validate-stage-execution.sh << 'EOF'\n#!/usr/bin/env bash\nEOF"
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "Build the validator script.",
+		Metadata: mustMarshalJSON(t, map[string]any{
+			"tool_calls": []map[string]any{{
+				"id":   buildCallID,
+				"name": "cli_execute",
+				"arguments": map[string]any{
+					"command": buildCommand,
+				},
+			}},
+		}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:  fixture.session.ID,
+		TurnID:     &turnID,
+		Role:       "tool_result",
+		Status:     "final",
+		ToolCallID: &buildCallID,
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "cli.execute",
+			"output": map[string]any{
+				"duration_ms": 12,
+				"exit_code":   0,
+			},
+		})),
+	})
+
+	readCallIDs := []string{"read-prev-1", "read-prev-2", "read-1"}
+	for _, callID := range readCallIDs {
+		fixture.messages.create(repo.ChatMessage{
+			SessionID:  fixture.session.ID,
+			TurnID:     &turnID,
+			Role:       "tool_result",
+			Status:     "final",
+			ToolCallID: &callID,
+			Content: string(mustRawJSON(t, map[string]any{
+				"tool_name": "file.read",
+				"output": map[string]any{
+					"path":    targetPath,
+					"content": "#!/usr/bin/env bash\necho ok\n",
+				},
+			})),
+		})
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:   "read-1",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "read-1",
+		Name:       "file.read",
+		Output: map[string]any{
+			"path":    targetPath,
+			"content": "#!/usr/bin/env bash\necho ok\n",
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	guard, ok := parseTaskValidationGuard(updated.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if guard.Count != validationLoopTurnStopThreshold {
+		t.Fatalf("guard.Count = %d, want %d", guard.Count, validationLoopTurnStopThreshold)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated identical shell-file readback churn in this turn") {
+		t.Fatal("expected repeated shell-file readback early-stop validation message")
+	}
+}
+
+func TestShellFileReadbackTargetFromCLICommandRecognizesReadOnlyCatCommand(t *testing.T) {
+	targetPath, ok := shellFileReadbackTargetFromCLICommand("cat scripts/validate-stage-execution.sh")
+	if !ok {
+		t.Fatal("expected cat command to classify as shell file readback")
+	}
+	if targetPath != "scripts/validate-stage-execution.sh" {
+		t.Fatalf("targetPath = %q, want scripts/validate-stage-execution.sh", targetPath)
+	}
+}
+
+func TestHandleToolValidationResultsIgnoresShellFileReadbackChurnWithoutPriorShellBuild(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "scripts/validate-stage-execution.sh"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate stage execution ordering",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	readCallIDs := []string{"read-prev-1", "read-1"}
+	for _, callID := range readCallIDs {
+		fixture.messages.create(repo.ChatMessage{
+			SessionID:  fixture.session.ID,
+			TurnID:     &turnID,
+			Role:       "tool_result",
+			Status:     "final",
+			ToolCallID: &callID,
+			Content: string(mustRawJSON(t, map[string]any{
+				"tool_name": "file.read",
+				"output": map[string]any{
+					"path":    targetPath,
+					"content": "#!/usr/bin/env bash\necho ok\n",
+				},
+			})),
+		})
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:   "read-1",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "read-1",
+		Name:       "file.read",
+		Output: map[string]any{
+			"path":    targetPath,
+			"content": "#!/usr/bin/env bash\necho ok\n",
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if handled {
+		t.Fatal("handled = true, want false")
+	}
+	if fixture.messages.containsContentSubstring("shell-file readback churn") {
+		t.Fatal("did not expect shell-file readback churn validation message")
+	}
+}
+
 func TestHandleToolValidationResultsIgnoresPackageInstallChurnWhenPackageChanges(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

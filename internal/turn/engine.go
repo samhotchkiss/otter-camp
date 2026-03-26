@@ -107,6 +107,7 @@ const (
 	duplicateSuccessfulFileWriteChurnCode     = "duplicate_successful_write_churn"
 	duplicatePackageInstallChurnCode          = "duplicate_package_install_churn"
 	duplicateShellFileBuildChurnCode          = "duplicate_shell_file_build_churn"
+	duplicateShellFileReadbackChurnCode       = "duplicate_shell_file_readback_churn"
 	validationLoopSuppressionReason           = "validation_loop_blocked"
 	recoveryCLIRepairBudget                   = 1
 	recoveryFileWriteRepairBudget             = 1
@@ -17638,6 +17639,9 @@ func (e *TurnEngine) collectAsyncTaskToolResultChurnFailures(ctx context.Context
 		if failure, ok := classifyRepeatedShellFileBuildChurn(turnMessages, assistantCalls, result); ok {
 			candidates = append(candidates, failure)
 		}
+		if failure, ok := classifyRepeatedShellFileReadbackChurn(turnMessages, assistantCalls, result); ok {
+			candidates = append(candidates, failure)
+		}
 		for _, failure := range candidates {
 			key := strings.TrimSpace(failure.AttemptFingerprint)
 			if key == "" {
@@ -17873,6 +17877,139 @@ func shellFileBuildChurnAttemptFingerprint(path string) string {
 	return "cli.execute:shell-file-build:" + normalizeWorkspaceRelativePath(path)
 }
 
+func classifyRepeatedShellFileReadbackChurn(turnMessages []repo.ChatMessage, assistantCalls map[string]storedAssistantToolCall, result ToolResult) (toolValidationFailure, bool) {
+	targetPath, toolName, ok := shellFileReadbackTargetForResult(assistantCalls, result)
+	if !ok {
+		return toolValidationFailure{}, false
+	}
+	if !turnHasSuccessfulShellFileBuildForPath(turnMessages, assistantCalls, targetPath) {
+		return toolValidationFailure{}, false
+	}
+
+	matchCount := 0
+	currentRecorded := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		messageToolName, output, errText, parsed := parseToolResultMessage(message.Content)
+		if !parsed || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(messageToolName)) {
+		case "file.read":
+			readPath := normalizeWorkspaceRelativePath(anyString(output["path"]))
+			if !sameWorkspaceRelativePath(readPath, targetPath) {
+				continue
+			}
+		case "cli.execute":
+			if anyInt(output["exit_code"]) != 0 || message.ToolCallID == nil {
+				continue
+			}
+			messageCallID := strings.TrimSpace(*message.ToolCallID)
+			if messageCallID == "" {
+				continue
+			}
+			call, exists := assistantCalls[messageCallID]
+			if !exists {
+				continue
+			}
+			readPath, ok := shellFileReadbackTargetFromCLIExecuteArguments(call.Arguments)
+			if !ok || !sameWorkspaceRelativePath(readPath, targetPath) {
+				continue
+			}
+		default:
+			continue
+		}
+		matchCount++
+		if message.ToolCallID != nil &&
+			strings.TrimSpace(*message.ToolCallID) != "" &&
+			strings.TrimSpace(*message.ToolCallID) == strings.TrimSpace(result.ToolCallID) {
+			currentRecorded = true
+		}
+	}
+	if !currentRecorded {
+		matchCount++
+	}
+	if matchCount < 2 {
+		return toolValidationFailure{}, false
+	}
+
+	reason := fmt.Sprintf("repeated readback of shell-built file `%s` in the same turn", targetPath)
+	return buildToolValidationFailure(
+		toolName,
+		duplicateShellFileReadbackChurnCode,
+		reason,
+		shellFileReadbackChurnAttemptFingerprint(targetPath),
+		targetPath,
+	), true
+}
+
+func shellFileReadbackChurnAttemptFingerprint(path string) string {
+	return "shell-file-readback:" + normalizeWorkspaceRelativePath(path)
+}
+
+func shellFileReadbackTargetForResult(assistantCalls map[string]storedAssistantToolCall, result ToolResult) (string, string, bool) {
+	switch strings.ToLower(strings.TrimSpace(result.Name)) {
+	case "file.read":
+		if strings.TrimSpace(result.Error) != "" || strings.TrimSpace(anyString(result.Output["error"])) != "" {
+			return "", "", false
+		}
+		targetPath := normalizeWorkspaceRelativePath(anyString(result.Output["path"]))
+		if targetPath == "" {
+			return "", "", false
+		}
+		return targetPath, "file.read", true
+	case "cli.execute":
+		if strings.TrimSpace(result.Error) != "" || anyInt(result.Output["exit_code"]) != 0 {
+			return "", "", false
+		}
+		callID := strings.TrimSpace(result.ToolCallID)
+		if callID == "" || len(assistantCalls) == 0 {
+			return "", "", false
+		}
+		call, ok := assistantCalls[callID]
+		if !ok {
+			return "", "", false
+		}
+		targetPath, ok := shellFileReadbackTargetFromCLIExecuteArguments(call.Arguments)
+		if !ok {
+			return "", "", false
+		}
+		return targetPath, "cli.execute", true
+	default:
+		return "", "", false
+	}
+}
+
+func turnHasSuccessfulShellFileBuildForPath(turnMessages []repo.ChatMessage, assistantCalls map[string]storedAssistantToolCall, targetPath string) bool {
+	if strings.TrimSpace(targetPath) == "" {
+		return false
+	}
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || message.ToolCallID == nil {
+			continue
+		}
+		messageCallID := strings.TrimSpace(*message.ToolCallID)
+		if messageCallID == "" {
+			continue
+		}
+		toolName, output, errText, parsed := parseToolResultMessage(message.Content)
+		if !parsed || !strings.EqualFold(strings.TrimSpace(toolName), "cli.execute") || strings.TrimSpace(errText) != "" || anyInt(output["exit_code"]) != 0 {
+			continue
+		}
+		call, exists := assistantCalls[messageCallID]
+		if !exists {
+			continue
+		}
+		builtPath, ok := shellFileBuildTargetFromCLIExecuteArguments(call.Arguments)
+		if ok && sameWorkspaceRelativePath(builtPath, targetPath) {
+			return true
+		}
+	}
+	return false
+}
+
 func shellFileBuildTargetFromCLIExecuteArguments(arguments map[string]any) (string, bool) {
 	if len(arguments) == 0 {
 		return "", false
@@ -17921,6 +18058,61 @@ func looksLikeShellFileBuildCommand(command, targetPath string) bool {
 	default:
 		return false
 	}
+}
+
+func shellFileReadbackTargetFromCLIExecuteArguments(arguments map[string]any) (string, bool) {
+	if len(arguments) == 0 {
+		return "", false
+	}
+	normalized := toolargs.Normalize("cli.execute", cloneMap(arguments))
+	command := strings.TrimSpace(anyString(normalized["command"]))
+	if command == "" {
+		return "", false
+	}
+	return shellFileReadbackTargetFromCLICommand(command)
+}
+
+func shellFileReadbackTargetFromCLICommand(command string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	if lower == "" || !isReadOnlyCLICommand(lower) {
+		return "", false
+	}
+	match := shellFileBuildTargetPattern.FindStringSubmatch(lower)
+	if len(match) < 2 {
+		return "", false
+	}
+	targetPath := normalizeWorkspaceRelativePath(match[1])
+	if targetPath == "" || !looksLikeShellFileReadbackCommand(lower, targetPath) {
+		return "", false
+	}
+	return targetPath, true
+}
+
+func looksLikeShellFileReadbackCommand(command, targetPath string) bool {
+	path := strings.TrimSpace(strings.ToLower(targetPath))
+	if path == "" || !shellCommandMentionsPath(command, path) {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(command, "cat "),
+		strings.HasPrefix(command, "head "),
+		strings.HasPrefix(command, "tail "),
+		strings.HasPrefix(command, "sed "),
+		strings.HasPrefix(command, "grep "),
+		strings.HasPrefix(command, "rg "),
+		strings.HasPrefix(command, "wc "),
+		strings.HasPrefix(command, "stat "),
+		strings.HasPrefix(command, "file "):
+		return true
+	default:
+		return false
+	}
+}
+
+func shellCommandMentionsPath(command, targetPath string) bool {
+	return strings.Contains(command, " "+targetPath) ||
+		strings.Contains(command, "'"+targetPath+"'") ||
+		strings.Contains(command, "\""+targetPath+"\"")
 }
 
 func packageInstallSpecFromCLIExecuteArguments(arguments map[string]any) (string, bool) {
@@ -18352,6 +18544,9 @@ func buildValidationLoopBlockReason(state taskValidationGuardState) string {
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateShellFileBuildChurnCode) {
 		return fmt.Sprintf("deterministic same-turn shell file-build churn blocked after %d identical target rewrites: %s", state.Count, reason)
 	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateShellFileReadbackChurnCode) {
+		return fmt.Sprintf("deterministic same-turn shell file readback churn blocked after %d identical target rereads: %s", state.Count, reason)
+	}
 	if toolName == "" {
 		return fmt.Sprintf("deterministic tool validation loop blocked after %d identical failures: %s", state.Count, reason)
 	}
@@ -18539,6 +18734,9 @@ func buildValidationLoopTurnStopSystemMessage(state taskValidationGuardState) st
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateShellFileBuildChurnCode) {
 		return fmt.Sprintf("[Repeated identical cli.execute shell file-build churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can write directly instead of wrapping more shell builders.]", state.Count, validationLoopBlockThreshold, reason)
 	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateShellFileReadbackChurnCode) {
+		return fmt.Sprintf("[Repeated identical shell-file readback churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can execute or mutate the file instead of rereading the same target again.]", state.Count, validationLoopBlockThreshold, reason)
+	}
 	if toolName == "" {
 		return fmt.Sprintf("[Repeated identical tool validation failure in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
 	}
@@ -18559,6 +18757,9 @@ func buildValidationLoopSystemMessage(state taskValidationGuardState) string {
 	}
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateShellFileBuildChurnCode) {
 		return fmt.Sprintf("[Deterministic same-turn shell file-build churn blocked after %d identical target rewrites: %s]", state.Count, reason)
+	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateShellFileReadbackChurnCode) {
+		return fmt.Sprintf("[Deterministic same-turn shell file-readback churn blocked after %d identical target rereads: %s]", state.Count, reason)
 	}
 	return fmt.Sprintf("[Deterministic tool validation loop blocked after %d identical failures: %s (%s)]", state.Count, toolName, reason)
 }
