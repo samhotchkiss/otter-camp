@@ -515,6 +515,7 @@ Implemented so far in this spec:
   - hot turns with repeated rate-limit failures
   - duplicate successful `file.write` churn grouped by turn/path/byte-size
   - repeated package-install attempts grouped by turn
+  - shell file-build / readback churn grouped by turn
   - completed turns grouped by `stop_reason`
   - `listening_eval` grouped by session scope/mode
   - sessions with active summarization backoff metadata

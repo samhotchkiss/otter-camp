@@ -365,6 +365,82 @@ ORDER BY install_attempts DESC, last_seen DESC
 LIMIT :'limit_rows'::int;
 
 \echo
+\echo '== Shell File Build / Readback Churn By Turn =='
+WITH params AS (
+  SELECT
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
+    NULLIF(:'org_id', '')::uuid AS org_id
+),
+assistant_calls AS (
+  SELECT
+    cm.turn_id,
+    cm.session_id,
+    cm.created_at,
+    lower(COALESCE(call->'arguments'->>'command', '')) AS command,
+    substring(lower(COALESCE(call->'arguments'->>'command', '')) from '(scripts/[^[:space:];|&]+|config/[^[:space:];|&]+|results/[^[:space:];|&]+)') AS path_hint
+  FROM chat_message cm
+  JOIN chat_session cs ON cs.id = cm.session_id
+  CROSS JOIN params p
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(cm.metadata::jsonb->'tool_calls', '[]'::jsonb)) AS call
+  WHERE cm.created_at >= p.since_at
+    AND cm.turn_id IS NOT NULL
+    AND cm.role = 'assistant'
+    AND cm.status = 'final'
+    AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+),
+turn_rollup AS (
+  SELECT
+    turn_id,
+    session_id,
+    COUNT(*) FILTER (
+      WHERE path_hint IS NOT NULL
+        AND (
+          command LIKE '%>%scripts/%'
+          OR command LIKE '%>>%scripts/%'
+          OR command LIKE '%>%config/%'
+          OR command LIKE '%>>%config/%'
+          OR command LIKE '%>%results/%'
+          OR command LIKE '%>>%results/%'
+          OR command LIKE '%with open(''%scripts/%'
+          OR command LIKE '%with open(''%config/%'
+          OR command LIKE '%cat > scripts/%'
+          OR command LIKE '%cat > config/%'
+          OR command LIKE '%printf %scripts/%'
+          OR command LIKE '%printf %config/%'
+          OR command LIKE '%cp scripts/%'
+        )
+    ) AS shell_file_builds,
+    COUNT(*) FILTER (
+      WHERE path_hint IS NOT NULL
+        AND (
+          command LIKE 'head %'
+          OR command LIKE 'tail %'
+          OR command LIKE 'wc %'
+          OR command LIKE 'cat %'
+          OR command LIKE 'grep %'
+        )
+    ) AS readback_checks,
+    string_agg(DISTINCT path_hint, ' | ') FILTER (WHERE path_hint IS NOT NULL) AS path_hints,
+    MIN(created_at) AS first_seen,
+    MAX(created_at) AS last_seen
+  FROM assistant_calls
+  GROUP BY turn_id, session_id
+)
+SELECT
+  turn_id,
+  session_id,
+  shell_file_builds,
+  readback_checks,
+  COALESCE(path_hints, '∅') AS path_hints,
+  first_seen,
+  last_seen
+FROM turn_rollup
+WHERE shell_file_builds > 0
+   OR readback_checks > 2
+ORDER BY (shell_file_builds + readback_checks) DESC, last_seen DESC
+LIMIT :'limit_rows'::int;
+
+\echo
 \echo '== Completed Turns By Stop Reason =='
 WITH params AS (
   SELECT

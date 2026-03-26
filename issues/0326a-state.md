@@ -1432,6 +1432,7 @@ Focused verification that passed:
 Operator diagnostics now also include:
 
 - `Repeated Package Install Attempts By Turn` in [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+- `Shell File Build / Readback Churn By Turn` in [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
 
 Fresh report proof on the recent two-hour window:
 
@@ -1443,6 +1444,9 @@ Fresh report proof on the recent two-hour window:
   - `/Library/Developer/CommandLineTools/usr/bin/python3 -m pip install pyyaml`
   - `python3 -m pip install --user pyyaml`
   - `python3 -m pip install --target=./lib pyyaml`
+- the same report now also shows the next highest-burn family waiting behind package installs:
+  - shell-based file construction plus repeated readbacks on the same script path
+  - example hotspot: turn `bf2139fd-5b8a-46b8-93b9-5f1ab2709934` with `7` shell file-build commands and `4` readback checks in one turn
 
 Deployment status for this newest package-install cutoff:
 
