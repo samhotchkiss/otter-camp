@@ -329,6 +329,10 @@ func (s *stubTaskRepo) ListByProject(context.Context, uuid.UUID, ...string) ([]r
 	return nil, nil
 }
 
+func (s *stubTaskRepo) GetByProjectAndNumber(_ context.Context, _ uuid.UUID, _ int) (repo.ProjectTask, error) {
+	return repo.ProjectTask{}, repo.ErrNotFound
+}
+
 func (s *stubTaskRepo) SetFlowNode(context.Context, uuid.UUID, *uuid.UUID) (repo.ProjectTask, error) {
 	return repo.ProjectTask{}, repo.ErrNotFound
 }

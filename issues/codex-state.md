@@ -8718,3 +8718,43 @@ Current blocker:
 - the new meta-task guard is deployed and tested, but rerun-88 has not yet consumed the fresh continuation message on the new binary
 - so the next required live proof is still pending:
   - confirm that the next project continuation no longer creates another duplicate meta-review task and instead either advances the existing draft tree or fails with the new guard reason
+
+## 2026-03-26 06:31 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go)
+  - widened the async `project`-session meta-task guard to also reject the live duplicate title family:
+    - `Analyze Results of Integration Test`
+  - `task.add_dependency` now resolves numeric `source_id` / `depends_on_id` task references through the current project scope for `project_task` dependencies, so project continuations can pass task numbers like `19` and `20` instead of raw UUIDs
+- [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - expanded the meta-task rejection integration test to cover `Analyze Results of Integration Test`
+  - added `TestIntegrationTaskAddDependencyResolvesProjectTaskNumbersInProjectScope`
+- [`internal/tools/native/executor.go`](/Users/sam/dev/otter-camp/internal/tools/native/executor.go)
+  - extended the task repo interface with `GetByProjectAndNumber(...)`
+- [`internal/tools/native/executor_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/executor_test.go)
+- [`internal/tools/native/mutation_tools_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools_test.go)
+  - updated stubs/mocks for the new task-number lookup method
+
+Focused verification passed:
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationTaskAddDependency(ResolvesProjectTaskNumbersInProjectScope|AcceptsTaskAliasTypes)$' -count=1`
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324` `serve` and `worker --concurrency 2`
+- `./bin/ottercamp health` is green
+
+Live proof so far:
+- rerun-88 session remains [`1a9edb0a-a817-46b1-975d-4d96c8164bcb`](/Users/sam/dev/otter-camp)
+- the pre-redeploy bad duplicate still exists historically:
+  - task `24` `Analyze Results of Integration Test`
+- the old pre-patch continuation turn `0f323d7a-ba7f-47fa-a44f-86f47186f866` completed after:
+  - calling `task.add_dependency`
+  - with task-number arguments `source_id=19`, `depends_on_id=20`
+  - receiving tool result `{"error":"invalid_dependency"}`
+  - then replying with generic dependency coaching
+- after redeploy, the session requeued onto a fresh continuation turn:
+  - message `c199b9b3-b046-4d15-8bf5-539667af5386`
+  - turn `c9bc72a4-a5e9-4790-b42b-6e88fba82523`
+  - live invocation `e35810ff-aabc-4055-8343-eb868570cb82`
+
+Current narrowed seam:
+- the duplicate `Analyze Results of Integration Test` creation path is now blocked in code and deployed, but this exact widened title family has not yet been re-attempted live
+- the active rerun-88 continuation is now on the new binary, and the next proof target is whether numeric `task.add_dependency` references succeed live instead of returning `invalid_dependency`

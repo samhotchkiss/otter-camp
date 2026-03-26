@@ -1392,6 +1392,65 @@ func TestIntegrationTaskAddDependencyAcceptsTaskAliasTypes(t *testing.T) {
 	}
 }
 
+func TestIntegrationTaskAddDependencyResolvesProjectTaskNumbersInProjectScope(t *testing.T) {
+	pool := testdb.New(t)
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+	ctx := integrationExecCtxWith(orgID, agent.ID)
+	ctx = mcp.WithExecutionContext(ctx, mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agent.ID,
+		ProjectID:      &project.ID,
+	})
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	taskAResp, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id": project.ID.String(),
+		"title":      "Task A",
+	})
+	if err != nil {
+		t.Fatalf("task.create A: %v", err)
+	}
+	taskBResp, err := executor.Execute(ctx, "task.create", map[string]any{
+		"project_id": project.ID.String(),
+		"title":      "Task B",
+	})
+	if err != nil {
+		t.Fatalf("task.create B: %v", err)
+	}
+	taskAID := nestedUUID(t, taskAResp, "task", "id")
+	taskBID := nestedUUID(t, taskBResp, "task", "id")
+
+	addResp, err := executor.Execute(ctx, "task.add_dependency", map[string]any{
+		"source_type":     "task",
+		"source_id":       "1",
+		"depends_on_type": "task",
+		"depends_on_id":   "2",
+	})
+	if err != nil {
+		t.Fatalf("task.add_dependency number aliases: %v", err)
+	}
+	dependencyID := mustUUIDValue(t, addResp["dependency_id"])
+
+	var count int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM project_task_dependency
+		WHERE source_type = 'project_task'
+		  AND source_id = $1
+		  AND depends_on_type = 'project_task'
+		  AND depends_on_id = $2
+		  AND id = $3
+	`, taskAID, taskBID, dependencyID).Scan(&count); err != nil {
+		t.Fatalf("count dependency row: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("dependency count = %d, want 1", count)
+	}
+}
+
 func TestIntegrationTaskAddDependencyRejectsUnknownTypesActionably(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)
@@ -4944,6 +5003,26 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	}
 	if len(tasks) != 1 {
 		t.Fatalf("project task count = %d after second variant, want 1", len(tasks))
+	}
+
+	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":   project.ID.String(),
+		"title":        "Analyze Results of Integration Test",
+		"description":  "Review and analyze the results from the end-to-end pipeline integration test. Identify any issues, errors, or areas for improvement.",
+	})
+	if err != nil {
+		t.Fatalf("task.create third variant: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); got != projectContinuationMetaTaskCreateError {
+		t.Fatalf("third task.create error = %q, want %q", got, projectContinuationMetaTaskCreateError)
+	}
+
+	tasks, err = taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks after third variant: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("project task count = %d after third variant, want 1", len(tasks))
 	}
 }
 

@@ -2698,11 +2698,18 @@ func looksLikeProjectContinuationMetaTask(title string, description *string) boo
 	if strings.Contains(normalized, "review and validate integration test results") {
 		return true
 	}
+	if strings.Contains(normalized, "analyze results of integration test") {
+		return true
+	}
 	if strings.Contains(normalized, "prepare for next phase of project execution") {
 		return true
 	}
 	if strings.Contains(normalized, "end to end pipeline integration test") &&
-		(strings.Contains(normalized, "review") || strings.Contains(normalized, "validate") || strings.Contains(normalized, "verify the outcomes")) {
+		(strings.Contains(normalized, "review") ||
+			strings.Contains(normalized, "validate") ||
+			strings.Contains(normalized, "verify the outcomes") ||
+			strings.Contains(normalized, "analyze") ||
+			strings.Contains(normalized, "results")) {
 		return true
 	}
 	if strings.Contains(normalized, "remaining draft task") &&
@@ -5100,8 +5107,8 @@ func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input 
 			"message":     "Use source_type and depends_on_type of project_task or project_subtask.",
 		}, nil
 	}
-	sourceID, okSource := readUUID(input, "source_id")
-	dependsOnID, okDepends := readUUID(input, "depends_on_id")
+	sourceID, okSource := e.resolveDependencyScopeID(ctx, input, "source_id", sourceType)
+	dependsOnID, okDepends := e.resolveDependencyScopeID(ctx, input, "depends_on_id", dependsOnType)
 	if !okSource || !okDepends || sourceID == uuid.Nil || dependsOnID == uuid.Nil {
 		return map[string]any{"error": "invalid_dependency"}, nil
 	}
@@ -5131,6 +5138,36 @@ func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input 
 		return nil, err
 	}
 	return map[string]any{"dependency_id": created.ID}, nil
+}
+
+func (e *NativeToolExecutor) resolveDependencyScopeID(ctx context.Context, input map[string]any, fieldName, scopeType string) (uuid.UUID, bool) {
+	if resolved, ok := readUUID(input, fieldName); ok && resolved != uuid.Nil {
+		return resolved, true
+	}
+	if scopeType != "project_task" {
+		return uuid.Nil, false
+	}
+	execCtx := mcp.ExecutionContextFromContext(ctx)
+	if execCtx.ProjectID == nil || *execCtx.ProjectID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	raw, ok := input[fieldName]
+	if !ok {
+		return uuid.Nil, false
+	}
+	text := strings.TrimSpace(fmt.Sprint(raw))
+	if text == "" {
+		return uuid.Nil, false
+	}
+	taskNumber, err := strconv.Atoi(text)
+	if err != nil || taskNumber <= 0 {
+		return uuid.Nil, false
+	}
+	taskRecord, err := e.tasks.GetByProjectAndNumber(ctx, *execCtx.ProjectID, taskNumber)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return taskRecord.ID, true
 }
 
 func normalizeTaskDependencyScopeType(value string) string {
