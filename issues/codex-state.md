@@ -2,6 +2,52 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 22:08 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `1a358a67`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- the recurring supervisor failure on blocked recovery inspection is gone
+
+### New local patch: recovery workspace readers now ignore directory targets instead of failing supervisor resume scans
+
+- root cause:
+  - `internal/task/recovery_resume.go`
+  - supervisor resume scans for blocked tasks call the recovery workspace helpers while inspecting persisted checkpoint targets
+  - rerun-88 had a blocked task with stale recovery history around `test-cases`
+  - one persisted target resolved to a directory under the recovery workspace, not a file
+  - `readRecoveryWorkspaceFile(...)` and `recoveryWorkspaceFileExists(...)` treated that as a hard error:
+    - `.ottercamp/recovery/test-cases resolved to a directory`
+  - because the error escaped the resume scan, every supervisor tick failed before it could inspect other blocked tasks
+- behavior:
+  - recovery workspace readers now `stat` candidate paths before reading them
+  - directory targets are skipped as non-file candidates instead of poisoning the whole resume pass
+  - this keeps the blocked-task supervisor scan running even when stale checkpoint metadata references a directory name
+- code:
+  - [`internal/task/recovery_resume.go`](../internal/task/recovery_resume.go)
+  - [`internal/task/service_test.go`](../internal/task/service_test.go)
+- focused verification:
+  - `go test ./internal/task -run 'Test(RecoveryWorkspaceFileExistsIgnoresDirectoryPath|ReadRecoveryWorkspaceFileIgnoresDirectoryPath)$' -count=1`
+  - `go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationResumeValidationBlockedTaskRepairsLegacyFlowRejectionScaffold$' -count=1`
+
+### Live proof after deploy
+
+- recurring failing blocked task:
+  - task `14`
+  - task id `fedab6a9-30ce-4bf0-881b-6ca0190b3a57`
+  - title `WS1.2: Execute speaker intake validation tests and document results`
+- before the patch:
+  - worker log emitted on each supervisor interval:
+    - `supervisor tick failed`
+    - `.ottercamp/recovery/test-cases resolved to a directory`
+- after rebuild/restart:
+  - waited a full supervisor interval
+  - no new `supervisor tick failed` entries appeared
+  - no new `test-cases resolved to a directory` entries appeared
+- current seam:
+  - the supervisor scan is no longer dying on this blocked task
+  - next thing to confirm is whether task `fedab6a9-30ce-4bf0-881b-6ca0190b3a57` now auto-heals or exposes the next real blocked-task resume seam
+
 ## 2026-03-25 21:55 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `821bf5c6`

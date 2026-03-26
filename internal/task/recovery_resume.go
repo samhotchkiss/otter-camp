@@ -688,6 +688,16 @@ func readRecoveryWorkspaceFile(roots []string, relPath string) (string, bool, er
 			}
 			continue
 		}
+		if info, statErr := os.Stat(absPath); statErr == nil {
+			if info.IsDir() {
+				continue
+			}
+		} else if !os.IsNotExist(statErr) {
+			if resolutionErr == nil {
+				resolutionErr = statErr
+			}
+			continue
+		}
 		body, err := os.ReadFile(absPath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -727,9 +737,6 @@ func recoveryWorkspaceFileExists(roots []string, relPath string) (bool, error) {
 			continue
 		}
 		if info.IsDir() {
-			if resolutionErr == nil {
-				resolutionErr = fmt.Errorf("%s resolved to a directory", relPath)
-			}
 			continue
 		}
 		return true, nil

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -137,6 +139,41 @@ func TestTransitionStatusInvalidReturnsTypedError(t *testing.T) {
 	}
 	if transitionErr.From != "done" || transitionErr.To != "queued" {
 		t.Fatalf("transition error = %+v, want from=done to=queued", transitionErr)
+	}
+}
+
+func TestRecoveryWorkspaceFileExistsIgnoresDirectoryPath(t *testing.T) {
+	root := t.TempDir()
+	dirPath := filepath.Join(root, ".ottercamp", "recovery", "test-cases")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("mkdir recovery dir: %v", err)
+	}
+
+	exists, err := recoveryWorkspaceFileExists([]string{root}, ".ottercamp/recovery/test-cases")
+	if err != nil {
+		t.Fatalf("recoveryWorkspaceFileExists err = %v, want nil", err)
+	}
+	if exists {
+		t.Fatalf("recoveryWorkspaceFileExists = true, want false for directory path")
+	}
+}
+
+func TestReadRecoveryWorkspaceFileIgnoresDirectoryPath(t *testing.T) {
+	root := t.TempDir()
+	dirPath := filepath.Join(root, ".ottercamp", "recovery", "test-cases")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("mkdir recovery dir: %v", err)
+	}
+
+	body, exists, err := readRecoveryWorkspaceFile([]string{root}, ".ottercamp/recovery/test-cases")
+	if err != nil {
+		t.Fatalf("readRecoveryWorkspaceFile err = %v, want nil", err)
+	}
+	if exists {
+		t.Fatalf("readRecoveryWorkspaceFile exists = true, want false for directory path")
+	}
+	if body != "" {
+		t.Fatalf("readRecoveryWorkspaceFile body = %q, want empty", body)
 	}
 }
 
