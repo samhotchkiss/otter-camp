@@ -18469,6 +18469,27 @@ Validate pipeline output format and downstream data delivery. Verify output reco
 	}
 }
 
+func TestRecoveryFileWriteDraftRejectReasonRejectsReviewerAssessmentInDeliverable(t *testing.T) {
+	t.Parallel()
+
+	content := `**Rejected — task is now blocked (review path exhausted).**
+
+The rejection has been recorded and the task has been automatically blocked because the work-review loop has exceeded its allowed iterations. Summary of why approval was not possible:
+
+| Check | Result |
+|---|---|
+| Core deliverable (error handling test results) | Missing |
+| Work file content | Contains prior reviewer rejection text, not a deliverable |
+| Review cycles exhausted | Loop properly blocked |
+
+**PM escalation recommended.** The worker was unable to produce this deliverable across 10 work iterations.
+`
+	got := recoveryFileWriteDraftRejectReason(content, "Work/OC-18-VALIDATE-PIPELINE-OUTPUT-FORMAT-AND-DELIVERY.md")
+	if !strings.Contains(got, "reviewer assessment or rejection commentary") {
+		t.Fatalf("reason = %q, want reviewer-assessment rejection", got)
+	}
+}
+
 func TestRecoveryFileWriteDraftRejectReasonRejectsDeliverableCompletionSummaryWithoutBody(t *testing.T) {
 	t.Parallel()
 

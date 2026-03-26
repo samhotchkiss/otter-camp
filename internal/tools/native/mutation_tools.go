@@ -490,6 +490,54 @@ func looksLikeExecutionResultsScaffoldWithoutEvidence(path, content string) bool
 	)
 }
 
+func looksLikeReviewerAssessmentInDeliverable(path, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	normalizedPath := strings.ToLower(normalizeWorkspacePath(path))
+	if strings.HasPrefix(normalizedPath, "planning/") ||
+		strings.HasPrefix(normalizedPath, "review/") ||
+		strings.HasPrefix(normalizedPath, "reviews/") ||
+		strings.HasPrefix(normalizedPath, ".ottercamp/review/") ||
+		strings.HasPrefix(normalizedPath, ".ottercamp/reviews/") {
+		return false
+	}
+	if !strings.HasPrefix(normalizedPath, "work/") &&
+		!strings.HasPrefix(normalizedPath, "test/") {
+		return false
+	}
+	if !containsAnySubstring(lower,
+		"here is my review assessment",
+		"rejected — task is now blocked",
+		"rejected - task is now blocked",
+		"the rejection has been recorded",
+		"summary of why approval was not possible",
+		"pm escalation recommended",
+		"review cycles exhausted",
+		"this does not pass review",
+		"rejecting again",
+		"cannot be approved",
+		"prior reviewer",
+		"review cycle #",
+		"reviewer rejection summary",
+		"previous reviewer's rejection summary",
+	) {
+		return false
+	}
+	return containsAnySubstring(lower,
+		"**findings:**",
+		"deliverable is a hollow scaffold",
+		"work file was overwritten with review commentary",
+		"planning artifacts remain unpopulated scaffolds",
+		"planning artifacts are all bare scaffolds",
+		"this task cannot be approved",
+		"work file content |",
+		"core deliverable (",
+	)
+}
+
 func looksLikeExecutionSpecCompletionMemoWithoutArtifacts(path, content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
@@ -1580,6 +1628,12 @@ func (e *NativeToolExecutor) handleFileWrite(ctx context.Context, input map[stri
 		return map[string]any{
 			"error":   "non_substantive_content",
 			"message": "file.write content appears to be a generic validation-results scaffold without concrete observed outcomes or evidence. Write actual results, findings, and pass/fail evidence directly.",
+		}, nil
+	}
+	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeReviewerAssessmentInDeliverable(renderedPath, content) {
+		return map[string]any{
+			"error":   "non_substantive_content",
+			"message": "file.write content appears to be reviewer assessment or rejection commentary, not the task deliverable itself. Write the concrete work product or review decision through the proper review flow instead.",
 		}, nil
 	}
 	if scope.taskID != nil && *scope.taskID != uuid.Nil && looksLikeExecutionSpecCompletionMemoWithoutArtifacts(renderedPath, content) {

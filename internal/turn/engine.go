@@ -14147,6 +14147,9 @@ func recoveryFileWriteDraftRejectReason(content, targetPath string) string {
 	if looksLikeExecutionResultsScaffoldWithoutEvidence(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote a generic validation-results scaffold without concrete observed outcomes or evidence", path)
 	}
+	if looksLikeReviewerAssessmentInDeliverable(path, trimmed) {
+		return fmt.Sprintf("assistant draft for %s wrote reviewer assessment or rejection commentary instead of the deliverable body", path)
+	}
 	if looksLikeExecutionSpecCompletionMemoWithoutArtifacts(path, trimmed) {
 		return fmt.Sprintf("assistant draft for %s wrote a self-certified execution-spec completion memo without concrete artifact evidence", path)
 	}
@@ -14594,6 +14597,54 @@ func looksLikeExecutionResultsScaffoldWithoutEvidence(targetPath, content string
 		"pass/fail decision",
 		"evidence file:",
 		"evidence path:",
+	)
+}
+
+func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
+	path := strings.ToLower(strings.TrimSpace(targetPath))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(path, "planning/") ||
+		strings.HasPrefix(path, "review/") ||
+		strings.HasPrefix(path, "reviews/") ||
+		strings.HasPrefix(path, ".ottercamp/review/") ||
+		strings.HasPrefix(path, ".ottercamp/reviews/") {
+		return false
+	}
+	if !strings.HasPrefix(path, "work/") &&
+		!strings.HasPrefix(path, "test/") {
+		return false
+	}
+	if !containsAny(lower,
+		"here is my review assessment",
+		"rejected — task is now blocked",
+		"rejected - task is now blocked",
+		"the rejection has been recorded",
+		"summary of why approval was not possible",
+		"pm escalation recommended",
+		"review cycles exhausted",
+		"this does not pass review",
+		"rejecting again",
+		"cannot be approved",
+		"prior reviewer",
+		"review cycle #",
+		"reviewer rejection summary",
+		"previous reviewer's rejection summary",
+	) {
+		return false
+	}
+	return containsAny(lower,
+		"**findings:**",
+		"deliverable is a hollow scaffold",
+		"work file was overwritten with review commentary",
+		"planning artifacts remain unpopulated scaffolds",
+		"planning artifacts are all bare scaffolds",
+		"this task cannot be approved",
+		"work file content |",
+		"core deliverable (",
 	)
 }
 

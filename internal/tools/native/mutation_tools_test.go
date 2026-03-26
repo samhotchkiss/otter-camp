@@ -944,6 +944,65 @@ Validate pipeline output format and downstream data delivery. Verify output reco
 	}
 }
 
+func TestFileWriteRejectsReviewerAssessmentInDeliverable(t *testing.T) {
+	root := t.TempDir()
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	agentID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+
+	executor := NewExecutor(ExecutorOptions{WorkspaceRoot: root})
+	executor.tasks = &mockTaskRepo{
+		task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			WorkStatus:     "in_progress",
+		},
+	}
+	executor.chatSessions = &fakeChatSessionRepo{
+		sessions: []repo.ChatSession{{
+			ID:             sessionID,
+			OrganizationID: orgID,
+			ScopeType:      "project_task",
+			ScopeID:        taskID,
+			Mode:           "async",
+			Status:         "active",
+		}},
+	}
+
+	ctx := mcp.WithExecutionContext(context.Background(), mcp.ExecutionContext{
+		OrganizationID: orgID,
+		AgentID:        &agentID,
+		SessionID:      &sessionID,
+		ProjectID:      &projectID,
+		TaskID:         &taskID,
+	})
+	out, err := executor.Execute(ctx, "file.write", map[string]any{
+		"path": "Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md",
+		"content": `**Rejected — task is now blocked (review path exhausted).**
+
+The rejection has been recorded and the task has been automatically blocked because the work-review loop has exceeded its allowed iterations. Summary of why approval was not possible:
+
+| Check | Result |
+|---|---|
+| Core deliverable (error handling test results) | Missing |
+| Work file content | Contains prior reviewer rejection text, not a deliverable |
+| Review cycles exhausted | Loop properly blocked |
+
+**PM escalation recommended.** The worker was unable to produce this deliverable across 10 work iterations.
+`,
+		"create_dirs": true,
+	})
+	if err != nil {
+		t.Fatalf("file.write: %v", err)
+	}
+	if out["error"] != "non_substantive_content" {
+		t.Fatalf("error = %v, want non_substantive_content", out["error"])
+	}
+}
+
 func TestFileWriteRejectsProjectSessionExecutionDeliverableMutation(t *testing.T) {
 	root := t.TempDir()
 	orgID := uuid.New()

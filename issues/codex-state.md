@@ -2,6 +2,64 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 22:55 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `724f447f`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- Anthropic failover is still preferring `pearl-swh-me`
+- rerun-88 task 15 is now proven to escape the blocked-review resume loop
+
+### New local patch: reject blocked-review summaries in deliverables and let blocked review resumes rewind to work
+
+- root cause:
+  - rerun-88 task `15` kept cycling on a polluted deliverable at `Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md`
+  - the live content had evolved beyond the older `Here is my review assessment` form and now looked like:
+    - `**Rejected — task is now blocked (review path exhausted).**`
+    - `Summary of why approval was not possible`
+    - `PM escalation recommended`
+  - the resume service still short-circuited on `flow rejection max visits exceeded` before honoring the durable recovery checkpoint already attached to the task
+- behavior:
+  - native `file.write` now rejects both reviewer-assessment prose and the newer blocked-review summary form when they target `Work/...` or `Test/...` deliverables
+  - recovery draft rejection in the turn engine rejects the same blocked-review summary form
+  - blocked-task resume now lets a durable checkpoint win over the generic `flow_rejection_max_visits` classifier
+  - the resume path now preserves the flow-rejection enrichment step so review-origin blocks can rewind from review back to the reject/work node instead of reopening review
+- code:
+  - [`internal/tools/native/mutation_tools.go`](../internal/tools/native/mutation_tools.go)
+  - [`internal/tools/native/mutation_tools_test.go`](../internal/tools/native/mutation_tools_test.go)
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - [`internal/task/recovery_resume.go`](../internal/task/recovery_resume.go)
+  - [`internal/task/service.go`](../internal/task/service.go)
+  - [`internal/task/service_test.go`](../internal/task/service_test.go)
+  - [`internal/task/service_integration_test.go`](../internal/task/service_integration_test.go)
+- focused verification:
+  - `go test ./internal/tools/native -run 'Test(FileWriteRejectsReviewerAssessmentInDeliverable|FileWriteRejectsExecutionResultsScaffoldWithoutEvidence|FileWriteRejectsDeliverableCompletionSummaryWithoutBody)' -count=1`
+  - `go test ./internal/turn -run 'TestRecoveryFileWriteDraftRejectReason(RejectsReviewerAssessmentInDeliverable|RejectsExecutionResultsScaffoldWithoutEvidence|RejectsDeliverableCompletionSummaryWithoutBody)' -count=1`
+  - `go test ./internal/task -run 'Test(ClassifyTaskResumeDecision(AllowsFlowRejectionMaxVisitsWithCheckpoint|AllowsHistoricalReviewDecisionBlockerWithDetailSuffix|AllowsHistoricalReviewDecisionBlockerWithoutGuard)|ResumeValidationBlockedTaskRequiresResumableBlockedState)' -count=1`
+  - `go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationResumeValidationBlocked(ReviewFlowRejectionRewindsToWorkNode|TaskRepairsMissingTargetAfterReportedRecoveryWrite|ReviewTaskRestoresReviewStatus)$' -count=1`
+- live proof:
+  - pre-fix, public resume on task `15` returned:
+    - `422 task_resume_flow_rejection_max_visits`
+  - after the latest rebuild/restart:
+    - `./bin/ottercamp task resume 4a4aaac6-9f18-4f63-a911-0ebc0cb5a65a`
+    - returned `STATUS queued`
+  - immediately after that, the task advanced into a fresh work lane:
+    - `work_status = in_progress`
+    - `current_flow_node_id = 5067e3b4-ee79-4fe4-b41c-bbb70d112d76`
+    - new active session `61512c34-ee0c-46c3-bc95-dd08e6d70ea9`
+    - new active execution `7f6d49ff-3c15-4765-9e70-46be10361249`
+  - the latest task-status event payload confirms the rewind:
+    - `recovery_retry_flow_node_id = 5067e3b4-ee79-4fe4-b41c-bbb70d112d76`
+    - `recovery_blocker_class = durable_recovery_checkpoint`
+
+### Current live seam
+
+- task `15` is no longer trapped in the blocked review resume loop
+- next proof target:
+  - whether the fresh work lane now avoids rewriting reviewer/block summaries into `Work/OC-15-...md`
+  - or whether there is still a separate non-`file.write` mutation path materializing those summaries during review/block transitions
+
 ## 2026-03-25 22:33 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `724f447f`

@@ -75,6 +75,7 @@ type taskResumeDecision struct {
 	clearValidationGuard bool
 	validationGuard      *ValidationGuardState
 	checkpoint           *taskcheckpoint.RecoveryFileWriteCheckpoint
+	retryFlowNodeID      *uuid.UUID
 }
 
 func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason string) taskResumeDecision {
@@ -82,12 +83,6 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 		return taskResumeDecision{blockerClass: RecoveryBlockerClassNotBlocked}
 	}
 	blockerReason = strings.TrimSpace(blockerReason)
-	if strings.EqualFold(blockerReason, "flow rejection max visits exceeded") {
-		return taskResumeDecision{
-			blockerClass:  RecoveryBlockerClassFlowRejectionMaxVisits,
-			blockerReason: blockerReason,
-		}
-	}
 	if guard, ok := ParseValidationGuard(taskRecord.Metadata); ok && guard.Blocked {
 		guardCopy := guard
 		return taskResumeDecision{
@@ -131,6 +126,12 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 			checkpoint:    &checkpointCopy,
 		}
 	}
+	if strings.EqualFold(blockerReason, "flow rejection max visits exceeded") {
+		return taskResumeDecision{
+			blockerClass:  RecoveryBlockerClassFlowRejectionMaxVisits,
+			blockerReason: blockerReason,
+		}
+	}
 	return taskResumeDecision{
 		blockerClass:  RecoveryBlockerClassBlockedWithoutResumableState,
 		blockerReason: blockerReason,
@@ -162,7 +163,9 @@ func (s *service) maybeResumeLegacyNonSubstantiveFlowRejection(ctx context.Conte
 	}
 	missingTargetAfterReportedWrite := looksLikeMissingTargetAfterReportedRecoveryWrite(blockerReason, checkpoint.FailureReason)
 	if exists {
-		if !missingTargetAfterReportedWrite && !looksLikeLegacyNonSubstantiveExecutionResultsScaffold(targetPath, targetBody) {
+		if !missingTargetAfterReportedWrite &&
+			!looksLikeLegacyNonSubstantiveExecutionResultsScaffold(targetPath, targetBody) &&
+			!looksLikeReviewerAssessmentDeliverablePollution(targetPath, targetBody) {
 			return taskResumeDecision{}, false, nil
 		}
 	} else {
@@ -177,12 +180,98 @@ func (s *service) maybeResumeLegacyNonSubstantiveFlowRejection(ctx context.Conte
 		}
 	}
 	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
-	return taskResumeDecision{
+	decision := taskResumeDecision{
 		resumable:     true,
 		blockerClass:  RecoveryBlockerClassDurableRecoveryCheckpoint,
 		blockerReason: blockerReason,
 		checkpoint:    &checkpoint,
-	}, true, nil
+	}
+	if exists && looksLikeReviewerAssessmentDeliverablePollution(targetPath, targetBody) {
+		if retryNodeID, ok := s.reviewRejectRetryNodeID(ctx, taskRecord); ok {
+			decision.retryFlowNodeID = &retryNodeID
+		}
+	}
+	return decision, true, nil
+}
+
+func (s *service) reviewRejectRetryNodeID(ctx context.Context, taskRecord repo.ProjectTask) (uuid.UUID, bool) {
+	if s == nil || s.flowNodes == nil || taskRecord.CurrentFlowNodeID == nil || *taskRecord.CurrentFlowNodeID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	currentNode, err := s.flowNodes.GetByID(ctx, *taskRecord.CurrentFlowNodeID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(currentNode.NodeType), "review") && !currentNode.RequiresHumanReview {
+		return uuid.Nil, false
+	}
+	if currentNode.RejectNodeID != nil && *currentNode.RejectNodeID != uuid.Nil {
+		return *currentNode.RejectNodeID, true
+	}
+	nodes, err := s.flowNodes.GetByTemplateOrdered(ctx, currentNode.FlowTemplateID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	for i, candidate := range nodes {
+		if candidate.ID != currentNode.ID {
+			continue
+		}
+		if i == 0 {
+			return uuid.Nil, false
+		}
+		return nodes[i-1].ID, true
+	}
+	return uuid.Nil, false
+}
+
+func looksLikeReviewerAssessmentDeliverablePollution(targetPath, content string) bool {
+	path := strings.ToLower(strings.TrimSpace(filepath.ToSlash(targetPath)))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(path, "planning/") ||
+		strings.HasPrefix(path, "review/") ||
+		strings.HasPrefix(path, "reviews/") ||
+		strings.HasPrefix(path, ".ottercamp/review/") ||
+		strings.HasPrefix(path, ".ottercamp/reviews/") {
+		return false
+	}
+	if !strings.HasPrefix(path, "work/") &&
+		!strings.HasPrefix(path, "test/") {
+		return false
+	}
+	if !containsAnyTaskResumeFragments(lower,
+		"here is my review assessment",
+		"review assessment for oc-",
+		"rejected — task is now blocked",
+		"rejected - task is now blocked",
+		"the rejection has been recorded",
+		"summary of why approval was not possible",
+		"pm escalation recommended",
+		"review cycles exhausted",
+		"this does not pass review",
+		"rejecting again",
+		"cannot be approved",
+		"prior reviewer",
+		"review cycle #",
+		"reviewer's prior rejection assessment",
+		"reviewer rejection summary",
+	) {
+		return false
+	}
+	return containsAnyTaskResumeFragments(lower,
+		"**findings:**",
+		"core deliverable missing",
+		"work file contains only prior review rejection text",
+		"work file was overwritten with review commentary",
+		"planning artifacts remain unpopulated scaffolds",
+		"planning artifacts are all bare scaffolds",
+		"there is nothing to approve",
+		"work file content |",
+		"core deliverable (",
+	)
 }
 
 func looksLikeMissingTargetAfterReportedRecoveryWrite(blockerReason, failureReason string) bool {

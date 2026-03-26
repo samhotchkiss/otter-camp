@@ -1150,6 +1150,97 @@ func TestTaskServiceIntegrationResumeValidationBlockedReviewTaskRestoresReviewSt
 	}
 }
 
+func TestTaskServiceIntegrationResumeValidationBlockedReviewFlowRejectionRewindsToWorkNode(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "resume-review-flow-rejection-pm", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "Resume Review Flow Rejection PM", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	nodeRepo := repo.NewFlowNodeRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Resume polluted review flow rejection",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	nodes, err := nodeRepo.GetByTemplateOrdered(ctx, template.ID)
+	if err != nil {
+		t.Fatalf("GetByTemplateOrdered: %v", err)
+	}
+	if len(nodes) < 2 {
+		t.Fatalf("nodes len = %d, want >= 2", len(nodes))
+	}
+	workNode := nodes[0]
+	reviewNode := nodes[1]
+
+	taskRecord, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	taskRecord.CurrentFlowNodeID = &reviewNode.ID
+	taskRecord.WorkStatus = "review"
+
+	const targetPath = "Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md"
+	const artifactPath = ".ottercamp/recovery/Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md"
+	const blockedReason = "flow rejection max visits exceeded"
+	targetBody := `**Rejected — task is now blocked (review path exhausted).**
+
+The rejection has been recorded and the task has been automatically blocked because the work-review loop has exceeded its allowed iterations. Summary of why approval was not possible:
+
+| Check | Result |
+|---|---|
+| Core deliverable (error handling test results) | Missing |
+| Work file content | Contains prior reviewer rejection text, not a deliverable |
+| Review cycles exhausted | Loop properly blocked |
+
+**PM escalation recommended.** The worker was unable to produce this deliverable across 10 work iterations.
+`
+	writeTaskRecoveryWorkspaceFiles(t, project.Slug, targetPath, artifactPath, targetBody, blockedReason)
+
+	checkpointedMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(taskRecord.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		ArtifactPath:  artifactPath,
+		FailureReason: blockedReason,
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	taskRecord.Metadata = checkpointedMetadata
+	if _, err := taskRepo.Update(ctx, taskRecord); err != nil {
+		t.Fatalf("Update review task: %v", err)
+	}
+	if _, err := svc.MarkBlocked(ctx, created.ID, blockedReason, Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	resumed, err := svc.ResumeValidationBlockedTask(ctx, created.ID, Actor{Type: "human_user", ID: pmUser.ID})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+	if resumed.CurrentFlowNodeID == nil || *resumed.CurrentFlowNodeID != workNode.ID {
+		t.Fatalf("current_flow_node_id = %v, want work node %s", resumed.CurrentFlowNodeID, workNode.ID)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumed.Metadata); !ok {
+		t.Fatalf("expected durable recovery checkpoint to remain after rewinding to work node, metadata=%s", string(resumed.Metadata))
+	}
+}
+
 func TestTaskServiceIntegrationResumeValidationBlockedTaskRejectsFlowRejectionMaxVisitsEvenWithCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

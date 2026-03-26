@@ -529,7 +529,7 @@ func TestResumeValidationBlockedTaskRejectsNonBlockedTask(t *testing.T) {
 	}
 }
 
-func TestClassifyTaskResumeDecisionRejectsFlowRejectionMaxVisitsEvenWithCheckpoint(t *testing.T) {
+func TestClassifyTaskResumeDecisionAllowsFlowRejectionMaxVisitsWithCheckpoint(t *testing.T) {
 	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
 		TargetPath:    "Work/report.md",
 		ArtifactPath:  ".ottercamp/recovery/Work/report.md",
@@ -546,11 +546,14 @@ func TestClassifyTaskResumeDecisionRejectsFlowRejectionMaxVisitsEvenWithCheckpoi
 		Metadata:   metadata,
 	}, "flow rejection max visits exceeded")
 
-	if decision.resumable {
-		t.Fatal("decision.resumable = true, want false")
+	if !decision.resumable {
+		t.Fatal("decision.resumable = false, want true")
 	}
-	if decision.blockerClass != RecoveryBlockerClassFlowRejectionMaxVisits {
-		t.Fatalf("blockerClass = %q, want %q", decision.blockerClass, RecoveryBlockerClassFlowRejectionMaxVisits)
+	if decision.blockerClass != RecoveryBlockerClassDurableRecoveryCheckpoint {
+		t.Fatalf("blockerClass = %q, want %q", decision.blockerClass, RecoveryBlockerClassDurableRecoveryCheckpoint)
+	}
+	if decision.checkpoint == nil {
+		t.Fatal("decision.checkpoint = nil, want durable recovery checkpoint")
 	}
 	if decision.blockerReason != "flow rejection max visits exceeded" {
 		t.Fatalf("blockerReason = %q, want flow rejection max visits exceeded", decision.blockerReason)

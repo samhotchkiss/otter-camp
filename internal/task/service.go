@@ -889,7 +889,7 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 	}
 
 	decision := classifyTaskResumeDecision(taskRecord, blockerReason)
-	if !decision.resumable && decision.blockerClass == RecoveryBlockerClassFlowRejectionMaxVisits {
+	if strings.EqualFold(strings.TrimSpace(blockerReason), "flow rejection max visits exceeded") {
 		legacyDecision, ok, legacyErr := s.maybeResumeLegacyNonSubstantiveFlowRejection(ctx, taskRecord, blockerReason)
 		if legacyErr != nil {
 			return nil, legacyErr
@@ -911,6 +911,14 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 			return nil, clearErr
 		}
 		taskRecord.Metadata = cleared
+	}
+	if decision.retryFlowNodeID != nil && *decision.retryFlowNodeID != uuid.Nil {
+		taskRecord.CurrentFlowNodeID = decision.retryFlowNodeID
+		updatedTask, updateErr := s.tasks.Update(ctx, taskRecord)
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		taskRecord = updatedTask
 	}
 	targetStatus := resumeBlockedTaskTargetStatus(ctx, s.flowNodes, taskRecord)
 	if targetStatus == "review" {
@@ -952,6 +960,9 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 		for key, value := range recoveryCheckpointPayload(*checkpoint) {
 			payload[key] = value
 		}
+	}
+	if decision.retryFlowNodeID != nil && *decision.retryFlowNodeID != uuid.Nil {
+		payload["recovery_retry_flow_node_id"] = decision.retryFlowNodeID.String()
 	}
 	resumeActor := actor
 	resumeActor.AllowGateBypass = true
