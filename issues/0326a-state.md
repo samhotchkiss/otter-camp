@@ -1097,3 +1097,9 @@ Why this matters:
 
 - the runtime hardening is no longer a one-off anecdote from manual SQL spelunking
 - we now have a repeatable operator report that can show whether the next Anthropic canary actually reduces these same-turn churn patterns
+
+The expanded report also answered two open observability questions in one real run:
+
+- `listening_eval` is not showing up on async `project` sessions in the current 6-hour window
+- the only visible `listening_eval` traffic in that window is `organization` async on `claude-haiku-4-5-20251001`
+- there are currently `0` sessions with active summarization-backoff metadata, so summarization backoff is not silently piling up across the live session set right now

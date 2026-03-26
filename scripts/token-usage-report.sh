@@ -128,6 +128,33 @@ ORDER BY total_tokens DESC, invocations DESC
 LIMIT :'limit_rows'::int;
 
 \echo
+\echo '== Listening Eval By Scope =='
+WITH params AS (
+  SELECT
+    now() - make_interval(hours => :'window_hours'::int) AS since_at,
+    NULLIF(:'org_id', '')::uuid AS org_id
+)
+SELECT
+  COALESCE(cs.scope_type, '∅') AS scope_type,
+  COALESCE(cs.mode, '∅') AS mode,
+  mi.model_name,
+  COUNT(*) AS invocations,
+  COUNT(*) FILTER (WHERE mi.status = 'failed') AS failed,
+  COALESCE(SUM(COALESCE(mi.input_tokens, 0)), 0) AS input_tokens,
+  COALESCE(SUM(COALESCE(mi.output_tokens, 0)), 0) AS output_tokens,
+  COALESCE(SUM(COALESCE(mi.cache_read_tokens, 0)), 0) AS cache_read_tokens,
+  COALESCE(SUM(COALESCE(mi.input_tokens, 0) + COALESCE(mi.output_tokens, 0) + COALESCE(mi.cache_read_tokens, 0)), 0) AS total_tokens
+FROM model_invocation mi
+LEFT JOIN chat_session cs ON cs.id = mi.session_id
+CROSS JOIN params p
+WHERE mi.created_at >= p.since_at
+  AND mi.invocation_purpose = 'listening_eval'
+  AND (p.org_id IS NULL OR mi.organization_id = p.org_id)
+GROUP BY COALESCE(cs.scope_type, '∅'), COALESCE(cs.mode, '∅'), mi.model_name
+ORDER BY total_tokens DESC, invocations DESC
+LIMIT :'limit_rows'::int;
+
+\echo
 \echo '== Top Sessions =='
 WITH params AS (
   SELECT
@@ -271,6 +298,28 @@ SELECT
 FROM successful_writes
 WHERE write_count > 1
 ORDER BY write_count DESC, last_seen DESC
+LIMIT :'limit_rows'::int;
+
+\echo
+\echo '== Sessions With Active Summarization Backoff =='
+WITH params AS (
+  SELECT
+    now() AS current_time,
+    NULLIF(:'org_id', '')::uuid AS org_id
+)
+SELECT
+  cs.id AS session_id,
+  COALESCE(cs.scope_type, '∅') AS scope_type,
+  COALESCE(cs.mode, '∅') AS mode,
+  COALESCE((cs.metadata->'summarization_backoff'->>'failure_count')::int, 0) AS failure_count,
+  NULLIF(cs.metadata->'summarization_backoff'->>'last_error', '') AS last_error,
+  (cs.metadata->'summarization_backoff'->>'next_allowed_at')::timestamptz AS next_allowed_at
+FROM chat_session cs
+CROSS JOIN params p
+WHERE cs.metadata ? 'summarization_backoff'
+  AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+  AND (cs.metadata->'summarization_backoff'->>'next_allowed_at')::timestamptz > p.current_time
+ORDER BY next_allowed_at ASC, failure_count DESC
 LIMIT :'limit_rows'::int;
 
 \echo

@@ -510,6 +510,8 @@ Implemented so far in this spec:
 - `scripts/token-usage-report.sh` now surfaces:
   - hot turns with repeated rate-limit failures
   - duplicate successful `file.write` churn grouped by turn/path/byte-size
+  - `listening_eval` grouped by session scope/mode
+  - sessions with active summarization backoff metadata
 
 Still pending from this spec:
 
