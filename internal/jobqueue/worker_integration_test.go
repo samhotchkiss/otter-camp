@@ -6410,8 +6410,8 @@ func TestJobWorkerClaimPendingAgentTurnsPrefersNewestTaskSessionMessage(t *testi
 	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, newerJobID).Scan(&newerStatus); err != nil {
 		t.Fatalf("query newer job: %v", err)
 	}
-	if olderStatus != "pending" {
-		t.Fatalf("older job status = %q, want pending", olderStatus)
+	if olderStatus != "dead_letter" {
+		t.Fatalf("older job status = %q, want dead_letter", olderStatus)
 	}
 	if newerStatus != "claimed" {
 		t.Fatalf("newer job status = %q, want claimed", newerStatus)
@@ -8049,6 +8049,193 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSupersedesStalePendi
 	}
 	if retryCount != 1 {
 		t.Fatalf("pending retry_count = %d, want 1", retryCount)
+	}
+
+	var oldJobStatus, oldJobError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		  AND (payload->>'message_id')::uuid = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID, oldMessage.ID).Scan(&oldJobStatus, &oldJobError); err != nil {
+		t.Fatalf("query stale old-message job: %v", err)
+	}
+	if oldJobStatus != "dead_letter" {
+		t.Fatalf("old-message job status = %q, want dead_letter", oldJobStatus)
+	}
+	if !strings.Contains(oldJobError, "superseded stale message-attempt dispatch during task requeue") {
+		t.Fatalf("old-message job error = %q, want superseded task requeue marker", oldJobError)
+	}
+}
+
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSupersedesOlderPendingReviewWhenSupervisorRecoveryIsNewer(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-supervisor-supersedes-older-review",
+		DisplayName: "Requeue Active Execution Supervisor Supersedes Older Review",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Supervisor Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover pending work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-supervisor-supersedes-older-review-project",
+		DisplayName:    "Requeue Active Execution Supervisor Supersedes Older Review Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-supervisor-supersedes-older-review-template",
+		DisplayName:    "Requeue Active Execution Supervisor Supersedes Older Review Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       1,
+		MaxVisits:      5,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Supervisor recovery should supersede older review retry",
+		WorkStatus:      "review",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active execution: %v", err)
+	}
+	oldMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Review only. Use flow.review_decision.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_review_action","flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create old review message: %v", err)
+	}
+	if _, err := worker.Enqueue(ctx, nil, agentTurnJobType, 50, agentTurnKeyPayload{
+		SessionID:  session.ID,
+		MessageID:  oldMessage.ID,
+		RetryCount: 1,
+	}, nil); err != nil {
+		t.Fatalf("enqueue stale old review retry job: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	newMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "supervisor recovery: resume task",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"supervisor","supervisor_pm_recovery":true,"flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create newer supervisor message: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, nil); err != nil {
+		t.Fatalf("clear current turn: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	var (
+		status        string
+		requeuedMsgID uuid.UUID
+		retryCount    int
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       COALESCE((payload->>'retry_count')::int, 0)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&status, &requeuedMsgID, &retryCount); err != nil {
+		t.Fatalf("query pending supervisor requeue job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("pending job status = %q, want pending", status)
+	}
+	if requeuedMsgID != newMessage.ID {
+		t.Fatalf("pending retry message_id = %s, want newest supervisor message %s", requeuedMsgID, newMessage.ID)
+	}
+	if retryCount != 0 {
+		t.Fatalf("pending retry_count = %d, want 0", retryCount)
 	}
 
 	var oldJobStatus, oldJobError string

@@ -1236,9 +1236,15 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			    WHERE jq.job_type = $1
 			      AND jq.status IN ('pending', 'claimed')
 			      AND (jq.payload->>'session_id')::uuid = cs.id
-			      AND (
-			            COALESCE(cm.metadata->>'source', '') NOT IN ('task_review_action', 'task_recovery_resume')
-			         OR queued_message.id = cm.id
+			      AND NOT (
+			            (
+			              COALESCE(cm.metadata->>'source', '') IN ('task_review_action', 'task_recovery_resume')
+			              OR (
+			                   COALESCE(cm.metadata->>'source', '') = 'supervisor'
+			               AND cm.content = 'supervisor recovery: resume task'
+			                 )
+			            )
+			        AND queued_message.created_at < cm.created_at
 			          )
 			  )
 			ORDER BY cs.id, cm.created_at DESC, cm.id DESC
@@ -1277,7 +1283,13 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			    SELECT 1
 			    FROM chat_message selected_message
 			    WHERE selected_message.id = $3
-			      AND COALESCE(selected_message.metadata->>'source', '') IN ('task_review_action', 'task_recovery_resume')
+			      AND (
+			            COALESCE(selected_message.metadata->>'source', '') IN ('task_review_action', 'task_recovery_resume')
+			         OR (
+			              COALESCE(selected_message.metadata->>'source', '') = 'supervisor'
+			          AND selected_message.content = 'supervisor recovery: resume task'
+			            )
+			          )
 			  )
 			  AND (jq.payload->>'message_id')::uuid <> $3
 		`, agentTurnJobType, sessionID, messageID); err != nil {
@@ -3882,7 +3894,56 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 		return nil, fmt.Errorf("iterate claimed jobs: %w", rows.Err())
 	}
 
+	for _, job := range jobs {
+		if !strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) {
+			continue
+		}
+		if err := w.deadLetterSupersededSameSessionAgentTurnJobs(ctx, job); err != nil {
+			return nil, err
+		}
+	}
+
 	return jobs, nil
+}
+
+func (w *Worker) deadLetterSupersededSameSessionAgentTurnJobs(ctx context.Context, job Job) error {
+	if w == nil || w.pool == nil || !strings.EqualFold(strings.TrimSpace(job.JobType), agentTurnJobType) {
+		return nil
+	}
+	var payload agentTurnKeyPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return fmt.Errorf("decode claimed %s payload for same-session purge: %w", agentTurnJobType, err)
+	}
+	if payload.SessionID == uuid.Nil {
+		return nil
+	}
+
+	tag, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    last_error = 'superseded by newer claimed same-session dispatch',
+		    updated_at = now()
+		WHERE jq.job_type = $1
+		  AND jq.status IN ('pending', 'claimed')
+		  AND jq.id <> $2
+		  AND (jq.payload->>'session_id')::uuid = $3
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    WHERE cs.id = $3
+		      AND cs.mode = 'async'
+		      AND cs.scope_type IN ('project', 'project_task')
+		  )
+	`, agentTurnJobType, job.ID, payload.SessionID)
+	if err != nil {
+		return fmt.Errorf("dead-letter superseded same-session agent_turn jobs for session %s: %w", payload.SessionID, err)
+	}
+	if tag.RowsAffected() > 0 {
+		w.logger.Info("job queue: dead-lettered superseded same-session agent_turn jobs", "job_id", job.ID, "session_id", payload.SessionID, "count", tag.RowsAffected())
+	}
+	return nil
 }
 
 func (w *Worker) executeClaimedJob(ctx context.Context, job Job) error {

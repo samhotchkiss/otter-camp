@@ -2,6 +2,77 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 03:08 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `5185f554`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after clean `respawn-pane` restart
+- targeted review-session supersession is improved again, but the live blocker has moved to long-running qwen review turns being failed as stale
+
+### New local patch: claiming a newer async project/project-task dispatch now dead-letters older same-session dispatches
+
+- root cause:
+  - even after session-level claim ordering preferred the newest message, older pending `agent_turn` jobs for the same async `project` / `project_task` session could remain queued behind the active lane
+  - that left stale recovery and review retries available to be claimed later once the newer job finished or a worker restarted
+- behavior:
+  - after `claimPendingByFilter(...)` claims an `agent_turn` for an async `project` or `project_task` session, it now dead-letters other pending/claimed same-session `agent_turn` rows as:
+    - `superseded by newer claimed same-session dispatch`
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ClaimPendingAgentTurnsPrefersNewestTaskSessionMessage|RecoverStaleClaimsKeepsClaimedAgentTurnWith(LiveInvocation|CurrentInProgressTurn)|RecoverStaleInProgressProjectTurnsWithoutOwnership|RequeueActiveExecutionSessionsWithoutTurnsSupersedesStalePendingOlderMessage)' -count=1`
+
+### New local patch: task-session requeue now lets newer supervisor recovery supersede older queued review retries
+
+- root cause:
+  - live review session `4edc333d-2380-4262-b383-2d9cc53bc5e5` still had an older pending retry job:
+    - `fc7a72d7-09c3-4066-85d9-798ef669e18c`
+    - message `6a388fd5-f4ef-4cdf-b917-2c31bef18f0b`
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)` still treated that queued older retry as a blocker, so the newest recovery/review prompt for the session could not be selected during restart repair
+- behavior:
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)` now treats these selected latest-message sources as superseding older queued same-session jobs:
+    - `task_review_action`
+    - `task_recovery_resume`
+    - supervisor message content `supervisor recovery: resume task`
+  - when selected, older pending/claimed same-session dispatches are ignored as blockers and dead-lettered during the requeue repair
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ClaimPendingAgentTurnsPrefersNewestTaskSessionMessage|RequeueActiveExecutionSessionsWithoutTurns(SupersedesStalePendingOlderMessage|SupersedesOlderPendingReviewWhenSupervisorRecoveryIsNewer)|RecoverStaleClaimsKeepsClaimedAgentTurnWith(LiveInvocation|CurrentInProgressTurn)|RecoverStaleInProgressProjectTurnsWithoutOwnership)' -count=1`
+
+### Live result
+
+- after the clean `respawn-pane` restart at `03:05 MDT`, health stayed green and the worker came back on the newest local binary
+- session `4edc333d-2380-4262-b383-2d9cc53bc5e5` no longer rolls forward by reusing the original stale review body directly
+- instead, each retry is now materializing a fresh `task_review_action` prompt:
+  - `93b24877-a927-447e-803f-cdfc0fd453c2`
+  - `575b7732-8c6f-44b0-a2c3-319fee92b2fa`
+  - `e9c105dd-1dbc-444c-8763-f60de537e094`
+- current live state on that session:
+  - claimed job still rooted at old retry metadata:
+    - `fc7a72d7-09c3-4066-85d9-798ef669e18c`
+    - payload message `6a388fd5-f4ef-4cdf-b917-2c31bef18f0b`
+  - but the actual active turn has advanced onto the newest review-action prompt:
+    - current turn `ef2089c9-837d-49c5-a8f4-41dc2f33e47c`
+    - trigger message `e9c105dd-1dbc-444c-8763-f60de537e094`
+    - live invocation `3918964f-ac9d-475e-bab9-327169a6b816`
+    - model `qwen2.5:72b`
+- this is better than the earlier state because the session is no longer pinned to the stale supervisor/review prompt body
+
+### Current live seam
+
+- the remaining blocker is no longer same-session message supersession
+- the active qwen review lane is still being failed as stale after a couple of minutes:
+  - previous turn `dd73ceb0-7557-4750-8618-2ccfbefa1151`
+  - failed invocation `d0123af1-885d-445e-b614-ab55241992f5`
+  - failure reason:
+    - `worker cleanup failed stale in_flight model invocation without live in-progress turn`
+- current critical path:
+  - understand why long-running qwen review turns on this `project_task` session still lose “live in-progress turn” ownership during stale-model-invocation cleanup
+  - not review-prompt supersession anymore
+
 ## 2026-03-26 02:44 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `e917a7a7`
