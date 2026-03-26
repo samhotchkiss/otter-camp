@@ -1126,6 +1126,22 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			         WHERE ct.session_id = cs.id
 			           AND ct.trigger_message_id = cm.id
 			       ), 0) AS next_retry_count,
+			       COALESCE((
+			         SELECT ct.error_message
+			         FROM chat_turn ct
+			         WHERE ct.session_id = cs.id
+			           AND ct.trigger_message_id = cm.id
+			         ORDER BY ct.turn_number DESC, ct.retry_count DESC, ct.created_at DESC, ct.id DESC
+			         LIMIT 1
+			       ), '') AS latest_turn_error,
+			       COALESCE((
+			         SELECT ct.completed_at
+			         FROM chat_turn ct
+			         WHERE ct.session_id = cs.id
+			           AND ct.trigger_message_id = cm.id
+			         ORDER BY ct.turn_number DESC, ct.retry_count DESC, ct.created_at DESC, ct.id DESC
+			         LIMIT 1
+			       ), cm.created_at) AS latest_turn_completed_at,
 			       e.started_at AS execution_started_at,
 			       cm.created_at AS message_created_at
 			FROM chat_session cs
@@ -1199,7 +1215,7 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			  )
 			ORDER BY cs.id, cm.created_at DESC, cm.id DESC
 		)
-		SELECT id, message_id, next_retry_count
+		SELECT id, message_id, next_retry_count, latest_turn_error, latest_turn_completed_at
 		FROM candidates
 		ORDER BY execution_started_at ASC, message_created_at ASC, id ASC
 		LIMIT $2
@@ -1214,7 +1230,9 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		var sessionID uuid.UUID
 		var messageID uuid.UUID
 		var retryCount int
-		if err := rows.Scan(&sessionID, &messageID, &retryCount); err != nil {
+		var latestTurnError string
+		var latestTurnCompletedAt time.Time
+		if err := rows.Scan(&sessionID, &messageID, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
 			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
 		}
 		if _, err := w.pool.Exec(ctx, `
@@ -1230,11 +1248,23 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		`, sessionID); err != nil {
 			return repaired, fmt.Errorf("retire stale active execution runs for session %s: %w", sessionID, err)
 		}
-		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
+		var runAfter *time.Time
+		payload := agentTurnKeyPayload{
 			SessionID:  sessionID,
 			MessageID:  messageID,
 			RetryCount: retryCount,
-		}, nil); err != nil {
+		}
+		if retryAfterHint, ok := parseRateLimitRetryAfterFromText(latestTurnError); ok {
+			retryDelay := agentTurnRateLimitDelay(max(1, retryCount), retryAfterHint)
+			completedAt := latestTurnCompletedAt.UTC()
+			scheduled := completedAt.Add(retryDelay)
+			if scheduled.Before(w.clock.Now().UTC()) {
+				scheduled = w.clock.Now().UTC()
+			}
+			runAfter = &scheduled
+			payload.RateLimitJitterApplied = true
+		}
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, payload, runAfter); err != nil {
 			return repaired, fmt.Errorf("requeue active execution session without turn for session %s: %w", sessionID, err)
 		}
 		repaired++
@@ -2120,6 +2150,22 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		if err != nil {
 			return repaired, fmt.Errorf("resolve stale triggered retry message for session %s: %w", item.sessionID, err)
 		}
+		var (
+			retryRunAfter *time.Time
+			retryPayload  = agentTurnKeyPayload{
+				SessionID:  item.sessionID,
+				MessageID:  retryMessageID,
+				RetryCount: item.retryCount,
+			}
+		)
+		if retryAfterHint, ok, err := w.loadLatestTurnRateLimitRetryAfter(ctx, item.turnID); err != nil {
+			return repaired, fmt.Errorf("load stale triggered retry backoff for turn %s: %w", item.turnID, err)
+		} else if ok {
+			retryDelay := agentTurnRateLimitDelay(max(1, item.retryCount), retryAfterHint)
+			runAfter := w.clock.Now().UTC().Add(retryDelay)
+			retryRunAfter = &runAfter
+			retryPayload.RateLimitJitterApplied = true
+		}
 		shouldRequeue, err := w.shouldRequeueRecoveredProjectTrigger(ctx, item.sessionID, item.scopeType, retryMessageID)
 		if err != nil {
 			return repaired, fmt.Errorf("check recovered trigger requeue eligibility for session %s: %w", item.sessionID, err)
@@ -2140,11 +2186,7 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 			return repaired, fmt.Errorf("check queued recovered triggered retry for session %s: %w", item.sessionID, err)
 		}
 		if !hasQueued {
-			if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
-				SessionID:  item.sessionID,
-				MessageID:  retryMessageID,
-				RetryCount: item.retryCount,
-			}, nil); err != nil {
+			if _, err := w.enqueueAgentTurnDispatch(ctx, nil, retryPayload, retryRunAfter); err != nil {
 				return repaired, fmt.Errorf("enqueue recovered stale triggered retry for session %s: %w", item.sessionID, err)
 			}
 		}
@@ -2159,6 +2201,28 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		repaired++
 	}
 	return repaired, nil
+}
+
+func (w *Worker) loadLatestTurnRateLimitRetryAfter(ctx context.Context, turnID uuid.UUID) (time.Duration, bool, error) {
+	if turnID == uuid.Nil {
+		return 0, false, nil
+	}
+	var errorText string
+	err := w.pool.QueryRow(ctx, `
+		SELECT COALESCE(error_message, '')
+		FROM model_invocation
+		WHERE turn_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, turnID).Scan(&errorText)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	retryAfter, ok := parseRateLimitRetryAfterFromText(errorText)
+	return retryAfter, ok, nil
 }
 
 func (w *Worker) shouldRequeueRecoveredProjectTrigger(ctx context.Context, sessionID uuid.UUID, scopeType string, messageID uuid.UUID) (bool, error) {
@@ -4083,6 +4147,34 @@ func rateLimitRetryAfter(err error) (time.Duration, bool) {
 		return 0, true
 	}
 	return 0, false
+}
+
+func parseRateLimitRetryAfterFromText(text string) (time.Duration, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || !strings.Contains(strings.ToLower(trimmed), "model provider rate limited") {
+		return 0, false
+	}
+	const marker = "retry_after="
+	idx := strings.Index(trimmed, marker)
+	if idx < 0 {
+		return 0, false
+	}
+	value := trimmed[idx+len(marker):]
+	if end := strings.IndexAny(value, "):, ]"); end >= 0 {
+		value = value[:end]
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, false
+	}
+	if d < 0 {
+		d = 0
+	}
+	return d, true
 }
 
 func retryAttemptLimit(job Job, rateLimited bool) int {

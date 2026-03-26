@@ -2,6 +2,58 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 21:47 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `3c1924b3`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- the active rate-limit hammer seam on rerun-88 task session `eac6a81c-8e21-460b-86a4-8cc75cfcc9a6` is fixed live
+
+### New local patch: stale triggered-turn recovery now preserves provider backoff for rate-limited task turns
+
+- root cause:
+  - `internal/jobqueue/worker.go`
+  - `RecoverStaleInProgressTriggeredTurns(...)` recovers old `project_task` turns that have no live run or invocation ownership
+  - for task turns that immediately hit provider 429 and never created a `run`, the latest `model_invocation` was already `failed`, so the stale-triggered recovery path treated the turn as abandoned after the heartbeat-grace window
+  - that recovery path failed the in-progress turn and enqueued a fresh retry immediately with no delayed `run_after`, creating the live hammer loop:
+    - same `message_id`
+    - rising `retry_count`
+    - one fresh `agent_turn` job every few seconds
+- behavior:
+  - stale-triggered recovery now looks at the latest `model_invocation.error_message` for the current turn
+  - when the latest error is a parsed `model provider rate limited (retry_after=...)` failure, the recovery path now enqueues the fresh retry with a delayed `run_after` using `agentTurnRateLimitDelay(...)`
+  - the requeued payload also sets `rate_limit_jitter_applied=true`
+  - this preserves the provider backoff even when the original turn died before a `run` existed
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRecoverStaleInProgressTriggeredTurnsPreservesRateLimitBackoff$' -count=1`
+  - `go test ./internal/jobqueue -run 'Test(AgentTurnRateLimitDelay(CapsProviderHintAtBackoffCap|UsesProviderHintWhenBelowBackoffCap)|RejitteredRateLimitedRunAfterClampsOversizedRunAfter)$' -count=1`
+
+### Live proof after deploy
+
+- rerun-88 hot task session:
+  - session `eac6a81c-8e21-460b-86a4-8cc75cfcc9a6`
+  - trigger message `1e123197-b2e5-41cd-9c7d-ffeca9e8212c`
+  - active execution `7be105a3-bbe2-47e9-9b5b-fab7e624f426`
+- before the patch:
+  - that same session minted immediate fresh retries every few seconds
+  - retry counts climbed into the `370s`
+  - pending jobs were being created with no meaningful delay
+- after the patch and restart:
+  - the latest pending retry is now:
+    - job `990ad690-c7e8-418b-bf0c-dba655607699`
+    - `status = pending`
+    - `retry_count = 378`
+    - `run_after = 2026-03-25 22:16:14 MDT`
+    - `rate_limit_jitter_applied = true`
+  - the previous immediate retry job `ce3a9e0b-aedb-4b3c-8e1a-fb0b7c0049b4` was purged as stale terminal dispatch during restart cleanup
+- current seam:
+  - the task-session hammer is gone
+  - rerun-88 is now back to a legitimate delayed provider-backoff state on that lane
+  - the next thing to verify is which non-rate-limit task/review lane stalls first once the delayed retries resume, not another immediate retry storm
+
 ## 2026-03-25 21:28 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `0c0b51d3`

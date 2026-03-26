@@ -7413,6 +7413,201 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	}
 }
 
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsPreservesRateLimitBackoff(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-preserves-rate-limit-backoff",
+		DisplayName: "Requeue Active Execution Preserves Rate Limit Backoff",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover pending work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-preserves-rate-limit-backoff-project",
+		DisplayName:    "Requeue Active Execution Preserves Rate Limit Backoff Project",
+		Description:    "Project for no-turn rate-limit recovery coverage",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-preserves-rate-limit-backoff-template",
+		DisplayName:    "Requeue Active Execution Preserves Rate Limit Backoff Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover rate-limited no-turn execution session",
+		WorkStatus:      "draft",
+		BlocksScope:     "task",
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	messageMetadata := json.RawMessage(`{"source":"task_queue_processor","flow_event_type":"flow.rejected"}`)
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Start work on task: Validate pipeline output format and delivery",
+		Status:    "pending",
+		Metadata:  messageMetadata,
+	})
+	if err != nil {
+		t.Fatalf("create task queue message: %v", err)
+	}
+	completedAt := time.Now().UTC().Add(-30 * time.Second).Truncate(time.Second)
+	errorMessage := `model provider rate limited (retry_after=3h22m57s): provider http 429`
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "failed",
+		TriggerMessageID: &message.ID,
+	})
+	if err != nil {
+		t.Fatalf("create failed turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET completed_at = $2,
+		    error_message = $3
+		WHERE id = $1
+	`, turn.ID, completedAt, errorMessage); err != nil {
+		t.Fatalf("update failed turn with rate limit error: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, nil); err != nil {
+		t.Fatalf("clear current turn: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active flow node execution: %v", err)
+	}
+	messageMetadata = json.RawMessage(fmt.Sprintf(`{"source":"task_queue_processor","flow_event_type":"flow.rejected","flow_node_execution_id":"%s"}`, execution.ID))
+	if _, err := repo.NewChatMessageRepo(pool).UpdateMetadata(ctx, message.ID, messageMetadata); err != nil {
+		t.Fatalf("update task queue metadata: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	var (
+		status         string
+		requeuedMsgID  uuid.UUID
+		requeuedSessID uuid.UUID
+		retryCount     int
+		runAfter       time.Time
+		jitterApplied  bool
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       (payload->>'session_id')::uuid,
+		       COALESCE((payload->>'retry_count')::int, 0),
+		       run_after,
+		       COALESCE((payload->>'rate_limit_jitter_applied')::boolean, false)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID, &retryCount, &runAfter, &jitterApplied); err != nil {
+		t.Fatalf("query requeued rate-limited active execution job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("requeued job status = %q, want pending", status)
+	}
+	if requeuedSessID != session.ID {
+		t.Fatalf("requeued session_id = %s, want %s", requeuedSessID, session.ID)
+	}
+	if requeuedMsgID != message.ID {
+		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	}
+	if retryCount != 1 {
+		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
+	}
+	if !jitterApplied {
+		t.Fatal("expected rate_limit_jitter_applied = true")
+	}
+	minExpected := completedAt.Add(agentTurnRateLimitMinBackoff)
+	if !runAfter.After(minExpected) {
+		t.Fatalf("run_after = %s, want > %s", runAfter, minExpected)
+	}
+	maxAllowed := worker.clock.Now().UTC().Add(agentTurnRateLimitBackoffCap + time.Minute)
+	if runAfter.After(maxAllowed) {
+		t.Fatalf("run_after = %s, want clamped near <= %s", runAfter, maxAllowed)
+	}
+}
+
 func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsCapsRecoveryBatch(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -11937,6 +12132,186 @@ func TestJobWorkerRecoverStaleInProgressTriggeredTurns(t *testing.T) {
 	}
 	if retryCount != 1 {
 		t.Fatalf("requeued triggered retry_count = %d, want 1", retryCount)
+	}
+}
+
+func TestJobWorkerRecoverStaleInProgressTriggeredTurnsPreservesRateLimitBackoff(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "recover-rate-limited-triggered-turn",
+		DisplayName: "Recover Rate Limited Triggered Turn",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Rate Limited Triggered Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover rate-limited turns.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "recover-rate-limited-triggered-project",
+		DisplayName:    "Recover Rate Limited Triggered Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "recover-rate-limited-triggered-template",
+		DisplayName:    "Recover Rate Limited Triggered Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Recover rate limited triggered turn",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "continue the task",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("create trigger message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &message.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create triggered turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("set current turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET started_at = now() - interval '1 hour'
+		WHERE id = $1
+	`, turn.ID); err != nil {
+		t.Fatalf("age triggered turn: %v", err)
+	}
+
+	provider, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
+		Slug:        "recover-rate-limited-triggered-provider",
+		DisplayName: "Recover Rate Limited Triggered Provider",
+		APIBaseURL:  "https://example.invalid",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	completedAt := time.Now().UTC().Add(-30 * time.Minute)
+	errorMessage := `model provider rate limited (retry_after=3h22m57s): provider http 429`
+	if _, err := repo.NewModelInvocationRepo(pool).Create(ctx, repo.ModelInvocation{
+		OrganizationID:    org.ID,
+		ModelProviderID:   provider.ID,
+		InvocationPurpose: "agent_turn",
+		Status:            "failed",
+		ModelName:         "test-model",
+		AgentID:           &agent.ID,
+		ProjectID:         &project.ID,
+		ProjectTaskID:     &taskRecord.ID,
+		SessionID:         &session.ID,
+		TurnID:            &turn.ID,
+		ErrorMessage:      &errorMessage,
+		CompletedAt:       &completedAt,
+	}); err != nil {
+		t.Fatalf("create failed invocation: %v", err)
+	}
+
+	before := time.Now().UTC()
+	repaired, err := worker.RecoverStaleInProgressTriggeredTurns(ctx)
+	if err != nil {
+		t.Fatalf("RecoverStaleInProgressTriggeredTurns: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired triggered turns = %d, want 1", repaired)
+	}
+
+	var (
+		jobStatus string
+		runAfter  time.Time
+		retry     int
+		jittered  bool
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status,
+		       run_after,
+		       COALESCE((payload->>'retry_count')::int, 0),
+		       COALESCE((payload->>'rate_limit_jitter_applied')::boolean, false)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, session.ID).Scan(&jobStatus, &runAfter, &retry, &jittered); err != nil {
+		t.Fatalf("query requeued rate-limited retry job: %v", err)
+	}
+	if jobStatus != "pending" {
+		t.Fatalf("retry job status = %q, want pending", jobStatus)
+	}
+	if retry != 1 {
+		t.Fatalf("retry count = %d, want 1", retry)
+	}
+	if !jittered {
+		t.Fatalf("rate_limit_jitter_applied = false, want true")
+	}
+	wantRunAfter := before.Add(agentTurnRateLimitDelay(1, 3*time.Hour+22*time.Minute+57*time.Second))
+	if runAfter.Before(wantRunAfter.Add(-5*time.Second)) || runAfter.After(wantRunAfter.Add(5*time.Second)) {
+		t.Fatalf("run_after = %s, want about %s", runAfter, wantRunAfter)
 	}
 }
 
