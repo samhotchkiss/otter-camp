@@ -2,9 +2,60 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
-## 2026-03-26 03:54 MDT update
+## 2026-03-26 04:01 MDT update
 
-- deployed runtime is now a fresh local patch on top of pushed commit `3495bee8`
+- deployed runtime is now a fresh local patch on top of pushed commit `c039930a`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+
+### New local patch: supervisor stranded-execution recovery now respects live review retry prompts
+
+- root cause:
+  - `hasLiveStrandedExecutionRecovery(...)` only treated an existing supervisor kickoff as live recovery
+  - if a review execution had already appended a fresh synthetic retry prompt such as:
+    - `source = task_review_action`
+    - or `source = task_recovery_resume`
+  - supervisor could still append `supervisor recovery: resume task` on top of that retry and steal the next turn
+- behavior:
+  - supervisor stranded-execution recovery now also treats live `task_review_action` and `task_recovery_resume` prompts for the same `flow_node_execution_id` as an existing recovery lane
+  - when those prompts already have a pending/in-progress turn or pending/claimed `agent_turn`, supervisor does not create a new recovery kickoff
+- code:
+  - [`internal/controlplane/stranded_execution.go`](../internal/controlplane/stranded_execution.go)
+  - [`internal/controlplane/supervisor_integration_test.go`](../internal/controlplane/supervisor_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/controlplane -run 'TestSupervisor_StrandedActiveExecutionSkips(DuplicateLiveRecoveryKickoff|LiveTaskReviewRetry)' -count=1`
+  - `go test -tags=integration ./internal/tools/native -run 'TestIntegrationFlowReviewDecisionApproveRejectsDirtyWorkspace' -count=1`
+
+### Live proof after restart
+
+- runtime was rebuilt and restarted with:
+  - `set -a && source .env && set +a`
+  - tmux panes:
+    - `codex-e2e-20260324:0.0` serve
+    - `codex-e2e-20260324:0.1` worker `--concurrency 2`
+- on startup, rerun-88 review session `4edc333d-2380-4262-b383-2d9cc53bc5e5` no longer let supervisor reclaim the lane
+  - stale supervisor job `c0bf8124-3ef6-4781-96e6-3e51211be894`
+  - message `a1c1edb9-529b-41d4-8cdd-77ec2d5978a6`
+  - now `dead_letter`
+  - `last_error = superseded stale message-attempt dispatch during task requeue`
+- the same session is instead live on the review retry path:
+  - claimed job `d66d8c0e-864f-40a5-9549-95f3c91bbf6a`
+  - task-review-action message `33ab05e9-47b5-4d97-8beb-d9e9f4317a65`
+  - current turn `a92732a9-4878-4b8a-9adf-fe08ea1ec8b0`
+
+### Current live seam
+
+- supervisor is no longer overtaking a live review retry prompt on this lane
+- the remaining rerun-88 blocker is the task-16 review execution itself:
+  - execution `39ca89e3-1e66-4f97-9712-aafd018a21f1`
+  - still carries the legacy stale `review_decision=approve`
+  - now needs to either:
+    - settle cleanly under the task-review-action retry path
+    - or hit the dirty-approve guard again and prove that the stale decision is cleared automatically
+
+## 2026-03-26 03:56 MDT update
+
+- pushed/deployed commit is now `c039930a` on `main` / `origin`
 - tmux runtime remains `codex-e2e-20260324`
 - health is green after rebuild/restart
 

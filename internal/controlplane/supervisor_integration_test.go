@@ -1423,6 +1423,171 @@ func TestSupervisor_StrandedActiveExecutionSkipsDuplicateLiveRecoveryKickoff(t *
 	}
 }
 
+func TestSupervisor_StrandedActiveExecutionSkipsLiveTaskReviewRetry(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedControlPlaneOrg(t, ctx, pool)
+	projectRecord := seedRunProject(t, ctx, pool, org.ID)
+	template, node := seedSupervisorFlowTemplateNode(t, ctx, pool, org.ID, projectRecord.ID, nil, nil)
+	worker := seedSupervisorAgent(t, ctx, pool, org.ID, "Recovery Worker")
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:    org.ID,
+		ProjectID:         projectRecord.ID,
+		Title:             "Recover stranded execution once",
+		WorkStatus:        "review",
+		CurrentFlowNodeID: &node.ID,
+		FlowTemplateID:    &template.ID,
+		AssignedAgentID:   &worker.ID,
+		CreatedByType:     "system",
+		Metadata:          json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	bus := eventbus.New(pool, newDiscardLogger(), eventbus.Config{})
+	chatService, err := chat.NewService(chat.Options{
+		Pool:   pool,
+		Events: bus,
+	})
+	if err != nil {
+		t.Fatalf("chat.NewService: %v", err)
+	}
+	session, err := chatService.CreateSession(ctx, chat.CreateSessionInput{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Metadata:       json.RawMessage(`{"source":"supervisor_integration"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := chatService.AddParticipant(ctx, session.ID, "agent", worker.ID, "responder"); err != nil {
+		t.Fatalf("AddParticipant: %v", err)
+	}
+
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      taskRecord.ID,
+		FlowNodeID:  node.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create flow execution: %v", err)
+	}
+
+	runService, err := NewRunService(RunServiceOptions{
+		Pool:     pool,
+		EventBus: bus,
+		Policy:   allowRunCreationPolicy{},
+		Logger:   newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunService: %v", err)
+	}
+	wakeSvc := runService.(interface {
+		CreateExecutionWakeup(context.Context, executionWakeupInput) (executionWakeupResult, error)
+	})
+	started, err := wakeSvc.CreateExecutionWakeup(ctx, executionWakeupInput{
+		CreateRunInput: CreateRunInput{
+			OrganizationID: org.ID,
+			ProjectID:      &projectRecord.ID,
+			TaskID:         &taskRecord.ID,
+			FlowNodeID:     &node.ID,
+			SessionID:      &session.ID,
+			PrincipalType:  "agent",
+			PrincipalID:    worker.ID,
+			TriggerType:    "scheduler",
+			Metadata:       json.RawMessage(`{"run_mode":"async"}`),
+		},
+		WakeupSource: "task_queue_processor",
+		WakeupKind:   "flow_current",
+		WakeupPayload: map[string]any{
+			"flow_node_execution_id": execution.ID.String(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateExecutionWakeup: %v", err)
+	}
+
+	staleAt := time.Now().UTC().Add(-5 * time.Minute)
+	backdateStrandedExecutionFixture(t, ctx, pool, taskRecord.ID, session.ID, execution.ID, staleAt)
+
+	msgMeta, err := json.Marshal(map[string]any{
+		"source":                 "task_review_action",
+		"flow_node_execution_id": execution.ID.String(),
+		"synthetic_user_message": true,
+	})
+	if err != nil {
+		t.Fatalf("Marshal task review action metadata: %v", err)
+	}
+	message, err := chatService.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Review only. Inspect the current deliverables and use flow.review_decision to approve or reject this review step.",
+		Metadata:  msgMeta,
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage task review action: %v", err)
+	}
+	recoveryTurn, _, err := repo.NewChatTurnRepo(pool).CreateForMessageAttempt(ctx, session.ID, worker.ID, message.ID, 0)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+	if recoveryTurn.Status != "pending" {
+		t.Fatalf("recovery turn status = %q, want pending", recoveryTurn.Status)
+	}
+
+	supervisor, err := NewSupervisor(SupervisorOptions{
+		Pool:        pool,
+		RunService:  runService,
+		ChatService: chatService,
+		EventBus:    bus,
+		Logger:      newDiscardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewSupervisor: %v", err)
+	}
+	if err := supervisor.detectStrandedActiveExecutions(ctx); err != nil {
+		t.Fatalf("detectStrandedActiveExecutions: %v", err)
+	}
+
+	var recoveryRunCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM run
+		WHERE task_id = $1
+		  AND trigger_type = 'supervisor'
+		  AND metadata->>'stranded_execution' = 'true'
+	`, taskRecord.ID).Scan(&recoveryRunCount); err != nil {
+		t.Fatalf("count stranded recovery runs: %v", err)
+	}
+	if recoveryRunCount != 0 {
+		t.Fatalf("stranded recovery runs = %d, want 0 when live task review retry already exists", recoveryRunCount)
+	}
+
+	messages, err := repo.NewChatMessageRepo(pool).ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	for _, item := range messages {
+		if strings.TrimSpace(item.Content) == "supervisor recovery: resume task" {
+			t.Fatalf("unexpected supervisor recovery kickoff message %s when task review retry already existed", item.ID)
+		}
+	}
+
+	updatedStarted, err := NewRunRepository(pool).Get(ctx, started.Run.ID)
+	if err != nil {
+		t.Fatalf("Get started run: %v", err)
+	}
+	if updatedStarted.Status != "in_progress" {
+		t.Fatalf("started run status = %q, want in_progress when live task review retry already exists", updatedStarted.Status)
+	}
+}
+
 func TestSupervisor_StrandedActiveExecutionFailureBlocksTaskAndAbandonsExecution(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

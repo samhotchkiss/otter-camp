@@ -486,9 +486,14 @@ func (s *Supervisor) hasLiveStrandedExecutionRecovery(ctx context.Context, sessi
 			FROM chat_message cm
 			WHERE cm.session_id = $1
 			  AND cm.role = 'user'
-			  AND cm.content = 'supervisor recovery: resume task'
-			  AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
 			  AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = $2
+			  AND (
+				(
+					cm.content = 'supervisor recovery: resume task'
+					AND COALESCE(cm.metadata->>'source', '') = 'supervisor'
+				)
+				OR COALESCE(cm.metadata->>'source', '') IN ('task_review_action', 'task_recovery_resume')
+			  )
 			  AND (
 				EXISTS (
 					SELECT 1
