@@ -257,6 +257,65 @@ func TestTaskWorkspaceRootFallsBackToProjectRootWhenMainWorktreeOwnsTaskBranch(t
 	}
 }
 
+func TestTaskWorkspaceRootFallsBackToProjectRootWhenMainWorktreeOwnsUnbornTaskBranch(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	ctx := context.Background()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	repoRoot := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	run(repoRoot, "init", "-b", "main")
+	run(repoRoot, "checkout", "-b", "task/10")
+	if err := os.WriteFile(filepath.Join(repoRoot, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	projects := fixture.engine.projects.(*fakeProjectRepo)
+	projects.items = map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, Slug: "turn-unborn-shared-task-root"},
+	}
+	tasks := fixture.engine.tasks.(*fakeTaskRepo)
+	branchName := "task/10"
+	tasks.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:         taskID,
+			ProjectID:  projectID,
+			TaskNumber: 10,
+			BranchName: &branchName,
+		},
+	}
+	fixture.engine.environments = &fakeTurnProjectEnvironmentRepo{
+		items: map[uuid.UUID][]repo.ProjectEnvironment{
+			projectID: {{
+				Name: "workspace",
+				RepoPath: func() *string {
+					path := repoRoot
+					return &path
+				}(),
+				IsActive: true,
+			}},
+		},
+	}
+
+	root, err := fixture.engine.taskWorkspaceRoot(ctx, tasks.items[taskID])
+	if err != nil {
+		t.Fatalf("taskWorkspaceRoot: %v", err)
+	}
+	if got := filepath.Clean(root); got != filepath.Clean(repoRoot) {
+		t.Fatalf("taskWorkspaceRoot root = %q, want shared project root %q", got, repoRoot)
+	}
+}
+
 func TestSanitizeInheritedRunAttributionDropsTerminalRun(t *testing.T) {
 	pool := testdb.New(t)
 	engine := &TurnEngine{pool: pool}
@@ -12612,6 +12671,85 @@ func TestHandleUserMessageBlocksRepeatedToolValidationFailures(t *testing.T) {
 	}
 	if !fixture.messages.containsContentSubstring("validation loop blocked") {
 		t.Fatal("expected validation loop system message")
+	}
+}
+
+func TestHandleUserMessageRetriesRepeatedReviewActionRequiredFailures(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				OrganizationID:  fixture.session.OrganizationID,
+				ProjectID:       projectID,
+				Title:           "Review config deliverables",
+				WorkStatus:      "review",
+				AssignedAgentID: &assignedAgentID,
+				Metadata:        json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("review"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{
+			ToolCalls: []ModelToolCall{{
+				ID:   "cli-1",
+				Name: "cli.execute",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"_raw": `{"command":"python validate_configs.py"}`,
+				},
+			}},
+		}, nil
+	}
+	fixture.dispatcher.tier2Fn = func(ctx context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output:     map[string]any{"error": "review_action_required"},
+			RunID:      &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	taskRecord, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if taskRecord.WorkStatus != "review" {
+		t.Fatalf("task work_status = %q, want review", taskRecord.WorkStatus)
+	}
+	if _, ok := parseTaskValidationGuard(taskRecord.Metadata); ok {
+		t.Fatal("expected validation guard metadata to be cleared")
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocker calls = %d, want 0", len(blocker.calls))
+	}
+	if fixture.chat.completeCalls != 1 {
+		t.Fatalf("completeCalls = %d, want 1", fixture.chat.completeCalls)
+	}
+	if !fixture.messages.containsContentSubstring("Review retry required after repeated blocked review-only tool attempts") {
+		t.Fatal("expected review retry system message")
+	}
+	if !fixture.messages.containsContentSubstring("Review only. Inspect the current deliverables and use flow.review_decision") {
+		t.Fatal("expected fresh task_review_action prompt")
 	}
 }
 

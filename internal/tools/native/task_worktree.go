@@ -271,7 +271,11 @@ func branchExists(ctx context.Context, repoRoot, branchName string, command comm
 func gitBranchName(ctx context.Context, repoRoot string, command commandContextFunc) (string, error) {
 	out, err := runGitCommand(ctx, repoRoot, command, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return "", err
+		out, symbolicErr := runGitCommand(ctx, repoRoot, command, "symbolic-ref", "--short", "HEAD")
+		if symbolicErr != nil {
+			return "", err
+		}
+		return strings.TrimSpace(out), nil
 	}
 	return strings.TrimSpace(out), nil
 }

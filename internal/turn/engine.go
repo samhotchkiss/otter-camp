@@ -15233,7 +15233,11 @@ func turnBranchExists(ctx context.Context, repoRoot, branchName string) bool {
 func turnGitBranchName(ctx context.Context, repoRoot string) (string, error) {
 	out, err := turnGitOutput(ctx, repoRoot, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return "", err
+		out, symbolicErr := turnGitOutput(ctx, repoRoot, "symbolic-ref", "--short", "HEAD")
+		if symbolicErr != nil {
+			return "", err
+		}
+		return strings.TrimSpace(out), nil
 	}
 	return strings.TrimSpace(out), nil
 }
@@ -15867,6 +15871,20 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 		return false, nil
 	}
 
+	if e.shouldRetryReviewValidationLoop(rt, updatedTask, next) {
+		retried, retryErr := e.retryReviewValidationLoop(ctx, rt, updatedTask)
+		if retryErr != nil {
+			return false, retryErr
+		}
+		if retried {
+			rt.stopReason = stopReasonValidationBlocked
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Review retry required after repeated blocked review-only tool attempts. Start a fresh review turn and use flow.review_decision instead of blocked tools like cli.execute.]"); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+	}
+
 	if !strings.EqualFold(strings.TrimSpace(updatedTask.WorkStatus), "blocked") {
 		if e.taskTransitions == nil {
 			return false, fmt.Errorf(errMissingTaskTransitionServiceForValidationBlock)
@@ -15898,6 +15916,48 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 				return false, checkpointErr
 			}
 		}
+	}
+	return true, nil
+}
+
+func (e *TurnEngine) shouldRetryReviewValidationLoop(rt *turnRuntime, taskRecord repo.ProjectTask, state taskValidationGuardState) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(state.FailureCode), "review_action_required")
+}
+
+func (e *TurnEngine) retryReviewValidationLoop(ctx context.Context, rt *turnRuntime, taskRecord repo.ProjectTask) (bool, error) {
+	if e == nil || rt == nil || rt.turn == nil || rt.session == nil || e.tasks == nil || e.chat == nil {
+		return false, nil
+	}
+	cleared, clearErr := clearTaskValidationGuardMetadata(taskRecord.Metadata)
+	if clearErr != nil {
+		return false, clearErr
+	}
+	taskRecord.Metadata = cleared
+	if _, err := updateTurnTaskMetadata(ctx, e.tasks, taskRecord); err != nil {
+		return false, err
+	}
+	actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: rt.session.ID,
+		TurnID:    &rt.turn.ID,
+		Role:      "user",
+		Content:   e.buildTaskReviewActionPrompt(ctx, rt.session),
+		Metadata:  e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, rt.session, "task_review_action", reviewActionMetadataSource(ctx, e.messages, rt)),
+	})
+	if err != nil {
+		return false, err
+	}
+	rt.historyStartID = &actionMessage.ID
+	if err := e.persistTurnHistoryStart(ctx, rt, actionMessage.ID); err != nil {
+		return false, err
 	}
 	return true, nil
 }

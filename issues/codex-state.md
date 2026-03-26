@@ -7030,3 +7030,53 @@ Important distinction:
 Immediate next proof target:
 - let clean retry turn `1995d7eb-...` advance far enough to issue its first `file.write`
 - verify that the old `branch attached to main worktree` failure no longer appears under the single patched worker
+
+## 2026-03-25 20:12 MDT
+
+Rerun-88 advanced materially again:
+- task `12` (`Create and validate pipeline configuration files`) is no longer stuck on the shared-worktree/file-write seam
+- the lane produced real work output, staged files, and a canonical work commit:
+  - execution `27a2db6c-5a2b-4dd4-b569-1b26d0ed2d25`
+  - `commit_sha = 6155343`
+- the old `branch attached to main worktree` blocker is now confined to stale metadata on that completed execution's recovery checkpoint, not the live file-write path
+
+New review-lane fix in this stretch:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - repeated identical `review_action_required` failures during a review turn no longer block the task
+  - instead, the turn now clears validation-guard metadata, appends a fresh `task_review_action` prompt, and retries review
+- focused regression added in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go):
+  - `TestHandleUserMessageRetriesRepeatedReviewActionRequiredFailures`
+
+Also fixed in this stretch:
+- unborn shared-branch detection in both copies of the worktree resolver:
+  - [`internal/tools/native/task_worktree.go`](/Users/sam/dev/otter-camp/internal/tools/native/task_worktree.go)
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - `gitBranchName(...)` / `turnGitBranchName(...)` now fall back to `git symbolic-ref --short HEAD` so task branches on unborn repos are recognized correctly
+- focused unborn-branch tests added in:
+  - [`internal/tools/native/task_worktree_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/task_worktree_test.go)
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+
+Focused verification passed:
+- `go test ./internal/tools/native -run 'Test(TaskWorkspaceRootFallsBackToProjectRootWhenMainWorktreeOwns(TaskBranch|UnbornTaskBranch)|EnsureTaskWorktree(FailsClosedWhenMainWorktreeOwnsTaskBranch|CreatesOrphanBranchForUnbornRepo))$' -count=1`
+- `go test ./internal/turn -run 'Test(HandleUserMessage(BlocksRepeatedToolValidationFailures|RetriesRepeatedReviewActionRequiredFailures)|TaskWorkspaceRootFallsBackToProjectRootWhenMainWorktreeOwns(TaskBranch|UnbornTaskBranch)|EnsureTurnTaskWorktreeCreatesOrphanBranchForUnbornRepo)$' -count=1`
+
+Live proof for the review-lane fix:
+- pre-fix, task `12` was left `blocked` after review session `077517fc-...` hit three identical `cli.execute -> review_action_required` failures
+- after deploying the patch and restarting the worker:
+  - task `12` returned to `review`
+  - fresh review session `36ce6d4f-29d1-4202-ba24-b0eaf5917618` ran
+  - review execution `e87d3f4f-b5ad-4611-bdf2-6ea132e0908d` ended `rejected` with:
+    - `commit_sha = db733a520753a38a1cce3cb1476d2c89a47c2a69`
+    - metadata `review_decision.decision = reject`
+  - task `12` is now back to `in_progress`, not `blocked`
+  - fresh active task-12 session:
+    - `d16348f6-3307-4920-8eb5-258fcfc1f2eb`
+
+Current rerun-88 task board:
+- `12 in_progress`
+- `13 done`
+- `9,10,11,14,15,16,17,18,19` still `draft`
+
+Current critical path:
+- verify that task `12` now re-enters work cleanly after the live review rejection
+- then confirm later-wave release continues from the task-12/task-13 outcomes
