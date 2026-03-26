@@ -57,9 +57,14 @@ Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
     - execution `07e4b507-cfad-4731-99e3-e05644c43690`
     - session `8727f5d0-fe78-4038-91c3-c1a3d5505034`
     - review turn `c8f1568e-2aeb-4713-8df9-c5534119bdd6`
+  - review then completed cleanly:
+    - review execution `07e4b507-cfad-4731-99e3-e05644c43690`
+    - decision `approve`
+    - completed at `2026-03-25 20:46:29 MDT`
+  - task 12 is now `done`
 - current seam:
-  - task 12 is no longer blocked on stale work-execution ownership
-  - the next live seam, if any, is now in the fresh review lane rather than recovery-write completion
+  - task 12 is fully cleared
+  - the next live seam, if any, is now elsewhere in rerun-88 rather than this stale recovery-write lane
 
 ## 2026-03-25 14:32 MDT update
 
