@@ -6330,3 +6330,404 @@ The next move from here:
   - run a fresh bootstrap probe and verify:
     - project-scoped bootstrap can no longer create a second project
     - generic non-action bootstrap follow-on replies now enqueue a fresh bootstrap-resume retry instead of counting as successful progress
+
+## 2026-03-25 17:11 MDT: pushed `dbc016d3`; rerun-71 shows the project-scope guard holding
+
+- pushed checkpoint:
+  - commit `dbc016d3`
+  - message `Guard project bootstrap against stray project creation`
+
+- deployment:
+  - rebuilt `./bin/ottercamp`
+  - restarted tmux session `codex-e2e-20260324`
+    - pane `0.1` serve
+    - pane `0.2` worker `--concurrency 24`
+  - `./bin/ottercamp health` is green
+
+- fresh live probe:
+  - project `786bde8c-d26b-45a4-b316-1a2a77f44d53`
+  - slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-71`
+  - async project session `7e9e0432-05da-4f5e-9c24-5b027992d155`
+  - kickoff message `dd6d23b2-ed2e-4d55-a20b-d456a0b24e9a`
+  - kickoff turn `7ed5d8ba-2f2c-4b9a-a724-6a1c556c2315`
+
+- live proof so far:
+  - kickoff turn 1 completed cleanly at `17:10:21 MDT`
+  - bootstrap again advanced through task 2 `Bind repo and environment`
+  - follow-on turn 2 started immediately:
+    - message `672a4985-cbae-45c9-bb21-91bdd7d586f4`
+    - turn `5925adff-af19-495d-ab45-77f22066aca4`
+  - critically, after deploying `dbc016d3`, rerun-71 has **not** created a stray second project during this project-scoped bootstrap lane
+  - newest projects in the DB are still:
+    - rerun-71 itself `786bde8c-d26b-45a4-b316-1a2a77f44d53`
+    - then the old bad rerun-70 stray project `e0940944-df39-46f2-812a-168d0e1e4636`
+  - so the project-scope `project.create` reopening seam has not reappeared on the first fresh lane after deploy
+
+- still pending live proof:
+  - turn 2 is still in progress, so the generic non-action bootstrap-reply retry path has not been exercised yet on the new build
+  - `trigger_message_id` is still rooted at the system resume message on follow-on turns, but this has not yet caused a concrete regression on rerun-71
+
+- next seam:
+  - keep rerun-71 running until turn 2 either:
+    - makes real bootstrap progress, or
+    - emits a generic non-action reply that should now get retried instead of accepted
+
+## 2026-03-25 17:18 MDT: rerun-71 proves blocked `project.create` but exposes a narrower generic-reply variant
+
+- rerun-71 live update:
+  - follow-on turn 2 `5925adff-af19-495d-ab45-77f22066aca4` completed at `17:16:45 MDT`
+  - the turn attempted `project.create`, but the new project-scope identity guard blocked it exactly as intended:
+    - tool result `a11d2d91-8074-4ac7-aad7-d81fd432ac05`
+    - error included:
+      - `project already created in this flow as slug=speaker-pipeline-ops-validation-fresh-20260325-rerun-71 project_id=786bde8c-d26b-45a4-b316-1a2a77f44d53`
+  - importantly, no new stray project row was created
+
+- remaining defect from the same turn:
+  - after the blocked `project.create`, the assistant produced another generic non-action bootstrap reply:
+    - `It seems like the project has already been created ... Would you like to proceed with the existing project or start over?`
+  - that exact wording was not matched by `looksLikeGenericTaskRecoveryReply(...)`
+  - so the runtime treated turn 2 as ordinary completed progress and created normal follow-on turn 3:
+    - message `83a0a67c-e6fb-4957-8ad2-52f747f13942`
+    - turn `2b0f908e-c5ba-45d3-90b8-bca370edfc33`
+
+- local fix landed:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - extended `looksLikeGenericTaskRecoveryReply(...)` with the blocked-project-create coaching variants:
+      - `if you need to continue with this project, we can proceed`
+      - `if you explicitly want to create a new project, please let me know`
+      - `would you like to proceed with the existing project or start over`
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added `TestLooksLikeGenericTaskRecoveryReplyDetectsExistingProjectProceedMenu`
+
+- focused verification passed locally:
+  - `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetectsExistingProjectProceedMenu|HandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity|HandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt)' -count=1`
+  - `go test ./internal/turn -run 'Test(ShouldStopAfterBlockedProjectKickoffSessionCreate|BootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall|BootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID|ContinuationTurnAppendsCompactBootstrapActionPromptAfterCompression|ContinuationTurnSynthesizesBootstrapResumeStateWhenMetadataIsStale)' -count=1`
+
+- next step:
+  - rebuild/restart on this classifier extension
+  - then prove live that this blocked-project coaching reply now gets retried as bootstrap drift instead of spawning another normal continuation turn
+
+## 2026-03-25 17:22 MDT: rerun-71 finally failed closed; one last generic bootstrap-reply variant is patched
+
+- rerun-71 final live state:
+  - session `7e9e0432-05da-4f5e-9c24-5b027992d155` is now `closed`
+  - bootstrap state is `failed`
+  - failure message:
+    - `bootstrap setup stalled after 3 consecutive follow-on turns without creating project assignments, scoped tasks, and flow templates`
+  - project remained intact; no extra stray project was created after the blocked `project.create`
+
+- what happened:
+  - turn 2 `5925adff-af19-495d-ab45-77f22066aca4` proved the new guard:
+    - blocked `project.create`
+    - no new project row created
+  - but turn 2 still ended with the generic coaching reply:
+    - `Would you like to proceed with the existing project or start over?`
+  - turn 3 `2b0f908e-c5ba-45d3-90b8-bca370edfc33` then ended with a second generic coaching variant:
+    - `I will format any function calls as requested ... Please let me know which tool functions you would like me to call`
+  - because that exact wording also was not yet in the generic bootstrap-reply detector, rerun-71 exhausted the 3-turn bootstrap drift budget and failed closed
+
+- latest local fix:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - extended `looksLikeGenericTaskRecoveryReply(...)` again for the function-call-formatting coach variant:
+      - `i will format any function calls as requested`
+      - `please let me know which tool functions you would like me to call`
+      - `using the provided json structure wrapped in <xml> tags`
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added `TestLooksLikeGenericTaskRecoveryReplyDetectsFunctionCallFormattingCoachReply`
+
+- focused verification passed locally:
+  - `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetectsFunctionCallFormattingCoachReply|LooksLikeGenericTaskRecoveryReplyDetectsExistingProjectProceedMenu|HandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)' -count=1`
+  - `go test ./internal/turn -run 'Test(HandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt|ShouldStopAfterBlockedProjectKickoffSessionCreate|BootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall|BootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID)' -count=1`
+
+- next step:
+  - rebuild/restart on this final classifier extension
+  - run fresh rerun-72
+  - verify the next blocked-project/generic bootstrap coaching reply gets retried as drift instead of consuming the bootstrap turn budget
+
+## 2026-03-25 17:29 MDT: rerun-72 proves the retry path live, then exposes the last adjacent wording gap
+
+- rerun-72 live probe:
+  - project `9cb1c729-8499-4bdb-a006-4cb043f0b3c1`
+  - session `fe146f58-04bb-44b5-b9cb-ed58e649a58d`
+
+- live proof achieved:
+  - turn 2 `d1890f21-9fc9-4ccc-9487-7db42f3263ef` returned the generic bootstrap drift:
+    - `Sure! Could you please specify which function you'd like to use ...`
+  - the engine **did** classify that as generic non-action drift and appended:
+    - system message `357d27a2-1a74-4b6e-829a-5d7feb05cd67`
+    - `[Bootstrap follow-on turn returned a generic non-action reply. Retrying with a fresh bootstrap-resume prompt that requires direct bootstrap action.]`
+  - this is the first live proof that the bootstrap generic-reply retry path is working in production on the deployed build
+
+- remaining miss from the same fresh probe:
+  - turn 3 `f737318d-d912-4a97-b048-66a813ce7564` still slipped through with two adjacent phrasings:
+    - `It looks like the project has already been created in this flow ... We should continue using this existing project unless you explicitly want to start a new one. Let me know how you would like to proceed!`
+    - `Sure! I can help you format the function calls as JSON objects ...`
+  - because those variants were just outside the last pattern set, rerun-72 still exhausted the 3-turn bootstrap drift budget and failed closed
+
+- latest local generalization:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - expanded `looksLikeGenericTaskRecoveryReply(...)` again for the rerun-72 variants:
+      - `it looks like the project has already been created in this flow`
+      - `we should continue using this existing project unless you explicitly want to start a new one`
+      - `let me know how you would like to proceed`
+      - `i can help you format the function calls as json objects`
+      - `could you please specify which function you'd like to use and provide the necessary arguments`
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added:
+      - `TestLooksLikeGenericTaskRecoveryReplyDetectsExistingProjectProceedInstruction`
+      - `TestLooksLikeGenericTaskRecoveryReplyDetectsFunctionUseQuestionReply`
+
+- focused verification passed locally:
+  - `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(ExistingProjectProceedInstruction|FunctionUseQuestionReply|FunctionCallFormattingCoachReply|ExistingProjectProceedMenu)|HandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)' -count=1`
+  - `go test ./internal/turn -run 'Test(HandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt|ShouldStopAfterBlockedProjectKickoffSessionCreate|BootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall|BootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID)' -count=1`
+
+- next step:
+  - rebuild/restart on this broader detector
+  - launch the next fresh rerun
+  - verify the blocked-project / function-formatting bootstrap coaching variants now also route through the retry path instead of consuming the remaining bootstrap budget
+
+## 2026-03-25 17:38 MDT: rerun-73 narrows the seam to generic parameter-coaching variants
+
+- rerun-73 live probe:
+  - project `cea5ec8a-98a2-4580-b3b4-3ece574a7371`
+  - session `44c5c320-a8ba-46f4-af48-a60aaab092fa`
+
+- live result:
+  - kickoff turn `83100c4d-5ef3-4ad4-9141-b20f23c9fe73` completed cleanly
+  - turns 2 and 3 still failed closed on generic bootstrap drift, so the session archived after the 3-turn budget
+  - no stray project was created; this is no longer a project-identity bug
+
+- exact remaining gap:
+  - turn 2 generic reply:
+    - `Could you please provide me with the specific details for the function call you'd like to make ...`
+  - turn 3 generic reply:
+    - `please provide the details of the operation you would like to perform or the specific function call you want me to construct ...`
+  - these are still parameter-coaching/function-construction replies, but they used slightly broader wording than the last detector pass
+
+- local fix now added:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added broader parameter-coaching patterns:
+      - `could you please provide me with the specific details for the function call you'd like to make`
+      - `please provide the details of the operation you would like to perform`
+      - `the specific function call you want me to construct`
+      - `if you want to create a project, provide the necessary parameters`
+      - `i will then format it into the required json object`
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added `TestLooksLikeGenericTaskRecoveryReplyDetectsFunctionConstructionCoachReply`
+
+- focused verification passed locally:
+  - `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(FunctionConstructionCoachReply|ExistingProjectProceedInstruction|FunctionUseQuestionReply|FunctionCallFormattingCoachReply|ExistingProjectProceedMenu)|HandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)' -count=1`
+  - `go test ./internal/turn -run 'Test(HandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt|ShouldStopAfterBlockedProjectKickoffSessionCreate|BootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall|BootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID)' -count=1`
+
+- next step:
+  - rebuild/restart on this detector expansion
+  - run the next fresh rerun
+  - verify that these remaining parameter-coaching variants now route through the already-proven bootstrap retry path
+
+## 2026-03-25 17:45 MDT: rerun-74 reduces the remaining misses to context/details and error-explanation coaching
+
+- rerun-74 live probe:
+  - project `86bf252a-7237-44c9-893a-f5aa11d6c4b5`
+  - session `4cf07b55-be75-48c8-b6a9-6182e512eeef`
+
+- live result:
+  - kickoff turn `e909440e-51d5-455d-9d13-8dc4f9f9452c` completed cleanly
+  - turns 2 and 3 still failed closed on generic bootstrap drift, so the session archived after the 3-turn budget
+  - this lane did not create a stray project; runtime ownership and blocked-project behavior remain correct
+
+- exact remaining generic variants from rerun-74:
+  - turn 2:
+    - `Could you please provide me with the details or the context for which you would like to generate a function call?`
+  - turn 2 also paraphrased a blocked `task.create` validation as explanatory chat:
+    - `planning playbook state is required before planning artifacts can be recorded`
+  - turn 3:
+    - `please provide the details of the operation you would like to perform or the specific function call you want me to construct`
+
+- newest local detector expansion:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added:
+      - `could you please provide me with the details or the context for which you would like to generate a function call`
+      - `provide me with the details or the context for which you would like to generate a function call`
+      - `it seems there was an error when trying to create a task`
+      - `planning playbook state is required before planning artifacts can be recorded`
+      - `some initial setup or configuration needs to be completed before`
+      - `i'll give an example by creating a task in a project`
+      - `let's say we want to create a task with the title`
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added:
+      - `TestLooksLikeGenericTaskRecoveryReplyDetectsFunctionCallContextQuestionReply`
+      - `TestLooksLikeGenericTaskRecoveryReplyDetectsTaskCreateErrorExplanationReply`
+
+- focused verification passed locally:
+  - `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(FunctionCallContextQuestionReply|TaskCreateErrorExplanationReply|FunctionConstructionCoachReply|ExistingProjectProceedInstruction|FunctionUseQuestionReply|FunctionCallFormattingCoachReply|ExistingProjectProceedMenu)|HandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)' -count=1`
+  - `go test ./internal/turn -run 'Test(HandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt|ShouldStopAfterBlockedProjectKickoffSessionCreate|BootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall|BootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID)' -count=1`
+
+- next step:
+  - rebuild/restart on this expansion
+  - continue with the next fresh rerun
+  - prove these last context/details and error-explanation coaching forms now hit the retry path too
+
+## 2026-03-25 18:00 MDT: rerun-75 reduces the seam again to task/action-details and existing-project-working prompts
+
+- rerun-75 live probe:
+  - project `dc6aa835-14ac-4727-a9fe-4fe705dcc6ed`
+  - session `09d39184-c607-4dcf-b5df-cf70ad01e4d4`
+
+- live result:
+  - kickoff turn `f6672645-22e6-43d8-a169-2e10075f5934` completed cleanly
+  - turns 2 and 3 still failed closed on generic bootstrap drift, so the session archived after the 3-turn budget
+  - no stray project was created; blocked-project handling continues to hold
+
+- exact remaining wording gap from rerun-75:
+  - turn 2:
+    - `It looks like a project with the slug ... has already been created in this flow. The existing project ID is ... If you want to continue working with this existing project ...`
+    - `Could you please specify which function you would like to call and provide the necessary arguments?`
+  - turn 3:
+    - `Could you please provide me with the details of the task or action you want to perform so I can generate the appropriate JSON for it?`
+
+- newest local detector expansion:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added:
+      - `it looks like a project with the slug`
+      - `if you want to continue working with this existing project`
+      - `the existing project id is`
+      - `could you please provide me with the details of the task or action you want to perform`
+      - `details of the task or action you want to perform`
+      - `generate the appropriate json for it`
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added:
+      - `TestLooksLikeGenericTaskRecoveryReplyDetectsTaskOrActionDetailsReply`
+      - `TestLooksLikeGenericTaskRecoveryReplyDetectsExistingProjectWorkingReply`
+
+- focused verification passed locally:
+  - `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(TaskOrActionDetailsReply|ExistingProjectWorkingReply|FunctionCallContextQuestionReply|TaskCreateErrorExplanationReply|FunctionConstructionCoachReply|ExistingProjectProceedInstruction|FunctionUseQuestionReply|FunctionCallFormattingCoachReply|ExistingProjectProceedMenu)|HandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)' -count=1`
+  - `go test ./internal/turn -run 'Test(HandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt|ShouldStopAfterBlockedProjectKickoffSessionCreate|BootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall|BootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID)' -count=1`
+
+- next step:
+  - rebuild/restart on this detector expansion
+  - continue with the next fresh rerun
+  - verify these last adjacent prompts also route into the proven retry path
+
+## 2026-03-25 18:19 MDT: rerun-76 re-proves the retry path and narrows the seam again
+
+- rerun-76 live probe:
+  - project `ea00589a-e128-4fe1-9c48-b801281bee40`
+  - session `1d989fd8-c37e-4f57-8d72-4e1caadf402c`
+
+- live proof:
+  - turn 2 `88aadb55-285c-4102-a189-07b33ad0eba8` again hit the bootstrap retry path in production
+  - the engine appended:
+    - `70b2c4e2-1d65-4cc2-a26b-50e4348ef8fc`
+    - `[Bootstrap follow-on turn returned a generic non-action reply. Retrying with a fresh bootstrap-resume prompt that requires direct bootstrap action.]`
+  - so the retry path remains live and correct
+
+- remaining miss from the same fresh probe:
+  - turn 2 generic reply:
+    - `It looks like you want to use the provided JSON-RPC-like functions ... Please specify which function you would like to call and provide the necessary arguments`
+  - turn 3 generic reply:
+    - `could you please tell me which function you would like to use and provide the necessary parameters?`
+  - rerun-76 still failed closed only because those two adjacent phrasings were not yet in the detector
+
+- newest local detector expansion:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added:
+      - `it looks like you want to use the provided json-rpc-like functions`
+      - `please specify which function you would like to call and provide the necessary arguments`
+      - `could you please tell me which function you would like to use and provide the necessary parameters`
+      - `help understanding what the functions do or what parameters they require`
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added:
+      - `TestLooksLikeGenericTaskRecoveryReplyDetectsJSONRPCFunctionCoachReply`
+      - `TestLooksLikeGenericTaskRecoveryReplyDetectsFunctionParametersReply`
+
+- focused verification passed locally:
+  - `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(JSONRPCFunctionCoachReply|FunctionParametersReply|TaskOrActionDetailsReply|ExistingProjectWorkingReply|FunctionCallContextQuestionReply|TaskCreateErrorExplanationReply|FunctionConstructionCoachReply|ExistingProjectProceedInstruction|FunctionUseQuestionReply|FunctionCallFormattingCoachReply|ExistingProjectProceedMenu)|HandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)' -count=1`
+  - `go test ./internal/turn -run 'Test(HandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt|ShouldStopAfterBlockedProjectKickoffSessionCreate|BootstrapAutoContinueTurnAppendsResumeStateBeforeFirstModelCall|BootstrapAutoContinueSanitizesInheritedNonBootstrapInitialMessageID)' -count=1`
+
+- next step:
+  - rebuild/restart on this latest detector expansion
+  - continue with the next fresh rerun
+  - verify these last JSON-RPC / function-parameter coaching phrasings also route into the retry path
+
+## 2026-03-25 18:36 MDT: rerun-77 proves live bootstrap progress plus live generic-reply retry on the same session
+
+- rerun-77 live probe:
+  - project `67e29d68-63a3-4207-8337-e6f8a1a93c0d`
+  - session `065c77f1-a992-4c46-b3a5-6a2aafacbf68`
+  - kickoff user message `997f3ab9-b9b4-4bbc-acb9-1e4b5b4df641`
+  - Frank handoff message `88b6c76a-18aa-468a-8786-c9eb15f5fec1`
+
+- live proof:
+  - kickoff turn `1e2967d6-69bd-4e2a-8769-bdb5d15e9bf6` started cleanly with no dead-letter or duplicate-claim failure
+  - first invocation `6c94323a-d831-48fb-8e63-683a44333b40` completed and produced a real tool result:
+    - `project.update`
+    - then `bootstrap.setup.persist` materialized at least the `bind-repo-environment` bootstrap step as done
+  - the same turn then produced a generic assistant follow-on:
+    - `The project ... has been updated successfully ... If you need to make further changes or require additional updates, please let me know!`
+  - the engine handled that in production by completing turn `1e2967d6-69bd-4e2a-8769-bdb5d15e9bf6` and appending a fresh bootstrap-resume user message:
+    - `c82e85e0-e01d-45e4-af97-f7f2d9aff63c`
+    - content begins `Continue the active project bootstrap from the persisted state above. Do not restate the project state ...`
+  - fresh retry turn `aeda5d2c-caf3-4cf3-8dc2-86a9c2c7958a` is now `in_progress`
+  - second retry invocation `16202a65-9a1f-41fc-971f-d3eb51df38ea` is live on `qwen2.5:72b`
+
+- what this proves:
+  - the current build no longer only retries empty bootstrap follow-ons
+  - a generic non-action assistant reply after one real bootstrap mutation now correctly rolls forward into a stronger bootstrap-resume turn on the same session
+  - the active seam is still detector vocabulary on subsequent variants, not dispatch, duplicate-claim, or stale-root metadata
+
+- newest local detector hardening, not yet deployed at this note:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - generalized generic-reply detection with family-level helpers for:
+      - function/JSON/tool-call formatting coaching replies
+      - existing-project proceed/start-over menu replies
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added:
+      - `TestLooksLikeGenericTaskRecoveryReplyDetectsGeneralFunctionFormattingPrompt`
+      - `TestLooksLikeGenericTaskRecoveryReplyDetectsGeneralExistingProjectProceedPrompt`
+
+- focused verification passed locally:
+  - `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(GeneralFunctionFormattingPrompt|GeneralExistingProjectProceedPrompt|JSONRPCFunctionCoachReply|FunctionParametersReply|TaskOrActionDetailsReply|ExistingProjectWorkingReply|FunctionCallContextQuestionReply|TaskCreateErrorExplanationReply|FunctionConstructionCoachReply|ExistingProjectProceedInstruction|FunctionUseQuestionReply|FunctionCallFormattingCoachReply|ExistingProjectProceedMenu)|HandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)' -count=1`
+
+- next step:
+  - let rerun-77 finish or expose the next live wording gap
+  - if it still burns on another adjacent coaching variant, rebuild/restart on the generalized detector instead of continuing exact-string expansion
+  - note: as of `18:36-18:37 MDT`, rerun-77 also re-proved the empty-assistant retry branch live:
+    - turn `aeda5d2c-caf3-4cf3-8dc2-86a9c2c7958a` completed after invocation `16202a65-9a1f-41fc-971f-d3eb51df38ea`
+    - the engine appended system note `1e5c5625-0d2a-41bf-be60-4661eb749866`
+    - `[Bootstrap follow-on turn returned empty assistant output. Retrying with a fresh bootstrap-resume prompt that requires concrete tool action or a concrete blocker.]`
+    - fresh retry turn `bd4cfe1c-ec20-4c27-b06d-51d1a3e387da` then started from bootstrap-resume user message `55869481-4afc-4ff9-9939-ab0ab25c834e`
+
+## 2026-03-25 18:50 MDT: checklist progress now resets the bootstrap stall budget
+
+- new bug found from rerun-77:
+  - bootstrap archived after 3 follow-on turns even though turn 1 had already made real `bootstrap.setup.persist` checklist progress
+  - root cause: `projectBootstrapProgressAdvancedBeyondState(...)` and the normal bootstrap turn accounting ignored:
+    - `BootstrapSetupTaskCount`
+    - `BootstrapSetupDoneCount`
+    - `FrankSignOffRecorded`
+  - so `bind-repo-environment` completion still counted as “no progress” for the auto-archive budget
+
+- patch:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added bootstrap checklist/sign-off fields to `projectBootstrapState`
+    - updated `projectBootstrapProgressAdvancedBeyondState(...)` to treat checklist completion and sign-off progress as real progress
+    - updated `applyProjectBootstrapProgressState(...)` to persist those fields into session/project bootstrap state
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - expanded `TestProjectBootstrapProgressAdvancedBeyondState` to cover checklist-only progress
+
+- focused verification passed locally:
+  - `go test ./internal/turn -run 'Test(ProjectBootstrapProgressAdvancedBeyondState|LooksLikeGenericTaskRecoveryReplyDetects(GeneralFunctionFormattingPrompt|GeneralExistingProjectProceedPrompt|JSONRPCFunctionCoachReply|FunctionParametersReply)|HandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)' -count=1`
+
+- live proof on fresh rerun-78 after rebuild/restart:
+  - project `7ff75789-87c7-45f4-b288-0bf9d4a66a82`
+  - session `fa488c80-ed94-4613-a94a-60e0e491dbe5`
+  - kickoff turn `011fd5f3-f5f2-405e-b490-4c3f54db8820` completed
+  - qwen invocation `c4220924-c66e-4475-bf41-f3d94e61f04f` produced the same real `bootstrap.setup.persist` result:
+    - `bind-repo-environment` done
+  - unlike rerun-77, the project did **not** auto-archive after that partial setup progress
+  - fresh continuation turn `f020b46f-4f37-428b-a4d0-168d5907b3dd` is now live from bootstrap-resume message `9e59f1a1-906b-40ed-9d63-e632fce574c4`
+  - project settings still show bootstrap `status=active`, not failed/archived
+
+- current live seam:
+  - bootstrap continuation is still in progress on rerun-78
+  - the old false “3 consecutive follow-on turns” archive after checklist-only progress appears fixed

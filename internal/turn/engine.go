@@ -3552,7 +3552,10 @@ func bootstrapScaffoldTaskLess(left, right repo.ProjectTask) bool {
 }
 
 func projectBootstrapProgressAdvancedBeyondState(state projectBootstrapState, progress projectBootstrapProgress) bool {
-	return progress.AssignmentCount > state.AssignmentCount ||
+	return progress.BootstrapSetupTaskCount > state.BootstrapSetupTaskCount ||
+		progress.BootstrapSetupDoneCount > state.BootstrapSetupDoneCount ||
+		(progress.FrankSignOffRecorded && !state.FrankSignOffRecorded) ||
+		progress.AssignmentCount > state.AssignmentCount ||
 		progress.StaffingDraftCount > state.StaffingDraftCount ||
 		progress.PlannedTaskCount > state.PlannedTaskCount ||
 		progress.PlannedFlowTemplateCount > state.PlannedFlowTemplateCount ||
@@ -3646,6 +3649,9 @@ type projectBootstrapState struct {
 	LastTurnID               string                              `json:"last_turn_id,omitempty"`
 	LastResponderID          string                              `json:"last_responder_id,omitempty"`
 	AutoTurnCount            int                                 `json:"auto_turn_count,omitempty"`
+	BootstrapSetupTaskCount  int                                 `json:"bootstrap_setup_task_count,omitempty"`
+	BootstrapSetupDoneCount  int                                 `json:"bootstrap_setup_done_count,omitempty"`
+	FrankSignOffRecorded     bool                                `json:"frank_sign_off_recorded,omitempty"`
 	AssignmentCount          int                                 `json:"assignment_count,omitempty"`
 	StaffingDraftCount       int                                 `json:"staffing_draft_count,omitempty"`
 	PlannedTaskCount         int                                 `json:"planned_task_count,omitempty"`
@@ -5386,6 +5392,9 @@ func applyProjectBootstrapProgressState(state *projectBootstrapState, progress p
 	checkpoint := projectBootstrapLastCheckpoint(progress)
 	state.Phase = checkpoint
 	state.LastCheckpoint = checkpoint
+	state.BootstrapSetupTaskCount = progress.BootstrapSetupTaskCount
+	state.BootstrapSetupDoneCount = progress.BootstrapSetupDoneCount
+	state.FrankSignOffRecorded = progress.FrankSignOffRecorded
 	state.AssignmentCount = progress.AssignmentCount
 	state.StaffingDraftCount = progress.StaffingDraftCount
 	state.PlannedTaskCount = progress.PlannedTaskCount
@@ -19406,6 +19415,9 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 	if normalized == "" {
 		return false
 	}
+	if looksLikeGenericFunctionFormattingReply(normalized) || looksLikeGenericExistingProjectProceedReply(normalized) {
+		return true
+	}
 	patterns := []string{
 		"i'll help",
 		"i'm ready to help",
@@ -19465,6 +19477,39 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"should i search the workspace",
 		"should i search the workspace for existing test execution logs",
 		"ready to proceed",
+		"if you need to continue with this project, we can proceed",
+		"if you explicitly want to create a new project, please let me know",
+		"it looks like the project has already been created in this flow",
+		"it looks like a project with the slug",
+		"we should continue using this existing project unless you explicitly want to start a new one",
+		"if you want to continue working with this existing project",
+		"the existing project id is",
+		"would you like to proceed with the existing project or start over",
+		"let me know how you would like to proceed",
+		"i will format any function calls as requested",
+		"i can help you format the function calls as json objects",
+		"please let me know which tool functions you would like me to call",
+		"could you please specify which function you'd like to use and provide the necessary arguments",
+		"could you please provide me with the specific details for the function call you'd like to make",
+		"could you please provide me with the details or the context for which you would like to generate a function call",
+		"provide me with the details or the context for which you would like to generate a function call",
+		"could you please provide me with the details of the task or action you want to perform",
+		"details of the task or action you want to perform",
+		"generate the appropriate json for it",
+		"it looks like you want to use the provided json-rpc-like functions",
+		"please specify which function you would like to call and provide the necessary arguments",
+		"could you please tell me which function you would like to use and provide the necessary parameters",
+		"help understanding what the functions do or what parameters they require",
+		"please provide the details of the operation you would like to perform",
+		"the specific function call you want me to construct",
+		"if you want to create a project, provide the necessary parameters",
+		"i will then format it into the required json object",
+		"it seems there was an error when trying to create a task",
+		"planning playbook state is required before planning artifacts can be recorded",
+		"some initial setup or configuration needs to be completed before",
+		"i'll give an example by creating a task in a project",
+		"let's say we want to create a task with the title",
+		"using the provided json structure wrapped in <xml> tags",
 		"which error scenarios to prioritize",
 		"let me gather the available test artifacts",
 		"let me gather the error scenario test results first",
@@ -19473,6 +19518,52 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		if strings.Contains(normalized, pattern) {
 			return true
 		}
+	}
+	return false
+}
+
+func looksLikeGenericFunctionFormattingReply(normalized string) bool {
+	if !strings.Contains(normalized, "function") && !strings.Contains(normalized, "json") && !strings.Contains(normalized, "tool") {
+		return false
+	}
+	requestSignals := []string{
+		"please specify",
+		"please provide",
+		"could you please specify",
+		"could you please provide",
+		"could you please tell me",
+		"tell me which",
+		"let me know which",
+		"what do you need",
+	}
+	detailSignals := []string{
+		"details",
+		"context",
+		"arguments",
+		"parameters",
+		"function call",
+		"operation",
+		"task or action",
+		"construct",
+	}
+	if containsAny(normalized, requestSignals...) && containsAny(normalized, detailSignals...) {
+		return true
+	}
+	if strings.Contains(normalized, "format") && strings.Contains(normalized, "json") && (strings.Contains(normalized, "function") || strings.Contains(normalized, "tool")) {
+		return true
+	}
+	if strings.Contains(normalized, "json-rpc") && (strings.Contains(normalized, "function") || strings.Contains(normalized, "parameters")) {
+		return true
+	}
+	return false
+}
+
+func looksLikeGenericExistingProjectProceedReply(normalized string) bool {
+	if !strings.Contains(normalized, "existing project") && !strings.Contains(normalized, "project has already been created") && !strings.Contains(normalized, "project with the slug") {
+		return false
+	}
+	if strings.Contains(normalized, "continue working") || strings.Contains(normalized, "start over") || strings.Contains(normalized, "how you would like to proceed") || strings.Contains(normalized, "let me know") || strings.Contains(normalized, "proceed with the existing project") || strings.Contains(normalized, "explicitly want to start a new one") {
+		return true
 	}
 	return false
 }

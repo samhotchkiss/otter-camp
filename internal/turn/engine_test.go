@@ -7869,6 +7869,14 @@ func TestProjectBootstrapProgressAdvancedBeyondState(t *testing.T) {
 	}) {
 		t.Fatal("unchanged progress should not reset recoverable continuation budget")
 	}
+	if !projectBootstrapProgressAdvancedBeyondState(state, projectBootstrapProgress{
+		BootstrapSetupTaskCount: 8,
+		BootstrapSetupDoneCount: 1,
+		AssignmentCount:         3,
+		PlannedTaskCount:        20,
+	}) {
+		t.Fatal("bootstrap checklist progress should reset recoverable continuation budget")
+	}
 }
 
 func TestProjectBootstrapPauseInvalidatedByCurrentProgressForFirstWavePromotion(t *testing.T) {
@@ -10219,6 +10227,134 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsConcreteSituationClarifier(t *t
 	content := "I'm reviewing the continuation summary you provided, but I need to clarify the concrete situation before I continue."
 	if !looksLikeGenericTaskRecoveryReply(content) {
 		t.Fatal("expected concrete-situation clarification reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsExistingProjectProceedMenu(t *testing.T) {
+	t.Parallel()
+
+	content := "It seems like the project has already been created in this flow with the slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-71` and ID `786bde8c-d26b-45a4-b316-1a2a77f44d53`. " +
+		"If you need to continue with this project, we can proceed. Otherwise, if you explicitly want to create a new project, please let me know.\n\n" +
+		"Would you like to proceed with the existing project or start over?"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected existing-project proceed menu to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsFunctionCallFormattingCoachReply(t *testing.T) {
+	t.Parallel()
+
+	content := "I understand. I will format any function calls as requested, using the provided JSON structure wrapped in <XML> tags.\n\n" +
+		"Please let me know which tool functions you would like me to call and with what arguments, or if you have any other questions about how I can help."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected function-call formatting coach reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsExistingProjectProceedInstruction(t *testing.T) {
+	t.Parallel()
+
+	content := "It looks like the project has already been created in this flow with the slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-72` and project ID `9cb1c729-8499-4bdb-a006-4cb043f0b3c1`. " +
+		"We should continue using this existing project unless you explicitly want to start a new one.\n\n" +
+		"Let me know how you would like to proceed!"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected existing-project proceed instruction to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsFunctionUseQuestionReply(t *testing.T) {
+	t.Parallel()
+
+	content := "Sure! Could you please specify which function you'd like to use and provide the necessary arguments? If you need help with the available functions or their parameters, let me know!"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected function-use question reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsFunctionConstructionCoachReply(t *testing.T) {
+	t.Parallel()
+
+	content := "Sure, please provide the details of the operation you would like to perform or the specific function call you want me to construct. " +
+		"For example, if you want to create a project, provide the necessary parameters such as name and description. " +
+		"I will then format it into the required JSON object."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected function-construction coach reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsFunctionCallContextQuestionReply(t *testing.T) {
+	t.Parallel()
+
+	content := "Sure! Could you please provide me with the details or the context for which you would like to generate a function call? " +
+		"For example, do you want to create a project, send a chat message, or perform some other action?"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected function-call context question reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsTaskCreateErrorExplanationReply(t *testing.T) {
+	t.Parallel()
+
+	content := "It seems there was an error when trying to create a task. The error message indicates that the planning playbook state is required before planning artifacts can be recorded. " +
+		"This suggests that some initial setup or configuration needs to be completed before task creation can proceed."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected task-create error explanation reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsTaskOrActionDetailsReply(t *testing.T) {
+	t.Parallel()
+
+	content := "Sure! Could you please provide me with the details of the task or action you want to perform so I can generate the appropriate JSON for it?"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected task-or-action details reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsExistingProjectWorkingReply(t *testing.T) {
+	t.Parallel()
+
+	content := "It looks like a project with the slug `speaker-pipeline-ops-validation-fresh-20260325-rerun-75` has already been created in this flow. The existing project ID is `dc6aa835-14ac-4727-a9fe-4fe705dcc6ed`. If you want to continue working with this existing project, let me know."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected existing-project working reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsJSONRPCFunctionCoachReply(t *testing.T) {
+	t.Parallel()
+
+	content := "It looks like you want to use the provided JSON-RPC-like functions by generating the appropriate JSON objects for function calls. " +
+		"Please specify which function you would like to call and provide the necessary arguments."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected JSON-RPC function coach reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsFunctionParametersReply(t *testing.T) {
+	t.Parallel()
+
+	content := "Sure, could you please tell me which function you would like to use and provide the necessary parameters? " +
+		"If you need help understanding what the functions do or what parameters they require, I can certainly assist with that as well!"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected function-parameters reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsGeneralFunctionFormattingPrompt(t *testing.T) {
+	t.Parallel()
+
+	content := "I can format the JSON tool call for you. Please tell me which function to use and the parameters or context you want included."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected generalized function-formatting prompt to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsGeneralExistingProjectProceedPrompt(t *testing.T) {
+	t.Parallel()
+
+	content := "The project has already been created and the existing project is ready. Let me know whether to continue working there or start over."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected generalized existing-project prompt to be treated as generic recovery output")
 	}
 }
 
