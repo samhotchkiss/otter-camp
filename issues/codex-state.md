@@ -9068,3 +9068,33 @@ Current narrowed seam:
 - creation guards are catching more shell-task families correctly
 - prompt generation now needs live proof that it excludes both existing junk shells `26` and `27`
 - after this new sync patch deploys, the next correct rerun-88 continuation should drop back from `6` to `4` actionable drafts
+
+## 2026-03-26 08:12 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go)
+  - widened the project-session meta-task guard again to block the new live shell family:
+    - `Review and Prepare for Next Phase`
+    - `prepare the next set of tasks`
+    - `inspect the results` + `integration test` + `next phase`
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - actionable-draft filtering now excludes that same next-phase shell family from continuation prompts
+- [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+  - worker-side continuation prompt generation now excludes the same next-phase shell family
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetectsProjectDraftListingCoachingReply|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemain$' -count=1`
+
+Latest live evidence before deploy:
+- rerun-88 produced another project-orchestration shell:
+  - task `28`
+  - title `Review and Prepare for Next Phase`
+  - description `Inspect the results from task 19 (Run end-to-end pipeline integration test) and prepare the next set of tasks.`
+- the current rerun-88 project session remains [`1a9edb0a-a817-46b1-975d-4d96c8164bcb`](/Users/sam/dev/otter-camp)
+- the latest continuation state before this deploy still showed polluted draft counts because task `28` was not yet filtered
+
+Current narrowed seam:
+- top-level meta-task and earlier shell-task families are already blocked live
+- the newest local patch closes the adjacent `next phase` shell-task family that produced task `28`
+- next proof target is the first rerun-88 continuation generated after this deploy, to verify the prompt count drops again to the truly actionable draft set

@@ -1698,6 +1698,9 @@ func looksLikeProjectContinuationMetaDraftForWorker(title string, description *s
 	if strings.Contains(normalized, "select and decompose next bounded task") {
 		return true
 	}
+	if strings.Contains(normalized, "review and prepare for next phase") {
+		return true
+	}
 	if strings.Contains(normalized, "prepare for next phase of project execution") {
 		return true
 	}
@@ -1720,6 +1723,12 @@ func looksLikeProjectContinuationMetaDraftForWorker(title string, description *s
 		(strings.Contains(normalized, "decompose") ||
 			strings.Contains(normalized, "assign") ||
 			strings.Contains(normalized, "queue it for execution")) {
+		return true
+	}
+	if strings.Contains(normalized, "prepare the next set of tasks") &&
+		(strings.Contains(normalized, "inspect the results") ||
+			strings.Contains(normalized, "integration test") ||
+			strings.Contains(normalized, "next phase")) {
 		return true
 	}
 	if strings.Contains(normalized, "remaining draft task") &&
