@@ -515,6 +515,7 @@ Implemented so far in this spec:
   - keep sync turns and active project bootstrap on the old path
 - async task lanes now also stop early on repeated successful rewrites of the same existing file when the runtime sees identical `file.write` output path plus `byte_size` churn in one turn
 - async task lanes now also stop early on repeated `cli.execute` package-install churn for the same package spec in one turn instead of spending multiple rounds on `pip` / `python -m pip install` variants
+- async task lanes now also stop early on repeated shell-based `cli.execute` file construction targeting the same `scripts/`, `config/`, or `results/` path in one turn instead of wrapping more `cat >`, `printf >`, or `python -c "with open(...)"` builders around the same file
 - `scripts/token-usage-report.sh` now surfaces:
   - hot turns with repeated rate-limit failures
   - duplicate successful `file.write` churn grouped by turn/path/byte-size

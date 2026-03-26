@@ -106,6 +106,7 @@ const (
 	validationLoopTurnStopThreshold           = 2
 	duplicateSuccessfulFileWriteChurnCode     = "duplicate_successful_write_churn"
 	duplicatePackageInstallChurnCode          = "duplicate_package_install_churn"
+	duplicateShellFileBuildChurnCode          = "duplicate_shell_file_build_churn"
 	validationLoopSuppressionReason           = "validation_loop_blocked"
 	recoveryCLIRepairBudget                   = 1
 	recoveryFileWriteRepairBudget             = 1
@@ -165,6 +166,7 @@ var (
 	recoveryCheckpointTaskNumberPattern            = regexp.MustCompile(`\boc[- ]?0*([1-9][0-9]*)\b`)
 	testScenarioNumberPattern                      = regexp.MustCompile(`(?i)\bscenario\s+([1-9][0-9]*)\b`)
 	trailingParentheticalPattern                   = regexp.MustCompile(`\(([^()]*)\)\s*$`)
+	shellFileBuildTargetPattern                    = regexp.MustCompile(`(?i)(scripts/[^[:space:]'";|&),]+|config/[^[:space:]'";|&),]+|results/[^[:space:]'";|&),]+)`)
 )
 
 const (
@@ -17626,11 +17628,14 @@ func (e *TurnEngine) collectAsyncTaskToolResultChurnFailures(ctx context.Context
 	failures := make([]toolValidationFailure, 0, len(results))
 	seen := make(map[string]struct{}, len(results))
 	for _, result := range results {
-		candidates := make([]toolValidationFailure, 0, 2)
+		candidates := make([]toolValidationFailure, 0, 3)
 		if failure, ok := classifyRepeatedSuccessfulFileWriteChurn(turnMessages, result); ok {
 			candidates = append(candidates, failure)
 		}
 		if failure, ok := classifyRepeatedPackageInstallChurn(turnMessages, assistantCalls, result); ok {
+			candidates = append(candidates, failure)
+		}
+		if failure, ok := classifyRepeatedShellFileBuildChurn(turnMessages, assistantCalls, result); ok {
 			candidates = append(candidates, failure)
 		}
 		for _, failure := range candidates {
@@ -17798,6 +17803,124 @@ func classifyRepeatedPackageInstallChurn(turnMessages []repo.ChatMessage, assist
 
 func packageInstallChurnAttemptFingerprint(packageSpec string) string {
 	return "cli.execute:package-install:" + strings.ToLower(strings.TrimSpace(packageSpec))
+}
+
+func classifyRepeatedShellFileBuildChurn(turnMessages []repo.ChatMessage, assistantCalls map[string]storedAssistantToolCall, result ToolResult) (toolValidationFailure, bool) {
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "cli.execute") {
+		return toolValidationFailure{}, false
+	}
+	if strings.TrimSpace(result.Error) != "" || anyInt(result.Output["exit_code"]) != 0 {
+		return toolValidationFailure{}, false
+	}
+	callID := strings.TrimSpace(result.ToolCallID)
+	if callID == "" || len(assistantCalls) == 0 {
+		return toolValidationFailure{}, false
+	}
+	currentCall, ok := assistantCalls[callID]
+	if !ok {
+		return toolValidationFailure{}, false
+	}
+	targetPath, ok := shellFileBuildTargetFromCLIExecuteArguments(currentCall.Arguments)
+	if !ok {
+		return toolValidationFailure{}, false
+	}
+
+	matchCount := 0
+	currentRecorded := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") || message.ToolCallID == nil {
+			continue
+		}
+		messageCallID := strings.TrimSpace(*message.ToolCallID)
+		if messageCallID == "" {
+			continue
+		}
+		toolName, output, errText, parsed := parseToolResultMessage(message.Content)
+		if !parsed || !strings.EqualFold(strings.TrimSpace(toolName), "cli.execute") || strings.TrimSpace(errText) != "" || anyInt(output["exit_code"]) != 0 {
+			continue
+		}
+		priorCall, exists := assistantCalls[messageCallID]
+		if !exists {
+			continue
+		}
+		priorTargetPath, ok := shellFileBuildTargetFromCLIExecuteArguments(priorCall.Arguments)
+		if !ok || !sameWorkspaceRelativePath(priorTargetPath, targetPath) {
+			continue
+		}
+		matchCount++
+		if messageCallID == callID {
+			currentRecorded = true
+		}
+	}
+	if !currentRecorded {
+		matchCount++
+	}
+	if matchCount < 3 {
+		return toolValidationFailure{}, false
+	}
+
+	reason := fmt.Sprintf("repeated shell-based file construction for `%s` in the same turn", targetPath)
+	return buildToolValidationFailure(
+		"cli.execute",
+		duplicateShellFileBuildChurnCode,
+		reason,
+		shellFileBuildChurnAttemptFingerprint(targetPath),
+		targetPath,
+	), true
+}
+
+func shellFileBuildChurnAttemptFingerprint(path string) string {
+	return "cli.execute:shell-file-build:" + normalizeWorkspaceRelativePath(path)
+}
+
+func shellFileBuildTargetFromCLIExecuteArguments(arguments map[string]any) (string, bool) {
+	if len(arguments) == 0 {
+		return "", false
+	}
+	normalized := toolargs.Normalize("cli.execute", cloneMap(arguments))
+	command := strings.TrimSpace(anyString(normalized["command"]))
+	if command == "" {
+		return "", false
+	}
+	return shellFileBuildTargetFromCLICommand(command)
+}
+
+func shellFileBuildTargetFromCLICommand(command string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	if lower == "" {
+		return "", false
+	}
+	match := shellFileBuildTargetPattern.FindStringSubmatch(lower)
+	if len(match) < 2 {
+		return "", false
+	}
+	targetPath := normalizeWorkspaceRelativePath(match[1])
+	if targetPath == "" || !looksLikeShellFileBuildCommand(lower, targetPath) {
+		return "", false
+	}
+	return targetPath, true
+}
+
+func looksLikeShellFileBuildCommand(command, targetPath string) bool {
+	path := strings.TrimSpace(strings.ToLower(targetPath))
+	if path == "" {
+		return false
+	}
+	switch {
+	case strings.Contains(command, "with open('"+path+"'"),
+		strings.Contains(command, "with open(\""+path+"\""),
+		strings.Contains(command, "cat > "+path),
+		strings.Contains(command, "cat >> "+path),
+		strings.Contains(command, "tee "+path),
+		strings.Contains(command, "tee -a "+path),
+		strings.Contains(command, "> "+path),
+		strings.Contains(command, ">> "+path),
+		strings.Contains(command, ">"+path),
+		strings.Contains(command, ">>"+path):
+		return true
+	default:
+		return false
+	}
 }
 
 func packageInstallSpecFromCLIExecuteArguments(arguments map[string]any) (string, bool) {
@@ -18226,6 +18349,9 @@ func buildValidationLoopBlockReason(state taskValidationGuardState) string {
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicatePackageInstallChurnCode) {
 		return fmt.Sprintf("deterministic same-turn package-install churn blocked after %d identical attempts: %s", state.Count, reason)
 	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateShellFileBuildChurnCode) {
+		return fmt.Sprintf("deterministic same-turn shell file-build churn blocked after %d identical target rewrites: %s", state.Count, reason)
+	}
 	if toolName == "" {
 		return fmt.Sprintf("deterministic tool validation loop blocked after %d identical failures: %s", state.Count, reason)
 	}
@@ -18410,6 +18536,9 @@ func buildValidationLoopTurnStopSystemMessage(state taskValidationGuardState) st
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicatePackageInstallChurnCode) {
 		return fmt.Sprintf("[Repeated identical cli.execute package-install churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
 	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateShellFileBuildChurnCode) {
+		return fmt.Sprintf("[Repeated identical cli.execute shell file-build churn in this turn (%d/%d): %s. Ending the turn early so the next continuation can write directly instead of wrapping more shell builders.]", state.Count, validationLoopBlockThreshold, reason)
+	}
 	if toolName == "" {
 		return fmt.Sprintf("[Repeated identical tool validation failure in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
 	}
@@ -18427,6 +18556,9 @@ func buildValidationLoopSystemMessage(state taskValidationGuardState) string {
 	}
 	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicatePackageInstallChurnCode) {
 		return fmt.Sprintf("[Deterministic same-turn package-install churn blocked after %d identical attempts: %s]", state.Count, reason)
+	}
+	if strings.EqualFold(strings.TrimSpace(state.FailureCode), duplicateShellFileBuildChurnCode) {
+		return fmt.Sprintf("[Deterministic same-turn shell file-build churn blocked after %d identical target rewrites: %s]", state.Count, reason)
 	}
 	return fmt.Sprintf("[Deterministic tool validation loop blocked after %d identical failures: %s (%s)]", state.Count, toolName, reason)
 }

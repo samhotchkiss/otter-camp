@@ -1500,3 +1500,41 @@ Current status:
 - unit-tested
 - docs updated
 - waiting for the next deliberate runtime roll so it can be proven on fresh Anthropic traffic
+
+## Update 17:58 MDT
+
+I kept going on the next deterministic async-task churn family and landed a narrow shell-builder cutoff in code.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async `project_task` turns now classify repeated successful shell-based `cli.execute` file construction targeting the same `scripts/`, `config/`, or `results/` path as same-turn churn
+  - the classifier is intentionally narrow:
+    - same target path only
+    - successful `cli.execute` only (`exit_code = 0`)
+    - shell builder shapes only, such as:
+      - `cat > path`
+      - `printf ... > path`
+      - `python3 -c "with open('path', ...)"` 
+  - the threshold is `3` attempts in one turn, which leaves room for one correction pass but cuts off the obvious script-construction spiral
+
+Why this was worth doing:
+
+- the operator report surfaced turns like:
+  - `cc90162c-b1e3-40f6-8036-5f6cb27e0402`
+  - `ae637e85-8b6b-4f15-9ed6-b9311a46f725`
+- those turns were not just editing a script once or twice
+- they were repeatedly rebuilding the same target path with a long series of shell wrappers:
+  - `cat > scripts/validate-stage-execution.sh`
+  - `printf ... > scripts/validate-stage-execution.sh`
+  - `python3 -c "with open('scripts/validate-stage-execution.sh', 'a') ..."`
+- that is exactly the kind of same-turn burn where direct file mutation tools should win instead of paying for more shell wrappers
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdShellFileBuildAttemptInSameTurn|HandleToolValidationResultsIgnoresShellFileBuildChurnWhenTargetPathChanges|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdPackageInstallAttemptInSameTurn|HandleToolValidationResultsIgnoresPackageInstallChurnWhenPackageChanges|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdIdenticalSuccessfulFileWriteInSameTurn|HandleToolValidationResultsIgnoresSuccessfulFileWriteChurnWhenByteSizeChanges)$' -count=1`
+
+What is still not proven:
+
+- this newest shell-builder cutoff is not deployed yet
+- so there is not yet live evidence showing one of the known hot script-construction turns getting cut off by the new guardrail
