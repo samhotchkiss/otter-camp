@@ -18115,6 +18115,10 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 			if strings.Contains(errText, "non-bootstrap tasks with blocks_scope=all must include an assigned agent") {
 				return true
 			}
+			if strings.Contains(errText, "project_session_meta_task_disallowed") ||
+				strings.Contains(errText, "project session already has remaining draft tasks to advance") {
+				return true
+			}
 		}
 	}
 	return false
@@ -20373,6 +20377,9 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"for tasks with blocks_scope=all, you must specify either an assigned agent, an executable flow template, or a human review path",
 		"could you please provide one of these options so i can try creating the task again",
 		"let me know which option you'd like to proceed with, and i'll make the necessary adjustments",
+		"the project session already has remaining draft tasks to advance",
+		"do not create a new meta task to review or promote draft tasks from the project lane",
+		"inspect the existing draft tasks and directly queue, decompose, assign, or update the correct task instead",
 		"planning playbook state is required before planning artifacts can be recorded",
 		"some initial setup or configuration needs to be completed before",
 		"i'll give an example by creating a task in a project",

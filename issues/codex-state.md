@@ -8681,3 +8681,40 @@ Current narrowed seam:
 - the remaining local patch is an efficiency/consistency fix:
   - stop immediately after the terminal blocked `flow.review_decision(reject)` result
   - avoid the extra assistant/model follow-up that still occurred once before the turn completed
+
+## 2026-03-26 06:05 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go)
+  - async `project`-session `task.create` now rejects top-level meta-orchestration tasks that just tell the project lane to review/promote existing drafts instead of advancing them directly
+  - the guard currently covers live rerun-88 shapes including:
+    - `Review and Promote Draft Tasks`
+    - `Review and validate integration test results`
+- [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - added focused integration coverage proving both meta-task variants are rejected and do not create extra project tasks
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - blocked `task.create` results with `project_session_meta_task_disallowed` now stop async project turns immediately
+  - generic-reply detection also recognizes the matching coaching text
+- [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - added focused coverage for both the stop helper and the coaching-text detector
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(ShouldStopAfterBlockedProjectExecutionBlockedMutationOnMetaTaskCreate|LooksLikeGenericTaskRecoveryReplyDetectsProjectMetaTaskCoachingReply|HandleCompletedProjectExecutionContinuationTurnRetriesAllScopeTaskCreateCoachingReplyWithFreshMessage)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemain$' -count=1`
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324` `serve` and `worker --concurrency 2`
+- `./bin/ottercamp health` is green
+
+Live state after redeploy:
+- rerun-88 project session remains [`1a9edb0a-a817-46b1-975d-4d96c8164bcb`](/Users/sam/dev/otter-camp)
+- the earlier bad project-lane creations already exist and remain in the tree:
+  - task `22` `Review and Promote Draft Tasks`
+  - task `23` `Review and validate integration test results`
+- after restart, the session was requeued again with fresh pending continuation message:
+  - message `4cbe329e-fb30-4c98-81f2-a6a698cf287c`
+- that fresh rerun-88 continuation has not executed yet because the two worker/qwen slots were immediately occupied by other project sessions after startup
+
+Current blocker:
+- the new meta-task guard is deployed and tested, but rerun-88 has not yet consumed the fresh continuation message on the new binary
+- so the next required live proof is still pending:
+  - confirm that the next project continuation no longer creates another duplicate meta-review task and instead either advances the existing draft tree or fails with the new guard reason

@@ -2297,6 +2297,8 @@ func normalizeProjectDeliveryModeInput(value string) string {
 	}
 }
 
+const projectContinuationMetaTaskCreateError = "project_session_meta_task_disallowed"
+
 func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[string]any) (map[string]any, error) {
 	if e.tasks == nil {
 		return map[string]any{"error": "task_repository_unavailable"}, nil
@@ -2386,6 +2388,12 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 			return nil, err
 		}
 		bootstrapSetupActive = bootstrapSetupStillActive(projectTasks)
+	}
+	if shouldRejectProjectContinuationMetaTaskCreate(scope, projectID, parentTask, bootstrapSetupActive, title, description, projectTasks) {
+		return map[string]any{
+			"error":   projectContinuationMetaTaskCreateError,
+			"message": "This project session already has remaining draft tasks to advance. Do not create a new meta task to review or promote draft tasks from the project lane. Inspect the existing draft tasks and directly queue, decompose, assign, or update the correct task instead.",
+		}, nil
 	}
 	bootstrapSessionActive := parentTask == nil && e.activeProjectBootstrapSession(ctx, scope, projectID)
 	bootstrapTopLevelOrchestrationParent := parentTask == nil &&
@@ -2649,6 +2657,66 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 		response["planning"] = reviewPlanningResponse(planning)
 	}
 	return response, nil
+}
+
+func shouldRejectProjectContinuationMetaTaskCreate(scope workspaceScope, projectID uuid.UUID, parentTask *repo.ProjectTask, bootstrapSetupActive bool, title string, description *string, tasks []repo.ProjectTask) bool {
+	if parentTask != nil || bootstrapSetupActive {
+		return false
+	}
+	if scope.sessionID == nil || *scope.sessionID == uuid.Nil {
+		return false
+	}
+	if scope.projectID == nil || *scope.projectID == uuid.Nil || *scope.projectID != projectID {
+		return false
+	}
+	if !looksLikeProjectContinuationMetaTask(title, description) {
+		return false
+	}
+	for _, task := range tasks {
+		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+			continue
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(task.Metadata, &metadata); err == nil {
+			if setupTask, _ := metadata["bootstrap_setup_task"].(bool); setupTask {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func looksLikeProjectContinuationMetaTask(title string, description *string) bool {
+	normalized := normalizeComparableText(strings.TrimSpace(title) + " " + derefString(description))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "review and promote draft tasks") {
+		return true
+	}
+	if strings.Contains(normalized, "review and validate integration test results") {
+		return true
+	}
+	if strings.Contains(normalized, "prepare for next phase of project execution") {
+		return true
+	}
+	if strings.Contains(normalized, "end to end pipeline integration test") &&
+		(strings.Contains(normalized, "review") || strings.Contains(normalized, "validate") || strings.Contains(normalized, "verify the outcomes")) {
+		return true
+	}
+	if strings.Contains(normalized, "remaining draft task") &&
+		(strings.Contains(normalized, "review") ||
+			strings.Contains(normalized, "promote") ||
+			strings.Contains(normalized, "runnable") ||
+			strings.Contains(normalized, "next phase")) {
+		return true
+	}
+	if strings.Contains(normalized, "draft project task") &&
+		(strings.Contains(normalized, "inspect") || strings.Contains(normalized, "promote")) {
+		return true
+	}
+	return false
 }
 
 func (e *NativeToolExecutor) resolveBootstrapWorkstreamFlowTemplate(ctx context.Context, scope workspaceScope, projectID uuid.UUID) (*uuid.UUID, error) {

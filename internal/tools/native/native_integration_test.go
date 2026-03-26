@@ -4870,6 +4870,83 @@ func TestIntegrationProjectSessionTaskPlanningIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemain(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	agent := testutil.MakeAgent(t, pool, orgID)
+
+	taskRepo := repo.NewProjectTaskRepo(pool)
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Speaker Ingestion Workflow Validation",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{"decomposition":{"mode":"parallel_children","applied":true,"orchestration_only":true}}`),
+	}); err != nil {
+		t.Fatalf("create draft orchestration task: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, agent.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   project.ID.String(),
+		"mode":       "async",
+		"title":      "Project continuation meta-task guard",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, agent.ID, sessionID)
+
+	out, err := executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":             project.ID.String(),
+		"title":                  "Review and Promote Draft Tasks",
+		"description":            "Inspect the 5 remaining draft tasks, ensure they are ready for execution, and promote them to runnable status as appropriate.",
+		"requires_human_review":  true,
+	})
+	if err != nil {
+		t.Fatalf("task.create: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); got != projectContinuationMetaTaskCreateError {
+		t.Fatalf("task.create error = %q, want %q", got, projectContinuationMetaTaskCreateError)
+	}
+	if message := fmt.Sprintf("%v", out["message"]); !strings.Contains(message, "remaining draft tasks to advance") {
+		t.Fatalf("task.create message = %q, want remaining-draft guidance", message)
+	}
+
+	tasks, err := taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("project task count = %d, want 1 after blocked meta task create", len(tasks))
+	}
+
+	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":   project.ID.String(),
+		"title":        "Review and validate integration test results",
+		"description":  "Verify the outcomes of the end-to-end pipeline integration test to ensure all expected behaviors are met.",
+	})
+	if err != nil {
+		t.Fatalf("task.create second variant: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); got != projectContinuationMetaTaskCreateError {
+		t.Fatalf("second task.create error = %q, want %q", got, projectContinuationMetaTaskCreateError)
+	}
+
+	tasks, err = taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks after second variant: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("project task count = %d after second variant, want 1", len(tasks))
+	}
+}
+
 func TestIntegrationProjectSessionQueueKeepsPlannedTaskSetFlat(t *testing.T) {
 	pool := testdb.New(t)
 	orgID := testutil.MakeOrg(t, pool)

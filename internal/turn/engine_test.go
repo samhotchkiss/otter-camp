@@ -7387,6 +7387,25 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesAllScopeTaskCreat
 	}
 }
 
+func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnMetaTaskCreate(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+	}
+	results := []ToolResult{{
+		Name:  "task.create",
+		Error: "project_session_meta_task_disallowed: This project session already has remaining draft tasks to advance.",
+	}}
+
+	if !shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, results) {
+		t.Fatal("expected meta task create rejection to stop project execution turn")
+	}
+}
+
 func TestMaybeContinueProjectExecutionAfterTaskCompletionSupersedesStaleProjectContinuationTurn(t *testing.T) {
 	t.Parallel()
 
@@ -11725,6 +11744,15 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsTaskOrActionDetailsReply(t *tes
 	content := "Sure! Could you please provide me with the details of the task or action you want to perform so I can generate the appropriate JSON for it?"
 	if !looksLikeGenericTaskRecoveryReply(content) {
 		t.Fatal("expected task-or-action details reply to be treated as generic recovery output")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsProjectMetaTaskCoachingReply(t *testing.T) {
+	t.Parallel()
+
+	content := "This project session already has remaining draft tasks to advance. Do not create a new meta task to review or promote draft tasks from the project lane. Inspect the existing draft tasks and directly queue, decompose, assign, or update the correct task instead."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatalf("expected project meta-task coaching reply to be generic recovery text")
 	}
 }
 
