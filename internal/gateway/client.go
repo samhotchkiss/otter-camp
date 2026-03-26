@@ -29,6 +29,8 @@ import (
 const (
 	defaultLiveGatewayTimeout       = 5 * time.Minute
 	defaultCleanupTimeout           = 5 * time.Second
+	extendedLocalProviderTimeout    = 30 * time.Minute
+	providerCallTimeoutSlack        = 5 * time.Second
 	defaultAnthropicVersion         = "2023-06-01"
 	defaultAnthropicMaxOutputTokens = 16384
 	anthropicAuthModeAPIKey         = "api_key"
@@ -699,7 +701,7 @@ func (g *LiveModelGateway) executeProviderCall(
 		applyHeaders(httpReq)
 	}
 
-	resp, err := g.httpClient.Do(httpReq)
+	resp, err := g.httpClientForProviderCall(ctx, endpointURL, providerType).Do(httpReq)
 	if err != nil {
 		return providerCallResult{}, err
 	}
@@ -754,6 +756,44 @@ func (g *LiveModelGateway) callAnthropicSubscriptionProvider(
 	return g.executeProviderCall(ctx, endpointURL, "anthropic", body, stream, onChunk, func(httpReq *http.Request) {
 		applyAnthropicSubscriptionHeaders(httpReq, refreshed.AccessToken)
 	})
+}
+
+func (g *LiveModelGateway) httpClientForProviderCall(ctx context.Context, endpointURL, providerType string) *http.Client {
+	if g == nil || g.httpClient == nil {
+		return http.DefaultClient
+	}
+	requestTimeout := time.Duration(0)
+	deadline, ok := ctx.Deadline()
+	if ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 {
+			requestTimeout = remaining + providerCallTimeoutSlack
+		}
+	}
+	if localTimeout, ok := localProviderCallTimeout(endpointURL, providerType); ok && localTimeout > requestTimeout {
+		requestTimeout = localTimeout
+	}
+	if requestTimeout <= 0 || g.httpClient.Timeout == 0 || g.httpClient.Timeout >= requestTimeout {
+		return g.httpClient
+	}
+	cloned := *g.httpClient
+	cloned.Timeout = requestTimeout
+	return &cloned
+}
+
+func localProviderCallTimeout(endpointURL, providerType string) (time.Duration, bool) {
+	if strings.EqualFold(strings.TrimSpace(providerType), "anthropic") {
+		return 0, false
+	}
+	parsed, err := url.Parse(strings.TrimSpace(endpointURL))
+	if err != nil {
+		return 0, false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host != "localhost" && host != "127.0.0.1" {
+		return 0, false
+	}
+	return extendedLocalProviderTimeout + providerCallTimeoutSlack, true
 }
 
 func parseProviderCompletion(body io.Reader, providerType string) (providerCallResult, error) {

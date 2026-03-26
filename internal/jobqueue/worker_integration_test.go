@@ -7481,11 +7481,22 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	if requeuedSessID != session.ID {
 		t.Fatalf("requeued session_id = %s, want %s", requeuedSessID, session.ID)
 	}
-	if requeuedMsgID != message.ID {
-		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	if requeuedMsgID == message.ID {
+		t.Fatalf("requeued message_id = %s, want refreshed bootstrap continuation message", requeuedMsgID)
 	}
-	if retryCount != 1 {
-		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
+	if retryCount != 0 {
+		t.Fatalf("requeued retry_count = %d, want 0 for fresh synthesized bootstrap continuation", retryCount)
+	}
+	var requeuedSource string
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata->>'source', '')
+		FROM chat_message
+		WHERE id = $1
+	`, requeuedMsgID).Scan(&requeuedSource); err != nil {
+		t.Fatalf("load requeued message source: %v", err)
+	}
+	if requeuedSource != "project_bootstrap" {
+		t.Fatalf("requeued message source = %q, want project_bootstrap", requeuedSource)
 	}
 }
 
@@ -7668,8 +7679,8 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsPreservesRateLimitBa
 	if requeuedMsgID != message.ID {
 		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
 	}
-	if retryCount != 1 {
-		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
+	if retryCount != 0 {
+		t.Fatalf("requeued retry_count = %d, want 0 for fresh synthesized bootstrap continuation", retryCount)
 	}
 	if !jitterApplied {
 		t.Fatal("expected rate_limit_jitter_applied = true")
@@ -8136,11 +8147,22 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurns(t *testing.T) {
 	if requeuedSessID != session.ID {
 		t.Fatalf("requeued session_id = %s, want %s", requeuedSessID, session.ID)
 	}
-	if requeuedMsgID != message.ID {
-		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	if retryCount != 0 {
+		t.Fatalf("requeued retry_count = %d, want 0 for fresh synthesized bootstrap continuation", retryCount)
 	}
-	if retryCount != 1 {
-		t.Fatalf("requeued retry_count = %d, want 1", retryCount)
+	if requeuedMsgID == message.ID {
+		t.Fatalf("requeued message_id = %s, want refreshed bootstrap continuation message", requeuedMsgID)
+	}
+	var requeuedSource string
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(metadata->>'source', '')
+		FROM chat_message
+		WHERE id = $1
+	`, requeuedMsgID).Scan(&requeuedSource); err != nil {
+		t.Fatalf("load requeued message source: %v", err)
+	}
+	if requeuedSource != "project_bootstrap" {
+		t.Fatalf("requeued message source = %q, want project_bootstrap", requeuedSource)
 	}
 }
 
@@ -8201,6 +8223,131 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsSkipsFinalMessages(t *
 	}
 	if requeued != 0 {
 		t.Fatalf("requeued sessions = %d, want 0", requeued)
+	}
+}
+
+func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsIgnoresStalePendingDispatch(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-project-session-ignore-stale-pending-dispatch",
+		DisplayName: "Requeue Active Project Session Ignore Stale Pending Dispatch",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue active projects.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-project-session-ignore-stale-pending-dispatch-project",
+		DisplayName:    "Requeue Active Project Session Ignore Stale Pending Dispatch Project",
+		Description:    "Project for stale pending continuation dispatch coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_execution_continuation","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create pending project continuation message: %v", err)
+	}
+	completedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "failed",
+		TriggerMessageID: &message.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create terminal project continuation turn: %v", err)
+	}
+	if _, err := worker.Enqueue(ctx, nil, agentTurnJobType, 100, agentTurnKeyPayload{
+		SessionID:  session.ID,
+		MessageID:  message.ID,
+		RetryCount: 0,
+	}, nil); err != nil {
+		t.Fatalf("enqueue stale pending dispatch: %v", err)
+	}
+	if completedTurn.TriggerMessageID == nil || *completedTurn.TriggerMessageID != message.ID {
+		t.Fatalf("completed turn trigger_message_id = %v, want %s", completedTurn.TriggerMessageID, message.ID)
+	}
+
+	requeued, err := worker.RequeueActiveProjectSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	var pendingJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND (payload->>'session_id')::uuid = $1
+		  AND (payload->>'message_id')::uuid = $2
+	`, session.ID, message.ID).Scan(&pendingJobs); err != nil {
+		t.Fatalf("count pending agent_turn jobs: %v", err)
+	}
+	if pendingJobs != 1 {
+		t.Fatalf("pending agent_turn jobs = %d, want 1 fresh requeue", pendingJobs)
+	}
+	var deadLetterJobs int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'dead_letter'
+		  AND (payload->>'session_id')::uuid = $1
+		  AND (payload->>'message_id')::uuid = $2
+	`, session.ID, message.ID).Scan(&deadLetterJobs); err != nil {
+		t.Fatalf("count dead-letter agent_turn jobs: %v", err)
+	}
+	if deadLetterJobs != 1 {
+		t.Fatalf("dead-letter agent_turn jobs = %d, want 1 stale dispatch retired", deadLetterJobs)
 	}
 }
 

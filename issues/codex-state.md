@@ -7782,3 +7782,95 @@ Current narrowed live seam:
 Current critical path:
 - no new code failure is proven yet after the latest restart
 - the immediate next blocker is simply whichever of the two live qwen turns fails or completes next
+
+## 2026-03-26 00:52 MDT
+
+Live update after the latest worker fixes:
+- task `16` completed cleanly through review
+  - task id `afa19068-d471-4a51-9745-3f9b7ce0aa2f`
+  - work status `done`
+  - the old task-16 review turn `79cac1ec-780d-46f7-8e5a-c59e84eedcff` was canceled after its qwen invocation completed successfully
+- task-16 completion then superseded the older project continuation rooted to task `18`
+  - old project turn:
+    - `cfeaaae8-2442-48a4-9fe9-ebac83a2ba5a`
+    - status `cancelled`
+  - old invocation:
+    - `1cb4af0c-2e90-4f64-99b8-da6ac42baa65`
+    - status `failed`
+    - error `Post "http://localhost:11434/v1/chat/completions": context canceled`
+- a fresh project continuation message was appended for task `16`
+  - message `25a498b8-b1e7-47ab-89c0-bad732ce05a1`
+  - source `project_execution_continuation`
+  - completed task id `afa19068-d471-4a51-9745-3f9b7ce0aa2f`
+- the associated dispatch was first logged as `suppressed duplicate active dispatch`, but then the same job was claimed normally and is now the active project lane:
+  - job `67c530b9-2d91-4d24-a2b3-4f877632dbcc`
+  - active turn `3e4a4d0c-14fd-400b-b49d-f4a774b7cede`
+  - active invocation `d77a3a91-f326-496a-9080-717aea24aa31`
+  - provider `34b13633-46b0-4471-ba52-1c0ad20cd36b`
+  - model `qwen2.5:72b`
+
+Current rerun-88 board:
+- done:
+  - `1-8`
+  - `12-16`
+  - `18`
+- draft:
+  - `9`
+  - `10`
+  - `11`
+  - `17`
+  - `19`
+
+Current narrowed live seam:
+- there is no new deterministic product failure yet after task `16` completion
+- the only active rerun-88 lane is the fresh project continuation turn:
+  - `3e4a4d0c-14fd-400b-b49d-f4a774b7cede`
+- it has remained `in_progress` with the same qwen invocation for multiple minutes without advancing the draft later-wave tasks
+
+Current critical path:
+- determine whether the new task-16 continuation is a genuine long qwen generation or another stalled/idle project-continuation lane
+- the next code change should come from the first concrete failure mode this turn produces
+
+## 2026-03-26 01:18 MDT
+
+Latest fixes landed:
+- [`internal/gateway/client.go`](/Users/sam/dev/otter-camp/internal/gateway/client.go)
+  - provider calls now clone the HTTP client when the request context deadline exceeds the shared `5m` timeout
+  - local OpenAI-compatible calls on localhost now get an explicit extended timeout floor (`30m + 5s`) so long Ollama/qwen turns are not cut off by the transport client even when no larger request deadline is propagated
+- [`internal/gateway/client_test.go`](/Users/sam/dev/otter-camp/internal/gateway/client_test.go)
+  - added focused coverage for context-driven timeout extension and the localhost OpenAI-compatible timeout floor
+- [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+  - `RequeueActiveProjectSessionsWithoutTurns(...)` now ignores stale pending `agent_turn` jobs whose `(session_id, message_id, retry_count)` already have a terminal turn
+  - before enqueuing a fresh project-session continuation retry, it now dead-letters stale terminal message-attempt dispatches for that session so dedupe does not suppress the fresh enqueue
+- [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+  - added coverage for the stale-pending-dispatch requeue case
+  - updated the older bootstrap-active requeue expectation to match current continuation refresh behavior
+
+Focused verification passed:
+- `go test ./internal/gateway -run 'Test(HTTPClientForProviderCall(ExtendsTimeoutToContextDeadline|KeepsSharedClientWithoutDeadline|KeepsLongerSharedTimeout|ExtendsLocalOpenAICompatibleTimeoutWithoutDeadline)|LocalProviderCallTimeoutSkipsAnthropic)' -count=1`
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueActiveProjectSessionsWithoutTurns(IgnoresStalePendingDispatch|SupersedesStalePendingContinuation)?|PurgeStaleAgentTurnJobsKeepsProjectSupervisorPMRecoveryJob|EnsureProjectContinuationMessageSupersedesStalePendingContinuation|RequeueActiveProjectSessionsWithoutTurns$)' -count=1`
+
+Live proof after redeploy:
+- the restart-specific project-session requeue seam is fixed in production behavior
+- rerun-88 project session [`1a9edb0a-a817-46b1-975d-4d96c8164bcb`](/Users/sam/dev/otter-camp) no longer stayed idle after startup cleanup
+- after restart, the session got a fresh claimed continuation dispatch again:
+  - job `7a74828f-9c9b-4476-acaf-35331393f77d`
+  - message `25a498b8-b1e7-47ab-89c0-bad732ce05a1`
+  - retry count `4`
+  - turn `ee72a103-1182-4f00-bcb0-fce5e2086b29`
+- the old stale pending dispatch remains retired:
+  - job `51ea7ea5-2eae-4542-9ba5-87d785d4ba7c`
+  - status `dead_letter`
+  - error `purged stale terminal message-attempt dispatch during claim`
+
+Current live blocker:
+- the new continuation retry exposed a different seam immediately afterward
+- project turn `ee72a103-1182-4f00-bcb0-fce5e2086b29` is `in_progress`, but there is still no `model_invocation` row for that turn
+- the only turn-scoped message so far is:
+  - system `b02628ab-a81b-442b-9f52-859c7abbc297`
+  - content `[Retry attempt 4 started.]`
+- so the active blocker has shifted again:
+  - not stale continuation reuse
+  - not startup PM-recovery purge
+  - not idle project-session requeue
+  - now it is a pre-invocation hang on the fresh rerun-88 project continuation turn after `start inbound turn`

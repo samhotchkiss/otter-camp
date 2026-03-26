@@ -1,8 +1,11 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/samhotchkiss/otter-camp/internal/prompt"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
@@ -362,6 +365,69 @@ func TestAnthropicToolsSanitizesNames(t *testing.T) {
 	tool := expectMapValue(t, toolsPayload[0], "tools[0]")
 	if tool["name"] != "task_create" {
 		t.Fatalf("tools[0].name = %v, want task_create", tool["name"])
+	}
+}
+
+func TestHTTPClientForProviderCallExtendsTimeoutToContextDeadline(t *testing.T) {
+	gw := &LiveModelGateway{
+		httpClient: &http.Client{Timeout: 5 * time.Minute},
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(30*time.Minute))
+	defer cancel()
+
+	client := gw.httpClientForProviderCall(ctx, "https://api.openai.com/v1/chat/completions", "openai")
+	if client == gw.httpClient {
+		t.Fatal("expected cloned client when context deadline exceeds shared client timeout")
+	}
+	if client.Timeout < (30*time.Minute) {
+		t.Fatalf("client timeout = %s, want at least context deadline", client.Timeout)
+	}
+	if gw.httpClient.Timeout != 5*time.Minute {
+		t.Fatalf("shared client timeout = %s, want unchanged 5m", gw.httpClient.Timeout)
+	}
+}
+
+func TestHTTPClientForProviderCallKeepsSharedClientWithoutDeadline(t *testing.T) {
+	gw := &LiveModelGateway{
+		httpClient: &http.Client{Timeout: 5 * time.Minute},
+	}
+
+	client := gw.httpClientForProviderCall(context.Background(), "https://api.openai.com/v1/chat/completions", "openai")
+	if client != gw.httpClient {
+		t.Fatal("expected shared client when request context has no deadline")
+	}
+}
+
+func TestHTTPClientForProviderCallKeepsLongerSharedTimeout(t *testing.T) {
+	gw := &LiveModelGateway{
+		httpClient: &http.Client{Timeout: 40 * time.Minute},
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(30*time.Minute))
+	defer cancel()
+
+	client := gw.httpClientForProviderCall(ctx, "https://api.openai.com/v1/chat/completions", "openai")
+	if client != gw.httpClient {
+		t.Fatal("expected shared client when it already exceeds the context deadline")
+	}
+}
+
+func TestHTTPClientForProviderCallExtendsLocalOpenAICompatibleTimeoutWithoutDeadline(t *testing.T) {
+	gw := &LiveModelGateway{
+		httpClient: &http.Client{Timeout: 5 * time.Minute},
+	}
+
+	client := gw.httpClientForProviderCall(context.Background(), "http://localhost:11434/v1/chat/completions", "openai")
+	if client == gw.httpClient {
+		t.Fatal("expected cloned client for local openai-compatible provider")
+	}
+	if client.Timeout < extendedLocalProviderTimeout {
+		t.Fatalf("client timeout = %s, want at least %s", client.Timeout, extendedLocalProviderTimeout)
+	}
+}
+
+func TestLocalProviderCallTimeoutSkipsAnthropic(t *testing.T) {
+	if timeout, ok := localProviderCallTimeout("http://localhost:11434/v1/messages", "anthropic"); ok || timeout != 0 {
+		t.Fatalf("localProviderCallTimeout() = (%s, %v), want (0,false)", timeout, ok)
 	}
 }
 

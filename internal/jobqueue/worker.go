@@ -1333,6 +1333,14 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		    WHERE jq.job_type = $1
 		      AND jq.status IN ('pending', 'claimed')
 		      AND (jq.payload->>'session_id')::uuid = cs.id
+		      AND NOT EXISTS (
+		        SELECT 1
+		        FROM chat_turn terminal_ct
+		        WHERE terminal_ct.session_id = (jq.payload->>'session_id')::uuid
+		          AND terminal_ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+		          AND terminal_ct.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+		          AND terminal_ct.status IN ('completed', 'cancelled', 'failed')
+		      )
 		      AND NOT (
 		            COALESCE(queued_message.metadata->>'source', '') = 'project_bootstrap'
 		        AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') = 'completed'
@@ -1369,6 +1377,27 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 				}
 				messageID = synthMessageID
 			}
+		}
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE job_queue jq
+			SET status = 'dead_letter',
+			    claimed_by = NULL,
+			    claimed_at = NULL,
+			    last_error = 'superseded stale terminal message-attempt dispatch during project requeue',
+			    updated_at = now()
+			WHERE jq.job_type = $1
+			  AND jq.status IN ('pending', 'claimed')
+			  AND (jq.payload->>'session_id')::uuid = $2
+			  AND EXISTS (
+			    SELECT 1
+			    FROM chat_turn terminal_ct
+			    WHERE terminal_ct.session_id = (jq.payload->>'session_id')::uuid
+			      AND terminal_ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+			      AND terminal_ct.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+			      AND terminal_ct.status IN ('completed', 'cancelled', 'failed')
+			  )
+		`, agentTurnJobType, sessionID); err != nil {
+			return repaired, fmt.Errorf("purge stale terminal agent_turn dispatches for session %s: %w", sessionID, err)
 		}
 		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
 			SessionID:  sessionID,
