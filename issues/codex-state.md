@@ -2,6 +2,73 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 21:18 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `c07ff934`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- rerun-88 has advanced past the earlier work-lane recovery stalls
+- task 15 and task 18 are both back in active review after successful rework executions
+
+### New local patch: recovery turns that only reread files now synthesize the deliverable write when a durable draft already exists
+
+- root cause:
+  - `internal/turn/engine.go`
+  - on live rerun-88 task 15, recovery kept spending turns on read-only batches like `file.read` / `file.list` / `task.get` after the runtime had already persisted a valid task-scoped draft body
+  - the earlier override logic only replaced clearly invalid mutation batches or broader discovery drift, so purely read-only recovery batches could still burn retries without ever emitting the deliverable write
+- behavior:
+  - `maybeSynthesizeRecoveryFileWriteToolCalls(...)` now treats read-only recovery batches as overridable when all tool calls are discovery-only and a durable draft body already exists
+  - the engine synthesizes a canonical `file.write` directly to the resolved task deliverable target instead of allowing another no-op read-only turn
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- focused verification:
+  - `go test ./internal/turn -run 'Test(MaybeSynthesizeRecoveryFileWriteToolCalls(OverridesReadOnlyRecoveryReads|OverridesNonMutationDiscoveryCall)|RecoverySynthesizedFileWriteTargetPathPrefersTaskDeliverableOverHistoricalArtifact|HandleRecoveryRejectedFileWriteContentCanonicalizesWrongPathBeforeDraftReplacement)$' -count=1`
+
+### New local patch: polished “complete context / complete understanding / let me build” recovery placeholders are rejected as non-substantive task drafts
+
+- root cause:
+  - `internal/turn/engine.go`
+  - task 18’s recovery lane had already been writing to the correct target, but the persisted draft content was still a polished placeholder of the form:
+    - `Now I have complete understanding of the project. Let me build...`
+  - those variants were slipping past the older placeholder detector because they were more polished than the earlier “I’ll now create...” forms
+- behavior:
+  - `looksLikeStructuredRecoveryIntentPlaceholder(...)` now rejects the broader placeholder family, including:
+    - `now i have complete context`
+    - `i have complete context`
+    - `now i have complete understanding`
+    - `i have complete understanding`
+    - `let me build`
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- focused verification:
+  - `go test ./internal/turn -run 'Test(RecoveryFileWriteDraftRejectReason|MaybeSynthesizeRecoveryFileWriteToolCalls(OverridesReadOnlyRecoveryReads|OverridesNonMutationDiscoveryCall))$' -count=1`
+
+### Live proof on rerun-88 tasks 15 and 18
+
+- project:
+  - rerun-88 project `3ee5af44-f1b6-4f03-9664-ef3116fad9ee`
+- task 15:
+  - task id `4a4aaac6-9f18-4f63-a911-0ebc0cb5a65a`
+  - latest completed work execution `10d62d17-71c7-43d4-ab00-4ee8030f6c36`
+  - canonical work commit `42bd07f7f2d15b13a4499f252d7f75320cd8c702`
+  - current active review execution `ed41dd15-00ce-4dcf-ba55-c1aceffba2b9`
+  - current active review session `4ad50572-6251-4368-a902-52ec194e246b`
+  - current live review turn `5640a8df-8bee-455a-a50c-668747fcf3fb`
+  - task status is now `review`
+- task 18:
+  - task id `3e153770-235e-4785-87fc-8fa33c81af33`
+  - latest completed work execution `c8733349-1d3c-4462-9607-8a66aee27a7d`
+  - canonical work commit `3088aa92e026c52f206fe1e43e51c8d096000fe5`
+  - current active review execution `5359a878-f33b-496f-8e20-fe7f33114d7a`
+  - current active review session `a1297b3a-04b4-4d2f-91af-b99d12f0290a`
+  - current live review turn `0cb8894c-eed2-45ba-a851-5f0ced463419`
+  - task status is now `review`
+- current seam:
+  - rerun-88 is no longer blocked in work recovery on tasks 15 or 18
+  - the next live seam is review-lane behavior on those two tasks, not task-deliverable recovery targeting or placeholder draft reuse
+
 ## 2026-03-25 20:46 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `dd0048c3`

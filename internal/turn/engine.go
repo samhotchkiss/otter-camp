@@ -11144,6 +11144,10 @@ func (e *TurnEngine) maybeSynthesizeRecoveryFileWriteToolCalls(ctx context.Conte
 	if rejectReason == "" {
 		rejectReason, mutationNeedsOverride = recoveryMutationDraftRejectReason(toolCalls, targetPath)
 	}
+	if rejectReason == "" && !mutationNeedsOverride && recoveryToolCallsAreReadOnlyDiscovery(toolCalls) {
+		rejectReason = "recovery turn used read-only discovery tools instead of writing the deliverable"
+		mutationNeedsOverride = true
+	}
 	if rejectReason == "" && !mutationNeedsOverride {
 		return toolCalls, false, nil
 	}
@@ -11179,6 +11183,21 @@ func (e *TurnEngine) maybeSynthesizeRecoveryFileWriteToolCalls(ctx context.Conte
 		"path", targetPath,
 	)
 	return []ModelToolCall{synthesized}, true, nil
+}
+
+func recoveryToolCallsAreReadOnlyDiscovery(toolCalls []ModelToolCall) bool {
+	if len(toolCalls) == 0 {
+		return false
+	}
+	for _, call := range toolCalls {
+		switch strings.ToLower(strings.TrimSpace(call.Name)) {
+		case "file.read", "file_read", "file.list", "file_list", "file.search", "file_search", "git.log", "git_log", "project.get", "project_get", "task.get", "task_get", "flow.get_execution", "flow_get_execution", "cli.execute", "cli_execute":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (e *TurnEngine) recoverySynthesizedFileWriteTargetPath(ctx context.Context, rt *turnRuntime) string {
@@ -14902,6 +14921,10 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		"good. now i have a clear understanding of the requirements",
 		"now i have a clear understanding of the requirements",
 		"i have a clear understanding of the requirements",
+		"now i have complete understanding",
+		"i have complete understanding",
+		"now i have complete context",
+		"i have complete context",
 		"now i have a clear picture",
 		"current state summary",
 		"based on my review",
@@ -14938,6 +14961,7 @@ func looksLikeStructuredRecoveryIntentPlaceholder(content string) bool {
 		"now i'll write",
 		"now i will write",
 		"now let me write",
+		"let me build",
 		"let me create",
 		"let me write",
 		"let me draft",

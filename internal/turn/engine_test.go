@@ -13752,6 +13752,114 @@ func TestMaybeSynthesizeRecoveryFileWriteToolCallsOverridesNonMutationDiscoveryC
 	}
 }
 
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsOverridesReadOnlyRecoveryReads(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	targetPath := "Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md"
+	targetDraft := strings.TrimSpace(`
+# OC-15: Test Speaker Ingestion Error Handling
+
+## Objective
+Verify malformed, incomplete, and edge-case speaker inputs fail cleanly without data corruption.
+
+## Error Cases
+- Missing required speaker identifier.
+- Malformed email format.
+- Unsupported topic payload type.
+
+## Expected Results
+- Reject invalid payloads with explicit validation errors.
+- Preserve datastore integrity with no partial speaker records.
+`)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     15,
+		Title:          "Test speaker ingestion error handling",
+		WorkStatus:     "blocked",
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": taskplan.ModeExecutionFirst,
+			},
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    targetPath,
+				"failure_reason": "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
+			},
+		}),
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetDraft+"\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"I need to understand the project context first to write a substantive error handling test results document. Let me quickly check the planning artifacts and any existing test infrastructure.",
+		[]ModelToolCall{
+			{ID: "read-1", Name: "file.read", Tier: "tier2", Arguments: map[string]any{"path": "planning/prd-spec/oc-15-acceptance-criteria.md"}},
+			{ID: "read-2", Name: "file.read", Tier: "tier2", Arguments: map[string]any{"path": "planning/prd-spec/oc-15-implementation-plan.md"}},
+			{ID: "read-3", Name: "file.read", Tier: "tier2", Arguments: map[string]any{"path": "planning/prd-spec/oc-15-prd.md"}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want synthesized file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(toolCalls[0].Arguments["content"]); got != targetDraft {
+		t.Fatalf("content = %q, want persisted target draft", got)
+	}
+}
+
 func TestMaybeSynthesizeRecoveryFileWriteToolCallsOverridesInvalidMutationWithPersistedDraft(t *testing.T) {
 	t.Parallel()
 
@@ -15803,6 +15911,25 @@ This specification defines the global page shell for the site.`,
 This document defines archive, results, and related-post wireframes.`,
 			targetPath: "design/06-search-discovery-wireframes.md",
 			want:       "",
+		},
+		{
+			name: "rejects complete context build placeholder",
+			content: "Now I have complete context. I understand the pipeline configuration, the existing validation script, and the task requirements. " +
+				"Let me build the error handling test script and the results document.\n\n" +
+				"The task is to test speaker ingestion error handling with malformed, incomplete, and edge-case inputs. Based on the pipeline configs, I need to test:\n\n" +
+				"1. Malformed inputs\n2. Incomplete inputs\n3. Edge cases\n\n" +
+				"Let me create the test script and execute it, then write the results.",
+			targetPath: "Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md",
+			want:       "described intent to write the deliverable instead of the file body",
+		},
+		{
+			name: "rejects complete understanding build placeholder",
+			content: "Now I have complete understanding of the project. Let me build the deliverables for OC-18: a validation script that checks pipeline output format and delivery, and a results document. " +
+				"Let me analyze what needs to be validated based on the runtime configuration:\n\n" +
+				"- Formats: json, srt, vtt, txt\n- Default format: json\n- Includes: timestamps, confidence scores, speaker labels\n\n" +
+				"Let me create the validation script and the results document.",
+			targetPath: "Work/OC-18-VALIDATE-PIPELINE-OUTPUT-FORMAT-AND-DELIVERY.md",
+			want:       "described intent to write the deliverable instead of the file body",
 		},
 	}
 
