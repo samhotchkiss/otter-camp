@@ -842,6 +842,131 @@ func TestLiveModelGatewayClassifiesRateLimitFailures(t *testing.T) {
 	if storedConnection.HealthStatus != string(HealthStateRateLimited) {
 		t.Fatalf("health_status = %q, want %q", storedConnection.HealthStatus, HealthStateRateLimited)
 	}
+	metadata := map[string]any{}
+	if err := json.Unmarshal(storedConnection.Metadata, &metadata); err != nil {
+		t.Fatalf("unmarshal connection metadata: %v", err)
+	}
+	if got, _ := metadata[providerConnectionMetadataHealthRateLimitedUntil].(string); strings.TrimSpace(got) == "" {
+		t.Fatalf("expected %q metadata to be populated", providerConnectionMetadataHealthRateLimitedUntil)
+	}
+}
+
+func TestLiveModelGatewayReturnsRateLimitedWithoutProviderCallWhenAllConnectionsCoolingDown(t *testing.T) {
+	t.Setenv("OTTERCAMP_MASTER_KEY", base64.StdEncoding.EncodeToString(testMasterKey()))
+	t.Setenv("OTTERCAMP_MASTER_KEY_FILE", "")
+	t.Setenv("OTTERCAMP_KMS_KEY_ID", "")
+
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+	invocationRepo := repo.NewModelInvocationRepo(pool)
+	secretSvc := secret.NewService(repo.NewSecretRepo(pool))
+
+	org := mustCreateOrg(t, ctx, orgRepo, repo.Organization{
+		Slug:        "live-gateway-cooled-down-org",
+		DisplayName: "Live Gateway Cooled Down Org",
+	})
+	if err := secretSvc.Set(ctx, org.ID, "cooldown-key", "Cooldown Key", "", "sk-cooldown", secret.Principal{Type: "human", ID: uuid.Nil}); err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
+
+	serverURL := testutil.MockProviderServer(t, testutil.MockProviderFixture{
+		Handlers: []testutil.MockHandler{{
+			StatusCode: http.StatusOK,
+			Body:       `{"content":[{"type":"text","text":"should not be called"}]}`,
+		}},
+	})
+
+	provider := mustCreateProvider(t, ctx, providerRepo, repo.ModelProvider{
+		Slug:        "openai-cooled-down",
+		DisplayName: "OpenAI",
+		APIBaseURL:  serverURL,
+		IsEnabled:   true,
+	})
+
+	primary := mustCreateConnection(t, ctx, connectionRepo, repo.ProviderConnection{
+		OrganizationID:     org.ID,
+		ProviderID:         provider.ID,
+		DisplayName:        "Primary",
+		APIKeyRef:          "ref:cooldown-key",
+		APIBaseURLOverride: &serverURL,
+		FailoverPriority:   1,
+		MaxConcurrent:      1,
+		IsEnabled:          true,
+	})
+	secondary := mustCreateConnection(t, ctx, connectionRepo, repo.ProviderConnection{
+		OrganizationID:     org.ID,
+		ProviderID:         provider.ID,
+		DisplayName:        "Secondary",
+		APIKeyRef:          "ref:cooldown-key",
+		APIBaseURLOverride: &serverURL,
+		FailoverPriority:   2,
+		MaxConcurrent:      1,
+		IsEnabled:          true,
+	})
+
+	firstRetryUntil := time.Now().UTC().Add(14 * time.Minute).Truncate(time.Second)
+	secondRetryUntil := time.Now().UTC().Add(27 * time.Minute).Truncate(time.Second)
+	if _, err := connectionRepo.SetHealthStatusWithRetryUntil(ctx, primary.ID, string(HealthStateRateLimited), &firstRetryUntil); err != nil {
+		t.Fatalf("SetHealthStatusWithRetryUntil primary: %v", err)
+	}
+	if _, err := connectionRepo.SetHealthStatusWithRetryUntil(ctx, secondary.ID, string(HealthStateRateLimited), &secondRetryUntil); err != nil {
+		t.Fatalf("SetHealthStatusWithRetryUntil secondary: %v", err)
+	}
+
+	orgID := org.ID
+	profile, err := profileRepo.Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    "cooldown-profile",
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          provider.ID,
+		ModelName:           "gpt-4o-mini",
+		DisplayName:         "Cooldown Profile",
+		ContextWindowTokens: 128000,
+		MaxOutputTokens:     2048,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
+	})
+	if err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+
+	health := NewHealthChecker()
+	gw, err := NewLiveModelGateway(LiveModelGatewayOptions{
+		Router:      NewRouter(profileRepo, connectionRepo, health),
+		Providers:   providerRepo,
+		Secrets:     secretSvc,
+		Invocations: invocationRepo,
+		HealthStore: connectionRepo,
+		Health:      health,
+	})
+	if err != nil {
+		t.Fatalf("NewLiveModelGateway: %v", err)
+	}
+
+	_, err = gw.Complete(ctx, turn.ModelRequest{
+		OrganizationID: org.ID,
+		Purpose:        "agent_turn",
+		Profile:        profile,
+		HumanMessages:  []string{"hello"},
+	})
+	if !errors.Is(err, turn.ErrRateLimited) {
+		t.Fatalf("err = %v, want turn.ErrRateLimited", err)
+	}
+
+	rows, err := invocationRepo.ListByOrg(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("ListByOrg: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("invocation rows = %d, want 0 because provider should not have been called", len(rows))
+	}
 }
 
 func TestLiveModelGatewayClassifiesTransientProviderFailures(t *testing.T) {

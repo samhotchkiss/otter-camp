@@ -1,0 +1,484 @@
+# Spec 0326A: Reduce Runaway Token Usage Without Making OtterCamp Worse
+
+Date: 2026-03-26
+
+Primary supporting analysis:
+- [`issues/0326a-state.md`](./issues/0326a-state.md)
+- [`docsv2/visual/02-chat-flow-runtime.html`](./docsv2/visual/02-chat-flow-runtime.html)
+
+## Purpose
+
+OtterCamp is spending far more model tokens than the human testing volume justifies. The goal of this spec is to reduce runaway token usage by making task boundaries real in runtime behavior, not just in task metadata, while preserving product quality and completion reliability.
+
+This is not a cost-cutting spec in the abstract. It is a runtime-correction spec. The system is currently paying for too many model cycles, too much repeated context, and too much soft-rejection churn inside async project and task execution.
+
+## Problem Statement
+
+The current runtime permits long, expensive turns that repeatedly reread expanding prompt history while probing blocked or redundant actions.
+
+Observed in live data:
+
+- last 24 hours completed usage: about `164.6M` tokens
+  - `92.9M` input
+  - `3.95M` output
+  - `67.7M` cache-read
+- last 24 hours failed invocations: `3,051`
+- last 24 hours explicit rate-limit failures: `1,524`
+- one representative project turn consumed `31` completed `agent_turn` invocations and grew from `494` input tokens to `59,015` input tokens inside a single turn
+- one representative task turn consumed `46` completed model calls and `1,889,087` tokens
+- completed `listening_eval` in last 24 hours:
+  - `376` invocations
+  - `13.5M` tokens
+  - almost entirely on async `project` sessions
+- summarization in last 24 hours:
+  - `113` completed
+  - `902` failed
+
+The important conclusion is that OtterCamp already has tasks and subtasks as decomposition objects, but they are not behaving as reliable bounded execution containers.
+
+## Goals
+
+1. Reduce unnecessary model cycles in async `project` and `project_task` execution.
+2. Make task boundary enforcement happen earlier and more deterministically.
+3. Prevent repeated blocked-tool and recovery-target loops from burning full model rounds.
+4. Remove optional background model work from hot async execution paths unless there is a strong product reason to keep it.
+5. Make internal usage accounting match provider-facing reality by including cache-read tokens.
+6. Preserve or improve completion quality on rerun-style canaries.
+
+## Non-Goals
+
+1. Do not globally shrink all prompt context without scope-specific evidence.
+2. Do not weaken review semantics, flow ownership, or recovery guarantees.
+3. Do not replace Claude with cheaper models as the primary strategy.
+4. Do not introduce a permanent multi-agent internal dialogue loop as part of this fix.
+5. Do not rely on manual DB repair or operator intervention to make the new behavior look successful.
+
+## Design Principles
+
+1. Prefer hard runtime boundaries over advisory prompts.
+2. Stop repeated dead ends early instead of letting the model rediscover the same rejection.
+3. Scope changes to async execution paths first.
+4. Keep sync human chat quality stable unless the same issue appears there too.
+5. Use measured guardrails, not a blind global cap.
+6. Make every major runtime reduction observable in metrics and logs.
+
+## Current Boundary Model
+
+Today task boundary is attempted through a stack of partial controls:
+
+- prompt scoping:
+  - `project_task` sessions get task-specific context, acceptance criteria, flow-step state, and review-mode instructions
+- execution binding:
+  - tool broker binds a `project_task` session to its exact task and project IDs
+- mutation guards:
+  - project sessions are blocked from mutating active task lanes
+  - task sessions are blocked from directly forcing flow-owned status changes
+  - review lanes are blocked from normal implementation writes and CLI execution
+  - task lanes are blocked from direct `git.commit`
+- lifecycle cleanup:
+  - orphaned or terminal async `project_task` sessions are closed automatically
+
+That architecture is directionally correct, but in practice most enforcement still happens as tool-time rejection after the model has already spent reasoning budget and reread more context.
+
+## Why Task Boundary Still Leaks
+
+The current abstraction leaks in five ways:
+
+1. The model is allowed to keep trying after many blocked tool results.
+2. Tool rejections happen too late to prevent prompt growth inside the same turn.
+3. Async `project` sessions pay for extra `listening_eval` calls by default.
+4. Prompt assembly can enqueue background summarization once unsummarized history crosses a low threshold.
+5. Some task turns mix real work with repeated tool friction and recovery-target confusion, which inflates them dramatically.
+
+## Scope Of This Spec
+
+This spec covers:
+
+- async `project` turn control
+- async `project_task` turn control
+- tool-surface enforcement for project, work, and review lanes
+- repeated-blocker cutoffs
+- `listening_eval` policy for async execution
+- summarization enqueue policy for active async execution
+- usage accounting and operator-facing token observability
+
+This spec does not cover:
+
+- broad product redesign
+- dual-agent execution architecture
+- memory-system redesign
+- provider pricing strategy
+
+## Workstream 1: Make Task Boundary Enforcement Earlier And Harder
+
+### Goal
+
+Move from “soft tool-time rejection after the model has already spent a round” toward earlier and narrower runtime control of what each lane is even allowed to do.
+
+### Required changes
+
+1. Narrow tool availability or preflight tool eligibility by session scope and lane type.
+   - async `project` lanes with executable tasks should not present or execute deliverable-writing paths outside bootstrap/planning-safe areas
+   - async `project_task` review lanes should not present or execute `cli.execute`, `git.commit`, or non-review `file.write` actions
+   - async `project_task` execution-first tasks should enforce explicit deliverable-path targeting before write attempts leave the model loop
+
+2. Promote existing guardrails into stronger boundary controls where possible.
+   - existing guards such as:
+     - `task_lane_owned_by_project_task_session`
+     - `task_execution_required`
+     - `task_git_commit_blocked`
+     - `review_action_required`
+     - `deliverable_path_required`
+     - orchestration-only parent guards
+   - should be used not only as tool responses, but as early routing signals
+
+3. Make review, work, and orchestration lanes visibly distinct in runtime behavior.
+   - work lanes write deliverables
+   - review lanes inspect and decide
+   - project lanes decompose, queue, assign, and recover
+
+### Primary files
+
+- [`internal/controlplane/broker.go`](./internal/controlplane/broker.go)
+- [`internal/tools/native/mutation_tools.go`](./internal/tools/native/mutation_tools.go)
+- [`internal/turn/engine.go`](./internal/turn/engine.go)
+- [`internal/prompt/assembler.go`](./internal/prompt/assembler.go)
+
+## Workstream 2: Add Repeated-Blocker And Repeated-Recovery Cutoffs
+
+### Goal
+
+Stop paying for repeated rediscovery of the same blocked state.
+
+### Required changes
+
+1. Add per-turn blocker fingerprint tracking.
+   - fingerprint should include at least:
+     - tool name
+     - normalized error family
+     - lane type
+   - examples of blocker families to classify:
+     - `task_lane_owned_by_project_task_session`
+     - `task_execution_required`
+     - `flow_owned_status_blocked`
+     - `review_action_required`
+     - `deliverable_path_required`
+     - `project_session_meta_task_disallowed`
+     - orchestration-only parent guard
+     - `blocks_scope=all` create rejection
+
+2. Add deterministic early-stop thresholds.
+   - same fingerprint twice in one turn should normally stop the turn
+   - same blocker family three times in one turn should always stop the turn
+
+3. Add repeated recovery-target / redirected write detection.
+   - if the same task lane keeps being redirected to the same recovery target or keep writing the wrong path family, stop and convert to a fresh recovery continuation rather than paying for more retries inside the same turn
+
+4. Emit explicit structured stop reasons so these cases are measurable.
+
+### Product requirement
+
+Stopping must not silently discard real work. The runtime must convert the blocker into a fresh continuation or explicit recovery prompt when appropriate.
+
+### Primary files
+
+- [`internal/turn/engine.go`](./internal/turn/engine.go)
+- [`internal/tools/native/mutation_tools.go`](./internal/tools/native/mutation_tools.go)
+
+## Workstream 3: Replace One Global Turn Budget With Scope-Aware Guardrails
+
+### Goal
+
+Prevent a single async turn from becoming a token furnace.
+
+### Required changes
+
+1. Replace broad reliance on the global `defaultMaxToolCalls = 75` with scope-aware budgets.
+
+2. Add configurable starting defaults for async execution:
+   - async `project` turns:
+     - maximum model/tool cycles: `8`
+     - prompt-input guardrail: `25k` tokens
+   - async `project_task` work turns:
+     - maximum model/tool cycles: `16`
+     - prompt-input guardrail: `35k` tokens
+   - async `project_task` review turns:
+     - maximum model/tool cycles: `6`
+     - prompt-input guardrail: `20k` tokens
+
+3. Make these values configuration-backed and observable, not hard-coded forever.
+
+4. When a guardrail is hit:
+   - do not simply fail
+   - emit a structured continuation reason
+   - continue in a fresh turn with narrower history where possible
+
+### Why these are starting values
+
+They are not “ideal truth.” They are conservative starting caps meant to break the worst runaway behavior while still allowing bounded multi-step work.
+
+### Primary files
+
+- [`internal/turn/engine.go`](./internal/turn/engine.go)
+- [`internal/prompt/assembler.go`](./internal/prompt/assembler.go)
+
+## Workstream 4: Remove Listening Eval From Async Execution Paths
+
+### Goal
+
+Stop paying an extra model call for “should I wait?” in places where there is no real conversational ambiguity.
+
+### Required changes
+
+1. Disable `listening_eval` for async `project` sessions.
+2. Keep it disabled for async `project_task` sessions.
+3. Retain `listening_eval` only for sync human conversational sessions, or other explicitly justified lanes.
+
+### Expected outcome
+
+- zero `listening_eval` invocations on async `project`
+- zero `listening_eval` invocations on async `project_task`
+
+### Primary files
+
+- [`internal/turn/engine.go`](./internal/turn/engine.go)
+
+## Workstream 5: Make Summarization Overload-Aware And Async-Aware
+
+### Goal
+
+Stop background summarization from contesting capacity during hot execution paths and provider distress.
+
+### Required changes
+
+1. Do not enqueue prompt-assembly summarization for active async `project` or `project_task` sessions.
+2. Suppress summarization enqueue when the selected provider connection is rate-limited.
+3. Add session-level backoff after summarization failures.
+   - repeated summarization failure for the same session should delay the next summarize enqueue attempt for a meaningful interval
+4. Keep dedupe behavior, but make it robust against repeated enqueue/fail/re-enqueue churn.
+5. Add regression coverage ensuring summarization uses current valid model profiles.
+
+### Important note
+
+The issue is not that summarization is conceptually bad. The issue is that it is currently being requested from the same growth path that is already making active async turns expensive.
+
+### Primary files
+
+- [`internal/prompt/assembler.go`](./internal/prompt/assembler.go)
+- [`internal/chat/summarization.go`](./internal/chat/summarization.go)
+- [`internal/jobqueue/worker.go`](./internal/jobqueue/worker.go)
+
+## Workstream 6: Fix Usage Accounting And Add Token Diagnostics
+
+### Goal
+
+Make OtterCamp’s own accounting and dashboards reflect the real load being sent upstream.
+
+### Required changes
+
+1. Include `cache_read_tokens` in all budget and usage totals.
+2. Add operator-visible per-turn metrics:
+   - completed model calls per turn
+   - total tokens per turn
+   - repeated blocker family count
+   - whether the turn hit a configured guardrail
+3. Add operator-visible per-session metrics:
+   - listening_eval count
+   - summarization enqueue count
+   - summarization failure count
+4. Add a simple report/query surface for top token-burning sessions and turns.
+
+### Primary files
+
+- [`internal/budget/service.go`](./internal/budget/service.go)
+- [`internal/model/cost_query.go`](./internal/model/cost_query.go)
+- server/dashboard or report surfaces as appropriate
+
+## Workstream 7: Canary Validation And Rollout
+
+### Goal
+
+Prove the runtime is cheaper and cleaner without degrading outcome quality.
+
+## Execution Order
+
+Implementation should land in this order, with tests after each slice:
+
+1. Accounting truth first
+   - include `cache_read_tokens` in budget and rollup math
+   - add per-turn / per-session reporting hooks where straightforward
+   - reason: measure the real load before changing runtime behavior
+
+2. Remove optional async execution model calls
+   - disable `listening_eval` for async `project`
+   - keep it disabled for async `project_task`
+   - reason: high-confidence reduction with low product risk
+
+3. Stop background pressure on hot async sessions
+   - suppress prompt-assembly summarization for active async `project` and `project_task`
+   - suppress summarize enqueue while provider is rate-limited
+   - add summarize backoff after repeated failure
+
+4. Add repeated-blocker and repeated-recovery cutoffs
+   - detect repeated blocked tool families and stop early
+   - detect repeated recovery-target misfires and convert to a fresh continuation
+
+5. Add scope-aware per-turn budgets
+   - async `project`
+   - async `project_task` work
+   - async `project_task` review
+
+6. Narrow tool surfaces further if the canary still drifts
+   - only after the earlier slices land and are measured
+
+7. Ship operator-facing token diagnostics in-product
+   - expose a first-class CLI report for recent model invocation usage, including cache reads, top sessions, top turns, and failure pressure
+   - keep the shell script as a convenience wrapper, but make the primary operator path versioned and test-covered in the product itself
+
+Each slice should be validated on focused tests first and then on the rerun-style canary.
+
+### Implementation Status
+
+Completed so far:
+
+1. Accounting truth first
+   - `cache_read_tokens` now count in budget and rollup totals
+
+2. Remove optional async execution model calls
+   - `listening_eval` is disabled for async sessions
+   - that now includes `project`, `project_task`, and `organization` async lanes
+
+3. Stop background pressure on hot async sessions
+   - prompt-assembly summarization is suppressed for active async `project` and `project_task`
+   - summarize enqueue now defers behind summary-provider rate-limit backoff in prompt assembly, turn runtime, and session close
+   - repeated summarization failures now record session-level backoff and defer later summarize enqueue attempts for that session
+   - explicit provider `retry_after` windows are now persisted on provider connections so rate-limited Anthropic backoff survives process boundaries and worker restarts
+
+4. Early blocker handling, partial
+   - common blocked async `project` mutation families now stop the turn early instead of burning more rounds
+   - async `project` lanes now preflight-block `subtask.create`; that tool belongs only inside a running task execution with an active `flow_node_execution_id`
+   - async `project_task` turns now stop after the second identical deterministic validation failure within the same turn
+   - async `project_task` lanes now preflight-block `subtask.create` when the session has no active `flow_node_execution_id`
+   - when an async `project_task` lane does have an active `flow_node_execution_id`, missing `subtask.create` arguments are hydrated from the bound session execution instead of burning a correction round
+   - repeated same-turn recovery-focus failures now persist the named deliverable checkpoint before stopping
+   - recovery turns that already carry a repeated target-drift checkpoint now stop on the first new focus miss across explicit resume attempts instead of paying another rediscovery cycle
+   - recovery turns now also stop after the second read-only discovery cycle in the same turn instead of rereading artifacts/context repeatedly without attempting the deliverable write
+   - ordinary async `project_task` execution lanes now preflight-block `task.create`; only explicit orchestration-only parent tasks may decompose further, and only beneath themselves via `parent_task_id = current_task`
+   - blocked task-lane decomposition attempts now end the turn immediately instead of paying for another model round
+   - existing third-strike blocked-task behavior remains intact
+   - broader repeated-recovery cutoffs are still pending beyond the shipped focus-failure, repeated-target-drift, and same-turn repeated read-only discovery stops
+
+5. Scope-aware per-turn budgets, first pass
+   - async `project` turns now cap at `8` tool/model cycles and `25k` prompt tokens
+   - async `project_task` review turns now cap at `6` tool/model cycles and `20k` prompt tokens
+   - async `project_task` work turns now cap at `16` tool/model cycles and use a `35k` prompt-token ceiling as an upper bound
+   - explicit lower runtime overrides still win
+
+6. Provider cooldown routing, first pass
+   - when every eligible connection for a routed profile is still inside a persisted rate-limit cooldown window, the router now returns a rate-limited backoff error instead of selecting one and burning another guaranteed 429
+   - live model calls now translate that router-level cooldown into the normal turn-level `ErrRateLimited` retry path
+   - `provider_connection.metadata.health_rate_limited_until` is cleared automatically once the connection is marked healthy or otherwise moved out of rate-limited state
+
+Still pending from this spec:
+
+- broader repeated-recovery fingerprint cutoffs beyond focus / target-drift / repeated read-only discovery failures
+- stronger tool-surface narrowing where canary drift still survives beyond the new task-lane `task.create` boundary
+- live proof of the new durable provider-cooldown path on a fresh post-deploy Anthropic 429
+
+Operator tooling now available:
+
+- `scripts/token-usage-report.sh` provides a lightweight direct-to-Postgres token report with:
+  - overall token totals including cache reads
+  - purpose / model / provider breakdown
+  - top sessions
+  - top turns
+  - most common failures
+- `ottercamp db token-usage` now exposes the same core breakdowns inside the product surface with `table|json|quiet` output modes
+
+### Rollout order
+
+1. Instrumentation and accounting fix
+2. `listening_eval` removal for async execution
+3. summarization suppression/backoff for async execution and rate-limited providers
+4. repeated-blocker and repeated-recovery cutoffs
+5. scope-aware turn budgets
+6. stronger tool-surface narrowing if the canary still drifts
+
+### Validation method
+
+Use the same rerun-style canary pattern and compare:
+
+- completed model calls per project turn
+- completed model calls per task turn
+- total tokens per settled task
+- total tokens per settled project session
+- rate-limit failures per hour
+- completion quality for verification, work, and review lanes
+
+## Acceptance Criteria
+
+### Runtime behavior
+
+1. Async `project` and async `project_task` sessions never invoke `listening_eval`.
+2. Repeated blocked tool patterns stop the turn deterministically instead of consuming many additional model rounds.
+3. Async turns use scope-aware budgets rather than the current one-size-fits-all ceiling.
+4. Review lanes cannot continue implementation work via normal write/CLI paths.
+5. Project lanes cannot continue deliverable-writing once executable task lanes exist.
+
+### Usage/accounting
+
+6. Budget totals include `cache_read_tokens`.
+7. Operators can identify top token-burning sessions and turns without ad hoc SQL spelunking.
+
+### Canary outcome
+
+8. A rerun-style validation canary completes without:
+   - any async `project` turn exceeding `8` completed `agent_turn` invocations
+   - any async `project_task` turn exceeding `16` completed `agent_turn` invocations unless the runtime explicitly created a fresh continuation boundary first
+9. The canary completes on Anthropic-only routing without needing local-model fallback.
+10. The canary’s completion quality is not worse than current behavior:
+   - work still lands
+   - review still approves/rejects correctly
+   - runtime still owns commit/flow completion
+
+## Test Plan
+
+### Unit tests
+
+- blocker fingerprint normalization and stop-threshold tests
+- scope-aware budget selection tests
+- `listening_eval` gating tests
+- summarization backoff and provider-rate-limit suppression tests
+- budget sum tests including `cache_read_tokens`
+
+### Integration tests
+
+- async `project` turn does not create `listening_eval` invocation rows
+- repeated blocked tool result in one turn produces fresh continuation instead of more retries
+- review lane rejects implementation writes and CLI paths
+- project lane rejects deliverable writes once executable task lanes exist
+- summarization does not enqueue on active async sessions
+- summarization does not enqueue when provider is rate-limited
+
+### Canary validation
+
+- run a fresh rerun-style validation project
+- record before/after metrics in the operator log and state report
+
+## Risks
+
+1. Over-tight budgets could cut off legitimate long-running execution before useful work is done.
+2. Removing `listening_eval` from async project sessions could expose a small number of real wait-for-human cases that currently piggyback on it.
+3. Suppressing summarization too aggressively could allow prompt bloat in long-lived sync conversations.
+4. Stronger tool-surface narrowing could break implicit workflows that currently work only because the model can try too many things.
+
+## Risk Mitigations
+
+1. Scope changes to async execution first.
+2. Make guardrails configurable and observable.
+3. Roll out in the order listed above instead of landing all changes blindly.
+4. Validate on the same canary family that exposed the problem.
+
+## Deferred Follow-Up, Not In This Spec
+
+The idea of a manager-specialist or planner-specialist runtime is worth exploring, but it should not be part of this first correction pass. First we need to make the current task abstraction behave like a true bounded-execution container. Only after that should we consider adding a more explicit two-layer execution model.

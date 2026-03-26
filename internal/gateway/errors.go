@@ -12,6 +12,17 @@ var (
 	ErrNoHealthyConnection = errors.New("no healthy provider connection available")
 )
 
+type ConnectionsRateLimitedError struct {
+	RetryAfter time.Duration
+}
+
+func (e ConnectionsRateLimitedError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("all provider connections are rate limited (retry_after=%s)", e.RetryAfter)
+	}
+	return "all provider connections are rate limited"
+}
+
 type ProviderHTTPError struct {
 	StatusCode int
 	RetryAfter time.Duration

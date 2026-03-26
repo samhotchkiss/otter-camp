@@ -68,6 +68,10 @@ type providerConnectionHealthWriter interface {
 	SetHealthStatus(ctx context.Context, id uuid.UUID, healthStatus string) (repo.ProviderConnection, error)
 }
 
+type providerConnectionHealthBackoffWriter interface {
+	SetHealthStatusWithRetryUntil(ctx context.Context, id uuid.UUID, healthStatus string, retryUntil *time.Time) (repo.ProviderConnection, error)
+}
+
 type traceSpanCreator interface {
 	Create(ctx context.Context, span repo.TraceSpan) (repo.TraceSpan, error)
 }
@@ -243,6 +247,13 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 	for hop := 0; hop < maxFallbackHops; hop++ {
 		connection, provider, err := g.selectConnection(ctx, orgID, req, priority)
 		if err != nil {
+			var rateLimited ConnectionsRateLimitedError
+			if errors.As(err, &rateLimited) {
+				if lastErr != nil {
+					return turn.ModelResponse{}, lastErr
+				}
+				return turn.ModelResponse{}, turn.NewRateLimitedError(rateLimited.RetryAfter, err)
+			}
 			if lastErr != nil {
 				return turn.ModelResponse{}, lastErr
 			}
@@ -299,7 +310,7 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 		}
 
 		g.health.RecordSuccess(connection.ID)
-		g.persistConnectionHealth(ctx, connection.ID, string(HealthStateHealthy))
+		g.persistConnectionHealth(ctx, connection.ID, string(HealthStateHealthy), nil)
 		usageOverride := tokenUsageFromModelUsage(result.Usage)
 		if err := g.completeInvocation(ctx, invocation, result.Content, startedAt, result.FirstChunkAt, usageOverride); err != nil {
 			return turn.ModelResponse{}, err
@@ -393,7 +404,7 @@ func (g *LiveModelGateway) markInvocationFailed(ctx context.Context, invocationI
 	if healthStatus, ok := healthStatusForInvocationFailure(failureClass); ok {
 		invocation, getErr := g.invocations.GetByID(cleanupCtx, invocationID)
 		if getErr == nil && invocation.ProviderConnectionID != nil {
-			g.persistConnectionHealth(cleanupCtx, *invocation.ProviderConnectionID, healthStatus)
+			g.persistConnectionHealth(cleanupCtx, *invocation.ProviderConnectionID, healthStatus, nil)
 		}
 	}
 	errCode := invocationErrorCode(failureClass)
@@ -516,21 +527,21 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 		switch providerErr.StatusCode {
 		case http.StatusUnauthorized:
 			g.health.MarkUnavailable(connectionID)
-			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateUnavailable))
+			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateUnavailable), nil)
 			return fmt.Errorf("%w", turn.ErrAuthFailed), false
 		case http.StatusForbidden:
 			g.health.MarkUnavailable(connectionID)
-			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateUnavailable))
+			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateUnavailable), nil)
 			return fmt.Errorf("%w", turn.ErrAuthFailed), false
 		case http.StatusTooManyRequests:
 			slog.Warn("provider rate limited", "connection_id", connectionID, "retry_after", providerErr.RetryAfter, "detail", providerErr.Err)
 			g.health.MarkRateLimitedFor(connectionID, providerErr.RetryAfter)
-			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateRateLimited))
+			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateRateLimited), retryUntilFromDelay(g.now().UTC(), providerErr.RetryAfter))
 			return turn.NewRateLimitedError(providerErr.RetryAfter, providerErr), true
 		default:
 			if providerErr.StatusCode >= http.StatusInternalServerError {
 				g.health.RecordFailure(connectionID, err)
-				g.persistConnectionHealth(context.Background(), connectionID, string(g.health.GetState(connectionID)))
+				g.persistConnectionHealth(context.Background(), connectionID, string(g.health.GetState(connectionID)), nil)
 				return fmt.Errorf("%w", turn.ErrModelTransient), true
 			}
 		}
@@ -544,13 +555,13 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		g.health.RecordFailure(connectionID, err)
-		g.persistConnectionHealth(context.Background(), connectionID, string(g.health.GetState(connectionID)))
+		g.persistConnectionHealth(context.Background(), connectionID, string(g.health.GetState(connectionID)), nil)
 		return fmt.Errorf("%w", turn.ErrModelTransient), true
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
 		g.health.RecordFailure(connectionID, err)
-		g.persistConnectionHealth(context.Background(), connectionID, string(g.health.GetState(connectionID)))
+		g.persistConnectionHealth(context.Background(), connectionID, string(g.health.GetState(connectionID)), nil)
 		return fmt.Errorf("%w", turn.ErrModelTransient), true
 	}
 
@@ -616,13 +627,27 @@ func healthStatusForInvocationFailure(class invocationFailureClass) (string, boo
 	}
 }
 
-func (g *LiveModelGateway) persistConnectionHealth(ctx context.Context, connectionID uuid.UUID, healthStatus string) {
+func (g *LiveModelGateway) persistConnectionHealth(ctx context.Context, connectionID uuid.UUID, healthStatus string, retryUntil *time.Time) {
 	if g == nil || g.healthStore == nil || connectionID == uuid.Nil || strings.TrimSpace(healthStatus) == "" {
+		return
+	}
+	if withBackoff, ok := g.healthStore.(providerConnectionHealthBackoffWriter); ok {
+		if _, err := withBackoff.SetHealthStatusWithRetryUntil(ctx, connectionID, healthStatus, retryUntil); err != nil {
+			g.logger.Warn("failed to persist provider connection health", "connection_id", connectionID, "health_status", healthStatus, "error", err)
+		}
 		return
 	}
 	if _, err := g.healthStore.SetHealthStatus(ctx, connectionID, healthStatus); err != nil {
 		g.logger.Warn("failed to persist provider connection health", "connection_id", connectionID, "health_status", healthStatus, "error", err)
 	}
+}
+
+func retryUntilFromDelay(now time.Time, delay time.Duration) *time.Time {
+	if delay <= 0 {
+		return nil
+	}
+	readyAt := now.UTC().Add(delay)
+	return &readyAt
 }
 
 func (g *LiveModelGateway) callProvider(
@@ -2068,9 +2093,9 @@ func anthropicMessages(req turn.ModelRequest) (string, []any) {
 				}
 				lastAssistantHadToolCalls = true
 				lastToolCallsIdx = len(out)
-			out = append(out, map[string]any{"role": "assistant", "content": content})
-			continue
-		}
+				out = append(out, map[string]any{"role": "assistant", "content": content})
+				continue
+			}
 			out = appendAnthropicMessage(out, "assistant", item.Content)
 		case "tool_result":
 			// Skip orphaned tool results with no preceding assistant+tool_calls.

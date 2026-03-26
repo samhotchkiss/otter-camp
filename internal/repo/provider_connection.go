@@ -32,6 +32,8 @@ type ProviderConnectionRepo struct {
 	pool *pgxpool.Pool
 }
 
+const providerConnectionMetadataHealthRateLimitedUntil = "health_rate_limited_until"
+
 func NewProviderConnectionRepo(pool *pgxpool.Pool) *ProviderConnectionRepo {
 	return &ProviderConnectionRepo{pool: pool}
 }
@@ -148,12 +150,21 @@ func (r *ProviderConnectionRepo) Update(ctx context.Context, connection Provider
 }
 
 func (r *ProviderConnectionRepo) SetHealthStatus(ctx context.Context, id uuid.UUID, healthStatus string) (ProviderConnection, error) {
+	return r.SetHealthStatusWithRetryUntil(ctx, id, healthStatus, nil)
+}
+
+func (r *ProviderConnectionRepo) SetHealthStatusWithRetryUntil(ctx context.Context, id uuid.UUID, healthStatus string, retryUntil *time.Time) (ProviderConnection, error) {
 	row := r.pool.QueryRow(ctx, `
 		UPDATE provider_connection
-		SET health_status = $2
+		SET health_status = $2,
+		    metadata = CASE
+		        WHEN $2 = 'rate_limited' AND $3::timestamptz IS NOT NULL
+		            THEN jsonb_set(COALESCE(metadata, '{}'::jsonb), '{health_rate_limited_until}', to_jsonb($3::timestamptz), true)
+		        ELSE COALESCE(metadata, '{}'::jsonb) - 'health_rate_limited_until'
+		    END
 		WHERE id = $1
 		RETURNING id, organization_id, provider_id, display_name, api_key_ref, api_base_url_override, failover_priority, max_concurrent, health_status, is_enabled, metadata, created_at, updated_at
-	`, id, healthStatus)
+	`, id, healthStatus, retryUntil)
 
 	updated, err := scanProviderConnection(row)
 	if errors.Is(err, pgx.ErrNoRows) {

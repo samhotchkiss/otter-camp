@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 const maxFallbackHops = 3
 const systemHaikuProfileID = "haiku"
+const providerConnectionMetadataHealthRateLimitedUntil = "health_rate_limited_until"
 
 type modelProfileLookup interface {
 	GetCurrentByLogicalID(ctx context.Context, organizationID uuid.UUID, logicalProfileID string) (repo.ModelProfile, error)
@@ -54,34 +56,50 @@ func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileI
 	_ = priority
 
 	visited := map[string]struct{}{currentProfileID: {}}
+	var earliestRateLimitRetryAfter time.Duration
 	for hop := 0; hop < maxFallbackHops; hop++ {
 		profile, err := r.profiles.GetCurrentByLogicalID(ctx, orgID, currentProfileID)
 		if err != nil {
 			if errors.Is(err, repo.ErrNotFound) {
+				if earliestRateLimitRetryAfter > 0 {
+					return nil, ConnectionsRateLimitedError{RetryAfter: earliestRateLimitRetryAfter}
+				}
 				return nil, ErrNoHealthyConnection
 			}
 			return nil, err
 		}
 
-		selected, err := r.selectProviderConnection(ctx, orgID, profile.ProviderID)
+		selected, retryAfter, err := r.selectProviderConnection(ctx, orgID, profile.ProviderID)
 		if err != nil {
 			return nil, err
 		}
 		if selected != nil {
 			return selected, nil
 		}
+		if retryAfter > 0 && (earliestRateLimitRetryAfter <= 0 || retryAfter < earliestRateLimitRetryAfter) {
+			earliestRateLimitRetryAfter = retryAfter
+		}
 
 		if profile.FallbackProfileID == nil || strings.TrimSpace(*profile.FallbackProfileID) == "" {
+			if earliestRateLimitRetryAfter > 0 {
+				return nil, ConnectionsRateLimitedError{RetryAfter: earliestRateLimitRetryAfter}
+			}
 			return nil, ErrNoHealthyConnection
 		}
 		nextProfileID := strings.TrimSpace(*profile.FallbackProfileID)
 		if _, seen := visited[nextProfileID]; seen {
+			if earliestRateLimitRetryAfter > 0 {
+				return nil, ConnectionsRateLimitedError{RetryAfter: earliestRateLimitRetryAfter}
+			}
 			return nil, ErrNoHealthyConnection
 		}
 		visited[nextProfileID] = struct{}{}
 		currentProfileID = nextProfileID
 	}
 
+	if earliestRateLimitRetryAfter > 0 {
+		return nil, ConnectionsRateLimitedError{RetryAfter: earliestRateLimitRetryAfter}
+	}
 	return nil, ErrNoHealthyConnection
 }
 
@@ -101,16 +119,18 @@ func routedProfileID(profileID, invocationPurpose string) string {
 	}
 }
 
-func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID uuid.UUID) (*repo.ProviderConnection, error) {
+func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID uuid.UUID) (*repo.ProviderConnection, time.Duration, error) {
 	connections, err := r.connections.ListByProvider(ctx, orgID, providerID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
+	now := time.Now().UTC()
 	bestIndex := -1
 	var bestState HealthState
 	var bestUpdatedAt time.Time
 	var bestPriority int
+	var earliestRateLimitedReadyAt time.Time
 	for index, connection := range connections {
 		if !connection.IsEnabled {
 			continue
@@ -125,6 +145,14 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 		if state == HealthStateUnavailable {
 			continue
 		}
+		if state == HealthStateRateLimited {
+			if readyAt, ok := persistedRateLimitRecoveryReadyAt(connection); ok {
+				if earliestRateLimitedReadyAt.IsZero() || readyAt.Before(earliestRateLimitedReadyAt) {
+					earliestRateLimitedReadyAt = readyAt
+				}
+			}
+			continue
+		}
 
 		if bestIndex == -1 || connectionPreferredOver(state, connection, bestState, bestUpdatedAt, bestPriority) {
 			bestIndex = index
@@ -135,10 +163,13 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 	}
 
 	if bestIndex == -1 {
-		return nil, nil
+		if !earliestRateLimitedReadyAt.IsZero() && earliestRateLimitedReadyAt.After(now) {
+			return nil, earliestRateLimitedReadyAt.Sub(now), nil
+		}
+		return nil, 0, nil
 	}
 	selected := connections[bestIndex]
-	return &selected, nil
+	return &selected, 0, nil
 }
 
 func persistedHealthState(connection repo.ProviderConnection) HealthState {
@@ -148,7 +179,7 @@ func persistedHealthState(connection repo.ProviderConnection) HealthState {
 	case HealthStateDegraded:
 		return HealthStateDegraded
 	case HealthStateRateLimited:
-		if rateLimitBackoffExpired(connection.UpdatedAt) {
+		if rateLimitBackoffExpired(connection) {
 			return HealthStateDegraded
 		}
 		return HealthStateRateLimited
@@ -159,11 +190,49 @@ func persistedHealthState(connection repo.ProviderConnection) HealthState {
 	}
 }
 
-func rateLimitBackoffExpired(updatedAt time.Time) bool {
-	if updatedAt.IsZero() {
+func EffectiveConnectionHealthState(connection repo.ProviderConnection) HealthState {
+	return persistedHealthState(connection)
+}
+
+func ConnectionRecoveryReadyAt(connection repo.ProviderConnection) (time.Time, bool) {
+	if readyAt, ok := persistedRateLimitRecoveryReadyAt(connection); ok {
+		return readyAt, true
+	}
+	if connection.UpdatedAt.IsZero() {
+		return time.Time{}, false
+	}
+	return connection.UpdatedAt.UTC().Add(healthProbeBackoffMax), true
+}
+
+func rateLimitBackoffExpired(connection repo.ProviderConnection) bool {
+	readyAt, ok := ConnectionRecoveryReadyAt(connection)
+	if !ok {
 		return false
 	}
-	return time.Since(updatedAt.UTC()) >= healthProbeBackoffMax
+	return !time.Now().UTC().Before(readyAt)
+}
+
+func persistedRateLimitRecoveryReadyAt(connection repo.ProviderConnection) (time.Time, bool) {
+	metadata := providerConnectionMetadataMap(connection.Metadata)
+	raw, _ := metadata[providerConnectionMetadataHealthRateLimitedUntil].(string)
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return time.Time{}, false
+	}
+	readyAt, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return readyAt.UTC(), true
+}
+
+func providerConnectionMetadataMap(metadata json.RawMessage) map[string]any {
+	result := map[string]any{}
+	if len(metadata) == 0 {
+		return result
+	}
+	_ = json.Unmarshal(metadata, &result)
+	return result
 }
 
 func connectionPreferredOver(state HealthState, connection repo.ProviderConnection, bestState HealthState, bestUpdatedAt time.Time, bestPriority int) bool {

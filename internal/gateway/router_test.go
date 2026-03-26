@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -186,6 +187,72 @@ func TestRouterSelectConnectionTreatsExpiredPersistedRateLimitAsDegraded(t *test
 	}
 	if selected.ID != expiredRateLimitedID {
 		t.Fatalf("selected connection = %s, want expired persisted rate-limited connection %s", selected.ID, expiredRateLimitedID)
+	}
+}
+
+func TestRouterSelectConnectionReturnsRateLimitedBackoffWhenAllConnectionsCoolingDown(t *testing.T) {
+	orgID := uuid.New()
+	providerID := uuid.New()
+	now := time.Now().UTC()
+	firstID := uuid.New()
+	secondID := uuid.New()
+
+	firstMetadata, err := json.Marshal(map[string]any{
+		providerConnectionMetadataHealthRateLimitedUntil: now.Add(25 * time.Minute).Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("marshal first metadata: %v", err)
+	}
+	secondMetadata, err := json.Marshal(map[string]any{
+		providerConnectionMetadataHealthRateLimitedUntil: now.Add(40 * time.Minute).Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("marshal second metadata: %v", err)
+	}
+
+	router := NewRouter(
+		&stubProfileLookup{
+			profiles: map[string]repo.ModelProfile{
+				"standard": {
+					LogicalProfileID: "standard",
+					ProviderID:       providerID,
+				},
+			},
+		},
+		&stubConnectionLookup{
+			items: map[uuid.UUID][]repo.ProviderConnection{
+				providerID: {
+					{
+						ID:               firstID,
+						ProviderID:       providerID,
+						IsEnabled:        true,
+						FailoverPriority: 1,
+						HealthStatus:     string(HealthStateRateLimited),
+						UpdatedAt:        now,
+						Metadata:         firstMetadata,
+					},
+					{
+						ID:               secondID,
+						ProviderID:       providerID,
+						IsEnabled:        true,
+						FailoverPriority: 2,
+						HealthStatus:     string(HealthStateRateLimited),
+						UpdatedAt:        now,
+						Metadata:         secondMetadata,
+					},
+				},
+			},
+		},
+		NewHealthChecker(),
+	)
+
+	_, err = router.SelectConnection(context.Background(), orgID, "standard", "agent_turn", PrioritySyncInteractive)
+	var rateLimited ConnectionsRateLimitedError
+	if !errors.As(err, &rateLimited) {
+		t.Fatalf("SelectConnection error = %v, want ConnectionsRateLimitedError", err)
+	}
+	if rateLimited.RetryAfter < 24*time.Minute || rateLimited.RetryAfter > 26*time.Minute {
+		t.Fatalf("retry_after = %s, want about 25m", rateLimited.RetryAfter)
 	}
 }
 

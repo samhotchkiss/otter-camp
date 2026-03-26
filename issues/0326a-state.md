@@ -267,3 +267,436 @@ What is still not working:
   - `Anthropic Primary`
 
 So the current blocker is no longer task-state correctness. It is final project-session completion under provider backoff.
+
+## Update 11:09 MDT - Token Usage Analysis
+
+The current Anthropic usage is too high for the amount of human testing being performed. The data points to OtterCamp runtime behavior multiplying usage internally, not just expensive models.
+
+### What the database shows
+
+Completed `model_invocation` usage in the last 24 hours:
+- `92,940,989` input tokens
+- `3,949,887` output tokens
+- `67,707,836` cache-read tokens
+- `164,598,712` total recorded completed tokens
+
+Completed usage on `2026-03-25` alone:
+- `143,345,645` total recorded tokens
+
+Failure volume in the last 24 hours:
+- `8,185` completed invocations
+- `3,051` failed invocations
+- `27.1%` failed overall
+- `1,524` failed invocations were explicitly rate-limit related
+
+Top canary project sessions by completed-token burn in the last 24 hours:
+- rerun-86 project session `0ffc31b3-c88d-49dc-aab6-f8ff0b45839e` -> `14,926,074`
+- rerun-87 project session `ec26eddb-66be-42a5-9859-64cb24c7c820` -> `13,753,320`
+- rerun-88 project session `1a9edb0a-a817-46b1-975d-4d96c8164bcb` -> `9,763,939`
+
+These three project sessions alone account for roughly `38.4M` tokens in 24 hours. That is not proportional to the amount of operator testing.
+
+### Primary multiplier: too many model calls inside one turn
+
+The strongest runtime multiplier is that a single `chat_turn` can make dozens of `agent_turn` model invocations before it ends.
+
+Code path:
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+- `defaultMaxToolCalls = 75`
+- the main `runTurn(...)` loop keeps calling the model after tool results until the tool-call budget or duration limit is reached
+
+Observed live example:
+- turn `d04a74a0-25a2-40d2-a899-677f896076a3`
+- session `0ffc31b3-c88d-49dc-aab6-f8ff0b45839e`
+- completed in about 7 minutes
+- produced:
+  - `31` completed `agent_turn` model invocations
+  - `1` completed `listening_eval`
+  - `1` completed `continuation_summary`
+  - `75` `tool_result` messages
+  - `31` assistant messages
+
+Within that one turn, prompt input grew from `494` tokens to `59,015` tokens before the turn ended. That is the opposite of healthy convergence. The model kept paying to reread a larger and larger tool transcript while still exploring the same lane.
+
+Across all completed `agent_turn` invocations in the last 24 hours:
+- average completed calls per turn: `3.9`
+- max completed calls inside a single turn: `70`
+
+That max is not a normal user interaction pattern. It is a runtime loop pattern.
+
+Scope split for completed `agent_turn` work in the last 24 hours:
+- `project_task`
+  - `6,304` completed invocations
+  - average input `8,338.2`
+  - max input `59,878`
+  - `114,454,824` total tokens
+- `project`
+  - `1,499` completed invocations
+  - average input `19,826.2`
+  - max input `90,091`
+  - `40,724,466` total tokens
+
+Per-turn aggregation shows the same shape:
+- `project_task`
+  - average completed calls per turn: `5.09`
+  - max completed calls per turn: `70`
+  - average tokens per turn: `92,376.8`
+  - max tokens per turn: `1,889,087`
+- `project`
+  - average completed calls per turn: `2.04`
+  - max completed calls per turn: `31`
+  - average tokens per turn: `55,482.9`
+  - max tokens per turn: `1,434,958`
+
+So the problem is not just "project continuations are expensive." The larger burn is repeated multi-call task turns, with project turns adding a second expensive control-plane layer on top.
+
+Representative expensive `project_task` turns in the last 24 hours:
+- `fb6ea882-1514-4987-b538-2f5b6998dc75`
+  - task `Validate config loading and environment overrides`
+  - `46` completed model calls
+  - `1,889,087` tokens
+- `a9620ed2-16d7-40ea-822e-54b7dc017c4b`
+  - task `Verify ingestion workstream child outputs and close parent`
+  - `31` completed model calls
+  - `1,765,101` tokens
+- `84b2d9e1-4a38-4c26-b48b-7bb542da7d2d`
+  - task `Validate pipeline stage execution and ordering`
+  - `49` completed model calls
+  - `1,711,468` tokens
+
+The first of those traces is important because it shows why a blunt cap could make the product worse. That turn was not only dead looping. It mixed:
+- repeated tool-call formatting confusion
+- repeated `file.write` redirects back into the recovery target
+- CLI retries and verification loops
+- real debugging, test execution, and workspace validation
+
+So the safe interpretation is:
+- there is real work happening inside some long task turns
+- but tool friction and recovery-tool confusion are inflating those turns dramatically
+- the product-safe fix is targeted early stop / recovery on repeated blocker fingerprints and repeated recovery-target misfires, not a blanket "all task turns must be tiny" rule
+
+### Secondary multiplier: blocked-tool loops are not cut off early enough
+
+Representative high-cost project turns repeatedly hit blocked tool results such as:
+- `task_lane_owned_by_project_task_session`
+- `task_execution_required`
+- `task must remain orchestration-only while executable child tasks exist`
+- `not_found`
+
+In one representative turn, the most common tool-result prefixes were:
+- `task_lane_owned_by_project_task_session` -> `8`
+- PM directive/session history payloads -> `7`
+- planning payloads -> `6`
+- `task_execution_required` -> `4`
+- orchestration-only guard -> `4`
+- `flow.get_execution not_found` -> `3`
+
+The current stop predicate for blocked project-execution mutations is too narrow. It stops on a few known `project.create` / `task.create` failures, but not on the higher-frequency blockers above. That means the model can keep probing the same dead end while the prompt keeps expanding.
+
+### Secondary multiplier: listening_eval is expensive and concentrated on async project sessions
+
+Completed `listening_eval` usage in the last 24 hours:
+- `376` completed
+- `13,532,679` total tokens
+- average input around `35.8k` tokens
+
+Breakdown:
+- async project sessions:
+  - `358` completed
+  - `246` failed
+- async project_task sessions:
+  - `0` completed
+
+So `listening_eval` is almost entirely a project-session cost center right now. It is not a broad, unavoidable platform cost. It is a design choice concentrated in the async project lane.
+
+Top `listening_eval` sessions in the last 24 hours:
+- rerun-87 project session `ec26eddb-66be-42a5-9859-64cb24c7c820`
+  - `120` completed
+  - `71` failed
+  - `6,042,410` tokens
+- rerun-88 project session `1a9edb0a-a817-46b1-975d-4d96c8164bcb`
+  - `77` completed
+  - `75` failed
+  - `2,909,413` tokens
+- project session `856ae42a-5ed8-4c53-bf70-53dc6a9e0c46`
+  - `54` completed
+  - `20` failed
+  - `1,827,564` tokens
+
+The control flow explains why. In [`internal/turn/engine.go`](../internal/turn/engine.go), `runListeningEval(...)` skips:
+- `project_task` sessions
+- synthetic project-continuation resume messages
+- active bootstrap project sessions
+
+But after those special cases, the gating logic is:
+- if the session is **not** async and there is `<= 1` pending user message, skip
+- otherwise run `listening_eval`
+
+That means async project sessions effectively pay this extra model call by default, even when there is no genuine operator "is more context incoming?" ambiguity.
+
+### Secondary multiplier: summarization is adding pressure while the provider is already rate-limited
+
+Summarization in the last 24 hours:
+- `113` completed
+- `902` failed
+
+Scope split:
+- `project_task`
+  - `109` completed
+  - `440` failed
+  - `476,306` completed tokens
+- `project`
+  - `5` completed
+  - `462` failed
+  - `442,005` completed tokens
+
+The main path is prompt assembly, not the dormant `runTurn(...)` check in `engine.go`. In [`internal/prompt/assembler.go`](../internal/prompt/assembler.go):
+- `defaultLayer6BudgetTokens = 12000`
+- summarization is requested when unsummarized history reaches `55%` of that budget
+- that means summarize pressure begins at roughly `6,600` estimated unsummarized tokens
+
+That threshold is low enough that long-running canary sessions can spend much of their life qualifying for background summarization.
+
+Summarize jobs do dedupe while a pending job for the same session already exists, but the dedupe key is only session-scoped and pending-job-scoped. There is no broader suppression after repeated failure, so noisy sessions can keep re-entering the same pressure pattern.
+
+The failure mix is also more nuanced than "just 429s":
+- `196` summarization failures are explicit Anthropic 429s
+- `35` are stale-model cleanup failures
+- `668` are avoidable `claude-sonnet-4` 404s from the old model name, concentrated between `2026-03-25 19:00 MDT` and `2026-03-25 22:00 MDT`
+
+So summarization is both:
+- contesting quota during overload
+- and creating avoidable background churn when model routing is stale or sessions are already unstable
+
+### Accounting gap: internal budgets undercount real provider-facing load
+
+Usage persistence mostly works for completed invocations, but internal budget sums are softer than provider reality.
+
+Current budget query behavior:
+- [`internal/budget/service.go`](../internal/budget/service.go)
+- `SumTokens(...)` uses `SUM(input_tokens + output_tokens)`
+- it ignores `cache_read_tokens`
+
+In the last 24 hours:
+- cache-read tokens were `67,707,836`
+- cache-read tokens were `41.1%` of all completed recorded tokens
+
+So OtterCamp's own budget view materially underreports actual token throughput seen by Anthropic.
+
+### Safe product conclusion
+
+The evidence does **not** support "send more context" as the fix.
+
+The evidence supports:
+- too many model/tool cycles inside single turns
+- prompt history growing inside those turns instead of resetting sooner
+- expensive project-session `listening_eval`
+- prompt-assembly summarization firing once unsummarized history crosses only about `6.6k` estimated tokens
+- overload-unaware summarization retry churn
+- budgets undercounting cache reads
+
+The likely product-safe direction is:
+- reduce per-turn tool/model cycle budgets for async project and project_task turns
+- add early stop conditions for repeated blocked-tool fingerprints
+- reduce or disable `listening_eval` for async project continuations
+- suppress summarization attempts while the selected provider is already rate-limited
+- include cache-read tokens everywhere budgets and operator usage views are computed
+
+## Implementation checkpoint
+
+The first runtime slices from `spec-0326a.md` are now in code and tested:
+
+- budget usage now includes `cache_read_tokens`
+- `listening_eval` is disabled for async `project` sessions
+- prompt-assembly summarization is suppressed for active async `project` and `project_task` sessions
+- summarize enqueue now defers behind provider backoff and session-level summarization backoff
+- scope-aware async turn budgets are in place for `project`, `project_task` review, and `project_task` work
+- async `project_task` turns now stop after the second identical deterministic validation failure within the same turn instead of paying for a third rediscovery cycle
+- when that repeated same-turn validation failure names a concrete deliverable target, the checkpoint is now persisted before the turn stops
+- ordinary async `project_task` execution lanes now preflight-block `task.create`
+- explicit orchestration-only parent tasks can still decompose, but only by creating bounded child tasks beneath themselves with `parent_task_id` set to the current task
+- those blocked task-lane decomposition attempts now stop the turn immediately instead of spending another model round on the same boundary mistake
+- async `project` continuation lanes now also preflight-block `subtask.create`; that tool now hard-bounces at the project boundary instead of paying for a `flow_node_execution_id_required` coaching round
+- async `project_task` lanes now preflight-block `subtask.create` when there is no active flow execution bound to the session
+- when a task lane does have an active bound flow execution, missing `subtask.create` execution IDs are now injected from the session instead of forcing a correction round
+
+The repeated-validation change is deliberately narrow:
+
+- it only applies to async `project_task` turns
+- it does **not** preempt the dedicated review retry path for `review_action_required`
+- it does **not** change the existing third-strike blocked-task path
+
+I also added a lightweight operator report at [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh). It reports:
+
+- window totals including cache reads
+- purpose / model / connection breakdown
+- top sessions
+- top turns
+- most common failures
+
+The script smoke-ran successfully against the local dev database after sourcing `.env`.
+
+So the implementation has moved beyond diagnosis, but it is still a partial rollout. The largest remaining runtime gap from this spec is repeated recovery-target drift, plus richer in-product per-session / per-turn token diagnostics.
+
+### Deployment checkpoint
+
+The latest `0326a` slices are now also deployed locally:
+
+- rebuilt `./bin/ottercamp`
+- respawned tmux `codex-e2e-20260324` serve and worker panes on the new binary
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+That means the currently running runtime now includes:
+
+- cache-read-aware budget accounting
+- async `project` `listening_eval` suppression
+- async summarize suppression/backoff
+- scope-aware async turn budgets
+- same-turn repeated validation cutoff for async task turns
+- repeated recovery-target focus cutoff across explicit recovery resumes
+- async task-lane `task.create` boundary enforcement with orchestration-only self-decomposition as the only escape hatch
+- async project-lane `subtask.create` boundary enforcement
+- async task-lane `subtask.create` boundary enforcement plus session execution-id injection
+
+## Update 13:27 MDT
+
+The next `0326a` boundary slices are now deployed locally on the rebuilt runtime.
+
+New behavior now in the running binary:
+
+- async `project_task` execution lanes preflight-block `task.create` unless the current task is explicitly orchestration-only
+- even orchestration-only task lanes may only decompose beneath themselves by setting `parent_task_id` to the current task
+- async `project` continuation lanes preflight-block `subtask.create`
+- async `project_task` lanes preflight-block `subtask.create` when the session has no active `flow_node_execution_id`
+- when the task session does have an active bound execution, missing `subtask.create.flow_node_execution_id` is injected from session metadata automatically
+- blocked task-lane decomposition attempts now stop the turn immediately instead of paying for another model round
+
+Focused verification that passed before deploy:
+
+- `go test ./internal/turn -run 'Test(ShouldBlockTaskExecutionBroadContextTool|ShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationContextReads|ShouldBlockTaskExecutionTaskCreateToolBlocksNonOrchestrationTask|ShouldBlockTaskExecutionTaskCreateToolAllowsOrchestrationParentChildCreate|ShouldBlockTaskExecutionOffTargetEvidenceTool|ShouldBlockTaskRecoveryStatusPathTool|ShouldBlockTaskStatusMessageTool|ShouldStopAfterBlockedTaskExecutionBoundaryMutation|HandleUserMessageTaskScopeStopsAfterBlockedTaskCreateBoundaryMutation)$' -count=1`
+- `go test ./internal/turn -run 'Test(ShouldBlockProjectExecutionSubtaskCreateTool|ShouldBlockTaskExecutionSubtaskCreateTool|ShouldStopAfterBlockedProjectExecutionBlockedMutationOnSubtaskCreateBoundaryError|ShouldStopAfterBlockedTaskExecutionBoundaryMutation|HandleUserMessageProjectScopeStopsAfterBlockedSubtaskCreateBoundaryMutation|HandleUserMessageTaskScopeStopsAfterBlockedSubtaskCreateBoundaryMutation|HandleUserMessageTaskScopeInjectsFlowNodeExecutionIDForSubtaskCreate|ShouldBlockTaskExecutionTaskCreateToolBlocksNonOrchestrationTask|ShouldBlockTaskExecutionTaskCreateToolAllowsOrchestrationParentChildCreate|HandleUserMessageTaskScopeStopsAfterBlockedTaskCreateBoundaryMutation)$' -count=1`
+
+Deployment checkpoint:
+
+- rebuilt `./bin/ottercamp`
+- respawned tmux `codex-e2e-20260324` serve and worker panes
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+What is still not proven live from this slice:
+
+- a fresh Anthropic canary turn has not yet been observed tripping these newest preflight guards in production traffic
+- broader repeated-recovery drift cutoffs are still pending beyond the already-shipped repeated focus-failure handling
+
+## Update 13:54 MDT
+
+The next `0326a` recovery-hardening slice is now in code and focused-test green.
+
+New behavior:
+
+- recovery checkpoints that already record repeated target drift now stop the next async recovery turn on the first new focus miss instead of paying another rediscovery cycle
+- recovery checkpoint persistence now strengthens the stored failure reason when an explicit resume attempt drifts away from an already-established target path
+- the recovery prompt strategy already references that hardened checkpoint state, so the next continuation is told not to switch files again without a new authoritative signal
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsRecoveryTurnAfterRepeatedTargetDriftAcrossResumes|HandleToolValidationResultsStopsRecoveryTurnAfterRepeatedFocusFailureAcrossResumes|HandleToolValidationResultsPersistsRecoveryCheckpointOnRepeatedFocusFailureStop|PersistRecoveryFileWriteCheckpointStrengthensRepeatedTargetDriftFailureReason)$' -count=1`
+- `go test ./internal/taskcheckpoint -count=1`
+
+What is still pending after this slice:
+
+- live proof on a fresh Anthropic canary recovery turn
+- broader repeated-recovery cutoffs beyond focus / target-drift failures
+
+## Update 14:09 MDT
+
+The operator-diagnostics slice is now in the product surface, not just the shell script.
+
+New command:
+
+- `ottercamp db token-usage [--hours N] [--limit N] [--org UUID] [--output table|json|quiet]`
+
+What it reports:
+
+- overall invocation totals including cache-read tokens
+- purpose / model / provider-connection breakdown
+- top sessions
+- top turns
+- most common failures
+
+Verification that passed:
+
+- `go test ./cmd/ottercamp -run '^TestMigrationAppliedLine$' -count=1`
+- `go test -tags=integration ./cmd/ottercamp -run '^TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
+
+This closes the spec item for richer in-product top-session / top-turn token diagnostics. The remaining runtime gap is still repeated-recovery fingerprints beyond the already-shipped focus and target-drift cutoffs.
+
+## Update 14:27 MDT
+
+The next recovery cutoff slice is focused on same-turn read-only discovery churn.
+
+New behavior:
+
+- the first read-only discovery cycle in a recovery turn is still allowed
+- the second read-only discovery cycle in that same recovery turn now halts early, persists the recovery checkpoint, and tells the next continuation to write the deliverable or resume from the durable artifact instead of rereading context again
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(MaybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatchStopsSecondReadOnlyRecoveryCycle|MaybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatchBlocksReadOnlyRecoveryNarration|HandleToolValidationResultsStopsRecoveryTurnAfterRepeatedTargetDriftAcrossResumes|HandleToolValidationResultsStopsRecoveryTurnAfterRepeatedFocusFailureAcrossResumes)$' -count=1`
+
+This narrows the remaining recovery gap again. What is still pending is broader repeated-recovery fingerprint handling beyond the shipped focus-failure, repeated-target-drift, and repeated read-only discovery stops.
+
+## Update 14:45 MDT
+
+The `listening_eval` policy now matches the spec more closely.
+
+New behavior:
+
+- `listening_eval` is now skipped for all async sessions, not just async `project` and `project_task`
+- that closes the small remaining async `organization` leak that still showed up in the live database after the previous restart
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(ListeningEvalSkippedForAsyncOrganizationSession|ListeningEvalSkippedForAsyncProjectTaskSession|ListeningEvalSkippedForAsyncProjectSession|ListeningEvalWaitReenqueuesAndSkipsPhase2|ListeningEvalSkippedForSyncSinglePending)$' -count=1`
+
+This does not yet have post-restart live traffic proof for a fresh async organization turn, but the runtime contract and focused tests are now aligned with the spec: only sync sessions should pay for `listening_eval`.
+
+## Update 15:18 MDT
+
+The next `0326a` slice hardens provider cooldown behavior across processes and restarts.
+
+New behavior:
+
+- explicit provider `retry_after` windows are now persisted on `provider_connection.metadata.health_rate_limited_until`
+- the router now treats those persisted cooldown windows as authoritative when deciding whether a connection is still rate-limited
+- if every eligible connection for a routed profile is still inside cooldown, the router now returns a rate-limited backoff error instead of selecting one and burning another guaranteed 429
+- live model calls translate that router-level cooldown into the normal turn-level `ErrRateLimited` retry path
+- moving a connection back to `healthy` or another non-rate-limited state clears the persisted cooldown marker automatically
+
+Why this matters:
+
+- before this change, explicit provider backoff only lived in in-memory gateway health state
+- once health was persisted to Postgres, other processes and cold starts only saw `health_status = rate_limited` plus `updated_at`
+- that collapsed a real provider `retry_after` window down to the generic one-minute persisted backoff and made repeated 429 clusters much more likely after restarts or cross-process routing
+
+Focused verification that passed:
+
+- `go test ./internal/gateway -run 'Test(RouterSelectConnection(ReturnsRateLimitedBackoffWhenAllConnectionsCoolingDown|TreatsExpiredPersistedRateLimitAsDegraded)|ListeningEvalSkippedForAsyncProjectSession)' -count=1`
+- `go test -tags=integration ./internal/repo -run '^TestProviderConnectionRepoCRUDAndHealthStatus$' -count=1`
+- `go test -tags=integration ./internal/gateway -run 'TestLiveModelGateway(ClassifiesRateLimitFailures|ReturnsRateLimitedWithoutProviderCallWhenAllConnectionsCoolingDown)$' -count=1`
+
+Deployment checkpoint:
+
+- rebuilt `./bin/ottercamp`
+- respawned tmux `codex-e2e-20260324` serve and worker panes on the new binary
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+Live operational note:
+
+- the existing long Anthropic cooldown on `claude-swh-me` had been recorded before this slice existed, so it had no persisted metadata yet
+- before the restart, I backfilled `provider_connection.metadata.health_rate_limited_until = 2026-03-26T20:59:58.024902-06:00` for `claude-swh-me` from its latest stored `retry_after=6h59m43s` failure row
+- `pearl-swh-me` and `Anthropic Primary` are still only carrying the older coarse `rate_limited` state because their latest stored failures did not include an explicit retry-after window to preserve
+
+What is not yet proven live:
+
+- a fresh post-deploy Anthropic 429 has not yet been observed to stamp `health_rate_limited_until` in the real local runtime
+- a fresh post-deploy router refusal has not yet been observed on a live Anthropic call with all eligible connections still cooling down
