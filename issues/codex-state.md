@@ -8970,4 +8970,40 @@ Current narrowed seam:
 - duplicate dependency adds are fixed
 - polluted draft counts in continuation prompts are fixed
 - meta-task creation is being blocked correctly
-- the next remaining seam is qwen’s follow-up coaching after the blocked meta-task result; the detector patch for that variant is tested locally but not yet deployed
+- the next remaining seam is child-style results shells created under completed parent tasks; task 26 proved that the top-level guard alone was not enough
+
+## 2026-03-26 07:47 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go)
+  - project-session meta-task rejection now also applies when the model tries to hide the shell under a completed parent task
+  - widened semantic matching for:
+    - `Analyze test results and document findings`
+    - `identify any issues or anomalies`
+    - `document detailed findings`
+- [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - extended the project-session meta-task guard test to cover the live child-task pattern under a completed parent
+
+Focused verification passed:
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemain$' -count=1`
+
+Live proof achieved in this stretch:
+- rerun-88 current execution did advance past the old coaching seam:
+  - old coaching assistant `d9b71885-53a8-4191-aa9b-640f61953f40` is now `failed`
+  - fresh continuation message `21eb9c63-6226-4259-b53b-50ab67762d27`
+  - fresh turn `1e6a5a2a-8974-4ba5-bc52-83afaa91168b`
+- but that turn created another junk review/results shell as a child of completed task 19:
+  - task `26`
+  - title `Analyze test results and document findings`
+  - description `Review the output of the end-to-end pipeline integration test, identify any issues or anomalies, and document detailed findings.`
+  - metadata shows generic planning artifacts at:
+    - `planning/prd-spec/oc-26-prd.md`
+    - `planning/prd-spec/oc-26-implementation-plan.md`
+    - `planning/prd-spec/oc-26-acceptance-criteria.md`
+    - `planning/prd-spec/oc-26-dependency-log.md`
+
+Current narrowed seam:
+- top-level duplicate meta-task shells are blocked
+- duplicate dependency edges are explicit no-ops
+- prompt draft counts are cleaned to actionable drafts
+- the latest local fix closes the completed-parent escape hatch that produced task 26, but that patch is not deployed yet

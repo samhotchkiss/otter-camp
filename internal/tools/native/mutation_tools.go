@@ -2660,7 +2660,7 @@ func (e *NativeToolExecutor) handleTaskCreate(ctx context.Context, input map[str
 }
 
 func shouldRejectProjectContinuationMetaTaskCreate(scope workspaceScope, projectID uuid.UUID, parentTask *repo.ProjectTask, bootstrapSetupActive bool, title string, description *string, tasks []repo.ProjectTask) bool {
-	if parentTask != nil || bootstrapSetupActive {
+	if bootstrapSetupActive {
 		return false
 	}
 	if scope.sessionID == nil || *scope.sessionID == uuid.Nil {
@@ -2671,6 +2671,10 @@ func shouldRejectProjectContinuationMetaTaskCreate(scope workspaceScope, project
 	}
 	if !looksLikeProjectContinuationMetaTask(title, description) {
 		return false
+	}
+	if parentTask != nil {
+		// Do not let project continuations hide duplicate review/results shells under an already-completed parent task.
+		return strings.EqualFold(strings.TrimSpace(parentTask.WorkStatus), "done")
 	}
 	for _, task := range tasks {
 		if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
@@ -2704,6 +2708,9 @@ func looksLikeProjectContinuationMetaTask(title string, description *string) boo
 	if strings.Contains(normalized, "review and update pipeline test results") {
 		return true
 	}
+	if strings.Contains(normalized, "analyze test results and document findings") {
+		return true
+	}
 	if strings.Contains(normalized, "prepare for next phase of project execution") {
 		return true
 	}
@@ -2714,6 +2721,9 @@ func looksLikeProjectContinuationMetaTask(title string, description *string) boo
 			strings.Contains(normalized, "analyze") ||
 			strings.Contains(normalized, "inspect") ||
 			strings.Contains(normalized, "update") ||
+			strings.Contains(normalized, "document findings") ||
+			strings.Contains(normalized, "document detailed findings") ||
+			strings.Contains(normalized, "identify any issues or anomalies") ||
 			strings.Contains(normalized, "document any findings") ||
 			strings.Contains(normalized, "required updates") ||
 			strings.Contains(normalized, "results")) {

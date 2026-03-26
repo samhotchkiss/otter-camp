@@ -4938,6 +4938,7 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	orgID := testutil.MakeOrg(t, pool)
 	project := testutil.MakeProject(t, pool, orgID)
 	agent := testutil.MakeAgent(t, pool, orgID)
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, project.ID)
 
 	taskRepo := repo.NewProjectTaskRepo(pool)
 	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
@@ -4949,6 +4950,18 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 		Metadata:       json.RawMessage(`{"decomposition":{"mode":"parallel_children","applied":true,"orchestration_only":true}}`),
 	}); err != nil {
 		t.Fatalf("create draft orchestration task: %v", err)
+	}
+	completedParent, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Run end-to-end pipeline integration test",
+		WorkStatus:     "done",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{"planning":{"work_type":"execution_spec"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create completed parent task: %v", err)
 	}
 
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
@@ -4984,8 +4997,8 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	if err != nil {
 		t.Fatalf("list project tasks: %v", err)
 	}
-	if len(tasks) != 1 {
-		t.Fatalf("project task count = %d, want 1 after blocked meta task create", len(tasks))
+	if len(tasks) != 2 {
+		t.Fatalf("project task count = %d, want 2 after blocked meta task create", len(tasks))
 	}
 
 	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
@@ -5004,8 +5017,8 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	if err != nil {
 		t.Fatalf("list project tasks after second variant: %v", err)
 	}
-	if len(tasks) != 1 {
-		t.Fatalf("project task count = %d after second variant, want 1", len(tasks))
+	if len(tasks) != 2 {
+		t.Fatalf("project task count = %d after second variant, want 2", len(tasks))
 	}
 
 	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
@@ -5024,8 +5037,8 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	if err != nil {
 		t.Fatalf("list project tasks after third variant: %v", err)
 	}
-	if len(tasks) != 1 {
-		t.Fatalf("project task count = %d after third variant, want 1", len(tasks))
+	if len(tasks) != 2 {
+		t.Fatalf("project task count = %d after third variant, want 2", len(tasks))
 	}
 
 	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
@@ -5044,8 +5057,29 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	if err != nil {
 		t.Fatalf("list project tasks after fourth variant: %v", err)
 	}
-	if len(tasks) != 1 {
-		t.Fatalf("project task count = %d after fourth variant, want 1", len(tasks))
+	if len(tasks) != 2 {
+		t.Fatalf("project task count = %d after fourth variant, want 2", len(tasks))
+	}
+
+	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":     project.ID.String(),
+		"parent_task_id": completedParent.ID.String(),
+		"title":          "Analyze test results and document findings",
+		"description":    "Review the output of the end-to-end pipeline integration test, identify any issues or anomalies, and document detailed findings.",
+	})
+	if err != nil {
+		t.Fatalf("task.create fifth variant: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); got != projectContinuationMetaTaskCreateError {
+		t.Fatalf("fifth task.create error = %q, want %q", got, projectContinuationMetaTaskCreateError)
+	}
+
+	tasks, err = taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks after fifth variant: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("project task count = %d after fifth variant, want 2 (1 draft + 1 completed parent)", len(tasks))
 	}
 }
 
