@@ -98,6 +98,25 @@ func HeadSHA(ctx context.Context, repoRoot string) (string, error) {
 	return strings.TrimSpace(sha), nil
 }
 
+func RefSHA(ctx context.Context, repoRoot, ref string) (string, error) {
+	root := filepath.Clean(strings.TrimSpace(repoRoot))
+	if root == "" {
+		return "", fmt.Errorf("repo root is required")
+	}
+	trimmedRef := strings.TrimSpace(ref)
+	if trimmedRef == "" {
+		return "", fmt.Errorf("git ref is required")
+	}
+	if err := ensureGitWorkspace(ctx, root); err != nil {
+		return "", err
+	}
+	sha, err := gitOutput(ctx, root, "rev-parse", trimmedRef)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(sha), nil
+}
+
 func CommitAllFromBase(ctx context.Context, repoRoot, branchName, baseSHA, message string, allowEmpty bool) (CommitResult, error) {
 	root := filepath.Clean(strings.TrimSpace(repoRoot))
 	if root == "" {

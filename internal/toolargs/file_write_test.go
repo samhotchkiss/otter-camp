@@ -137,9 +137,34 @@ func TestFileWriteAttemptFingerprintIgnoresRawEnvelopeOncePathAndContentRecovere
 	}
 }
 
+func TestFileReadAttemptFingerprintTracksPath(t *testing.T) {
+	first := AttemptFingerprint("file.read", map[string]any{
+		"path": "scripts/validate-metrics-alerting.sh",
+	})
+	second := AttemptFingerprint("file_read", map[string]any{
+		"path": "scripts/validate-metrics-alerting.sh",
+	})
+	third := AttemptFingerprint("file.read", map[string]any{
+		"path": "scripts/other.sh",
+	})
+
+	if first != second {
+		t.Fatalf("same path fingerprints differ: %q vs %q", first, second)
+	}
+	if first == third {
+		t.Fatalf("different file.read paths should not share fingerprint: %q", first)
+	}
+}
+
 func TestCanonicalToolNameNormalizesFileWriteAlias(t *testing.T) {
 	if got := canonicalToolName("file_write"); got != "file.write" {
 		t.Fatalf("canonicalToolName(file_write) = %q, want file.write", got)
+	}
+}
+
+func TestCanonicalToolNameNormalizesFileReadAlias(t *testing.T) {
+	if got := canonicalToolName("file_read"); got != "file.read" {
+		t.Fatalf("canonicalToolName(file_read) = %q, want file.read", got)
 	}
 }
 

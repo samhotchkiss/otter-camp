@@ -666,7 +666,7 @@ func TestPromptAssemblerEnqueueSummarizationUsesBackgroundPriority(t *testing.T)
 		t.Fatalf("enqueuer = %T, want *fakeEnqueuer", assembler.enqueuer)
 	}
 
-	if err := assembler.enqueueSummarization(context.Background(), assembler.sessions.(*fakeSessionRepo).session.ID, 130000); err != nil {
+	if err := assembler.enqueueSummarization(context.Background(), assembler.sessions.(*fakeSessionRepo).session.ID, 130000, nil); err != nil {
 		t.Fatalf("enqueueSummarization: %v", err)
 	}
 	if enqueuer.jobType != chat.ChatSummarizeJobType {
@@ -677,6 +677,122 @@ func TestPromptAssemblerEnqueueSummarizationUsesBackgroundPriority(t *testing.T)
 	}
 	if enqueuer.priority >= 70 {
 		t.Fatalf("priority = %d, want below agent_turn priority", enqueuer.priority)
+	}
+}
+
+func TestPromptAssemblerDefersSummarizationWhenProviderBackoffActive(t *testing.T) {
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session: repo.ChatSession{ID: uuid.New(), OrganizationID: uuid.New(), ScopeType: "organization", ScopeID: uuid.New(), Mode: "sync"},
+		agent:   repo.Agent{ID: uuid.New()},
+	})
+	assembler.summarization = &fakeSummarizationChecker{shouldSummarize: true}
+	delayUntil := time.Now().UTC().Add(45 * time.Second).Truncate(time.Second)
+	assembler.summarizationRunAfter = func(context.Context, uuid.UUID) (*time.Time, error) {
+		return &delayUntil, nil
+	}
+	enqueuer, ok := assembler.enqueuer.(*fakeEnqueuer)
+	if !ok {
+		t.Fatalf("enqueuer = %T, want *fakeEnqueuer", assembler.enqueuer)
+	}
+
+	if _, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID:      assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:        assembler.agents.(*fakeAgentRepo).agent.ID,
+		ModelProfileID: "default",
+	}); err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+
+	if enqueuer.jobType != chat.ChatSummarizeJobType {
+		t.Fatalf("job type = %q, want %q", enqueuer.jobType, chat.ChatSummarizeJobType)
+	}
+	if enqueuer.runAfter == nil || !enqueuer.runAfter.Equal(delayUntil) {
+		t.Fatalf("run_after = %v, want %s", enqueuer.runAfter, delayUntil)
+	}
+}
+
+func TestPromptAssemblerDefersSummarizationWhenSessionBackoffActive(t *testing.T) {
+	delayUntil := time.Now().UTC().Add(20 * time.Minute).Truncate(time.Second)
+	metadata, err := chat.MergeSummarizationBackoffMetadata(nil, chat.SummarizationBackoffState{
+		FailureCount:  2,
+		LastError:     "provider http 429",
+		LastFailureAt: time.Now().UTC().Format(time.RFC3339Nano),
+		NextAllowedAt: delayUntil.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeSummarizationBackoffMetadata: %v", err)
+	}
+	assembler := mustUnitAssembler(t, unitAssemblerConfig{
+		session: repo.ChatSession{ID: uuid.New(), OrganizationID: uuid.New(), ScopeType: "organization", ScopeID: uuid.New(), Mode: "sync", Metadata: metadata},
+		agent:   repo.Agent{ID: uuid.New()},
+	})
+	assembler.summarization = &fakeSummarizationChecker{shouldSummarize: true}
+	enqueuer, ok := assembler.enqueuer.(*fakeEnqueuer)
+	if !ok {
+		t.Fatalf("enqueuer = %T, want *fakeEnqueuer", assembler.enqueuer)
+	}
+
+	if _, err := assembler.Assemble(context.Background(), AssemblyInput{
+		SessionID:      assembler.sessions.(*fakeSessionRepo).session.ID,
+		AgentID:        assembler.agents.(*fakeAgentRepo).agent.ID,
+		ModelProfileID: "default",
+	}); err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+
+	if enqueuer.jobType != chat.ChatSummarizeJobType {
+		t.Fatalf("job type = %q, want %q", enqueuer.jobType, chat.ChatSummarizeJobType)
+	}
+	if enqueuer.runAfter == nil || !enqueuer.runAfter.Equal(delayUntil) {
+		t.Fatalf("run_after = %v, want %s", enqueuer.runAfter, delayUntil)
+	}
+}
+
+func TestPromptAssemblerSkipsSummarizationForAsyncExecutionSessions(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		scopeType string
+		scopeID   uuid.UUID
+	}{
+		{name: "project async", scopeType: "project", scopeID: uuid.New()},
+		{name: "project task async", scopeType: "project_task", scopeID: uuid.New()},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assembler := mustUnitAssembler(t, unitAssemblerConfig{
+				session: repo.ChatSession{
+					ID:             uuid.New(),
+					OrganizationID: uuid.New(),
+					ScopeType:      tc.scopeType,
+					ScopeID:        tc.scopeID,
+					Mode:           "async",
+				},
+				agent: repo.Agent{ID: uuid.New()},
+			})
+			checker := &fakeSummarizationChecker{shouldSummarize: true}
+			assembler.summarization = checker
+			enqueuer, ok := assembler.enqueuer.(*fakeEnqueuer)
+			if !ok {
+				t.Fatalf("enqueuer = %T, want *fakeEnqueuer", assembler.enqueuer)
+			}
+
+			if _, err := assembler.Assemble(context.Background(), AssemblyInput{
+				SessionID:      assembler.sessions.(*fakeSessionRepo).session.ID,
+				AgentID:        assembler.agents.(*fakeAgentRepo).agent.ID,
+				ModelProfileID: "default",
+			}); err != nil {
+				t.Fatalf("Assemble: %v", err)
+			}
+			if checker.calls != 0 {
+				t.Fatalf("summarization checker calls = %d, want 0", checker.calls)
+			}
+			if enqueuer.jobType != "" {
+				t.Fatalf("enqueued job type = %q, want none", enqueuer.jobType)
+			}
+		})
 	}
 }
 
@@ -1113,20 +1229,37 @@ func (f *fakeMemoryRetriever) Query(context.Context, memory.RetrievalRequest) (m
 	return f.result, nil
 }
 
-type fakeSummarizationChecker struct{}
+type fakeSummarizationChecker struct {
+	shouldSummarize bool
+	err             error
+	calls           int
+}
 
 func (f *fakeSummarizationChecker) ShouldSummarize(context.Context, uuid.UUID, int) (bool, error) {
-	return false, nil
+	f.calls++
+	if f.err != nil {
+		return false, f.err
+	}
+	return f.shouldSummarize, nil
 }
 
 type fakeEnqueuer struct {
-	jobType  string
-	priority int
+	jobType     string
+	priority    int
+	runAfter    *time.Time
+	lastPayload any
 }
 
-func (f *fakeEnqueuer) Enqueue(_ context.Context, _ pgx.Tx, jobType string, priority int, _ any, _ *time.Time) (uuid.UUID, error) {
+func (f *fakeEnqueuer) Enqueue(_ context.Context, _ pgx.Tx, jobType string, priority int, payload any, runAfter *time.Time) (uuid.UUID, error) {
 	f.jobType = jobType
 	f.priority = priority
+	f.lastPayload = payload
+	if runAfter != nil {
+		value := runAfter.UTC()
+		f.runAfter = &value
+	} else {
+		f.runAfter = nil
+	}
 	return uuid.New(), nil
 }
 

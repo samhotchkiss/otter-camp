@@ -598,7 +598,7 @@ func (q *PostgresUsageQuerier) SumTokens(ctx context.Context, orgID uuid.UUID, p
 	args := []any{orgID, since.UTC()}
 	var builder strings.Builder
 	builder.WriteString(`
-		SELECT COALESCE(SUM(input_tokens + output_tokens), 0)
+		SELECT COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) + COALESCE(cache_read_tokens, 0)), 0)
 		FROM model_invocation
 		WHERE organization_id = $1
 		  AND created_at >= $2
@@ -635,7 +635,7 @@ func (q *PostgresUsageQuerier) DailyRollups(ctx context.Context, orgID uuid.UUID
 	builder.WriteString(`
 		SELECT
 			date_trunc('day', created_at AT TIME ZONE 'UTC') AS day_start,
-			COALESCE(SUM(input_tokens + output_tokens), 0) AS total_tokens
+			COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) + COALESCE(cache_read_tokens, 0)), 0) AS total_tokens
 		FROM model_invocation
 		WHERE organization_id = $1
 		  AND created_at >= $2

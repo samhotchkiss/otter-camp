@@ -36,6 +36,11 @@ const (
 	messageEstimatorOverheadChars  = 16
 	summarizationFitDivisor        = 3
 	summarizationFitOverheadChars  = 32
+	summarizationRouteProfileID    = "haiku"
+	summarizationProviderBackoff   = 1 * time.Minute
+	summarizationFailureBackoff    = 10 * time.Minute
+	summarizationFailureBackoffMax = 1 * time.Hour
+	summarizationMaxFallbackHops   = 3
 
 	toolResultCompactionThresholdBytes = 4 * 1024
 	retentionWindow                    = 90 * 24 * time.Hour
@@ -149,6 +154,198 @@ func (c *SummarizationChecker) unsummarizedTokenEstimate(ctx context.Context, se
 	return estimated, nil
 }
 
+func NextSummarizationRunAfter(ctx context.Context, pool *pgxpool.Pool, organizationID uuid.UUID) (*time.Time, error) {
+	return nextSummarizationRunAfter(ctx, pool, organizationID, time.Now)
+}
+
+func nextSummarizationRunAfter(ctx context.Context, pool *pgxpool.Pool, organizationID uuid.UUID, now func() time.Time) (*time.Time, error) {
+	if pool == nil || organizationID == uuid.Nil {
+		return nil, nil
+	}
+	if now == nil {
+		now = time.Now
+	}
+
+	connection, err := selectSummarizationConnection(ctx, repo.NewModelProfileRepo(pool), repo.NewProviderConnectionRepo(pool), organizationID, now)
+	if err != nil || connection == nil {
+		return nil, err
+	}
+	if effectiveSummarizationConnectionHealth(*connection, now) != "rate_limited" {
+		return nil, nil
+	}
+
+	readyAt := connection.UpdatedAt.UTC().Add(summarizationProviderBackoff)
+	if connection.UpdatedAt.IsZero() || !readyAt.After(now().UTC()) {
+		return nil, nil
+	}
+	return &readyAt, nil
+}
+
+func SummarizationSessionRunAfter(metadata json.RawMessage, now time.Time) *time.Time {
+	state, ok := ParseSummarizationBackoff(metadata)
+	if !ok {
+		return nil
+	}
+	nextAllowedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(state.NextAllowedAt))
+	if err != nil {
+		return nil
+	}
+	nextAllowedAt = nextAllowedAt.UTC()
+	if !nextAllowedAt.After(now.UTC()) {
+		return nil
+	}
+	return &nextAllowedAt
+}
+
+func MergeSummarizationRunAfter(left, right *time.Time) *time.Time {
+	switch {
+	case left == nil && right == nil:
+		return nil
+	case left == nil:
+		value := right.UTC()
+		return &value
+	case right == nil:
+		value := left.UTC()
+		return &value
+	case right.After(left.UTC()):
+		value := right.UTC()
+		return &value
+	default:
+		value := left.UTC()
+		return &value
+	}
+}
+
+func selectSummarizationConnection(ctx context.Context, profiles *repo.ModelProfileRepo, connections *repo.ProviderConnectionRepo, organizationID uuid.UUID, now func() time.Time) (*repo.ProviderConnection, error) {
+	if profiles == nil || connections == nil || organizationID == uuid.Nil {
+		return nil, nil
+	}
+	if now == nil {
+		now = time.Now
+	}
+
+	currentProfileID := summarizationRouteProfileID
+	visited := map[string]struct{}{currentProfileID: {}}
+	for hop := 0; hop < summarizationMaxFallbackHops; hop++ {
+		profile, err := profiles.GetCurrentByLogicalID(ctx, organizationID, currentProfileID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		selected, err := selectBestSummarizationProviderConnection(ctx, connections, organizationID, profile.ProviderID, now)
+		if err != nil {
+			return nil, err
+		}
+		if selected != nil {
+			return selected, nil
+		}
+		if profile.FallbackProfileID == nil || strings.TrimSpace(*profile.FallbackProfileID) == "" {
+			return nil, nil
+		}
+		nextProfileID := strings.TrimSpace(*profile.FallbackProfileID)
+		if _, seen := visited[nextProfileID]; seen {
+			return nil, nil
+		}
+		visited[nextProfileID] = struct{}{}
+		currentProfileID = nextProfileID
+	}
+	return nil, nil
+}
+
+func selectBestSummarizationProviderConnection(ctx context.Context, connections *repo.ProviderConnectionRepo, organizationID, providerID uuid.UUID, now func() time.Time) (*repo.ProviderConnection, error) {
+	items, err := connections.ListByProvider(ctx, organizationID, providerID)
+	if err != nil {
+		return nil, err
+	}
+
+	bestIndex := -1
+	bestState := ""
+	var bestUpdatedAt time.Time
+	bestPriority := 0
+	for index, connection := range items {
+		if !connection.IsEnabled {
+			continue
+		}
+		state := effectiveSummarizationConnectionHealth(connection, now)
+		if state == "unavailable" {
+			continue
+		}
+		if bestIndex == -1 || summarizationConnectionPreferredOver(state, connection, bestState, bestUpdatedAt, bestPriority) {
+			bestIndex = index
+			bestState = state
+			bestUpdatedAt = connection.UpdatedAt
+			bestPriority = connection.FailoverPriority
+		}
+	}
+	if bestIndex == -1 {
+		return nil, nil
+	}
+	selected := items[bestIndex]
+	return &selected, nil
+}
+
+func effectiveSummarizationConnectionHealth(connection repo.ProviderConnection, now func() time.Time) string {
+	if now == nil {
+		now = time.Now
+	}
+	switch strings.TrimSpace(connection.HealthStatus) {
+	case "healthy":
+		return "healthy"
+	case "degraded":
+		return "degraded"
+	case "rate_limited":
+		if !connection.UpdatedAt.IsZero() && !now().UTC().Before(connection.UpdatedAt.UTC().Add(summarizationProviderBackoff)) {
+			return "degraded"
+		}
+		return "rate_limited"
+	case "unavailable":
+		return "unavailable"
+	default:
+		return "healthy"
+	}
+}
+
+func summarizationConnectionPreferredOver(state string, connection repo.ProviderConnection, bestState string, bestUpdatedAt time.Time, bestPriority int) bool {
+	stateRank := summarizationHealthRank(state)
+	bestRank := summarizationHealthRank(bestState)
+	if stateRank != bestRank {
+		return stateRank < bestRank
+	}
+
+	if state != "healthy" {
+		leftUpdated := connection.UpdatedAt.UTC()
+		rightUpdated := bestUpdatedAt.UTC()
+		switch {
+		case leftUpdated.IsZero() != rightUpdated.IsZero():
+			return !leftUpdated.IsZero()
+		case !leftUpdated.Equal(rightUpdated):
+			return leftUpdated.Before(rightUpdated)
+		}
+	}
+
+	if connection.FailoverPriority != bestPriority {
+		return connection.FailoverPriority < bestPriority
+	}
+	return false
+}
+
+func summarizationHealthRank(state string) int {
+	switch state {
+	case "healthy":
+		return 0
+	case "degraded":
+		return 1
+	case "rate_limited":
+		return 2
+	case "unavailable":
+		return 3
+	default:
+		return 4
+	}
+}
+
 type SummarizationRequest struct {
 	OrganizationID    uuid.UUID
 	SessionID         uuid.UUID
@@ -244,8 +441,12 @@ func (s *Summarizer) RegisterJobs(registrar interface {
 			return fmt.Errorf("chat_summarize payload missing session_id")
 		}
 		_, err := s.RunForSession(ctx, payload.SessionID)
-		if errors.Is(err, ErrAlreadySummarized) {
+		if err == nil || errors.Is(err, ErrAlreadySummarized) {
+			_ = s.clearSessionSummarizationBackoff(ctx, payload.SessionID)
 			return nil
+		}
+		if markErr := s.recordSessionSummarizationBackoff(ctx, payload.SessionID, err); markErr != nil {
+			return fmt.Errorf("record summarization backoff: %w", markErr)
 		}
 		return err
 	})
@@ -347,6 +548,58 @@ func (s *Summarizer) sessionScopes(ctx context.Context, session repo.ChatSession
 		scopes = append(scopes, model.Scope{Type: "project", ID: task.ProjectID})
 	}
 	return scopes, nil
+}
+
+func (s *Summarizer) recordSessionSummarizationBackoff(ctx context.Context, sessionID uuid.UUID, runErr error) error {
+	if s == nil || s.sessions == nil || sessionID == uuid.Nil {
+		return nil
+	}
+	session, err := s.sessions.GetByID(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	current, _ := ParseSummarizationBackoff(session.Metadata)
+	failureCount := current.FailureCount + 1
+	delay := summarizationFailureBackoff
+	for step := 1; step < failureCount; step++ {
+		delay *= 2
+		if delay >= summarizationFailureBackoffMax {
+			delay = summarizationFailureBackoffMax
+			break
+		}
+	}
+	nowValue := time.Now().UTC()
+	state := SummarizationBackoffState{
+		FailureCount:  failureCount,
+		LastError:     strings.TrimSpace(runErr.Error()),
+		LastFailureAt: nowValue.Format(time.RFC3339Nano),
+		NextAllowedAt: nowValue.Add(delay).Format(time.RFC3339Nano),
+	}
+	merged, err := MergeSummarizationBackoffMetadata(session.Metadata, state)
+	if err != nil {
+		return err
+	}
+	_, err = s.sessions.UpdateMetadata(ctx, sessionID, merged)
+	return err
+}
+
+func (s *Summarizer) clearSessionSummarizationBackoff(ctx context.Context, sessionID uuid.UUID) error {
+	if s == nil || s.sessions == nil || sessionID == uuid.Nil {
+		return nil
+	}
+	session, err := s.sessions.GetByID(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if _, ok := ParseSummarizationBackoff(session.Metadata); !ok {
+		return nil
+	}
+	cleared, err := ClearSummarizationBackoffMetadata(session.Metadata)
+	if err != nil {
+		return err
+	}
+	_, err = s.sessions.UpdateMetadata(ctx, sessionID, cleared)
+	return err
 }
 
 type SessionCleanerOptions struct {

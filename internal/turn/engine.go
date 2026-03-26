@@ -52,6 +52,9 @@ const (
 	defaultAgentTurnJobPriority               = 70
 	backgroundSummarizeJobPriority            = 60
 	defaultMaxToolCalls                       = 75
+	asyncProjectMaxToolCalls                  = 8
+	asyncProjectTaskWorkMaxToolCalls          = 16
+	asyncProjectTaskReviewMaxToolCalls        = 6
 	defaultSyncMaxDuration                    = 5 * time.Minute
 	defaultAsyncMaxDuration                   = 30 * time.Minute
 	defaultProjectBootstrapTurnTimeout        = 90 * time.Second
@@ -93,7 +96,11 @@ const (
 	recoveryActionValidationResume            = "resume_validation_blocked_task"
 	workerPromptTokenGuardrail                = 32000
 	defaultPromptTokenGuardrail               = 64000
+	asyncProjectPromptTokenGuardrail          = 25000
+	asyncProjectTaskWorkPromptGuardrail       = 35000
+	asyncProjectTaskReviewPromptGuardrail     = 20000
 	validationLoopBlockThreshold              = 3
+	validationLoopTurnStopThreshold           = 2
 	validationLoopSuppressionReason           = "validation_loop_blocked"
 	recoveryCLIRepairBudget                   = 1
 	recoveryFileWriteRepairBudget             = 1
@@ -494,40 +501,42 @@ type TurnEngine struct {
 	logger                      *slog.Logger
 	cancelConsumerName          string
 	rollupUpdater               *model.RollupUpdater
+	summarizationRunAfter       func(context.Context, uuid.UUID) (*time.Time, error)
 }
 
 type turnRuntime struct {
-	session               *chat.ChatSession
-	agent                 repo.Agent
-	turn                  *chat.ChatTurn
-	initialMessageID      uuid.UUID
-	initialMessageText    string
-	currentJobID          *uuid.UUID
-	runID                 *uuid.UUID
-	runStepID             *uuid.UUID
-	runAttemptID          *uuid.UUID
-	startedAt             time.Time
-	toolCallsUsed         int
-	activeTier2RunID      *uuid.UUID
-	activeTier2RunMu      sync.RWMutex
-	modelRetryUsed        int
-	invocationAttempt     int
-	toolSet               []tools.ToolDescriptor
-	stopReason            string
-	projectIdentity       *projectIdentity
-	historyStartID        *uuid.UUID
-	disableMemory         bool
-	freshKickoff          bool
-	recoveryTurn          bool
-	recoveryCLIFixes      int
-	recoveryFileFixes     int
-	taskFileFixes         int
-	recoveryFileWrites    map[string]recoveryPopulatedFileWriteState
-	recoveryWriteDone     bool
-	recoveryBlockReason   string
-	recoveryQueuedTurn    bool
-	recoveryTargetPath    string
-	placeholderTargetSeen bool
+	session                *chat.ChatSession
+	agent                  repo.Agent
+	turn                   *chat.ChatTurn
+	initialMessageID       uuid.UUID
+	initialMessageText     string
+	currentJobID           *uuid.UUID
+	runID                  *uuid.UUID
+	runStepID              *uuid.UUID
+	runAttemptID           *uuid.UUID
+	startedAt              time.Time
+	toolCallsUsed          int
+	activeTier2RunID       *uuid.UUID
+	activeTier2RunMu       sync.RWMutex
+	modelRetryUsed         int
+	invocationAttempt      int
+	toolSet                []tools.ToolDescriptor
+	stopReason             string
+	projectIdentity        *projectIdentity
+	historyStartID         *uuid.UUID
+	disableMemory          bool
+	freshKickoff           bool
+	recoveryTurn           bool
+	recoveryCLIFixes       int
+	recoveryFileFixes      int
+	recoveryReadOnlyRounds int
+	taskFileFixes          int
+	recoveryFileWrites     map[string]recoveryPopulatedFileWriteState
+	recoveryWriteDone      bool
+	recoveryBlockReason    string
+	recoveryQueuedTurn     bool
+	recoveryTargetPath     string
+	placeholderTargetSeen  bool
 }
 
 type projectIdentity struct {
@@ -686,7 +695,7 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		rollupUpdater = model.NewRollupUpdater(opts.Pool)
 	}
 
-	return &TurnEngine{
+	engine := &TurnEngine{
 		pool:                        opts.Pool,
 		dataDir:                     strings.TrimSpace(opts.DataDir),
 		chat:                        opts.Chat,
@@ -728,7 +737,14 @@ func NewEngine(opts Options) (*TurnEngine, error) {
 		logger:                      opts.Logger,
 		cancelConsumerName:          defaultCancelConsumerPrefix,
 		rollupUpdater:               rollupUpdater,
-	}, nil
+	}
+	if opts.Pool != nil {
+		engine.summarizationRunAfter = func(ctx context.Context, organizationID uuid.UUID) (*time.Time, error) {
+			return chat.NextSummarizationRunAfter(ctx, opts.Pool, organizationID)
+		}
+	}
+
+	return engine, nil
 }
 
 func (e *TurnEngine) RegisterJobHandler(worker interface {
@@ -2207,9 +2223,6 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 	if err != nil {
 		return err
 	}
-	if remainingDraftTasks == 0 {
-		return nil
-	}
 
 	var activeTaskWork int
 	if err := e.pool.QueryRow(ctx, `
@@ -2256,27 +2269,17 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 		return nil
 	}
 
-	var pendingContinuationMessages int
-	if err := e.pool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM chat_message m
-		WHERE m.session_id = $1
-		  AND m.role = 'user'
-		  AND COALESCE(NULLIF(m.metadata->>'source', ''), '') = $2
-		  AND (
-			NOT EXISTS (
-				SELECT 1
-				FROM chat_turn ct
-				WHERE ct.trigger_message_id = m.id
-			)
-			OR EXISTS (
-				SELECT 1
-				FROM chat_turn ct
-				WHERE ct.trigger_message_id = m.id
-				  AND ct.status IN ('pending', 'in_progress')
-			)
-		  )
-	`, session.ID, projectExecutionContinuationSource).Scan(&pendingContinuationMessages); err != nil {
+	pendingContinuationMessages, err := e.countPendingProjectContinuationMessages(ctx, session.ID)
+	if err != nil {
+		return err
+	}
+	if remainingDraftTasks == 0 {
+		if pendingContinuationMessages > 0 {
+			if err := e.failPendingProjectContinuationMessages(ctx, session.ID, "project execution already settled"); err != nil {
+				return err
+			}
+		}
+		_, err := repo.NewChatSessionRepo(e.pool).Close(ctx, session.ID)
 		return err
 	}
 	if pendingContinuationMessages > 0 {
@@ -2307,6 +2310,55 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 		payload.AgentID = &agentID
 	}
 	_, err = e.enqueueAgentTurnIfActive(ctx, session, payload, nil)
+	return err
+}
+
+func (e *TurnEngine) countPendingProjectContinuationMessages(ctx context.Context, sessionID uuid.UUID) (int, error) {
+	if e == nil || e.pool == nil || sessionID == uuid.Nil {
+		return 0, nil
+	}
+	var pendingContinuationMessages int
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM chat_message m
+		WHERE m.session_id = $1
+		  AND m.role = 'user'
+		  AND COALESCE(NULLIF(m.metadata->>'source', ''), '') = $2
+		  AND (
+			NOT EXISTS (
+				SELECT 1
+				FROM chat_turn ct
+				WHERE ct.trigger_message_id = m.id
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM chat_turn ct
+				WHERE ct.trigger_message_id = m.id
+				  AND ct.status IN ('pending', 'in_progress')
+			)
+		  )
+	`, sessionID, projectExecutionContinuationSource).Scan(&pendingContinuationMessages); err != nil {
+		return 0, err
+	}
+	return pendingContinuationMessages, nil
+}
+
+func (e *TurnEngine) failPendingProjectContinuationMessages(ctx context.Context, sessionID uuid.UUID, reason string) error {
+	if e == nil || e.pool == nil || sessionID == uuid.Nil {
+		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "project continuation superseded"
+	}
+	_, err := e.pool.Exec(ctx, `
+		UPDATE chat_message
+		SET status = 'failed',
+		    error_message = $2
+		WHERE session_id = $1
+		  AND role = 'user'
+		  AND status = 'pending'
+		  AND COALESCE(metadata->>'source', '') = $3
+	`, sessionID, reason, projectExecutionContinuationSource)
 	return err
 }
 
@@ -7173,7 +7225,7 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 			previousManifest = nil
 			continue
 		}
-		guardrail := agentTurnPromptGuardrailTokens(rt.agent, taskComplexity)
+		guardrail := e.agentTurnPromptGuardrailTokens(ctx, rt, taskComplexity)
 		if guardrail > 0 && assembled != nil && assembled.TotalTokens > guardrail {
 			continuations++
 			if continuations > maxContinuationTurnDepth {
@@ -7202,7 +7254,13 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 
 		if e.summarization != nil {
 			if summarize, summarizeErr := e.summarization.ShouldSummarize(ctx, rt.session.ID, defaultSummarizeLayerBudget); summarizeErr == nil && summarize {
-				_, _ = e.enqueuer.Enqueue(ctx, nil, chat.ChatSummarizeJobType, backgroundSummarizeJobPriority, chat.ChatSummarizePayload{SessionID: rt.session.ID, LayerBudgetTokens: defaultSummarizeLayerBudget}, nil)
+				summarizeRunAfter := chat.SummarizationSessionRunAfter(rt.session.Metadata, e.now().UTC())
+				if e.summarizationRunAfter != nil {
+					if delayedUntil, delayErr := e.summarizationRunAfter(ctx, rt.session.OrganizationID); delayErr == nil {
+						summarizeRunAfter = chat.MergeSummarizationRunAfter(summarizeRunAfter, delayedUntil)
+					}
+				}
+				_, _ = e.enqueuer.Enqueue(ctx, nil, chat.ChatSummarizeJobType, backgroundSummarizeJobPriority, chat.ChatSummarizePayload{SessionID: rt.session.ID, LayerBudgetTokens: defaultSummarizeLayerBudget}, summarizeRunAfter)
 			}
 		}
 
@@ -9397,7 +9455,15 @@ func isChatTurnStopReasonConstraintError(err error) bool {
 }
 
 func (e *TurnEngine) runListeningEval(ctx context.Context, rt *turnRuntime, assembled *prompt.AssembledPrompt) (bool, error) {
+	if rt != nil && rt.session != nil && strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, nil
+	}
 	if rt != nil && rt.session != nil && strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false, nil
+	}
+	if rt != nil && rt.session != nil &&
+		strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") &&
+		strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
 		return false, nil
 	}
 	if rt != nil && rt.session != nil && rt.initialMessageID != uuid.Nil &&
@@ -9527,6 +9593,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		if !toolPreservesExplicitTargetAgentID(name) {
 			arguments["agent_id"] = rt.agent.ID.String()
 		}
+		maybeInjectTaskExecutionSubtaskCreateExecutionID(rt, name, arguments)
 		if binding.projectID != nil {
 			arguments["project_id"] = binding.projectID.String()
 		}
@@ -9600,11 +9667,35 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if shouldBlockProjectExecutionSubtaskCreateTool(rt, name) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildProjectExecutionSubtaskCreateGuardError(),
+			})
+			continue
+		}
+		if shouldBlockTaskExecutionSubtaskCreateTool(rt, name) {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      buildTaskExecutionSubtaskCreateGuardError(),
+			})
+			continue
+		}
 		if e.shouldBlockTaskExecutionBroadContextTool(ctx, rt, name) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
 				Error:      buildTaskExecutionBroadContextToolGuardError(name),
+			})
+			continue
+		}
+		if blocked, reason := e.shouldBlockTaskExecutionTaskCreateTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
 			})
 			continue
 		}
@@ -9679,7 +9770,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 		maxDuration = e.asyncMaxDuration
 	}
 
-	toolBudget := e.maxToolCalls
+	toolBudget := e.turnToolBudget(ctx, rt)
 	if toolBudget < 1 {
 		toolBudget = 1
 	}
@@ -9689,6 +9780,11 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			return false, err
 		}
 		rt.toolCallsUsed += len(blockedCalls)
+		if shouldStopAfterBlockedTaskExecutionBoundaryMutation(rt, blockedCalls) {
+			rt.stopReason = stopReasonValidationBlocked
+			_, _ = e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, "[Task boundary guard blocked new child-task creation from this async task lane. Ending the turn early so the next continuation stays on the current task deliverable.]")
+			return true, nil
+		}
 		if shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, blockedCalls) {
 			return true, nil
 		}
@@ -11424,6 +11520,25 @@ func buildRecoveryFileWriteRetryMessage(targetPath string) string {
 	return fmt.Sprintf("[Recovery correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. The first non-whitespace character of your next assistant message must be the first character of the deliverable itself, not a sentence like 'I will write' or 'Now I'll draft'. If you already have the draft text, carry that exact text into the next write instead of emitting another empty-content call.]", path)
 }
 
+func buildRepeatedRecoveryReadOnlyDiscoveryFailureReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the recovery target"
+	}
+	return fmt.Sprintf("repeated read-only recovery discovery for %s within the same recovery turn; write the deliverable or resume from the durable artifact instead of rereading context again", path)
+}
+
+func buildRepeatedRecoveryReadOnlyDiscoveryTurnStopSystemMessage(targetPath, artifactPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the recovery target"
+	}
+	if artifact := strings.TrimSpace(artifactPath); artifact != "" {
+		return fmt.Sprintf("[Repeated read-only recovery discovery for `%s` in this recovery turn. Ending the turn early so the next continuation can resume from `%s` and write the deliverable instead of rereading context again.]", path, artifact)
+	}
+	return fmt.Sprintf("[Repeated read-only recovery discovery for `%s` in this recovery turn. Ending the turn early so the next continuation writes the deliverable instead of rereading context again.]", path)
+}
+
 func buildRecoveryFileWriteRejectedMessage(targetPath, artifactPath, failureReason string) string {
 	path := strings.TrimSpace(targetPath)
 	if path == "" {
@@ -11514,6 +11629,12 @@ func (e *TurnEngine) maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch(
 	if e.recoveryFileWriteSuppressedForReviewTask(ctx, rt) || recoveryToolCallsContainReviewDecision(toolCalls) {
 		return false, nil
 	}
+	if recoveryToolCallsAreReadOnlyDiscovery(toolCalls) {
+		rt.recoveryReadOnlyRounds++
+		if rt.recoveryReadOnlyRounds >= 2 {
+			return e.haltRepeatedRecoveryReadOnlyDiscovery(ctx, rt)
+		}
+	}
 	if strings.TrimSpace(assistantContent) == "" {
 		return false, nil
 	}
@@ -11531,6 +11652,33 @@ func (e *TurnEngine) maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch(
 	}
 	handled, _, err := e.haltRejectedRecoveryFileWrite(ctx, rt, targetPath, assistantContent, rejectReason)
 	return handled, err
+}
+
+func (e *TurnEngine) haltRepeatedRecoveryReadOnlyDiscovery(ctx context.Context, rt *turnRuntime) (bool, error) {
+	if e == nil || rt == nil || rt.turn == nil || rt.session == nil {
+		return false, nil
+	}
+	checkpoint, hasCheckpoint := e.recoveryFileWriteCheckpointCandidate(ctx, rt, "")
+	targetPath := strings.TrimSpace(e.recoverySynthesizedFileWriteTargetPath(ctx, rt))
+	artifactPath := ""
+	if hasCheckpoint && checkpoint != nil {
+		if strings.TrimSpace(checkpoint.TargetPath) != "" {
+			targetPath = strings.TrimSpace(checkpoint.TargetPath)
+		}
+		artifactPath = strings.TrimSpace(checkpoint.ArtifactPath)
+	}
+	failureReason := buildRepeatedRecoveryReadOnlyDiscoveryFailureReason(targetPath)
+	rt.stopReason = stopReasonValidationBlocked
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRepeatedRecoveryReadOnlyDiscoveryTurnStopSystemMessage(targetPath, artifactPath))
+	if err != nil {
+		return true, err
+	}
+	if strings.TrimSpace(targetPath) != "" {
+		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, artifactPath, failureReason, message.ID); checkpointErr != nil {
+			return true, checkpointErr
+		}
+	}
+	return true, nil
 }
 
 func (e *TurnEngine) maybeSynthesizeRecoveryFileWriteToolCalls(ctx context.Context, rt *turnRuntime, assistantContent string, toolCalls []ModelToolCall) ([]ModelToolCall, bool, error) {
@@ -16077,6 +16225,7 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	if err != nil {
 		return err
 	}
+	requestedTargetPath := strings.TrimSpace(targetPath)
 	targetPath = strings.TrimSpace(targetPath)
 	artifactPath = strings.TrimSpace(artifactPath)
 	candidate := normalizeRecoveryCheckpointPathsForTask(taskRecord, taskcheckpoint.RecoveryFileWriteCheckpoint{
@@ -16135,6 +16284,8 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 			}
 		}
 	}
+	existingCheckpoint, hasExistingCheckpoint := e.currentRecoveryFileWriteCheckpoint(ctx, rt)
+	failureReason = strengthenRecoveryTargetDriftFailureReason(requestedTargetPath, targetPath, failureReason, existingCheckpoint, hasExistingCheckpoint)
 	priorFailureReasons := e.recoveryCheckpointPriorFailureReasons(ctx, rt, failureReason)
 	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
 		TargetPath:            targetPath,
@@ -16155,6 +16306,33 @@ func (e *TurnEngine) persistRecoveryFileWriteCheckpoint(ctx context.Context, rt 
 	}
 	rt.historyStartID = &messageID
 	return nil
+}
+
+func strengthenRecoveryTargetDriftFailureReason(requestedTargetPath, normalizedTargetPath, currentReason string, existing *taskcheckpoint.RecoveryFileWriteCheckpoint, hasExisting bool) string {
+	current := strings.TrimSpace(currentReason)
+	if !hasExisting || existing == nil {
+		return current
+	}
+	requested := normalizeWorkspaceRelativePath(strings.TrimSpace(requestedTargetPath))
+	normalized := normalizeWorkspaceRelativePath(strings.TrimSpace(normalizedTargetPath))
+	existingTarget := normalizeWorkspaceRelativePath(strings.TrimSpace(existing.TargetPath))
+	if requested == "" || normalized == "" || existingTarget == "" {
+		return current
+	}
+	if !sameWorkspaceRelativePath(normalized, existingTarget) || sameWorkspaceRelativePath(requested, normalized) {
+		return current
+	}
+	priorReason := strings.TrimSpace(existing.FailureReason)
+	if priorReason == "" && len(taskcheckpoint.RecoveryFileWriteFailureHistory(existing)) == 0 {
+		return current
+	}
+	if strings.Contains(current, normalized) || taskcheckpoint.RecoveryFileWriteFailureIsRepeatedTargetDrift(current) {
+		return current
+	}
+	if current == "" {
+		current = "recovery target drifted away from the checkpoint target"
+	}
+	return fmt.Sprintf("repeated recovery target drift away from `%s` toward `%s` across explicit resume attempts; latest %s", normalized, requested, current)
 }
 
 func recoveryCheckpointTargetIsAuthoritative(targetPath, failureReason string) bool {
@@ -16584,6 +16762,7 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 
 	failures := collectToolValidationFailures(calls, results)
 	current, ok := parseTaskValidationGuard(taskRecord.Metadata)
+	recoveryCheckpoint, hasRecoveryCheckpoint := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
 	if len(failures) == 0 {
 		if !ok || current.Blocked || current.Count == 0 {
 			return false, nil
@@ -16607,14 +16786,37 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 
 	next := current
 	blockedNow := false
+	repeatedRecoveryFocusStop := false
+	repeatedTurnStop := false
 	var blockedFailure *toolValidationFailure
+	var repeatedRecoveryFailure *toolValidationFailure
+	var repeatedFailure *toolValidationFailure
 	for _, failure := range failures {
+		previous := next
 		candidate, candidateBlocked := nextTaskValidationGuardState(next, rt.initialMessageID, rt.turn.ID, failure, e.now())
 		next = candidate
 		if candidateBlocked {
 			blockedNow = true
 			failureCopy := failure
 			blockedFailure = &failureCopy
+			break
+		}
+		if shouldStopTurnAfterRepeatedRecoveryFocusFailure(rt, recoveryCheckpoint, hasRecoveryCheckpoint, failure) {
+			repeatedRecoveryFocusStop = true
+			failureCopy := failure
+			repeatedRecoveryFailure = &failureCopy
+			break
+		}
+		if shouldStopTurnAfterRepeatedRecoveryTargetDrift(rt, recoveryCheckpoint, hasRecoveryCheckpoint, failure) {
+			repeatedRecoveryFocusStop = true
+			failureCopy := failure
+			repeatedRecoveryFailure = &failureCopy
+			break
+		}
+		if shouldStopTurnAfterRepeatedTaskValidationFailure(rt, previous, candidate) {
+			repeatedTurnStop = true
+			failureCopy := failure
+			repeatedFailure = &failureCopy
 			break
 		}
 	}
@@ -16630,6 +16832,41 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	}
 
 	if !blockedNow {
+		if repeatedRecoveryFocusStop {
+			rt.stopReason = stopReasonValidationBlocked
+			targetPath := recoveryFocusFailureTargetPath(recoveryCheckpoint, repeatedRecoveryFailure)
+			failureReason := buildRepeatedRecoveryFocusFailureReason(recoveryCheckpoint, repeatedRecoveryFailure, targetPath)
+			systemMessage := buildRepeatedRecoveryFocusTurnStopSystemMessage(targetPath, repeatedRecoveryFailure)
+			if hasRepeatedRecoveryTargetDriftHistory(recoveryCheckpoint) {
+				targetPath = normalizeWorkspaceRelativePath(strings.TrimSpace(recoveryCheckpoint.TargetPath))
+				failureReason = buildRepeatedRecoveryTargetDriftFailureReason(recoveryCheckpoint, repeatedRecoveryFailure)
+				systemMessage = buildRepeatedRecoveryTargetDriftTurnStopSystemMessage(targetPath, repeatedRecoveryFailure)
+			}
+			message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage)
+			if err != nil {
+				return false, err
+			}
+			if strings.TrimSpace(targetPath) != "" {
+				if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", failureReason, message.ID); checkpointErr != nil {
+					return false, checkpointErr
+				}
+			}
+			return true, nil
+		}
+		if repeatedTurnStop {
+			rt.stopReason = stopReasonValidationBlocked
+			if repeatedFailure != nil {
+				if targetPath := strings.TrimSpace(repeatedFailure.DeliverablePath); targetPath != "" {
+					if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", repeatedFailure.FailureReason, rt.initialMessageID); checkpointErr != nil {
+						return false, checkpointErr
+					}
+				}
+			}
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildValidationLoopTurnStopSystemMessage(next)); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
 		return false, nil
 	}
 
@@ -16797,26 +17034,57 @@ func classifyToolValidationFailure(call ToolCall, result ToolResult) (toolValida
 		return toolValidationFailure{}, false
 	}
 	attemptFingerprint := toolargs.AttemptFingerprint(toolName, call.Arguments)
+	rawErrorCode := strings.TrimSpace(toolResultErrorCode(result))
+	normalizedErrorCode := normalizeValidationFailureCode(rawErrorCode)
 
 	if hasRawToolArguments(call) {
 		reason := "malformed _raw arguments"
-		if code := strings.TrimSpace(toolResultErrorCode(result)); code != "" {
+		if code := rawErrorCode; code != "" {
 			reason = fmt.Sprintf("malformed _raw arguments (%s)", code)
 		}
 		return buildToolValidationFailure(toolName, "malformed_arguments_raw", reason, attemptFingerprint, ""), true
 	}
 
-	if code := normalizeValidationFailureCode(toolResultErrorCode(result)); isToolValidationCode(code) {
-		return buildToolValidationFailure(toolName, code, strings.TrimSpace(toolResultErrorCode(result)), attemptFingerprint, toolResultDeliverablePath(result)), true
+	if isToolValidationCode(normalizedErrorCode) {
+		return buildToolValidationFailure(toolName, normalizedErrorCode, rawErrorCode, attemptFingerprint, toolResultDeliverablePath(result)), true
+	}
+	if code, reason, ok := classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawErrorCode, strings.TrimSpace(result.Error)); ok {
+		return buildToolValidationFailure(toolName, code, reason, attemptFingerprint, toolResultDeliverablePath(result)), true
 	}
 
 	if reason := strings.TrimSpace(stripToolFailurePrefix(result.Error, toolName)); reason != "" {
 		if code := normalizeValidationFailureCode(reason); isToolValidationCode(code) {
 			return buildToolValidationFailure(toolName, code, reason, attemptFingerprint, toolResultDeliverablePath(result)), true
 		}
+		if code, normalizedReason, ok := classifyDeterministicToolResultFailure(toolName, normalizeValidationFailureCode(reason), rawErrorCode, reason); ok {
+			return buildToolValidationFailure(toolName, code, normalizedReason, attemptFingerprint, toolResultDeliverablePath(result)), true
+		}
 	}
 
 	return toolValidationFailure{}, false
+}
+
+func classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawErrorCode, rawReason string) (string, string, bool) {
+	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+	normalizedReason := strings.ToLower(strings.TrimSpace(rawReason))
+	if normalizedToolName == "cli.execute" && strings.Contains(normalizedReason, "shell_injection") {
+		reason := strings.TrimSpace(rawReason)
+		if reason == "" {
+			reason = strings.TrimSpace(rawErrorCode)
+		}
+		if reason == "" {
+			reason = "command_denied (shell_injection)"
+		}
+		return "cli_shell_injection", reason, true
+	}
+	if normalizedToolName == "file.read" && normalizedErrorCode == "not_found" {
+		reason := strings.TrimSpace(rawErrorCode)
+		if reason == "" {
+			reason = "not_found"
+		}
+		return "not_found", reason, true
+	}
+	return "", "", false
 }
 
 func buildToolValidationFailure(toolName, failureCode, failureReason, attemptFingerprint, deliverablePath string) toolValidationFailure {
@@ -17004,6 +17272,28 @@ func nextTaskValidationGuardState(current taskValidationGuardState, initialMessa
 	return next, next.Blocked && !current.Blocked
 }
 
+func shouldStopTurnAfterRepeatedTaskValidationFailure(rt *turnRuntime, current, next taskValidationGuardState) bool {
+	if rt == nil || rt.session == nil || rt.turn == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	if current.Blocked || next.Blocked || next.Count < validationLoopTurnStopThreshold {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(next.FailureCode), "review_action_required") {
+		return false
+	}
+	if strings.TrimSpace(current.LastTurnID) != rt.turn.ID.String() {
+		return false
+	}
+	return current.Count > 0 &&
+		current.InitialMessageID == next.InitialMessageID &&
+		current.Fingerprint == next.Fingerprint
+}
+
 func buildValidationLoopBlockReason(state taskValidationGuardState) string {
 	reason := strings.TrimSpace(state.FailureReason)
 	if reason == "" {
@@ -17014,6 +17304,184 @@ func buildValidationLoopBlockReason(state taskValidationGuardState) string {
 		return fmt.Sprintf("deterministic tool validation loop blocked after %d identical failures: %s", state.Count, reason)
 	}
 	return fmt.Sprintf("deterministic tool validation loop blocked after %d identical failures: %s (%s)", state.Count, toolName, reason)
+}
+
+func shouldStopTurnAfterRepeatedRecoveryFocusFailure(rt *turnRuntime, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint, hasCheckpoint bool, failure toolValidationFailure) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !rt.recoveryTurn ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	if !hasCheckpoint || !isRecoveryFocusValidationCode(failure.FailureCode) {
+		return false
+	}
+	targetPath := recoveryFocusFailureTargetPath(checkpoint, &failure)
+	if strings.TrimSpace(targetPath) == "" {
+		return false
+	}
+	for _, reason := range taskcheckpoint.RecoveryFileWriteFailureHistory(&checkpoint) {
+		if isRecoveryFocusFailureReason(reason) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldStopTurnAfterRepeatedRecoveryTargetDrift(rt *turnRuntime, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint, hasCheckpoint bool, failure toolValidationFailure) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !rt.recoveryTurn ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	if !hasCheckpoint || !isRecoveryFocusValidationCode(failure.FailureCode) {
+		return false
+	}
+	targetPath := normalizeWorkspaceRelativePath(strings.TrimSpace(checkpoint.TargetPath))
+	if targetPath == "" {
+		return false
+	}
+	for _, reason := range taskcheckpoint.RecoveryFileWriteFailureHistory(&checkpoint) {
+		if taskcheckpoint.RecoveryFileWriteFailureIsRepeatedTargetDrift(reason) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRepeatedRecoveryTargetDriftHistory(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) bool {
+	for _, reason := range taskcheckpoint.RecoveryFileWriteFailureHistory(&checkpoint) {
+		if taskcheckpoint.RecoveryFileWriteFailureIsRepeatedTargetDrift(reason) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRecoveryFocusValidationCode(code string) bool {
+	switch strings.TrimSpace(code) {
+	case "recovery_target_focus_required", "explicit_deliverable_focus_required", "deliverable_path_required":
+		return true
+	default:
+		return false
+	}
+}
+
+func isRecoveryFocusFailureReason(reason string) bool {
+	normalized := normalizeValidationFailureCode(reason)
+	if isRecoveryFocusValidationCode(normalized) {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return containsAny(lower,
+		"repeated recovery target focus failures",
+		"repeated deliverable focus failures",
+		"recovery_target_focus_required",
+		"explicit_deliverable_focus_required",
+		"deliverable_path_required",
+	)
+}
+
+func recoveryFocusFailureTargetPath(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint, failure *toolValidationFailure) string {
+	checkpointTarget := normalizeWorkspaceRelativePath(strings.TrimSpace(checkpoint.TargetPath))
+	if failure == nil {
+		return checkpointTarget
+	}
+	failureTarget := normalizeWorkspaceRelativePath(strings.TrimSpace(failure.DeliverablePath))
+	switch {
+	case failureTarget == "":
+		return checkpointTarget
+	case checkpointTarget == "":
+		return failureTarget
+	case sameWorkspaceRelativePath(failureTarget, checkpointTarget):
+		return checkpointTarget
+	default:
+		return ""
+	}
+}
+
+func buildRepeatedRecoveryFocusFailureReason(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint, failure *toolValidationFailure, targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the recovery target"
+	}
+	latest := "recovery_target_focus_required"
+	if failure != nil {
+		if reason := strings.TrimSpace(failure.FailureReason); reason != "" {
+			latest = reason
+		} else if code := strings.TrimSpace(failure.FailureCode); code != "" {
+			latest = code
+		}
+	}
+	if taskcheckpoint.RecoveryFileWriteFailureHistory(&checkpoint) != nil {
+		return fmt.Sprintf("repeated recovery target focus failures for %s across explicit resume attempts; latest %s", path, latest)
+	}
+	return fmt.Sprintf("repeated deliverable focus failures for %s; latest %s", path, latest)
+}
+
+func buildRepeatedRecoveryTargetDriftFailureReason(checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint, failure *toolValidationFailure) string {
+	path := strings.TrimSpace(checkpoint.TargetPath)
+	if path == "" {
+		path = "the recovery target"
+	}
+	latest := "recovery_target_focus_required"
+	if failure != nil {
+		if reason := strings.TrimSpace(failure.FailureReason); reason != "" {
+			latest = reason
+		} else if code := strings.TrimSpace(failure.FailureCode); code != "" {
+			latest = code
+		}
+	}
+	return fmt.Sprintf("repeated recovery target drift away from `%s` across explicit resume attempts; latest %s", path, latest)
+}
+
+func buildRepeatedRecoveryFocusTurnStopSystemMessage(targetPath string, failure *toolValidationFailure) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the named recovery target"
+	}
+	reason := "recovery_target_focus_required"
+	if failure != nil {
+		if current := strings.TrimSpace(failure.FailureReason); current != "" {
+			reason = current
+		} else if code := strings.TrimSpace(failure.FailureCode); code != "" {
+			reason = code
+		}
+	}
+	return fmt.Sprintf("[Repeated recovery-target focus failure for `%s` across resume attempts (%s). Ending this turn early so the next continuation can stay on that file instead of re-discovering the same blocker.]", path, reason)
+}
+
+func buildRepeatedRecoveryTargetDriftTurnStopSystemMessage(targetPath string, failure *toolValidationFailure) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the named recovery target"
+	}
+	reason := "recovery_target_focus_required"
+	if failure != nil {
+		if current := strings.TrimSpace(failure.FailureReason); current != "" {
+			reason = current
+		} else if code := strings.TrimSpace(failure.FailureCode); code != "" {
+			reason = code
+		}
+	}
+	return fmt.Sprintf("[Repeated recovery-target drift away from `%s` across resume attempts (%s). Ending this turn early so the next continuation stays on that file instead of re-discovering alternate paths.]", path, reason)
+}
+
+func buildValidationLoopTurnStopSystemMessage(state taskValidationGuardState) string {
+	reason := strings.TrimSpace(state.FailureReason)
+	if reason == "" {
+		reason = strings.TrimSpace(state.FailureCode)
+	}
+	toolName := strings.TrimSpace(state.ToolName)
+	if toolName == "" {
+		return fmt.Sprintf("[Repeated identical tool validation failure in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", state.Count, validationLoopBlockThreshold, reason)
+	}
+	return fmt.Sprintf("[Repeated identical %s validation failure in this turn (%d/%d): %s. Ending the turn early so the next continuation can take a narrower step.]", toolName, state.Count, validationLoopBlockThreshold, reason)
 }
 
 func buildValidationLoopSystemMessage(state taskValidationGuardState) string {
@@ -18214,12 +18682,28 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 	for _, result := range results {
 		name := strings.ToLower(strings.TrimSpace(result.Name))
 		errText := strings.ToLower(strings.TrimSpace(result.Error))
+		if containsAny(errText,
+			"task_lane_owned_by_project_task_session",
+			"task_execution_required",
+			"flow_owned_status_blocked",
+			"flow_owned_done_blocked",
+			"flow_owned_review_status_blocked",
+			"review_action_required",
+			"deliverable_path_required",
+			"task must remain orchestration-only while executable child tasks exist",
+		) {
+			return true
+		}
 		switch name {
 		case "project.create":
 			if rt.projectIdentity == nil {
 				continue
 			}
 			if strings.Contains(errText, "project already created in this flow") {
+				return true
+			}
+		case "subtask.create":
+			if strings.Contains(errText, "flow_node_execution_id_required") {
 				return true
 			}
 		case "task.create":
@@ -18233,6 +18717,74 @@ func shouldStopAfterBlockedProjectExecutionBlockedMutation(rt *turnRuntime, resu
 		}
 	}
 	return false
+}
+
+func shouldStopAfterBlockedTaskExecutionBoundaryMutation(rt *turnRuntime, results []ToolResult) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	for _, result := range results {
+		errText := strings.ToLower(strings.TrimSpace(result.Error))
+		switch strings.ToLower(strings.TrimSpace(result.Name)) {
+		case "task.create":
+			if strings.Contains(errText, "orchestration_parent_required") ||
+				strings.Contains(errText, "parent_task_id_required") {
+				return true
+			}
+		case "subtask.create":
+			if strings.Contains(errText, "flow_node_execution_id_required") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func maybeInjectTaskExecutionSubtaskCreateExecutionID(rt *turnRuntime, toolName string, arguments map[string]any) {
+	if rt == nil || rt.session == nil || arguments == nil {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(toolName), "subtask.create") {
+		return
+	}
+	if strings.TrimSpace(stringValue(arguments["flow_node_execution_id"])) != "" {
+		return
+	}
+	executionID := flowNodeExecutionIDFromSessionMetadata(rt.session)
+	if executionID == nil || *executionID == uuid.Nil {
+		return
+	}
+	arguments["flow_node_execution_id"] = executionID.String()
+}
+
+func shouldBlockTaskExecutionSubtaskCreateTool(rt *turnRuntime, toolName string) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(toolName), "subtask.create") {
+		return false
+	}
+	executionID := flowNodeExecutionIDFromSessionMetadata(rt.session)
+	return executionID == nil || *executionID == uuid.Nil
+}
+
+func shouldBlockProjectExecutionSubtaskCreateTool(rt *turnRuntime, toolName string) bool {
+	if rt == nil || rt.session == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(toolName), "subtask.create")
 }
 
 func shouldBlockFreshKickoffPreCreateTool(rt *turnRuntime, toolName string) bool {
@@ -18489,6 +19041,39 @@ func shouldBlockTaskExecutionBroadContextTool(rt *turnRuntime, toolName string) 
 	}
 }
 
+func (e *TurnEngine) shouldBlockTaskExecutionTaskCreateTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(toolName), "task.create") {
+		return false, ""
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return true, buildTaskExecutionTaskCreateGuardError(repo.ProjectTask{}, false, uuid.Nil)
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return true, buildTaskExecutionTaskCreateGuardError(repo.ProjectTask{}, false, *taskID)
+	}
+	if !taskExecutionAllowsChildTaskDecomposition(taskRecord) {
+		return true, buildTaskExecutionTaskCreateGuardError(taskRecord, false, taskRecord.ID)
+	}
+	parentTaskIDText := strings.TrimSpace(stringValue(arguments["parent_task_id"]))
+	if parentTaskIDText == "" {
+		return true, buildTaskExecutionTaskCreateGuardError(taskRecord, true, taskRecord.ID)
+	}
+	parentTaskID, err := uuid.Parse(parentTaskIDText)
+	if err != nil || parentTaskID == uuid.Nil || parentTaskID != taskRecord.ID {
+		return true, buildTaskExecutionTaskCreateGuardError(taskRecord, true, taskRecord.ID)
+	}
+	return false, ""
+}
+
 func (e *TurnEngine) shouldBlockTaskExecutionBroadContextTool(ctx context.Context, rt *turnRuntime, toolName string) bool {
 	if !shouldBlockTaskExecutionBroadContextTool(rt, toolName) {
 		return false
@@ -18533,6 +19118,18 @@ func taskExecutionAllowsLimitedProjectContext(taskRecord repo.ProjectTask) bool 
 		return true
 	}
 	return false
+}
+
+func taskExecutionAllowsChildTaskDecomposition(taskRecord repo.ProjectTask) bool {
+	if taskMetadataMarksOrchestrationOnlyTurn(taskRecord.Metadata) {
+		return true
+	}
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.ToLower(strings.TrimSpace(*taskRecord.Description))
+	}
+	return strings.Contains(description, "orchestration task") &&
+		strings.Contains(description, "parent task")
 }
 
 func taskMetadataMarksOrchestrationOnlyTurn(metadata json.RawMessage) bool {
@@ -18918,6 +19515,28 @@ func buildTaskExecutionBroadContextToolGuardError(toolName string) string {
 	default:
 		return "task execution should not reread broad org or project context from a task-scoped async session. Continue the assigned task directly."
 	}
+}
+
+func buildTaskExecutionTaskCreateGuardError(taskRecord repo.ProjectTask, parentRequired bool, currentTaskID uuid.UUID) string {
+	label := "the current task"
+	if taskRecord.ID != uuid.Nil || taskRecord.TaskNumber > 0 || strings.TrimSpace(taskRecord.Title) != "" {
+		label = projectBootstrapTaskLabel(taskRecord)
+	}
+	if parentRequired {
+		if currentTaskID == uuid.Nil {
+			return fmt.Sprintf("parent_task_id_required: %s may only create bounded child tasks beneath itself from this async task lane. Set parent_task_id to the current task id instead of creating unrelated or top-level tasks.", label)
+		}
+		return fmt.Sprintf("parent_task_id_required: %s is orchestration-only, so this async task lane may only create bounded child tasks beneath that exact parent. Set parent_task_id to %s instead of creating unrelated or top-level tasks.", label, currentTaskID.String())
+	}
+	return fmt.Sprintf("orchestration_parent_required: %s already has its own async execution lane. Do not create additional project tasks from this lane unless the current task is explicitly orchestration-only. Continue the current task deliverable directly.", label)
+}
+
+func buildProjectExecutionSubtaskCreateGuardError() string {
+	return "flow_node_execution_id_required: project continuation should not call subtask.create from the project lane. Queue or advance the appropriate task execution lane instead; subtask.create belongs inside a running task execution with an active flow_node_execution_id."
+}
+
+func buildTaskExecutionSubtaskCreateGuardError() string {
+	return "flow_node_execution_id_required: this async task lane does not currently have an active flow_node_execution_id, so subtask.create is unavailable here. Continue the current task deliverable directly or advance the task flow before creating subtasks."
 }
 
 func buildProjectExecutionPrematureDoneToolGuardError(taskRecord repo.ProjectTask, remainingDraftTasks int) string {
@@ -20004,6 +20623,79 @@ func agentTurnPromptGuardrailTokens(agent repo.Agent, taskComplex bool) int {
 		return workerPromptTokenGuardrail
 	}
 	return defaultPromptTokenGuardrail
+}
+
+func (e *TurnEngine) agentTurnPromptGuardrailTokens(ctx context.Context, rt *turnRuntime, taskComplex bool) int {
+	base := agentTurnPromptGuardrailTokens(rt.agent, taskComplex)
+	scoped, ok := e.asyncScopedPromptGuardrail(ctx, rt)
+	if !ok || scoped <= 0 {
+		return base
+	}
+	if base <= 0 || scoped < base {
+		return scoped
+	}
+	return base
+}
+
+func (e *TurnEngine) turnToolBudget(ctx context.Context, rt *turnRuntime) int {
+	budget := e.maxToolCalls
+	scoped, ok := e.asyncScopedToolBudget(ctx, rt)
+	if !ok || scoped <= 0 {
+		return budget
+	}
+	if budget <= 0 || scoped < budget {
+		return scoped
+	}
+	return budget
+}
+
+func (e *TurnEngine) asyncScopedToolBudget(ctx context.Context, rt *turnRuntime) (int, bool) {
+	if rt == nil || rt.session == nil || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return 0, false
+	}
+	switch strings.ToLower(strings.TrimSpace(rt.session.ScopeType)) {
+	case "project":
+		return asyncProjectMaxToolCalls, true
+	case "project_task":
+		taskRecord, err := e.lookupSessionTask(ctx, rt.session)
+		if err != nil {
+			return 0, false
+		}
+		if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+			return asyncProjectTaskReviewMaxToolCalls, true
+		}
+		return asyncProjectTaskWorkMaxToolCalls, true
+	default:
+		return 0, false
+	}
+}
+
+func (e *TurnEngine) asyncScopedPromptGuardrail(ctx context.Context, rt *turnRuntime) (int, bool) {
+	if rt == nil || rt.session == nil || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return 0, false
+	}
+	switch strings.ToLower(strings.TrimSpace(rt.session.ScopeType)) {
+	case "project":
+		return asyncProjectPromptTokenGuardrail, true
+	case "project_task":
+		taskRecord, err := e.lookupSessionTask(ctx, rt.session)
+		if err != nil {
+			return 0, false
+		}
+		if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+			return asyncProjectTaskReviewPromptGuardrail, true
+		}
+		return asyncProjectTaskWorkPromptGuardrail, true
+	default:
+		return 0, false
+	}
+}
+
+func (e *TurnEngine) lookupSessionTask(ctx context.Context, session *chat.ChatSession) (repo.ProjectTask, error) {
+	if e == nil || e.tasks == nil || session == nil || !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") || session.ScopeID == uuid.Nil {
+		return repo.ProjectTask{}, repo.ErrNotFound
+	}
+	return e.tasks.GetByID(ctx, session.ScopeID)
 }
 
 func (e *TurnEngine) appendAssistantPlaceholder(ctx context.Context, turnID, sessionID, agentID uuid.UUID) (*chat.ChatMessage, error) {

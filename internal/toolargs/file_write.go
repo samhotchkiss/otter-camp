@@ -38,6 +38,8 @@ func AttemptFingerprint(toolName string, input map[string]any) string {
 	switch name {
 	case "file.write":
 		return fileWriteAttemptFingerprint(input, normalized)
+	case "file.read":
+		return fileReadAttemptFingerprint(input, normalized)
 	case "cli.execute":
 		return cliExecuteAttemptFingerprint(input, normalized)
 	default:
@@ -116,11 +118,31 @@ func fileWriteAttemptFingerprint(original, normalized map[string]any) string {
 	return "file.write:" + hashString(builder.String())
 }
 
+func fileReadAttemptFingerprint(original, normalized map[string]any) string {
+	pathValue, hasPath := stringField(normalized, "path")
+
+	builder := strings.Builder{}
+	builder.WriteString("tool=file.read")
+	builder.WriteString("\npath=")
+	if hasPath {
+		builder.WriteString(pathValue)
+	}
+	if !hasPath && original != nil {
+		if raw, ok := rawArgumentString(original); ok {
+			builder.WriteString("\nraw_sha=")
+			builder.WriteString(hashString(raw))
+		}
+	}
+	return "file.read:" + hashString(builder.String())
+}
+
 func canonicalToolName(toolName string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(toolName))
 	switch trimmed {
 	case "file_write":
 		return "file.write"
+	case "file_read":
+		return "file.read"
 	case "cli_execute":
 		return "cli.execute"
 	default:

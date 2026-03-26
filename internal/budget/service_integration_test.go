@@ -98,18 +98,18 @@ func TestCheckBudgetSumsModelInvocationTokens(t *testing.T) {
 	}
 
 	createdAt := time.Now().UTC()
-	insertRow := func(projectID uuid.UUID, input, output int64) {
+	insertRow := func(projectID uuid.UUID, input, output, cacheRead int64) {
 		t.Helper()
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO model_invocation (organization_id, model_provider_id, project_id, invocation_purpose, status, model_name, input_tokens, output_tokens, created_at)
-			VALUES ($1, $2, $3, 'agent_turn', 'completed', $4, $5, $6, $7)
-		`, org.ID, provider.ID, projectID, "budget-model", input, output, createdAt); err != nil {
+			INSERT INTO model_invocation (organization_id, model_provider_id, project_id, invocation_purpose, status, model_name, input_tokens, output_tokens, cache_read_tokens, created_at)
+			VALUES ($1, $2, $3, 'agent_turn', 'completed', $4, $5, $6, $7, $8)
+		`, org.ID, provider.ID, projectID, "budget-model", input, output, cacheRead, createdAt); err != nil {
 			t.Fatalf("insert model_invocation row: %v", err)
 		}
 	}
-	insertRow(projectA.ID, 50, 50)  // 100
-	insertRow(projectA.ID, 20, 30)  // 50
-	insertRow(projectB.ID, 90, 110) // 200 (must not count for projectA)
+	insertRow(projectA.ID, 50, 50, 25)  // 125
+	insertRow(projectA.ID, 20, 30, 5)   // 55
+	insertRow(projectB.ID, 90, 110, 40) // 240 (must not count for projectA)
 
 	svc, err := NewService(Options{
 		Pool:    pool,
@@ -120,18 +120,18 @@ func TestCheckBudgetSumsModelInvocationTokens(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	okResult, err := svc.CheckBudget(ctx, org.ID, &projectA.ID, nil, 100) // 150 + 100 = 250
+	okResult, err := svc.CheckBudget(ctx, org.ID, &projectA.ID, nil, 100) // 180 + 100 = 280
 	if err != nil {
 		t.Fatalf("CheckBudget allowed call: %v", err)
 	}
 	if !okResult.Allowed {
 		t.Fatalf("Allowed = %v, want true", okResult.Allowed)
 	}
-	if okResult.CurrentTokens != 250 {
-		t.Fatalf("CurrentTokens = %d, want 250", okResult.CurrentTokens)
+	if okResult.CurrentTokens != 280 {
+		t.Fatalf("CurrentTokens = %d, want 280", okResult.CurrentTokens)
 	}
 
-	blockedResult, err := svc.CheckBudget(ctx, org.ID, &projectA.ID, nil, 200) // 150 + 200 = 350
+	blockedResult, err := svc.CheckBudget(ctx, org.ID, &projectA.ID, nil, 150) // 180 + 150 = 330
 	if err != nil {
 		t.Fatalf("CheckBudget blocked call: %v", err)
 	}
@@ -140,6 +140,75 @@ func TestCheckBudgetSumsModelInvocationTokens(t *testing.T) {
 	}
 	if !blockedResult.HardLimitHit {
 		t.Fatalf("HardLimitHit = %v, want true", blockedResult.HardLimitHit)
+	}
+}
+
+func TestPostgresUsageQuerierDailyRollupsIncludeCacheReadTokens(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	orgRepo := repo.NewOrgRepo(pool)
+	projectRepo := repo.NewProjectRepo(pool)
+	providerRepo := repo.NewModelProviderRepo(pool)
+
+	org, err := orgRepo.Create(ctx, repo.Organization{
+		Slug:        "budget-rollup-org",
+		DisplayName: "Budget Rollup Org",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := projectRepo.Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "budget-rollup-project",
+		DisplayName:    "Budget Rollup Project",
+		Description:    "rollup scope",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	provider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "budget-rollup-provider",
+		DisplayName: "Budget Rollup Provider",
+		APIBaseURL:  "https://provider.example",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Hour)
+	today := now
+	yesterday := now.Add(-24 * time.Hour)
+	insertRow := func(createdAt time.Time, input, output, cacheRead int64) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO model_invocation (organization_id, model_provider_id, project_id, invocation_purpose, status, model_name, input_tokens, output_tokens, cache_read_tokens, created_at)
+			VALUES ($1, $2, $3, 'agent_turn', 'completed', $4, $5, $6, $7, $8)
+		`, org.ID, provider.ID, project.ID, "budget-model", input, output, cacheRead, createdAt); err != nil {
+			t.Fatalf("insert model_invocation row: %v", err)
+		}
+	}
+	insertRow(today, 20, 10, 5)      // 35
+	insertRow(today, 3, 2, 10)       // 15
+	insertRow(yesterday, 10, 10, 20) // 40
+
+	querier := NewPostgresUsageQuerier(pool)
+	rollups, err := querier.DailyRollups(ctx, org.ID, &project.ID, 3)
+	if err != nil {
+		t.Fatalf("DailyRollups: %v", err)
+	}
+	if len(rollups) < 2 {
+		t.Fatalf("rollup count = %d, want at least 2", len(rollups))
+	}
+	if got := rollups[0].Tokens; got != 50 {
+		t.Fatalf("today tokens = %d, want 50", got)
+	}
+	if got := rollups[1].Tokens; got != 40 {
+		t.Fatalf("yesterday tokens = %d, want 40", got)
 	}
 }
 
@@ -185,9 +254,9 @@ func TestCheckBudgetWarnsOncePerPeriodWithInboxInsert(t *testing.T) {
 
 	now := time.Date(2026, time.February, 24, 10, 0, 0, 0, time.UTC)
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO model_invocation (organization_id, model_provider_id, invocation_purpose, status, model_name, input_tokens, output_tokens, created_at)
-		VALUES ($1, $2, 'agent_turn', 'completed', $3, $4, $5, $6)
-	`, org.ID, provider.ID, "budget-model", int64(70), int64(50), now.Add(2*time.Hour)); err != nil {
+		INSERT INTO model_invocation (organization_id, model_provider_id, invocation_purpose, status, model_name, input_tokens, output_tokens, cache_read_tokens, created_at)
+		VALUES ($1, $2, 'agent_turn', 'completed', $3, $4, $5, $6, $7)
+	`, org.ID, provider.ID, "budget-model", int64(70), int64(50), int64(15), now.Add(2*time.Hour)); err != nil {
 		t.Fatalf("insert model_invocation: %v", err)
 	}
 

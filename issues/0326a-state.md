@@ -607,6 +607,28 @@ What is still pending after this slice:
 - live proof on a fresh Anthropic canary recovery turn
 - broader repeated-recovery cutoffs beyond focus / target-drift failures
 
+## Update 14:17 MDT
+
+The next deterministic-cutoff widening slice is now in code and focused-test green.
+
+New behavior:
+
+- repeated same-turn async `project_task` validation stops now explicitly classify `cli.execute` shell-injection denials as deterministic blocker fingerprints
+- repeated same-turn async `project_task` validation stops now also classify `file.read` `not_found` misses as deterministic blocker fingerprints
+- `file.read` attempt fingerprints are now path-aware, so the early stop only triggers when the model rereads the same missing path instead of collapsing all read misses together
+- the shell-injection path keeps using command-aware fingerprints, so the stop is still scoped to the same denied command rather than all `cli.execute` failures
+
+Focused verification that passed:
+
+- `go test ./internal/toolargs -run 'Test(FileReadAttemptFingerprintTracksPath|CanonicalToolNameNormalizesFileReadAlias)$' -count=1`
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalShellInjectionFailureInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFileReadNotFoundInSameTurn|HandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFailureInSameTurn)$' -count=1`
+
+What is still pending after this slice:
+
+- rebuild / restart on this newest deterministic-cutoff widening
+- live proof on a fresh Anthropic canary task turn
+- broader repeated-recovery cutoffs beyond focus / target-drift / repeated read-only discovery handling
+
 ## Update 14:09 MDT
 
 The operator-diagnostics slice is now in the product surface, not just the shell script.

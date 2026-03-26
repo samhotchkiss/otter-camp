@@ -134,6 +134,25 @@ func TestSummarization_Trigger_ThresholdCheck(t *testing.T) {
 	}
 }
 
+func TestNextSummarizationRunAfterReturnsProviderBackoffWhenSummaryProviderRateLimited(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	seedSystemHaikuProviderConnection(t, ctx, pool, org.ID, "rate_limited")
+
+	before := time.Now().UTC()
+	runAfter, err := NextSummarizationRunAfter(ctx, pool, org.ID)
+	if err != nil {
+		t.Fatalf("NextSummarizationRunAfter: %v", err)
+	}
+	if runAfter == nil {
+		t.Fatal("runAfter = nil, want deferred retry time")
+	}
+	if !runAfter.After(before) {
+		t.Fatalf("runAfter = %s, want after %s", runAfter.UTC(), before)
+	}
+}
+
 func TestSummarization_ImmutableRow(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -695,6 +714,54 @@ func seedSummarizationProfile(t *testing.T, ctx context.Context, pool *pgxpool.P
 		InvocationPurpose: "summarization",
 	}); err != nil {
 		t.Fatalf("upsert model profile assignment: %v", err)
+	}
+}
+
+func seedSystemHaikuProviderConnection(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, healthStatus string) {
+	t.Helper()
+
+	providerRepo := repo.NewModelProviderRepo(pool)
+	profileRepo := repo.NewModelProfileRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+
+	provider, err := providerRepo.Create(ctx, repo.ModelProvider{
+		Slug:        "haiku-provider-" + uuid.NewString()[:8],
+		DisplayName: "Haiku Provider",
+		APIBaseURL:  "https://example.invalid/v1",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create model provider: %v", err)
+	}
+
+	if _, err := profileRepo.Create(ctx, repo.ModelProfile{
+		LogicalProfileID:    "haiku",
+		OrganizationID:      &orgID,
+		Version:             1,
+		IsCurrent:           true,
+		ProviderID:          provider.ID,
+		ModelName:           "claude-haiku-4-5-20251001",
+		DisplayName:         "Haiku",
+		ContextWindowTokens: 64000,
+		MaxOutputTokens:     4096,
+		SupportsStreaming:   true,
+		SupportsVision:      false,
+		InvocationPurpose:   "agent_turn",
+	}); err != nil {
+		t.Fatalf("create haiku model profile: %v", err)
+	}
+
+	if _, err := connectionRepo.Create(ctx, repo.ProviderConnection{
+		OrganizationID:   orgID,
+		ProviderID:       provider.ID,
+		DisplayName:      "Haiku Connection",
+		APIKeyRef:        "secret/test",
+		FailoverPriority: 1,
+		MaxConcurrent:    1,
+		HealthStatus:     healthStatus,
+		IsEnabled:        true,
+	}); err != nil {
+		t.Fatalf("create provider connection: %v", err)
 	}
 }
 

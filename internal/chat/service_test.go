@@ -1038,6 +1038,87 @@ func TestCloseSessionEnqueuesSummarizationAndCleanupJobs(t *testing.T) {
 	}
 }
 
+func TestCloseSessionDefersSummarizationWhenProviderBackoffActive(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	enqueuer := &fakeEnqueuer{}
+	svc := newUnitService(t, unitDeps{
+		enqueuer: enqueuer,
+		sessions: &fakeSessionRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				return repo.ChatSession{ID: id, OrganizationID: orgID, Status: "active"}, nil
+			},
+			closeFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				return repo.ChatSession{ID: id, OrganizationID: orgID, Status: "closed"}, nil
+			},
+		},
+		turns: &fakeTurnRepo{listBySessionFn: func(context.Context, uuid.UUID) ([]repo.ChatTurn, error) {
+			return []repo.ChatTurn{}, nil
+		}},
+	})
+	delayUntil := now.Add(30 * time.Second)
+	svc.clock = staticClock{now: now}
+	svc.summarizationRunAfter = func(context.Context, uuid.UUID) (*time.Time, error) {
+		return &delayUntil, nil
+	}
+
+	if err := svc.CloseSession(context.Background(), sessionID); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+	if len(enqueuer.calls) == 0 {
+		t.Fatal("expected summary job enqueue")
+	}
+	if enqueuer.calls[0].jobType != ChatSummarizeJobType {
+		t.Fatalf("first job type = %s, want %s", enqueuer.calls[0].jobType, ChatSummarizeJobType)
+	}
+	if enqueuer.calls[0].runAfter == nil || !enqueuer.calls[0].runAfter.Equal(delayUntil) {
+		t.Fatalf("summary run_after = %v, want %s", enqueuer.calls[0].runAfter, delayUntil)
+	}
+}
+
+func TestCloseSessionDefersSummarizationWhenSessionBackoffActive(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	orgID := uuid.New()
+	sessionID := uuid.New()
+	delayUntil := now.Add(25 * time.Minute)
+	metadata, err := MergeSummarizationBackoffMetadata(nil, SummarizationBackoffState{
+		FailureCount:  2,
+		LastError:     "provider http 429",
+		LastFailureAt: now.Format(time.RFC3339Nano),
+		NextAllowedAt: delayUntil.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeSummarizationBackoffMetadata: %v", err)
+	}
+	enqueuer := &fakeEnqueuer{}
+	svc := newUnitService(t, unitDeps{
+		enqueuer: enqueuer,
+		sessions: &fakeSessionRepo{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				return repo.ChatSession{ID: id, OrganizationID: orgID, Status: "active", Metadata: metadata}, nil
+			},
+			closeFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+				return repo.ChatSession{ID: id, OrganizationID: orgID, Status: "closed", Metadata: metadata}, nil
+			},
+		},
+		turns: &fakeTurnRepo{listBySessionFn: func(context.Context, uuid.UUID) ([]repo.ChatTurn, error) {
+			return []repo.ChatTurn{}, nil
+		}},
+	})
+	svc.clock = staticClock{now: now}
+
+	if err := svc.CloseSession(context.Background(), sessionID); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+	if len(enqueuer.calls) == 0 {
+		t.Fatal("expected summary job enqueue")
+	}
+	if enqueuer.calls[0].runAfter == nil || !enqueuer.calls[0].runAfter.Equal(delayUntil) {
+		t.Fatalf("summary run_after = %v, want %s", enqueuer.calls[0].runAfter, delayUntil)
+	}
+}
+
 type unitDeps struct {
 	sessions     *fakeSessionRepo
 	participants *fakeParticipantRepo
@@ -1105,7 +1186,9 @@ func newUnitService(t *testing.T, deps unitDeps) *service {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	return svc.(*service)
+	typed := svc.(*service)
+	typed.summarizationRunAfter = nil
+	return typed
 }
 
 type fakeSessionRepo struct {
@@ -1116,6 +1199,7 @@ type fakeSessionRepo struct {
 	updateModeFn        func(ctx context.Context, id uuid.UUID, mode string) (repo.ChatSession, error)
 	closeFn             func(ctx context.Context, id uuid.UUID) (repo.ChatSession, error)
 	updateCurrentTurnFn func(ctx context.Context, id uuid.UUID, currentTurnID *uuid.UUID) (repo.ChatSession, error)
+	updateMetadataFn    func(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ChatSession, error)
 	incrementCountsFn   func(ctx context.Context, id uuid.UUID, turnDelta, messageDelta int) (repo.ChatSession, error)
 }
 
@@ -1168,6 +1252,13 @@ func (f *fakeSessionRepo) UpdateCurrentTurn(ctx context.Context, id uuid.UUID, c
 		return f.updateCurrentTurnFn(ctx, id, currentTurnID)
 	}
 	return repo.ChatSession{ID: id, CurrentTurnID: currentTurnID}, nil
+}
+
+func (f *fakeSessionRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ChatSession, error) {
+	if f.updateMetadataFn != nil {
+		return f.updateMetadataFn(ctx, id, metadata)
+	}
+	return repo.ChatSession{ID: id, Metadata: metadata}, nil
 }
 
 func (f *fakeSessionRepo) IncrementCounts(ctx context.Context, id uuid.UUID, turnDelta, messageDelta int) (repo.ChatSession, error) {

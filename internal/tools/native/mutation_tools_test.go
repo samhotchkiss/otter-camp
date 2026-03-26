@@ -981,17 +981,15 @@ func TestFileWriteRejectsReviewerAssessmentInDeliverable(t *testing.T) {
 	})
 	out, err := executor.Execute(ctx, "file.write", map[string]any{
 		"path": "Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md",
-		"content": `**Rejected — task is now blocked (review path exhausted).**
+		"content": `The evidence is clear. Here's my assessment:
 
-The rejection has been recorded and the task has been automatically blocked because the work-review loop has exceeded its allowed iterations. Summary of why approval was not possible:
+**Findings:**
 
-| Check | Result |
-|---|---|
-| Core deliverable (error handling test results) | Missing |
-| Work file content | Contains prior reviewer rejection text, not a deliverable |
-| Review cycles exhausted | Loop properly blocked |
+1. **No deliverable produced.** There are no test scripts, test result files, or deliverable content.
+2. **All four planning artifacts are empty scaffolds.**
+3. **12 work iterations with 10+ rejections — no progress.**
 
-**PM escalation recommended.** The worker was unable to produce this deliverable across 10 work iterations.
+This task has no deliverable to approve. Rejecting.
 `,
 		"create_dirs": true,
 	})

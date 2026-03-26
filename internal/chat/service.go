@@ -150,6 +150,7 @@ type chatSessionRepository interface {
 	UpdateMode(ctx context.Context, id uuid.UUID, mode string) (repo.ChatSession, error)
 	Close(ctx context.Context, id uuid.UUID) (repo.ChatSession, error)
 	UpdateCurrentTurn(ctx context.Context, id uuid.UUID, currentTurnID *uuid.UUID) (repo.ChatSession, error)
+	UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (repo.ChatSession, error)
 	IncrementCounts(ctx context.Context, id uuid.UUID, turnDelta, messageDelta int) (repo.ChatSession, error)
 }
 
@@ -246,6 +247,8 @@ type service struct {
 	events   eventPublisher
 	enqueuer jobEnqueuer
 	clock    clock.Clock
+
+	summarizationRunAfter func(context.Context, uuid.UUID) (*time.Time, error)
 }
 
 func NewService(opts Options) (ChatService, error) {
@@ -313,6 +316,9 @@ func NewService(opts Options) (ChatService, error) {
 		svc.enqueuer = opts.Enqueuer
 	} else {
 		svc.enqueuer = jobqueue.New(opts.Pool, nil, jobqueue.Config{})
+	}
+	svc.summarizationRunAfter = func(ctx context.Context, organizationID uuid.UUID) (*time.Time, error) {
+		return NextSummarizationRunAfter(ctx, opts.Pool, organizationID)
 	}
 
 	return svc, nil
@@ -703,10 +709,16 @@ func (s *service) CloseSession(ctx context.Context, sessionID uuid.UUID) error {
 		return err
 	}
 
+	summarizeRunAfter := SummarizationSessionRunAfter(session.Metadata, s.clock.Now().UTC())
+	if s.summarizationRunAfter != nil {
+		if delayedUntil, err := s.summarizationRunAfter(ctx, session.OrganizationID); err == nil {
+			summarizeRunAfter = MergeSummarizationRunAfter(summarizeRunAfter, delayedUntil)
+		}
+	}
 	if _, err := s.enqueuer.Enqueue(ctx, nil, ChatSummarizeJobType, summarizePriority, ChatSummarizePayload{
 		SessionID:         session.ID,
 		LayerBudgetTokens: 0,
-	}, nil); err != nil {
+	}, summarizeRunAfter); err != nil {
 		return err
 	}
 

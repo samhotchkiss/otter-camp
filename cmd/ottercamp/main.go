@@ -2297,6 +2297,8 @@ func runDBCommand(args []string) int {
 		return runDBMigrate(args[1:])
 	case "status":
 		return runDBStatus(args[1:])
+	case "token-usage":
+		return runDBTokenUsage(args[1:])
 	case "reset":
 		return runDBReset(args[1:])
 	default:
@@ -2521,6 +2523,458 @@ func runDBReset(args []string) int {
 
 	fmt.Fprintln(os.Stdout, "database reset complete")
 	return 0
+}
+
+type dbTokenUsageOverview struct {
+	Invocations         int64 `json:"invocations"`
+	Completed           int64 `json:"completed"`
+	Failed              int64 `json:"failed"`
+	InFlight            int64 `json:"in_flight"`
+	Pending             int64 `json:"pending"`
+	RateLimitedFailures int64 `json:"rate_limited_failures"`
+	InputTokens         int64 `json:"input_tokens"`
+	OutputTokens        int64 `json:"output_tokens"`
+	CacheReadTokens     int64 `json:"cache_read_tokens"`
+	TotalTokens         int64 `json:"total_tokens"`
+}
+
+type dbTokenUsagePurposeRow struct {
+	InvocationPurpose  string `json:"invocation_purpose"`
+	ModelName          string `json:"model_name"`
+	ProviderConnection string `json:"provider_connection"`
+	Invocations        int64  `json:"invocations"`
+	Failed             int64  `json:"failed"`
+	InputTokens        int64  `json:"input_tokens"`
+	OutputTokens       int64  `json:"output_tokens"`
+	CacheReadTokens    int64  `json:"cache_read_tokens"`
+	TotalTokens        int64  `json:"total_tokens"`
+}
+
+type dbTokenUsageSessionRow struct {
+	SessionID       uuid.UUID `json:"session_id"`
+	ScopeType       string    `json:"scope_type"`
+	Mode            string    `json:"mode"`
+	Invocations     int64     `json:"invocations"`
+	Failed          int64     `json:"failed"`
+	InputTokens     int64     `json:"input_tokens"`
+	OutputTokens    int64     `json:"output_tokens"`
+	CacheReadTokens int64     `json:"cache_read_tokens"`
+	TotalTokens     int64     `json:"total_tokens"`
+	FirstSeen       time.Time `json:"first_seen"`
+	LastSeen        time.Time `json:"last_seen"`
+}
+
+type dbTokenUsageTurnRow struct {
+	TurnID          uuid.UUID `json:"turn_id"`
+	SessionID       uuid.UUID `json:"session_id"`
+	Invocations     int64     `json:"invocations"`
+	Purposes        int64     `json:"purposes"`
+	InputTokens     int64     `json:"input_tokens"`
+	OutputTokens    int64     `json:"output_tokens"`
+	CacheReadTokens int64     `json:"cache_read_tokens"`
+	TotalTokens     int64     `json:"total_tokens"`
+	FirstSeen       time.Time `json:"first_seen"`
+	LastSeen        time.Time `json:"last_seen"`
+}
+
+type dbTokenUsageFailureRow struct {
+	ErrorCode                 string    `json:"error_code"`
+	Failures                  int64     `json:"failures"`
+	ExplicitRateLimitFailures int64     `json:"explicit_rate_limit_failures"`
+	LastSeen                  time.Time `json:"last_seen"`
+}
+
+type dbTokenUsageReport struct {
+	WindowHours    int                      `json:"window_hours"`
+	Limit          int                      `json:"limit"`
+	OrganizationID *uuid.UUID               `json:"organization_id,omitempty"`
+	Overview       dbTokenUsageOverview     `json:"overview"`
+	ByPurpose      []dbTokenUsagePurposeRow `json:"by_purpose"`
+	TopSessions    []dbTokenUsageSessionRow `json:"top_sessions"`
+	TopTurns       []dbTokenUsageTurnRow    `json:"top_turns"`
+	Failures       []dbTokenUsageFailureRow `json:"failures"`
+}
+
+func runDBTokenUsage(args []string) int {
+	flags := flag.NewFlagSet("db token-usage", flag.ContinueOnError)
+	windowHours := flags.Int("hours", 24, "lookback window in hours")
+	limit := flags.Int("limit", 15, "maximum rows per breakdown")
+	orgIDRaw := flags.String("org", "", "organization UUID filter")
+	outputMode := flags.String("output", defaultOutputMode, "output mode: table|json|quiet")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "db token-usage argument error: %v\n", err)
+		return 1
+	}
+	if *windowHours <= 0 {
+		fmt.Fprintln(os.Stderr, "db token-usage argument error: --hours must be > 0")
+		return 1
+	}
+	if *limit <= 0 {
+		fmt.Fprintln(os.Stderr, "db token-usage argument error: --limit must be > 0")
+		return 1
+	}
+
+	var orgID *uuid.UUID
+	if trimmed := strings.TrimSpace(*orgIDRaw); trimmed != "" {
+		parsed, err := uuid.Parse(trimmed)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "db token-usage argument error: invalid --org UUID: %v\n", err)
+			return 1
+		}
+		orgID = &parsed
+	}
+
+	pool, err := db.NewFromEnv(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db token-usage setup error: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	report, err := loadDBTokenUsageReport(context.Background(), pool.Raw(), *windowHours, *limit, orgID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db token-usage query error: %v\n", err)
+		return 1
+	}
+
+	formatter, err := clitools.NewOutputFormatter(*outputMode, os.Stdout, defaultNoColor)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "db token-usage output error: %v\n", err)
+		return 1
+	}
+	switch formatter.Mode() {
+	case clitools.OutputModeJSON:
+		if err := formatter.WriteJSON(report); err != nil {
+			fmt.Fprintf(os.Stderr, "db token-usage output error: %v\n", err)
+			return 1
+		}
+	case clitools.OutputModeQuiet:
+		if err := formatter.WriteQuiet(strconv.FormatInt(report.Overview.TotalTokens, 10)); err != nil {
+			fmt.Fprintf(os.Stderr, "db token-usage output error: %v\n", err)
+			return 1
+		}
+	default:
+		printDBTokenUsageReportTable(os.Stdout, formatter, report)
+	}
+	return 0
+}
+
+func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours, limit int, orgID *uuid.UUID) (*dbTokenUsageReport, error) {
+	if pool == nil {
+		return nil, fmt.Errorf("db token-usage pool is required")
+	}
+	sinceAt := time.Now().UTC().Add(-time.Duration(windowHours) * time.Hour)
+	report := &dbTokenUsageReport{
+		WindowHours:    windowHours,
+		Limit:          limit,
+		OrganizationID: orgID,
+	}
+
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) AS invocations,
+			COUNT(*) FILTER (WHERE status = 'completed') AS completed,
+			COUNT(*) FILTER (WHERE status = 'failed') AS failed,
+			COUNT(*) FILTER (WHERE status = 'in_flight') AS in_flight,
+			COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+			COUNT(*) FILTER (
+				WHERE status = 'failed'
+				  AND (
+					lower(COALESCE(error_code, '')) LIKE '%rate%'
+					OR lower(COALESCE(error_message, '')) LIKE '%rate limit%'
+					OR lower(COALESCE(error_message, '')) LIKE '%429%'
+				  )
+			) AS rate_limited_failures,
+			COALESCE(SUM(COALESCE(input_tokens, 0)), 0) AS input_tokens,
+			COALESCE(SUM(COALESCE(output_tokens, 0)), 0) AS output_tokens,
+			COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0) AS cache_read_tokens,
+			COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) + COALESCE(cache_read_tokens, 0)), 0) AS total_tokens
+		FROM model_invocation
+		WHERE created_at >= $1
+		  AND ($2::uuid IS NULL OR organization_id = $2)
+	`, sinceAt, orgID).Scan(
+		&report.Overview.Invocations,
+		&report.Overview.Completed,
+		&report.Overview.Failed,
+		&report.Overview.InFlight,
+		&report.Overview.Pending,
+		&report.Overview.RateLimitedFailures,
+		&report.Overview.InputTokens,
+		&report.Overview.OutputTokens,
+		&report.Overview.CacheReadTokens,
+		&report.Overview.TotalTokens,
+	); err != nil {
+		return nil, err
+	}
+
+	purposeRows, err := pool.Query(ctx, `
+		SELECT
+			mi.invocation_purpose,
+			mi.model_name,
+			COALESCE(pc.display_name, '∅') AS provider_connection,
+			COUNT(*) AS invocations,
+			COUNT(*) FILTER (WHERE mi.status = 'failed') AS failed,
+			COALESCE(SUM(COALESCE(mi.input_tokens, 0)), 0) AS input_tokens,
+			COALESCE(SUM(COALESCE(mi.output_tokens, 0)), 0) AS output_tokens,
+			COALESCE(SUM(COALESCE(mi.cache_read_tokens, 0)), 0) AS cache_read_tokens,
+			COALESCE(SUM(COALESCE(mi.input_tokens, 0) + COALESCE(mi.output_tokens, 0) + COALESCE(mi.cache_read_tokens, 0)), 0) AS total_tokens
+		FROM model_invocation mi
+		LEFT JOIN provider_connection pc ON pc.id = mi.provider_connection_id
+		WHERE mi.created_at >= $1
+		  AND ($2::uuid IS NULL OR mi.organization_id = $2)
+		GROUP BY mi.invocation_purpose, mi.model_name, COALESCE(pc.display_name, '∅')
+		ORDER BY total_tokens DESC, invocations DESC
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer purposeRows.Close()
+	for purposeRows.Next() {
+		var row dbTokenUsagePurposeRow
+		if scanErr := purposeRows.Scan(
+			&row.InvocationPurpose,
+			&row.ModelName,
+			&row.ProviderConnection,
+			&row.Invocations,
+			&row.Failed,
+			&row.InputTokens,
+			&row.OutputTokens,
+			&row.CacheReadTokens,
+			&row.TotalTokens,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.ByPurpose = append(report.ByPurpose, row)
+	}
+	if err := purposeRows.Err(); err != nil {
+		return nil, err
+	}
+
+	sessionRows, err := pool.Query(ctx, `
+		SELECT
+			mi.session_id,
+			COALESCE(cs.scope_type, '∅') AS scope_type,
+			COALESCE(cs.mode, '∅') AS mode,
+			COUNT(*) AS invocations,
+			COUNT(*) FILTER (WHERE mi.status = 'failed') AS failed,
+			COALESCE(SUM(COALESCE(mi.input_tokens, 0)), 0) AS input_tokens,
+			COALESCE(SUM(COALESCE(mi.output_tokens, 0)), 0) AS output_tokens,
+			COALESCE(SUM(COALESCE(mi.cache_read_tokens, 0)), 0) AS cache_read_tokens,
+			COALESCE(SUM(COALESCE(mi.input_tokens, 0) + COALESCE(mi.output_tokens, 0) + COALESCE(mi.cache_read_tokens, 0)), 0) AS total_tokens,
+			MIN(mi.created_at) AS first_seen,
+			MAX(mi.created_at) AS last_seen
+		FROM model_invocation mi
+		LEFT JOIN chat_session cs ON cs.id = mi.session_id
+		WHERE mi.created_at >= $1
+		  AND mi.session_id IS NOT NULL
+		  AND ($2::uuid IS NULL OR mi.organization_id = $2)
+		GROUP BY mi.session_id, COALESCE(cs.scope_type, '∅'), COALESCE(cs.mode, '∅')
+		ORDER BY total_tokens DESC, invocations DESC
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer sessionRows.Close()
+	for sessionRows.Next() {
+		var row dbTokenUsageSessionRow
+		if scanErr := sessionRows.Scan(
+			&row.SessionID,
+			&row.ScopeType,
+			&row.Mode,
+			&row.Invocations,
+			&row.Failed,
+			&row.InputTokens,
+			&row.OutputTokens,
+			&row.CacheReadTokens,
+			&row.TotalTokens,
+			&row.FirstSeen,
+			&row.LastSeen,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.TopSessions = append(report.TopSessions, row)
+	}
+	if err := sessionRows.Err(); err != nil {
+		return nil, err
+	}
+
+	turnRows, err := pool.Query(ctx, `
+		SELECT
+			mi.turn_id,
+			mi.session_id,
+			COUNT(*) AS invocations,
+			COUNT(DISTINCT mi.invocation_purpose) AS purposes,
+			COALESCE(SUM(COALESCE(mi.input_tokens, 0)), 0) AS input_tokens,
+			COALESCE(SUM(COALESCE(mi.output_tokens, 0)), 0) AS output_tokens,
+			COALESCE(SUM(COALESCE(mi.cache_read_tokens, 0)), 0) AS cache_read_tokens,
+			COALESCE(SUM(COALESCE(mi.input_tokens, 0) + COALESCE(mi.output_tokens, 0) + COALESCE(mi.cache_read_tokens, 0)), 0) AS total_tokens,
+			MIN(mi.created_at) AS first_seen,
+			MAX(mi.created_at) AS last_seen
+		FROM model_invocation mi
+		WHERE mi.created_at >= $1
+		  AND mi.turn_id IS NOT NULL
+		  AND ($2::uuid IS NULL OR mi.organization_id = $2)
+		GROUP BY mi.turn_id, mi.session_id
+		ORDER BY total_tokens DESC, invocations DESC
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer turnRows.Close()
+	for turnRows.Next() {
+		var row dbTokenUsageTurnRow
+		if scanErr := turnRows.Scan(
+			&row.TurnID,
+			&row.SessionID,
+			&row.Invocations,
+			&row.Purposes,
+			&row.InputTokens,
+			&row.OutputTokens,
+			&row.CacheReadTokens,
+			&row.TotalTokens,
+			&row.FirstSeen,
+			&row.LastSeen,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.TopTurns = append(report.TopTurns, row)
+	}
+	if err := turnRows.Err(); err != nil {
+		return nil, err
+	}
+
+	failureRows, err := pool.Query(ctx, `
+		SELECT
+			COALESCE(NULLIF(error_code, ''), '∅') AS error_code,
+			COUNT(*) AS failures,
+			COUNT(*) FILTER (
+				WHERE lower(COALESCE(error_message, '')) LIKE '%rate limit%'
+				   OR lower(COALESCE(error_message, '')) LIKE '%429%'
+			) AS explicit_rate_limit_failures,
+			MAX(created_at) AS last_seen
+		FROM model_invocation
+		WHERE created_at >= $1
+		  AND status = 'failed'
+		  AND ($2::uuid IS NULL OR organization_id = $2)
+		GROUP BY COALESCE(NULLIF(error_code, ''), '∅')
+		ORDER BY failures DESC, error_code
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer failureRows.Close()
+	for failureRows.Next() {
+		var row dbTokenUsageFailureRow
+		if scanErr := failureRows.Scan(
+			&row.ErrorCode,
+			&row.Failures,
+			&row.ExplicitRateLimitFailures,
+			&row.LastSeen,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.Failures = append(report.Failures, row)
+	}
+	if err := failureRows.Err(); err != nil {
+		return nil, err
+	}
+
+	return report, nil
+}
+
+func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatter, report *dbTokenUsageReport) {
+	if report == nil {
+		return
+	}
+	fmt.Fprintln(w, "== Token Usage Overview ==")
+	_ = formatter.WriteTable([]string{
+		"Invocations", "Completed", "Failed", "In Flight", "Pending", "Rate-Limited", "Input", "Output", "Cache Read", "Total",
+	}, [][]string{{
+		strconv.FormatInt(report.Overview.Invocations, 10),
+		strconv.FormatInt(report.Overview.Completed, 10),
+		strconv.FormatInt(report.Overview.Failed, 10),
+		strconv.FormatInt(report.Overview.InFlight, 10),
+		strconv.FormatInt(report.Overview.Pending, 10),
+		strconv.FormatInt(report.Overview.RateLimitedFailures, 10),
+		strconv.FormatInt(report.Overview.InputTokens, 10),
+		strconv.FormatInt(report.Overview.OutputTokens, 10),
+		strconv.FormatInt(report.Overview.CacheReadTokens, 10),
+		strconv.FormatInt(report.Overview.TotalTokens, 10),
+	}})
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Usage by Purpose / Model / Connection ==")
+	purposeRows := make([][]string, 0, len(report.ByPurpose))
+	for _, row := range report.ByPurpose {
+		purposeRows = append(purposeRows, []string{
+			row.InvocationPurpose,
+			row.ModelName,
+			row.ProviderConnection,
+			strconv.FormatInt(row.Invocations, 10),
+			strconv.FormatInt(row.Failed, 10),
+			strconv.FormatInt(row.InputTokens, 10),
+			strconv.FormatInt(row.OutputTokens, 10),
+			strconv.FormatInt(row.CacheReadTokens, 10),
+			strconv.FormatInt(row.TotalTokens, 10),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Purpose", "Model", "Connection", "Invocations", "Failed", "Input", "Output", "Cache Read", "Total"}, purposeRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Top Sessions ==")
+	sessionRows := make([][]string, 0, len(report.TopSessions))
+	for _, row := range report.TopSessions {
+		sessionRows = append(sessionRows, []string{
+			row.SessionID.String(),
+			row.ScopeType,
+			row.Mode,
+			strconv.FormatInt(row.Invocations, 10),
+			strconv.FormatInt(row.Failed, 10),
+			strconv.FormatInt(row.InputTokens, 10),
+			strconv.FormatInt(row.OutputTokens, 10),
+			strconv.FormatInt(row.CacheReadTokens, 10),
+			strconv.FormatInt(row.TotalTokens, 10),
+			row.FirstSeen.UTC().Format(time.RFC3339),
+			row.LastSeen.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Session", "Scope", "Mode", "Invocations", "Failed", "Input", "Output", "Cache Read", "Total", "First Seen", "Last Seen"}, sessionRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Top Turns ==")
+	turnRows := make([][]string, 0, len(report.TopTurns))
+	for _, row := range report.TopTurns {
+		turnRows = append(turnRows, []string{
+			row.TurnID.String(),
+			row.SessionID.String(),
+			strconv.FormatInt(row.Invocations, 10),
+			strconv.FormatInt(row.Purposes, 10),
+			strconv.FormatInt(row.InputTokens, 10),
+			strconv.FormatInt(row.OutputTokens, 10),
+			strconv.FormatInt(row.CacheReadTokens, 10),
+			strconv.FormatInt(row.TotalTokens, 10),
+			row.FirstSeen.UTC().Format(time.RFC3339),
+			row.LastSeen.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Turn", "Session", "Invocations", "Purposes", "Input", "Output", "Cache Read", "Total", "First Seen", "Last Seen"}, turnRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Most Common Failures ==")
+	failureRows := make([][]string, 0, len(report.Failures))
+	for _, row := range report.Failures {
+		failureRows = append(failureRows, []string{
+			row.ErrorCode,
+			strconv.FormatInt(row.Failures, 10),
+			strconv.FormatInt(row.ExplicitRateLimitFailures, 10),
+			row.LastSeen.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Error Code", "Failures", "Explicit Rate Limit", "Last Seen"}, failureRows)
 }
 
 func runAuthCommand(args []string) int {

@@ -186,6 +186,11 @@ func RecoveryFileWriteFailureRejectsDraft(reason string) bool {
 		strings.Contains(lower, "repeated intent-only recovery drafts")
 }
 
+func RecoveryFileWriteFailureIsRepeatedTargetDrift(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return strings.Contains(lower, "repeated recovery target drift")
+}
+
 func RecoveryFileWriteFailureIsIntentOnly(reason string) bool {
 	lower := strings.ToLower(strings.TrimSpace(reason))
 	return strings.Contains(lower, "intent to write the deliverable") ||
@@ -230,6 +235,9 @@ func RecoveryFileWritePromptStrategyLines(checkpoint *RecoveryFileWriteCheckpoin
 			if RecoveryFileWriteFailureIsRepeatedDraftReject(failure) {
 				lines = append(lines, "- Repeated non-substantive recovery drafts are a hardened blocker state; do not expect a generic retry loop to make progress.")
 			}
+		}
+		if RecoveryFileWriteFailureIsRepeatedTargetDrift(failure) {
+			lines = append(lines, "- The checkpoint already rejected recovery target drift. Do not switch to a different file path unless a new authoritative validation failure explicitly names it.")
 		}
 	}
 	lines = append(lines, "- If the target file already exists, continue from that durable output instead of restarting the same failed write.")

@@ -241,6 +241,7 @@ type mcpPromptCacheKey struct {
 }
 
 type PromptAssembler struct {
+	pool           *pgxpool.Pool
 	sessions       chatSessionRepository
 	messages       chatMessageRepository
 	summaries      chatSummaryRepository
@@ -271,7 +272,8 @@ type PromptAssembler struct {
 	defaultLayer6Budget int
 	defaultLayer7Budget int
 
-	logger *slog.Logger
+	logger                *slog.Logger
+	summarizationRunAfter func(context.Context, uuid.UUID) (*time.Time, error)
 
 	mcpPromptCacheMu sync.RWMutex
 	mcpPromptCache   map[mcpPromptCacheKey][]MCPPrompt
@@ -322,6 +324,7 @@ func NewPromptAssembler(opts AssemblerOptions) (*PromptAssembler, error) {
 	}
 
 	a := &PromptAssembler{
+		pool:                opts.Pool,
 		sessions:            opts.Sessions,
 		messages:            opts.Messages,
 		summaries:           opts.Summaries,
@@ -439,6 +442,11 @@ func NewPromptAssembler(opts AssemblerOptions) (*PromptAssembler, error) {
 	if a.enqueuer == nil && opts.Pool != nil {
 		a.enqueuer = jobqueue.New(opts.Pool, a.logger, jobqueue.Config{})
 	}
+	if opts.Pool != nil {
+		a.summarizationRunAfter = func(ctx context.Context, organizationID uuid.UUID) (*time.Time, error) {
+			return chat.NextSummarizationRunAfter(ctx, opts.Pool, organizationID)
+		}
+	}
 
 	return a, nil
 }
@@ -527,11 +535,21 @@ func (a *PromptAssembler) Assemble(ctx context.Context, input AssemblyInput) (*A
 	assembled.MemoryManifest = manifest
 
 	historyMessages, layer6Compressed := a.buildLayer6(messages, summaries, layer6Budget)
-	if shouldSummarize, summarizeErr := a.shouldSummarize(ctx, session.ID, layer6Budget); summarizeErr != nil {
-		assembled.Errors = append(assembled.Errors, summarizeErr.Error())
-	} else if shouldSummarize {
-		if enqueueErr := a.enqueueSummarization(ctx, session.ID, layer6Budget); enqueueErr != nil {
-			assembled.Errors = append(assembled.Errors, enqueueErr.Error())
+	if !shouldSkipAsyncExecutionSummarization(session) {
+		if shouldSummarize, summarizeErr := a.shouldSummarize(ctx, session.ID, layer6Budget); summarizeErr != nil {
+			assembled.Errors = append(assembled.Errors, summarizeErr.Error())
+		} else if shouldSummarize {
+			runAfter := chat.SummarizationSessionRunAfter(session.Metadata, time.Now().UTC())
+			if a.summarizationRunAfter != nil {
+				if delayedUntil, delayErr := a.summarizationRunAfter(ctx, session.OrganizationID); delayErr != nil {
+					assembled.Errors = append(assembled.Errors, delayErr.Error())
+				} else {
+					runAfter = chat.MergeSummarizationRunAfter(runAfter, delayedUntil)
+				}
+			}
+			if enqueueErr := a.enqueueSummarization(ctx, session.ID, layer6Budget, runAfter); enqueueErr != nil {
+				assembled.Errors = append(assembled.Errors, enqueueErr.Error())
+			}
 		}
 	}
 
@@ -948,29 +966,29 @@ type taskContextRelatedTask struct {
 }
 
 type projectTaskContext struct {
-	projectName          string
-	taskTitle            string
-	taskNumber           int
-	taskStatus           string
-	taskDescription      string
-	parentTaskLabel      string
-	workspaceRoot        string
-	contentMigration     bool
-	migrationCheckpoint  *taskcheckpoint.ContentMigrationCheckpoint
-	recoveryCheckpoint   *taskcheckpoint.RecoveryFileWriteCheckpoint
-	planningArtifacts    []taskplan.PlannedArtifact
-	acceptanceCriteria   []string
-	currentFlowStep       string
-	currentFlowStatus     string
+	projectName            string
+	taskTitle              string
+	taskNumber             int
+	taskStatus             string
+	taskDescription        string
+	parentTaskLabel        string
+	workspaceRoot          string
+	contentMigration       bool
+	migrationCheckpoint    *taskcheckpoint.ContentMigrationCheckpoint
+	recoveryCheckpoint     *taskcheckpoint.RecoveryFileWriteCheckpoint
+	planningArtifacts      []taskplan.PlannedArtifact
+	acceptanceCriteria     []string
+	currentFlowStep        string
+	currentFlowStatus      string
 	currentFlowExecutionID *uuid.UUID
-	completedFlowSteps   []string
-	pendingFlowSteps     []string
-	childTasks           []taskContextChildTask
-	siblingTasks         []taskContextRelatedTask
-	parentGate           []string
-	subtasks             []taskContextSubtask
-	dependencies         []string
-	flowNodeID           *uuid.UUID
+	completedFlowSteps     []string
+	pendingFlowSteps       []string
+	childTasks             []taskContextChildTask
+	siblingTasks           []taskContextRelatedTask
+	parentGate             []string
+	subtasks               []taskContextSubtask
+	dependencies           []string
+	flowNodeID             *uuid.UUID
 }
 
 func (a *PromptAssembler) buildProjectTaskContext(ctx context.Context, taskID uuid.UUID) (projectTaskContext, error) {
@@ -1774,14 +1792,26 @@ func (a *PromptAssembler) shouldSummarize(ctx context.Context, sessionID uuid.UU
 	return a.summarization.ShouldSummarize(ctx, sessionID, layerBudgetTokens)
 }
 
-func (a *PromptAssembler) enqueueSummarization(ctx context.Context, sessionID uuid.UUID, layerBudgetTokens int) error {
+func shouldSkipAsyncExecutionSummarization(session repo.ChatSession) bool {
+	if !strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(session.ScopeType)) {
+	case "project", "project_task":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *PromptAssembler) enqueueSummarization(ctx context.Context, sessionID uuid.UUID, layerBudgetTokens int, runAfter *time.Time) error {
 	if a.enqueuer == nil {
 		return nil
 	}
 	_, err := a.enqueuer.Enqueue(ctx, nil, chat.ChatSummarizeJobType, defaultSummarizationJobPrio, chat.ChatSummarizePayload{
 		SessionID:         sessionID,
 		LayerBudgetTokens: layerBudgetTokens,
-	}, nil)
+	}, runAfter)
 	if err != nil {
 		return fmt.Errorf("enqueue summarization: %w", err)
 	}

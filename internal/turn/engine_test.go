@@ -32,6 +32,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
+	"github.com/samhotchkiss/otter-camp/internal/toolargs"
 	"github.com/samhotchkiss/otter-camp/internal/tools"
 	"log/slog"
 )
@@ -631,13 +632,12 @@ func TestLogicalMessageCancelledUsesLatestAttemptForTriggerMessage(t *testing.T)
 	}
 }
 
-func TestListeningEvalRunsForAsyncSession(t *testing.T) {
+func TestListeningEvalSkippedForAsyncOrganizationSession(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
-	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
-		if req.Purpose == "listening_eval" {
-			return ModelResponse{Content: "respond"}, nil
-		}
-		return ModelResponse{Content: "continuation"}, nil
+	fixture.session.ScopeType = "organization"
+	fixture.model.completeFn = func(context.Context, ModelRequest) (ModelResponse, error) {
+		t.Fatal("listening eval should be skipped for async organization sessions")
+		return ModelResponse{}, nil
 	}
 	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
 		if err := onChunk("ok"); err != nil {
@@ -649,8 +649,8 @@ func TestListeningEvalRunsForAsyncSession(t *testing.T) {
 	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
 		t.Fatalf("HandleUserMessage: %v", err)
 	}
-	if fixture.model.listeningEvalCalls != 1 {
-		t.Fatalf("listening eval calls = %d, want 1", fixture.model.listeningEvalCalls)
+	if fixture.model.listeningEvalCalls != 0 {
+		t.Fatalf("listening eval calls = %d, want 0", fixture.model.listeningEvalCalls)
 	}
 }
 
@@ -673,6 +673,32 @@ func TestListeningEvalSkippedForAsyncProjectTaskSession(t *testing.T) {
 	}
 	fixture.model.completeFn = func(context.Context, ModelRequest) (ModelResponse, error) {
 		t.Fatal("listening eval should be skipped for async project_task sessions")
+		return ModelResponse{}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if fixture.model.listeningEvalCalls != 0 {
+		t.Fatalf("listening eval calls = %d, want 0", fixture.model.listeningEvalCalls)
+	}
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", fixture.model.streamCalls)
+	}
+}
+
+func TestListeningEvalSkippedForAsyncProjectSession(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	fixture.model.completeFn = func(context.Context, ModelRequest) (ModelResponse, error) {
+		t.Fatal("listening eval should be skipped for async project sessions")
 		return ModelResponse{}, nil
 	}
 	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
@@ -794,7 +820,13 @@ func TestHandleUserMessageFailsWhenInvocationCompletionFails(t *testing.T) {
 }
 
 func TestListeningEvalWaitReenqueuesAndSkipsPhase2(t *testing.T) {
-	fixture := newUnitFixture(t, "async")
+	fixture := newUnitFixture(t, "sync")
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   "One more thing after the current request.",
+	})
 	base := time.Unix(1700000000, 0).UTC()
 	fixture.engine.now = func() time.Time { return base }
 	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
@@ -874,6 +906,107 @@ func TestHandleUserMessageSummarizeEnqueueUsesBackgroundPriority(t *testing.T) {
 	}
 	if summarizeJobs[0].priority >= fixture.engine.jobPriority {
 		t.Fatalf("chat_summarize priority = %d, want below agent_turn priority %d", summarizeJobs[0].priority, fixture.engine.jobPriority)
+	}
+}
+
+func TestHandleUserMessageSummarizeEnqueueUsesProviderBackoffRunAfter(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.summarization = &fakeSummarizationChecker{shouldSummarize: true}
+	delayUntil := fixture.engine.now().Add(40 * time.Second).Truncate(time.Second)
+	fixture.engine.summarizationRunAfter = func(context.Context, uuid.UUID) (*time.Time, error) {
+		return &delayUntil, nil
+	}
+	fixture.model.completeFn = func(_ context.Context, req ModelRequest) (ModelResponse, error) {
+		if req.Purpose == "listening_eval" {
+			return ModelResponse{Content: "respond"}, nil
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+	fixture.model.streamFn = func(ctx context.Context, req ModelRequest, onChunk func(token string) error) (ModelResponse, error) {
+		if err := onChunk("ok"); err != nil {
+			return ModelResponse{}, err
+		}
+		return ModelResponse{Content: "ok"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	summarizeJobs := fixture.enqueuer.jobsByType(chat.ChatSummarizeJobType)
+	if len(summarizeJobs) != 1 {
+		t.Fatalf("chat_summarize jobs = %d, want 1", len(summarizeJobs))
+	}
+	if summarizeJobs[0].runAfter == nil || !summarizeJobs[0].runAfter.Equal(delayUntil) {
+		t.Fatalf("chat_summarize run_after = %v, want %s", summarizeJobs[0].runAfter, delayUntil)
+	}
+}
+
+func TestTurnToolBudgetUsesAsyncProjectCap(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	rt := &turnRuntime{session: fixture.session, agent: repo.Agent{AgentType: "general"}}
+
+	if got := fixture.engine.turnToolBudget(context.Background(), rt); got != asyncProjectMaxToolCalls {
+		t.Fatalf("turnToolBudget = %d, want %d", got, asyncProjectMaxToolCalls)
+	}
+	if got := fixture.engine.agentTurnPromptGuardrailTokens(context.Background(), rt, false); got != asyncProjectPromptTokenGuardrail {
+		t.Fatalf("prompt guardrail = %d, want %d", got, asyncProjectPromptTokenGuardrail)
+	}
+}
+
+func TestTurnToolBudgetUsesAsyncProjectTaskReviewCap(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatalf("tasks repo = %T, want *fakeTaskRepo", fixture.engine.tasks)
+	}
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {ID: taskID, WorkStatus: "review"},
+	}
+	rt := &turnRuntime{session: fixture.session, agent: repo.Agent{AgentType: "worker"}}
+
+	if got := fixture.engine.turnToolBudget(context.Background(), rt); got != asyncProjectTaskReviewMaxToolCalls {
+		t.Fatalf("turnToolBudget = %d, want %d", got, asyncProjectTaskReviewMaxToolCalls)
+	}
+	if got := fixture.engine.agentTurnPromptGuardrailTokens(context.Background(), rt, false); got != asyncProjectTaskReviewPromptGuardrail {
+		t.Fatalf("prompt guardrail = %d, want %d", got, asyncProjectTaskReviewPromptGuardrail)
+	}
+}
+
+func TestTurnPromptGuardrailUsesAsyncProjectTaskWorkCapForComplexWork(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatalf("tasks repo = %T, want *fakeTaskRepo", fixture.engine.tasks)
+	}
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {ID: taskID, WorkStatus: "in_progress"},
+	}
+	rt := &turnRuntime{session: fixture.session, agent: repo.Agent{AgentType: "worker"}}
+
+	if got := fixture.engine.turnToolBudget(context.Background(), rt); got != asyncProjectTaskWorkMaxToolCalls {
+		t.Fatalf("turnToolBudget = %d, want %d", got, asyncProjectTaskWorkMaxToolCalls)
+	}
+	if got := fixture.engine.agentTurnPromptGuardrailTokens(context.Background(), rt, true); got != asyncProjectTaskWorkPromptGuardrail {
+		t.Fatalf("prompt guardrail = %d, want %d", got, asyncProjectTaskWorkPromptGuardrail)
+	}
+}
+
+func TestTurnToolBudgetPreservesExplicitLowerOverride(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.engine.maxToolCalls = 3
+	rt := &turnRuntime{session: fixture.session, agent: repo.Agent{AgentType: "general"}}
+
+	if got := fixture.engine.turnToolBudget(context.Background(), rt); got != 3 {
+		t.Fatalf("turnToolBudget = %d, want 3", got)
 	}
 }
 
@@ -5685,6 +5818,294 @@ func TestHandleUserMessageProjectScopeStopsAfterBlockedTaskCreateAllScopeMutatio
 	}
 }
 
+func TestHandleUserMessageTaskScopeStopsAfterBlockedTaskCreateBoundaryMutation(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	description := "Write the real validation log for the assigned task deliverable."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Write validation log",
+				Description:     &description,
+				AssignedAgentID: &assignedAgentID,
+			},
+		},
+	}
+	var dispatched []string
+	fixture.engine.dispatcher = &fakeDispatcher{
+		tier1Fn: func(_ context.Context, call ToolCall) (ToolResult, error) {
+			dispatched = append(dispatched, call.Name)
+			return ToolResult{ToolCallID: call.ID, Name: call.Name}, nil
+		},
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "call_task_create_boundary",
+				Name: "task.create",
+				Tier: "tier1",
+				Arguments: map[string]any{
+					"title":      "Analyze validation output",
+					"project_id": uuid.NewString(),
+				},
+			}}}, nil
+		default:
+			return ModelResponse{Content: "unexpected second round"}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(dispatched) != 0 {
+		t.Fatalf("dispatched tools = %v, want none after preflight task boundary block", dispatched)
+	}
+	if round != 1 {
+		t.Fatalf("model rounds = %d, want 1 after blocked task.create boundary mutation", round)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawBlockedTaskCreate bool
+	var sawBoundaryStop bool
+	for _, msg := range messages {
+		if msg.Role == "tool_result" && msg.ToolCallID != nil && *msg.ToolCallID == "call_task_create_boundary" &&
+			strings.Contains(msg.Content, "orchestration_parent_required") {
+			sawBlockedTaskCreate = true
+		}
+		if msg.Role == "system" && strings.Contains(msg.Content, "Task boundary guard blocked new child-task creation") {
+			sawBoundaryStop = true
+		}
+	}
+	if !sawBlockedTaskCreate {
+		t.Fatal("missing blocked task.create tool_result for task-scoped session")
+	}
+	if !sawBoundaryStop {
+		t.Fatal("missing task-boundary early-stop system message")
+	}
+}
+
+func TestHandleUserMessageTaskScopeStopsAfterBlockedSubtaskCreateBoundaryMutation(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	description := "Write the real validation log for the assigned task deliverable."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Write validation log",
+				Description:     &description,
+				AssignedAgentID: &assignedAgentID,
+			},
+		},
+	}
+	var dispatched []string
+	fixture.engine.dispatcher = &fakeDispatcher{
+		tier1Fn: func(_ context.Context, call ToolCall) (ToolResult, error) {
+			dispatched = append(dispatched, call.Name)
+			return ToolResult{ToolCallID: call.ID, Name: call.Name}, nil
+		},
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "call_subtask_create_task_boundary",
+				Name: "subtask.create",
+				Tier: "tier1",
+				Arguments: map[string]any{
+					"title": "Break verification into a subtask",
+				},
+			}}}, nil
+		default:
+			return ModelResponse{Content: "unexpected second round"}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(dispatched) != 0 {
+		t.Fatalf("dispatched tools = %v, want none after task-lane subtask.create block", dispatched)
+	}
+	if round != 1 {
+		t.Fatalf("model rounds = %d, want 1 after blocked task-lane subtask.create", round)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawBlockedSubtaskCreate bool
+	var sawBoundaryStop bool
+	for _, msg := range messages {
+		if msg.Role == "tool_result" && msg.ToolCallID != nil && *msg.ToolCallID == "call_subtask_create_task_boundary" &&
+			strings.Contains(msg.Content, "flow_node_execution_id_required") {
+			sawBlockedSubtaskCreate = true
+		}
+		if msg.Role == "system" && strings.Contains(msg.Content, "Task boundary guard blocked new child-task creation") {
+			sawBoundaryStop = true
+		}
+	}
+	if !sawBlockedSubtaskCreate {
+		t.Fatal("missing blocked subtask.create tool_result for task-scoped session")
+	}
+	if !sawBoundaryStop {
+		t.Fatal("missing task-boundary early-stop system message")
+	}
+}
+
+func TestHandleUserMessageTaskScopeInjectsFlowNodeExecutionIDForSubtaskCreate(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	executionID := uuid.New()
+	assignedAgentID := fixture.chat.participants[0].ParticipantID
+	description := "Carry out the task work and record progress."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{"flow_node_execution_id": executionID.String()})
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:              taskID,
+				ProjectID:       projectID,
+				TaskNumber:      27,
+				Title:           "Carry out task work",
+				Description:     &description,
+				AssignedAgentID: &assignedAgentID,
+			},
+		},
+	}
+
+	var dispatched []ToolCall
+	fixture.engine.dispatcher = &fakeDispatcher{
+		tier1Fn: func(_ context.Context, call ToolCall) (ToolResult, error) {
+			dispatched = append(dispatched, call)
+			return ToolResult{ToolCallID: call.ID, Name: call.Name, Output: map[string]any{"created": true}}, nil
+		},
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "call_subtask_create_injected",
+				Name: "subtask.create",
+				Tier: "tier1",
+				Arguments: map[string]any{
+					"title": "Capture the current evidence set",
+				},
+			}}}, nil
+		default:
+			return ModelResponse{Content: "done"}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if round != 2 {
+		t.Fatalf("model rounds = %d, want 2 after successful injected subtask.create", round)
+	}
+	if len(dispatched) != 1 {
+		t.Fatalf("dispatched calls = %d, want 1", len(dispatched))
+	}
+	if got := stringValue(dispatched[0].Arguments["flow_node_execution_id"]); got != executionID.String() {
+		t.Fatalf("flow_node_execution_id = %q, want %s", got, executionID.String())
+	}
+}
+
+func TestHandleUserMessageProjectScopeStopsAfterBlockedSubtaskCreateBoundaryMutation(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = projectID
+	var dispatched []string
+	fixture.engine.dispatcher = &fakeDispatcher{
+		tier1Fn: func(_ context.Context, call ToolCall) (ToolResult, error) {
+			dispatched = append(dispatched, call.Name)
+			return ToolResult{ToolCallID: call.ID, Name: call.Name}, nil
+		},
+	}
+
+	round := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		round++
+		switch round {
+		case 1:
+			return ModelResponse{ToolCalls: []ModelToolCall{{
+				ID:   "call_subtask_create_boundary",
+				Name: "subtask.create",
+				Tier: "tier1",
+				Arguments: map[string]any{
+					"title": "Break verification into a subtask",
+				},
+			}}}, nil
+		default:
+			return ModelResponse{Content: "unexpected second round"}, nil
+		}
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+	if len(dispatched) != 0 {
+		t.Fatalf("dispatched tools = %v, want none after project-lane subtask.create block", dispatched)
+	}
+	if round != 1 {
+		t.Fatalf("model rounds = %d, want 1 after blocked project-lane subtask.create", round)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	var sawBlockedSubtaskCreate bool
+	for _, msg := range messages {
+		if msg.Role != "tool_result" || msg.ToolCallID == nil || *msg.ToolCallID != "call_subtask_create_boundary" {
+			continue
+		}
+		if strings.Contains(msg.Content, "flow_node_execution_id_required") {
+			sawBlockedSubtaskCreate = true
+		}
+	}
+	if !sawBlockedSubtaskCreate {
+		t.Fatal("missing blocked subtask.create tool_result for project-scoped session")
+	}
+}
+
 func TestShouldBlockFreshKickoffPreCreateTool(t *testing.T) {
 	rt := &turnRuntime{
 		freshKickoff: true,
@@ -6787,6 +7208,83 @@ func TestShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationCo
 	}
 }
 
+func TestShouldBlockTaskExecutionTaskCreateToolBlocksNonOrchestrationTask(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Implement the migration CLI and write the execution log for the current task."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  24,
+				Title:       "Implement migration CLI",
+				Description: &description,
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"title":      "Analyze migration output",
+		"project_id": uuid.NewString(),
+	})
+	if !blocked {
+		t.Fatal("expected non-orchestration task execution lane to block task.create")
+	}
+	if !strings.Contains(reason, "orchestration_parent_required") {
+		t.Fatalf("reason = %q, want orchestration_parent_required guidance", reason)
+	}
+}
+
+func TestShouldBlockTaskExecutionTaskCreateToolAllowsOrchestrationParentChildCreate(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Orchestration task: parent task for decomposing the remaining bounded validation work."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  12,
+				Title:       "Validation orchestration parent",
+				Description: &description,
+				Metadata:    mustRawJSON(t, map[string]any{"decomposition": map[string]any{"orchestration_only": true}}),
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	if blocked, reason := fixture.engine.shouldBlockTaskExecutionTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"title":          "Run bounded validation slice",
+		"project_id":     uuid.NewString(),
+		"parent_task_id": taskID.String(),
+	}); blocked {
+		t.Fatalf("expected orchestration-only parent task to allow child create, got %q", reason)
+	}
+
+	blocked, reason := fixture.engine.shouldBlockTaskExecutionTaskCreateTool(context.Background(), rt, "task.create", map[string]any{
+		"title":      "Run bounded validation slice",
+		"project_id": uuid.NewString(),
+	})
+	if !blocked {
+		t.Fatal("expected orchestration-only task create without parent_task_id to be blocked")
+	}
+	if !strings.Contains(reason, "parent_task_id_required") {
+		t.Fatalf("reason = %q, want parent_task_id_required guidance", reason)
+	}
+}
+
 func TestBuildTaskExecutionBroadContextToolGuardError(t *testing.T) {
 	if msg := buildTaskExecutionBroadContextToolGuardError("memory.query"); !strings.Contains(msg, "should not browse org or project memory") {
 		t.Fatalf("memory.query guard = %q, want memory guidance", msg)
@@ -7406,6 +7904,111 @@ func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnMetaTaskCreate(t
 	}
 }
 
+func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnTaskLaneBoundaryErrors(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+	}
+	cases := []ToolResult{
+		{Name: "task.update", Error: "task_lane_owned_by_project_task_session: active execution lane exists"},
+		{Name: "file.write", Error: "task_execution_required: executable project tasks already exist"},
+		{Name: "task.update", Error: "flow_owned_status_blocked: this task is flow-owned"},
+		{Name: "file.write", Error: "deliverable_path_required: continue the concrete deliverable instead"},
+		{Name: "task.update", Error: "task must remain orchestration-only while executable child tasks exist"},
+	}
+
+	for _, result := range cases {
+		if !shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {
+			t.Fatalf("expected %q to stop project execution turn", result.Error)
+		}
+	}
+}
+
+func TestShouldStopAfterBlockedProjectExecutionBlockedMutationOnSubtaskCreateBoundaryError(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+	}
+	result := ToolResult{
+		Name:  "subtask.create",
+		Error: "flow_node_execution_id_required: project continuation should not call subtask.create from the project lane",
+	}
+	if !shouldStopAfterBlockedProjectExecutionBlockedMutation(rt, []ToolResult{result}) {
+		t.Fatal("expected project-scoped subtask.create boundary rejection to stop the turn")
+	}
+}
+
+func TestShouldStopAfterBlockedTaskExecutionBoundaryMutation(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+	}
+	results := []ToolResult{
+		{Name: "task.create", Error: "orchestration_parent_required: continue the current task deliverable directly"},
+		{Name: "task.create", Error: "parent_task_id_required: set parent_task_id to the current task id"},
+		{Name: "subtask.create", Error: "flow_node_execution_id_required: advance the task flow before creating subtasks"},
+	}
+	for _, result := range results {
+		if !shouldStopAfterBlockedTaskExecutionBoundaryMutation(rt, []ToolResult{result}) {
+			t.Fatalf("expected %q to stop task execution turn", result.Error)
+		}
+	}
+}
+
+func TestShouldBlockProjectExecutionSubtaskCreateTool(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+		},
+	}
+	if !shouldBlockProjectExecutionSubtaskCreateTool(rt, "subtask.create") {
+		t.Fatal("expected async project session to block subtask.create")
+	}
+	if shouldBlockProjectExecutionSubtaskCreateTool(rt, "task.create") {
+		t.Fatal("task.create should not use the project subtask-create guard")
+	}
+	rt.session.ScopeType = "project_task"
+	if shouldBlockProjectExecutionSubtaskCreateTool(rt, "subtask.create") {
+		t.Fatal("task-scoped sessions should bypass the project subtask-create guard")
+	}
+}
+
+func TestShouldBlockTaskExecutionSubtaskCreateTool(t *testing.T) {
+	t.Parallel()
+
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project_task",
+			Mode:      "async",
+		},
+	}
+	if !shouldBlockTaskExecutionSubtaskCreateTool(rt, "subtask.create") {
+		t.Fatal("expected task-scoped async session without execution id to block subtask.create")
+	}
+	rt.session.Metadata = mustRawJSON(t, map[string]any{"flow_node_execution_id": uuid.NewString()})
+	if shouldBlockTaskExecutionSubtaskCreateTool(rt, "subtask.create") {
+		t.Fatal("active flow execution should allow subtask.create to proceed")
+	}
+	if shouldBlockTaskExecutionSubtaskCreateTool(rt, "task.create") {
+		t.Fatal("task.create should not trigger the subtask-create guard")
+	}
+}
+
 func TestMaybeContinueProjectExecutionAfterTaskCompletionSupersedesStaleProjectContinuationTurn(t *testing.T) {
 	t.Parallel()
 
@@ -7594,6 +8197,142 @@ func TestProjectBootstrapWatchdogTimeoutForModel(t *testing.T) {
 	longBase := 24 * time.Minute
 	if got := projectBootstrapWatchdogTimeoutForModel("qwen2.5:72b", longBase); got != longBase {
 		t.Fatalf("long timeout = %s, want %s", got, longBase)
+	}
+}
+
+func TestMaybeContinueProjectExecutionAfterTaskCompletionClosesSettledSession(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	flowTemplateID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	sessionMetadata := mustJSONRaw(map[string]any{
+		"project_bootstrap": map[string]any{
+			"status": "completed",
+		},
+	})
+	fixture.session.Metadata = sessionMetadata
+	fixture.chat.session.Metadata = sessionMetadata
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO organization (id, slug, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, now(), now())
+	`, fixture.session.OrganizationID, "settled-project-org", "Settled Project Org"); err != nil {
+		t.Fatalf("insert organization: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO project (id, organization_id, slug, display_name, status, settings, created_by_type, created_by_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'active', '{}'::jsonb, 'system', $5, now(), now())
+	`, projectID, fixture.session.OrganizationID, "project-settled-session", "Project Settled Session", uuid.New()); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO flow_template (
+			id, organization_id, project_id, slug, display_name, description, is_current, version, is_system, created_by_type, created_by_id, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, '', true, 1, false, 'system', $6, now(), now())
+	`, flowTemplateID, fixture.session.OrganizationID, projectID, "settled-flow", "Settled Flow", uuid.New()); err != nil {
+		t.Fatalf("insert flow_template: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO chat_session (
+			id, organization_id, scope_type, scope_id, mode, status, title,
+			created_by_type, created_by_id, current_turn_id, last_message_at, turn_count, message_count, metadata, created_at, updated_at
+		) VALUES ($1, $2, 'project', $3, 'async', 'active', 'Settled Project Session',
+			'system', $4, NULL, now(), 0, 0, $5, now(), now())
+	`, fixture.session.ID, fixture.session.OrganizationID, projectID, uuid.New(), sessionMetadata); err != nil {
+		t.Fatalf("insert chat_session: %v", err)
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Status:         "active",
+			},
+		},
+	}
+	dbAgent, err := repo.NewAgentRepo(fixture.engine.pool).Create(context.Background(), repo.Agent{
+		OrganizationID:  fixture.session.OrganizationID,
+		DisplayName:     "Settled Project Session Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Test agent",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:              completedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      11,
+				Title:           "Finalize project delivery",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(dbAgent.ID),
+				FlowTemplateID:  uuidPtr(flowTemplateID),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO project_task (
+			id, organization_id, project_id, task_number, title, work_status,
+			requires_human_review, created_by_type, metadata, assigned_agent_id, flow_template_id, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,false,'system',$7,$8,$9,now(),now())
+	`, completedTaskID, fixture.session.OrganizationID, projectID, 11, "Finalize project delivery", "done", mustJSONRaw(map[string]any{}), dbAgent.ID, flowTemplateID); err != nil {
+		t.Fatalf("insert completed project_task: %v", err)
+	}
+
+	pendingContinuation, err := fixture.chat.AppendMessage(context.Background(), chat.AppendMessageInput{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage pending continuation: %v", err)
+	}
+
+	if err := fixture.engine.maybeContinueProjectExecutionAfterTaskCompletion(context.Background(), projectID, taskRepo.items[completedTaskID]); err != nil {
+		t.Fatalf("maybeContinueProjectExecutionAfterTaskCompletion: %v", err)
+	}
+
+	storedSession, err := repo.NewChatSessionRepo(fixture.engine.pool).GetByID(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("GetByID session: %v", err)
+	}
+	if storedSession.Status != "closed" {
+		t.Fatalf("session status = %q, want closed", storedSession.Status)
+	}
+	if storedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want nil", storedSession.CurrentTurnID)
+	}
+
+	storedMessage, err := fixture.messages.GetByID(context.Background(), pendingContinuation.ID)
+	if err != nil {
+		t.Fatalf("GetByID pending continuation: %v", err)
+	}
+	if storedMessage.Status != "failed" {
+		t.Fatalf("pending continuation status = %q, want failed", storedMessage.Status)
+	}
+	if storedMessage.ErrorMessage == nil || !strings.Contains(strings.TrimSpace(*storedMessage.ErrorMessage), "project execution already settled") {
+		t.Fatalf("pending continuation error = %v, want settled reason", storedMessage.ErrorMessage)
 	}
 }
 
@@ -14250,6 +14989,25 @@ func TestHandleUserMessageFailsWhenValidationLoopBlockLacksTaskTransitions(t *te
 	fixture.session.ScopeID = taskID
 	fixture.session.Mode = "async"
 
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.write:path_required",
+		AttemptFingerprint: "file.write",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "path_required",
+		FailureReason:      "path_required",
+		Count:              validationLoopBlockThreshold - 1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         uuid.New().String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
 	taskRepo := &fakeTaskRepo{
 		items: map[uuid.UUID]repo.ProjectTask{
 			taskID: {
@@ -14259,7 +15017,7 @@ func TestHandleUserMessageFailsWhenValidationLoopBlockLacksTaskTransitions(t *te
 				Title:           "Write file",
 				WorkStatus:      "in_progress",
 				AssignedAgentID: &assignedAgentID,
-				Metadata:        json.RawMessage(`{"existing":"value"}`),
+				Metadata:        metadata,
 			},
 		},
 	}
@@ -14292,7 +15050,7 @@ func TestHandleUserMessageFailsWhenValidationLoopBlockLacksTaskTransitions(t *te
 		}, nil
 	}
 
-	err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID)
+	err = fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID)
 	if err == nil || !strings.Contains(err.Error(), errMissingTaskTransitionServiceForValidationBlock) {
 		t.Fatalf("HandleUserMessage error = %v, want contains %q", err, errMissingTaskTransitionServiceForValidationBlock)
 	}
@@ -14695,6 +15453,103 @@ func TestMaybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatchBlocksReadOnl
 	}
 	if !fixture.messages.containsContentSubstring("Recovery turn halted: recovered file.write") {
 		t.Fatal("expected recovery halt system message")
+	}
+}
+
+func TestMaybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatchStopsSecondReadOnlyRecoveryCycle(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	description := "Write the deliverable. Output: docs/content-strategy.md with the full content strategy."
+	plan := taskplan.Analyze("Write content strategy", &description)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		Title:          "Write content strategy",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+		Metadata:       taskplan.ApplyMetadata(nil, plan),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+	readOnlyToolCalls := []ModelToolCall{{
+		ID:   "read-1",
+		Name: "file.read",
+		Tier: "tier1",
+		Arguments: map[string]any{
+			"path": "docs/content-strategy.md",
+		},
+	}}
+
+	handled, err := fixture.engine.maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch(
+		context.Background(),
+		rt,
+		"",
+		readOnlyToolCalls,
+	)
+	if err != nil {
+		t.Fatalf("first maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch: %v", err)
+	}
+	if handled {
+		t.Fatal("first handled = true, want false")
+	}
+	if rt.recoveryReadOnlyRounds != 1 {
+		t.Fatalf("recoveryReadOnlyRounds after first pass = %d, want 1", rt.recoveryReadOnlyRounds)
+	}
+
+	handled, err = fixture.engine.maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch(
+		context.Background(),
+		rt,
+		"",
+		readOnlyToolCalls,
+	)
+	if err != nil {
+		t.Fatalf("second maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch: %v", err)
+	}
+	if !handled {
+		t.Fatal("second handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+
+	taskRecord, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint")
+	}
+	if checkpoint.TargetPath != "docs/content-strategy.md" {
+		t.Fatalf("TargetPath = %q, want docs/content-strategy.md", checkpoint.TargetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "repeated read-only recovery discovery") {
+		t.Fatalf("FailureReason = %q, want repeated read-only recovery discovery", checkpoint.FailureReason)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated read-only recovery discovery") {
+		t.Fatal("expected repeated read-only recovery discovery system message")
 	}
 }
 
@@ -16637,8 +17492,28 @@ func TestHandleValidationLoopBlockIgnoresQueuedInvalidTransition(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
 	projectID := uuid.New()
+	priorTurnID := uuid.New()
 	fixture.session.ScopeType = "project_task"
 	fixture.session.ScopeID = taskID
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.read:recovery_target_focus_required",
+		AttemptFingerprint: "file.read",
+		ToolName:           "file.read",
+		FailureClass:       "tool_validation",
+		FailureCode:        "recovery_target_focus_required",
+		FailureReason:      "recovery_target_focus_required",
+		Count:              validationLoopBlockThreshold - 1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         priorTurnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
 
 	taskRepo := &fakeTaskRepo{
 		items: map[uuid.UUID]repo.ProjectTask{
@@ -16648,7 +17523,7 @@ func TestHandleValidationLoopBlockIgnoresQueuedInvalidTransition(t *testing.T) {
 				ProjectID:      projectID,
 				Title:          "Queued validation task",
 				WorkStatus:     "queued",
-				Metadata:       json.RawMessage(`{}`),
+				Metadata:       metadata,
 			},
 		},
 	}
@@ -16659,7 +17534,8 @@ func TestHandleValidationLoopBlockIgnoresQueuedInvalidTransition(t *testing.T) {
 	}
 
 	rt := &turnRuntime{
-		session: fixture.session,
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
 		turn: &chat.ChatTurn{
 			ID:        uuid.New(),
 			SessionID: fixture.session.ID,
@@ -16675,6 +17551,637 @@ func TestHandleValidationLoopBlockIgnoresQueuedInvalidTransition(t *testing.T) {
 	}
 	if !handled {
 		t.Fatal("handled = false, want true")
+	}
+}
+
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFailureInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.write:path_required",
+		AttemptFingerprint: "file.write",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "path_required",
+		FailureReason:      "path_required",
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write validation artifact",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:        "write-1",
+		Name:      "file.write",
+		Arguments: map[string]any{"path": ""},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "write-1",
+		Name:       "file.write",
+		Error:      "path_required",
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if updated.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updated.WorkStatus)
+	}
+	guard, ok := parseTaskValidationGuard(updated.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if guard.Blocked {
+		t.Fatal("guard.Blocked = true, want false")
+	}
+	if guard.Count != validationLoopTurnStopThreshold {
+		t.Fatalf("guard.Count = %d, want %d", guard.Count, validationLoopTurnStopThreshold)
+	}
+	if !fixture.messages.containsContentSubstring("Ending the turn early so the next continuation can take a narrower step") {
+		t.Fatal("expected early-stop validation system message")
+	}
+}
+
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalShellInjectionFailureInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	command := "python3 - <<'PY'\nprint('hi')\nPY"
+	attemptFingerprint := toolargs.AttemptFingerprint("cli.execute", map[string]any{"command": command})
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "cli.execute:cli_shell_injection",
+		AttemptFingerprint: attemptFingerprint,
+		ToolName:           "cli.execute",
+		FailureClass:       "tool_validation",
+		FailureCode:        "cli_shell_injection",
+		FailureReason:      "command_denied: command_denied (shell_injection)",
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write validation artifact",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:        "exec-1",
+		Name:      "cli.execute",
+		Arguments: map[string]any{"command": command},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "exec-1",
+		Name:       "cli.execute",
+		Error:      "command_denied: command_denied (shell_injection)",
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("shell_injection") {
+		t.Fatal("expected shell-injection early-stop validation message")
+	}
+}
+
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalFileReadNotFoundInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	path := "scripts/_missing_generator.py"
+	attemptFingerprint := toolargs.AttemptFingerprint("file.read", map[string]any{"path": path})
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.read:not_found",
+		AttemptFingerprint: attemptFingerprint,
+		ToolName:           "file.read",
+		FailureClass:       "tool_validation",
+		FailureCode:        "not_found",
+		FailureReason:      "not_found",
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write validation artifact",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:        "read-1",
+		Name:      "file.read",
+		Arguments: map[string]any{"path": path},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "read-1",
+		Name:       "file.read",
+		Output: map[string]any{
+			"error": "not_found",
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("not_found") {
+		t.Fatal("expected repeated not_found early-stop validation message")
+	}
+}
+
+func TestHandleToolValidationResultsPersistsRecoveryCheckpointOnRepeatedFocusFailureStop(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.read:recovery_target_focus_required",
+		AttemptFingerprint: "file.read",
+		ToolName:           "file.read",
+		FailureClass:       "tool_validation",
+		FailureCode:        "recovery_target_focus_required",
+		FailureReason:      "recovery_target_focus_required",
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Create and validate pipeline configuration files",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{ID: "read-1", Name: "file.read", Arguments: map[string]any{"path": "planning/other.md"}}}
+	results := []ToolResult{{
+		ToolCallID: "read-1",
+		Name:       "file.read",
+		Output: map[string]any{
+			"error":            "recovery_target_focus_required",
+			"deliverable_path": targetPath,
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint.TargetPath = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+}
+
+func TestHandleToolValidationResultsStopsRecoveryTurnAfterRepeatedFocusFailureAcrossResumes(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{"existing":"value"}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		FailureReason: "recovery_target_focus_required",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Create and validate pipeline configuration files",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		recoveryTurn:     true,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{ID: "read-1", Name: "file.read", Arguments: map[string]any{"path": "planning/notes.md"}}}
+	results := []ToolResult{{
+		ToolCallID: "read-1",
+		Name:       "file.read",
+		Output: map[string]any{
+			"error":            "recovery_target_focus_required",
+			"deliverable_path": targetPath,
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if updated.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updated.WorkStatus)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint.TargetPath = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "repeated recovery target focus failures") {
+		t.Fatalf("checkpoint.FailureReason = %q, want repeated recovery target focus failures", checkpoint.FailureReason)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated recovery-target focus failure") {
+		t.Fatal("expected repeated recovery-target focus system message")
+	}
+}
+
+func TestHandleToolValidationResultsStopsRecoveryTurnAfterRepeatedTargetDriftAcrossResumes(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{"existing":"value"}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		FailureReason: "repeated recovery target drift away from `Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md` toward `planning/other.md` across explicit resume attempts; latest flow rejection max visits exceeded",
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Create and validate pipeline configuration files",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		recoveryTurn:     true,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{ID: "read-1", Name: "file.read", Arguments: map[string]any{"path": "planning/notes.md"}}}
+	results := []ToolResult{{
+		ToolCallID: "read-1",
+		Name:       "file.read",
+		Output: map[string]any{
+			"error":            "recovery_target_focus_required",
+			"deliverable_path": targetPath,
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if updated.WorkStatus != "in_progress" {
+		t.Fatalf("task work_status = %q, want in_progress", updated.WorkStatus)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint.TargetPath = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "repeated recovery target drift away from `"+targetPath+"` across explicit resume attempts") {
+		t.Fatalf("checkpoint.FailureReason = %q, want repeated recovery target drift", checkpoint.FailureReason)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated recovery-target drift away from") {
+		t.Fatal("expected repeated recovery-target drift system message")
+	}
+}
+
+func TestHandleToolValidationResultsBlocksTaskOnThirdIdenticalFailureEvenInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.write:path_required",
+		AttemptFingerprint: "file.write",
+		ToolName:           "file.write",
+		FailureClass:       "tool_validation",
+		FailureCode:        "path_required",
+		FailureReason:      "path_required",
+		Count:              validationLoopTurnStopThreshold,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write validation artifact",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:        "write-1",
+		Name:      "file.write",
+		Arguments: map[string]any{"path": ""},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "write-1",
+		Name:       "file.write",
+		Error:      "path_required",
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(blocker.calls) != 1 {
+		t.Fatalf("blocked transition calls = %d, want 1", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if updated.WorkStatus != "blocked" {
+		t.Fatalf("task work_status = %q, want blocked", updated.WorkStatus)
+	}
+	guard, ok := parseTaskValidationGuard(updated.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if !guard.Blocked {
+		t.Fatal("expected blocked validation guard")
+	}
+	if guard.Count != validationLoopBlockThreshold {
+		t.Fatalf("guard.Count = %d, want %d", guard.Count, validationLoopBlockThreshold)
 	}
 }
 
@@ -21690,6 +23197,72 @@ func TestPersistRecoveryFileWriteCheckpointPrefersBetterTaskMatchedExistingTarge
 	}
 	if checkpoint.TargetPath != existingTarget {
 		t.Fatalf("TargetPath = %q, want %q", checkpoint.TargetPath, existingTarget)
+	}
+}
+
+func TestPersistRecoveryFileWriteCheckpointStrengthensRepeatedTargetDriftFailureReason(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	existingTarget := "deliverables/OC-18-INTAKE-FRAMEWORK-SCHEMA.md"
+	driftTarget := "schemas/scoring-algorithm-v1.0.md"
+	priorReason := "flow rejection max visits exceeded"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	existingMetadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(nil, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    existingTarget,
+		ArtifactPath:  ".ottercamp/recovery/deliverables/OC-18-INTAKE-FRAMEWORK-SCHEMA.md",
+		FailureReason: priorReason,
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	description := "Define sourcing channels, intake form structure, lead qualification criteria, and triage logic for speaking opportunity identification and capture."
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				TaskNumber:     18,
+				Title:          "OC-01: Design Intake Framework",
+				Description:    &description,
+				ProjectID:      projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				WorkStatus:     "blocked",
+				Metadata:       existingMetadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	if err := fixture.engine.persistRecoveryFileWriteCheckpoint(context.Background(), rt, driftTarget, ".ottercamp/recovery/schemas/scoring-algorithm-v1.0.md", priorReason, uuid.New()); err != nil {
+		t.Fatalf("persistRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	updated := taskRepo.items[taskID]
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint")
+	}
+	if checkpoint.TargetPath != existingTarget {
+		t.Fatalf("TargetPath = %q, want %q", checkpoint.TargetPath, existingTarget)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "repeated recovery target drift away from `"+existingTarget+"` toward `"+driftTarget+"`") {
+		t.Fatalf("FailureReason = %q, want repeated target drift guidance", checkpoint.FailureReason)
 	}
 }
 

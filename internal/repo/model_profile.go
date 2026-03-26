@@ -225,6 +225,19 @@ func (r *ModelProfileRepo) Deprecate(ctx context.Context, currentID uuid.UUID, n
 		return ModelProfile{}, ErrConflict
 	}
 
+	var nextVersion int
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(MAX(version), 0) + 1
+		FROM model_profile
+		WHERE logical_profile_id = $1
+		  AND (
+			(organization_id = $2)
+			OR (organization_id IS NULL AND $2 IS NULL)
+		  )
+	`, current.LogicalProfileID, current.OrganizationID).Scan(&nextVersion); err != nil {
+		return ModelProfile{}, mapDBError(err)
+	}
+
 	if _, err := tx.Exec(ctx, `
 		UPDATE model_profile
 		SET is_current = false
@@ -255,7 +268,7 @@ func (r *ModelProfileRepo) Deprecate(ctx context.Context, currentID uuid.UUID, n
 	`,
 		current.LogicalProfileID,
 		current.OrganizationID,
-		current.Version+1,
+		nextVersion,
 		next.ProviderID,
 		next.ModelName,
 		next.DisplayName,

@@ -183,6 +183,10 @@ func (r *ChatSessionRepo) UpdateCurrentTurn(ctx context.Context, id uuid.UUID, c
 	return r.updateSessionColumn(ctx, id, `current_turn_id = $2`, currentTurnID)
 }
 
+func (r *ChatSessionRepo) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata json.RawMessage) (ChatSession, error) {
+	return r.updateSessionColumn(ctx, id, `metadata = $2::jsonb`, normalizeChatJSON(metadata, json.RawMessage(`{}`)))
+}
+
 func (r *ChatSessionRepo) IncrementCounts(ctx context.Context, id uuid.UUID, turnDelta, messageDelta int) (ChatSession, error) {
 	row := r.db.QueryRow(ctx, `
 		UPDATE chat_session

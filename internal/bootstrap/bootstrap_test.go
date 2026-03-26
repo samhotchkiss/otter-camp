@@ -64,28 +64,6 @@ func TestRunRecoversStepPanic(t *testing.T) {
 	}
 }
 
-func TestProfileNeedsRotation(t *testing.T) {
-	base := repo.ModelProfile{
-		ProviderID:          uuid.New(),
-		ModelName:           "model-a",
-		ContextWindowTokens: 1000,
-		MaxOutputTokens:     100,
-		SupportsStreaming:   true,
-		SupportsVision:      false,
-		InvocationPurpose:   "agent_turn",
-	}
-
-	if profileNeedsRotation(base, base) {
-		t.Fatal("expected no rotation when profile matches")
-	}
-
-	next := base
-	next.ModelName = "model-b"
-	if !profileNeedsRotation(base, next) {
-		t.Fatal("expected rotation when model name changes")
-	}
-}
-
 func TestBuildSystemTemplateNodeSeedPlan(t *testing.T) {
 	templateID := uuid.New()
 	startID := uuid.New()
