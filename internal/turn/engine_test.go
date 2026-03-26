@@ -20558,11 +20558,15 @@ func TestMaybeBlockRepeatedReadOnlyDiscoveryCapTurnsRetriesReviewLane(t *testing
 		if i == maxReadOnlyDiscoveryCapTurns {
 			currentTurn = turn
 		}
-		for _, payload := range []map[string]any{
+		payloads := []map[string]any{
 			{"tool_name": "file.list", "output": map[string]any{"path": "scripts"}},
 			{"tool_name": "git.log", "output": map[string]any{"error": "path_traversal"}},
 			{"tool_name": "task.get", "output": map[string]any{"task_number": 13}},
-		} {
+		}
+		if i == maxReadOnlyDiscoveryCapTurns-2 {
+			payloads = append(payloads, map[string]any{"tool_name": "cli.execute", "output": map[string]any{"error": "review_action_required"}})
+		}
+		for _, payload := range payloads {
 			fixture.messages.create(repo.ChatMessage{
 				SessionID:     fixture.session.ID,
 				TurnID:        &turnID,

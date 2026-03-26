@@ -1373,3 +1373,26 @@ What is still not proven:
 
 - I do not yet have a completed turn row showing the new repeated-read-only-review cutoff message itself on live Anthropic traffic
 - the hot review session had already rolled into restart/retry behavior by the time the fix landed, so the fresh proof target is still the next review-discovery churn chain
+
+## Update 16:50 MDT
+
+The live proof for the review-lane cutoff has now landed.
+
+Fresh production evidence on session `fc516b1d-0343-450b-bf1c-dea4351c7c07`:
+
+- turn `47` `6e5d9181-d75c-495b-b7d4-2101d412bc8b`
+- turn `52` `dce9c580-ade7-456f-9523-73dc113ef725`
+- both completed with `stop_reason=validation_loop_blocked`
+- both emitted the exact new system message family:
+  - `Repeated read-only discovery churn across 5 consecutive max-tool-call turns using file.list, file.read, git.diff, git.log, task.get with recurring exit_status_128, path_traversal`
+
+What that proves:
+
+- the cross-turn read-only discovery cutoff is now live-proven on async `project_task` review lanes
+- the runtime is no longer letting that review session burn unbounded chains of capped read-only turns
+- the follow-on path is now the intended review retry loop rather than endless `max_tool_calls` continuation
+
+Current remaining proof gap:
+
+- I still do not have equivalent live proof for the shell-wrapped `cli.execute` read-only discovery variant
+- the direct read-tool family is now proven in production

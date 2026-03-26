@@ -527,7 +527,7 @@ Implemented so far in this spec:
 
 Still pending from this spec:
 
-- stronger live proof that the new shell-based read-only discovery cutoff is catching fresh Anthropic task churn, not just the direct read-tool variant
+- stronger live proof that the new shell-based read-only discovery cutoff is catching fresh Anthropic task churn, not just the direct read-tool variant; the direct read-tool cutoff is now live-proven on review lanes
 - any additional recovery-specific fingerprints that remain after the current async task guardrails
 - richer operator diagnostics directly in product surfaces instead of shell-only reporting
 

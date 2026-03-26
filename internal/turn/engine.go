@@ -9304,10 +9304,6 @@ func (e *TurnEngine) maybeBlockRepeatedReadOnlyDiscoveryCapTurns(ctx context.Con
 	if e == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return false, nil
 	}
-	blockReason, systemMessage, ok, err := e.repeatedReadOnlyDiscoveryCapTurnReason(ctx, rt)
-	if err != nil || !ok {
-		return false, err
-	}
 	taskRecord, err := e.lookupSessionTask(ctx, rt.session)
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
@@ -9315,7 +9311,12 @@ func (e *TurnEngine) maybeBlockRepeatedReadOnlyDiscoveryCapTurns(ctx context.Con
 		}
 		return false, err
 	}
-	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+	reviewLane := strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review")
+	blockReason, systemMessage, ok, err := e.repeatedReadOnlyDiscoveryCapTurnReason(ctx, rt, reviewLane)
+	if err != nil || !ok {
+		return false, err
+	}
+	if reviewLane {
 		rt.stopReason = stopReasonValidationBlocked
 		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
 			return false, err
@@ -9363,7 +9364,7 @@ func (e *TurnEngine) maybeBlockRepeatedReadOnlyDiscoveryCapTurns(ctx context.Con
 	return true, nil
 }
 
-func (e *TurnEngine) repeatedReadOnlyDiscoveryCapTurnReason(ctx context.Context, rt *turnRuntime) (string, string, bool, error) {
+func (e *TurnEngine) repeatedReadOnlyDiscoveryCapTurnReason(ctx context.Context, rt *turnRuntime, reviewLane bool) (string, string, bool, error) {
 	if e == nil || e.turns == nil || e.messages == nil || rt == nil || rt.session == nil || rt.turn == nil {
 		return "", "", false, nil
 	}
@@ -9389,7 +9390,7 @@ func (e *TurnEngine) repeatedReadOnlyDiscoveryCapTurnReason(ctx context.Context,
 	toolNames := map[string]struct{}{}
 	errorCodes := map[string]struct{}{}
 	for _, turnID := range recentTurnIDs {
-		turnToolNames, turnErrorCodes, ok := summarizeReadOnlyDiscoveryTurn(messages, turnID)
+		turnToolNames, turnErrorCodes, ok := summarizeReadOnlyDiscoveryTurn(messages, turnID, reviewLane)
 		if !ok {
 			return "", "", false, nil
 		}
@@ -9469,7 +9470,7 @@ func recentConsecutiveMaxToolCallTurnIDs(turns []repo.ChatTurn, currentTurn *cha
 	return collected
 }
 
-func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUID) ([]string, []string, bool) {
+func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUID, reviewLane bool) ([]string, []string, bool) {
 	if turnID == uuid.Nil {
 		return nil, nil, false
 	}
@@ -9487,8 +9488,13 @@ func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUI
 			continue
 		}
 		normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+		errorCode := normalizeValidationFailureCode(errText)
+		if errorCode == "" {
+			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+		}
 		switch {
 		case isReadOnlyDiscoveryTool(normalizedToolName):
+		case reviewLane && errorCode == "review_action_required":
 		case strings.EqualFold(normalizedToolName, "cli.execute"):
 			if message.ToolCallID == nil {
 				return nil, nil, false
@@ -9502,10 +9508,6 @@ func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUI
 		}
 		toolResults++
 		toolNames[normalizedToolName] = struct{}{}
-		errorCode := normalizeValidationFailureCode(errText)
-		if errorCode == "" {
-			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
-		}
 		if errorCode != "" {
 			errorCodes[errorCode] = struct{}{}
 		}
