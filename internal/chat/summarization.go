@@ -815,6 +815,12 @@ func (c *SessionCleaner) runSummaryConsolidation(ctx context.Context, session re
 		return fmt.Errorf("session cleaner model is required for summary consolidation")
 	}
 
+	if runAfter, err := nextSummarizationRunAfter(ctx, c.pool, session.OrganizationID, c.now); err != nil {
+		return err
+	} else if runAfter != nil {
+		return jobqueue.NewDeferredJobError(*runAfter, "summary consolidation provider cooldown active")
+	}
+
 	summaries, err := c.summaries.ListBySession(ctx, session.ID)
 	if err != nil {
 		return err

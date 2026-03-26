@@ -509,6 +509,64 @@ func TestSessionCleanerIntegrationSummaryConsolidation(t *testing.T) {
 	}
 }
 
+func TestSessionCleanerSummaryConsolidationDefersWhenProviderCooldownActive(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	seedSystemHaikuProviderConnection(t, ctx, pool, org.ID, "rate_limited")
+
+	session := seedClosedSession(t, ctx, pool, org.ID, "sync", json.RawMessage(`{}`))
+	summaryRepo := repo.NewChatSummaryRepo(pool)
+	for idx := 0; idx < 7; idx++ {
+		from := int64(idx*10 + 1)
+		to := int64((idx + 1) * 10)
+		if _, err := summaryRepo.Create(ctx, repo.ChatSummary{
+			SessionID:           session.ID,
+			FromSequence:        from,
+			ToSequence:          to,
+			SummaryText:         fmt.Sprintf("segment-%d", idx+1),
+			SummarizedTurnCount: 1,
+		}); err != nil {
+			t.Fatalf("create summary %d: %v", idx, err)
+		}
+	}
+
+	modelCalls := 0
+	cleaner, err := NewSessionCleaner(SessionCleanerOptions{
+		Pool: pool,
+		Model: &fakeSummarizationModel{summarizeFn: func(context.Context, SummarizationRequest) (SummarizationResponse, error) {
+			modelCalls++
+			return SummarizationResponse{SummaryText: "should not run"}, nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewSessionCleaner: %v", err)
+	}
+
+	err = cleaner.RunCleanup(ctx, session.ID, CleanupTypeSummaryConsolidate)
+	if err == nil {
+		t.Fatal("RunCleanup error = nil, want DeferredJobError")
+	}
+	var deferred *jobqueue.DeferredJobError
+	if !errors.As(err, &deferred) {
+		t.Fatalf("RunCleanup error = %v, want DeferredJobError", err)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("model calls = %d, want 0", modelCalls)
+	}
+	if !deferred.RunAfter.After(time.Now().UTC()) {
+		t.Fatalf("defer run_after = %s, want future timestamp", deferred.RunAfter)
+	}
+
+	summaries, err := summaryRepo.ListBySession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	if len(summaries) != 7 {
+		t.Fatalf("summary count after deferral = %d, want 7", len(summaries))
+	}
+}
+
 func TestSessionCleanerIntegrationToolResultCompaction(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

@@ -1142,3 +1142,30 @@ What remains true:
 
 - this does not change sync-chat summarization eligibility
 - this does not reduce prompt history by itself; it only removes avoidable background failure churn during cooldown periods
+
+## Update 16:18 MDT
+
+I extended the same cooldown-preserving behavior to session cleanup's summary-consolidation path.
+
+What changed:
+
+- closed-session cleanup `summary_consolidation` now checks summarization provider cooldown before calling the model
+- if the selected summarization route is still in cooldown, cleanup returns a deferred-job signal instead of attempting the consolidation call
+- this uses the same worker-level `DeferredJobError` path that now powers `chat_summarize`
+
+Why this matters:
+
+- `summary_consolidation` is also background summarization work
+- without this extension, the runtime could still spend failed Sonnet calls from cleanup even after `chat_summarize` itself had been made cooldown-aware
+- this closes the other obvious background summarization hole in the runtime
+
+Focused verification that passed:
+
+- `go test -tags=integration ./internal/chat -run 'Test(SessionCleanerIntegrationSummaryConsolidation|SessionCleanerSummaryConsolidationDefersWhenProviderCooldownActive|SummarizeJobHandlerDefersWhenProviderCooldownActive|NextSummarizationRunAfterReturnsProviderBackoffWhenSummaryProviderRateLimited)$' -count=1`
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerDeferredJobRequeuesWithoutConsumingAttempt$' -count=1`
+
+What this closes:
+
+- both background summarization entry points now preserve cooldown before model invocation:
+  - `chat_summarize`
+  - cleanup `summary_consolidation`
