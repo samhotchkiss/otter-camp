@@ -1189,3 +1189,30 @@ Fresh proof from the new short-window report:
   - `0` `listening_eval` invocations
   - `0` sessions with active summarization backoff metadata
 - the report still highlights the hot recent task sessions and turns, but now at the exact live-monitoring granularity needed for the next rerun
+
+## Update 16:35 MDT
+
+Fresh live Anthropic proof on the hardened build:
+
+- session `803a3410-c820-429e-991e-44f32efc8e2d`
+- project `speaker-pipeline-ops-validation-fresh-20260325-rerun-7-restart-9`
+- task `13` `Validate pipeline metrics and alerting hooks`
+
+What happened:
+
+- hot turn `32eb8232-243c-49db-bada-9c343e5fc459` ran to exactly `16` model invocations
+- recorded token burn on that one turn was `582,615` total tokens
+- the turn then completed and the session advanced to fresh turn `7` (`ad82246e-749e-4eb7-8086-3656142b156b`) instead of staying stuck indefinitely on the same turn
+
+Why this matters:
+
+- this is the first fresh live proof on recovered Anthropic traffic that the async `project_task` work-turn budget is actually acting as a ceiling in production
+- the same 15-minute live window still showed:
+  - `0` rate-limit failures
+  - `0` `listening_eval`
+  - `0` active summarization-backoff sessions
+
+What it does not prove yet:
+
+- it does not prove the task finished successfully
+- it does prove the runtime is now willing to cut a hot turn over to a fresh turn instead of letting one task turn expand without bound
