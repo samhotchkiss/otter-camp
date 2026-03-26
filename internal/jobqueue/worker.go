@@ -45,6 +45,7 @@ const (
 	defaultCleanupInterval         = 24 * time.Hour
 	postModelOrphanTurnThreshold   = 30 * time.Second
 	claimedAgentTurnHeartbeatGrace = 30 * time.Second
+	slowProjectAsyncModelThreshold = 20 * time.Minute
 
 	agentTurnRateLimitMinBackoff    = 30 * time.Second
 	agentTurnRateLimitBackoffCap    = 30 * time.Minute
@@ -66,6 +67,20 @@ func staleContinuationThresholdForScope(scopeType string) time.Duration {
 		return defaultStaleThreshold
 	}
 	return staleContinuationThreshold
+}
+
+func staleModelInvocationThresholdForProjectModel(modelName string) time.Duration {
+	lowerModel := strings.ToLower(strings.TrimSpace(modelName))
+	switch {
+	case strings.Contains(lowerModel, "qwen"),
+		strings.Contains(lowerModel, "mistral"),
+		strings.Contains(lowerModel, "llama"),
+		strings.Contains(lowerModel, "gemma"),
+		strings.Contains(lowerModel, "deepseek"):
+		return slowProjectAsyncModelThreshold
+	default:
+		return staleContinuationThreshold
+	}
 }
 
 func (w *Worker) maxExecutionSessionRecoveryBatch() int {
@@ -1681,6 +1696,21 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		           WHERE cs_orphan.id = mi.session_id
 		             AND cs_orphan.mode = 'async'
 		             AND cs_orphan.scope_type = 'project'
+		             AND (
+		                   POSITION('qwen' IN lower(COALESCE(mi.model_name, ''))) > 0
+		                OR POSITION('mistral' IN lower(COALESCE(mi.model_name, ''))) > 0
+		                OR POSITION('llama' IN lower(COALESCE(mi.model_name, ''))) > 0
+		                OR POSITION('gemma' IN lower(COALESCE(mi.model_name, ''))) > 0
+		                OR POSITION('deepseek' IN lower(COALESCE(mi.model_name, ''))) > 0
+		             )
+		         )
+		        THEN $6::timestamptz
+		        WHEN EXISTS (
+		           SELECT 1
+		           FROM chat_session cs_orphan
+		           WHERE cs_orphan.id = mi.session_id
+		             AND cs_orphan.mode = 'async'
+		             AND cs_orphan.scope_type = 'project'
 		         )
 		        THEN $4::timestamptz
 		        ELSE $1::timestamptz
@@ -1720,7 +1750,21 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		            OR (
 		              cs.scope_type <> 'project_task'
 		              AND (
-		                (cs.mode = 'async' AND mi.created_at < $4)
+		                (
+		                  cs.mode = 'async'
+		                  AND mi.created_at < CASE
+		                        WHEN cs.scope_type = 'project'
+		                         AND (
+		                               POSITION('qwen' IN lower(COALESCE(mi.model_name, ''))) > 0
+		                            OR POSITION('mistral' IN lower(COALESCE(mi.model_name, ''))) > 0
+		                            OR POSITION('llama' IN lower(COALESCE(mi.model_name, ''))) > 0
+		                            OR POSITION('gemma' IN lower(COALESCE(mi.model_name, ''))) > 0
+		                            OR POSITION('deepseek' IN lower(COALESCE(mi.model_name, ''))) > 0
+		                         )
+		                        THEN $6::timestamptz
+		                        ELSE $4::timestamptz
+		                      END
+		                )
 		                OR (cs.mode <> 'async' AND mi.created_at < $2)
 		              )
 		            )
@@ -1748,7 +1792,7 @@ func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {
 		      )
 		    )
 		  )
-	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold), startedBefore)
+	`, w.clock.Now().UTC().Add(-30*time.Minute), w.clock.Now().UTC().Add(-15*time.Second), w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold), startedBefore, w.clock.Now().UTC().Add(-slowProjectAsyncModelThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("list stale model invocations: %w", err)
 	}

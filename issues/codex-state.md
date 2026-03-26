@@ -2,6 +2,46 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 05:41 MDT update
+
+- deployed runtime now includes an additional local `internal/jobqueue/worker.go` stale-model threshold patch on top of pushed `2de2a1ae`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+
+### New local fix
+
+- `internal/jobqueue/worker.go`
+  - `FailStaleModelInvocations(...)` now gives slow async `project` models the same `20m` stale budget used elsewhere for qwen/mistral/llama/gemma/deepseek-class runtimes instead of the generic `15m` project-session threshold
+- `internal/jobqueue/worker_integration_test.go`
+  - added `TestJobWorkerFailStaleModelInvocationsKeepsSlowAsyncProjectSessionInvocation`
+
+### Focused verification
+
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerFailStaleModelInvocations(FailsDetachedAsyncProjectSessionInvocationWithStaleTurn|KeepsSlowAsyncProjectSessionInvocation|RecoversInheritedAsyncProjectInvocationAfterWorkerRestart|FailsOrphanedLiveTurnsWithoutClaimedJob)$' -count=1`
+- rebuilt `./bin/ottercamp`
+- respawned tmux panes with sourced `.env`
+
+### Live result after restart
+
+- pre-restart rerun-88 live project continuation turn:
+  - turn `88cc8a51-1079-4475-a6ae-f3efd13b40bd`
+  - invocation `b3080ea3-3b42-4f89-b871-898bb1e46c7b`
+  - model `qwen2.5:72b`
+  - had crossed `15m` and was the exact motivating risk for this patch
+- restart cleanup did retire that inherited in-flight turn:
+  - turn `88cc8a51-1079-4475-a6ae-f3efd13b40bd` is now `failed`
+  - error: `worker cleanup failed stale in_flight model invocation without live in-progress turn`
+- but rerun-88 is not dead:
+  - fresh continuation message `ee9b117f-c247-4499-8155-0e36acc8b553`
+  - pending job `8bc7c3b1-264b-43fc-adca-15bfe318703e`
+  - prior retry message `ed314145-4158-44f5-bd5d-0be82ce9a2c8` is failed/superseded
+
+### Current seam
+
+- slow-model stale threshold is patched and tested
+- rerun-88 is still progressing through fresh continuation retries
+- the next live proof target is the claim/execution outcome of message `ee9b117f-...` under the new worker build
+
 ## 2026-03-26 05:22 MDT update
 
 - deployed runtime now includes an additional local `internal/turn/engine.go` detector widening on top of pushed `f6c6b7cb`
