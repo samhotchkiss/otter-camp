@@ -1580,3 +1580,34 @@ What is still not proven:
 
 - this newest shell-file readback cutoff is not deployed yet
 - so there is not yet live evidence showing one of the known shell-builder/readback turns ending early on the new `duplicate_shell_file_readback_churn` path
+
+## Update 17:52 MDT
+
+I did not add another runtime cutoff in this slice. The next remaining high-burn family is less obviously safe to block, so I tightened diagnostics instead.
+
+What changed:
+
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - added `Written File Readback Churn By Turn`
+  - this report groups turns that:
+    - successfully `file.write` a concrete path
+    - then repeatedly reread that same path via:
+      - `file.read`
+      - read-only `cli.execute` inspection such as `cat`, `sed`, `head`, `tail`, `grep`, `rg`, `wc`, `stat`, or `file`
+
+Why I stopped at diagnostics here:
+
+- the remaining hottest turns are not pure nonsense anymore
+- they often mix:
+  - a real file write
+  - some verification
+  - a real execution step
+  - then extra rereads of the same generated file
+- that may still deserve a later cutoff, but it is not yet safe enough to block blindly without better measurement
+
+Intended use:
+
+- this new section gives us a cleaner before/after view on the next Anthropic canary
+- if one turn family still dominates through repeated written-file readbacks, we can decide whether to:
+  - broaden the runtime cutoff beyond shell-built files
+  - or leave it alone because the rereads are actually paying for real debugging progress

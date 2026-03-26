@@ -365,6 +365,146 @@ ORDER BY install_attempts DESC, last_seen DESC
 LIMIT :'limit_rows'::int;
 
 \echo
+\echo '== Written File Readback Churn By Turn =='
+WITH params AS (
+  SELECT
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
+    NULLIF(:'org_id', '')::uuid AS org_id
+),
+tool_results AS (
+  SELECT
+    cm.turn_id,
+    cm.session_id,
+    cm.created_at,
+    cm.content::jsonb AS payload,
+    NULLIF(
+      COALESCE(
+        cm.content::jsonb->>'error',
+        cm.content::jsonb->'output'->>'error',
+        ''
+      ),
+      ''
+    ) AS tool_error
+  FROM chat_message cm
+  JOIN chat_session cs ON cs.id = cm.session_id
+  CROSS JOIN params p
+  WHERE cm.created_at >= p.since_at
+    AND cm.turn_id IS NOT NULL
+    AND cm.role = 'tool_result'
+    AND cm.status = 'final'
+    AND cm.content_format = 'text'
+    AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+),
+successful_writes AS (
+  SELECT
+    turn_id,
+    session_id,
+    lower(payload->'output'->>'path') AS path,
+    COUNT(*) AS write_count,
+    MIN(created_at) AS first_write_at,
+    MAX(created_at) AS last_write_at
+  FROM tool_results
+  WHERE COALESCE(payload->>'tool_name', '') = 'file.write'
+    AND tool_error IS NULL
+    AND COALESCE(payload->'output'->>'path', '') <> ''
+    AND COALESCE((payload->'output'->>'byte_size')::int, 0) > 0
+  GROUP BY turn_id, session_id, lower(payload->'output'->>'path')
+),
+file_readbacks AS (
+  SELECT
+    turn_id,
+    session_id,
+    lower(payload->'output'->>'path') AS path,
+    created_at,
+    'file.read' AS source
+  FROM tool_results
+  WHERE COALESCE(payload->>'tool_name', '') = 'file.read'
+    AND tool_error IS NULL
+    AND COALESCE(payload->'output'->>'path', '') <> ''
+),
+assistant_calls AS (
+  SELECT
+    cm.turn_id,
+    cm.session_id,
+    cm.created_at,
+    lower(COALESCE(call->'arguments'->>'command', '')) AS command,
+    lower(
+      substring(
+        lower(COALESCE(call->'arguments'->>'command', ''))
+        from '(scripts/[^[:space:]''\";|&),]+|config/[^[:space:]''\";|&),]+|results/[^[:space:]''\";|&),]+)'
+      )
+    ) AS path_hint
+  FROM chat_message cm
+  JOIN chat_session cs ON cs.id = cm.session_id
+  CROSS JOIN params p
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(cm.metadata::jsonb->'tool_calls', '[]'::jsonb)) AS call
+  WHERE cm.created_at >= p.since_at
+    AND cm.turn_id IS NOT NULL
+    AND cm.role = 'assistant'
+    AND cm.status = 'final'
+    AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+),
+cli_readbacks AS (
+  SELECT
+    turn_id,
+    session_id,
+    path_hint AS path,
+    created_at,
+    'cli.execute' AS source
+  FROM assistant_calls
+  WHERE path_hint IS NOT NULL
+    AND (
+      command LIKE 'cat %'
+      OR command LIKE 'head %'
+      OR command LIKE 'tail %'
+      OR command LIKE 'sed %'
+      OR command LIKE 'grep %'
+      OR command LIKE 'rg %'
+      OR command LIKE 'wc %'
+      OR command LIKE 'stat %'
+      OR command LIKE 'file %'
+    )
+),
+readbacks AS (
+  SELECT * FROM file_readbacks
+  UNION ALL
+  SELECT * FROM cli_readbacks
+),
+rollup AS (
+  SELECT
+    w.turn_id,
+    w.session_id,
+    w.path,
+    w.write_count,
+    COUNT(*) AS readback_count,
+    COUNT(*) FILTER (WHERE r.source = 'file.read') AS file_reads,
+    COUNT(*) FILTER (WHERE r.source = 'cli.execute') AS cli_readbacks,
+    MIN(r.created_at) AS first_readback,
+    MAX(r.created_at) AS last_readback
+  FROM successful_writes w
+  JOIN readbacks r
+    ON r.turn_id = w.turn_id
+   AND r.session_id = w.session_id
+   AND r.path = w.path
+   AND r.created_at >= w.first_write_at
+  GROUP BY w.turn_id, w.session_id, w.path, w.write_count
+)
+SELECT
+  turn_id,
+  session_id,
+  path,
+  write_count,
+  readback_count,
+  file_reads,
+  cli_readbacks,
+  first_readback,
+  last_readback
+FROM rollup
+WHERE readback_count > 1
+ORDER BY readback_count DESC, write_count DESC, last_readback DESC
+LIMIT :'limit_rows'::int;
+
+\echo
 \echo '== Shell File Build / Readback Churn By Turn =='
 WITH params AS (
   SELECT
