@@ -28,6 +28,8 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/workspace"
 )
 
+func boolPtr(v bool) *bool { return &v }
+
 func TestTaskServiceIntegrationStatusLifecycleAndEvents(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
@@ -441,6 +443,45 @@ func TestTaskServiceIntegrationRejectsCreateWhenOutstandingProjectGateExists(t *
 	}
 	if len(allTasks) != 1 {
 		t.Fatalf("task count after blocked create = %d, want 1 gate task only", len(allTasks))
+	}
+}
+
+func TestTaskServiceIntegrationIgnoresProjectContinuationMetaGateWhenCreatingTask(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "shell-gate-pm", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "Shell Gate PM", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	svc := newTaskIntegrationService(t, pool)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	if _, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID:      org.ID,
+		ProjectID:           project.ID,
+		Title:               "Review and validate pipeline integration test results",
+		WorkStatus:          "draft",
+		BlocksScope:         "all",
+		RequiresHumanReview: true,
+		CreatedByType:       "system",
+	}); err != nil {
+		t.Fatalf("create continuation shell gate: %v", err)
+	}
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:           project.ID,
+		Title:               "Legitimate follow-on workstream",
+		FlowTemplateID:      &template.ID,
+		AssignedAgentID:     &pmAgent.ID,
+		RequiresHumanReview: boolPtr(true),
+		CreatedByType:       "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask with continuation shell gate present: %v", err)
+	}
+	if created.Title != "Legitimate follow-on workstream" {
+		t.Fatalf("created task title = %q, want legitimate follow-on workstream", created.Title)
 	}
 }
 

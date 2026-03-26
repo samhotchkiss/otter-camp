@@ -334,6 +334,50 @@ func TestLowestOutstandingProjectGateIgnoresInvalidDraftGateWithoutExecutionPath
 	}
 }
 
+func TestLowestOutstandingProjectGateIgnoresProjectContinuationMetaGate(t *testing.T) {
+	projectID := uuid.New()
+	realGateID := uuid.New()
+	metaGateID := uuid.New()
+	taskRepo := &fakeTaskRepo{
+		tasks: map[uuid.UUID]repo.ProjectTask{
+			metaGateID: {
+				ID:                  metaGateID,
+				OrganizationID:      uuid.New(),
+				ProjectID:           projectID,
+				TaskNumber:          30,
+				Title:               "Review and validate pipeline integration test results",
+				WorkStatus:          "draft",
+				BlocksScope:         "all",
+				RequiresHumanReview: true,
+				CreatedByType:       "system",
+			},
+			realGateID: {
+				ID:                  realGateID,
+				OrganizationID:      uuid.New(),
+				ProjectID:           projectID,
+				TaskNumber:          31,
+				Title:               "Real launch gate",
+				WorkStatus:          "draft",
+				BlocksScope:         "all",
+				RequiresHumanReview: true,
+				CreatedByType:       "system",
+			},
+		},
+	}
+
+	svc := newUnitService(taskRepo)
+	gateTask, err := svc.lowestOutstandingProjectGate(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("lowestOutstandingProjectGate: %v", err)
+	}
+	if gateTask == nil {
+		t.Fatal("lowestOutstandingProjectGate = nil, want real gate")
+	}
+	if gateTask.ID != realGateID {
+		t.Fatalf("lowestOutstandingProjectGate = %+v, want real gate %s", gateTask, realGateID)
+	}
+}
+
 func TestTransitionStatusAllowsCompletedChildReopenToQueued(t *testing.T) {
 	taskID := uuid.New()
 	parentID := uuid.New()

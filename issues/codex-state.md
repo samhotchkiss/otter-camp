@@ -9237,3 +9237,27 @@ Current narrowed seam:
 - generic narration of `task.list` output is now retried instead of consumed
 - the newest local patch removes the noisy shell drafts from the default async project-session `task.list` payload itself
 - next proof target is rerun-88 on the rebuilt binary, to verify qwen now sees only the actionable project draft set when it re-lists tasks
+
+## 2026-03-26 09:12 MDT
+
+Latest fixes landed locally:
+- [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go)
+  - `lowestOutstandingProjectGate(...)` now ignores synthetic continuation-shell tasks even if they were historically created with `blocks_scope=all`
+  - this prevents junk review-shell task `30` (`Review and validate pipeline integration test results`) from blocking legitimate follow-on task creation as if it were a real project-wide gate
+- [`internal/task/service_test.go`](/Users/sam/dev/otter-camp/internal/task/service_test.go)
+  - added direct coverage proving an async-project shell gate is skipped while a real launch gate still wins gate selection
+
+Focused verification passed:
+- `go test ./internal/task -run 'Test(ValidateProjectGateTask(AllowsHumanReviewGateWithoutFlow|RejectsNonBootstrapGateWithoutExecutionPath)|LowestOutstandingProjectGate(IgnoresInvalidDraftGateWithoutExecutionPath|IgnoresProjectContinuationMetaGate))$' -count=1`
+
+Latest live evidence before deploy:
+- rerun-88 advanced past the pre-filter `task.list` narration seam
+- the next completed turn `e5888f7d-eea6-4b63-bb80-f96efdf51d41` no longer idled; it made direct tool calls
+- but it still treated historical shell task `30` as a real outstanding project gate:
+  - repeated `task.create` tool results returned `task creation is blocked by outstanding project gate task 30 (Review and validate pipeline integration test results)`
+  - same turn also added dependencies successfully, so the blocker has narrowed to gate classification, not generic continuation retries
+
+Current narrowed seam:
+- async project-session `task.list` noise is filtered on the deployed build
+- the newest local patch removes the remaining false gate classification for synthetic continuation-shell tasks with `blocks_scope=all`
+- next proof target is rerun-88 after rebuild/restart, to verify legitimate task creation no longer bounces off historical shell task `30`
