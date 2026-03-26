@@ -1611,3 +1611,34 @@ Intended use:
 - if one turn family still dominates through repeated written-file readbacks, we can decide whether to:
   - broaden the runtime cutoff beyond shell-built files
   - or leave it alone because the rereads are actually paying for real debugging progress
+
+## Update 17:58 MDT
+
+I went one step further on the written-file reread family and landed a narrow runtime cutoff instead of leaving it as diagnostics only.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async `project_task` turns now classify repeated rereads of the same recently written `scripts/`, `config/`, or `results/` file as same-turn churn
+  - this only activates after a successful `file.write` to that exact path in the same turn
+  - it currently covers:
+    - successful `file.read`
+    - successful read-only `cli.execute` inspection such as `cat`, `sed`, `head`, `tail`, `grep`, `rg`, `wc`, `stat`, or `file`
+  - a later successful `file.write` to that same path resets the reread window, so iterative edit-then-check loops still get another pass
+
+Why this was safe enough to harden:
+
+- the new report section showed concrete same-turn families like:
+  - write `scripts/pipeline_config.py`, then reread it `4` times
+  - write `scripts/validate-metrics-alerting.sh`, then reread it `3` times
+- the narrower rule here is not “do not reread files”
+- it is “after you have already successfully written this exact tracked target, do not spend a third same-turn reread on that unchanged file before mutating it again”
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdWrittenFileReadbackInSameTurn|HandleToolValidationResultsIgnoresWrittenFileReadbackChurnAfterInterveningRewrite|HandleToolValidationResultsStopsAsyncTaskTurnAfterThirdShellFileReadbackInSameTurn|HandleToolValidationResultsIgnoresShellFileReadbackChurnWithoutPriorShellBuild)$' -count=1`
+
+What is still not proven:
+
+- this newest written-file reread cutoff is not deployed yet
+- so there is not yet live evidence showing one of the known `file.write -> reread -> reread -> reread` task turns ending early on the new `duplicate_written_file_readback_churn` path

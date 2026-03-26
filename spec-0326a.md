@@ -520,6 +520,10 @@ Implemented so far in this spec:
   - successful `file.read` on the same exact built path
   - successful read-only `cli.execute` inspection of the same exact built path, such as `cat`, `sed`, `head`, `tail`, `grep`, `rg`, `wc`, `stat`, or `file`
   - the guard only activates once the turn has already successfully shell-built that exact target, so ordinary deliverable reads do not get swept into this cutoff
+- async task lanes now also stop early on repeated rereads of the same recently written `scripts/`, `config/`, or `results/` file in one turn:
+  - the guard activates only after a successful `file.write` to that exact path
+  - repeated `file.read` or read-only `cli.execute` inspection of that unchanged target will now stop on the third reread
+  - a fresh successful write to that same path resets the reread counter, so iterative edit-then-check loops can still proceed
 - `scripts/token-usage-report.sh` now surfaces:
   - hot turns with repeated rate-limit failures
   - duplicate successful `file.write` churn grouped by turn/path/byte-size

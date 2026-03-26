@@ -19442,6 +19442,239 @@ func TestHandleToolValidationResultsIgnoresShellFileReadbackChurnWithoutPriorShe
 	}
 }
 
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterThirdWrittenFileReadbackInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "scripts/pipeline_config.py"
+	attemptFingerprint := writtenFileReadbackChurnAttemptFingerprint(targetPath)
+	reason := fmt.Sprintf("repeated readback of recently written file `%s` in the same turn", targetPath)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "file.read:" + duplicateWrittenFileReadbackChurnCode,
+		AttemptFingerprint: attemptFingerprint,
+		ToolName:           "file.read",
+		FailureClass:       "tool_validation",
+		FailureCode:        duplicateWrittenFileReadbackChurnCode,
+		FailureReason:      reason,
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate generated pipeline config helpers",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	writeCallID := "write-1"
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:  fixture.session.ID,
+		TurnID:     &turnID,
+		Role:       "tool_result",
+		Status:     "final",
+		ToolCallID: &writeCallID,
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.write",
+			"output": map[string]any{
+				"path":      targetPath,
+				"created":   false,
+				"byte_size": 262,
+			},
+		})),
+	})
+	readPrevID := "read-prev-1"
+	fixture.messages.create(repo.ChatMessage{
+		SessionID:  fixture.session.ID,
+		TurnID:     &turnID,
+		Role:       "tool_result",
+		Status:     "final",
+		ToolCallID: &readPrevID,
+		Content: string(mustRawJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":    targetPath,
+				"content": "print('ok')\n",
+			},
+		})),
+	})
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:   "read-1",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "read-1",
+		Name:       "file.read",
+		Output: map[string]any{
+			"path":    targetPath,
+			"content": "print('ok')\n",
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	guard, ok := parseTaskValidationGuard(updated.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if guard.Count != validationLoopTurnStopThreshold {
+		t.Fatalf("guard.Count = %d, want %d", guard.Count, validationLoopTurnStopThreshold)
+	}
+	if !fixture.messages.containsContentSubstring("Repeated identical written-file readback churn in this turn") {
+		t.Fatal("expected repeated written-file readback early-stop validation message")
+	}
+}
+
+func TestHandleToolValidationResultsIgnoresWrittenFileReadbackChurnAfterInterveningRewrite(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	targetPath := "scripts/pipeline_config.py"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Validate generated pipeline config helpers",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	for idx, callID := range []string{"write-1", "read-prev-1", "write-2"} {
+		switch idx {
+		case 0, 2:
+			fixture.messages.create(repo.ChatMessage{
+				SessionID:  fixture.session.ID,
+				TurnID:     &turnID,
+				Role:       "tool_result",
+				Status:     "final",
+				ToolCallID: &callID,
+				Content: string(mustRawJSON(t, map[string]any{
+					"tool_name": "file.write",
+					"output": map[string]any{
+						"path":      targetPath,
+						"created":   false,
+						"byte_size": 262 + idx,
+					},
+				})),
+			})
+		case 1:
+			fixture.messages.create(repo.ChatMessage{
+				SessionID:  fixture.session.ID,
+				TurnID:     &turnID,
+				Role:       "tool_result",
+				Status:     "final",
+				ToolCallID: &callID,
+				Content: string(mustRawJSON(t, map[string]any{
+					"tool_name": "file.read",
+					"output": map[string]any{
+						"path":    targetPath,
+						"content": "print('ok')\n",
+					},
+				})),
+			})
+		}
+	}
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:   "read-1",
+		Name: "file.read",
+		Arguments: map[string]any{
+			"path": targetPath,
+		},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "read-1",
+		Name:       "file.read",
+		Output: map[string]any{
+			"path":    targetPath,
+			"content": "print('ok')\n",
+		},
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if handled {
+		t.Fatal("handled = true, want false")
+	}
+	if fixture.messages.containsContentSubstring("written-file readback churn") {
+		t.Fatal("did not expect written-file readback churn validation message")
+	}
+}
+
 func TestHandleToolValidationResultsIgnoresPackageInstallChurnWhenPackageChanges(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
