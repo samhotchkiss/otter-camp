@@ -11756,6 +11756,15 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsProjectMetaTaskCoachingReply(t 
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsProjectDraftListingCoachingReply(t *testing.T) {
+	t.Parallel()
+
+	content := "It appears that there is an existing draft task in the project session, and creating a new meta-task to review or promote draft tasks is not allowed. Instead, we should inspect the existing draft tasks and take appropriate actions such as queuing, decomposing, assigning, or updating them. Would you like to proceed by listing the current draft tasks in the project or take another action?"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatalf("expected project draft-listing coaching reply to be generic recovery text")
+	}
+}
+
 func TestLooksLikeGenericTaskRecoveryReplyDetectsDependencySuccessAckReply(t *testing.T) {
 	t.Parallel()
 

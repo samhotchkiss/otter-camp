@@ -8939,3 +8939,35 @@ Current narrowed seam:
 - duplicate dependency adds are now explicit no-ops and live-proven
 - current rerun-88 lane is back in flight on turn `0b6b63d7-c0a7-4882-99cd-05cbf038bd30`
 - the actionable-draft prompt filter is deployed, but the freshly created continuation message still shows `9 remaining draft project tasks`, so the next proof target is whether the next continuation generated fully on the new code drops the polluted count and stops steering the model toward junk draft shells
+
+## 2026-03-26 07:38 MDT
+
+Latest fixes landed locally:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - widened the generic continuation-reply detector again to catch the new live fallback:
+    - `Would you like to review the existing draft tasks...`
+    - `Would you like to proceed by listing the current draft tasks...`
+    - `existing draft task in the project session`
+- [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - added `TestLooksLikeGenericTaskRecoveryReplyDetectsProjectDraftListingCoachingReply`
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetectsProjectMetaTaskCoachingReply|LooksLikeGenericTaskRecoveryReplyDetectsProjectDraftListingCoachingReply|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+
+Live proof achieved in this stretch:
+- the actionable-draft prompt filter is now proven live:
+  - old continuation message `d7bab277-497e-49f5-ab98-4f35c100dd7b` reported `9 remaining draft project tasks`
+  - fresh continuation message `81d3697a-67d6-46fa-87a1-951d8c39e464` now reports `4 remaining draft project tasks`
+- the widened meta-task guard is also proven on the same lane:
+  - turn `0b6b63d7-c0a7-4882-99cd-05cbf038bd30`
+  - tool result `ab9fae7c-8fff-48fd-9365-5d9bffcaf712`
+    - `project_session_meta_task_disallowed`
+- after that blocked mutation, qwen drifted again into a new generic coaching variant:
+  - `Would you like to review the existing draft tasks...`
+  - `Would you like to proceed by listing the current draft tasks...`
+
+Current narrowed seam:
+- duplicate dependency adds are fixed
+- polluted draft counts in continuation prompts are fixed
+- meta-task creation is being blocked correctly
+- the next remaining seam is qwen’s follow-up coaching after the blocked meta-task result; the detector patch for that variant is tested locally but not yet deployed
