@@ -8902,4 +8902,5 @@ Live proof achieved in this stretch:
 Current narrowed seam:
 - repeated dependency adds are no longer the immediate blocker
 - the new live duplicate family is project-session creation of another “review integration test results” shell under a slightly different title
-- the local guard now covers that title variant, but this meta-task patch is not deployed yet
+- commit `7466cdee` deploys the exact-title guard for that live variant
+- the latest local follow-on patch further broadens the semantic guard so future variants mentioning end-to-end integration test results with inspect/update/findings language are blocked even if the title changes again

@@ -2712,6 +2712,10 @@ func looksLikeProjectContinuationMetaTask(title string, description *string) boo
 			strings.Contains(normalized, "validate") ||
 			strings.Contains(normalized, "verify the outcomes") ||
 			strings.Contains(normalized, "analyze") ||
+			strings.Contains(normalized, "inspect") ||
+			strings.Contains(normalized, "update") ||
+			strings.Contains(normalized, "document any findings") ||
+			strings.Contains(normalized, "required updates") ||
 			strings.Contains(normalized, "results")) {
 		return true
 	}
