@@ -915,11 +915,46 @@ What this closes:
 
 Current status of this slice:
 
-- code and focused tests are complete locally
-- this slice has not been rebuilt/redeployed yet
-- I intentionally kept it out of the live runtime until the current cooldown-window batch is worth restarting for
+- rebuilt `./bin/ottercamp`
+- respawned tmux `codex-e2e-20260324` serve and worker panes on the new binary
+- `./bin/ottercamp health --output json` returned `status=ok`
 
 What is still pending after this slice:
 
 - broader repeated-recovery fingerprints beyond the shipped focus-failure, target-drift, repeated empty-mutation, and repeated read-only discovery stops
-- another real post-deploy Anthropic rate-limit event to prove the durable provider-cooldown telemetry path end-to-end in live traffic
+
+## Update 15:20 MDT
+
+The durable provider-cooldown path now has fresh live proof.
+
+Fresh evidence from the running runtime:
+
+- recent Anthropic refusals are now recorded as `error_code=provider_rate_limited`, not flattened `model_error`
+- latest fresh rows:
+  - invocation `623d6567-c626-4c3e-a216-ea9bcb6fcd52`
+  - session `07ab860d-1c73-4e73-a160-3b8fe3c23998`
+  - turn `2323b41a-5499-40cf-97fb-ba994322fcc3`
+  - model `claude-opus-4-6`
+  - `provider_connection_id = NULL`
+  - error `model provider rate limited (retry_after=42m29s): all provider connections are rate limited ...`
+  - created `2026-03-26 15:17:30 MDT`
+
+Why that matters:
+
+- this is the router-refusal path, not a provider-call path
+- the runtime is now surfacing the cooldown refusal with the correct durable error code instead of collapsing it back into generic `model_error`
+
+The project-bootstrap cooldown storm fix also survived the runtime restart cleanly:
+
+- active async project session `db21265f-c37d-40e4-9ed5-13def09970f8` still has the same future-dated retry after the restart
+- current job state remains:
+  - job `4554c05f-7c8a-41cb-b458-a074865ef5d5`
+  - `status = pending`
+  - `retry_count = 58`
+  - `run_after = 2026-03-26 15:35:04 MDT`
+- no new failed turn was spawned immediately on startup, which is the behavior that used to recreate the one-minute storm
+
+This closes the two remaining proof items for the provider-cooldown work:
+
+- fresh live `provider_rate_limited` classification exists
+- project-bootstrap repair backoff survives a runtime restart without immediate churn

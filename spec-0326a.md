@@ -388,13 +388,13 @@ Completed so far:
    - streamed `agent_turn` invocation rows now preserve provider failure classification for 429s instead of flattening them into generic `model_error`
    - active async `project` sessions now preserve the latest turn-level rate-limit backoff when worker repair requeues a project bootstrap / continuation lane with no current turn
    - deferred project-bootstrap provider failures now enqueue the next retry with an incremented `retry_count` and a rate-limit-aware `run_after` instead of falling back to an immediate or generic retry
+   - fresh live Anthropic cooldown refusals now record `error_code=provider_rate_limited` instead of flattening back to `model_error`
+   - the future-dated project-bootstrap retry now survives runtime restarts without degrading back into a one-minute repair storm
 
 Still pending from this spec:
 
 - broader repeated-recovery fingerprint cutoffs beyond focus / target-drift / repeated empty-mutation / repeated read-only discovery failures
 - stronger tool-surface narrowing where canary drift still survives beyond the new task-lane `task.create` boundary
-- live proof of the new durable provider-cooldown path on a fresh post-deploy Anthropic 429
-- live proof that the same fix fully suppresses repeated project-bootstrap repair churn past the next scheduled retry boundary
 
 Operator tooling now available:
 
