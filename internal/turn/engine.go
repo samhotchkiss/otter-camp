@@ -1518,11 +1518,15 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 		}
 		nextMessageID := latestUser.ID
 		if e.chat != nil {
+			retryPrompt := e.buildTaskReviewActionPrompt(ctx, session) +
+				"\nYour last review turn returned empty assistant output." +
+				" Do not reply with blank text, acknowledgement, or a review plan." +
+				" Your next assistant action must either emit the concrete flow.review_decision tool call for this review step or provide one short blocker sentence explaining why bounded review could not complete."
 			retryMessage, appendErr := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 				SessionID: session.ID,
 				TurnID:    &latestCompleted.ID,
 				Role:      "user",
-				Content:   e.buildTaskReviewActionPrompt(ctx, session),
+				Content:   retryPrompt,
 				Metadata:  e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, session, "task_review_action", latestUser.Metadata),
 			})
 			if appendErr != nil {
@@ -2061,7 +2065,13 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 	}
 
 	if session.CurrentTurnID != nil {
-		return nil
+		cleared, err := e.cancelSupersededProjectContinuationTurn(ctx, session, completedTask.ID)
+		if err != nil {
+			return err
+		}
+		if !cleared {
+			return nil
+		}
 	}
 	if queued, err := e.hasQueuedAgentTurnForSession(ctx, session.ID, nil); err != nil {
 		return err
@@ -2181,6 +2191,60 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 	}
 	_, err = e.enqueueAgentTurnIfActive(ctx, session, payload, nil)
 	return err
+}
+
+func (e *TurnEngine) cancelSupersededProjectContinuationTurn(ctx context.Context, session *chat.ChatSession, completedTaskID uuid.UUID) (bool, error) {
+	if e == nil || e.chat == nil || e.messages == nil || session == nil || session.CurrentTurnID == nil || completedTaskID == uuid.Nil {
+		return false, nil
+	}
+
+	currentTurn, err := e.chat.GetTurn(ctx, *session.CurrentTurnID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if currentTurn.TriggerMessageID == nil || *currentTurn.TriggerMessageID == uuid.Nil {
+		return false, nil
+	}
+	trigger, err := e.messages.GetByID(ctx, *currentTurn.TriggerMessageID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	triggerMetadata := messageMetadataMap(trigger.Metadata)
+	if !strings.EqualFold(strings.TrimSpace(stringValue(triggerMetadata["source"])), projectExecutionContinuationSource) {
+		return false, nil
+	}
+	priorCompletedTaskID, ok := parseUUIDAny(triggerMetadata["completed_task_id"])
+	if !ok || priorCompletedTaskID == uuid.Nil || priorCompletedTaskID == completedTaskID {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(currentTurn.Status), "pending") &&
+		!strings.EqualFold(strings.TrimSpace(currentTurn.Status), "in_progress") {
+		return false, nil
+	}
+	if err := e.chat.CancelTurn(ctx, currentTurn.ID, "superseded by newer completed project task"); err != nil {
+		if !errors.Is(err, chat.ErrInvalidStatusTransition) {
+			return false, err
+		}
+		return false, nil
+	}
+	if e.pool != nil {
+		if _, err := repo.NewChatSessionRepo(e.pool).UpdateCurrentTurn(ctx, session.ID, nil); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return false, err
+		}
+	}
+	if e.sessions != nil {
+		if _, err := e.sessions.UpdateCurrentTurn(ctx, session.ID, nil); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return false, err
+		}
+	}
+	session.CurrentTurnID = nil
+	return true, nil
 }
 
 func (e *TurnEngine) HandleProjectResumedEvent(ctx context.Context, event eventbus.DomainEvent) error {
@@ -11071,11 +11135,20 @@ func buildRecoveryFileWriteBlockedTaskReason(targetPath, artifactPath, failureRe
 	return fmt.Sprintf("recovery halted after file.write for %s was retried without content; re-queue only after producing the full file body", path)
 }
 
+func recoveryToolCallsContainReviewDecision(toolCalls []ModelToolCall) bool {
+	for _, call := range toolCalls {
+		if strings.EqualFold(strings.TrimSpace(call.Name), "flow.review_decision") {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *TurnEngine) maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch(ctx context.Context, rt *turnRuntime, assistantContent string, toolCalls []ModelToolCall) (bool, error) {
 	if e == nil || rt == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
 		return false, nil
 	}
-	if e.recoveryFileWriteSuppressedForReviewTask(ctx, rt) {
+	if e.recoveryFileWriteSuppressedForReviewTask(ctx, rt) || recoveryToolCallsContainReviewDecision(toolCalls) {
 		return false, nil
 	}
 	if strings.TrimSpace(assistantContent) == "" {
@@ -11101,7 +11174,7 @@ func (e *TurnEngine) maybeSynthesizeRecoveryFileWriteToolCalls(ctx context.Conte
 	if e == nil || rt == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
 		return toolCalls, false, nil
 	}
-	if e.recoveryFileWriteSuppressedForReviewTask(ctx, rt) {
+	if e.recoveryFileWriteSuppressedForReviewTask(ctx, rt) || recoveryToolCallsContainReviewDecision(toolCalls) {
 		return toolCalls, false, nil
 	}
 	if strings.TrimSpace(assistantContent) == "" {
@@ -14619,7 +14692,15 @@ func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
 		return false
 	}
 	if !containsAny(lower,
+		"i have a complete picture",
+		"the evidence is clear",
 		"here is my review assessment",
+		"here is my assessment",
+		"the evidence is conclusive",
+		"review findings for oc-",
+		"review complete",
+		"task now blocked",
+		"root cause summary for pm escalation",
 		"rejected — task is now blocked",
 		"rejected - task is now blocked",
 		"the rejection has been recorded",
@@ -14643,6 +14724,21 @@ func looksLikeReviewerAssessmentInDeliverable(targetPath, content string) bool {
 		"planning artifacts remain unpopulated scaffolds",
 		"planning artifacts are all bare scaffolds",
 		"this task cannot be approved",
+		"there is nothing to approve",
+		"no deliverable exists",
+		"no deliverable produced",
+		"work file is self-referential review text",
+		"all four planning artifacts are empty scaffolds",
+		"12 work iterations",
+		"10+ rejections",
+		"no progress",
+		"systemic failure",
+		"terminal loop",
+		"no further reject-rework loops are permitted",
+		"the task is now blocked because",
+		"rejecting.",
+		"worker was stuck in a loop",
+		"further rejection cycles are unlikely",
 		"work file content |",
 		"core deliverable (",
 	)

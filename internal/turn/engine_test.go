@@ -2139,6 +2139,12 @@ func TestHandleTurnCompletedEventRetriesEmptyReviewTurnWithoutDecisionAtRetryLim
 	if !strings.Contains(retryPrompt.Content, executionID.String()) {
 		t.Fatalf("retry prompt = %q, want flow execution id %s", retryPrompt.Content, executionID)
 	}
+	if !strings.Contains(retryPrompt.Content, "Your last review turn returned empty assistant output.") {
+		t.Fatalf("retry prompt = %q, want empty-output retry warning", retryPrompt.Content)
+	}
+	if !strings.Contains(retryPrompt.Content, "must either emit the concrete flow.review_decision tool call") {
+		t.Fatalf("retry prompt = %q, want direct-action requirement", retryPrompt.Content)
+	}
 }
 
 func TestHandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootstrapPrompt(t *testing.T) {
@@ -6438,6 +6444,177 @@ func TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueue
 	}
 	if !sawSystemMessage {
 		t.Fatal("expected system message recording bounded-size auto-queue failure")
+	}
+}
+
+func TestMaybeContinueProjectExecutionAfterTaskCompletionSupersedesStaleProjectContinuationTurn(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	staleCompletedTaskID := uuid.New()
+	newCompletedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	flowTemplateID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	sessionMetadata, err := json.Marshal(map[string]any{
+		"project_bootstrap": map[string]any{
+			"status": "completed",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal session metadata: %v", err)
+	}
+	fixture.session.Metadata = sessionMetadata
+	fixture.chat.session.Metadata = sessionMetadata
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO organization (id, slug, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, now(), now())
+	`, fixture.session.OrganizationID, "turn-test-org", "Turn Test Org"); err != nil {
+		t.Fatalf("insert organization: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO project (id, organization_id, slug, display_name, status, settings, created_by_type, created_by_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'active', '{}'::jsonb, 'system', $5, now(), now())
+	`, projectID, fixture.session.OrganizationID, "project-continuation-supersede", "Project Continuation Supersede", uuid.New()); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO flow_template (
+			id, organization_id, project_id, slug, display_name, description, is_current, version, is_system, created_by_type, created_by_id, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, '', true, 1, false, 'system', $6, now(), now())
+	`, flowTemplateID, fixture.session.OrganizationID, projectID, "turn-test-flow", "Turn Test Flow", uuid.New()); err != nil {
+		t.Fatalf("insert flow_template: %v", err)
+	}
+	if _, err := fixture.engine.pool.Exec(context.Background(), `
+		INSERT INTO chat_session (
+			id, organization_id, scope_type, scope_id, mode, status, title,
+			created_by_type, created_by_id, current_turn_id, last_message_at, turn_count, message_count, metadata, created_at, updated_at
+		) VALUES ($1, $2, 'project', $3, 'async', 'active', 'Project Continuation Session',
+			'system', $4, NULL, now(), 0, 0, $5, now(), now())
+	`, fixture.session.ID, fixture.session.OrganizationID, projectID, uuid.New(), sessionMetadata); err != nil {
+		t.Fatalf("insert chat_session: %v", err)
+	}
+	fixture.engine.projects = &fakeProjectRepo{
+		items: map[uuid.UUID]repo.Project{
+			projectID: {
+				ID:             projectID,
+				OrganizationID: fixture.session.OrganizationID,
+				Status:         "active",
+			},
+		},
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			newCompletedTaskID: {
+				ID:              newCompletedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      18,
+				Title:           "Validate pipeline output format and delivery",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      19,
+				Title:           "Run end-to-end pipeline integration test",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	staleMessage, err := fixture.chat.AppendMessage(context.Background(), chat.AppendMessageInput{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Content:   "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": staleCompletedTaskID.String(),
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendMessage stale continuation: %v", err)
+	}
+
+	staleTurnID := uuid.New()
+	staleTurn := repo.ChatTurn{
+		ID:               staleTurnID,
+		SessionID:        fixture.session.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &staleMessage.ID,
+	}
+	if _, err := fixture.chat.Create(context.Background(), staleTurn); err != nil {
+		t.Fatalf("Create stale turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(fixture.engine.pool).UpdateCurrentTurn(context.Background(), fixture.session.ID, &staleTurnID); err != nil {
+		t.Fatalf("seed current_turn_id: %v", err)
+	}
+	fixture.session.CurrentTurnID = &staleTurnID
+	fixture.chat.session.CurrentTurnID = &staleTurnID
+
+	for _, task := range taskRepo.items {
+		if _, err := fixture.engine.pool.Exec(context.Background(), `
+			INSERT INTO project_task (
+				id, organization_id, project_id, task_number, title, work_status,
+				requires_human_review, created_by_type, metadata, assigned_agent_id, flow_template_id, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,false,'system',$7,NULL,$8,now(),now())
+		`, task.ID, fixture.session.OrganizationID, projectID, task.TaskNumber, task.Title, task.WorkStatus, mustJSONRaw(map[string]any{}), flowTemplateID); err != nil {
+			t.Fatalf("insert project_task %s: %v", task.ID, err)
+		}
+	}
+
+	if err := fixture.engine.maybeContinueProjectExecutionAfterTaskCompletion(context.Background(), projectID, taskRepo.items[newCompletedTaskID]); err != nil {
+		t.Fatalf("maybeContinueProjectExecutionAfterTaskCompletion: %v", err)
+	}
+	storedSession, err := repo.NewChatSessionRepo(fixture.engine.pool).GetByID(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("GetByID session: %v", err)
+	}
+	if storedSession.CurrentTurnID != nil {
+		t.Fatalf("current_turn_id = %v, want cleared after stale continuation cancel", storedSession.CurrentTurnID)
+	}
+	cancelled := fixture.chat.turnByID(staleTurnID)
+	if cancelled == nil || cancelled.Status != "cancelled" {
+		t.Fatalf("stale turn status = %v, want cancelled", cancelled)
+	}
+
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var sawFreshContinuation bool
+	for _, msg := range messages {
+		if msg.ID == staleMessage.ID || !strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
+			continue
+		}
+		metadata := messageMetadataMap(msg.Metadata)
+		if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectExecutionContinuationSource) {
+			continue
+		}
+		if stringValue(metadata["completed_task_id"]) != newCompletedTaskID.String() {
+			continue
+		}
+		if !strings.Contains(msg.Content, "latest completed task was task 18") {
+			t.Fatalf("fresh continuation content = %q, want task 18 context", msg.Content)
+		}
+		sawFreshContinuation = true
+		break
+	}
+	if !sawFreshContinuation {
+		t.Fatal("expected fresh continuation message for newer completed task")
 	}
 }
 
@@ -15040,6 +15217,135 @@ func TestMaybeSynthesizeTaskReviewDecisionToolCallsSkipsWhenDecisionToolAlreadyP
 	}
 }
 
+func TestMaybeSynthesizeRecoveryFileWriteToolCallsSkipsWhenReviewDecisionToolPresent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 15,
+		Title:      "Test speaker ingestion error handling",
+		WorkStatus: "in_progress",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    "Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md",
+				"failure_reason": "review lane recovery",
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	original := []ModelToolCall{{
+		ID:   "review-1",
+		Name: "flow.review_decision",
+		Tier: "tier2",
+		Arguments: map[string]any{
+			"flow_node_execution_id": uuid.NewString(),
+			"decision":               "reject",
+		},
+	}}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeRecoveryFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"**Review decision recorded: REJECTED -> Task now BLOCKED.**",
+		original,
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeRecoveryFileWriteToolCalls: %v", err)
+	}
+	if synthesized {
+		t.Fatal("synthesized = true, want false when flow.review_decision is already present")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "flow.review_decision" {
+		t.Fatalf("toolCalls = %+v, want original flow.review_decision only", toolCalls)
+	}
+}
+
+func TestMaybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatchSkipsWhenReviewDecisionToolPresent(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:         taskID,
+		TaskNumber: 15,
+		Title:      "Test speaker ingestion error handling",
+		WorkStatus: "in_progress",
+		Metadata: mustRawJSON(t, map[string]any{
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    "Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md",
+				"failure_reason": "review lane recovery",
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	handled, err := fixture.engine.maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch(
+		context.Background(),
+		rt,
+		"**Review decision recorded: REJECTED -> Task now BLOCKED.**",
+		[]ModelToolCall{{
+			ID:   "review-1",
+			Name: "flow.review_decision",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"flow_node_execution_id": uuid.NewString(),
+				"decision":               "reject",
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatch: %v", err)
+	}
+	if handled {
+		t.Fatal("handled = true, want false when flow.review_decision is already present")
+	}
+}
+
 func TestMaybeSynthesizeTaskReviewDecisionToolCallsInfersRejectFromStrongFindings(t *testing.T) {
 	t.Parallel()
 
@@ -18472,17 +18778,15 @@ Validate pipeline output format and downstream data delivery. Verify output reco
 func TestRecoveryFileWriteDraftRejectReasonRejectsReviewerAssessmentInDeliverable(t *testing.T) {
 	t.Parallel()
 
-	content := `**Rejected — task is now blocked (review path exhausted).**
+	content := `The evidence is clear. Here's my assessment:
 
-The rejection has been recorded and the task has been automatically blocked because the work-review loop has exceeded its allowed iterations. Summary of why approval was not possible:
+**Findings:**
 
-| Check | Result |
-|---|---|
-| Core deliverable (error handling test results) | Missing |
-| Work file content | Contains prior reviewer rejection text, not a deliverable |
-| Review cycles exhausted | Loop properly blocked |
+1. **No deliverable produced.** There are no test scripts, test result files, or deliverable content.
+2. **All four planning artifacts are empty scaffolds.**
+3. **12 work iterations with 10+ rejections — no progress.**
 
-**PM escalation recommended.** The worker was unable to produce this deliverable across 10 work iterations.
+This task has no deliverable to approve. Rejecting.
 `
 	got := recoveryFileWriteDraftRejectReason(content, "Work/OC-18-VALIDATE-PIPELINE-OUTPUT-FORMAT-AND-DELIVERY.md")
 	if !strings.Contains(got, "reviewer assessment or rejection commentary") {

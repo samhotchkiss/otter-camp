@@ -1171,6 +1171,10 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			      COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
 			      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
 			    )
+			    OR (
+			      COALESCE(cm.metadata->>'source', '') = 'task_review_action'
+			      AND COALESCE(cm.metadata->>'flow_node_execution_id', '') = e.id::text
+			    )
 			  )
 			  AND NOT EXISTS (
 			    SELECT 1
@@ -1341,14 +1345,18 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		if err := rows.Scan(&sessionID, &messageID, &source, &openTaskCount, &retryCount); err != nil {
 			return repaired, fmt.Errorf("scan active project session without turn: %w", err)
 		}
-		if strings.EqualFold(strings.TrimSpace(source), "project_bootstrap") && openTaskCount > 0 {
+		shouldRefreshContinuation := strings.EqualFold(strings.TrimSpace(source), "project_execution_continuation") ||
+			(strings.EqualFold(strings.TrimSpace(source), "project_bootstrap") && openTaskCount > 0)
+		if shouldRefreshContinuation {
 			synthMessageID, err := w.ensureProjectContinuationMessage(ctx, sessionID)
 			if err != nil {
 				return repaired, fmt.Errorf("ensure project continuation message for session %s: %w", sessionID, err)
 			}
 			if synthMessageID != uuid.Nil {
+				if synthMessageID != messageID {
+					retryCount = 0
+				}
 				messageID = synthMessageID
-				retryCount = 0
 			}
 		}
 		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
@@ -1371,12 +1379,19 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 		return uuid.Nil, nil
 	}
 
-	var bootstrapStatus string
+	var (
+		bootstrapStatus string
+		projectID       uuid.UUID
+	)
 	if err := w.pool.QueryRow(ctx, `
-		SELECT COALESCE(metadata->'project_bootstrap'->>'status', '')
+		SELECT COALESCE(metadata->'project_bootstrap'->>'status', ''),
+		       CASE
+		         WHEN scope_type = 'project' THEN scope_id
+		         ELSE NULL
+		       END
 		FROM chat_session
 		WHERE id = $1
-	`, sessionID).Scan(&bootstrapStatus); err != nil {
+	`, sessionID).Scan(&bootstrapStatus, &projectID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, nil
 		}
@@ -1392,6 +1407,11 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 		"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
 		"Inspect the current task tree and immediately queue or otherwise advance the next runnable bounded draft task.",
 	}, " ")
+	metadataMap := map[string]any{
+		"source":                 source,
+		"auto_continue":          true,
+		"synthetic_user_message": true,
+	}
 	if activeBootstrap {
 		source = "project_bootstrap"
 		content = strings.Join([]string{
@@ -1401,11 +1421,48 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 			"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
 			"Inspect the persisted bootstrap task tree and immediately repair staffing, bounded task decomposition, assignment, or flow attachment using bootstrap-compatible task mutations.",
 		}, " ")
+		metadataMap["source"] = source
+	} else if projectID != uuid.Nil {
+		var (
+			completedTaskID    uuid.UUID
+			completedTaskNum   int
+			completedTaskTitle string
+			remainingDrafts    int
+		)
+		if err := w.pool.QueryRow(ctx, `
+			WITH latest_completed AS (
+				SELECT id, task_number, title
+				FROM project_task
+				WHERE project_id = $1
+				  AND work_status = 'done'
+				ORDER BY updated_at DESC, task_number DESC, id DESC
+				LIMIT 1
+			)
+			SELECT COALESCE((SELECT id FROM latest_completed), '00000000-0000-0000-0000-000000000000'::uuid),
+			       COALESCE((SELECT task_number FROM latest_completed), 0),
+			       COALESCE((SELECT title FROM latest_completed), ''),
+			       COALESCE((
+			         SELECT COUNT(*)
+			         FROM project_task
+			         WHERE project_id = $1
+			           AND work_status = 'draft'
+			       ), 0)
+		`, projectID).Scan(&completedTaskID, &completedTaskNum, &completedTaskTitle, &remainingDrafts); err != nil {
+			return uuid.Nil, fmt.Errorf("load latest completed project task: %w", err)
+		}
+		if completedTaskID != uuid.Nil {
+			metadataMap["completed_task_id"] = completedTaskID.String()
+			content = buildProjectExecutionContinuationPromptForWorker(completedTaskNum, completedTaskTitle, remainingDrafts)
+		}
 	}
 
-	var existingMessageID uuid.UUID
+	var (
+		existingMessageID            uuid.UUID
+		existingCompletedTaskIDText string
+	)
 	err := w.pool.QueryRow(ctx, `
-		SELECT id
+		SELECT id,
+		       COALESCE(metadata->>'completed_task_id', '')
 		FROM chat_message
 		WHERE session_id = $1
 		  AND role = 'user'
@@ -1413,12 +1470,32 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 		  AND COALESCE(metadata->>'source', '') = $2
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
-	`, sessionID, source).Scan(&existingMessageID)
+	`, sessionID, source).Scan(&existingMessageID, &existingCompletedTaskIDText)
 	if err == nil {
-		return existingMessageID, nil
-	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		expectedCompletedTaskID := ""
+		if rawCompletedTaskID, ok := metadataMap["completed_task_id"]; ok {
+			expectedCompletedTaskID = strings.TrimSpace(fmt.Sprintf("%v", rawCompletedTaskID))
+		}
+		if source != "project_execution_continuation" || expectedCompletedTaskID == strings.TrimSpace(existingCompletedTaskIDText) {
+			return existingMessageID, nil
+		}
+		if _, execErr := w.pool.Exec(ctx, `
+			UPDATE chat_message
+			SET status = 'failed',
+			    error_message = 'superseded by newer completed project task'
+			WHERE session_id = $1
+			  AND role = 'user'
+			  AND status = 'pending'
+			  AND COALESCE(metadata->>'source', '') = $2
+		`, sessionID, source); execErr != nil {
+			return uuid.Nil, fmt.Errorf("fail stale project continuation messages: %w", execErr)
+		}
+	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, fmt.Errorf("query existing project continuation message: %w", err)
+	}
+	metadata, err := json.Marshal(metadataMap)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("marshal project continuation metadata: %w", err)
 	}
 
 	message, err := repo.NewChatMessageRepo(w.pool).Create(ctx, repo.ChatMessage{
@@ -1426,12 +1503,40 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 		Role:      "user",
 		Content: content,
 		Status:   "pending",
-		Metadata: json.RawMessage(fmt.Sprintf(`{"source":"%s","auto_continue":true,"synthetic_user_message":true}`, source)),
+		Metadata: metadata,
 	})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create project continuation message: %w", err)
 	}
 	return message.ID, nil
+}
+
+func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int) string {
+	lines := []string{
+		"Continue the active project execution now.",
+		"Recently completed work may have unlocked the next wave of bounded tasks.",
+	}
+	if completedTaskNumber > 0 || strings.TrimSpace(completedTaskTitle) != "" {
+		label := strings.TrimSpace(completedTaskTitle)
+		if completedTaskNumber > 0 && label != "" {
+			label = fmt.Sprintf("task %d (%s)", completedTaskNumber, label)
+		} else if completedTaskNumber > 0 {
+			label = fmt.Sprintf("task %d", completedTaskNumber)
+		}
+		lines = append(lines, fmt.Sprintf("The latest completed task was %s.", label))
+	}
+	if remainingDraftTasks > 0 {
+		lines = append(lines, fmt.Sprintf("There are %d remaining draft project tasks that still need selection, orchestration, or promotion.", remainingDraftTasks))
+	}
+	lines = append(lines,
+		"Your next response must take direct project action instead of generic chat.",
+		"Do not ask what to do next, do not restate the project, and do not reread broad context before acting.",
+		"Inspect the current task tree and immediately move the next bounded work forward by selecting, decomposing, assigning, or queueing the correct tasks.",
+		"Do not treat a completed gate-review or sign-off task as proof that the whole project is complete while any draft tasks still remain.",
+		"Do not use task.update to mark untouched draft tasks done; queue or otherwise advance the next runnable task instead.",
+		"If the remaining work is blocked on a concrete prerequisite, report that blocker in one sentence instead of narrating intent.",
+	)
+	return strings.Join(lines, " ")
 }
 
 func (w *Worker) FailStaleModelInvocations(ctx context.Context) (int64, error) {

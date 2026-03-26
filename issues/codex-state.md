@@ -7594,3 +7594,141 @@ Current blocker after that live proof:
   - successful recovery write completed
   - session returned to no-turn idle
   - task flow did not advance from the abandoned execution root
+
+## 2026-03-25 23:48 MDT
+
+Task `15` is now closed live, and the remaining seam shifted again.
+
+New fixes in this stretch:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - recovery review turns that already contain `flow.review_decision` are no longer eligible for recovery `file.write` synthesis or rejected-draft blocking
+  - empty review-output retries now append a stronger direct-action prompt:
+    - do not reply with blank text
+    - do not acknowledge or summarize a plan
+    - next action must be a concrete `flow.review_decision` call or one short blocker sentence
+- [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)` now treats synthetic `task_review_action` messages as valid recovery roots when they match the active `flow_node_execution_id`
+- focused regressions added in:
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(MaybeSynthesizeRecoveryFileWriteToolCallsSkipsWhenReviewDecisionToolPresent|MaybeBlockRejectedRecoveryAssistantDraftBeforeToolDispatchSkipsWhenReviewDecisionToolPresent|HandleCompletedReviewTurnWithoutDecisionRetriesEmptyAssistantOutput)$' -count=1`
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(AllowsTaskReviewActionRetry|AllowsSyntheticReviewRecoveryRetry|AllowsReviewRecoveryHaltRetry)$' -count=1`
+
+Live proof on rerun-88 task `15`:
+- task id:
+  - `4a4aaac6-9f18-4f63-a911-0ebc0cb5a65a`
+- active review execution had been stranded at:
+  - execution `2e6d3a1e-ea85-4eed-9b36-10fb6b57cb86`
+  - session `ceba823a-88c5-4566-b9f6-ddd1556ec9cd`
+- before the worker patch:
+  - stale pending retry still pointed at supervisor message `ba06776a-80f9-4d82-82b5-e40069111f14`
+  - newer synthetic review prompt `c19a3f9b-1c41-416c-b806-de80e10cad5d` existed, but startup recovery ignored it
+  - project also stayed paused after a transient local-provider outage, which prevented the corrected retry from being claimed
+- after the worker patch, dead-lettering the stale supervisor job, and clearing the stale project pause:
+  - startup recovery created the correct pending retry from the latest `task_review_action` message
+  - that retry was claimed and launched on local Ollama / `qwen2.5:72b`
+- after the review prompt hardening:
+  - the repeated empty review turns stopped re-poisoning the deliverable
+  - retries advanced through:
+    - `4a608009-67fe-4ea4-99c3-2fd269de5468`
+    - `ece2d1b0-2fbd-4dd0-8693-621b40b56085`
+    - `861ba903-3a02-4553-b826-2378dd12d428`
+  - final assistant message `7647d46c-f7a1-493f-8114-abff38f4613a` included:
+    - tool call `flow_review_decision`
+    - `decision = approve`
+    - `flow_node_execution_id = 2e6d3a1e-ea85-4eed-9b36-10fb6b57cb86`
+  - flow node execution `2e6d3a1e-ea85-4eed-9b36-10fb6b57cb86` is now `completed`
+  - commit sha:
+    - `1d7c5cb24696047dce5b0d26988575abdb41b280`
+  - task `15` is now `done`
+
+Important negative proof:
+- the old review-lane corruption path did not recur
+- during the repaired qwen review retries, the deliverable file stayed unchanged and was not overwritten again by synthesized blocked-review prose:
+  - `/Users/sam/otter-data/task-worktrees/speaker-pipeline-ops-validation-fresh-20260325-rerun-88/task-15/Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md`
+
+Current rerun-88 task board:
+- `12 done`
+- `13 done`
+- `14 done`
+- `15 done`
+- `18 review`
+- `9,10,11,16,17,19` still `draft`
+
+Current critical path:
+- task `15` no longer needs work
+- next live seam is task `18` on the same review node family:
+  - `3e153770-235e-4785-87fc-8fa33c81af33`
+  - work_status `review`
+
+## 2026-03-26 00:34 MDT
+
+New worker-side continuation freshness fixes in this stretch:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - `maybeContinueProjectExecutionAfterTaskCompletion(...)` now cancels a stale in-progress project continuation turn when a newer completed task arrives, clears `current_turn_id`, and appends a fresh continuation message keyed to the newer `completed_task_id`
+- [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+  - `ensureProjectContinuationMessage(...)` now synthesizes project continuation messages with a concrete `completed_task_id`
+  - stale pending `project_execution_continuation` messages are now failed with:
+    - `superseded by newer completed project task`
+  - `RequeueActiveProjectSessionsWithoutTurns(...)` now routes stale pending `project_execution_continuation` messages back through `ensureProjectContinuationMessage(...)` instead of blindly reusing the old message id
+- focused regressions added in:
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - [`internal/jobqueue/worker_integration_test.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker_integration_test.go)
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(MaybeContinueProjectExecutionAfterTaskCompletionSupersedesStaleProjectContinuationTurn|HandleCompletedProjectExecutionContinuationTurn(AutoQueuesRunnableDraft|ConsumesBoundedSizeQueueFailure)|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)' -count=1`
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(EnsureProjectContinuationMessageSupersedesStalePendingContinuation|RequeueActiveProjectSessionsWithoutTurnsSupersedesStalePendingContinuation|ResolveStaleTriggeredRetryMessageIDSwitchesProjectExecutionToBootstrapWhileBootstrapActive|ClaimPendingAgentTurnsPrefersNewestProjectContinuation)' -count=1`
+
+Live proof after deploy:
+- the stale rerun-88 project continuation was no longer blocking later-wave promotion:
+  - project session `1a9edb0a-a817-46b1-975d-4d96c8164bcb`
+  - old continuation message `5d3b20af-8a51-4421-8aca-4e6c4185dad2`
+  - metadata still points at completed task `12`
+- the project session emitted:
+  - `[Project continuation auto-queued task 16 (Validate speaker data enrichment step) after a narrative-only continuation left runnable draft work untouched.]`
+- task `16` advanced live from `draft` into the work lane, completed work, and reached review:
+  - task id `afa19068-d471-4a51-9745-3f9b7ce0aa2f`
+  - completed work execution `3133110b-19ec-449a-833f-5d614c06bad2`
+  - fresh review session `67cba2bb-a0be-4e1c-a504-f133e99178f2`
+  - current task status is now `review`
+
+Current narrowed live seam:
+- rerun-88 project board:
+  - `12 done`
+  - `13 done`
+  - `14 done`
+  - `15 done`
+  - `16 review`
+  - `18 done`
+  - `9,10,11,17,19` still `draft`
+- after the latest restart, the rerun-88 project session is now idle again:
+  - session `1a9edb0a-a817-46b1-975d-4d96c8164bcb`
+  - `current_turn_id = NULL`
+- two separate pending user messages still coexist on rerun-88:
+  - stale project continuation:
+    - `5d3b20af-8a51-4421-8aca-4e6c4185dad2`
+    - `source=project_execution_continuation`
+    - `completed_task_id=e1840ae1-0fbf-4d6c-9ea9-6df5035f7e35` (task 12)
+  - supervisor PM-recovery message on the same project session:
+    - `4292acb2-3149-454b-8699-c17b2fff365d`
+    - `source=supervisor`
+    - content `supervisor recovery: inspect stranded execution and use flow.recovery_decision`
+- that supervisor message has already been dead-lettered twice on the project session:
+  - jobs `55db443f-78bb-4215-8c62-d0bf3a68d628`
+  - jobs `1b879ebd-5516-4629-906d-5dca1a860652`
+- task `16`’s review execution is currently abandoned with no live turn:
+  - flow node execution `81291d5c-061c-407e-8467-caf130e12a22`
+  - session `67cba2bb-a0be-4e1c-a504-f133e99178f2`
+  - latest pending review prompts include:
+    - `0ca56fc0-6acb-46ec-a27e-9af590609f20` (`source=task_review_action`)
+    - `9bff9c83-9c59-4115-b3fa-56679bbccf22` (`source=supervisor`, `supervisor recovery: resume task`)
+
+Current critical path:
+- the project-continuation freshness bug is patched and covered
+- the next live issue is no longer stale task-12 continuation reuse alone
+- it is the cross-wired supervisor / PM-recovery path on rerun-88:
+  - project session and task-review session both have pending supervisor recovery prompts
+  - the project session still carries the obsolete task-12 continuation alongside the supervisor PM-recovery message
+  - task `16` review now needs the next repair, not task `15`
