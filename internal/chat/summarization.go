@@ -374,9 +374,11 @@ type SummarizerOptions struct {
 	Resolver  model.ProfileResolver
 	Model     SummarizationModel
 	Prompt    string
+	Now       func() time.Time
 }
 
 type Summarizer struct {
+	pool      *pgxpool.Pool
 	sessions  chatSessionRepository
 	messages  chatMessageRepository
 	summaries chatSummaryRepository
@@ -384,6 +386,7 @@ type Summarizer struct {
 	resolver  model.ProfileResolver
 	model     SummarizationModel
 	prompt    string
+	now       func() time.Time
 }
 
 func NewSummarizer(opts SummarizerOptions) (*Summarizer, error) {
@@ -395,6 +398,7 @@ func NewSummarizer(opts SummarizerOptions) (*Summarizer, error) {
 	}
 
 	s := &Summarizer{
+		pool:      opts.Pool,
 		sessions:  opts.Sessions,
 		messages:  opts.Messages,
 		summaries: opts.Summaries,
@@ -402,6 +406,10 @@ func NewSummarizer(opts SummarizerOptions) (*Summarizer, error) {
 		resolver:  opts.Resolver,
 		model:     opts.Model,
 		prompt:    strings.TrimSpace(opts.Prompt),
+		now:       opts.Now,
+	}
+	if s.now == nil {
+		s.now = time.Now
 	}
 	if s.sessions == nil {
 		s.sessions = repo.NewChatSessionRepo(opts.Pool)
@@ -440,7 +448,16 @@ func (s *Summarizer) RegisterJobs(registrar interface {
 		if payload.SessionID == uuid.Nil {
 			return fmt.Errorf("chat_summarize payload missing session_id")
 		}
-		_, err := s.RunForSession(ctx, payload.SessionID)
+		session, err := s.sessions.GetByID(ctx, payload.SessionID)
+		if err != nil {
+			return err
+		}
+		if runAfter, reason, err := s.summarizationJobRunAfter(ctx, session); err != nil {
+			return err
+		} else if runAfter != nil {
+			return jobqueue.NewDeferredJobError(*runAfter, reason)
+		}
+		_, err = s.RunForSession(ctx, payload.SessionID)
 		if err == nil || errors.Is(err, ErrAlreadySummarized) {
 			_ = s.clearSessionSummarizationBackoff(ctx, payload.SessionID)
 			return nil
@@ -450,6 +467,36 @@ func (s *Summarizer) RegisterJobs(registrar interface {
 		}
 		return err
 	})
+}
+
+func (s *Summarizer) summarizationJobRunAfter(ctx context.Context, session repo.ChatSession) (*time.Time, string, error) {
+	if s == nil {
+		return nil, "", nil
+	}
+
+	nowValue := s.now().UTC()
+	runAfter := SummarizationSessionRunAfter(session.Metadata, nowValue)
+	reason := ""
+	if runAfter != nil {
+		reason = "summarization session backoff active"
+	}
+
+	if s.pool == nil || session.OrganizationID == uuid.Nil {
+		return runAfter, reason, nil
+	}
+
+	providerRunAfter, err := nextSummarizationRunAfter(ctx, s.pool, session.OrganizationID, s.now)
+	if err != nil {
+		return nil, "", err
+	}
+	if providerRunAfter == nil {
+		return runAfter, reason, nil
+	}
+	if runAfter == nil || providerRunAfter.After((*runAfter).UTC()) {
+		value := providerRunAfter.UTC()
+		return &value, "summarization provider cooldown active", nil
+	}
+	return runAfter, reason, nil
 }
 
 func (s *Summarizer) RunForSession(ctx context.Context, sessionID uuid.UUID) (*repo.ChatSummary, error) {

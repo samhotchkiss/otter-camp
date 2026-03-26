@@ -498,6 +498,7 @@ Implemented so far in this spec:
 - budget/accounting now includes `cache_read_tokens`
 - async `project` `listening_eval` is disabled
 - active async `project` and `project_task` sessions suppress summarization enqueue, and summarization defers behind provider cooldown
+- background `chat_summarize` jobs now self-defer behind session backoff and provider cooldown without consuming a worker attempt
 - async scope-aware prompt/tool budgets are in place for:
   - async `project`
   - async `project_task` review

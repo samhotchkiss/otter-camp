@@ -1585,7 +1585,7 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 	}
 
 	var (
-		existingMessageID            uuid.UUID
+		existingMessageID           uuid.UUID
 		existingCompletedTaskIDText string
 		existingMessageConsumed     bool
 	)
@@ -1642,9 +1642,9 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 	message, err := repo.NewChatMessageRepo(w.pool).Create(ctx, repo.ChatMessage{
 		SessionID: sessionID,
 		Role:      "user",
-		Content: content,
-		Status:   "pending",
-		Metadata: metadata,
+		Content:   content,
+		Status:    "pending",
+		Metadata:  metadata,
 	})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create project continuation message: %w", err)
@@ -4381,6 +4381,11 @@ func (w *Worker) releaseClaimsForWorker(ctx context.Context) (int64, error) {
 }
 
 func (w *Worker) markFailure(ctx context.Context, job Job, jobErr error) error {
+	var deferred *DeferredJobError
+	if errors.As(jobErr, &deferred) {
+		return w.markDeferred(ctx, job, deferred)
+	}
+
 	errText := strings.TrimSpace(jobErr.Error())
 	if errText == "" {
 		errText = "unknown job failure"
@@ -4431,6 +4436,39 @@ func (w *Worker) markFailure(ctx context.Context, job Job, jobErr error) error {
 	`, job.ID, errText)
 	if err != nil {
 		return fmt.Errorf("mark job dead_letter: %w", err)
+	}
+	return nil
+}
+
+func (w *Worker) markDeferred(ctx context.Context, job Job, deferred *DeferredJobError) error {
+	if deferred == nil {
+		return fmt.Errorf("deferred job error is required")
+	}
+
+	runAfter := deferred.RunAfter.UTC()
+	now := w.clock.Now().UTC()
+	if runAfter.IsZero() || !runAfter.After(now) {
+		runAfter = now
+	}
+
+	reason := strings.TrimSpace(deferred.Reason)
+	if reason == "" {
+		reason = deferred.Error()
+	}
+
+	_, err := w.pool.Exec(ctx, `
+		UPDATE job_queue
+		SET status = 'pending',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    attempts = GREATEST(attempts - 1, 0),
+		    run_after = $2,
+		    last_error = $3,
+		    updated_at = now()
+		WHERE id = $1
+	`, job.ID, runAfter, reason)
+	if err != nil {
+		return fmt.Errorf("mark job deferred: %w", err)
 	}
 	return nil
 }

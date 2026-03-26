@@ -67,6 +67,63 @@ func TestJobWorkerProcessesEnqueuedJobs(t *testing.T) {
 	}
 }
 
+func TestJobWorkerDeferredJobRequeuesWithoutConsumingAttempt(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	deferUntil := time.Now().UTC().Add(7 * time.Minute).Truncate(time.Second)
+	worker.Register("test.defer", func(context.Context, Job) error {
+		return NewDeferredJobError(deferUntil, "provider cooldown active")
+	})
+
+	jobID, err := worker.Enqueue(context.Background(), nil, "test.defer", 100, nil, nil)
+	if err != nil {
+		t.Fatalf("enqueue defer job: %v", err)
+	}
+
+	jobs, err := worker.claimPending(context.Background())
+	if err != nil {
+		t.Fatalf("claimPending failed: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("claimed %d jobs, want 1", len(jobs))
+	}
+
+	if err := worker.executeClaimedJob(context.Background(), jobs[0]); err != nil {
+		t.Fatalf("executeClaimedJob defer path failed: %v", err)
+	}
+
+	var (
+		status    string
+		attempts  int
+		runAfter  time.Time
+		lastError *string
+	)
+	if err := pool.QueryRow(context.Background(), `
+		SELECT status, attempts, run_after, last_error
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &attempts, &runAfter, &lastError); err != nil {
+		t.Fatalf("query deferred job failed: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("status after deferral = %q, want pending", status)
+	}
+	if attempts != 0 {
+		t.Fatalf("attempts after deferral = %d, want 0", attempts)
+	}
+	if !runAfter.Equal(deferUntil) {
+		t.Fatalf("run_after = %s, want %s", runAfter, deferUntil)
+	}
+	if lastError == nil || *lastError != "provider cooldown active" {
+		t.Fatalf("last_error = %v, want provider cooldown active", lastError)
+	}
+}
+
 func TestJobWorkerProcessesBatchConcurrently(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -9213,11 +9270,11 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsPreservesRateLimitBack
 	}
 
 	var (
-		status    string
-		jobMsgID  uuid.UUID
-		retry     int
-		runAfter  time.Time
-		jittered  bool
+		status   string
+		jobMsgID uuid.UUID
+		retry    int
+		runAfter time.Time
+		jittered bool
 	)
 	if err := pool.QueryRow(ctx, `
 		SELECT status,
@@ -9773,9 +9830,9 @@ func TestJobWorkerEnsureProjectContinuationMessageKeepsBootstrapContinuationWhil
 	}
 
 	var (
-		sessionID  uuid.UUID
-		source     string
-		content    string
+		sessionID uuid.UUID
+		source    string
+		content   string
 	)
 	if err := pool.QueryRow(ctx, `
 		SELECT cm.id,

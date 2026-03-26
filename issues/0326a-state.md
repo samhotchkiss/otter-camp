@@ -1103,3 +1103,42 @@ The expanded report also answered two open observability questions in one real r
 - `listening_eval` is not showing up on async `project` sessions in the current 6-hour window
 - the only visible `listening_eval` traffic in that window is `organization` async on `claude-haiku-4-5-20251001`
 - there are currently `0` sessions with active summarization-backoff metadata, so summarization backoff is not silently piling up across the live session set right now
+
+## Update 16:06 MDT
+
+I used the remaining Anthropic cooldown window for one more low-risk runtime hardening slice: background summarization jobs now defer cleanly when the runtime already knows they should wait.
+
+What changed:
+
+- the job worker now supports a first-class deferred-job path via `DeferredJobError`
+- deferred jobs release their claim, move back to `pending`, keep a future `run_after`, and do not consume a worker attempt
+- `chat_summarize` now checks both:
+  - session-level summarization backoff metadata
+  - summarization-provider cooldown from `NextSummarizationRunAfter(...)`
+- if either gate says "wait", the summarization job returns a deferred-job signal before any model call
+
+Why this matters:
+
+- prior enqueue points were already cooldown-aware, but an already-claimed summarization job could still wake up, hit the model path, and fail
+- this closes that remaining gap
+- summarization is background work, so it should preserve provider/session cooldown instead of converting known wait conditions into noisy failures
+
+Focused verification that passed:
+
+- `go test ./internal/chat -run 'TestSummarizerRegisterJobs(RecordsBackoffOnFailure|DefersWhenSessionBackoffActive)$' -count=1`
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerDeferredJobRequeuesWithoutConsumingAttempt$' -count=1`
+- `go test -tags=integration ./internal/chat -run 'Test(NextSummarizationRunAfterReturnsProviderBackoffWhenSummaryProviderRateLimited|SummarizeJobHandlerDefersWhenProviderCooldownActive)$' -count=1`
+
+What this closes:
+
+- background summarization jobs no longer need to burn a failed attempt just to respect an already-known cooldown
+- provider/session backoff is now preserved consistently at:
+  - prompt-assembly enqueue
+  - session-close enqueue
+  - turn-runtime enqueue
+  - claimed summarization job execution
+
+What remains true:
+
+- this does not change sync-chat summarization eligibility
+- this does not reduce prompt history by itself; it only removes avoidable background failure churn during cooldown periods

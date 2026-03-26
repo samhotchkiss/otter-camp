@@ -372,6 +372,77 @@ func TestSummarizerRegisterJobsRecordsBackoffOnFailure(t *testing.T) {
 	}
 }
 
+func TestSummarizerRegisterJobsDefersWhenSessionBackoffActive(t *testing.T) {
+	sessionID := uuid.New()
+	orgID := uuid.New()
+	nextAllowedAt := time.Now().UTC().Add(12 * time.Minute).Truncate(time.Second)
+	metadata, err := MergeSummarizationBackoffMetadata(json.RawMessage(`{}`), SummarizationBackoffState{
+		FailureCount:  2,
+		LastError:     "provider http 429",
+		LastFailureAt: time.Now().UTC().Format(time.RFC3339Nano),
+		NextAllowedAt: nextAllowedAt.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeSummarizationBackoffMetadata: %v", err)
+	}
+
+	sessionRecord := repo.ChatSession{ID: sessionID, OrganizationID: orgID, ScopeType: "organization", ScopeID: orgID, Status: "active", Metadata: metadata}
+	sessionRepo := &fakeSessionRepo{
+		getByIDFn: func(_ context.Context, id uuid.UUID) (repo.ChatSession, error) {
+			return sessionRecord, nil
+		},
+		updateMetadataFn: func(_ context.Context, id uuid.UUID, updated json.RawMessage) (repo.ChatSession, error) {
+			sessionRecord.Metadata = updated
+			return sessionRecord, nil
+		},
+	}
+
+	modelCalls := 0
+	summarizer, err := NewSummarizer(SummarizerOptions{
+		Sessions:  sessionRepo,
+		Messages:  &fakeMessageRepo{},
+		Summaries: &fakeSummaryRepo{},
+		Tasks:     &fakeTaskRepo{},
+		Resolver:  fixedResolver{profile: repo.ModelProfile{LogicalProfileID: "summary", InvocationPurpose: "summarization"}},
+		Model: &fakeSummarizationModel{summarizeFn: func(context.Context, SummarizationRequest) (SummarizationResponse, error) {
+			modelCalls++
+			return SummarizationResponse{}, nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewSummarizer: %v", err)
+	}
+
+	registrar := &fakeJobRegistrar{handlers: map[string]jobqueue.JobHandler{}}
+	summarizer.RegisterJobs(registrar)
+	handler := registrar.handlers[ChatSummarizeJobType]
+	if handler == nil {
+		t.Fatal("missing chat_summarize handler")
+	}
+	payload, _ := json.Marshal(ChatSummarizePayload{SessionID: sessionID})
+	err = handler(context.Background(), jobqueue.Job{ID: uuid.New(), JobType: ChatSummarizeJobType, Payload: payload})
+	if err == nil {
+		t.Fatal("handler err = nil, want deferred job error")
+	}
+	var deferred *jobqueue.DeferredJobError
+	if !errors.As(err, &deferred) {
+		t.Fatalf("handler err = %v, want DeferredJobError", err)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("model calls = %d, want 0", modelCalls)
+	}
+	if !deferred.RunAfter.Equal(nextAllowedAt) {
+		t.Fatalf("defer run_after = %s, want %s", deferred.RunAfter, nextAllowedAt)
+	}
+	state, ok := ParseSummarizationBackoff(sessionRecord.Metadata)
+	if !ok {
+		t.Fatal("expected summarization backoff metadata to remain present")
+	}
+	if state.FailureCount != 2 {
+		t.Fatalf("failure_count = %d, want 2", state.FailureCount)
+	}
+}
+
 type fakeJobRegistrar struct {
 	handlers map[string]jobqueue.JobHandler
 }

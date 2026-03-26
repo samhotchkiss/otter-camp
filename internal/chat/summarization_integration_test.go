@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/samhotchkiss/otter-camp/internal/eventbus"
+	"github.com/samhotchkiss/otter-camp/internal/jobqueue"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
 	"github.com/samhotchkiss/otter-camp/internal/testdb"
 )
@@ -150,6 +151,51 @@ func TestNextSummarizationRunAfterReturnsProviderBackoffWhenSummaryProviderRateL
 	}
 	if !runAfter.After(before) {
 		t.Fatalf("runAfter = %s, want after %s", runAfter.UTC(), before)
+	}
+}
+
+func TestSummarizeJobHandlerDefersWhenProviderCooldownActive(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	org := seedChatServiceOrg(t, ctx, pool)
+	seedSystemHaikuProviderConnection(t, ctx, pool, org.ID, "rate_limited")
+
+	svc := newIntegrationService(t, pool, nil)
+	session := mustCreateSession(t, ctx, svc, org.ID)
+
+	modelCalls := 0
+	summarizer, err := NewSummarizer(SummarizerOptions{
+		Pool: pool,
+		Model: &fakeSummarizationModel{summarizeFn: func(context.Context, SummarizationRequest) (SummarizationResponse, error) {
+			modelCalls++
+			return SummarizationResponse{SummaryText: "should not run"}, nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewSummarizer: %v", err)
+	}
+
+	registrar := &fakeJobRegistrar{handlers: map[string]jobqueue.JobHandler{}}
+	summarizer.RegisterJobs(registrar)
+	handler := registrar.handlers[ChatSummarizeJobType]
+	if handler == nil {
+		t.Fatal("missing chat_summarize handler")
+	}
+
+	payload, _ := json.Marshal(ChatSummarizePayload{SessionID: session.ID})
+	err = handler(ctx, jobqueue.Job{ID: uuid.New(), JobType: ChatSummarizeJobType, Payload: payload})
+	if err == nil {
+		t.Fatal("handler err = nil, want deferred job error")
+	}
+	var deferred *jobqueue.DeferredJobError
+	if !errors.As(err, &deferred) {
+		t.Fatalf("handler err = %v, want DeferredJobError", err)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("model calls = %d, want 0", modelCalls)
+	}
+	if !deferred.RunAfter.After(time.Now().UTC()) {
+		t.Fatalf("defer run_after = %s, want future timestamp", deferred.RunAfter)
 	}
 }
 
