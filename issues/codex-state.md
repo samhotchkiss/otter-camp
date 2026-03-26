@@ -8795,3 +8795,45 @@ Current narrowed seam:
 - the next proof target is the fresh rerun-88 continuation spawned after that recovery:
   - confirm whether it now uses the numeric `task.add_dependency` path successfully
   - or whether the project lane surfaces a different next orchestration error
+
+## 2026-03-26 06:52 MDT
+
+Latest fixes landed locally:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - widened `looksLikeGenericTaskRecoveryReply(...)` so project-continuation replies like:
+    - `The task or subtask dependency edge ... has been successfully added`
+    - `Is there anything else you would like to do with your project tasks?`
+    are treated as generic non-action continuation output
+- [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - added `TestLooksLikeGenericTaskRecoveryReplyDetectsDependencySuccessAckReply`
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetectsDependencySuccessAckReply|HandleCompletedProjectExecutionContinuationTurnRetriesDependencyErrorCoachingReplyWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnRetriesGenericAssistantReplyWithFreshMessage)$' -count=1`
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324` `serve` and `worker --concurrency 2`
+- `./bin/ottercamp health` is green
+
+Live proof achieved in this stretch:
+- the numeric dependency fix is now proven live on rerun-88:
+  - turn `7394331b-e8c9-4ca3-b0e3-5a099eec529d`
+  - first invocation `b1663e2b-1ee6-442b-8fdb-5928d752cadc`
+  - tool call reused the old numeric shape:
+    - `task.add_dependency`
+    - `source_id=19`
+    - `depends_on_id=20`
+  - tool result succeeded:
+    - `dependency_id=3160e783-fd92-4666-b348-8d3f6253f24b`
+  - project dependency graph now includes:
+    - task `19` depends on `17`, `18`, and `20`
+- the same rerun-88 turn then drifted into a generic confirmation reply instead of continuing project action:
+  - assistant message `8ed15bfd-5791-4f54-83a6-1e8b20765b70`
+  - content included:
+    - `has been successfully added`
+    - `Is there anything else you would like to do with your project tasks?`
+- because that turn completed before the latest restart, worker recovery synthesized the next continuation message:
+  - `b4c47956-3199-4db6-aa95-ed0adb58ab04`
+
+Current narrowed seam:
+- dependency-number resolution is fixed and proven
+- the next proof target is the new generic-success-ack detector on the next rerun-88 continuation after `b4c47956-...`
+- if the model produces the same dependency-success acknowledgement again, the engine should now enqueue the fresh retry immediately instead of waiting for worker-side `requeued active project sessions without turns`

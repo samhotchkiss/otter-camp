@@ -11756,6 +11756,15 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsProjectMetaTaskCoachingReply(t 
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsDependencySuccessAckReply(t *testing.T) {
+	t.Parallel()
+
+	content := "The task or subtask dependency edge with ID `3160e783-fd92-4666-b348-8d3f6253f24b` has been successfully added. Is there anything else you would like to do with your project tasks?"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatal("expected dependency success acknowledgement reply to be treated as generic recovery output")
+	}
+}
+
 func TestLooksLikeGenericTaskRecoveryReplyDetectsExistingProjectWorkingReply(t *testing.T) {
 	t.Parallel()
 
