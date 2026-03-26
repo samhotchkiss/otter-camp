@@ -5027,6 +5027,26 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	if len(tasks) != 1 {
 		t.Fatalf("project task count = %d after third variant, want 1", len(tasks))
 	}
+
+	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":   project.ID.String(),
+		"title":        "Review and update pipeline test results",
+		"description":  "Inspect the results from the end-to-end pipeline integration test and document any findings or required updates.",
+	})
+	if err != nil {
+		t.Fatalf("task.create fourth variant: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); got != projectContinuationMetaTaskCreateError {
+		t.Fatalf("fourth task.create error = %q, want %q", got, projectContinuationMetaTaskCreateError)
+	}
+
+	tasks, err = taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks after fourth variant: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("project task count = %d after fourth variant, want 1", len(tasks))
+	}
 }
 
 func TestIntegrationProjectSessionQueueKeepsPlannedTaskSetFlat(t *testing.T) {

@@ -8874,3 +8874,32 @@ Current narrowed seam:
 - the success-acknowledgement retry path is fixed and live-proven
 - the next likely loop source is repeated no-op dependency adds, since `19 -> 20` already exists and qwen is still trying to add it again
 - the latest local patch makes duplicate dependency calls explicit no-ops via `already_exists=true`; that patch is tested but not yet deployed to the live rerun-88 lane
+
+## 2026-03-26 07:20 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go)
+  - widened the async project-session meta-task guard to also reject:
+    - `Review and update pipeline test results`
+- [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - extended the project-session meta-task guard integration test with this fourth live variant
+
+Focused verification passed:
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemain$' -count=1`
+
+Live proof achieved in this stretch:
+- the duplicate-dependency no-op patch is deployed and pushed as commit `54edd957`
+- rerun-88 moved past the dependency-success acknowledgement seam, but surfaced a new duplicate meta-task title:
+  - completed retry turn `0ce4d267-e804-41e0-a9d0-fb5ea0a8330b`
+  - assistant tool call:
+    - `task_create`
+    - title `Review and update pipeline test results`
+    - parent `TASK_19_ID`
+  - tool result message `bce04210-eb0e-4910-ad08-5af773525711` confirms that call produced a new planning-bearing task shell
+- current project task list now includes that extra duplicate draft task:
+  - task `25` `draft` `Review and update pipeline test results`
+
+Current narrowed seam:
+- repeated dependency adds are no longer the immediate blocker
+- the new live duplicate family is project-session creation of another “review integration test results” shell under a slightly different title
+- the local guard now covers that title variant, but this meta-task patch is not deployed yet

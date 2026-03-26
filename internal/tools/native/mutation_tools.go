@@ -2701,6 +2701,9 @@ func looksLikeProjectContinuationMetaTask(title string, description *string) boo
 	if strings.Contains(normalized, "analyze results of integration test") {
 		return true
 	}
+	if strings.Contains(normalized, "review and update pipeline test results") {
+		return true
+	}
 	if strings.Contains(normalized, "prepare for next phase of project execution") {
 		return true
 	}
