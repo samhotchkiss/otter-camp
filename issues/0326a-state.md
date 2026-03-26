@@ -838,3 +838,56 @@ What is not yet proven live:
 
 - a fresh post-deploy Anthropic 429 has not yet been observed to stamp `health_rate_limited_until` in the real local runtime
 - a fresh post-deploy router refusal has not yet been observed on a live Anthropic call with all eligible connections still cooling down
+
+## Update 15:10 MDT
+
+The next `0326a` slice fixed a different rate-limit churn path: active async `project` sessions were still ignoring provider backoff during worker repair and bootstrap retry.
+
+Root cause:
+
+- `RequeueActiveProjectSessionsWithoutTurns(...)` repaired active async `project` sessions immediately, even when the latest terminal turn on the same trigger message had already failed with a concrete provider `retry_after`
+- deferred bootstrap provider failures also re-enqueued without carrying forward the next `retry_count`, which made the delayed retry path less durable than the ordinary turn retry path
+
+New behavior:
+
+- worker repair for active async `project` sessions now inspects the latest terminal turn for the same bootstrap / continuation message
+- if that turn failed with a concrete rate-limit hint, the repair path now schedules the next `agent_turn` dispatch at a future `run_after` instead of immediately
+- the repaired retry payload now marks `rate_limit_jitter_applied = true`
+- deferred project-bootstrap provider failures now enqueue with `retry_count = current_turn_retry + 1`
+- those deferred bootstrap retries also use the same rate-limit-aware delayed scheduling path instead of falling back to a generic immediate retry
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(HandleDeferredBootstrapProviderFailureEnqueuesIncrementedRateLimitedRetry|HandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint|HandleTurnJobRateLimitedPersistsProviderRateLimitFailureClassification)$' -count=1`
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueActiveProjectSessionsWithoutTurnsPreservesRateLimitBackoff|RequeueActiveProjectSessionsWithoutTurns|RequeueActiveProjectSessionsWithoutTurnsIgnoresStalePendingDispatch)$' -count=1`
+
+Deployment checkpoint:
+
+- rebuilt `./bin/ottercamp`
+- respawned tmux `codex-e2e-20260324` serve and worker panes with exported `.env`
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+Live proof:
+
+- the previously storming active async project session `db21265f-c37d-40e4-9ed5-13def09970f8` is no longer producing a new failed turn every minute
+- latest failed turn remains:
+  - `9518ecd6-0d67-4e2a-ba29-281fa4984f1f`
+  - `retry_count = 57`
+  - `completed_at = 2026-03-26 15:05:04 MDT`
+  - error `model provider rate limited (retry_after=54m55s): all provider connections are rate limited ...`
+- latest dispatch state is now one future-dated pending retry instead of an immediate repair loop:
+  - job `4554c05f-7c8a-41cb-b458-a074865ef5d5`
+  - `status = pending`
+  - `retry_count = 58`
+  - `run_after = 2026-03-26 15:35:04 MDT`
+  - `rate_limit_jitter_applied = true`
+
+What this fixes:
+
+- worker startup / repair no longer burns a project bootstrap turn every minute while every Claude connection is cooling down
+- project bootstrap retry behavior is now aligned with the task-session repair path and with ordinary rate-limited turn retries
+
+What is still pending:
+
+- a fresh post-deploy Anthropic 429 should still be observed end-to-end to confirm the streamed failure classification and persisted cooldown path together on a new real invocation
+- the next remaining `0326a` runtime gap is still broader repeated-recovery fingerprint handling beyond the already-shipped focus-failure, target-drift, and repeated read-only discovery stops

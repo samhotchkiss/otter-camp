@@ -1362,7 +1362,9 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		         FROM chat_turn ct
 		         WHERE ct.session_id = cs.id
 		           AND ct.trigger_message_id = cm.id
-		       ), 0) AS next_retry_count
+		       ), 0) AS next_retry_count,
+		       COALESCE(latest_turn.error_message, '') AS latest_turn_error,
+		       COALESCE(latest_turn.completed_at, latest_turn.created_at, cm.created_at) AS latest_turn_completed_at
 		FROM chat_session cs
 		JOIN project p
 		  ON p.id = cs.scope_id
@@ -1370,6 +1372,19 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		  ON cm.session_id = cs.id
 		LEFT JOIN project_task pt
 		  ON pt.project_id = cs.scope_id
+		LEFT JOIN LATERAL (
+		  SELECT ct.error_message,
+		         ct.completed_at,
+		         ct.created_at
+		  FROM chat_turn ct
+		  WHERE ct.session_id = cs.id
+		    AND ct.trigger_message_id = cm.id
+		    AND ct.status IN ('completed', 'cancelled', 'failed')
+		  ORDER BY ct.retry_count DESC,
+		           COALESCE(ct.completed_at, ct.created_at) DESC,
+		           ct.id DESC
+		  LIMIT 1
+		) latest_turn ON true
 		WHERE cs.scope_type = 'project'
 		  AND cs.mode = 'async'
 		  AND cs.status = 'active'
@@ -1407,7 +1422,7 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		        AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') = 'completed'
 		      )
 		  )
-		GROUP BY cs.id, cm.id, cm.created_at, cm.metadata
+		GROUP BY cs.id, cm.id, cm.created_at, cm.metadata, latest_turn.error_message, latest_turn.completed_at, latest_turn.created_at
 		ORDER BY cs.id, cm.created_at DESC, cm.id DESC
 	`, agentTurnJobType)
 	if err != nil {
@@ -1422,7 +1437,9 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		var source string
 		var openTaskCount int
 		var retryCount int
-		if err := rows.Scan(&sessionID, &messageID, &source, &openTaskCount, &retryCount); err != nil {
+		var latestTurnError string
+		var latestTurnCompletedAt time.Time
+		if err := rows.Scan(&sessionID, &messageID, &source, &openTaskCount, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
 			return repaired, fmt.Errorf("scan active project session without turn: %w", err)
 		}
 		shouldRefreshContinuation := strings.EqualFold(strings.TrimSpace(source), "project_execution_continuation") ||
@@ -1438,6 +1455,21 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 				}
 				messageID = synthMessageID
 			}
+		}
+		var runAfter *time.Time
+		payload := agentTurnKeyPayload{
+			SessionID:  sessionID,
+			MessageID:  messageID,
+			RetryCount: retryCount,
+		}
+		if retryAfterHint, ok := parseRateLimitRetryAfterFromText(latestTurnError); ok {
+			retryDelay := agentTurnRateLimitDelay(max(1, retryCount), retryAfterHint)
+			scheduled := latestTurnCompletedAt.UTC().Add(retryDelay)
+			if scheduled.Before(w.clock.Now().UTC()) {
+				scheduled = w.clock.Now().UTC()
+			}
+			runAfter = &scheduled
+			payload.RateLimitJitterApplied = true
 		}
 		if _, err := w.pool.Exec(ctx, `
 			UPDATE job_queue jq
@@ -1460,11 +1492,7 @@ func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (
 		`, agentTurnJobType, sessionID); err != nil {
 			return repaired, fmt.Errorf("purge stale terminal agent_turn dispatches for session %s: %w", sessionID, err)
 		}
-		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, agentTurnKeyPayload{
-			SessionID:  sessionID,
-			MessageID:  messageID,
-			RetryCount: retryCount,
-		}, nil); err != nil {
+		if _, err := w.enqueueAgentTurnDispatch(ctx, nil, payload, runAfter); err != nil {
 			return repaired, fmt.Errorf("requeue active project session without turn for session %s: %w", sessionID, err)
 		}
 		repaired++

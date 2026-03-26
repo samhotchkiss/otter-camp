@@ -1672,6 +1672,81 @@ func TestHandleTurnJobRateLimitedRetryCapStopsRequeue(t *testing.T) {
 	}
 }
 
+func TestHandleDeferredBootstrapProviderFailureEnqueuesIncrementedRateLimitedRetry(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+
+	agentID := uuid.New()
+	turnRecord, created, err := fixture.chat.CreateForMessageAttempt(context.Background(), fixture.session.ID, agentID, fixture.userMessageID, 4)
+	if err != nil {
+		t.Fatalf("CreateForMessageAttempt: %v", err)
+	}
+	if !created {
+		t.Fatal("expected bootstrap retry turn to be created")
+	}
+	if err := fixture.chat.StartTurn(context.Background(), turnRecord.ID); err != nil {
+		t.Fatalf("StartTurn: %v", err)
+	}
+	turn := fixture.chat.turnByID(turnRecord.ID)
+	if turn == nil {
+		t.Fatal("missing created turn")
+	}
+
+	retryAfter := 8*time.Minute + 4*time.Second
+	cause := NewRateLimitedError(retryAfter, errors.New("http status 429"))
+	runtime := &turnRuntime{
+		session:          fixture.session,
+		agent:            repo.Agent{ID: agentID},
+		turn:             turn,
+		initialMessageID: fixture.userMessageID,
+		startedAt:        base.Add(-time.Minute),
+	}
+
+	handled, err := fixture.engine.handleDeferredBootstrapProviderFailure(
+		context.Background(),
+		runtime,
+		projectBootstrapProgress{},
+		projectBootstrapFailureProviderRateLimit,
+		cause.Error(),
+		cause,
+		base,
+	)
+	if err != nil {
+		t.Fatalf("handleDeferredBootstrapProviderFailure: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected deferred bootstrap provider failure to be handled")
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	job := jobs[0]
+	if job.payload == nil {
+		t.Fatal("retry payload missing")
+	}
+	if job.payload.RetryCount != 5 {
+		t.Fatalf("retry_count = %d, want 5", job.payload.RetryCount)
+	}
+	if !job.payload.RateLimitJitterApplied {
+		t.Fatal("expected rate limit retry payload to be marked as jittered")
+	}
+	if job.runAfter == nil {
+		t.Fatal("retry run_after missing")
+	}
+	wantRunAfter := base.Add(jitteredRateLimitRetryDelay(retryAfter, fixture.session.ID, fixture.userMessageID, 4))
+	if !job.runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", *job.runAfter, wantRunAfter)
+	}
+	if !fixture.messages.containsContentSubstring("[Project bootstrap delayed:") {
+		t.Fatal("missing bootstrap delayed status message")
+	}
+}
+
 func TestHandleTurnJobTransientInfrastructureEnqueuesRetry(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	base := time.Unix(1700000000, 0).UTC()

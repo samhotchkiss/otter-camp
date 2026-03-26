@@ -9123,6 +9123,135 @@ func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsIgnoresStalePendingDis
 	}
 }
 
+func TestJobWorkerRequeueActiveProjectSessionsWithoutTurnsPreservesRateLimitBackoff(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-project-session-preserves-rate-limit-backoff",
+		DisplayName: "Requeue Active Project Session Preserves Rate Limit Backoff",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Project Continuation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue active projects.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-project-session-preserves-rate-limit-backoff-project",
+		DisplayName:    "Requeue Active Project Session Preserves Rate Limit Backoff Project",
+		Description:    "Project for project-session rate-limit requeue coverage",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{"project_bootstrap":{"status":"active"}}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active project bootstrap from the persisted state above.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_bootstrap","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create project bootstrap message: %v", err)
+	}
+	completedAt := time.Now().UTC().Add(-20 * time.Minute)
+	errorMessage := `model provider rate limited (retry_after=3h22m57s): provider http 429`
+	if _, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "failed",
+		TriggerMessageID: &message.ID,
+		RetryCount:       4,
+		ErrorMessage:     &errorMessage,
+		CompletedAt:      &completedAt,
+	}); err != nil {
+		t.Fatalf("create failed project continuation turn: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveProjectSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveProjectSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	var (
+		status    string
+		jobMsgID  uuid.UUID
+		retry     int
+		runAfter  time.Time
+		jittered  bool
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       COALESCE((payload->>'retry_count')::int, 0),
+		       run_after,
+		       COALESCE((payload->>'rate_limit_jitter_applied')::boolean, false)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, session.ID).Scan(&status, &jobMsgID, &retry, &runAfter, &jittered); err != nil {
+		t.Fatalf("query requeued project retry job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("retry job status = %q, want pending", status)
+	}
+	if jobMsgID != message.ID {
+		t.Fatalf("retry message_id = %s, want %s", jobMsgID, message.ID)
+	}
+	if retry != 5 {
+		t.Fatalf("retry count = %d, want 5", retry)
+	}
+	if !jittered {
+		t.Fatal("expected rate_limit_jitter_applied = true")
+	}
+	wantRunAfter := completedAt.Add(agentTurnRateLimitDelay(5, 3*time.Hour+22*time.Minute+57*time.Second))
+	if runAfter.Before(wantRunAfter.Add(-5*time.Second)) || runAfter.After(wantRunAfter.Add(5*time.Second)) {
+		t.Fatalf("run_after = %s, want about %s", runAfter, wantRunAfter)
+	}
+}
+
 func TestJobWorkerRecoverStaleInProgressProjectTurnsWithoutOwnership(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{

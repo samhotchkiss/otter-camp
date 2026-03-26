@@ -383,12 +383,15 @@ Completed so far:
    - live model calls now translate that router-level cooldown into the normal turn-level `ErrRateLimited` retry path
    - `provider_connection.metadata.health_rate_limited_until` is cleared automatically once the connection is marked healthy or otherwise moved out of rate-limited state
    - streamed `agent_turn` invocation rows now preserve provider failure classification for 429s instead of flattening them into generic `model_error`
+   - active async `project` sessions now preserve the latest turn-level rate-limit backoff when worker repair requeues a project bootstrap / continuation lane with no current turn
+   - deferred project-bootstrap provider failures now enqueue the next retry with an incremented `retry_count` and a rate-limit-aware `run_after` instead of falling back to an immediate or generic retry
 
 Still pending from this spec:
 
 - broader repeated-recovery fingerprint cutoffs beyond focus / target-drift / repeated read-only discovery failures
 - stronger tool-surface narrowing where canary drift still survives beyond the new task-lane `task.create` boundary
 - live proof of the new durable provider-cooldown path on a fresh post-deploy Anthropic 429
+- live proof that the same fix fully suppresses repeated project-bootstrap repair churn past the next scheduled retry boundary
 
 Operator tooling now available:
 

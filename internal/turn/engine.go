@@ -13998,7 +13998,7 @@ func (e *TurnEngine) handleProjectBootstrapUnhandledFailure(ctx context.Context,
 		}
 	}
 	if failureCategory == projectFailureCategoryProvider && projectBootstrapSetupPersisted(progress) {
-		return e.handleDeferredBootstrapProviderFailure(ctx, rt, progress, failureClass, failureReason, now)
+		return e.handleDeferredBootstrapProviderFailure(ctx, rt, progress, failureClass, failureReason, cause, now)
 	}
 	record := buildProjectBootstrapAutomaticFailureRecord(progress, failureCategory, failureClass, failureReason, now)
 
@@ -14043,7 +14043,7 @@ func (e *TurnEngine) handleProjectBootstrapUnhandledFailure(ctx context.Context,
 	return true, nil
 }
 
-func (e *TurnEngine) handleDeferredBootstrapProviderFailure(ctx context.Context, rt *turnRuntime, progress projectBootstrapProgress, failureClass, failureReason string, now time.Time) (bool, error) {
+func (e *TurnEngine) handleDeferredBootstrapProviderFailure(ctx context.Context, rt *turnRuntime, progress projectBootstrapProgress, failureClass, failureReason string, cause error, now time.Time) (bool, error) {
 	if e == nil || rt == nil || rt.turn == nil || rt.session == nil {
 		return false, nil
 	}
@@ -14090,14 +14090,25 @@ func (e *TurnEngine) handleDeferredBootstrapProviderFailure(ctx context.Context,
 	}
 
 	nextPayload := AgentTurnPayload{
-		SessionID: rt.session.ID,
-		MessageID: rt.initialMessageID,
+		SessionID:  rt.session.ID,
+		MessageID:  rt.initialMessageID,
+		RetryCount: rt.turn.RetryCount + 1,
 	}
 	if rt.agent.ID != uuid.Nil {
 		nextAgentID := rt.agent.ID
 		nextPayload.AgentID = &nextAgentID
 	}
 	runAfter := now.Add(retryBackoff(rt.modelRetryUsed + 1))
+	if strings.EqualFold(strings.TrimSpace(failureClass), projectBootstrapFailureProviderRateLimit) {
+		retryDelay := jitteredRateLimitRetryDelay(
+			rateLimitRetryDelay(rt.turn.RetryCount, rateLimitRetryAfterHint(cause)),
+			rt.session.ID,
+			rt.initialMessageID,
+			rt.turn.RetryCount,
+		)
+		runAfter = now.Add(retryDelay)
+		nextPayload.RateLimitJitterApplied = true
+	}
 	_, err := e.enqueueAgentTurnIfActive(ctx, rt.session, nextPayload, &runAfter)
 	return true, err
 }
