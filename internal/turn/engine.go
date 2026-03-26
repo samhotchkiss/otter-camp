@@ -2203,15 +2203,8 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 		return nil
 	}
 
-	var remainingDraftTasks int
-	if err := e.pool.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM project_task
-		WHERE project_id = $1
-		  AND work_status = 'draft'
-		  AND NOT COALESCE((metadata->>'bootstrap_gate')::boolean, false)
-		  AND NOT COALESCE((metadata->>'bootstrap_setup_task')::boolean, false)
-	`, projectID).Scan(&remainingDraftTasks); err != nil {
+	remainingDraftTasks, err := e.countProjectDraftTasks(ctx, projectID)
+	if err != nil {
 		return err
 	}
 	if remainingDraftTasks == 0 {
@@ -3468,11 +3461,77 @@ func (e *TurnEngine) countProjectDraftTasks(ctx context.Context, projectID uuid.
 	}
 	count := 0
 	for _, task := range projectTasks {
-		if strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+		if isActionableProjectDraftTask(task) {
 			count++
 		}
 	}
 	return count, nil
+}
+
+func isActionableProjectDraftTask(task repo.ProjectTask) bool {
+	if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+		return false
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(task.Metadata, &metadata); err == nil {
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			return false
+		}
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); setupTask {
+			return false
+		}
+	}
+	return !looksLikeProjectContinuationMetaDraft(task.Title, task.Description)
+}
+
+func looksLikeProjectContinuationMetaDraft(title string, description *string) bool {
+	descriptionText := ""
+	if description != nil {
+		descriptionText = *description
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(title+" "+descriptionText)), " "))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "review and promote draft tasks") {
+		return true
+	}
+	if strings.Contains(normalized, "review and validate integration test results") {
+		return true
+	}
+	if strings.Contains(normalized, "analyze results of integration test") {
+		return true
+	}
+	if strings.Contains(normalized, "review and update pipeline test results") {
+		return true
+	}
+	if strings.Contains(normalized, "prepare for next phase of project execution") {
+		return true
+	}
+	if strings.Contains(normalized, "end to end pipeline integration test") &&
+		(strings.Contains(normalized, "review") ||
+			strings.Contains(normalized, "validate") ||
+			strings.Contains(normalized, "verify the outcomes") ||
+			strings.Contains(normalized, "analyze") ||
+			strings.Contains(normalized, "inspect") ||
+			strings.Contains(normalized, "update") ||
+			strings.Contains(normalized, "document any findings") ||
+			strings.Contains(normalized, "required updates") ||
+			strings.Contains(normalized, "results")) {
+		return true
+	}
+	if strings.Contains(normalized, "remaining draft task") &&
+		(strings.Contains(normalized, "review") ||
+			strings.Contains(normalized, "promote") ||
+			strings.Contains(normalized, "runnable") ||
+			strings.Contains(normalized, "next phase")) {
+		return true
+	}
+	if strings.Contains(normalized, "draft project task") &&
+		(strings.Contains(normalized, "inspect") || strings.Contains(normalized, "promote")) {
+		return true
+	}
+	return false
 }
 
 func turnHasSuccessfulToolResult(messages []repo.ChatMessage, turnID uuid.UUID) bool {

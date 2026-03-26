@@ -11812,6 +11812,28 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsGeneralExistingProjectProceedPr
 	}
 }
 
+func TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts(t *testing.T) {
+	t.Parallel()
+
+	description := "Inspect the results from the end-to-end pipeline integration test and document any findings or required updates."
+	task := repo.ProjectTask{
+		Title:       "Review and update pipeline test results",
+		Description: &description,
+		WorkStatus:  "draft",
+	}
+	if isActionableProjectDraftTask(task) {
+		t.Fatal("expected project continuation meta draft to be excluded from actionable draft count")
+	}
+
+	task = repo.ProjectTask{
+		Title:      "Speaker Ingestion Workflow Validation",
+		WorkStatus: "draft",
+	}
+	if !isActionableProjectDraftTask(task) {
+		t.Fatal("expected substantive draft task to count as actionable")
+	}
+}
+
 func TestTaskExecutionKickoffMessageDetectsTaskQueueKickoff(t *testing.T) {
 	t.Parallel()
 

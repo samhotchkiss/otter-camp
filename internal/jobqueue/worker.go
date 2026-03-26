@@ -1529,6 +1529,7 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 			completedTaskNum   int
 			completedTaskTitle string
 			remainingDrafts    int
+			err                error
 		)
 		if err := w.pool.QueryRow(ctx, `
 			WITH latest_completed AS (
@@ -1541,15 +1542,13 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 			)
 			SELECT COALESCE((SELECT id FROM latest_completed), '00000000-0000-0000-0000-000000000000'::uuid),
 			       COALESCE((SELECT task_number FROM latest_completed), 0),
-			       COALESCE((SELECT title FROM latest_completed), ''),
-			       COALESCE((
-			         SELECT COUNT(*)
-			         FROM project_task
-			         WHERE project_id = $1
-			           AND work_status = 'draft'
-			       ), 0)
-		`, projectID).Scan(&completedTaskID, &completedTaskNum, &completedTaskTitle, &remainingDrafts); err != nil {
+			       COALESCE((SELECT title FROM latest_completed), '')
+		`, projectID).Scan(&completedTaskID, &completedTaskNum, &completedTaskTitle); err != nil {
 			return uuid.Nil, fmt.Errorf("load latest completed project task: %w", err)
+		}
+		remainingDrafts, err = w.countActionableProjectDraftTasks(ctx, projectID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("count actionable draft project tasks: %w", err)
 		}
 		if completedTaskID != uuid.Nil {
 			metadataMap["completed_task_id"] = completedTaskID.String()
@@ -1623,6 +1622,103 @@ func (w *Worker) ensureProjectContinuationMessage(ctx context.Context, sessionID
 		return uuid.Nil, fmt.Errorf("create project continuation message: %w", err)
 	}
 	return message.ID, nil
+}
+
+func (w *Worker) countActionableProjectDraftTasks(ctx context.Context, projectID uuid.UUID) (int, error) {
+	rows, err := w.pool.Query(ctx, `
+		SELECT title, description, metadata
+		FROM project_task
+		WHERE project_id = $1
+		  AND work_status = 'draft'
+	`, projectID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var title string
+		var description *string
+		var metadata []byte
+		if err := rows.Scan(&title, &description, &metadata); err != nil {
+			return 0, err
+		}
+		task := repo.ProjectTask{Title: title, Description: description, WorkStatus: "draft", Metadata: metadata}
+		if isActionableProjectDraftTaskForWorker(task) {
+			count++
+		}
+	}
+	if rows.Err() != nil {
+		return 0, rows.Err()
+	}
+	return count, nil
+}
+
+func isActionableProjectDraftTaskForWorker(task repo.ProjectTask) bool {
+	if !strings.EqualFold(strings.TrimSpace(task.WorkStatus), "draft") {
+		return false
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(task.Metadata, &metadata); err == nil {
+		if bootstrapGate, _ := metadata["bootstrap_gate"].(bool); bootstrapGate {
+			return false
+		}
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); setupTask {
+			return false
+		}
+	}
+	return !looksLikeProjectContinuationMetaDraftForWorker(task.Title, task.Description)
+}
+
+func looksLikeProjectContinuationMetaDraftForWorker(title string, description *string) bool {
+	descriptionText := ""
+	if description != nil {
+		descriptionText = *description
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(title+" "+descriptionText)), " "))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "review and promote draft tasks") {
+		return true
+	}
+	if strings.Contains(normalized, "review and validate integration test results") {
+		return true
+	}
+	if strings.Contains(normalized, "analyze results of integration test") {
+		return true
+	}
+	if strings.Contains(normalized, "review and update pipeline test results") {
+		return true
+	}
+	if strings.Contains(normalized, "prepare for next phase of project execution") {
+		return true
+	}
+	if strings.Contains(normalized, "end to end pipeline integration test") &&
+		(strings.Contains(normalized, "review") ||
+			strings.Contains(normalized, "validate") ||
+			strings.Contains(normalized, "verify the outcomes") ||
+			strings.Contains(normalized, "analyze") ||
+			strings.Contains(normalized, "inspect") ||
+			strings.Contains(normalized, "update") ||
+			strings.Contains(normalized, "document any findings") ||
+			strings.Contains(normalized, "required updates") ||
+			strings.Contains(normalized, "results")) {
+		return true
+	}
+	if strings.Contains(normalized, "remaining draft task") &&
+		(strings.Contains(normalized, "review") ||
+			strings.Contains(normalized, "promote") ||
+			strings.Contains(normalized, "runnable") ||
+			strings.Contains(normalized, "next phase")) {
+		return true
+	}
+	if strings.Contains(normalized, "draft project task") &&
+		(strings.Contains(normalized, "inspect") || strings.Contains(normalized, "promote")) {
+		return true
+	}
+	return false
 }
 
 func buildProjectExecutionContinuationPromptForWorker(completedTaskNumber int, completedTaskTitle string, remainingDraftTasks int) string {

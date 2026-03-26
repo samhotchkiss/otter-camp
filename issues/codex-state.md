@@ -8904,3 +8904,38 @@ Current narrowed seam:
 - the new live duplicate family is project-session creation of another “review integration test results” shell under a slightly different title
 - commit `7466cdee` deploys the exact-title guard for that live variant
 - the latest local follow-on patch further broadens the semantic guard so future variants mentioning end-to-end integration test results with inspect/update/findings language are blocked even if the title changes again
+
+## 2026-03-26 07:27 MDT
+
+Latest fixes landed locally:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - project continuation draft counting now excludes:
+    - bootstrap gate/setup drafts
+    - known project-continuation meta-review/result shell drafts
+- [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+  - worker-side continuation prompt generation now uses the same actionable-draft filter
+- [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - added `TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts`
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts|LooksLikeGenericTaskRecoveryReplyDetectsProjectMetaTaskCoachingReply)$' -count=1`
+- `go test ./internal/jobqueue -run 'TestJobWorkerClaimPendingAgentTurnsPrefersNewestProjectContinuation$' -count=1`
+
+Live proof achieved in this stretch:
+- duplicate dependency no-op signaling is now proven on rerun-88:
+  - completed turn `62de86d6-7667-49bb-872e-179d2d9f21d4`
+  - tool result `e2ba3703-2d35-4fd1-baed-5539874038a1`
+    - `task.add_dependency`
+    - `already_exists=true`
+    - `dependency_id=3160e783-fd92-4666-b348-8d3f6253f24b`
+  - assistant then drifted into another generic follow-up:
+    - `d5ad2966-89f9-48a4-afec-f4c79fe02d07`
+    - `Would you like to proceed with removing this dependency...`
+  - the project lane advanced again instead of idling:
+    - fresh continuation message `d7bab277-497e-49f5-ab98-4f35c100dd7b`
+    - fresh turn `0b6b63d7-c0a7-4882-99cd-05cbf038bd30`
+
+Current narrowed seam:
+- duplicate dependency adds are now explicit no-ops and live-proven
+- current rerun-88 lane is back in flight on turn `0b6b63d7-c0a7-4882-99cd-05cbf038bd30`
+- the actionable-draft prompt filter is deployed, but the freshly created continuation message still shows `9 remaining draft project tasks`, so the next proof target is whether the next continuation generated fully on the new code drops the polluted count and stops steering the model toward junk draft shells
