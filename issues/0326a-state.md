@@ -958,3 +958,38 @@ This closes the two remaining proof items for the provider-cooldown work:
 
 - fresh live `provider_rate_limited` classification exists
 - project-bootstrap repair backoff survives a runtime restart without immediate churn
+
+## Update 15:24 MDT
+
+The next `0326a` slice removes one more rate-limit waste path inside a single turn.
+
+Root cause:
+
+- `callMainModel(...)` still treated `ErrRateLimited` as a generic transient model error
+- that meant a router/provider cooldown refusal could create multiple failed `model_invocation` rows on the same turn before the outer turn handler finally enqueued the delayed retry
+
+Concrete live evidence before the fix:
+
+- turn `2323b41a-5499-40cf-97fb-ba994322fcc3`
+- session `07ab860d-1c73-4e73-a160-3b8fe3c23998`
+- three failed invocations in roughly three seconds:
+  - `67302878-df3e-4f16-ba47-bb53bcfcfc22`
+  - `0a49264e-dd3b-4654-80f3-f903311c3e18`
+  - `623d6567-c626-4c3e-a216-ea9bcb6fcd52`
+- all three had `error_code=provider_rate_limited`
+- all three reported `all provider connections are rate limited`
+
+New behavior:
+
+- `ErrRateLimited` now exits `callMainModel(...)` immediately
+- the outer turn failure path still enqueues the delayed retry as before
+- but the same turn no longer burns extra internal model attempts first
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(HandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint|HandleTurnJobRateLimitedPersistsProviderRateLimitFailureClassification|HandleTurnJobRateLimitedDoesNotRetryInsideSingleTurn|HandleTurnJobRateLimitedUsesBackoffWhenNoRetryHint)$' -count=1`
+
+What this closes:
+
+- a single Anthropic cooldown refusal should now produce one failed invocation row, not a mini burst of same-turn failures
+- provider cooldown windows should consume less quota pressure and less local write churn during exactly the periods when the system is already constrained

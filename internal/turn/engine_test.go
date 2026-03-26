@@ -1557,6 +1557,49 @@ func TestHandleTurnJobRateLimitedPersistsProviderRateLimitFailureClassification(
 	}
 }
 
+func TestHandleTurnJobRateLimitedDoesNotRetryInsideSingleTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+	fixture.engine.modelRetryBudget = 3
+
+	retryAfter := 8*time.Minute + 4*time.Second
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, NewRateLimitedError(retryAfter, errors.New("http status 429"))
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", fixture.model.streamCalls)
+	}
+	if len(fixture.invocations.creates) != 1 {
+		t.Fatalf("invocation creates = %d, want 1", len(fixture.invocations.creates))
+	}
+	if len(fixture.invocations.failures) != 1 {
+		t.Fatalf("invocation failure updates = %d, want 1", len(fixture.invocations.failures))
+	}
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if job := jobs[0]; job.payload == nil || job.payload.RetryCount != 1 {
+		t.Fatalf("retry payload = %+v, want retry_count=1", jobs[0].payload)
+	}
+}
+
 func TestHandleTurnJobRateLimitedUsesBackoffWhenNoRetryHint(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	base := time.Unix(1700000000, 0).UTC()

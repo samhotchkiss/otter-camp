@@ -390,6 +390,7 @@ Completed so far:
    - deferred project-bootstrap provider failures now enqueue the next retry with an incremented `retry_count` and a rate-limit-aware `run_after` instead of falling back to an immediate or generic retry
    - fresh live Anthropic cooldown refusals now record `error_code=provider_rate_limited` instead of flattening back to `model_error`
    - the future-dated project-bootstrap retry now survives runtime restarts without degrading back into a one-minute repair storm
+   - `callMainModel(...)` no longer retries `ErrRateLimited` inside the same turn, so a router/provider cooldown refusal now burns one failed invocation row and one delayed turn retry instead of multiple same-turn invocation attempts
 
 Still pending from this spec:
 

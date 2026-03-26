@@ -19983,6 +19983,10 @@ func (e *TurnEngine) callMainModel(
 				_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", callErr.Error())
 				return ModelResponse{}, callErr
 			}
+			if errors.Is(callErr, ErrRateLimited) {
+				_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", callErr.Error())
+				return ModelResponse{}, callErr
+			}
 			if isTransientModelError(callErr) {
 				rt.modelRetryUsed++
 				if rt.modelRetryUsed >= e.modelRetryBudget {
