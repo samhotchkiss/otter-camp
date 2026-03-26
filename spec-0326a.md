@@ -523,6 +523,7 @@ Implemented so far in this spec:
   - when every turn is limited to read-only discovery tools such as `file.list`, `file.read`, `file.search`, `git.log`, `git.diff`, `git.status`, `task.get`, `project.get`, `flow.get_template`, and `flow.get_execution`
   - the same cutoff now also recognizes read-only `cli.execute` turns by parsing persisted assistant `tool_calls` metadata and allowlisting inspection-only shell commands such as `pwd`, `ls`, `cat`, `rg`, `git diff`, and `git log`
   - the runtime blocks the task lane instead of auto-continuing another discovery-only pass
+  - review lanes are no longer exempt from that cutoff; when review churn hits the same pattern, the runtime ends the hot turn and queues a fresh `task_review_action` prompt instead of letting review keep burning `max_tool_calls`
 
 Still pending from this spec:
 

@@ -9315,6 +9315,19 @@ func (e *TurnEngine) maybeBlockRepeatedReadOnlyDiscoveryCapTurns(ctx context.Con
 		}
 		return false, err
 	}
+	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		rt.stopReason = stopReasonValidationBlocked
+		if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage); err != nil {
+			return false, err
+		}
+		if _, err := e.retryReviewValidationLoop(ctx, rt, taskRecord); err != nil {
+			return false, err
+		}
+		if err := e.completeTurn(ctx, rt); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	if e.taskTransitions == nil {
 		return false, fmt.Errorf(errMissingTaskTransitionServiceForValidationBlock)
 	}
@@ -9360,17 +9373,6 @@ func (e *TurnEngine) repeatedReadOnlyDiscoveryCapTurnReason(ctx context.Context,
 		rt.recoveryTurn {
 		return "", "", false, nil
 	}
-	taskRecord, err := e.lookupSessionTask(ctx, rt.session)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			return "", "", false, nil
-		}
-		return "", "", false, err
-	}
-	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
-		return "", "", false, nil
-	}
-
 	turns, err := e.turns.ListBySession(ctx, rt.session.ID)
 	if err != nil {
 		return "", "", false, err

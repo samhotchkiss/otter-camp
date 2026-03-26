@@ -1327,3 +1327,49 @@ What is proven vs not yet proven:
     - repeated identical successful `file.write` churn
 
 So this slice is live, but its new proof target is still pending: a capped shell-discovery task lane needs to actually hit the new stop path.
+
+## Update 16:47 MDT
+
+I found and fixed the next miss immediately after deploying the shell-discovery classifier.
+
+What the live data showed:
+
+- hot session `fc516b1d-0343-450b-bf1c-dea4351c7c07`
+- task `13` `Validate pipeline metrics and alerting hooks`
+- task status was `review`
+- that session had a long consecutive chain of pure read-only `max_tool_calls` turns:
+  - turns `33` through `39`
+  - all of them were discovery-only mixes such as `file.list`, `file.read`, `git.diff`, `git.log`, and `task.get`
+- the cutoff did not fire there because the original implementation still exempted `review` tasks
+
+That review exemption was wrong for the live product behavior. A review lane that spends many capped turns only rereading diff/log/task context is still runaway token churn.
+
+I patched that runtime seam:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - repeated cross-turn read-only discovery churn is now handled for async `project_task` review lanes too
+  - review lanes do **not** get marked `blocked` here
+  - instead, the runtime ends the hot turn and queues a fresh `task_review_action` prompt so the next turn is forced back toward `flow.review_decision`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving the review-lane retry behavior
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(MaybeBlockRepeatedReadOnlyDiscoveryCapTurns|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsIgnoresMutationTurns|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsTreatsReadOnlyCLIExecuteAsDiscovery|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsIgnoresMutatingCLIExecute|MaybeBlockRepeatedReadOnlyDiscoveryCapTurnsRetriesReviewLane)$' -count=1`
+
+Deployment status:
+
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324` serve/worker
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+Fresh live evidence after the deploy:
+
+- session `fc516b1d-0343-450b-bf1c-dea4351c7c07` is now on turn `41`
+- the session now has a fresh user review-action prompt:
+  - `Review only. Inspect the current deliverables and use flow.review_decision to approve or reject this review step.`
+
+What is still not proven:
+
+- I do not yet have a completed turn row showing the new repeated-read-only-review cutoff message itself on live Anthropic traffic
+- the hot review session had already rolled into restart/retry behavior by the time the fix landed, so the fresh proof target is still the next review-discovery churn chain
