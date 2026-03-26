@@ -9261,3 +9261,82 @@ Current narrowed seam:
 - async project-session `task.list` noise is filtered on the deployed build
 - the newest local patch removes the remaining false gate classification for synthetic continuation-shell tasks with `blocks_scope=all`
 - next proof target is rerun-88 after rebuild/restart, to verify legitimate task creation no longer bounces off historical shell task `30`
+
+## 2026-03-26 09:01 MDT
+
+Latest live proof:
+- the shell-gate fix is now proven in production
+- after restart recovery cleared inherited turn `2c72edfa-7ad3-4a4e-a63d-86e489b543d0`, fresh turn `68754f8f-33f6-4504-9e7f-bcd24ebc3248` no longer hit `task creation is blocked by outstanding project gate task 30`
+- that fresh turn instead:
+  - reused duplicate dependency edge `3160e783-fd92-4666-b348-8d3f6253f24b` as `already_exists=true`
+  - created new draft task `31` `Analyze Test Results and Identify Issues`
+  - then drifted into `subtask.create` calls without `flow_node_execution_id` and follow-on coaching text asking the operator to provide it
+- the next retry turn created another synthetic shell draft:
+  - task `32` `Review and approve E2E test results`
+  - followed by assistant narration of the `task.create` payload and planning artifacts instead of taking the next direct project action
+
+Latest fixes landed locally:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - widened generic project-continuation drift detection for:
+    - `flow_node_execution_id_required` coaching replies after invalid `subtask.create`
+    - task-create payload narration replies that restate the new task id/artifacts/draft status instead of acting
+  - widened continuation-shell title detection again to exclude the new family:
+    - `Review and approve E2E test results`
+- matching focused coverage added in [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+- the same new title family was also added to:
+  - [`internal/tools/native/query_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/query_tools.go)
+  - [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go)
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(ProjectMetaTaskCoachingReply|ProjectDraftListingCoachingReply|MetaTaskErrorNarrationReply|TaskListNarrationReply|FlowNodeExecutionIDCoachingReply|TaskCreatePayloadNarrationReply|DependencySuccessAckReply)|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+
+Current narrowed seam:
+- task 30 shell-gate blocking is fixed live
+- the newest live drift is post-success narration and invalid `subtask.create` usage from the project lane
+- next proof target is rerun-88 on the rebuilt binary, to verify those two new reply shapes are converted into fresh continuation retries instead of burning whole turns and creating more shell drafts
+
+## 2026-03-26 09:21 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/query_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/query_tools.go)
+  - widened continuation-shell draft filtering again to hide the newer junk families:
+    - `Analyze Test Results and Identify Issues`
+    - `Analyze Test Results and Prepare Report`
+- [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go)
+  - widened project-gate draft filtering for the same two titles so they cannot re-enter gate selection if qwen creates them with misleading metadata
+- [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - added draft-task coverage proving both new `Analyze Test Results ...` shell titles are excluded from actionable project draft counts
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(ProjectMetaTaskCoachingReply|ProjectDraftListingCoachingReply|MetaTaskErrorNarrationReply|TaskListNarrationReply|FlowNodeExecutionIDCoachingReply|TaskCreatePayloadNarrationReply|DependencySuccessAckReply)|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationTaskList(DefaultsToCurrentProjectSessionScope|HidesProjectContinuationMetaDraftsByDefault)$' -count=1`
+- `go test ./internal/task -run 'Test(ValidateProjectGateTask(AllowsHumanReviewGateWithoutFlow|RejectsNonBootstrapGateWithoutExecutionPath)|LowestOutstandingProjectGate(IgnoresInvalidDraftGateWithoutExecutionPath|IgnoresProjectContinuationMetaGate))$' -count=1`
+
+Latest live evidence before this deploy:
+- rerun-88 had already advanced past the historical task-30 shell gate
+- the remaining drift created fresh synthetic tasks in a new family:
+  - task `31` `Analyze Test Results and Identify Issues`
+  - task `33` `Analyze Test Results and Prepare Report`
+- those titles were still absent from the native/task-side shell filters, so they could keep polluting draft counts and project-task reads even after the turn-engine retry detector learned them
+
+Current narrowed seam:
+- the new `Analyze Test Results ...` family is now filtered consistently across retry detection, async project `task.list`, and project gate selection
+- next proof target is rerun-88 on the rebuilt binary, to verify the project lane stops re-seeing those shell drafts and either advances to a real orchestration step or exposes the next narrower qwen-specific drift
+
+Update:
+- live rerun-88 then created one more shell draft on the same family edge:
+  - task `34` `Review test results and identify issues`
+- that title was still missing from all three shell-draft detectors, so it could still inflate continuation prompt counts after restart recovery
+
+Latest local follow-up:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+- [`internal/tools/native/query_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/query_tools.go)
+- [`internal/task/service.go`](/Users/sam/dev/otter-camp/internal/task/service.go)
+  - all now also treat `Review test results and identify issues` as a continuation-shell draft
+- [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - added draft-count coverage for that title too
+
+Focused verification still passes after the widening:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetects(ProjectMetaTaskCoachingReply|ProjectDraftListingCoachingReply|MetaTaskErrorNarrationReply|TaskListNarrationReply|FlowNodeExecutionIDCoachingReply|TaskCreatePayloadNarrationReply|DependencySuccessAckReply)|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationTaskList(DefaultsToCurrentProjectSessionScope|HidesProjectContinuationMetaDraftsByDefault)$' -count=1`
+- `go test ./internal/task -run 'Test(ValidateProjectGateTask(AllowsHumanReviewGateWithoutFlow|RejectsNonBootstrapGateWithoutExecutionPath)|LowestOutstandingProjectGate(IgnoresInvalidDraftGateWithoutExecutionPath|IgnoresProjectContinuationMetaGate))$' -count=1`

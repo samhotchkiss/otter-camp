@@ -290,7 +290,22 @@ func looksLikeProjectContinuationMetaDraft(title string, description *string) bo
 	if strings.Contains(normalized, "review and validate pipeline integration test results") {
 		return true
 	}
+	if strings.Contains(normalized, "review and approve e2e test results") {
+		return true
+	}
+	if strings.Contains(normalized, "review and approve end to end test results") {
+		return true
+	}
+	if strings.Contains(normalized, "review test results and identify issues") {
+		return true
+	}
 	if strings.Contains(normalized, "analyze test results and document findings") {
+		return true
+	}
+	if strings.Contains(normalized, "analyze test results and identify issues") {
+		return true
+	}
+	if strings.Contains(normalized, "analyze test results and prepare report") {
 		return true
 	}
 	if strings.Contains(normalized, "select and decompose next bounded task") {

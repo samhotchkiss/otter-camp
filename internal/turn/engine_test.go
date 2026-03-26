@@ -5642,10 +5642,10 @@ func TestHandleUserMessageProjectScopeStopsAfterBlockedTaskCreateAllScopeMutatio
 				Name: "task.create",
 				Tier: "tier1",
 				Arguments: map[string]any{
-							"title":        "Prepare for next phase of project execution",
-							"project_id":   "your_project_id_here",
-							"description":  "Identify and prepare tasks required to advance the project based on recent completion of task 19.",
-							"blocks_scope": "all",
+					"title":        "Prepare for next phase of project execution",
+					"project_id":   "your_project_id_here",
+					"description":  "Identify and prepare tasks required to advance the project based on recent completion of task 19.",
+					"blocks_scope": "all",
 				},
 			}}}, nil
 		default:
@@ -11783,6 +11783,24 @@ func TestLooksLikeGenericTaskRecoveryReplyDetectsTaskListNarrationReply(t *testi
 	}
 }
 
+func TestLooksLikeGenericTaskRecoveryReplyDetectsFlowNodeExecutionIDCoachingReply(t *testing.T) {
+	t.Parallel()
+
+	content := "It seems like there was an error in creating the subtask because the `flow_node_execution_id` is required. Could you please provide the correct `flow_node_execution_id` along with the title for the subtask? If you need help finding the `flow_node_execution_id`, let me know!"
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatalf("expected flow-node-execution-id coaching reply to be generic recovery text")
+	}
+}
+
+func TestLooksLikeGenericTaskRecoveryReplyDetectsTaskCreatePayloadNarrationReply(t *testing.T) {
+	t.Parallel()
+
+	content := "The task creation response indicates that a new task has been created with the following details: task number 32, draft status, and the planning artifacts associated with this task include a PRD, implementation plan, acceptance criteria, and dependency log."
+	if !looksLikeGenericTaskRecoveryReply(content) {
+		t.Fatalf("expected task-create payload narration reply to be generic recovery text")
+	}
+}
+
 func TestLooksLikeGenericTaskRecoveryReplyDetectsDependencySuccessAckReply(t *testing.T) {
 	t.Parallel()
 
@@ -11900,6 +11918,46 @@ func TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts(t *testi
 	}
 	if isActionableProjectDraftTask(task) {
 		t.Fatal("expected integration-test review shell draft to be excluded from actionable draft count")
+	}
+
+	description = "Review the end-to-end test results and approve the validated outcome package once the evidence is complete."
+	task = repo.ProjectTask{
+		Title:       "Review and approve E2E test results",
+		Description: &description,
+		WorkStatus:  "draft",
+	}
+	if isActionableProjectDraftTask(task) {
+		t.Fatal("expected E2E review shell draft to be excluded from actionable draft count")
+	}
+
+	description = "Review the latest test results, identify any issues, and summarize the failures that need follow-up."
+	task = repo.ProjectTask{
+		Title:       "Review test results and identify issues",
+		Description: &description,
+		WorkStatus:  "draft",
+	}
+	if isActionableProjectDraftTask(task) {
+		t.Fatal("expected review-results issue shell draft to be excluded from actionable draft count")
+	}
+
+	description = "Analyze the latest end-to-end test run, identify failing areas, and summarize the issues that need follow-up work."
+	task = repo.ProjectTask{
+		Title:       "Analyze Test Results and Identify Issues",
+		Description: &description,
+		WorkStatus:  "draft",
+	}
+	if isActionableProjectDraftTask(task) {
+		t.Fatal("expected test-results analysis shell draft to be excluded from actionable draft count")
+	}
+
+	description = "Analyze the latest end-to-end test run and prepare a report summarizing outcomes, failures, and recommended next steps."
+	task = repo.ProjectTask{
+		Title:       "Analyze Test Results and Prepare Report",
+		Description: &description,
+		WorkStatus:  "draft",
+	}
+	if isActionableProjectDraftTask(task) {
+		t.Fatal("expected test-results report shell draft to be excluded from actionable draft count")
 	}
 
 	task = repo.ProjectTask{

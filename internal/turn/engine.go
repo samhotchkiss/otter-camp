@@ -3508,7 +3508,22 @@ func looksLikeProjectContinuationMetaDraft(title string, description *string) bo
 	if strings.Contains(normalized, "review and validate pipeline integration test results") {
 		return true
 	}
+	if strings.Contains(normalized, "review and approve e2e test results") {
+		return true
+	}
+	if strings.Contains(normalized, "review and approve end to end test results") {
+		return true
+	}
+	if strings.Contains(normalized, "review test results and identify issues") {
+		return true
+	}
 	if strings.Contains(normalized, "analyze test results and document findings") {
+		return true
+	}
+	if strings.Contains(normalized, "analyze test results and identify issues") {
+		return true
+	}
+	if strings.Contains(normalized, "analyze test results and prepare report") {
 		return true
 	}
 	if strings.Contains(normalized, "select and decompose next bounded task") {
@@ -20498,6 +20513,17 @@ func looksLikeGenericTaskRecoveryReply(content string) bool {
 		"the list of tasks provided shows",
 		"from the list of tasks provided",
 		"here's a breakdown of the tasks provided",
+		"flow_node_execution_id is required",
+		"because the `flow_node_execution_id` is required",
+		"because the flow_node_execution_id is required",
+		"subtask.create requires an active flow_node_execution_id",
+		"if you need help finding the flow_node_execution_id",
+		"if you need help finding the `flow_node_execution_id`",
+		"task creation response indicates that a new task has been created",
+		"the planning artifacts associated with this task include",
+		"the task is in the \"draft\" status",
+		"the task is in the draft status",
+		"ensure that the spec defines goals, non-goals, scope, constraints",
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(normalized, pattern) {
