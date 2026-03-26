@@ -2,6 +2,38 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 04:26 MDT update
+
+- pushed/deployed commit is now `d6c5c536` on `main` / `origin`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+
+### Live proof: dirty review retry prompt fix is now exercised in production
+
+- rerun-88 review session `4edc333d-2380-4262-b383-2d9cc53bc5e5`
+- execution `39ca89e3-1e66-4f97-9712-aafd018a21f1`
+- recovered generic retry turn:
+  - `472d5b25-9db8-4bd6-9936-2bf3dd8afb0e`
+  - trigger message `733a3f90-d6ce-4708-a7c8-12939dcb5daa`
+  - completed after a qwen invocation with empty assistant output
+- after that completion, the engine appended the corrected dirty-workspace retry prompt:
+  - user message `3f2b90ec-9679-4c12-a99d-57f4bde95578`
+  - content now explicitly includes:
+    - `Your previous approve attempt for this exact review step failed because the workspace is still dirty`
+    - `decision=reject`
+  - this is the first live proof that the new matcher for persisted `flow_review_decision` metadata works in production
+
+### Current live seam
+
+- the prompt-detection bug is fixed end-to-end
+- the remaining blocker on this lane is queue pressure, not prompt synthesis:
+  - pending `agent_turn` job `e08b29f0-5111-464d-8049-1c18bfb3d357`
+  - message `3f2b90ec-9679-4c12-a99d-57f4bde95578`
+  - waiting because both worker slots are occupied by long-running qwen project turns:
+    - session `9569610a-faa1-4807-bc85-8142fd72416a` turn `2269b703-a9bc-45bb-a572-0339766a6808`
+    - session `1a9edb0a-a817-46b1-975d-4d96c8164bcb` turn `b38c8127-f9ff-4049-a8e1-185653bab9b6`
+- next proof target is simply the claim/execution outcome of `3f2b90ec-...` once a qwen slot frees
+
 ## 2026-03-26 04:22 MDT update
 
 - deployed runtime is now a fresh local patch on top of pushed commit `af5a38b4`
@@ -8428,3 +8460,46 @@ Current live blocker:
   - not startup PM-recovery purge
   - not idle project-session requeue
   - now it is a pre-invocation hang on the fresh rerun-88 project continuation turn after `start inbound turn`
+
+## 2026-03-26 04:46 MDT
+
+Latest fixes landed:
+- pushed to `main`/`origin`:
+  - `d6c5c536` `Fix live review retry detection shape`
+  - `af5a38b4` `Fix dirty review decision and suppress duplicate supervisor recovery`
+- local follow-on patch staged for next push:
+  - [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+    - added `maybeRewriteDirtyWorkspaceReviewApprovalToolCalls(...)` into `runTurn(...)`
+    - repeated dirty-workspace `flow.review_decision(decision=approve)` calls are now rewritten in-flight to `decision=reject` with a concrete reason
+    - added `shouldStopAfterTerminalReviewReject(...)` so a terminal blocked `flow.review_decision` result stops the turn immediately instead of burning a follow-up model pass
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+    - added focused coverage for both the dirty-workspace approve-to-reject rewrite and the new terminal-review-reject stop helper
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(ShouldStopAfterTerminalReviewReject|HandleCompletedReviewTurnWithoutDecisionRetriesWithResolvedApprovePromptAfterDirtyWorkspaceFailure|HandleCompletedReviewTurnWithoutDecisionRetriesWithRejectPromptWhileWorkspaceStillDirty|MaybeRewriteDirtyWorkspaceReviewApprovalToolCalls)$' -count=1`
+
+Live proof:
+- rerun-88 review session `4edc333d-2380-4262-b383-2d9cc53bc5e5` no longer loops on dirty-workspace approval retries
+- latest retry turn:
+  - `70fd599e-cfd1-4649-8c45-c2afc23a5a19`
+  - trigger message `8ce96a08-909b-4d31-95b9-e8dcc163038b`
+- the model emitted another approval tool call, and the engine rewrote it live to:
+  - `flow.review_decision`
+  - `decision=reject`
+  - reason `Approval retried after an explicit dirty-workspace rejection prompt; the workspace still contains file changes and must be rejected with findings.`
+- tool result on that same turn:
+  - `9fcaadfe-7fc9-40ae-818c-73196fdb90e1`
+  - `{"blocked":true,"message":"review rejection recorded, but the reject path has exhausted its allowed visits and the task is now blocked"}`
+- resulting task/execution state:
+  - task `f2c01724-6966-4e52-a419-2b16b400f0b7` -> `work_status=blocked`
+  - flow execution `39ca89e3-1e66-4f97-9712-aafd018a21f1` -> `status=rejected`
+  - `metadata.review_decision = {"decision":"reject","reason":"Approval retried after an explicit dirty-workspace rejection prompt; the workspace still contains file changes and must be rejected with findings."}`
+- the session is now settled:
+  - session `4edc333d-2380-4262-b383-2d9cc53bc5e5` -> `active` with `current_turn_id = NULL`
+  - turn `70fd599e-cfd1-4649-8c45-c2afc23a5a19` -> `completed`
+
+Current narrowed seam:
+- the live review lane is no longer stuck
+- the remaining local patch is an efficiency/consistency fix:
+  - stop immediately after the terminal blocked `flow.review_decision(reject)` result
+  - avoid the extra assistant/model follow-up that still occurred once before the turn completed

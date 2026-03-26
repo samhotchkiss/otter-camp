@@ -2693,6 +2693,158 @@ func TestHandleCompletedReviewTurnWithoutDecisionRetriesWithRejectPromptWhileWor
 	}
 }
 
+func TestMaybeRewriteDirtyWorkspaceReviewApprovalToolCalls(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	executionID := uuid.New()
+	reviewNodeID := uuid.New()
+
+	repoRoot := t.TempDir()
+	initializeTurnTestGitRepo(t, repoRoot)
+
+	projectRepo, ok := fixture.engine.projects.(*fakeProjectRepo)
+	if !ok {
+		t.Fatal("expected fake project repo")
+	}
+	if projectRepo.items == nil {
+		projectRepo.items = map[uuid.UUID]repo.Project{}
+	}
+	projectRepo.items[projectID] = repo.Project{
+		ID:             projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		Slug:           "rewrite-dirty-review-approval",
+	}
+	fixture.engine.environments = &fakeTurnProjectEnvironmentRepo{
+		items: map[uuid.UUID][]repo.ProjectEnvironment{
+			projectID: {{
+				ProjectID: projectID,
+				RepoPath:  stringPtr(repoRoot),
+				IsActive:  true,
+			}},
+		},
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.chat.session.Metadata = fixture.session.Metadata
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		ProjectID:      projectID,
+		TaskNumber:     16,
+		Title:          "Review delivery artifacts and approve or reject",
+		WorkStatus:     "review",
+		BranchName:     stringPtr("task/16"),
+	}
+	flowNodes, ok := fixture.engine.flowNodes.(*fakeFlowNodeRepo)
+	if !ok {
+		t.Fatal("expected fake flow node repo")
+	}
+	if flowNodes.items == nil {
+		flowNodes.items = map[uuid.UUID]repo.FlowNode{}
+	}
+	flowNodes.items[reviewNodeID] = repo.FlowNode{ID: reviewNodeID, NodeType: "review"}
+	fixture.flowAdvancer.activeExecution = &repo.FlowNodeExecution{
+		ID:         executionID,
+		TaskID:     taskID,
+		FlowNodeID: reviewNodeID,
+		Status:     "active",
+	}
+	taskRoot, err := fixture.engine.taskWorkspaceRoot(context.Background(), taskRepo.items[taskID])
+	if err != nil {
+		t.Fatalf("taskWorkspaceRoot: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(taskRoot, "README.md"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("dirty tracked file: %v", err)
+	}
+
+	userMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	userMessage.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	userMessage.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"flow_node_execution_id": executionID.String(),
+		"synthetic_user_message": true,
+	})
+	fixture.messages.upsert(userMessage)
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "assistant",
+		Status:    "final",
+		Metadata: buildToolCallMetadata([]ModelToolCall{{
+			ID:   "review-approve",
+			Name: "flow_review_decision",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"flow_node_execution_id": executionID.String(),
+				"decision":               "approve",
+			},
+		}}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"output":{"error":"review_approval_requires_clean_workspace"}}`,
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+		},
+	}
+	rt.turn.TriggerMessageID = &userMessage.ID
+	toolCalls := []ModelToolCall{{
+		ID:   "call-1",
+		Name: "flow_review_decision",
+		Tier: "tier2",
+		Arguments: map[string]any{
+			"flow_node_execution_id": executionID.String(),
+			"decision":               "approve",
+		},
+	}}
+
+	rewritten, changed, err := fixture.engine.maybeRewriteDirtyWorkspaceReviewApprovalToolCalls(context.Background(), rt, toolCalls)
+	if err != nil {
+		t.Fatalf("maybeRewriteDirtyWorkspaceReviewApprovalToolCalls: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if len(rewritten) != 1 {
+		t.Fatalf("rewritten len = %d, want 1", len(rewritten))
+	}
+	if rewritten[0].Name != "flow.review_decision" {
+		t.Fatalf("tool name = %q, want flow.review.decision normalized form", rewritten[0].Name)
+	}
+	if got := stringValue(rewritten[0].Arguments["decision"]); got != "reject" {
+		t.Fatalf("decision = %q, want reject", got)
+	}
+	if strings.TrimSpace(stringValue(rewritten[0].Arguments["reason"])) == "" {
+		t.Fatal("reason empty, want populated rejection reason")
+	}
+}
+
 func TestHandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700001000, 0).UTC()
@@ -21797,6 +21949,48 @@ func TestShouldStopAfterExecutionDeliverableWriteIgnoresNonTargetRecoveryWrite(t
 	}
 	if rt.recoveryWriteDone {
 		t.Fatal("recoveryWriteDone = true, want false for non-target write")
+	}
+}
+
+func TestShouldStopAfterTerminalReviewReject(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:         taskID,
+				TaskNumber: 15,
+				Title:      "Test speaker ingestion error handling",
+				WorkStatus: "blocked",
+			},
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	stop, err := fixture.engine.shouldStopAfterTerminalReviewReject(context.Background(), rt, ToolResult{
+		Name: "flow.review_decision",
+		Output: map[string]any{
+			"blocked": true,
+			"message": "review rejection recorded, but the reject path has exhausted its allowed visits and the task is now blocked",
+		},
+	})
+	if err != nil {
+		t.Fatalf("shouldStopAfterTerminalReviewReject: %v", err)
+	}
+	if !stop {
+		t.Fatal("expected stop signal from terminal blocked review rejection")
 	}
 }
 

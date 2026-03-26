@@ -7079,6 +7079,11 @@ func (e *TurnEngine) runTurn(ctx context.Context, rt *turnRuntime) error {
 		} else if synthesized {
 			response.ToolCalls = synthesizedToolCalls
 		}
+		if rewrittenToolCalls, rewritten, rewriteErr := e.maybeRewriteDirtyWorkspaceReviewApprovalToolCalls(ctx, rt, response.ToolCalls); rewriteErr != nil {
+			return rewriteErr
+		} else if rewritten {
+			response.ToolCalls = rewrittenToolCalls
+		}
 		if synthesizedToolCalls, synthesized, synthErr := e.maybeSynthesizeTaskExecutionFileWriteToolCalls(ctx, rt, response.Content, response.ToolCalls); synthErr != nil {
 			return synthErr
 		} else if synthesized {
@@ -9730,6 +9735,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			rt.toolCallsUsed++
 			return true, nil
 		}
+		stopAfterTerminalReviewReject, err := e.shouldStopAfterTerminalReviewReject(ctx, rt, result)
+		if err != nil {
+			return false, err
+		}
+		if stopAfterTerminalReviewReject {
+			rt.toolCallsUsed++
+			return true, nil
+		}
 		blocked, err := e.handleToolValidationResults(ctx, rt, []ToolCall{call}, []ToolResult{result})
 		if err != nil {
 			return false, err
@@ -9806,6 +9819,33 @@ func (e *TurnEngine) shouldStopAfterExecutionDeliverableWrite(ctx context.Contex
 		return false, err
 	}
 	return shouldStopAfterExecutionArtifactWrite(taskRecord, result), nil
+}
+
+func (e *TurnEngine) shouldStopAfterTerminalReviewReject(ctx context.Context, rt *turnRuntime, result ToolResult) (bool, error) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || rt.session.ScopeID == uuid.Nil {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(result.Name), "flow.review_decision") {
+		return false, nil
+	}
+	if strings.TrimSpace(result.Error) != "" {
+		return false, nil
+	}
+	if blocked, ok := result.Output["blocked"].(bool); !ok || !blocked {
+		return false, nil
+	}
+
+	taskRecord, err := e.tasks.GetByID(ctx, rt.session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked"), nil
 }
 
 func (e *TurnEngine) persistResolvedRecoveryTargetWritePath(ctx context.Context, rt *turnRuntime, result ToolResult) error {
@@ -11540,6 +11580,75 @@ func (e *TurnEngine) maybeSynthesizeTaskReviewDecisionToolCalls(ctx context.Cont
 		"flow_node_execution_id", executionID.String(),
 	)
 	return []ModelToolCall{synthesized}, true, nil
+}
+
+func (e *TurnEngine) maybeRewriteDirtyWorkspaceReviewApprovalToolCalls(ctx context.Context, rt *turnRuntime, toolCalls []ModelToolCall) ([]ModelToolCall, bool, error) {
+	if e == nil || rt == nil || rt.turn == nil || rt.session == nil || len(toolCalls) == 0 {
+		return toolCalls, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return toolCalls, false, nil
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil || e.tasks == nil {
+		return toolCalls, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return toolCalls, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return toolCalls, false, nil
+	}
+	if rt.turn.TriggerMessageID == nil || *rt.turn.TriggerMessageID == uuid.Nil {
+		return toolCalls, false, nil
+	}
+	latestUser, err := e.messages.GetByID(ctx, *rt.turn.TriggerMessageID)
+	if err != nil {
+		return toolCalls, false, nil
+	}
+	retryPrompt, ok, err := e.reviewApprovalRetryPrompt(ctx, rt.session, taskRecord, &latestUser)
+	if err != nil || !ok || !strings.Contains(retryPrompt, "workspace is still dirty") {
+		return toolCalls, false, err
+	}
+	executionID := parseFlowNodeExecutionIDFromMetadata(latestUser.Metadata)
+	if executionID == uuid.Nil {
+		return toolCalls, false, nil
+	}
+
+	rewritten := false
+	out := make([]ModelToolCall, 0, len(toolCalls))
+	for _, call := range toolCalls {
+		name := strings.TrimSpace(call.Name)
+		if !strings.EqualFold(name, "flow.review_decision") && !strings.EqualFold(name, "flow_review_decision") {
+			out = append(out, call)
+			continue
+		}
+		decision := strings.TrimSpace(stringValue(call.Arguments["decision"]))
+		callExecutionID := strings.TrimSpace(stringValue(call.Arguments["flow_node_execution_id"]))
+		if !strings.EqualFold(decision, "approve") || !strings.EqualFold(callExecutionID, executionID.String()) {
+			out = append(out, call)
+			continue
+		}
+		callCopy := call
+		callCopy.Name = "flow.review_decision"
+		callCopy.Arguments = cloneMap(call.Arguments)
+		callCopy.Arguments["decision"] = "reject"
+		if strings.TrimSpace(stringValue(callCopy.Arguments["reason"])) == "" {
+			callCopy.Arguments["reason"] = "Approval retried after an explicit dirty-workspace rejection prompt; the workspace still contains file changes and must be rejected with findings."
+		}
+		rewritten = true
+		out = append(out, callCopy)
+	}
+	if !rewritten {
+		return toolCalls, false, nil
+	}
+	e.logger.Info("task review: rewrote repeated dirty-workspace approval to rejection",
+		"session_id", rt.session.ID,
+		"turn_id", rt.turn.ID,
+		"flow_node_execution_id", executionID.String(),
+	)
+	return out, true, nil
 }
 
 func taskExecutionToolCallsNeedSynthesis(toolCalls []ModelToolCall, targetPath string) bool {
