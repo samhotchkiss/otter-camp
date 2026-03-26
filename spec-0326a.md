@@ -379,6 +379,7 @@ Completed so far:
    - when every eligible connection for a routed profile is still inside a persisted rate-limit cooldown window, the router now returns a rate-limited backoff error instead of selecting one and burning another guaranteed 429
    - live model calls now translate that router-level cooldown into the normal turn-level `ErrRateLimited` retry path
    - `provider_connection.metadata.health_rate_limited_until` is cleared automatically once the connection is marked healthy or otherwise moved out of rate-limited state
+   - streamed `agent_turn` invocation rows now preserve provider failure classification for 429s instead of flattening them into generic `model_error`
 
 Still pending from this spec:
 

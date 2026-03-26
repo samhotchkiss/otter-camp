@@ -629,6 +629,34 @@ What is still pending after this slice:
 - live proof on a fresh Anthropic canary task turn
 - broader repeated-recovery cutoffs beyond focus / target-drift / repeated read-only discovery handling
 
+## Update 14:23 MDT
+
+The next `0326a` telemetry-hardening slice is now in code and focused-test green.
+
+New behavior:
+
+- streamed `agent_turn` invocation failures now preserve provider failure classification in the turn engine instead of flattening provider 429s into generic `model_error`
+- the failure row for a streamed Anthropic rate-limit now records:
+  - `failure_class=provider_rate_limit`
+  - `error_code=provider_rate_limited`
+  - the original rate-limit detail in `error_message`
+
+Focused verification that passed:
+
+- `go test ./internal/turn -run 'Test(HandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint|HandleTurnJobRateLimitedPersistsProviderRateLimitFailureClassification|HandleTurnJobRateLimitedUsesBackoffWhenNoRetryHint|HandleTurnJobRateLimitedCapsProviderHintAtMaxBackoff)$' -count=1`
+
+Why this mattered:
+
+- live Anthropic continuation failures were already surfacing the correct retry UX (`[Rate limited, retrying in ...]`)
+- but the persisted `model_invocation` rows were still landing as `error_code=model_error` with no `failure_class`
+- that made operational reporting and backoff debugging noisier than the actual runtime behavior
+
+What is still pending after this slice:
+
+- rebuild / restart on this telemetry patch
+- live proof on a fresh Anthropic 429 after the rebuild
+- broader repeated-recovery cutoffs beyond focus / target-drift / repeated read-only discovery handling
+
 ## Update 14:09 MDT
 
 The operator-diagnostics slice is now in the product surface, not just the shell script.

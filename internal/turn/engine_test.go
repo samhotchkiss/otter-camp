@@ -1516,6 +1516,47 @@ func TestHandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint(t *testing.T) {
 	}
 }
 
+func TestHandleTurnJobRateLimitedPersistsProviderRateLimitFailureClassification(t *testing.T) {
+	fixture := newUnitFixture(t, "sync")
+	fixture.engine.modelRetryBudget = 1
+
+	retryAfter := 8*time.Minute + 4*time.Second
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, NewRateLimitedError(retryAfter, errors.New("http status 429"))
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	if len(fixture.invocations.failures) != 1 {
+		t.Fatalf("invocation failure updates = %d, want 1", len(fixture.invocations.failures))
+	}
+	failure := fixture.invocations.failures[0]
+	if failure.status != "failed" {
+		t.Fatalf("failure status = %q, want failed", failure.status)
+	}
+	if failure.failureClass == nil || *failure.failureClass != "provider_rate_limit" {
+		t.Fatalf("failure class = %v, want provider_rate_limit", failure.failureClass)
+	}
+	if failure.errorCode == nil || *failure.errorCode != "provider_rate_limited" {
+		t.Fatalf("error code = %v, want provider_rate_limited", failure.errorCode)
+	}
+	if failure.errorMessage == nil || !strings.Contains(*failure.errorMessage, "retry_after=") {
+		t.Fatalf("error message = %v, want rate-limit detail", failure.errorMessage)
+	}
+}
+
 func TestHandleTurnJobRateLimitedUsesBackoffWhenNoRetryHint(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	base := time.Unix(1700000000, 0).UTC()
@@ -19954,7 +19995,16 @@ func (f *fakeEnqueuer) jobsByType(jobType string) []enqueuedJob {
 type fakeInvocationRepo struct {
 	mu                  sync.Mutex
 	creates             []repo.ModelInvocation
+	failures            []fakeInvocationFailureUpdate
 	updateCompletionErr error
+}
+
+type fakeInvocationFailureUpdate struct {
+	id           uuid.UUID
+	status       string
+	failureClass *string
+	errorCode    *string
+	errorMessage *string
 }
 
 func (f *fakeInvocationRepo) Create(ctx context.Context, invocation repo.ModelInvocation) (repo.ModelInvocation, error) {
@@ -19966,6 +20016,19 @@ func (f *fakeInvocationRepo) Create(ctx context.Context, invocation repo.ModelIn
 }
 
 func (f *fakeInvocationRepo) UpdateStatus(context.Context, uuid.UUID, string, *string, *string) (repo.ModelInvocation, error) {
+	return repo.ModelInvocation{}, nil
+}
+
+func (f *fakeInvocationRepo) UpdateFailure(_ context.Context, id uuid.UUID, status string, failureClass, errorCode, errorMessage *string) (repo.ModelInvocation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failures = append(f.failures, fakeInvocationFailureUpdate{
+		id:           id,
+		status:       status,
+		failureClass: failureClass,
+		errorCode:    errorCode,
+		errorMessage: errorMessage,
+	})
 	return repo.ModelInvocation{}, nil
 }
 

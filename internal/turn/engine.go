@@ -320,6 +320,7 @@ type JobEnqueuer interface {
 type modelInvocationRepo interface {
 	Create(ctx context.Context, invocation repo.ModelInvocation) (repo.ModelInvocation, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, errorCode, errorMessage *string) (repo.ModelInvocation, error)
+	UpdateFailure(ctx context.Context, id uuid.UUID, status string, failureClass, errorCode, errorMessage *string) (repo.ModelInvocation, error)
 	UpdateCompletion(ctx context.Context, id uuid.UUID, inputTokens, outputTokens, cacheTokens, latencyMS, totalDurationMS int, promptKey, responseKey *string) error
 }
 
@@ -19824,9 +19825,9 @@ func (e *TurnEngine) callMainModel(
 				_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", timeoutErr.Error())
 				return ModelResponse{}, timeoutErr
 			}
-			errorCode := stringPtr("model_error")
+			failureClass, errorCode := modelInvocationFailureDetails(callErr)
 			errorText := stringPtr(callErr.Error())
-			_, _ = e.invocations.UpdateStatus(ctx, invocation.ID, "failed", errorCode, errorText)
+			_, _ = e.invocations.UpdateFailure(ctx, invocation.ID, "failed", failureClass, errorCode, errorText)
 
 			if tokensSeen > 0 {
 				_ = e.chat.UpdateMessageStatus(ctx, assistant.ID, "failed", callErr.Error())
@@ -20623,6 +20624,19 @@ func agentTurnPromptGuardrailTokens(agent repo.Agent, taskComplex bool) int {
 		return workerPromptTokenGuardrail
 	}
 	return defaultPromptTokenGuardrail
+}
+
+func modelInvocationFailureDetails(err error) (*string, *string) {
+	switch {
+	case errors.Is(err, ErrAuthFailed):
+		return stringPtr("provider_auth"), stringPtr("provider_auth_failed")
+	case errors.Is(err, ErrRateLimited):
+		return stringPtr("provider_rate_limit"), stringPtr("provider_rate_limited")
+	case isTransientModelError(err):
+		return stringPtr("provider_transient"), stringPtr("provider_transient_failure")
+	default:
+		return stringPtr("product_runtime"), stringPtr("product_runtime_failure")
+	}
 }
 
 func (e *TurnEngine) agentTurnPromptGuardrailTokens(ctx context.Context, rt *turnRuntime, taskComplex bool) int {
