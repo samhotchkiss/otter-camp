@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/samhotchkiss/otter-camp/internal/repo"
 )
 
 func TestIsRecoverableWorktreeRemoveError(t *testing.T) {
@@ -172,4 +175,82 @@ func TestEnsureTaskWorktreeCreatesOrphanBranchForUnbornRepo(t *testing.T) {
 	if got := strings.TrimSpace(string(out)); got != "task/12" {
 		t.Fatalf("branch = %q, want task/12", got)
 	}
+}
+
+func TestTaskWorkspaceRootFallsBackToProjectRootWhenMainWorktreeOwnsTaskBranch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	projectID := uuid.New()
+	repoRoot := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	run(repoRoot, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write readme: %v", err)
+	}
+	run(repoRoot, "add", "README.md")
+	run(repoRoot, "commit", "-m", "base")
+	run(repoRoot, "checkout", "-b", "task/12")
+	if err := os.WriteFile(filepath.Join(repoRoot, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	executor := &NativeToolExecutor{
+		dataDir: t.TempDir(),
+		command: exec.CommandContext,
+		projects: &fakeProjectRepo{
+			projects: map[uuid.UUID]repo.Project{
+				projectID: {ID: projectID, Slug: "native-shared-task-root"},
+			},
+		},
+		environments: &fakeNativeProjectEnvironmentRepo{
+			items: map[uuid.UUID][]repo.ProjectEnvironment{
+				projectID: {{
+					Name: "workspace",
+					RepoPath: func() *string {
+						path := repoRoot
+						return &path
+					}(),
+					IsActive: true,
+				}},
+			},
+		},
+	}
+
+	root, err := executor.taskWorkspaceRoot(ctx, repo.ProjectTask{
+		ProjectID:  projectID,
+		TaskNumber: 12,
+	})
+	if err != nil {
+		t.Fatalf("taskWorkspaceRoot: %v", err)
+	}
+	if got := filepath.Clean(root); got != filepath.Clean(repoRoot) {
+		t.Fatalf("taskWorkspaceRoot = %q, want shared project root %q", got, repoRoot)
+	}
+}
+
+type fakeNativeProjectEnvironmentRepo struct {
+	items map[uuid.UUID][]repo.ProjectEnvironment
+}
+
+func (f *fakeNativeProjectEnvironmentRepo) Create(_ context.Context, environment repo.ProjectEnvironment) (repo.ProjectEnvironment, error) {
+	return environment, nil
+}
+
+func (f *fakeNativeProjectEnvironmentRepo) ListByProject(_ context.Context, projectID uuid.UUID) ([]repo.ProjectEnvironment, error) {
+	return append([]repo.ProjectEnvironment(nil), f.items[projectID]...), nil
 }

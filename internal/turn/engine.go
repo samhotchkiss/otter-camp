@@ -15051,6 +15051,11 @@ func (e *TurnEngine) taskWorkspaceRoot(ctx context.Context, taskRecord repo.Proj
 	}
 	worktreeRoot := filepath.Join(workspace.ResolveDataDir(e.dataDir), "task-worktrees", strings.TrimSpace(projectRecord.Slug), fmt.Sprintf("task-%d", taskRecord.TaskNumber))
 	if err := ensureTurnTaskWorktree(ctx, projectRoot, worktreeRoot, branchName, "main"); err != nil {
+		if errors.Is(err, errTurnBranchAttachedToMainWorktree) {
+			if ownsBranch, branchErr := turnMainWorktreeOwnsBranch(ctx, projectRoot, branchName); branchErr == nil && ownsBranch {
+				return projectRoot, nil
+			}
+		}
 		return "", err
 	}
 	return worktreeRoot, nil
@@ -15130,10 +15135,10 @@ func removeExistingTurnBranchWorktree(ctx context.Context, projectRoot, keepPath
 		if currentBranch != needle {
 			return nil
 		}
-		if filepath.Clean(currentPath) == keepPath {
+		if turnSameFilesystemPath(currentPath, keepPath) {
 			return nil
 		}
-		if filepath.Clean(currentPath) == filepath.Clean(projectRoot) {
+		if turnSameFilesystemPath(currentPath, projectRoot) {
 			released, releaseErr := releaseTurnMainWorktreeBranch(ctx, projectRoot, baseBranch)
 			if releaseErr != nil {
 				return releaseErr
@@ -15165,6 +15170,29 @@ func removeExistingTurnBranchWorktree(ctx context.Context, projectRoot, keepPath
 		}
 	}
 	return flush()
+}
+
+func turnSameFilesystemPath(left, right string) bool {
+	left = filepath.Clean(strings.TrimSpace(left))
+	right = filepath.Clean(strings.TrimSpace(right))
+	if left == right {
+		return true
+	}
+	if resolvedLeft, err := filepath.EvalSymlinks(left); err == nil {
+		left = filepath.Clean(resolvedLeft)
+	}
+	if resolvedRight, err := filepath.EvalSymlinks(right); err == nil {
+		right = filepath.Clean(resolvedRight)
+	}
+	return left == right
+}
+
+func turnMainWorktreeOwnsBranch(ctx context.Context, projectRoot, branchName string) (bool, error) {
+	currentBranch, err := turnGitBranchName(ctx, projectRoot)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(currentBranch) == strings.TrimSpace(branchName), nil
 }
 
 func releaseTurnMainWorktreeBranch(ctx context.Context, projectRoot, baseBranch string) (bool, error) {

@@ -187,6 +187,76 @@ func TestEnsureTurnTaskWorktreeCreatesOrphanBranchForUnbornRepo(t *testing.T) {
 	}
 }
 
+func TestTaskWorkspaceRootFallsBackToProjectRootWhenMainWorktreeOwnsTaskBranch(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	ctx := context.Background()
+	projectID := uuid.New()
+	taskID := uuid.New()
+	repoRoot := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	run(repoRoot, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write readme: %v", err)
+	}
+	run(repoRoot, "add", "README.md")
+	run(repoRoot, "commit", "-m", "base")
+	run(repoRoot, "checkout", "-b", "task/10")
+	if err := os.WriteFile(filepath.Join(repoRoot, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	projects := fixture.engine.projects.(*fakeProjectRepo)
+	projects.items = map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, Slug: "turn-shared-task-root"},
+	}
+	tasks := fixture.engine.tasks.(*fakeTaskRepo)
+	branchName := "task/10"
+	tasks.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:         taskID,
+			ProjectID:  projectID,
+			TaskNumber: 10,
+			BranchName: &branchName,
+		},
+	}
+	fixture.engine.environments = &fakeTurnProjectEnvironmentRepo{
+		items: map[uuid.UUID][]repo.ProjectEnvironment{
+			projectID: {{
+				Name: "workspace",
+				RepoPath: func() *string {
+					path := repoRoot
+					return &path
+				}(),
+				IsActive: true,
+			}},
+		},
+	}
+
+	root, err := fixture.engine.taskWorkspaceRoot(ctx, tasks.items[taskID])
+	if err != nil {
+		t.Fatalf("taskWorkspaceRoot: %v", err)
+	}
+	if got := filepath.Clean(root); got != filepath.Clean(repoRoot) {
+		t.Fatalf("taskWorkspaceRoot root = %q, want shared project root %q", got, repoRoot)
+	}
+}
+
 func TestSanitizeInheritedRunAttributionDropsTerminalRun(t *testing.T) {
 	pool := testdb.New(t)
 	engine := &TurnEngine{pool: pool}

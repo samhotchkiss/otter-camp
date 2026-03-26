@@ -6980,3 +6980,53 @@ The next move from here:
 - verify:
   - the first explicit-markdown task still starts with a synthesized write
   - downstream tool-return / run-event traffic no longer fails with `payload string too long`
+
+## 2026-03-25 19:58 MDT
+
+Current live focus is still rerun-88 task `12`:
+- project `3ee5af44-f1b6-4f03-9664-ef3116fad9ee`
+- task `12` id `e1840ae1-0fbf-4d6c-9ea9-6df5035f7e35`
+- task session `6b7cbba8-24be-4cbf-bc12-9c3b7d423dfe`
+
+New code fix in this stretch:
+- [`internal/tools/native/task_worktree.go`](/Users/sam/dev/otter-camp/internal/tools/native/task_worktree.go)
+  - `taskWorkspaceRoot(...)` now falls back to the shared project checkout when the main worktree already owns the exact task branch and migration is blocked
+  - added `sameFilesystemPath(...)` so `/var/...` and `/private/var/...` worktree paths are treated as the same filesystem location
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - mirrored the same shared-root fallback and path-equivalence fix in the turn-engine copy
+- focused tests added in:
+  - [`internal/tools/native/task_worktree_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/task_worktree_test.go)
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+
+Focused verification passed:
+- `go test ./internal/tools/native -run 'Test(EnsureTaskWorktreeFailsClosedWhenMainWorktreeOwnsTaskBranch|EnsureTaskWorktreeCreatesOrphanBranchForUnbornRepo|TaskWorkspaceRootFallsBackToProjectRootWhenMainWorktreeOwnsTaskBranch)$' -count=1`
+- `go test ./internal/turn -run 'Test(EnsureTurnTaskWorktreeCreatesOrphanBranchForUnbornRepo|TaskWorkspaceRootFallsBackToProjectRootWhenMainWorktreeOwnsTaskBranch)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationProjectTaskSessionUsesTaskSpecificWorktree$' -count=1`
+
+Operational finding during live verification:
+- I found duplicate live worker processes after restart, which contaminated task-12 retries with stale behavior:
+  - old worker tree `39809/39811`
+  - newer worker tree `26003/26004`
+- I killed all stray worker processes and restarted a single tmux-managed worker
+- current live worker tree is only:
+  - shell `26934`
+  - worker `26935`
+
+Current live status after the clean single-worker restart:
+- stale task-12 turn `753fb354-8aab-49cc-a706-b99c91e8e05f` was failed by startup cleanup
+- fresh retry turn is now:
+  - `1995d7eb-5a70-46a0-972d-194e9c8dadcb`
+- latest invocation on that clean retry:
+  - `50c0ce29-4a27-4d68-b157-282c554efe57`
+  - status `in_flight`
+- latest assistant message on the clean retry:
+  - `c3a832d5-da6f-4cbd-abe1-372e5a114fb6`
+  - `The validation script doesn't exist yet — the file_write failed earlier due to the worktree issue. Let me create it properly via heredoc:`
+
+Important distinction:
+- the `branch attached to main worktree` tool errors visible at `19:56:03`, `19:56:17`, and `19:56:30 MDT` occurred during the duplicate-worker contamination window
+- I have not yet seen a post-clean-restart `file.write` attempt on turn `1995d7eb-...`, so live proof of the shared-root fallback is still pending
+
+Immediate next proof target:
+- let clean retry turn `1995d7eb-...` advance far enough to issue its first `file.write`
+- verify that the old `branch attached to main worktree` failure no longer appears under the single patched worker

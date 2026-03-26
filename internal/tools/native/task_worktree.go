@@ -76,6 +76,11 @@ func (e *NativeToolExecutor) taskWorkspaceRoot(ctx context.Context, taskRecord r
 	branchName := taskBranchName(taskRecord)
 	worktreeRoot := filepath.Join(workspace.ResolveDataDir(e.dataDir), "task-worktrees", strings.TrimSpace(projectRecord.Slug), "task-"+strconv.Itoa(taskRecord.TaskNumber))
 	if err := ensureTaskWorktree(ctx, projectRoot, worktreeRoot, branchName, "main", e.command); err != nil {
+		if errors.Is(err, errBranchAttachedToMainWorktree) {
+			if ownsBranch, branchErr := mainWorktreeOwnsBranch(ctx, projectRoot, branchName, e.command); branchErr == nil && ownsBranch {
+				return projectRoot, nil
+			}
+		}
 		return "", err
 	}
 	return worktreeRoot, nil
@@ -168,10 +173,10 @@ func removeExistingBranchWorktree(ctx context.Context, projectRoot, keepPath, br
 		if currentBranch != needle {
 			return nil
 		}
-		if filepath.Clean(currentPath) == keepPath {
+		if sameFilesystemPath(currentPath, keepPath) {
 			return nil
 		}
-		if filepath.Clean(currentPath) == filepath.Clean(projectRoot) {
+		if sameFilesystemPath(currentPath, projectRoot) {
 			released, releaseErr := releaseMainWorktreeBranch(ctx, projectRoot, baseBranch, command)
 			if releaseErr != nil {
 				return releaseErr
@@ -203,6 +208,29 @@ func removeExistingBranchWorktree(ctx context.Context, projectRoot, keepPath, br
 		}
 	}
 	return flush()
+}
+
+func sameFilesystemPath(left, right string) bool {
+	left = filepath.Clean(strings.TrimSpace(left))
+	right = filepath.Clean(strings.TrimSpace(right))
+	if left == right {
+		return true
+	}
+	if resolvedLeft, err := filepath.EvalSymlinks(left); err == nil {
+		left = filepath.Clean(resolvedLeft)
+	}
+	if resolvedRight, err := filepath.EvalSymlinks(right); err == nil {
+		right = filepath.Clean(resolvedRight)
+	}
+	return left == right
+}
+
+func mainWorktreeOwnsBranch(ctx context.Context, projectRoot, branchName string, command commandContextFunc) (bool, error) {
+	currentBranch, err := gitBranchName(ctx, projectRoot, command)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(currentBranch) == strings.TrimSpace(branchName), nil
 }
 
 func releaseMainWorktreeBranch(ctx context.Context, projectRoot, baseBranch string, command commandContextFunc) (bool, error) {
