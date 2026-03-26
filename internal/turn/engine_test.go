@@ -14261,6 +14261,88 @@ func TestMaybeSynthesizeRecoveryFileWriteToolCallsPrefersCheckpointTargetOverHis
 	}
 }
 
+func TestRecoverySynthesizedFileWriteTargetPathPrefersTaskDeliverableOverHistoricalArtifact(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	targetPath := "Work/OC-14-TEST-SPEAKER-INGESTION-WITH-VALID-INPUTS.md"
+	historicalArtifactPath := ".ottercamp/recovery/config/.env.example"
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		ProjectID:      projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     14,
+		Title:          "Test speaker ingestion with valid inputs",
+		WorkStatus:     "blocked",
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": taskplan.ModeExecutionFirst,
+			},
+			"recovery_file_write_checkpoint": map[string]any{
+				"version":        1,
+				"blocker_class":  "durable_recovery_checkpoint",
+				"target_path":    targetPath,
+				"artifact_path":  historicalArtifactPath,
+				"failure_reason": "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
+			},
+		}),
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte("# Deliverable\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	artifactAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(historicalArtifactPath))
+	if err := os.MkdirAll(filepath.Dir(artifactAbs), 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+	if err := os.WriteFile(artifactAbs, []byte("# Recovery file.write artifact\n\n## Draft Content\nstale config artifact\n"), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	if got := fixture.engine.recoverySynthesizedFileWriteTargetPath(context.Background(), rt); got != targetPath {
+		t.Fatalf("recoverySynthesizedFileWriteTargetPath = %q, want %q", got, targetPath)
+	}
+}
+
 func TestMaybeSynthesizeRecoveryFileWriteToolCallsSkipsReviewLane(t *testing.T) {
 	t.Parallel()
 
@@ -14495,6 +14577,138 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesBadImprovisedWri
 	}
 	if got := stringValue(toolCalls[0].Arguments["path"]); got != "Test/test-execution-oc18-edge-case-scenarios.md" {
 		t.Fatalf("path = %q, want canonical edge-case execution log target", got)
+	}
+}
+
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesReadOnlyKickoffPlan(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Test speaker data ingestion with valid sample inputs. Verify that the intake path accepts well-formed speaker records and stores them correctly. Output: ingestion test results committed to workspace. ~20 min."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     14,
+		Title:          "Test speaker ingestion with valid inputs",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": "execution_first",
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"I'll start by reviewing the configuration and workspace before writing the results.",
+		[]ModelToolCall{{
+			ID:   "read-1",
+			Name: "file.read",
+			Tier: "tier1",
+			Arguments: map[string]any{
+				"path": "config/pipeline.yaml",
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one synthesized file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != "Work/OC-14-TEST-SPEAKER-INGESTION-WITH-VALID-INPUTS.md" {
+		t.Fatalf("path = %q, want canonical report path", got)
+	}
+}
+
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsOverridesCLIExecuteKickoffPlan(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Validate pipeline output format and downstream data delivery. Verify output records match expected schema and are delivered to the correct destination. Output: output validation results. ~20 min."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     18,
+		Title:          "Validate pipeline output format and delivery",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": "execution_first",
+			},
+		}),
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"Now I have complete understanding. Let me build the deliverables.",
+		[]ModelToolCall{{
+			ID:   "cli-1",
+			Name: "cli.execute",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"command": "pwd",
+			},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one synthesized file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != "Work/OC-18-VALIDATE-PIPELINE-OUTPUT-FORMAT-AND-DELIVERY.md" {
+		t.Fatalf("path = %q, want canonical report path", got)
 	}
 }
 
@@ -17549,6 +17763,108 @@ func TestHandleTaskFileWriteWrongPathRewritesToRecoveryTarget(t *testing.T) {
 	}
 	if got := stringValue(call.Arguments["path"]); got != targetPath {
 		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
+		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
+	}
+}
+
+func TestHandleRecoveryRejectedFileWriteContentCanonicalizesWrongPathBeforeDraftReplacement(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	dataDir := t.TempDir()
+	projectSlug := "speaker-pipeline"
+	orgSlug := "default"
+	targetPath := "Work/OC-14-TEST-SPEAKER-INGESTION-WITH-VALID-INPUTS.md"
+	targetDraft := strings.TrimSpace(`
+# Test Speaker Ingestion With Valid Inputs
+
+## Objective
+Verify that well-formed speaker records are accepted and stored correctly.
+
+## Validation Results
+- Accepted the provided valid sample records.
+- Persisted canonical speaker fields without schema violations.
+
+## Evidence
+- tests/valid_speaker_samples.json
+- config/pipeline.yaml
+`)
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:             taskID,
+			ProjectID:      projectID,
+			OrganizationID: fixture.session.OrganizationID,
+			TaskNumber:     14,
+			Title:          "Test speaker ingestion with valid inputs",
+			WorkStatus:     "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"planning": map[string]any{
+					"mode": taskplan.ModeExecutionFirst,
+				},
+				"recovery_file_write_checkpoint": map[string]any{
+					"version":        1,
+					"blocker_class":  "durable_recovery_checkpoint",
+					"target_path":    targetPath,
+					"failure_reason": "file.write content appears to be task narration about planning to write the deliverable, not the deliverable body itself. Write the concrete file contents directly.",
+				},
+			}),
+		},
+	}
+	fixture.engine.projects = &fakeProjectRepo{items: map[uuid.UUID]repo.Project{
+		projectID: {ID: projectID, OrganizationID: fixture.session.OrganizationID, Slug: projectSlug},
+	}}
+	fixture.engine.organizations = &fakeOrganizationRepo{items: map[uuid.UUID]repo.Organization{
+		fixture.session.OrganizationID: {ID: fixture.session.OrganizationID, Slug: orgSlug},
+	}}
+	fixture.engine.dataDir = dataDir
+
+	targetAbs := filepath.Join(dataDir, "workspaces", projectSlug, filepath.FromSlash(targetPath))
+	if err := os.MkdirAll(filepath.Dir(targetAbs), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(targetAbs, []byte(targetDraft+"\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "config/.env.example",
+			"content": "Now I have full context. Let me write and execute the actual ingestion tests against the codebase, then produce the results document.",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleRecoveryRejectedFileWriteContent(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleRecoveryRejectedFileWriteContent: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != targetPath {
+		t.Fatalf("path = %q, want %q", got, targetPath)
+	}
+	if got := stringValue(call.Arguments["content"]); got != targetDraft {
+		t.Fatalf("content = %q, want persisted target draft", got)
 	}
 	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
 		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])

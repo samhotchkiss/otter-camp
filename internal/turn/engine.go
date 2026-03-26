@@ -10432,6 +10432,15 @@ func (e *TurnEngine) handleRecoveryRejectedFileWriteContent(ctx context.Context,
 	if !ok {
 		return false, false, nil
 	}
+	if canonicalTarget := strings.TrimSpace(e.recoverySynthesizedFileWriteTargetPath(ctx, rt)); canonicalTarget != "" &&
+		!sameWorkspaceRelativePath(normalizeWorkspaceRelativePath(targetPath), canonicalTarget) {
+		targetPath = canonicalTarget
+		normalized["path"] = canonicalTarget
+		if _, exists := normalized["create_dirs"]; !exists {
+			normalized["create_dirs"] = true
+		}
+		call.Arguments = normalized
+	}
 
 	rejectReason := recoveryFileWriteDraftRejectReason(draft, targetPath)
 	if strings.TrimSpace(rejectReason) == "" {
@@ -11173,6 +11182,22 @@ func (e *TurnEngine) maybeSynthesizeRecoveryFileWriteToolCalls(ctx context.Conte
 }
 
 func (e *TurnEngine) recoverySynthesizedFileWriteTargetPath(ctx context.Context, rt *turnRuntime) string {
+	if taskRecord, ok := e.recoveryCheckpointTaskRecord(ctx, rt); ok {
+		if checkpoint, checkpointOK := e.currentRecoveryFileWriteCheckpoint(ctx, rt); checkpointOK {
+			if rawTargetPath := normalizeTurnWorkspacePath(checkpoint.TargetPath); rawTargetPath != "" &&
+				looksLikeExplicitDeliverablePath(rawTargetPath, checkpoint.TargetPath) {
+				return rawTargetPath
+			}
+			normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, *checkpoint)
+			if targetPath := normalizeTurnWorkspacePath(normalized.TargetPath); targetPath != "" &&
+				looksLikeExplicitDeliverablePath(targetPath, normalized.TargetPath) {
+				return targetPath
+			}
+		}
+		if preferred := normalizeTurnWorkspacePath(preferredTaskDeliverablePath(taskRecord)); preferred != "" {
+			return preferred
+		}
+	}
 	if checkpoint, ok := e.recoveryFileWriteCheckpointCandidate(ctx, rt, ""); ok {
 		if targetPath := normalizeTurnWorkspacePath(checkpoint.TargetPath); targetPath != "" {
 			return targetPath
@@ -11292,30 +11317,30 @@ func (e *TurnEngine) maybeSynthesizeTaskReviewDecisionToolCalls(ctx context.Cont
 }
 
 func taskExecutionToolCallsNeedSynthesis(toolCalls []ModelToolCall, targetPath string) bool {
+	hasValidTargetWrite := false
 	for _, call := range toolCalls {
 		switch strings.ToLower(strings.TrimSpace(call.Name)) {
-		case "git.log", "task.list", "file.list", "file.search":
-			return true
 		case "file.write":
+			callPath := normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"]))
+			if callPath == "" {
+				return true
+			}
+			if !sameWorkspaceRelativePath(callPath, targetPath) {
+				return true
+			}
+			content := strings.TrimSpace(stringValue(call.Arguments["content"]))
+			if content == "" {
+				return true
+			}
+			if strings.TrimSpace(recoveryFileWriteDraftRejectReason(content, targetPath)) != "" {
+				return true
+			}
+			hasValidTargetWrite = true
 		default:
-			continue
-		}
-		callPath := normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"]))
-		if callPath == "" {
-			return true
-		}
-		if !sameWorkspaceRelativePath(callPath, targetPath) {
-			return true
-		}
-		content := strings.TrimSpace(stringValue(call.Arguments["content"]))
-		if content == "" {
-			return true
-		}
-		if strings.TrimSpace(recoveryFileWriteDraftRejectReason(content, targetPath)) != "" {
 			return true
 		}
 	}
-	return false
+	return !hasValidTargetWrite
 }
 
 func (e *TurnEngine) recoveryFileWriteSuppressedForReviewTask(ctx context.Context, rt *turnRuntime) bool {
@@ -11337,7 +11362,7 @@ func recoveryMutationDraftRejectReason(toolCalls []ModelToolCall, targetPath str
 		}
 		callPath := normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"]))
 		if callPath != "" && strings.TrimSpace(targetPath) != "" && !sameWorkspaceRelativePath(callPath, targetPath) {
-			continue
+			return "file.write targeted a different path than the recovery checkpoint target", true
 		}
 		content := strings.TrimSpace(stringValue(call.Arguments["content"]))
 		if content == "" {
@@ -12028,6 +12053,11 @@ func inferredTaskDeliverableDraft(taskRecord repo.ProjectTask) string {
 		return draft
 	}
 	targetPath := strings.TrimSpace(explicitDeliverablePath(taskRecord))
+	if targetPath == "" {
+		if inferred, ok := inferredExecutionReportTargetPath(taskRecord); ok {
+			targetPath = strings.TrimSpace(inferred)
+		}
+	}
 	if targetPath == "" || !strings.HasSuffix(strings.ToLower(targetPath), ".md") {
 		return ""
 	}
