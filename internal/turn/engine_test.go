@@ -11874,6 +11874,16 @@ func TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts(t *testi
 		t.Fatal("expected review-promote shell draft to be excluded from actionable draft count")
 	}
 
+	description = "Review the output from task 19 (Run end-to-end pipeline integration test) to ensure all components are functioning correctly. Identify any issues or failures that need to be addressed."
+	task = repo.ProjectTask{
+		Title:       "Review and validate pipeline integration test results",
+		Description: &description,
+		WorkStatus:  "draft",
+	}
+	if isActionableProjectDraftTask(task) {
+		t.Fatal("expected integration-test review shell draft to be excluded from actionable draft count")
+	}
+
 	task = repo.ProjectTask{
 		Title:      "Speaker Ingestion Workflow Validation",
 		WorkStatus: "draft",

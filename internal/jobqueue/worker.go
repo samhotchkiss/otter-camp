@@ -1692,6 +1692,9 @@ func looksLikeProjectContinuationMetaDraftForWorker(title string, description *s
 	if strings.Contains(normalized, "review and update pipeline test results") {
 		return true
 	}
+	if strings.Contains(normalized, "review and validate pipeline integration test results") {
+		return true
+	}
 	if strings.Contains(normalized, "analyze test results and document findings") {
 		return true
 	}
@@ -1717,8 +1720,10 @@ func looksLikeProjectContinuationMetaDraftForWorker(title string, description *s
 			strings.Contains(normalized, "document findings") ||
 			strings.Contains(normalized, "document detailed findings") ||
 			strings.Contains(normalized, "identify any issues or anomalies") ||
+			strings.Contains(normalized, "identify any issues or failures") ||
 			strings.Contains(normalized, "document any findings") ||
 			strings.Contains(normalized, "required updates") ||
+			strings.Contains(normalized, "all components are functioning correctly") ||
 			strings.Contains(normalized, "results")) {
 		return true
 	}

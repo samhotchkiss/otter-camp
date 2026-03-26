@@ -9129,3 +9129,35 @@ Current narrowed seam:
 - task-28 `next phase` shells are now pushed and live
 - the newest local patch closes the adjacent task-specific review/promote shell family that produced task `29`
 - next proof target is the first rerun-88 continuation after this deploy, to verify the count drops again and the project lane stops manufacturing review/promote shells around task `20`
+
+## 2026-03-26 08:31 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go)
+  - widened the project-session meta-task guard again to block the new live integration-review shell family:
+    - `Review and validate pipeline integration test results`
+    - `Review the output from task 19 ... ensure all components are functioning correctly`
+    - `Identify any issues or failures that need to be addressed`
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - actionable-draft filtering now excludes that same integration-review shell family
+- [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+  - worker-side continuation prompt generation now excludes the same integration-review shell family
+- direct regression coverage now includes the exact task-30 wording in:
+  - [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetectsProjectDraftListingCoachingReply|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemain$' -count=1`
+
+Latest live evidence before deploy:
+- rerun-88 finally executed on the cleaned `4 remaining draft project tasks` prompt, but created another adjacent shell:
+  - task `30`
+  - title `Review and validate pipeline integration test results`
+  - description `Review the output from task 19 (Run end-to-end pipeline integration test) to ensure all components are functioning correctly. Identify any issues or failures that need to be addressed.`
+- current rerun-88 session remains [`1a9edb0a-a817-46b1-975d-4d96c8164bcb`](/Users/sam/dev/otter-camp)
+
+Current narrowed seam:
+- task-29 `Review and Promote Task 20` shells are already pushed and the prompt count had dropped to `4`
+- the newest local patch closes the next adjacent integration-review shell family that produced task `30`
+- next proof target is the next rerun-88 continuation after this deploy, to verify the prompt count drops again and the project lane stops generating integration-review shells around completed task `19`
