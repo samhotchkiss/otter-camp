@@ -77,6 +77,38 @@ func TestRunArtifactRepositoryCreateRejectsOversizedInlineContent(t *testing.T) 
 	}
 }
 
+func TestMarshalRunEventNotificationPayloadTruncatesOversizedPayload(t *testing.T) {
+	event := RunEvent{
+		ID:        uuid.New(),
+		RunID:     uuid.New(),
+		Sequence:  7,
+		EventType: "tool_returned",
+		ActorType: "system",
+		Payload:   json.RawMessage(`{"stdout_inline":"` + strings.Repeat("x", 12000) + `"}`),
+		CreatedAt: time.Now().UTC(),
+	}
+
+	payload, err := marshalRunEventNotificationPayload(event)
+	if err != nil {
+		t.Fatalf("marshalRunEventNotificationPayload: %v", err)
+	}
+	if len(payload) > maxRunEventNotifyBytes {
+		t.Fatalf("payload length = %d, want <= %d", len(payload), maxRunEventNotifyBytes)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	gotPayload, ok := decoded["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload field = %T, want object summary", decoded["payload"])
+	}
+	if got := gotPayload["truncated"]; got != true {
+		t.Fatalf("payload.truncated = %v, want true", got)
+	}
+}
+
 func TestRunAttemptRepositoryCreateRejectsAttemptNumberZero(t *testing.T) {
 	repo := &RunAttemptRepository{db: &fakeQueryExecutor{}}
 	_, err := repo.Create(context.Background(), RunAttempt{

@@ -8511,6 +8511,14 @@ func projectBootstrapResumeShouldStartWithPersist(state projectBootstrapState) b
 	if !state.BootstrapTaskOutstanding || strings.TrimSpace(state.BootstrapTaskID) == "" {
 		return false
 	}
+	if state.AssignmentCount == 0 &&
+		state.PlannedTaskCount == 0 &&
+		state.PlannedFlowTemplateCount == 0 &&
+		state.FirstWaveTaskCount == 0 &&
+		state.FirstWavePromotedCount == 0 &&
+		state.FirstWaveJobCount == 0 {
+		return false
+	}
 	if state.AssignmentCount > 0 ||
 		state.PlannedTaskCount > 0 ||
 		state.PlannedFlowTemplateCount > 0 ||
@@ -8555,6 +8563,10 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState, snapsh
 	if state.AssignmentCount == 0 && state.PlannedTaskCount == 0 && state.PlannedFlowTemplateCount == 0 {
 		lines = append(lines, "Do not claim bootstrap is complete just because the governance gate or checklist tasks are done. Those system-managed setup tasks do not count as staffed project work.")
 		lines = append(lines, "Your next action must create real project assignments, non-bootstrap tasks, and runnable flow templates, or report a concrete blocker preventing that.")
+		if state.BootstrapSetupDoneCount > 0 || state.BootstrapSetupTaskCount > 0 {
+			lines = append(lines, "Bootstrap is currently at the staffing/materialization step. Your next tool activity should materially staff the project: do one bounded staffing lookup per needed role category, then create and assign the PM, workers, and reviewers in the same turn before attempting task decomposition.")
+			lines = append(lines, "Do not answer with blank output, an acknowledgement, or another bootstrap summary. If the current staffing candidates are insufficient, say the one concrete blocker preventing staff creation.")
+		}
 	}
 	if strings.EqualFold(strings.TrimSpace(state.ValidationStatus), projectBootstrapValidationFailed) {
 		reason := strings.TrimSpace(state.ValidationFailureReason)
@@ -11121,7 +11133,7 @@ func (e *TurnEngine) maybeSynthesizeTaskExecutionFileWriteToolCalls(ctx context.
 		return toolCalls, false, nil
 	}
 	targetPath := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord))
-	draft := strings.TrimSpace(inferredTaskExecutionLogDraft(taskRecord))
+	draft := strings.TrimSpace(inferredTaskDeliverableDraft(taskRecord))
 	if targetPath == "" || draft == "" {
 		return toolCalls, false, nil
 	}
@@ -11206,7 +11218,11 @@ func (e *TurnEngine) maybeSynthesizeTaskReviewDecisionToolCalls(ctx context.Cont
 
 func taskExecutionToolCallsNeedSynthesis(toolCalls []ModelToolCall, targetPath string) bool {
 	for _, call := range toolCalls {
-		if !strings.EqualFold(strings.TrimSpace(call.Name), "file.write") {
+		switch strings.ToLower(strings.TrimSpace(call.Name)) {
+		case "git.log", "task.list", "file.list", "file.search":
+			return true
+		case "file.write":
+		default:
 			continue
 		}
 		callPath := normalizeWorkspaceRelativePath(stringValue(call.Arguments["path"]))
@@ -11928,6 +11944,72 @@ func inferredTaskExecutionLogDraft(taskRecord repo.ProjectTask) string {
 	return strings.TrimSpace(b.String())
 }
 
+func inferredTaskDeliverableDraft(taskRecord repo.ProjectTask) string {
+	if draft := strings.TrimSpace(inferredTaskExecutionLogDraft(taskRecord)); draft != "" {
+		return draft
+	}
+	targetPath := strings.TrimSpace(explicitDeliverablePath(taskRecord))
+	if targetPath == "" || !strings.HasSuffix(strings.ToLower(targetPath), ".md") {
+		return ""
+	}
+
+	title := strings.TrimSpace(taskRecord.Title)
+	if title == "" {
+		title = strings.TrimSuffix(filepath.Base(targetPath), filepath.Ext(targetPath))
+	}
+	objective := ""
+	if taskRecord.Description != nil {
+		objective = strings.TrimSpace(*taskRecord.Description)
+	}
+	if idx := strings.Index(strings.ToLower(objective), "output:"); idx >= 0 {
+		objective = strings.TrimSpace(objective[:idx])
+	}
+	if idx := strings.Index(objective, "~"); idx >= 0 {
+		objective = strings.TrimSpace(objective[:idx])
+	}
+	objective = strings.TrimSpace(strings.TrimSuffix(objective, "."))
+	if objective == "" {
+		objective = "Produce the requested deliverable directly from the task brief and make the review criteria explicit"
+	}
+
+	stageItems := make([]string, 0, 3)
+	lower := strings.ToLower(objective)
+	for _, item := range []struct {
+		match string
+		label string
+	}{
+		{match: "ingestion", label: "Ingestion"},
+		{match: "processing", label: "Processing"},
+		{match: "output/delivery", label: "Output/Delivery"},
+	} {
+		if strings.Contains(lower, item.match) {
+			stageItems = append(stageItems, item.label)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("# ")
+	b.WriteString(title)
+	b.WriteString("\n\n## Objective\n")
+	b.WriteString(objective)
+	b.WriteString(".\n")
+	if len(stageItems) > 0 {
+		b.WriteString("\n## Stages\n")
+		for _, item := range stageItems {
+			b.WriteString("- ")
+			b.WriteString(item)
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n## Validation Criteria\n")
+	b.WriteString("- Define explicit pass/fail checks for each relevant stage.\n")
+	b.WriteString("- Note the required evidence or observable outputs for each check.\n")
+	b.WriteString("- Call out key failure conditions or edge cases reviewers should expect to verify.\n")
+	b.WriteString("\n## Evidence Expectations\n")
+	b.WriteString("- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.\n")
+	return strings.TrimSpace(b.String())
+}
+
 func inferredTestExecutionSlug(title string, description *string) string {
 	candidateTitle := strings.TrimSpace(title)
 	if idx := strings.LastIndex(candidateTitle, ":"); idx >= 0 {
@@ -12271,7 +12353,7 @@ func (e *TurnEngine) loadRecoveryResumeState(ctx context.Context, rt *turnRuntim
 		}
 	}
 	if strings.TrimSpace(state.targetDraft) == "" && strings.TrimSpace(state.artifactDraft) == "" && strings.TrimSpace(state.summaryDraft) == "" && haveTaskRecord {
-		if scaffold := inferredTaskExecutionLogDraft(taskRecord); scaffold != "" {
+		if scaffold := inferredTaskDeliverableDraft(taskRecord); scaffold != "" {
 			state.summaryDraft = scaffold
 		}
 	}

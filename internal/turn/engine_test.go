@@ -3320,6 +3320,26 @@ func TestInferredTaskExecutionLogDraftBuildsConcreteStarter(t *testing.T) {
 	}
 }
 
+func TestInferredTaskDeliverableDraftBuildsExplicitMarkdownStarter(t *testing.T) {
+	description := "Document the speaker pipeline stages (ingestion, processing, output/delivery) and define explicit validation criteria for each stage. Output: validation-scope.md in workspace. ~20 min."
+	taskRecord := repo.ProjectTask{
+		TaskNumber:  14,
+		Title:       "Document pipeline stages and validation criteria",
+		Description: &description,
+	}
+
+	draft := inferredTaskDeliverableDraft(taskRecord)
+	if !strings.Contains(draft, "# Document pipeline stages and validation criteria") {
+		t.Fatalf("draft = %q, want document heading", draft)
+	}
+	if !strings.Contains(draft, "## Validation Criteria") {
+		t.Fatalf("draft = %q, want validation criteria section", draft)
+	}
+	if !strings.Contains(draft, "Ingestion") || !strings.Contains(draft, "Processing") || !strings.Contains(draft, "Output/Delivery") {
+		t.Fatalf("draft = %q, want explicit stage list", draft)
+	}
+}
+
 func TestReconcileRecoveryCheckpointCandidateNormalizesExecutionFirstReportTarget(t *testing.T) {
 	t.Parallel()
 
@@ -10813,6 +10833,28 @@ func TestBuildProjectBootstrapResumeActionPromptForSetupPersist(t *testing.T) {
 	}
 }
 
+func TestBuildProjectBootstrapResumeActionPromptForStaffingMaterializationStep(t *testing.T) {
+	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
+		BootstrapTaskID:          uuid.NewString(),
+		BootstrapTaskOutstanding: true,
+		BootstrapSetupTaskCount:  8,
+		BootstrapSetupDoneCount:  1,
+		ValidationStatus:         projectBootstrapValidationPending,
+	}, projectBootstrapResumeSnapshot{})
+	if !strings.Contains(prompt, "Bootstrap is currently at the staffing/materialization step") {
+		t.Fatalf("prompt = %q, want staffing materialization guidance", prompt)
+	}
+	if !strings.Contains(prompt, "do one bounded staffing lookup per needed role category") {
+		t.Fatalf("prompt = %q, want bounded staffing lookup guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not answer with blank output, an acknowledgement, or another bootstrap summary") {
+		t.Fatalf("prompt = %q, want no-blank-output guidance", prompt)
+	}
+	if strings.Contains(prompt, "Your first tool call in this resume turn should be bootstrap.setup.persist") {
+		t.Fatalf("prompt = %q, should not force persist-first before staffing materializes", prompt)
+	}
+}
+
 func TestBuildProjectBootstrapResumeActionPromptForValidationFailure(t *testing.T) {
 	prompt := buildProjectBootstrapResumeActionPrompt(projectBootstrapState{
 		CurrentPhase:            projectBootstrapCheckpointFlowTemplatesPersisted,
@@ -13983,6 +14025,67 @@ func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesInferredDraftOnGeneri
 	}
 	if got := stringValue(toolCalls[0].Arguments["content"]); !strings.Contains(got, "## Test Cases") {
 		t.Fatalf("content = %q, want inferred execution-log draft", got)
+	}
+}
+
+func TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesExplicitMarkdownDeliverableDraft(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Document the speaker pipeline stages (ingestion, processing, output/delivery) and define explicit validation criteria for each stage. Output: validation-scope.md in workspace. ~20 min."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		TaskNumber:     14,
+		Title:          "Document pipeline stages and validation criteria",
+		WorkStatus:     "in_progress",
+		Description:    &description,
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+
+	toolCalls, synthesized, err := fixture.engine.maybeSynthesizeTaskExecutionFileWriteToolCalls(
+		context.Background(),
+		rt,
+		"Fresh branch. I'll now create the validation-scope.md document based on the task requirements.",
+		[]ModelToolCall{{
+			ID:   "git-1",
+			Name: "git.log",
+			Tier: "tier2",
+		}},
+	)
+	if err != nil {
+		t.Fatalf("maybeSynthesizeTaskExecutionFileWriteToolCalls: %v", err)
+	}
+	if !synthesized {
+		t.Fatal("synthesized = false, want true")
+	}
+	if len(toolCalls) != 1 || toolCalls[0].Name != "file.write" {
+		t.Fatalf("toolCalls = %+v, want one synthesized file.write", toolCalls)
+	}
+	if got := stringValue(toolCalls[0].Arguments["path"]); got != "validation-scope.md" {
+		t.Fatalf("path = %q, want explicit markdown deliverable path", got)
+	}
+	if got := stringValue(toolCalls[0].Arguments["content"]); !strings.Contains(got, "## Validation Criteria") {
+		t.Fatalf("content = %q, want synthesized markdown starter", got)
 	}
 }
 

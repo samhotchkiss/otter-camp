@@ -6881,3 +6881,102 @@ The next move from here:
 - rebuild/restart tmux `serve` and `worker`
 - launch a fresh post-fix Anthropic canary
 - verify the `rerun-84 task 15` shape is rejected during bootstrap task creation instead of surviving until late validation
+
+## 2026-03-25 19:40 MDT: explicit markdown deliverables now synthesize direct kickoff writes; oversized run_event NOTIFY payloads are truncated
+
+- current local patch set after `49b7b735`; not yet pushed at this note
+- focused tests are green:
+  - `go test ./internal/turn -run 'Test(InferredTaskDeliverableDraftBuildsExplicitMarkdownStarter|MaybeSynthesizeTaskExecutionFileWriteToolCalls(UsesExplicitMarkdownDeliverableDraft|UsesInferredDraftOnGenericKickoffReply|OverridesBadImprovisedWrite|SkipsReviewLane)|PreferredTaskDeliverablePathInfersCanonicalDocumentTarget|InferredTaskExecutionLogDraftBuildsConcreteStarter)$' -count=1`
+  - `go test ./internal/controlplane -run 'Test(MarshalRunEventNotificationPayloadTruncatesOversizedPayload|RunEventRepositoryAppendPublishesNotify)$' -count=1`
+
+### Live proof on rerun-86
+
+- project:
+  - `11d01684-9b46-4af5-bc29-b7b838f135b2`
+- session:
+  - `0ffc31b3-c88d-49dc-aab6-f8ff0b45839e`
+- final bootstrap state:
+  - `status=completed`
+  - `current_phase=first_wave_jobs_claimed`
+- what it proved:
+  - the earlier broad generated-child regression is gone
+  - bootstrap completed cleanly on Anthropic through first-wave job claim
+  - top-level workstreams `9-13` plus bounded child tasks `14-23` were created
+  - first-wave task `14` entered real task execution
+
+### New task-lane seam exposed on rerun-86
+
+- task `14` (`Document pipeline stages and validation criteria`) had:
+  - explicit deliverable path `validation-scope.md`
+  - direct task brief sufficient to write the document
+- before the new patch, the live task lane still burned turns on:
+  - `git.log`
+  - broad planning lookups
+  - fresh-orphan-branch workspace checks
+- root cause:
+  - `preferredTaskDeliverablePath(...)` already knew the target
+  - `maybeSynthesizeTaskExecutionFileWriteToolCalls(...)` only had starter-draft synthesis for test-execution logs, not for generic explicit markdown deliverables
+
+### Implemented task-lane fix
+
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - added `inferredTaskDeliverableDraft(...)`
+  - explicit markdown deliverables like `validation-scope.md` / `test-plan-matrix.md` now get a substantive starter draft from the task brief
+  - kickoff synthesis now overrides broad pre-write browsing calls like `git.log`, `task.list`, `file.list`, and `file.search` when the target file and starter draft are already obvious
+  - recovery resume fallback now also uses the generic inferred deliverable draft, not only execution-log scaffolds
+- [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - added `TestInferredTaskDeliverableDraftBuildsExplicitMarkdownStarter`
+  - added `TestMaybeSynthesizeTaskExecutionFileWriteToolCallsUsesExplicitMarkdownDeliverableDraft`
+
+### Live proof on rerun-87
+
+- project:
+  - `3ee5af44-f1b6-4f03-9664-ef3116fad9ee`
+- session:
+  - `1a9edb0a-a817-46b1-975d-4d96c8164bcb`
+- task session that exercised the new lane:
+  - `5f3cd63c-5674-4607-b932-90e54a6d15da`
+- what happened live:
+  - task `14` produced `validation-scope.md`
+  - downstream task `15` immediately began consuming that artifact instead of waiting on another planning bootstrap fix
+- so the generic deliverable synthesis is live-proven, not just unit-tested
+
+### New runtime seam exposed immediately afterward
+
+- task `15` then hit:
+  - `ERROR: payload string too long (SQLSTATE 22023)`
+- root cause:
+  - not the `run_event` row insert itself
+  - the follow-on `pg_notify(...)` in `RunEventRepository.Append(...)`
+  - large tool-return payloads with `stdout_inline` could exceed PostgreSQL `NOTIFY` payload limits even though the full `run_event` row was valid
+
+### Implemented control-plane fix
+
+- [`internal/controlplane/repository.go`](/Users/sam/dev/otter-camp/internal/controlplane/repository.go)
+  - `marshalRunEventNotificationPayload(...)` now keeps full payloads when small
+  - when the notify body would exceed the Postgres payload cap, it emits a compact summary payload instead of the full nested tool output
+  - the complete event still remains in `run_event`; only the `LISTEN/NOTIFY` transport body is compacted
+- [`internal/controlplane/repository_test.go`](/Users/sam/dev/otter-camp/internal/controlplane/repository_test.go)
+  - added `TestMarshalRunEventNotificationPayloadTruncatesOversizedPayload`
+
+### Current live probe
+
+- rerun-87 remains the live proof for the first fix:
+  - project `5573e263-5be4-4488-957e-1c66f5f3d578`
+  - session `ec26eddb-66be-42a5-9859-64cb24c7c820`
+  - explicit-markdown task `14` produced `validation-scope.md`
+  - downstream task `15` then exposed the pre-fix `pg_notify` payload limit via `ERROR: payload string too long (SQLSTATE 22023)`
+- fresh post-second-fix canary is rerun-88:
+  - project `3ee5af44-f1b6-4f03-9664-ef3116fad9ee`
+  - session `1a9edb0a-a817-46b1-975d-4d96c8164bcb`
+  - current bootstrap state:
+    - session `active`
+    - `project_bootstrap.status = active`
+    - `project_bootstrap.current_phase = staffing_persisted`
+
+### Immediate next proof target
+
+- let rerun-88 advance to the first `project_task` lane under the notify-truncation build
+- verify:
+  - the first explicit-markdown task still starts with a synthesized write
+  - downstream tool-return / run-event traffic no longer fails with `payload string too long`

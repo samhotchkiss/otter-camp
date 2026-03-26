@@ -17,6 +17,7 @@ import (
 
 const (
 	maxInlineContentBytes = 51200
+	maxRunEventNotifyBytes = 7900
 	defaultListLimit      = 50
 	maxListLimit          = 200
 )
@@ -1744,7 +1745,42 @@ func normalizeJSON(value json.RawMessage, fallback json.RawMessage) json.RawMess
 }
 
 func marshalRunEventNotificationPayload(event RunEvent) (string, error) {
-	encoded, err := json.Marshal(map[string]any{
+	build := func(payload any) ([]byte, error) {
+		return json.Marshal(map[string]any{
+			"id":             event.ID,
+			"run_id":         event.RunID,
+			"run_step_id":    event.RunStepID,
+			"run_attempt_id": event.RunAttemptID,
+			"sequence":       event.Sequence,
+			"event_type":     event.EventType,
+			"actor_type":     event.ActorType,
+			"actor_id":       event.ActorID,
+			"payload":        payload,
+			"created_at":     event.CreatedAt.UTC(),
+		})
+	}
+
+	normalizedPayload := normalizeJSON(event.Payload, json.RawMessage(`{}`))
+	encoded, err := build(normalizedPayload)
+	if err != nil {
+		return "", fmt.Errorf("marshal run event notification: %w", err)
+	}
+	if len(encoded) <= maxRunEventNotifyBytes {
+		return string(encoded), nil
+	}
+
+	encoded, err = build(map[string]any{
+		"truncated":      true,
+		"original_bytes": len(normalizedPayload),
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal truncated run event notification: %w", err)
+	}
+	if len(encoded) <= maxRunEventNotifyBytes {
+		return string(encoded), nil
+	}
+
+	encoded, err = json.Marshal(map[string]any{
 		"id":             event.ID,
 		"run_id":         event.RunID,
 		"run_step_id":    event.RunStepID,
@@ -1753,7 +1789,7 @@ func marshalRunEventNotificationPayload(event RunEvent) (string, error) {
 		"event_type":     event.EventType,
 		"actor_type":     event.ActorType,
 		"actor_id":       event.ActorID,
-		"payload":        normalizeJSON(event.Payload, json.RawMessage(`{}`)),
+		"payload":        map[string]any{"truncated": true},
 		"created_at":     event.CreatedAt.UTC(),
 	})
 	if err != nil {
