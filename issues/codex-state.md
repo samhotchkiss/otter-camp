@@ -2,6 +2,51 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 01:30 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `e917a7a7`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- rerun-88 project continuation session is no longer wedged behind a ghost in-progress turn with no invocation/run
+
+### New local patch: recover stale in-progress project continuations without invocation ownership
+
+- root cause:
+  - rerun-88 project session `1a9edb0a-a817-46b1-975d-4d96c8164bcb` was left with:
+    - `current_turn_id = ee72a103-1182-4f00-bcb0-fce5e2086b29`
+    - turn status `in_progress`
+    - no `run` row for that turn
+    - no `model_invocation` row for that turn
+    - a pending retry job for the same continuation message still sitting in `job_queue`
+  - worker claim-time logic would not clear that state, so the session stayed idle behind a ghost turn
+- behavior:
+  - worker startup and inline pre-claim recovery now detect active async `project` sessions whose current turn is `in_progress` but has:
+    - no live or recent completed invocation
+    - no active run ownership
+    - no currently claimed `agent_turn` for that session
+  - that stale turn is now failed, `current_turn_id` is cleared, same-attempt pending/claimed dispatches are dead-lettered, and a fresh retry is enqueued at `retry_count + 1`
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RecoverStaleInProgressProjectTurnsWithoutOwnership|RequeueActiveProjectSessionsWithoutTurnsIgnoresStalePendingDispatch|PurgeStaleAgentTurnJobsKeepsProjectSupervisorPMRecoveryJob|EnsureProjectContinuationMessageSupersedesStalePendingContinuation|RequeueActiveProjectSessionsWithoutTurnsSupersedesStalePendingContinuation)' -count=1`
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRecoverStaleInProgressProjectTurnsWithoutOwnership' -count=1`
+- live proof:
+  - after rebuild/restart, rerun-88 session `1a9edb0a-a817-46b1-975d-4d96c8164bcb` now reads:
+    - `current_turn_id = ce4c896e-6c99-40d0-b647-5b43a4c58f89`
+    - old ghost turn `ee72a103-1182-4f00-bcb0-fce5e2086b29` is now `failed`
+    - stale retry job `7a74828f-9c9b-4476-acaf-35331393f77d` is now `dead_letter`
+    - fresh retry job `cca2314f-30a7-457c-8afc-44e6ae0af4c7` is `claimed`
+    - fresh retry turn `ce4c896e-6c99-40d0-b647-5b43a4c58f89` is `in_progress`
+  - worker log also shows the fresh rerun-88 dispatch re-entering `agent_turn dispatch` for retry `5`
+
+### Current live seam
+
+- rerun-88 project continuation is no longer stuck behind the pre-invocation ghost-turn state
+- next proof target:
+  - whether the fresh retry turn `ce4c896e-6c99-40d0-b647-5b43a4c58f89` completes or exposes the next real continuation/runtime seam
+  - if it stalls again, the next thing to inspect is downstream of fresh invocation creation rather than worker requeue ownership
+
 ## 2026-03-25 22:55 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `724f447f`

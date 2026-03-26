@@ -251,6 +251,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	} else if recovered > 0 {
 		w.logger.Info("job queue: recovered non-heartbeating claimed agent_turn jobs on startup", "count", recovered)
 	}
+	if recovered, err := w.RecoverStaleInProgressProjectTurnsWithoutOwnership(runCtx); err != nil {
+		if runCtx.Err() == nil {
+			w.logger.Error("startup stale in-progress project turn recovery failed", "error", err)
+		}
+	} else if recovered > 0 {
+		w.logger.Info("job queue: recovered stale in-progress project turns on startup", "count", recovered)
+	}
 	if repaired, err := w.CloseTerminalProjectTaskAsyncSessions(runCtx); err != nil {
 		if runCtx.Err() == nil {
 			w.logger.Error("startup terminal project_task session cleanup failed", "error", err)
@@ -2771,6 +2778,168 @@ func (w *Worker) RecoverClaimedAgentTurnsWithoutLiveOwnership(ctx context.Contex
 	return tag.RowsAffected(), nil
 }
 
+func (w *Worker) RecoverStaleInProgressProjectTurnsWithoutOwnership(ctx context.Context) (int64, error) {
+	postModelGraceBefore := w.clock.Now().UTC().Add(-postModelOrphanTurnThreshold)
+	rows, err := w.pool.Query(ctx, `
+		SELECT cs.id,
+		       ct.id,
+		       ct.trigger_message_id,
+		       ct.retry_count
+		FROM chat_session cs
+		JOIN chat_turn ct
+		  ON ct.id = cs.current_turn_id
+		WHERE cs.status = 'active'
+		  AND cs.mode = 'async'
+		  AND cs.scope_type = 'project'
+		  AND ct.status = 'in_progress'
+		  AND ct.trigger_message_id IS NOT NULL
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM model_invocation mi
+		    WHERE mi.turn_id = ct.id
+		      AND (
+		            mi.status = 'in_flight'
+		         OR (
+		              mi.status = 'completed'
+		          AND COALESCE(mi.completed_at, mi.created_at) >= $1
+		            )
+		          )
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM run r
+		    WHERE r.session_id = cs.id
+		      AND r.turn_id = ct.id
+		      AND r.status IN ('created', 'queued', 'in_progress')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM job_queue jq
+		    WHERE jq.job_type = $2
+		      AND jq.status = 'claimed'
+		      AND (jq.payload->>'session_id')::uuid = cs.id
+		  )
+	`, postModelGraceBefore, agentTurnJobType)
+	if err != nil {
+		return 0, fmt.Errorf("list stale in-progress project turns without ownership: %w", err)
+	}
+	defer rows.Close()
+
+	type candidate struct {
+		sessionID  uuid.UUID
+		turnID     uuid.UUID
+		messageID  uuid.UUID
+		retryCount int
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var item candidate
+		if err := rows.Scan(&item.sessionID, &item.turnID, &item.messageID, &item.retryCount); err != nil {
+			return 0, fmt.Errorf("scan stale in-progress project turn candidate: %w", err)
+		}
+		candidates = append(candidates, item)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate stale in-progress project turn candidates: %w", err)
+	}
+
+	const failureReason = "recovered stale in-progress project turn without active invocation ownership"
+	var recovered int64
+	for _, item := range candidates {
+		tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{})
+		if err != nil {
+			return recovered, fmt.Errorf("begin stale in-progress project turn recovery tx: %w", err)
+		}
+		committed := false
+		func() {
+			defer func() {
+				if !committed {
+					_ = tx.Rollback(ctx)
+				}
+			}()
+
+			tag, execErr := tx.Exec(ctx, `
+				UPDATE chat_turn
+				SET status = 'failed',
+				    error_message = $3,
+				    completed_at = COALESCE(completed_at, now())
+				WHERE id = $1
+				  AND session_id = $2
+				  AND status = 'in_progress'
+			`, item.turnID, item.sessionID, failureReason)
+			if execErr != nil {
+				err = fmt.Errorf("fail stale in-progress project turn %s: %w", item.turnID, execErr)
+				return
+			}
+			if tag.RowsAffected() == 0 {
+				if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+					err = fmt.Errorf("rollback skipped stale in-progress project turn recovery tx: %w", rollbackErr)
+				}
+				committed = true
+				return
+			}
+
+			if _, execErr := tx.Exec(ctx, `
+				UPDATE chat_message
+				SET status = 'failed',
+				    error_message = $2
+				WHERE turn_id = $1
+				  AND role = 'assistant'
+				  AND status IN ('pending', 'streaming')
+			`, item.turnID, failureReason); execErr != nil {
+				err = fmt.Errorf("fail assistant messages for stale in-progress project turn %s: %w", item.turnID, execErr)
+				return
+			}
+
+			if _, execErr := tx.Exec(ctx, `
+				UPDATE chat_session
+				SET current_turn_id = NULL
+				WHERE id = $1
+				  AND current_turn_id = $2
+			`, item.sessionID, item.turnID); execErr != nil {
+				err = fmt.Errorf("clear current_turn_id for stale in-progress project turn %s: %w", item.turnID, execErr)
+				return
+			}
+
+			if _, execErr := tx.Exec(ctx, `
+				UPDATE job_queue jq
+				SET status = 'dead_letter',
+				    claimed_by = NULL,
+				    claimed_at = NULL,
+				    last_error = 'superseded stale in-progress project turn before retry',
+				    updated_at = now()
+				WHERE jq.job_type = $1
+				  AND jq.status IN ('pending', 'claimed')
+				  AND (jq.payload->>'session_id')::uuid = $2
+				  AND (jq.payload->>'message_id')::uuid = $3
+				  AND COALESCE((jq.payload->>'retry_count')::int, 0) = $4
+			`, agentTurnJobType, item.sessionID, item.messageID, item.retryCount); execErr != nil {
+				err = fmt.Errorf("retire stale agent_turn dispatches for project turn %s: %w", item.turnID, execErr)
+				return
+			}
+
+			if _, execErr := w.enqueueAgentTurnDispatch(ctx, tx, agentTurnKeyPayload{
+				SessionID:  item.sessionID,
+				MessageID:  item.messageID,
+				RetryCount: item.retryCount + 1,
+			}, nil); execErr != nil {
+				err = fmt.Errorf("enqueue fresh retry for stale in-progress project turn %s: %w", item.turnID, execErr)
+				return
+			}
+			if commitErr := tx.Commit(ctx); commitErr != nil {
+				err = fmt.Errorf("commit stale in-progress project turn recovery tx: %w", commitErr)
+				return
+			}
+			committed = true
+			recovered++
+		}()
+		if err != nil {
+			return recovered, err
+		}
+	}
+	return recovered, nil
+}
+
 func (w *Worker) CloseSupersededCanonicalAsyncSessions(ctx context.Context) (int64, error) {
 	ct, err := w.pool.Exec(ctx, `
 		WITH ranked AS (
@@ -3070,6 +3239,14 @@ func (w *Worker) processAvailableJobs(ctx context.Context) error {
 		return err
 	} else if recovered > 0 {
 		w.logger.Info("job queue: recovered non-heartbeating claimed agent_turn jobs before claim", "count", recovered)
+	}
+	if recovered, err := w.RecoverStaleInProgressProjectTurnsWithoutOwnership(ctx); err != nil {
+		if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+			w.logger.Error("job queue: inline stale in-progress project turn recovery failed", "error", err)
+		}
+		return err
+	} else if recovered > 0 {
+		w.logger.Info("job queue: recovered stale in-progress project turns before claim", "count", recovered)
 	}
 
 	for {
