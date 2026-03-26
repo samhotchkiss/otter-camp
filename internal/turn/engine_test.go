@@ -7129,6 +7129,100 @@ func TestHandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithF
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnRetriesDependencyErrorCoachingReplyWithFreshMessage(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	turnID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 18,
+				Title:      "Validate pipeline output format and delivery",
+				WorkStatus: "done",
+			},
+			draftTaskID: {
+				ID:         draftTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 20,
+				Title:      "Prepare deduplication report for review",
+				WorkStatus: "draft",
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = &fakeTaskTransitionService{repo: taskRepo}
+
+	userMessageID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now.",
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		Content:        `{"tool_name":"task.add_dependency","output":{},"error":"invalid_dependency"}`,
+		SequenceNumber: 11,
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "It seems there was an issue with the dependency you tried to add. The error message indicates that the dependency is invalid. Could you please check if the task or subtask IDs are correct and try again? If you need further assistance, feel free to ask.",
+		SequenceNumber: 12,
+	}
+	messages := []repo.ChatMessage{*latestUser, *toolResult, *assistant}
+	completedTurn := &repo.ChatTurn{
+		ID:           turnID,
+		SessionID:    fixture.session.ID,
+		RespondingID: fixture.chat.participants[0].ParticipantID,
+		RetryCount:   0,
+	}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected dependency-error coaching reply to enqueue a fresh retry message")
+	}
+
+	jobs := fixture.enqueuer.jobs
+	if len(jobs) != 1 {
+		t.Fatalf("enqueued jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload.MessageID == userMessageID {
+		t.Fatal("retry reused original continuation message, want fresh message id")
+	}
+	if jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry_count = %d, want 1", jobs[0].payload.RetryCount)
+	}
+}
+
 func TestMaybeContinueProjectExecutionAfterTaskCompletionSupersedesStaleProjectContinuationTurn(t *testing.T) {
 	t.Parallel()
 

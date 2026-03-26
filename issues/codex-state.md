@@ -2,6 +2,48 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 05:22 MDT update
+
+- deployed runtime now includes an additional local `internal/turn/engine.go` detector widening on top of pushed `f6c6b7cb`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+
+### New local fix
+
+- `internal/turn/engine.go`
+  - `looksLikeGenericTaskRecoveryReply(...)` now recognizes the dependency-error coaching fallback that qwen emitted live:
+    - `It seems there was an issue with the dependency you tried to add`
+    - `The error message indicates that the dependency is invalid`
+    - `Could you please check if the task or subtask IDs are correct and try again`
+- `internal/turn/engine_test.go`
+  - added `TestHandleCompletedProjectExecutionContinuationTurnRetriesDependencyErrorCoachingReplyWithFreshMessage`
+
+### Focused verification
+
+- `go test ./internal/turn -run 'Test(HandleCompletedProjectExecutionContinuationTurnRetriesGenericReplyWithFreshMessage|HandleCompletedProjectExecutionContinuationTurnRetriesDependencyErrorCoachingReplyWithFreshMessage|BuildProjectContinuationActionPrompt|BuildProjectExecutionContinuationPrompt|HandleUserMessageProjectScopeBlocksProjectCreateAgainstSessionIdentity)$' -count=1`
+- rebuilt `./bin/ottercamp`
+- respawned tmux panes with sourced `.env`
+
+### Live proof on rerun-88
+
+- prior fresh continuation turn:
+  - turn `87d1632a-de6d-4fc5-afd2-bb16b02c4b70`
+  - trigger message `16a88f39-1487-49a8-b6bf-7c0e80ad5248`
+  - invocation `158e4a4e-42be-470e-bf59-05d1287f2799`
+  - completed at `05:18:19 MDT`
+- that turn attempted `task.add_dependency`, received `invalid_dependency`, then fell back to generic help/coaching text instead of advancing the project
+- under the new detector build, the same project lane no longer idles after that fallback:
+  - fresh continuation message `ed314145-4158-44f5-bd5d-0be82ce9a2c8`
+  - fresh claimed job `3a0056bd-a31a-46fb-9da9-a3cf9033b02a`
+  - fresh turn `88cc8a51-1079-4475-a6ae-f3efd13b40bd`
+  - session `1a9edb0a-a817-46b1-975d-4d96c8164bcb` now has `current_turn_id=88cc8a51-1079-4475-a6ae-f3efd13b40bd`
+
+### Current seam
+
+- stale continuation reuse is fixed
+- generic dependency-error coaching now requeues correctly
+- next blocker is the actual outcome of live turn `88cc8a51-1079-4475-a6ae-f3efd13b40bd`, not continuation retry plumbing anymore
+
 ## 2026-03-26 05:16 MDT update
 
 - deployed runtime now includes fresh local worker + engine patches on top of pushed `385ff7ee`
