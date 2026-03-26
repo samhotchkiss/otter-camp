@@ -2711,7 +2711,16 @@ func looksLikeProjectContinuationMetaTask(title string, description *string) boo
 	if strings.Contains(normalized, "analyze test results and document findings") {
 		return true
 	}
+	if strings.Contains(normalized, "select and decompose next bounded task") {
+		return true
+	}
 	if strings.Contains(normalized, "prepare for next phase of project execution") {
+		return true
+	}
+	if strings.Contains(normalized, "next runnable bounded task") &&
+		(strings.Contains(normalized, "decompose") ||
+			strings.Contains(normalized, "assign") ||
+			strings.Contains(normalized, "queue it for execution")) {
 		return true
 	}
 	if strings.Contains(normalized, "end to end pipeline integration test") &&

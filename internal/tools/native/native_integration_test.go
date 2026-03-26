@@ -5081,6 +5081,26 @@ func TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemai
 	if len(tasks) != 2 {
 		t.Fatalf("project task count = %d after fifth variant, want 2 (1 draft + 1 completed parent)", len(tasks))
 	}
+
+	out, err = executor.Execute(projectCtx, "task.create", map[string]any{
+		"project_id":   project.ID.String(),
+		"title":        "Select and Decompose Next Bounded Task",
+		"description":  "Inspect the current task tree, identify the next runnable bounded task, decompose it if necessary, and assign or queue it for execution.",
+	})
+	if err != nil {
+		t.Fatalf("task.create sixth variant: %v", err)
+	}
+	if got := fmt.Sprintf("%v", out["error"]); got != projectContinuationMetaTaskCreateError {
+		t.Fatalf("sixth task.create error = %q, want %q", got, projectContinuationMetaTaskCreateError)
+	}
+
+	tasks, err = taskRepo.ListByProject(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("list project tasks after sixth variant: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("project task count = %d after sixth variant, want 2", len(tasks))
+	}
 }
 
 func TestIntegrationProjectSessionQueueKeepsPlannedTaskSetFlat(t *testing.T) {

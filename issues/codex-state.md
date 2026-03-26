@@ -9007,3 +9007,36 @@ Current narrowed seam:
 - duplicate dependency edges are explicit no-ops
 - prompt draft counts are cleaned to actionable drafts
 - the latest local fix closes the completed-parent escape hatch that produced task 26, but that patch is not deployed yet
+
+## 2026-03-26 07:56 MDT
+
+Latest fixes landed locally:
+- [`internal/tools/native/mutation_tools.go`](/Users/sam/dev/otter-camp/internal/tools/native/mutation_tools.go)
+  - widened the project-session meta-task guard again to block orchestration shells like:
+    - `Select and Decompose Next Bounded Task`
+    - `identify the next runnable bounded task, decompose it if necessary, and assign or queue it for execution`
+- [`internal/tools/native/native_integration_test.go`](/Users/sam/dev/otter-camp/internal/tools/native/native_integration_test.go)
+  - extended the same guard test with this orchestration-shell variant
+
+Focused verification passed:
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemain$' -count=1`
+
+Live proof achieved in this stretch:
+- the project-draft-listing coaching detector is now live-proven:
+  - old assistant `d9b71885-53a8-4191-aa9b-640f61953f40` is `failed`
+  - fresh continuation `21eb9c63-6226-4259-b53b-50ab67762d27` started from the cleaned `4 remaining draft project tasks` prompt
+- that same lane then created yet another junk orchestration shell:
+  - task `27`
+  - title `Select and Decompose Next Bounded Task`
+  - description `Inspect the current task tree, identify the next runnable bounded task, decompose it if necessary, and assign or queue it for execution.`
+  - metadata shows `playbook = backlog_decomposition`
+  - artifacts created under `planning/backlog-story-pack/oc-27-*`
+- rerun-88 has already advanced again to:
+  - current continuation message `d1e018e8-f583-4c3f-b438-e5fab0b1c2ea`
+  - current turn `013cd44d-9cd7-43b4-8bf4-9929d157fb53`
+  - current prompt count `6 remaining draft project tasks`
+
+Current narrowed seam:
+- child review-result shells are addressed locally but not yet proven live
+- the latest local fix also blocks the newly proven orchestration-shell family that created task 27
+- next proof target is the first rerun-88 continuation after deploying this orchestration-shell guard expansion
