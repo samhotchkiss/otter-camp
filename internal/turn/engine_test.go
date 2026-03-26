@@ -11834,6 +11834,26 @@ func TestIsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts(t *testi
 		t.Fatal("expected project continuation meta draft to be excluded from actionable draft count")
 	}
 
+	description = "Review the output of the end-to-end pipeline integration test, identify any issues or anomalies, and document detailed findings."
+	task = repo.ProjectTask{
+		Title:       "Analyze test results and document findings",
+		Description: &description,
+		WorkStatus:  "draft",
+	}
+	if isActionableProjectDraftTask(task) {
+		t.Fatal("expected review-results shell draft to be excluded from actionable draft count")
+	}
+
+	description = "Inspect the current task tree, identify the next runnable bounded task, decompose it if necessary, and assign or queue it for execution."
+	task = repo.ProjectTask{
+		Title:       "Select and Decompose Next Bounded Task",
+		Description: &description,
+		WorkStatus:  "draft",
+	}
+	if isActionableProjectDraftTask(task) {
+		t.Fatal("expected orchestration shell draft to be excluded from actionable draft count")
+	}
+
 	task = repo.ProjectTask{
 		Title:      "Speaker Ingestion Workflow Validation",
 		WorkStatus: "draft",

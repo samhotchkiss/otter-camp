@@ -3505,6 +3505,12 @@ func looksLikeProjectContinuationMetaDraft(title string, description *string) bo
 	if strings.Contains(normalized, "review and update pipeline test results") {
 		return true
 	}
+	if strings.Contains(normalized, "analyze test results and document findings") {
+		return true
+	}
+	if strings.Contains(normalized, "select and decompose next bounded task") {
+		return true
+	}
 	if strings.Contains(normalized, "prepare for next phase of project execution") {
 		return true
 	}
@@ -3515,9 +3521,18 @@ func looksLikeProjectContinuationMetaDraft(title string, description *string) bo
 			strings.Contains(normalized, "analyze") ||
 			strings.Contains(normalized, "inspect") ||
 			strings.Contains(normalized, "update") ||
+			strings.Contains(normalized, "document findings") ||
+			strings.Contains(normalized, "document detailed findings") ||
+			strings.Contains(normalized, "identify any issues or anomalies") ||
 			strings.Contains(normalized, "document any findings") ||
 			strings.Contains(normalized, "required updates") ||
 			strings.Contains(normalized, "results")) {
+		return true
+	}
+	if strings.Contains(normalized, "next runnable bounded task") &&
+		(strings.Contains(normalized, "decompose") ||
+			strings.Contains(normalized, "assign") ||
+			strings.Contains(normalized, "queue it for execution")) {
 		return true
 	}
 	if strings.Contains(normalized, "remaining draft task") &&

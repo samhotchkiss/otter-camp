@@ -9039,4 +9039,32 @@ Live proof achieved in this stretch:
 Current narrowed seam:
 - child review-result shells are addressed locally but not yet proven live
 - the latest local fix also blocks the newly proven orchestration-shell family that created task 27
-- next proof target is the first rerun-88 continuation after deploying this orchestration-shell guard expansion
+- next proof target is the first rerun-88 continuation after deploying this orchestration-shell guard expansion and the synchronized prompt-count filter for tasks 26/27
+
+## 2026-03-26 08:03 MDT
+
+Latest fixes landed locally:
+- [`internal/turn/engine.go`](/Users/sam/dev/otter-camp/internal/turn/engine.go)
+  - actionable-draft filtering now excludes:
+    - `Analyze test results and document findings`
+    - `Select and Decompose Next Bounded Task`
+- [`internal/jobqueue/worker.go`](/Users/sam/dev/otter-camp/internal/jobqueue/worker.go)
+  - worker-side continuation prompt generation now excludes those same shell families
+- [`internal/turn/engine_test.go`](/Users/sam/dev/otter-camp/internal/turn/engine_test.go)
+  - actionable-draft test now covers both task-26 and task-27 families
+
+Focused verification passed:
+- `go test ./internal/turn -run 'Test(LooksLikeGenericTaskRecoveryReplyDetectsProjectDraftListingCoachingReply|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegrationProjectSessionTaskCreateRejectsMetaReviewTaskWhenDraftsRemain$' -count=1`
+
+Live proof achieved in this stretch:
+- the orchestration-shell guard is already proven on the mutation path:
+  - old turn `013cd44d-9cd7-43b4-8bf4-9929d157fb53` failed on tool result `6c078e3b-17c4-4e6d-8ef8-674614bc78bb`
+  - `project_session_meta_task_disallowed`
+- however, the first continuation after that restart still reported `6 remaining draft project tasks`
+  - meaning tasks `26` and `27` were still being counted as actionable in prompt generation
+
+Current narrowed seam:
+- creation guards are catching more shell-task families correctly
+- prompt generation now needs live proof that it excludes both existing junk shells `26` and `27`
+- after this new sync patch deploys, the next correct rerun-88 continuation should drop back from `6` to `4` actionable drafts
