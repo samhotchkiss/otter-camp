@@ -1522,6 +1522,11 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 				"\nYour last review turn returned empty assistant output." +
 				" Do not reply with blank text, acknowledgement, or a review plan." +
 				" Your next assistant action must either emit the concrete flow.review_decision tool call for this review step or provide one short blocker sentence explaining why bounded review could not complete."
+			if resolvedPrompt, ok, promptErr := e.resolvedReviewApprovalRetryPrompt(ctx, session, taskRecord, latestUser); promptErr != nil {
+				return true, promptErr
+			} else if ok {
+				retryPrompt = resolvedPrompt
+			}
 			retryMessage, appendErr := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 				SessionID: session.ID,
 				TurnID:    &latestCompleted.ID,
@@ -1614,6 +1619,114 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 		return true, err
 	}
 	return enqueued, nil
+}
+
+func (e *TurnEngine) resolvedReviewApprovalRetryPrompt(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask, latestUser *repo.ChatMessage) (string, bool, error) {
+	if e == nil || e.messages == nil || latestUser == nil {
+		return "", false, nil
+	}
+	executionID := parseFlowNodeExecutionIDFromMetadata(latestUser.Metadata)
+	if executionID == uuid.Nil {
+		return "", false, nil
+	}
+	clean, err := e.reviewApprovalWorkspaceClean(ctx, taskRecord)
+	if err != nil {
+		return "", false, err
+	}
+	if !clean {
+		return "", false, nil
+	}
+	messages, err := e.messages.ListBySession(ctx, session.ID)
+	if err != nil {
+		return "", false, err
+	}
+	if !latestReviewApprovalAttemptBlockedOnDirtyWorkspace(messages, executionID) {
+		return "", false, nil
+	}
+	retryPrompt := e.buildTaskReviewActionPrompt(ctx, session) +
+		"\nYour previous approve attempt for this exact review step failed only because the workspace was dirty." +
+		" The workspace is now clean." +
+		" Reissue flow.review_decision immediately with decision=approve and flow_node_execution_id " + executionID.String() + "." +
+		" Do not reply with explanation text, a review plan, or placeholder arguments."
+	return retryPrompt, true, nil
+}
+
+func (e *TurnEngine) reviewApprovalWorkspaceClean(ctx context.Context, taskRecord repo.ProjectTask) (bool, error) {
+	root, err := e.taskWorkspaceRoot(ctx, taskRecord)
+	if err != nil {
+		return false, err
+	}
+	dirty, err := flowcommit.WorktreeDirty(ctx, root)
+	if err != nil {
+		return false, err
+	}
+	return !dirty, nil
+}
+
+func latestReviewApprovalAttemptBlockedOnDirtyWorkspace(messages []repo.ChatMessage, executionID uuid.UUID) bool {
+	if executionID == uuid.Nil {
+		return false
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "tool_result") {
+			continue
+		}
+		if !strings.Contains(msg.Content, "review_approval_requires_clean_workspace") {
+			continue
+		}
+		for j := i - 1; j >= 0; j-- {
+			assistant := messages[j]
+			if !strings.EqualFold(strings.TrimSpace(assistant.Role), "assistant") {
+				continue
+			}
+			if assistantEmittedReviewDecisionCall(assistant.Metadata, executionID, "approve") {
+				return true
+			}
+			break
+		}
+	}
+	return false
+}
+
+func parseFlowNodeExecutionIDFromMetadata(metadata json.RawMessage) uuid.UUID {
+	value := strings.TrimSpace(stringValue(messageMetadataMap(metadata)["flow_node_execution_id"]))
+	if value == "" {
+		return uuid.Nil
+	}
+	parsed, err := uuid.Parse(value)
+	if err != nil {
+		return uuid.Nil
+	}
+	return parsed
+}
+
+func assistantEmittedReviewDecisionCall(metadata json.RawMessage, executionID uuid.UUID, decision string) bool {
+	if executionID == uuid.Nil || strings.TrimSpace(decision) == "" || len(metadata) == 0 {
+		return false
+	}
+	var payload struct {
+		ToolCalls []struct {
+			Name      string         `json:"name"`
+			Arguments map[string]any `json:"arguments"`
+		} `json:"tool_calls"`
+	}
+	if err := json.Unmarshal(metadata, &payload); err != nil {
+		return false
+	}
+	for _, call := range payload.ToolCalls {
+		if !strings.EqualFold(strings.TrimSpace(call.Name), "flow.review_decision") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(stringValue(call.Arguments["decision"])), decision) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(stringValue(call.Arguments["flow_node_execution_id"])), executionID.String()) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (e *TurnEngine) handleCompletedProjectBootstrapEmptyAssistantTurn(

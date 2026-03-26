@@ -1231,9 +1231,15 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			  AND NOT EXISTS (
 			    SELECT 1
 			    FROM job_queue jq
+			    LEFT JOIN chat_message queued_message
+			      ON queued_message.id = (jq.payload->>'message_id')::uuid
 			    WHERE jq.job_type = $1
 			      AND jq.status IN ('pending', 'claimed')
 			      AND (jq.payload->>'session_id')::uuid = cs.id
+			      AND (
+			            COALESCE(cm.metadata->>'source', '') NOT IN ('task_review_action', 'task_recovery_resume')
+			         OR queued_message.id = cm.id
+			          )
 			  )
 			ORDER BY cs.id, cm.created_at DESC, cm.id DESC
 		)
@@ -1256,6 +1262,26 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		var latestTurnCompletedAt time.Time
 		if err := rows.Scan(&sessionID, &messageID, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
 			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
+		}
+		if _, err := w.pool.Exec(ctx, `
+			UPDATE job_queue jq
+			SET status = 'dead_letter',
+			    claimed_by = NULL,
+			    claimed_at = NULL,
+			    last_error = 'superseded stale message-attempt dispatch during task requeue',
+			    updated_at = now()
+			WHERE jq.job_type = $1
+			  AND jq.status IN ('pending', 'claimed')
+			  AND (jq.payload->>'session_id')::uuid = $2
+			  AND EXISTS (
+			    SELECT 1
+			    FROM chat_message selected_message
+			    WHERE selected_message.id = $3
+			      AND COALESCE(selected_message.metadata->>'source', '') IN ('task_review_action', 'task_recovery_resume')
+			  )
+			  AND (jq.payload->>'message_id')::uuid <> $3
+		`, agentTurnJobType, sessionID, messageID); err != nil {
+			return repaired, fmt.Errorf("purge superseded agent_turn dispatches for session %s: %w", sessionID, err)
 		}
 		if _, err := w.pool.Exec(ctx, `
 			UPDATE run
@@ -2668,6 +2694,21 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 		    END,
 		    updated_at = now()
 		WHERE status = 'claimed'
+		  AND NOT (
+			job_type = $2
+			AND EXISTS (
+				SELECT 1
+				FROM chat_session cs
+				JOIN chat_turn ct
+				  ON ct.id = cs.current_turn_id
+				 AND ct.status = 'in_progress'
+				JOIN model_invocation mi
+				  ON mi.turn_id = ct.id
+				 AND mi.status = 'in_flight'
+				WHERE cs.id = (job_queue.payload->>'session_id')::uuid
+				  AND cs.status = 'active'
+			)
+		  )
 		  AND (
 			claimed_at < $1
 			OR (

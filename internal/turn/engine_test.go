@@ -2324,6 +2324,190 @@ func TestHandleCompletedProjectBootstrapEmptyAssistantTurnRetriesWithFreshBootst
 	}
 }
 
+func TestHandleCompletedReviewTurnWithoutDecisionRetriesWithResolvedApprovePromptAfterDirtyWorkspaceFailure(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700002050, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	taskID := uuid.New()
+	projectID := uuid.New()
+	executionID := uuid.New()
+	reviewNodeID := uuid.New()
+
+	repoRoot := t.TempDir()
+	initializeTurnTestGitRepo(t, repoRoot)
+
+	projectRepo, ok := fixture.engine.projects.(*fakeProjectRepo)
+	if !ok {
+		t.Fatal("expected fake project repo")
+	}
+	if projectRepo.items == nil {
+		projectRepo.items = map[uuid.UUID]repo.Project{}
+	}
+	projectRepo.items[projectID] = repo.Project{
+		ID:             projectID,
+		OrganizationID: fixture.session.OrganizationID,
+		Slug:           "resolved-review-retry",
+	}
+	fixture.engine.environments = &fakeTurnProjectEnvironmentRepo{
+		items: map[uuid.UUID][]repo.ProjectEnvironment{
+			projectID: {{
+				ProjectID: projectID,
+				RepoPath:  stringPtr(repoRoot),
+				IsActive:  true,
+			}},
+		},
+	}
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.session.Metadata = mustRawJSON(t, map[string]any{
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.chat.session.Metadata = fixture.session.Metadata
+
+	taskRepo, ok := fixture.engine.tasks.(*fakeTaskRepo)
+	if !ok {
+		t.Fatal("expected fake task repo")
+	}
+	if taskRepo.items == nil {
+		taskRepo.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	taskRepo.items[taskID] = repo.ProjectTask{
+		ID:             taskID,
+		OrganizationID: fixture.session.OrganizationID,
+		ProjectID:      projectID,
+		TaskNumber:     13,
+		Title:          "Validate environment setup and runtime dependencies",
+		WorkStatus:     "review",
+		BranchName:     stringPtr("task/13"),
+	}
+
+	flowNodes, ok := fixture.engine.flowNodes.(*fakeFlowNodeRepo)
+	if !ok {
+		t.Fatal("expected fake flow node repo")
+	}
+	if flowNodes.items == nil {
+		flowNodes.items = map[uuid.UUID]repo.FlowNode{}
+	}
+	flowNodes.items[reviewNodeID] = repo.FlowNode{
+		ID:       reviewNodeID,
+		NodeType: "review",
+	}
+	fixture.flowAdvancer.activeExecution = &repo.FlowNodeExecution{
+		ID:         executionID,
+		TaskID:     taskID,
+		FlowNodeID: reviewNodeID,
+		Status:     "active",
+	}
+
+	userMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	userMessage.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	userMessage.Metadata = mustRawJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"flow_node_execution_id": executionID.String(),
+		"synthetic_user_message": true,
+	})
+	fixture.messages.upsert(userMessage)
+
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "assistant",
+		Status:    "final",
+		Metadata: buildToolCallMetadata([]ModelToolCall{{
+			ID:   "review-approve",
+			Name: "flow.review_decision",
+			Tier: "tier2",
+			Arguments: map[string]any{
+				"flow_node_execution_id": executionID.String(),
+				"decision":               "approve",
+			},
+		}}),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"output":{"error":"review_approval_requires_clean_workspace"}}`,
+	})
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "")
+
+	turns, err := fixture.engine.turns.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession turns: %v", err)
+	}
+	latestCompleted := latestCompletedTurn(turns)
+	if latestCompleted == nil || latestCompleted.ID != turnID {
+		t.Fatalf("latestCompleted = %#v, want turn %s", latestCompleted, turnID)
+	}
+	messages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	assistant := latestAssistantFinalForTurn(messages, turnID)
+	if assistant == nil {
+		t.Fatal("assistant message missing")
+	}
+
+	handled, err := fixture.engine.handleCompletedReviewTurnWithoutDecision(
+		context.Background(),
+		fixture.session,
+		taskRepo.items[taskID],
+		latestCompleted,
+		&userMessage,
+		assistant.Content,
+	)
+	if err != nil {
+		t.Fatalf("handleCompletedReviewTurnWithoutDecision: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("payload.retry_count = %#v, want 1", jobs[0].payload)
+	}
+	allMessages, err := fixture.messages.ListBySession(context.Background(), fixture.session.ID)
+	if err != nil {
+		t.Fatalf("ListBySession after retry: %v", err)
+	}
+	var retryPrompt *repo.ChatMessage
+	for i := range allMessages {
+		if allMessages[i].ID == jobs[0].payload.MessageID {
+			retryPrompt = &allMessages[i]
+			break
+		}
+	}
+	if retryPrompt == nil {
+		t.Fatal("missing retry prompt message")
+	}
+	if !strings.Contains(retryPrompt.Content, "workspace was dirty") {
+		t.Fatalf("retry prompt = %q, want dirty-workspace reference", retryPrompt.Content)
+	}
+	if !strings.Contains(retryPrompt.Content, "workspace is now clean") {
+		t.Fatalf("retry prompt = %q, want clean-workspace reference", retryPrompt.Content)
+	}
+	if !strings.Contains(retryPrompt.Content, "decision=approve") {
+		t.Fatalf("retry prompt = %q, want explicit approve instruction", retryPrompt.Content)
+	}
+	if !strings.Contains(retryPrompt.Content, executionID.String()) {
+		t.Fatalf("retry prompt = %q, want flow execution id %s", retryPrompt.Content, executionID)
+	}
+}
+
 func TestHandleCompletedProjectBootstrapGenericAssistantReplyRetriesWithFreshBootstrapPrompt(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	base := time.Unix(1700001000, 0).UTC()

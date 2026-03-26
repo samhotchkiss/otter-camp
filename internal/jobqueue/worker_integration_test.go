@@ -1431,6 +1431,219 @@ func TestJobWorkerRecoverStaleClaimsReleasesForeignAgentTurnClaimsQuickly(t *tes
 	}
 }
 
+func TestJobWorkerRecoverStaleClaimsKeepsClaimedAgentTurnWithLiveInvocation(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		WorkerID:             "stale-claim-live-invocation-worker",
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		StaleClaimThreshold:  45 * time.Millisecond,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "recover-stale-claims-keeps-live-invocation",
+		DisplayName: "Recover Stale Claims Keeps Live Invocation",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Live Invocation Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You continue live turns.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "recover-stale-claims-keeps-live-invocation-project",
+		DisplayName:    "Recover Stale Claims Keeps Live Invocation Project",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	provider, err := repo.NewModelProviderRepo(pool).Create(ctx, repo.ModelProvider{
+		Slug:        "recover-stale-claims-live-invocation-provider",
+		DisplayName: "Recover Stale Claims Live Invocation Provider",
+		APIBaseURL:  "https://provider.example/v1",
+		IsEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	connection, err := repo.NewProviderConnectionRepo(pool).Create(ctx, repo.ProviderConnection{
+		OrganizationID: org.ID,
+		ProviderID:     provider.ID,
+		DisplayName:    "Primary",
+		APIKeyRef:      "ref:recover-stale-claims-live-invocation",
+		IsEnabled:      true,
+	})
+	if err != nil {
+		t.Fatalf("create provider connection: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "recover-stale-claims-keeps-live-invocation-template",
+		DisplayName:    "Recover Stale Claims Keeps Live Invocation Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Keep claimed agent turn with live invocation",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Continue the active review.",
+		Status:    "pending",
+	})
+	if err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+	turn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "in_progress",
+		TriggerMessageID: &message.ID,
+	})
+	if err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, &turn.ID); err != nil {
+		t.Fatalf("set current turn: %v", err)
+	}
+
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, claimed_by, claimed_at, attempts, max_attempts, run_after, payload)
+		VALUES (
+			'agent_turn',
+			'claimed',
+			'dead-worker',
+			now() - interval '5 minutes',
+			1,
+			3,
+			now(),
+			$1::jsonb
+		)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, message.ID)).Scan(&jobID); err != nil {
+		t.Fatalf("insert claimed agent_turn job: %v", err)
+	}
+
+	var invocationID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO model_invocation (
+			organization_id,
+			model_provider_id,
+			provider_connection_id,
+			invocation_purpose,
+			status,
+			model_name,
+			is_streaming,
+			attempt_number,
+			agent_id,
+			project_id,
+			project_task_id,
+			session_id,
+			turn_id
+		)
+		VALUES (
+			$1,
+			$2,
+			$3,
+			'agent_turn',
+			'in_flight',
+			'qwen2.5:72b',
+			true,
+			1,
+			$4,
+			$5,
+			$6,
+			$7,
+			$8
+		)
+		RETURNING id
+	`, org.ID, provider.ID, connection.ID, agent.ID, project.ID, task.ID, session.ID, turn.ID).Scan(&invocationID); err != nil {
+		t.Fatalf("insert model invocation: %v", err)
+	}
+	if invocationID == uuid.Nil {
+		t.Fatal("expected model invocation id")
+	}
+
+	time.Sleep(120 * time.Millisecond)
+
+	recovered, err := worker.RecoverStaleClaims(ctx)
+	if err != nil {
+		t.Fatalf("RecoverStaleClaims failed: %v", err)
+	}
+	if recovered != 0 {
+		t.Fatalf("recovered rows = %d, want 0 for claimed agent_turn with live invocation", recovered)
+	}
+
+	var (
+		status    string
+		claimedBy *string
+		claimedAt *time.Time
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, claimed_by, claimed_at
+		FROM job_queue
+		WHERE id = $1
+	`, jobID).Scan(&status, &claimedBy, &claimedAt); err != nil {
+		t.Fatalf("query claimed job: %v", err)
+	}
+	if status != "claimed" {
+		t.Fatalf("job status = %q, want claimed", status)
+	}
+	if claimedBy == nil || *claimedBy != "dead-worker" {
+		t.Fatalf("job claimed_by = %v, want dead-worker", claimedBy)
+	}
+	if claimedAt == nil {
+		t.Fatal("expected claimed_at to remain set")
+	}
+}
+
 func TestJobWorkerReleaseClaimsForWorkerRequeuesGracefulShutdownClaims(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -7497,6 +7710,213 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	}
 	if requeuedSource != "project_bootstrap" {
 		t.Fatalf("requeued message source = %q, want project_bootstrap", requeuedSource)
+	}
+}
+
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSupersedesStalePendingOlderMessage(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-supersedes-stale-pending-older-message",
+		DisplayName: "Requeue Active Execution Supersedes Stale Pending Older Message",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover pending work.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-supersedes-stale-pending-older-message-project",
+		DisplayName:    "Requeue Active Execution Supersedes Stale Pending Older Message Project",
+		Description:    "Project for stale pending task dispatch coverage",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-supersedes-stale-pending-older-message-template",
+		DisplayName:    "Requeue Active Execution Supersedes Stale Pending Older Message Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Review",
+		NodeType:       "review",
+		Position:       1,
+		MaxVisits:      5,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Supersede stale pending review dispatch",
+		WorkStatus:      "review",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+		Metadata:        json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active execution: %v", err)
+	}
+	oldMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Review only. Use flow.review_decision.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_review_action","flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create old review message: %v", err)
+	}
+	if _, err := worker.Enqueue(ctx, nil, agentTurnJobType, 50, agentTurnKeyPayload{
+		SessionID:  session.ID,
+		MessageID:  oldMessage.ID,
+		RetryCount: 0,
+	}, nil); err != nil {
+		t.Fatalf("enqueue stale pending job: %v", err)
+	}
+	newMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Review only. Use flow.review_decision with the active execution id.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_review_action","flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create new review message: %v", err)
+	}
+	failedTurn, err := repo.NewChatTurnRepo(pool).Create(ctx, repo.ChatTurn{
+		SessionID:        session.ID,
+		TurnNumber:       1,
+		RespondingType:   "agent",
+		RespondingID:     agent.ID,
+		Status:           "failed",
+		TriggerMessageID: &newMessage.ID,
+		RetryCount:       0,
+	})
+	if err != nil {
+		t.Fatalf("create failed turn: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE chat_turn
+		SET completed_at = now(),
+		    error_message = 'empty assistant output'
+		WHERE id = $1
+	`, failedTurn.ID); err != nil {
+		t.Fatalf("update failed turn: %v", err)
+	}
+	if _, err := repo.NewChatSessionRepo(pool).UpdateCurrentTurn(ctx, session.ID, nil); err != nil {
+		t.Fatalf("clear current turn: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions = %d, want 1", requeued)
+	}
+
+	var (
+		status        string
+		requeuedMsgID uuid.UUID
+		retryCount    int
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       COALESCE((payload->>'retry_count')::int, 0)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND status = 'pending'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&status, &requeuedMsgID, &retryCount); err != nil {
+		t.Fatalf("query pending requeued job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("pending job status = %q, want pending", status)
+	}
+	if requeuedMsgID != newMessage.ID {
+		t.Fatalf("pending retry message_id = %s, want newest review message %s", requeuedMsgID, newMessage.ID)
+	}
+	if retryCount != 1 {
+		t.Fatalf("pending retry_count = %d, want 1", retryCount)
+	}
+
+	var oldJobStatus, oldJobError string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		  AND (payload->>'message_id')::uuid = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID, oldMessage.ID).Scan(&oldJobStatus, &oldJobError); err != nil {
+		t.Fatalf("query stale old-message job: %v", err)
+	}
+	if oldJobStatus != "dead_letter" {
+		t.Fatalf("old-message job status = %q, want dead_letter", oldJobStatus)
+	}
+	if !strings.Contains(oldJobError, "superseded stale message-attempt dispatch during task requeue") {
+		t.Fatalf("old-message job error = %q, want superseded task requeue marker", oldJobError)
 	}
 }
 

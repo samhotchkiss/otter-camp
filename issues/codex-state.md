@@ -2,6 +2,109 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-26 02:44 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `e917a7a7`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- targeted review-task stale-message recovery is fixed in code and proved live
+
+### New local patch: prefer newest review/recovery retry message for project-task requeue
+
+- root cause:
+  - live review session `4edc333d-2380-4262-b383-2d9cc53bc5e5` had an older stale pending `agent_turn` job:
+    - job `4a753f24-dbb4-4759-9809-80858eefc8fe`
+    - message `84ea1895-ad81-4f91-894a-770de1313c71`
+  - a newer failed retry already existed on the same session:
+    - message `9cf1c42d-6404-462a-85e6-6a66d814960e`
+    - turn `e95be5dc-b97f-4622-9c54-dc15610341c7`
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)` treated any pending/claimed session job as a blocker, so the stale older-message dispatch could prevent the newest retry message from ever being requeued
+- behavior:
+  - project-task execution requeue now ignores stale pending/claimed jobs for older messages when the selected retry message source is:
+    - `task_review_action`
+    - `task_recovery_resume`
+  - once a newer retry message is selected, older pending/claimed `agent_turn` dispatches for that same session are dead-lettered as superseded
+  - this logic is intentionally narrow and does not change the older bootstrap/supervisor/task-queue project-task recovery path
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RequeueActiveExecutionSessionsWithoutTurnsSupersedesStalePendingOlderMessage|RecoverStaleInProgressProjectTurnsWithoutOwnership|RecoverStaleClaimsKeepsClaimedAgentTurnWithLiveInvocation)' -count=1`
+- live proof:
+  - after rebuild/restart, session `4edc333d-2380-4262-b383-2d9cc53bc5e5` no longer stayed pinned behind the stale `84ea...` dispatch
+  - stale job `4a753f24-dbb4-4759-9809-80858eefc8fe` is now:
+    - `status = dead_letter`
+    - `last_error = purged stale project_task continuation`
+  - the worker created a fresh review-action message and turn on the same session instead:
+    - message `aa45db61-d0e7-456f-bf63-f93a8dc18e74`
+    - turn `f360a0bb-54c4-499a-b5ca-145a4e3488c9`
+
+### New local patch: stale-claim recovery now skips claimed agent_turns with live in-flight model invocations
+
+- root cause:
+  - after earlier restarts, the worker would log:
+    - `job queue: recovered stale claims before claim count=2`
+  - but the supposedly stale jobs still had:
+    - active sessions
+    - `current_turn_id` pointing at an `in_progress` turn
+    - `model_invocation.status = in_flight`
+  - `RecoverStaleClaims(...)` only looked at `claimed_at`, plus the foreign-worker fast-release branch, so long-running local qwen turns could be reclaimed while still genuinely alive
+- behavior:
+  - stale-claim recovery now skips any claimed `agent_turn` whose session still has:
+    - `current_turn_id`
+    - current turn `status = in_progress`
+    - an `in_flight` `model_invocation` on that turn
+  - that exclusion is applied before all stale-claim recovery branches, including the foreign-worker fast-release path
+- code:
+  - [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(RecoverStaleClaimsKeepsClaimedAgentTurnWithLiveInvocation|RecoverStaleInProgressProjectTurnsWithoutOwnership|RequeueActiveExecutionSessionsWithoutTurnsSupersedesStalePendingOlderMessage)' -count=1`
+- live proof:
+  - before the patch, worker logs on the local qwen runtime showed stale-claim recovery re-touching active long-running turns
+  - after the latest rebuild/restart, the worker started two new qwen turns and did **not** emit a fresh `recovered stale claims before claim` event while they remained in flight
+  - startup still legitimately failed three already-stale old model invocations from the previous build:
+    - `job queue: failed stale model invocations on startup count=3`
+  - the new claim-seam is improved; the remaining issue is downstream stale-model-invocation cleanup / session repair, not claim-age recovery
+
+### New local patch: empty review retry after dirty-workspace approval now forces explicit re-approve prompt once clean
+
+- root cause:
+  - on review session `4edc333d-2380-4262-b383-2d9cc53bc5e5`, an earlier assistant emitted a correct `flow.review_decision approve`
+  - the tool result then returned `review_approval_requires_clean_workspace`
+  - later retries came back with empty assistant output instead of reissuing approve once the worktree was clean
+- behavior:
+  - if a review retry is empty, and:
+    - the latest review message carries `flow_node_execution_id`
+    - the workspace is now clean
+    - message history shows a prior `flow.review_decision approve` for that same execution id followed by `review_approval_requires_clean_workspace`
+  - then the retry prompt is rewritten to explicitly instruct:
+    - workspace was dirty
+    - workspace is now clean
+    - reissue `flow.review_decision` with `decision=approve` and the exact `flow_node_execution_id`
+- code:
+  - [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+- focused verification:
+  - `go test ./internal/turn -run 'TestHandleCompletedReviewTurnWithoutDecisionRetriesWithResolvedApprovePromptAfterDirtyWorkspaceFailure' -count=1`
+- live state:
+  - this prompt rewrite is deployed
+  - the targeted session later hit a separate startup stale-invocation cleanup path before the empty-output branch could be re-proven end-to-end in production
+
+### Current live seam
+
+- session `4edc333d-2380-4262-b383-2d9cc53bc5e5` is no longer blocked on stale older-message review dispatches
+- after the latest restart:
+  - `current_turn_id = NULL`
+  - latest turn `f360a0bb-54c4-499a-b5ca-145a4e3488c9` is now `failed`
+  - failure reason:
+    - `recovered stale in-progress message turn without live job or execution; scheduling a fresh retry`
+  - older stale message job `4a753f24-dbb4-4759-9809-80858eefc8fe` remains dead-lettered
+  - stale supervisor job `496a3bb7-0ea5-442c-aa97-2c6c1bb9c639` is still `claimed` on the old worker and should be the next cleanup target
+- current critical path is no longer stale review-message selection or stale-claim reclamation of live qwen invocations
+- next seam:
+  - alignment between startup stale-model-invocation cleanup, stale claimed supervisor jobs, and project-task session repair after restart
+
 ## 2026-03-26 02:05 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `e917a7a7`
