@@ -137,6 +137,41 @@ func classifyTaskResumeDecision(taskRecord repo.ProjectTask, blockerReason strin
 	}
 }
 
+func (s *service) maybeResumeLegacyNonSubstantiveFlowRejection(ctx context.Context, taskRecord repo.ProjectTask, blockerReason string) (taskResumeDecision, bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "blocked") {
+		return taskResumeDecision{}, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(blockerReason), "flow rejection max visits exceeded") {
+		return taskResumeDecision{}, false, nil
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
+	if !ok || !hasDurableRecoveryCheckpoint(checkpoint) {
+		return taskResumeDecision{}, false, nil
+	}
+	targetPath := strings.TrimSpace(checkpoint.TargetPath)
+	if targetPath == "" {
+		return taskResumeDecision{}, false, nil
+	}
+	roots, err := s.recoveryWorkspaceRoots(ctx, taskRecord)
+	if err != nil {
+		return taskResumeDecision{}, false, err
+	}
+	targetBody, exists, err := readRecoveryWorkspaceFile(roots, targetPath)
+	if err != nil {
+		return taskResumeDecision{}, false, err
+	}
+	if !exists || !looksLikeLegacyNonSubstantiveExecutionResultsScaffold(targetPath, targetBody) {
+		return taskResumeDecision{}, false, nil
+	}
+	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
+	return taskResumeDecision{
+		resumable:     true,
+		blockerClass:  RecoveryBlockerClassDurableRecoveryCheckpoint,
+		blockerReason: blockerReason,
+		checkpoint:    &checkpoint,
+	}, true, nil
+}
+
 func recoveryResumeReasonMatchesReviewDecisionRequired(blockerReason string) bool {
 	normalized := strings.TrimSpace(blockerReason)
 	if normalized == "" {
@@ -158,6 +193,68 @@ func hasDurableRecoveryCheckpoint(checkpoint taskcheckpoint.RecoveryFileWriteChe
 		len(checkpoint.PriorFailureReasons) != 0 ||
 		strings.TrimSpace(checkpoint.HistoryStartMessageID) != "" ||
 		strings.TrimSpace(checkpoint.HaltTurnID) != ""
+}
+
+func looksLikeLegacyNonSubstantiveExecutionResultsScaffold(targetPath, content string) bool {
+	path := strings.ToLower(strings.TrimSpace(filepath.ToSlash(targetPath)))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(path, "planning/") ||
+		strings.HasPrefix(path, "review/") ||
+		strings.HasPrefix(path, "reviews/") ||
+		strings.HasPrefix(path, ".ottercamp/review/") ||
+		strings.HasPrefix(path, ".ottercamp/reviews/") {
+		return false
+	}
+	if !strings.HasPrefix(path, "work/") &&
+		!strings.Contains(path, "results") &&
+		!strings.Contains(path, "validation") &&
+		!strings.Contains(path, "report") {
+		return false
+	}
+	if !containsAllTaskResumeFragments(lower,
+		"## validation criteria",
+		"## evidence expectations",
+		"- define explicit pass/fail checks for each relevant stage.",
+		"- note the required evidence or observable outputs for each check.",
+		"- call out key failure conditions or edge cases reviewers should expect to verify.",
+		"- reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.",
+	) {
+		return false
+	}
+	return !containsAnyTaskResumeFragments(lower,
+		"## execution results",
+		"## observed results",
+		"## findings",
+		"## evidence collected",
+		"## test cases",
+		"- observed:",
+		"- result:",
+		"pass/fail decision",
+		"evidence file:",
+		"evidence path:",
+	)
+}
+
+func containsAllTaskResumeFragments(content string, fragments ...string) bool {
+	for _, fragment := range fragments {
+		if !strings.Contains(content, strings.ToLower(strings.TrimSpace(fragment))) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsAnyTaskResumeFragments(content string, fragments ...string) bool {
+	for _, fragment := range fragments {
+		if strings.Contains(content, strings.ToLower(strings.TrimSpace(fragment))) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *service) maybeRepairDurableRecoveryCheckpoint(ctx context.Context, taskRecord repo.ProjectTask, blockerReason string) (repo.ProjectTask, bool, error) {
@@ -513,6 +610,15 @@ func (s *service) recoveryWorkspaceRoots(ctx context.Context, taskRecord repo.Pr
 	roots, err := workspace.ProjectCompatibilityRoots("", orgRecord.Slug, projectRecord.Slug)
 	if err != nil {
 		return nil, err
+	}
+	if taskRecord.TaskNumber > 0 {
+		taskWorktreeRoot := filepath.Join(
+			workspace.ResolveDataDir(""),
+			"task-worktrees",
+			strings.TrimSpace(projectRecord.Slug),
+			fmt.Sprintf("task-%d", taskRecord.TaskNumber),
+		)
+		roots = append([]string{taskWorktreeRoot}, roots...)
 	}
 	if len(roots) == 0 {
 		return []string{projectRoot}, nil

@@ -2,6 +2,56 @@
 
 Local-only handoff for restarting work in `/Users/sam/dev/otter-camp`.
 
+## 2026-03-25 21:55 MDT update
+
+- deployed runtime is now local patch-on-top of pushed commit `821bf5c6`
+- tmux runtime remains `codex-e2e-20260324`
+- health is green after rebuild/restart
+- rerun-88 poisoned task 15 lane is no longer terminally blocked
+
+### New local patch: task resume now heals legacy max-visit blocks when the current target file is still a non-substantive scaffold in the task worktree
+
+- root cause:
+  - `internal/task/recovery_resume.go`
+  - blocked-task resume treated `flow rejection max visits exceeded` as permanently non-resumable before it considered whether the task still had a durable recovery checkpoint and a now-invalid scaffold target
+  - rerun-88 task 15 was exactly that case:
+    - durable checkpoint present
+    - current target file still the old generic scaffold
+    - target file lived under the dedicated task worktree, not under the project root
+  - recovery workspace resolution only searched project compatibility roots, so the resume path never saw the actual `Work/...` file under `task-worktrees/.../task-15`
+- behavior:
+  - blocked-task resume now has a narrow legacy-heal path for `flow rejection max visits exceeded`
+  - when a blocked task still has a durable recovery checkpoint and its current target file matches the now-invalid non-substantive results scaffold, resume treats it like a checkpointed recovery lane instead of a permanently terminal flow block
+  - recovery workspace resolution now searches the dedicated `task-worktrees/<project>/task-<n>` root before the project compatibility roots
+- code:
+  - [`internal/task/service.go`](../internal/task/service.go)
+  - [`internal/task/recovery_resume.go`](../internal/task/recovery_resume.go)
+  - [`internal/task/service_integration_test.go`](../internal/task/service_integration_test.go)
+- focused verification:
+  - `go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationResumeValidationBlockedTaskRepairsLegacyFlowRejectionScaffold$' -count=1`
+  - `go test -tags=integration ./internal/task -run 'TestTaskServiceIntegrationResume(MissingDurableRecoveryCheckpointRepairsFromWorkspaceEX325|ValidationBlockedTaskBypassesOutstandingProjectGate)$' -count=1`
+
+### Live proof after deploy
+
+- rerun-88 poisoned task:
+  - task `15`
+  - task id `4a4aaac6-9f18-4f63-a911-0ebc0cb5a65a`
+  - previous public behavior:
+    - `./bin/ottercamp task resume 4a4aaac6-9f18-4f63-a911-0ebc0cb5a65a`
+    - returned `422 task_resume_flow_rejection_max_visits`
+- after deploy:
+  - the same public resume call now succeeds
+  - task 15 moved back to `review`
+  - active review execution:
+    - `22829612-f360-4fbb-b5d5-58efac55b72a`
+    - `status = active`
+    - `visit_number = 2`
+  - active review session:
+    - `c38be1f2-9db6-45d4-a57d-f1ea57292d58`
+- current seam:
+  - the legacy poisoned max-visit block is healed
+  - rerun-88 is again constrained mostly by normal active lanes and provider backoff, not a permanently wedged legacy scaffold block
+
 ## 2026-03-25 21:47 MDT update
 
 - deployed runtime is now local patch-on-top of pushed commit `3c1924b3`

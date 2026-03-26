@@ -889,6 +889,15 @@ func (s *service) ResumeValidationBlockedTask(ctx context.Context, taskID uuid.U
 	}
 
 	decision := classifyTaskResumeDecision(taskRecord, blockerReason)
+	if !decision.resumable && decision.blockerClass == RecoveryBlockerClassFlowRejectionMaxVisits {
+		legacyDecision, ok, legacyErr := s.maybeResumeLegacyNonSubstantiveFlowRejection(ctx, taskRecord, blockerReason)
+		if legacyErr != nil {
+			return nil, legacyErr
+		}
+		if ok {
+			decision = legacyDecision
+		}
+	}
 	if !decision.resumable {
 		return nil, TaskResumeBlockedStateError{
 			BlockerClass:  decision.blockerClass,

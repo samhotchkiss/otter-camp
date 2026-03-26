@@ -1333,6 +1333,97 @@ func TestTaskServiceIntegrationResumeValidationBlockedTaskBypassesOutstandingPro
 	}
 }
 
+func TestTaskServiceIntegrationResumeValidationBlockedTaskRepairsLegacyFlowRejectionScaffold(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	t.Setenv("OTTERCAMP_DATA_DIR", t.TempDir())
+
+	org, project := seedTaskServiceOrgProject(t, ctx, pool, json.RawMessage(`{}`))
+	pmUser := seedTaskServiceUser(t, ctx, pool, org.ID, "resume-legacy-flow-rejection-pm", "admin")
+	pmAgent := seedTaskServiceAgent(t, ctx, pool, org.ID, "Resume Legacy Flow Rejection PM", "staff", "pm", "human_user", pmUser.ID)
+	assignPMToProject(t, ctx, pool, pmAgent.ID, project.ID)
+	template := seedTaskServiceFlowTemplate(t, ctx, pool, org.ID, project.ID)
+
+	svc := newTaskIntegrationService(t, pool)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	created, err := svc.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "Repair legacy flow rejection scaffold",
+		FlowTemplateID: &template.ID,
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "queued", Actor{Type: "system"}); err != nil {
+		t.Fatalf("TransitionStatus queued: %v", err)
+	}
+	if _, err := svc.TransitionStatus(ctx, created.ID, "in_progress", Actor{Type: "system", AllowNoActiveFlow: true}); err != nil {
+		t.Fatalf("TransitionStatus in_progress: %v", err)
+	}
+
+	const (
+		targetPath    = "Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md"
+		artifactPath  = ".ottercamp/recovery/Work/OC-15-TEST-SPEAKER-INGESTION-ERROR-HANDLING.md"
+		failureReason = "flow rejection max visits exceeded"
+	)
+	targetBody := strings.Join([]string{
+		"# Test speaker ingestion error handling",
+		"",
+		"## Objective",
+		"Test speaker ingestion error handling with malformed, incomplete, and edge-case inputs. Verify proper error responses and no data corruption.",
+		"",
+		"## Stages",
+		"- Ingestion",
+		"",
+		"## Validation Criteria",
+		"- Define explicit pass/fail checks for each relevant stage.",
+		"- Note the required evidence or observable outputs for each check.",
+		"- Call out key failure conditions or edge cases reviewers should expect to verify.",
+		"",
+		"## Evidence Expectations",
+		"- Reference the concrete files, logs, screenshots, or outputs that should exist when the work is complete.",
+	}, "\n")
+	writeTaskRecoveryWorkspaceFiles(t, project.Slug, targetPath, artifactPath, targetBody, failureReason)
+
+	currentTask, err := taskRepo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID current task: %v", err)
+	}
+	checkpoint, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(currentTask.Metadata, taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		ArtifactPath:  artifactPath,
+		FailureReason: failureReason,
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+	currentTask.Metadata = checkpoint
+	if _, err := taskRepo.Update(ctx, currentTask); err != nil {
+		t.Fatalf("Update task checkpoint metadata: %v", err)
+	}
+	if _, err := svc.MarkBlocked(ctx, created.ID, failureReason, Actor{Type: "system"}); err != nil {
+		t.Fatalf("MarkBlocked: %v", err)
+	}
+
+	resumed, err := svc.ResumeValidationBlockedTask(ctx, created.ID, Actor{Type: "human_user", ID: pmUser.ID})
+	if err != nil {
+		t.Fatalf("ResumeValidationBlockedTask: %v", err)
+	}
+	if resumed.WorkStatus != "queued" {
+		t.Fatalf("resumed work_status = %q, want queued", resumed.WorkStatus)
+	}
+	resumedCheckpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(resumed.Metadata)
+	if !ok {
+		t.Fatalf("expected durable recovery checkpoint to remain on resumed task, metadata=%s", string(resumed.Metadata))
+	}
+	if resumedCheckpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint target_path = %q, want %q", resumedCheckpoint.TargetPath, targetPath)
+	}
+}
+
 func TestTaskServiceIntegrationResumeMissingDurableRecoveryCheckpointRepairsFromWorkspaceEX325(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
