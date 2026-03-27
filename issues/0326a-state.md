@@ -3089,6 +3089,37 @@ Why this matters:
 - without this alias, a future correctly parent-scoped call using that same argument shape would have returned an empty set for the wrong reason
 - this keeps the newly added child-task lookup path permissive in the exact way the live model is already asking for it, without reopening the broader project-wide task listing surface
 
+## Update 06:00 MDT
+
+I tightened review rejection guidance for the next hot family: missing preferred deliverables.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - review prompts now say that if reading the preferred deliverable target returns `not_found`, the model should stop broad inspection and call `flow.review_decision reject`
+  - `reviewApprovalRetryPrompt(...)` now routes a retrying review directly to `flow.review_decision reject` when the last review turn already established that the preferred deliverable target itself is missing
+  - this is bounded to the preferred-target path parsed from the review prompt; it does not change generic secondary-artifact `not_found` handling
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - prompt coverage now asserts `not_found` is included in the reject guidance
+  - added focused retry-path coverage for a missing preferred deliverable target
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(BuildTaskReviewActionPromptIncludesPreferredDeliverableTarget|ReviewApprovalRetryPromptRejectsMissingPreferredDeliverable|HandleTurnCompletedEventBlocksRepeatedReviewFileReadNotFoundTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedRetriesWithoutReviewDecision)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- rebuilt/restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Live state right after deploy:
+
+- task-10 review session [`f83171e8-0068-4f1f-8776-8186daff3a0e`](../issues/0326a-state.md)
+  - fresh retry turn at `2026-03-27 05:58:53 MDT`
+  - assistant started with the preferred deliverable target as expected
+  - `file.read` returned `not_found`
+  - then Anthropic failed transiently before the assistant could emit the new `flow.review_decision reject`
+- so this slice is deployed and healthy, but its live behavioral proof is still pending a non-interrupted post-`not_found` review turn
+
 ## Update 05:40 MDT
 
 The orchestration-parent review prompt fix is now live-proven, and the next concrete leak is narrower.

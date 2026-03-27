@@ -1726,6 +1726,9 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 		return "", false, err
 	}
 	if !latestReviewApprovalAttemptBlockedOnDirtyWorkspace(messages, executionID) {
+		if retryPrompt, ok := reviewRetryPromptForMissingPreferredDeliverable(messages, latestCompleted, latestUser, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+			return retryPrompt, true, nil
+		}
 		if retryPrompt, ok := reviewRetryPromptForMissingRequiredTests(messages, latestCompleted, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
@@ -1815,6 +1818,56 @@ func reviewRetryPromptForMissingRequiredTests(messages []repo.ChatMessage, lates
 		" Stop searching for more files now." +
 		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the required test coverage or related test artifacts could not be verified from the delivered workspace." +
 		" Use the missing or inaccessible test artifacts as evidence." +
+		" Do not reply with explanation text, a review plan, or placeholder arguments."
+	return retryPrompt, true
+}
+
+func reviewRetryPromptForMissingPreferredDeliverable(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, executionID uuid.UUID, basePrompt string) (string, bool) {
+	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil || executionID == uuid.Nil {
+		return "", false
+	}
+	targetPath := parsePromptDeliverableTarget(latestUser.Content)
+	if targetPath == "" {
+		return "", false
+	}
+	turnMessages := messagesForTurn(messages, latestCompleted.ID)
+	if len(turnMessages) == 0 {
+		return "", false
+	}
+
+	firstFileReadResultSeen := false
+	firstFileReadWasNotFound := false
+	successfulTargetRead := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || !strings.EqualFold(strings.TrimSpace(toolName), "file.read") {
+			continue
+		}
+		errorCode := normalizeValidationFailureCode(errText)
+		if errorCode == "" {
+			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+		}
+		path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		if !firstFileReadResultSeen {
+			firstFileReadResultSeen = true
+			firstFileReadWasNotFound = errorCode == "not_found" && (path == "" || path == targetPath)
+		}
+		if errorCode == "" && path == targetPath && intValue(output["byte_size"]) > 0 {
+			successfulTargetRead = true
+		}
+	}
+	if successfulTargetRead || !firstFileReadWasNotFound {
+		return "", false
+	}
+
+	retryPrompt := basePrompt +
+		"\nYour last review attempt already established that the preferred deliverable target `" + targetPath + "` is missing from the workspace." +
+		" Do not search alternate paths, casing variants, sibling directories, or companion files now." +
+		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the expected deliverable `" + targetPath + "` is missing." +
+		" Use the missing preferred deliverable as the rejection evidence." +
 		" Do not reply with explanation text, a review plan, or placeholder arguments."
 	return retryPrompt, true
 }
@@ -20218,7 +20271,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 		targetPath := strings.TrimSpace(e.reviewPromptDeliverableTarget(ctx, session, taskRecord))
 		if targetPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable target `%s`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `%s` is missing.", targetPath, targetPath))
-			lines = append(lines, fmt.Sprintf("If reading `%s` returns `placeholder_deliverable` or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.", targetPath))
+			lines = append(lines, fmt.Sprintf("If reading `%s` returns `not_found`, `placeholder_deliverable`, or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.", targetPath))
 		}
 		if taskLooksLikeOrchestrationOnlyParent(taskRecord) {
 			lines = append(lines, "This task is an orchestration-only parent. Review the parent orchestration summary and the direct child-task outcomes, not missing companion planning artifacts.")

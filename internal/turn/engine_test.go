@@ -29584,6 +29584,9 @@ func TestBuildTaskReviewActionPromptIncludesPreferredDeliverableTarget(t *testin
 	if !strings.Contains(prompt, "placeholder_deliverable") || !strings.Contains(prompt, "flow.review_decision reject") {
 		t.Fatalf("prompt = %q, want placeholder rejection guidance", prompt)
 	}
+	if !strings.Contains(prompt, "not_found") {
+		t.Fatalf("prompt = %q, want missing-deliverable rejection guidance", prompt)
+	}
 	if !strings.Contains(prompt, "Do not inspect planning artifacts or list the full repository tree") {
 		t.Fatalf("prompt = %q, want bounded review guidance", prompt)
 	}
@@ -29803,6 +29806,95 @@ func TestFlowNodeExecutionIDFromSessionMetadata(t *testing.T) {
 	session.Metadata = json.RawMessage(`{"flow_node_execution_id":"not-a-uuid"}`)
 	if got := flowNodeExecutionIDFromSessionMetadata(session); got != nil {
 		t.Fatalf("flowNodeExecutionIDFromSessionMetadata() invalid = %v, want nil", got)
+	}
+}
+
+func TestReviewApprovalRetryPromptRejectsMissingPreferredDeliverable(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	description := "Validate review path validation. Deliverable: Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  10,
+				Title:       "Workstream B: Review Path Validation",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"bootstrap_first_wave_selected": true,
+				}),
+			},
+		},
+	}
+
+	latestUser := repo.ChatMessage{
+		ID:        uuid.New(),
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "pending",
+		Content:   fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session),
+	}
+	latestUser.Metadata = mustMarshalJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(latestUser)
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "I'll start by reading the preferred deliverable target.",
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"error": "not_found",
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "The preferred deliverable file is missing. Let me check alternate paths before deciding.",
+	})
+
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	retryPrompt, ok, err := fixture.engine.reviewApprovalRetryPrompt(context.Background(), fixture.session, taskRecord, &latestUser, &repo.ChatTurn{ID: turnID})
+	if err != nil {
+		t.Fatalf("reviewApprovalRetryPrompt: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected reject-oriented retry prompt")
+	}
+	if !strings.Contains(retryPrompt, "decision=reject") {
+		t.Fatalf("retryPrompt = %q, want reject guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md") {
+		t.Fatalf("retryPrompt = %q, want preferred deliverable path", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "Do not search alternate paths") {
+		t.Fatalf("retryPrompt = %q, want bounded missing-deliverable guidance", retryPrompt)
 	}
 }
 

@@ -958,3 +958,12 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - focused native integration coverage now proves `task.list(parent_task_id=..., status=all)` still returns the expected child tasks
     - runtime was rebuilt/restarted successfully at `2026-03-27 05:55 MDT`
     - `./bin/ottercamp health --output json` remained green after that deploy
+  - review rejection guidance is now tighter for missing preferred deliverables too:
+    - review prompts now treat `file.read -> not_found` on the preferred deliverable target the same way they already treated `placeholder_deliverable` and `mismatched_deliverable_context`
+    - review retry prompts now redirect immediately to `flow.review_decision reject` when a retrying review already established that the preferred deliverable target is missing
+    - focused turn-engine coverage is green for both the prompt copy and the retry-path redirect
+    - runtime was rebuilt/restarted successfully at `2026-03-27 06:00 MDT`
+    - first fresh post-deploy task-10 turn proved the new binary is live, but not the new reject behavior yet:
+      - it read the preferred target
+      - received `file.read -> not_found`
+      - then hit a transient provider failure before the assistant could emit `flow.review_decision reject`
