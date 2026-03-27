@@ -6656,6 +6656,27 @@ func TestIntegrationBootstrapSetupPersistCompletesRequestedSetupSteps(t *testing
 	}
 	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
 
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    projectID,
+		Name:         "repo-binding",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		ProjectID:      projectID,
+		AgentID:        actor.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign project agent: %v", err)
+	}
+
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
 		"scope_id":   projectID.String(),
@@ -6669,8 +6690,7 @@ func TestIntegrationBootstrapSetupPersistCompletesRequestedSetupSteps(t *testing
 	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
 
 	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
-		"completed_step_slugs": []string{"bind-repo-environment", "staff-project", "record-frank-sign-off"},
-		"sign_off_summary":     "Frank approved the bootstrap setup.",
+		"completed_step_slugs": []string{"bind-repo-environment", "staff-project"},
 	})
 	if err != nil {
 		t.Fatalf("bootstrap.setup.persist: %v", err)
@@ -6690,6 +6710,7 @@ func TestIntegrationBootstrapSetupPersistCompletesRequestedSetupSteps(t *testing
 		"validate-task-shape",
 		"attach-validate-flow-templates",
 		"select-first-wave",
+		"record-frank-sign-off",
 	}
 	if !reflect.DeepEqual(remaining, wantRemaining) {
 		t.Fatalf("remaining_step_slugs = %v, want %v", remaining, wantRemaining)
@@ -6698,22 +6719,278 @@ func TestIntegrationBootstrapSetupPersistCompletesRequestedSetupSteps(t *testing
 		t.Fatalf("message = %q, want incomplete checklist guidance", message)
 	}
 
-	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
-	if err != nil {
-		t.Fatalf("list project tasks: %v", err)
-	}
-	statuses := map[string]string{}
-	for _, taskRecord := range tasks {
-		metadata := metadataObject(taskRecord.Metadata)
-		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
-			continue
-		}
-		statuses[readStringValue(metadata["bootstrap_step_slug"])] = taskRecord.WorkStatus
-	}
-	for _, slug := range []string{"bind-repo-environment", "staff-project", "record-frank-sign-off"} {
+	statuses := bootstrapSetupStatusesBySlug(t, ctx, pool, projectID)
+	for _, slug := range []string{"bind-repo-environment", "staff-project"} {
 		if got := statuses[slug]; got != "done" {
 			t.Fatalf("bootstrap step %q status = %q, want done", slug, got)
 		}
+	}
+	if got := statuses["record-frank-sign-off"]; got == "done" {
+		t.Fatalf("record-frank-sign-off unexpectedly persisted as done")
+	}
+}
+
+func TestIntegrationBootstrapSetupPersistBlocksUnmaterializedChecklistAfterRepoBinding(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Persist Structural Gate",
+		"slug":        "bootstrap-persist-structural-gate-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap.setup.persist does not over-persist checklist steps before real bootstrap state exists.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    projectID,
+		Name:         "repo-binding",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap persist structural gate",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{
+			"bind-repo-environment",
+			"staff-project",
+			"decompose-workstreams",
+			"validate-task-shape",
+			"attach-validate-flow-templates",
+			"select-first-wave",
+			"record-frank-sign-off",
+		},
+		"sign_off_summary": "Frank approved the bootstrap setup.",
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist structural gate: %v", err)
+	}
+	if out["error"] != "bootstrap_step_not_ready" {
+		t.Fatalf("error = %v, want bootstrap_step_not_ready", out["error"])
+	}
+	if out["blocked_step_slug"] != "staff-project" {
+		t.Fatalf("blocked_step_slug = %v, want staff-project", out["blocked_step_slug"])
+	}
+	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "active non-starter project assignment") {
+		t.Fatalf("message = %q, want staffing guidance", got)
+	}
+	if out["status"] != "blocked" {
+		t.Fatalf("status = %v, want blocked", out["status"])
+	}
+	completedSteps := parseCompletedStepsPayload(t, out["completed_steps"])
+	if len(completedSteps) != 1 || readStringValue(completedSteps[0]["step_slug"]) != "bind-repo-environment" {
+		t.Fatalf("completed_steps = %#v, want only bind-repo-environment", completedSteps)
+	}
+	remaining := parseStringSlicePayload(t, out["remaining_step_slugs"])
+	wantRemaining := []string{
+		"staff-project",
+		"decompose-workstreams",
+		"validate-task-shape",
+		"attach-validate-flow-templates",
+		"select-first-wave",
+		"record-frank-sign-off",
+	}
+	if !reflect.DeepEqual(remaining, wantRemaining) {
+		t.Fatalf("remaining_step_slugs = %v, want %v", remaining, wantRemaining)
+	}
+
+	statuses := bootstrapSetupStatusesBySlug(t, ctx, pool, projectID)
+	if got := statuses["bind-repo-environment"]; got != "done" {
+		t.Fatalf("bind-repo-environment status = %q, want done", got)
+	}
+	for _, slug := range wantRemaining {
+		if got := statuses[slug]; got == "done" {
+			t.Fatalf("bootstrap step %q unexpectedly persisted as done", slug)
+		}
+	}
+}
+
+func TestIntegrationBootstrapSetupPersistBlocksFlowAndSignoffOvertrust(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+
+	projectOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "project.create", map[string]any{
+		"name":        "Bootstrap Persist Flow Gate",
+		"slug":        "bootstrap-persist-flow-gate-" + uuid.NewString()[:8],
+		"description": "Verify bootstrap.setup.persist blocks later checklist steps until flows and sign-off evidence exist.",
+	})
+	if err != nil {
+		t.Fatalf("project.create: %v", err)
+	}
+	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    projectID,
+		Name:         "repo-binding",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		ProjectID:      projectID,
+		AgentID:        actor.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign project agent: %v", err)
+	}
+
+	taskDescription := "Create the bounded first-wave content slice."
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "FW-1: Create the initial content slice",
+		Description:     &taskDescription,
+		WorkStatus:      "draft",
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+
+	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
+		"scope_type": "project",
+		"scope_id":   projectID.String(),
+		"mode":       "async",
+		"title":      "Bootstrap persist flow gate",
+	})
+	if err != nil {
+		t.Fatalf("session.create: %v", err)
+	}
+	sessionID := mustUUIDValue(t, sessionOut["session"].(map[string]any)["id"])
+	projectCtx := integrationExecCtxWithSession(orgID, actor.ID, sessionID)
+
+	out, err := executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs": []string{
+			"bind-repo-environment",
+			"staff-project",
+			"decompose-workstreams",
+			"validate-task-shape",
+			"attach-validate-flow-templates",
+			"select-first-wave",
+			"record-frank-sign-off",
+		},
+		"first_wave_task_numbers": []string{strconv.Itoa(taskRecord.TaskNumber)},
+		"sign_off_summary":        "Frank approved the bootstrap setup.",
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist flow gate: %v", err)
+	}
+	if out["error"] != "bootstrap_step_not_ready" {
+		t.Fatalf("error = %v, want bootstrap_step_not_ready", out["error"])
+	}
+	if out["blocked_step_slug"] != "attach-validate-flow-templates" {
+		t.Fatalf("blocked_step_slug = %v, want attach-validate-flow-templates", out["blocked_step_slug"])
+	}
+	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "current flow template attached") {
+		t.Fatalf("message = %q, want missing flow guidance", got)
+	}
+	completedSteps := parseCompletedStepsPayload(t, out["completed_steps"])
+	gotCompleted := make([]string, 0, len(completedSteps))
+	for _, item := range completedSteps {
+		gotCompleted = append(gotCompleted, readStringValue(item["step_slug"]))
+	}
+	wantCompleted := []string{"bind-repo-environment", "staff-project", "decompose-workstreams", "validate-task-shape"}
+	if !reflect.DeepEqual(gotCompleted, wantCompleted) {
+		t.Fatalf("completed_steps = %v, want %v", gotCompleted, wantCompleted)
+	}
+
+	statuses := bootstrapSetupStatusesBySlug(t, ctx, pool, projectID)
+	for _, slug := range wantCompleted {
+		if got := statuses[slug]; got != "done" {
+			t.Fatalf("bootstrap step %q status = %q, want done", slug, got)
+		}
+	}
+	for _, slug := range []string{"attach-validate-flow-templates", "select-first-wave", "record-frank-sign-off"} {
+		if got := statuses[slug]; got == "done" {
+			t.Fatalf("bootstrap step %q unexpectedly persisted as done", slug)
+		}
+	}
+
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
+	reloadedTask, err := repo.NewProjectTaskRepo(pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	reloadedTask.FlowTemplateID = &template.ID
+	if _, err := repo.NewProjectTaskRepo(pool).Update(ctx, reloadedTask); err != nil {
+		t.Fatalf("attach flow template: %v", err)
+	}
+
+	out, err = executor.Execute(projectCtx, "bootstrap.setup.persist", map[string]any{
+		"completed_step_slugs":    []string{"attach-validate-flow-templates", "select-first-wave", "record-frank-sign-off"},
+		"first_wave_task_numbers": []string{strconv.Itoa(taskRecord.TaskNumber)},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap.setup.persist signoff gate: %v", err)
+	}
+	if out["error"] != "sign_off_summary_required" {
+		t.Fatalf("error = %v, want sign_off_summary_required", out["error"])
+	}
+	if out["blocked_step_slug"] != "record-frank-sign-off" {
+		t.Fatalf("blocked_step_slug = %v, want record-frank-sign-off", out["blocked_step_slug"])
+	}
+	if got := fmt.Sprintf("%v", out["message"]); !strings.Contains(got, "sign_off_summary") {
+		t.Fatalf("message = %q, want sign_off_summary guidance", got)
+	}
+	completedSteps = parseCompletedStepsPayload(t, out["completed_steps"])
+	gotCompleted = gotCompleted[:0]
+	for _, item := range completedSteps {
+		gotCompleted = append(gotCompleted, readStringValue(item["step_slug"]))
+	}
+	wantCompleted = []string{"attach-validate-flow-templates", "select-first-wave"}
+	if !reflect.DeepEqual(gotCompleted, wantCompleted) {
+		t.Fatalf("completed_steps after signoff gate = %v, want %v", gotCompleted, wantCompleted)
+	}
+
+	statuses = bootstrapSetupStatusesBySlug(t, ctx, pool, projectID)
+	if got := statuses["attach-validate-flow-templates"]; got != "done" {
+		t.Fatalf("attach-validate-flow-templates status = %q, want done", got)
+	}
+	if got := statuses["select-first-wave"]; got != "done" {
+		t.Fatalf("select-first-wave status = %q, want done", got)
+	}
+	if got := statuses["record-frank-sign-off"]; got == "done" {
+		t.Fatalf("record-frank-sign-off unexpectedly persisted as done")
+	}
+
+	reloadedTask, err = repo.NewProjectTaskRepo(pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("reload selected task: %v", err)
+	}
+	if selected, ok := metadataObject(reloadedTask.Metadata)["bootstrap_first_wave_selected"].(bool); !ok || !selected {
+		t.Fatalf("bootstrap_first_wave_selected = %v, want true", metadataObject(reloadedTask.Metadata)["bootstrap_first_wave_selected"])
 	}
 }
 
@@ -6733,6 +7010,27 @@ func TestIntegrationBootstrapSetupPersistRequiresExplicitFirstWaveSelectionAndPe
 		t.Fatalf("project.create: %v", err)
 	}
 	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    projectID,
+		Name:         "repo-binding",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		ProjectID:      projectID,
+		AgentID:        actor.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign project agent: %v", err)
+	}
 
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
@@ -6762,11 +7060,11 @@ func TestIntegrationBootstrapSetupPersistRequiresExplicitFirstWaveSelectionAndPe
 	if err != nil {
 		t.Fatalf("create first task: %v", err)
 	}
-	secondDescription := "Execute the deferred later-wave validation slice."
+	secondDescription := "Execute the follow-on validation slice."
 	secondTask, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
 		OrganizationID:  orgID,
 		ProjectID:       projectID,
-		Title:           "Val-2: Deferred validation",
+		Title:           "Val-2: Execute follow-on validation",
 		Description:     &secondDescription,
 		WorkStatus:      "draft",
 		FlowTemplateID:  &template.ID,
@@ -6932,6 +7230,27 @@ func TestIntegrationBootstrapSetupPersistRejectsDependencyBlockedFirstWaveSelect
 		t.Fatalf("project.create: %v", err)
 	}
 	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(context.Background(), repo.ProjectEnvironment{
+		ProjectID:    projectID,
+		Name:         "repo-binding",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(context.Background(), repo.AgentProjectAssignment{
+		ProjectID:      projectID,
+		AgentID:        actor.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign project agent: %v", err)
+	}
 
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
@@ -7266,6 +7585,42 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 	}
 	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
 
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(context.Background(), repo.ProjectEnvironment{
+		ProjectID:    projectID,
+		Name:         "repo-binding",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(context.Background(), repo.AgentProjectAssignment{
+		ProjectID:      projectID,
+		AgentID:        actor.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign project agent: %v", err)
+	}
+	template := makeExecutableProjectFlowTemplate(t, ctx, pool, projectID)
+	taskDescription := "Execute the bounded first-wave implementation slice."
+	if _, err := repo.NewProjectTaskRepo(pool).Create(context.Background(), repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "FW-1: Execute the first bounded slice",
+		Description:     &taskDescription,
+		WorkStatus:      "draft",
+		AssignedAgentID: &actor.ID,
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	}); err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
 		"scope_id":   projectID.String(),
@@ -7362,6 +7717,7 @@ func TestIntegrationBootstrapSetupPersistAcceptsNaturalStepAliases(t *testing.T)
 
 func TestIntegrationBootstrapSetupPersistAcceptsExpandedNaturalStepAliases(t *testing.T) {
 	pool := testdb.New(t)
+	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	actor := testutil.MakeAgent(t, pool, orgID)
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
@@ -7375,6 +7731,40 @@ func TestIntegrationBootstrapSetupPersistAcceptsExpandedNaturalStepAliases(t *te
 		t.Fatalf("project.create: %v", err)
 	}
 	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    projectID,
+		Name:         "repo-binding",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		ProjectID:      projectID,
+		AgentID:        actor.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign project agent: %v", err)
+	}
+	taskDescription := "Draft the first bounded execution slice."
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "Task 1: Draft the first bounded execution slice",
+		Description:     &taskDescription,
+		WorkStatus:      "draft",
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	}); err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
 
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
@@ -7507,6 +7897,7 @@ func TestIntegrationBootstrapSetupPersistUnknownStepReturnsValidCanonicalSlugs(t
 
 func TestIntegrationBootstrapSetupPersistAcceptsFirstWaveTaskAliasExpansion(t *testing.T) {
 	pool := testdb.New(t)
+	ctx := context.Background()
 	orgID := testutil.MakeOrg(t, pool)
 	actor := testutil.MakeAgent(t, pool, orgID)
 	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
@@ -7520,6 +7911,40 @@ func TestIntegrationBootstrapSetupPersistAcceptsFirstWaveTaskAliasExpansion(t *t
 		t.Fatalf("project.create: %v", err)
 	}
 	projectID := mustUUIDValue(t, projectOut["project"].(map[string]any)["id"])
+
+	repoRoot := t.TempDir()
+	if _, err := repo.NewProjectEnvironmentRepo(pool).Create(ctx, repo.ProjectEnvironment{
+		ProjectID:    projectID,
+		Name:         "repo-binding",
+		DeliveryMode: "gated",
+		RepoPath:     func() *string { path := repoRoot; return &path }(),
+		TargetBranch: "main",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("create project environment: %v", err)
+	}
+	if _, err := repo.NewAgentProjectAssignmentRepo(pool).Assign(ctx, repo.AgentProjectAssignment{
+		ProjectID:      projectID,
+		AgentID:        actor.ID,
+		Role:           "worker",
+		AssignedByType: "agent",
+		AssignedByID:   &actor.ID,
+	}); err != nil {
+		t.Fatalf("assign project agent: %v", err)
+	}
+	taskDescription := "Draft the first bounded execution slice."
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  orgID,
+		ProjectID:       projectID,
+		Title:           "Task 1: Draft the first bounded execution slice",
+		Description:     &taskDescription,
+		WorkStatus:      "draft",
+		AssignedAgentID: &actor.ID,
+		CreatedByType:   "agent",
+		CreatedByID:     &actor.ID,
+	}); err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
 
 	sessionOut, err := executor.Execute(integrationExecCtxWith(orgID, actor.ID), "session.create", map[string]any{
 		"scope_type": "project",
@@ -8748,6 +9173,48 @@ func parseStringSlicePayload(t *testing.T, raw any) []string {
 		t.Fatalf("string slice payload = %T, want []string", raw)
 		return nil
 	}
+}
+
+func parseCompletedStepsPayload(t *testing.T, raw any) []map[string]any {
+	t.Helper()
+	switch typed := raw.(type) {
+	case []map[string]any:
+		out := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, item)
+		}
+		return out
+	case []any:
+		out := make([]map[string]any, 0, len(typed))
+		for i, item := range typed {
+			value, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("completed_steps[%d] = %T, want map[string]any", i, item)
+			}
+			out = append(out, value)
+		}
+		return out
+	default:
+		t.Fatalf("completed_steps = %T, want slice", raw)
+		return nil
+	}
+}
+
+func bootstrapSetupStatusesBySlug(t *testing.T, ctx context.Context, pool *pgxpool.Pool, projectID uuid.UUID) map[string]string {
+	t.Helper()
+	tasks, err := repo.NewProjectTaskRepo(pool).ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list project tasks: %v", err)
+	}
+	statuses := map[string]string{}
+	for _, taskRecord := range tasks {
+		metadata := metadataObject(taskRecord.Metadata)
+		if setupTask, _ := metadata["bootstrap_setup_task"].(bool); !setupTask {
+			continue
+		}
+		statuses[readStringValue(metadata["bootstrap_step_slug"])] = taskRecord.WorkStatus
+	}
+	return statuses
 }
 
 func parseUUIDSlicePayload(t *testing.T, raw any) []uuid.UUID {

@@ -3571,9 +3571,6 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		case !explicitFirstWaveSelection && len(executableCandidates) == 1:
 			selectedFirstWaveTaskIDs = map[uuid.UUID]struct{}{executableCandidates[0].ID: {}}
 		}
-		if err := e.persistBootstrapFirstWaveSelection(ctx, projectTasks, selectedFirstWaveTaskIDs); err != nil {
-			return nil, err
-		}
 	}
 	tasksBySlug := make(map[string]repo.ProjectTask)
 	for _, taskRecord := range projectTasks {
@@ -3588,9 +3585,33 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		}
 		tasksBySlug[slug] = taskRecord
 	}
+	missing := make([]string, 0)
+	for _, rawSlug := range stepSlugs {
+		slug := normalizeBootstrapStepSlug(rawSlug)
+		if slug == "" || slug == "bootstrap-governance-gate" {
+			continue
+		}
+		if _, exists := tasksBySlug[slug]; exists {
+			continue
+		}
+		missing = append(missing, slug)
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return map[string]any{
+			"error":              "unknown_bootstrap_step",
+			"missing_step_slugs": missing,
+			"valid_step_slugs":   validBootstrapSetupStepSlugs(),
+			"message":            "Use the canonical bootstrap setup step slugs returned in valid_step_slugs.",
+		}, nil
+	}
+
+	state, err := e.loadBootstrapSetupPersistState(ctx, projectID, projectTasks, selectedFirstWaveTaskIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	completed := make([]map[string]any, 0, len(stepSlugs))
-	missing := make([]string, 0)
 	signoffSummary, _ := readString(input, "sign_off_summary")
 	for _, rawSlug := range stepSlugs {
 		slug := normalizeBootstrapStepSlug(rawSlug)
@@ -3607,8 +3628,31 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 				})
 				continue
 			}
-			missing = append(missing, slug)
-			continue
+			return map[string]any{
+				"error":              "unknown_bootstrap_step",
+				"missing_step_slugs": []string{slug},
+				"valid_step_slugs":   validBootstrapSetupStepSlugs(),
+				"message":            "Use the canonical bootstrap setup step slugs returned in valid_step_slugs.",
+			}, nil
+		}
+		if blocked := buildBootstrapSetupPersistStepBlockedResponse(slug, state, signoffSummary); blocked != nil {
+			blocked["project_id"] = projectID
+			blocked["status"] = "blocked"
+			blocked["completed_steps"] = completed
+			blocked["setup_checklist_complete"] = false
+			blocked["remaining_step_slugs"] = bootstrapRemainingSetupStepSlugs(tasksBySlug)
+			if len(state.SelectedFirstWaveTaskIDs) > 0 {
+				blocked["selected_first_wave_task_ids"] = orderedUUIDStrings(state.SelectedFirstWaveTaskIDs)
+			}
+			if slug == "select-first-wave" && len(state.SelectableFirstWaveTasks) > 0 {
+				blocked["selectable_first_wave_tasks"] = state.SelectableFirstWaveTasks
+			}
+			return blocked, nil
+		}
+		if slug == "select-first-wave" {
+			if err := e.persistBootstrapFirstWaveSelection(ctx, projectTasks, state.SelectedFirstWaveTaskIDs); err != nil {
+				return nil, err
+			}
 		}
 		if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
 			payload := map[string]any{
@@ -3637,15 +3681,6 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 			"step_slug":   slug,
 			"work_status": taskRecord.WorkStatus,
 		})
-	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return map[string]any{
-			"error":              "unknown_bootstrap_step",
-			"missing_step_slugs": missing,
-			"valid_step_slugs":   validBootstrapSetupStepSlugs(),
-			"message":            "Use the canonical bootstrap setup step slugs returned in valid_step_slugs.",
-		}, nil
 	}
 	remaining := make([]string, 0)
 	for _, slug := range validBootstrapSetupStepSlugs() {
@@ -3684,6 +3719,298 @@ func (e *NativeToolExecutor) handleBootstrapSetupPersist(ctx context.Context, in
 		response["message"] = "Bootstrap setup checklist is fully persisted. The governance gate will complete automatically once validation passes."
 	}
 	return response, nil
+}
+
+type bootstrapSetupPersistState struct {
+	RepoBindingPresent       bool
+	AssignmentCount          int
+	PlannedTaskCount         int
+	PlannedLeafTaskCount     int
+	PlannedFlowTemplateCount int
+	SelectedFirstWaveTaskIDs map[uuid.UUID]struct{}
+	SelectableFirstWaveTasks []map[string]any
+	TaskShapeReady           bool
+	TaskShapeMessage         string
+	FirstMissingFlowTask     *repo.ProjectTask
+}
+
+func (e *NativeToolExecutor) loadBootstrapSetupPersistState(ctx context.Context, projectID uuid.UUID, projectTasks []repo.ProjectTask, selectedFirstWaveTaskIDs map[uuid.UUID]struct{}) (bootstrapSetupPersistState, error) {
+	state := bootstrapSetupPersistState{
+		TaskShapeReady:           true,
+		SelectedFirstWaveTaskIDs: cloneUUIDSet(selectedFirstWaveTaskIDs),
+	}
+	if projectID == uuid.Nil {
+		return state, nil
+	}
+
+	if e.environments != nil {
+		environments, err := e.environments.ListByProject(ctx, projectID)
+		if err != nil {
+			return state, err
+		}
+		state.RepoBindingPresent = projectsvc.HasProjectRepoBinding(environments)
+	}
+
+	if e.assignments != nil {
+		assignments, err := e.assignments.ListByProject(ctx, projectID)
+		if err != nil {
+			return state, err
+		}
+		state.AssignmentCount = e.countBootstrapMaterializedAssignments(ctx, assignments)
+	}
+
+	setupTaskIDs := make(map[uuid.UUID]struct{})
+	childCounts := make(map[uuid.UUID]int)
+	plannedFlowTemplateIDs := make(map[uuid.UUID]struct{})
+	for _, task := range projectTasks {
+		if task.ID == uuid.Nil {
+			continue
+		}
+		if bootstrapSetupTask(task) {
+			setupTaskIDs[task.ID] = struct{}{}
+		}
+		if bootstrapGateTask(task) || bootstrapSetupTask(task) {
+			continue
+		}
+		metadata := metadataObject(task.Metadata)
+		if selected, _ := metadata["bootstrap_first_wave_selected"].(bool); selected {
+			state.SelectedFirstWaveTaskIDs[task.ID] = struct{}{}
+		}
+		if parentIDText := strings.TrimSpace(readStringValue(metadata["decomposition_parent_task_id"])); parentIDText != "" {
+			if parentID, err := uuid.Parse(parentIDText); err == nil && parentID != uuid.Nil {
+				childCounts[parentID]++
+			}
+		}
+		if task.FlowTemplateID != nil && *task.FlowTemplateID != uuid.Nil {
+			plannedFlowTemplateIDs[*task.FlowTemplateID] = struct{}{}
+		}
+	}
+	state.PlannedFlowTemplateCount = len(plannedFlowTemplateIDs)
+
+	blockedTaskIDs, err := e.loadBootstrapBlockedTaskIDs(ctx, projectID)
+	if err != nil {
+		return state, err
+	}
+	state.SelectableFirstWaveTasks = bootstrapFirstWaveSelectionHints(bootstrapFirstWaveSelectableTasksExcludingBlocked(projectTasks, blockedTaskIDs))
+
+	for _, task := range projectTasks {
+		if bootstrapGateTask(task) || bootstrapSetupTask(task) {
+			continue
+		}
+		state.PlannedTaskCount++
+
+		metadata := metadataObject(task.Metadata)
+		if parentIDText := strings.TrimSpace(readStringValue(metadata["decomposition_parent_task_id"])); parentIDText != "" {
+			if parentID, err := uuid.Parse(parentIDText); err == nil && parentID != uuid.Nil {
+				if _, setupParent := setupTaskIDs[parentID]; setupParent && state.TaskShapeReady {
+					state.TaskShapeReady = false
+					state.TaskShapeMessage = fmt.Sprintf("Cannot persist `validate-task-shape` until bootstrap setup task %s no longer owns executable child work like task %d (%s).", parentID.String(), task.TaskNumber, task.Title)
+				}
+			}
+		}
+
+		childCount := childCounts[task.ID]
+		prepared, decompErr := taskdecomp.PrepareQueueDecomposition(taskdecomp.QueueDecompositionInput{
+			ParentTaskID: task.ID,
+			Title:        task.Title,
+			Description:  task.Description,
+			Metadata:     task.Metadata,
+		})
+		if decompErr != nil {
+			if errors.Is(decompErr, taskdecomp.ErrBoundedTaskTooLarge) && childCount == 0 {
+				if state.TaskShapeReady {
+					state.TaskShapeReady = false
+					state.TaskShapeMessage = fmt.Sprintf("Cannot persist `validate-task-shape` until task %d (%s) is decomposed into bounded executable child tasks.", task.TaskNumber, task.Title)
+				}
+				continue
+			}
+			return state, decompErr
+		}
+		if prepared.Applied && childCount == 0 {
+			if state.TaskShapeReady {
+				state.TaskShapeReady = false
+				state.TaskShapeMessage = fmt.Sprintf("Cannot persist `validate-task-shape` until task %d (%s) is decomposed into bounded executable child tasks.", task.TaskNumber, task.Title)
+			}
+			continue
+		}
+		if childCount > 0 {
+			continue
+		}
+		state.PlannedLeafTaskCount++
+		if (task.FlowTemplateID == nil || *task.FlowTemplateID == uuid.Nil) && state.FirstMissingFlowTask == nil {
+			taskCopy := task
+			state.FirstMissingFlowTask = &taskCopy
+		}
+	}
+
+	return state, nil
+}
+
+func (e *NativeToolExecutor) countBootstrapMaterializedAssignments(ctx context.Context, assignments []repo.AgentProjectAssignment) int {
+	if len(assignments) == 0 {
+		return 0
+	}
+	if e == nil || e.agents == nil {
+		count := 0
+		for _, assignment := range assignments {
+			if assignment.IsActive && assignment.AgentID != uuid.Nil {
+				count++
+			}
+		}
+		return count
+	}
+
+	count := 0
+	for _, assignment := range assignments {
+		if !assignment.IsActive || assignment.AgentID == uuid.Nil {
+			continue
+		}
+		agentRecord, err := e.agents.GetByID(ctx, assignment.AgentID)
+		if err != nil {
+			count++
+			continue
+		}
+		if agentRecord.IsStarterTrio {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func cloneUUIDSet(src map[uuid.UUID]struct{}) map[uuid.UUID]struct{} {
+	if len(src) == 0 {
+		return make(map[uuid.UUID]struct{})
+	}
+	dst := make(map[uuid.UUID]struct{}, len(src))
+	for id := range src {
+		if id == uuid.Nil {
+			continue
+		}
+		dst[id] = struct{}{}
+	}
+	return dst
+}
+
+func bootstrapRemainingSetupStepSlugs(tasksBySlug map[string]repo.ProjectTask) []string {
+	remaining := make([]string, 0)
+	for _, slug := range validBootstrapSetupStepSlugs() {
+		if slug == "bootstrap-governance-gate" {
+			continue
+		}
+		taskRecord, exists := tasksBySlug[slug]
+		if !exists || !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "done") {
+			remaining = append(remaining, slug)
+		}
+	}
+	return remaining
+}
+
+func buildBootstrapSetupPersistStepBlockedResponse(slug string, state bootstrapSetupPersistState, signoffSummary string) map[string]any {
+	blocked := func(message string) map[string]any {
+		out := map[string]any{
+			"error":             "bootstrap_step_not_ready",
+			"blocked_step_slug": slug,
+			"message":           message,
+			"bootstrap_state": map[string]any{
+				"repo_binding_present":        state.RepoBindingPresent,
+				"assignment_count":            state.AssignmentCount,
+				"planned_task_count":          state.PlannedTaskCount,
+				"planned_leaf_task_count":     state.PlannedLeafTaskCount,
+				"planned_flow_template_count": state.PlannedFlowTemplateCount,
+			},
+		}
+		return out
+	}
+
+	switch slug {
+	case "bind-repo-environment":
+		if state.RepoBindingPresent {
+			return nil
+		}
+		return blocked("Cannot persist `bind-repo-environment` until the project has a persisted repo/environment binding.")
+	case "staff-project":
+		if state.AssignmentCount > 0 {
+			return nil
+		}
+		return blocked("Cannot persist `staff-project` until at least one active non-starter project assignment exists.")
+	case "decompose-workstreams":
+		if state.PlannedTaskCount > 0 {
+			return nil
+		}
+		return blocked("Cannot persist `decompose-workstreams` until bounded non-bootstrap project tasks have been created.")
+	case "validate-task-shape":
+		if state.PlannedTaskCount == 0 {
+			return blocked("Cannot persist `validate-task-shape` until bounded non-bootstrap project tasks have been created.")
+		}
+		if state.TaskShapeReady {
+			return nil
+		}
+		return blocked(state.TaskShapeMessage)
+	case "attach-validate-flow-templates":
+		if state.PlannedTaskCount == 0 {
+			return blocked("Cannot persist `attach-validate-flow-templates` until bounded non-bootstrap project tasks have been created.")
+		}
+		if !state.TaskShapeReady {
+			return blocked(state.TaskShapeMessage)
+		}
+		if state.PlannedLeafTaskCount == 0 {
+			return blocked("Cannot persist `attach-validate-flow-templates` until at least one bounded executable project task is ready for a flow attachment.")
+		}
+		if state.FirstMissingFlowTask != nil {
+			return blocked(fmt.Sprintf("Cannot persist `attach-validate-flow-templates` until task %d (%s) has a current flow template attached.", state.FirstMissingFlowTask.TaskNumber, state.FirstMissingFlowTask.Title))
+		}
+		if state.PlannedFlowTemplateCount == 0 {
+			return blocked("Cannot persist `attach-validate-flow-templates` until at least one current flow template is attached to the bounded executable project tasks.")
+		}
+		return nil
+	case "select-first-wave":
+		if state.PlannedTaskCount == 0 {
+			return blocked("Cannot persist `select-first-wave` until bounded non-bootstrap project tasks have been created.")
+		}
+		if !state.TaskShapeReady {
+			return blocked(state.TaskShapeMessage)
+		}
+		if state.FirstMissingFlowTask != nil || state.PlannedFlowTemplateCount == 0 {
+			return blocked("Cannot persist `select-first-wave` until bounded executable project tasks have current flow templates attached.")
+		}
+		if len(state.SelectedFirstWaveTaskIDs) == 0 {
+			if len(state.SelectableFirstWaveTasks) == 0 {
+				return blocked("Cannot persist `select-first-wave` yet because no bounded selectable project tasks exist. Create or repair the executable child tasks first.")
+			}
+			return blocked("Cannot persist `select-first-wave` until an exact runnable subset is selected. Include `first_wave_task_ids` or `first_wave_task_numbers` for the chosen bounded tasks.")
+		}
+		return nil
+	case "record-frank-sign-off":
+		if !state.RepoBindingPresent {
+			return blocked("Cannot persist `record-frank-sign-off` until the project has a persisted repo/environment binding.")
+		}
+		if state.AssignmentCount == 0 {
+			return blocked("Cannot persist `record-frank-sign-off` until at least one active non-starter project assignment exists.")
+		}
+		if state.PlannedTaskCount == 0 {
+			return blocked("Cannot persist `record-frank-sign-off` until bounded non-bootstrap project tasks have been created.")
+		}
+		if !state.TaskShapeReady {
+			return blocked(state.TaskShapeMessage)
+		}
+		if state.FirstMissingFlowTask != nil || state.PlannedFlowTemplateCount == 0 {
+			return blocked("Cannot persist `record-frank-sign-off` until bounded executable project tasks have current flow templates attached.")
+		}
+		if len(state.SelectedFirstWaveTaskIDs) == 0 {
+			return blocked("Cannot persist `record-frank-sign-off` until the first-wave subset is selected and persisted.")
+		}
+		if strings.TrimSpace(signoffSummary) == "" {
+			return map[string]any{
+				"error":             "sign_off_summary_required",
+				"blocked_step_slug": slug,
+				"message":           "When persisting `record-frank-sign-off`, include a non-empty `sign_off_summary`.",
+			}
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 func resolveBootstrapFirstWaveSelection(input map[string]any, tasks []repo.ProjectTask) (map[uuid.UUID]struct{}, bool, error) {
@@ -5210,7 +5537,7 @@ func (e *NativeToolExecutor) handleTaskAddDependency(ctx context.Context, input 
 		return nil, err
 	} else if existingID != uuid.Nil {
 		return map[string]any{
-			"dependency_id":   existingID,
+			"dependency_id":  existingID,
 			"already_exists": true,
 		}, nil
 	}
