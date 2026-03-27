@@ -3164,7 +3164,8 @@ Deploy status:
 
 - code complete
 - tests green
-- runtime restart/live proof of the new kickoff wording is still pending at the time of this note
+- runtime is now rebuilt/restarted on the latest binary and `./bin/ottercamp health --output json` is `ok`
+- fresh live proof of the new kickoff wording is still pending because the only observed `task 11` `flow.rejected` kickoff on this path predates the deploy
 
 ## Update 04:55 MDT
 

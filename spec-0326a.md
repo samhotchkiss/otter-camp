@@ -879,6 +879,8 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
   - focused control-plane coverage now proves:
     - the queue kickoff message for orchestration-only parents carries bounded-child repair guidance
     - the `flow.rejected` kickoff variant adds explicit rejection-recovery guidance for child-task repair
+  - runtime is now rebuilt/restarted and healthy on the latest binary
+  - fresh live proof is still pending because the only observed task-11 session on this path was created before the new kickoff wording was deployed
 - project-continuation read-only repair widened again:
   - `session.list` and `inbox.list` are now treated as read-only discovery tools in the same continuation auto-queue path
   - this closes the remaining observed browse-only project continuation gaps from live `max_tool_calls` turns like `e8556561-...` and `eae611d8-...`
