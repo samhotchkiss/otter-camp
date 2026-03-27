@@ -19610,6 +19610,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 		targetPath := strings.TrimSpace(e.reviewPromptDeliverableTarget(ctx, session, taskRecord))
 		if targetPath != "" {
 			lines = append(lines, fmt.Sprintf("Start with the preferred deliverable target `%s`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `%s` is missing.", targetPath, targetPath))
+			lines = append(lines, fmt.Sprintf("If reading `%s` returns `placeholder_deliverable` or `mismatched_deliverable_context`, stop broad inspection and call flow.review_decision reject using that tool result as evidence.", targetPath))
 		}
 		if contracts := reviewPromptArtifactContracts(taskRecord); len(contracts) == 0 {
 			lines = append(lines, "Do not invent companion planning-artifact requirements from neighboring tasks, generic playbook assumptions, or filenames alone. If the current task metadata does not carry an explicit artifact contract, review the actual deliverable files against this task's title and description only.")

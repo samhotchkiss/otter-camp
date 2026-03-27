@@ -2625,3 +2625,8 @@ Live proof after the final review-task gate change:
     - `error=placeholder_deliverable`
     - `deliverable_path=src/pipeline_logger.py`
 - this is the exact live seam that had been failing one restart earlier, when the same `src/pipeline_logger.py` read returned raw prompt-copy content instead of a native guard
+- the next surviving seam is narrower:
+  - after seeing `placeholder_deliverable`, the review model is still narrating “let me check” / “let me inspect” and drifting into task metadata or git history instead of calling `flow.review_decision reject`
+  - I added the next prompt hardening for that exact shape:
+    - when the preferred target returns `placeholder_deliverable` or `mismatched_deliverable_context`, stop broad inspection and call `flow.review_decision reject` using that tool result as evidence
+  - focused turn-engine coverage for that prompt contract is green; live proof is the next step
