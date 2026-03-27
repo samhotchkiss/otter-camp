@@ -1439,7 +1439,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workspace.selectedProjectID = ""
 		m.workspace.selectedProject = nil
 		m.workspace.selectedTaskID = ""
-		return m, loadSidebarDataCmd(m.runtimeHints)
+		cmds := []tea.Cmd{loadSidebarDataCmd(m.runtimeHints)}
+		if cmd := loadOperatorDashboardCmd(m.runtimeHints); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
 	case statusClearMsg:
 		// EX-105: only clear if the generation matches (no newer status was set).
 		if typed.Generation == m.statusGeneration && m.statusMessage != "" {
