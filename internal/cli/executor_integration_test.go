@@ -6,7 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -274,7 +277,7 @@ func TestExecutorIntegrationPathTraversalRejectedBeforeExecution(t *testing.T) {
 	}
 }
 
-func TestIntegrationTaskScopedCLIExecuteSharesProjectWorkspaceRootEX303(t *testing.T) {
+func TestIntegrationTaskScopedCLIExecuteSharesTaskWorkspaceRootEX303(t *testing.T) {
 	fixture := newTaskWorkspaceFixture(t)
 
 	if _, err := fixture.nativeExecutor.Execute(fixture.ctx, "file.write", map[string]any{
@@ -289,8 +292,8 @@ func TestIntegrationTaskScopedCLIExecuteSharesProjectWorkspaceRootEX303(t *testi
 	if err != nil {
 		t.Fatalf("cli.execute pwd: %v", err)
 	}
-	if got := stdoutInlineValue(t, pwdOut); got != fixture.workspaceRoot+"\n" {
-		t.Fatalf("pwd stdout = %q, want %q", got, fixture.workspaceRoot+"\\n")
+	if got := stdoutInlineValue(t, pwdOut); got != fixture.taskRoot+"\n" {
+		t.Fatalf("pwd stdout = %q, want %q", got, fixture.taskRoot+"\\n")
 	}
 
 	catOut, err := fixture.nativeExecutor.Execute(fixture.ctx, "cli.execute", fixture.cliInput("cat notes/plan.md"))
@@ -636,6 +639,8 @@ type taskWorkspaceFixture struct {
 	runID          uuid.UUID
 	runStepID      uuid.UUID
 	workspaceRoot  string
+	taskNumber     int
+	taskRoot       string
 }
 
 func newTaskWorkspaceFixture(t *testing.T) taskWorkspaceFixture {
@@ -680,6 +685,7 @@ func newTaskWorkspaceFixture(t *testing.T) taskWorkspaceFixture {
 	executor := NewExecutor(ExecutorOptions{
 		Executions: NewRepository(pool),
 		Projects:   repopkg.NewProjectRepo(pool),
+		Tasks:      repopkg.NewProjectTaskRepo(pool),
 		DataDir:    dataDir,
 	})
 	nativeExecutor := nativetools.NewExecutor(nativetools.ExecutorOptions{
@@ -687,6 +693,27 @@ func newTaskWorkspaceFixture(t *testing.T) taskWorkspaceFixture {
 		DataDir: dataDir,
 		CLI:     executor,
 	})
+
+	workspaceRoot := filepath.Join(resolvedDataDir, "workspaces", project.Slug)
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("mkdir workspace root: %v", err)
+	}
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = workspaceRoot
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, strings.TrimSpace(string(out)))
+		}
+	}
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGit("add", "README.md")
+	runGit("commit", "-m", "seed")
 
 	return taskWorkspaceFixture{
 		nativeExecutor: nativeExecutor,
@@ -701,7 +728,9 @@ func newTaskWorkspaceFixture(t *testing.T) taskWorkspaceFixture {
 		agentID:       agent.ID,
 		runID:         runRecord.ID,
 		runStepID:     step.ID,
-		workspaceRoot: filepath.Join(resolvedDataDir, "workspaces", project.Slug),
+		workspaceRoot: workspaceRoot,
+		taskNumber:    task.TaskNumber,
+		taskRoot:      filepath.Join(resolvedDataDir, "task-worktrees", project.Slug, "task-"+strconv.Itoa(task.TaskNumber)),
 	}
 }
 

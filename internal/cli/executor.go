@@ -61,6 +61,10 @@ type ProjectReader interface {
 	GetByID(ctx context.Context, id uuid.UUID) (repo.Project, error)
 }
 
+type TaskReader interface {
+	GetByID(ctx context.Context, id uuid.UUID) (repo.ProjectTask, error)
+}
+
 type SecretResolver interface {
 	ResolveRef(ctx context.Context, orgID uuid.UUID, ref string) (string, error)
 }
@@ -79,6 +83,7 @@ type ExecutorOptions struct {
 	Artifacts     ArtifactWriter
 	Events        RunEventWriter
 	Projects      ProjectReader
+	Tasks         TaskReader
 	SecretService SecretResolver
 	Store         storage.Store
 	DataDir       string
@@ -93,6 +98,7 @@ type Executor struct {
 	artifacts  ArtifactWriter
 	events     RunEventWriter
 	projects   ProjectReader
+	tasks      TaskReader
 	secrets    SecretResolver
 	store      storage.Store
 	dataDir    string
@@ -147,6 +153,7 @@ func NewExecutor(opts ExecutorOptions) *Executor {
 		artifacts:  opts.Artifacts,
 		events:     opts.Events,
 		projects:   opts.Projects,
+		tasks:      opts.Tasks,
 		secrets:    opts.SecretService,
 		store:      opts.Store,
 		dataDir:    workspace.ResolveDataDir(opts.DataDir),
@@ -166,6 +173,9 @@ func NewExecutor(opts ExecutorOptions) *Executor {
 	}
 	if instance.projects == nil && opts.Pool != nil {
 		instance.projects = repo.NewProjectRepo(opts.Pool)
+	}
+	if instance.tasks == nil && opts.Pool != nil {
+		instance.tasks = repo.NewProjectTaskRepo(opts.Pool)
 	}
 	if instance.now == nil {
 		instance.now = func() time.Time { return time.Now().UTC() }
@@ -519,7 +529,7 @@ func (e *Executor) resolveWorkingDirectory(ctx context.Context, orgID uuid.UUID,
 	root := strings.TrimSpace(e.root)
 	if root == "" {
 		var err error
-		root, err = workspace.ProjectRootByID(ctx, e.projects, e.dataDir, orgID, input.ProjectID)
+		root, err = e.resolveExecutionRoot(ctx, orgID, input)
 		if err != nil {
 			return "", err
 		}
@@ -536,6 +546,53 @@ func (e *Executor) resolveWorkingDirectory(ctx context.Context, orgID uuid.UUID,
 		return "", err
 	}
 	return resolved, nil
+}
+
+func (e *Executor) resolveExecutionRoot(ctx context.Context, orgID uuid.UUID, input CLIExecuteInput) (string, error) {
+	projectRoot, projectRecord, err := e.resolveProjectRoot(ctx, orgID, input.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	if input.TaskID == uuid.Nil || e.tasks == nil {
+		return projectRoot, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, input.TaskID)
+	if err != nil {
+		return "", err
+	}
+	if taskRecord.ProjectID != uuid.Nil && input.ProjectID != uuid.Nil && taskRecord.ProjectID != input.ProjectID {
+		return "", fmt.Errorf("task project mismatch")
+	}
+	if taskRecord.OrganizationID != uuid.Nil && orgID != uuid.Nil && taskRecord.OrganizationID != orgID {
+		return "", fmt.Errorf("task organization mismatch")
+	}
+	taskRoot, err := nativetools.ResolveTaskWorkspaceRoot(ctx, e.dataDir, projectRoot, projectRecord, taskRecord, e.command)
+	if err == nil {
+		return taskRoot, nil
+	}
+	slog.Warn("cli task workspace resolution fell back to project root", "task_id", taskRecord.ID, "project_id", projectRecord.ID, "error", err)
+	return projectRoot, nil
+}
+
+func (e *Executor) resolveProjectRoot(ctx context.Context, orgID, projectID uuid.UUID) (string, repo.Project, error) {
+	if e.projects == nil {
+		return "", repo.Project{}, fmt.Errorf("project repository is required for workspace resolution")
+	}
+	if projectID == uuid.Nil {
+		return "", repo.Project{}, fmt.Errorf("project id is required")
+	}
+	projectRecord, err := e.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return "", repo.Project{}, fmt.Errorf("resolve project slug: %w", err)
+	}
+	if orgID != uuid.Nil && projectRecord.OrganizationID != orgID {
+		return "", repo.Project{}, fmt.Errorf("project organization mismatch")
+	}
+	root, err := workspace.ProjectRoot(e.dataDir, projectRecord.Slug)
+	if err != nil {
+		return "", repo.Project{}, err
+	}
+	return root, projectRecord, nil
 }
 
 func (e *Executor) buildEnvironment(ctx context.Context, orgID uuid.UUID, input CLIExecuteInput) ([]string, map[string]any, error) {

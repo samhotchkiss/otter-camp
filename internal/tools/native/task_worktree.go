@@ -73,11 +73,27 @@ func (e *NativeToolExecutor) taskWorkspaceRoot(ctx context.Context, taskRecord r
 	if trimmed := strings.TrimSpace(e.explicitRoot); trimmed != "" {
 		return filepath.Clean(trimmed), nil
 	}
+	return ResolveTaskWorkspaceRoot(ctx, e.dataDir, projectRoot, projectRecord, taskRecord, e.command)
+}
+
+// ResolveTaskWorkspaceRoot returns the git worktree root that task-scoped tools
+// should use so file and shell tools share the same task branch view.
+func ResolveTaskWorkspaceRoot(
+	ctx context.Context,
+	dataDir string,
+	projectRoot string,
+	projectRecord repo.Project,
+	taskRecord repo.ProjectTask,
+	command func(context.Context, string, ...string) *exec.Cmd,
+) (string, error) {
 	branchName := taskBranchName(taskRecord)
-	worktreeRoot := filepath.Join(workspace.ResolveDataDir(e.dataDir), "task-worktrees", strings.TrimSpace(projectRecord.Slug), "task-"+strconv.Itoa(taskRecord.TaskNumber))
-	if err := ensureTaskWorktree(ctx, projectRoot, worktreeRoot, branchName, "main", e.command); err != nil {
+	if command == nil {
+		command = exec.CommandContext
+	}
+	worktreeRoot := filepath.Join(workspace.ResolveDataDir(dataDir), "task-worktrees", strings.TrimSpace(projectRecord.Slug), "task-"+strconv.Itoa(taskRecord.TaskNumber))
+	if err := ensureTaskWorktree(ctx, projectRoot, worktreeRoot, branchName, "main", command); err != nil {
 		if errors.Is(err, errBranchAttachedToMainWorktree) {
-			if ownsBranch, branchErr := mainWorktreeOwnsBranch(ctx, projectRoot, branchName, e.command); branchErr == nil && ownsBranch {
+			if ownsBranch, branchErr := mainWorktreeOwnsBranch(ctx, projectRoot, branchName, command); branchErr == nil && ownsBranch {
 				return projectRoot, nil
 			}
 		}

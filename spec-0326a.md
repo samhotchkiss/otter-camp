@@ -643,6 +643,14 @@ Implemented so far in this spec:
   - async task turns now classify the third successful `file.write` in one turn as redirected-write churn when the requested path keeps changing (`gen.py`, `tools/gen.py`, etc.) but the runtime keeps writing the same deliverable path instead
   - the turn-stop path is immediate once the current turn has already observed three such redirected writes, so the lane does not need a prior cross-turn guard increment to stop
   - this specifically targets the hot task-16 pattern where helper script writes were being rewritten onto `scripts/validate-error-handling.sh`, followed by more helper-file discovery and readback loops
+- task-scoped `cli.execute` now uses the same git-backed task worktree root as native file tools when task metadata is available:
+  - `cli.Executor.resolveWorkingDirectory(...)` now loads the bound task and resolves task-scoped shell commands through the shared `ResolveTaskWorkspaceRoot(...)` helper in `internal/tools/native/task_worktree.go`
+  - that closes the live mismatch where `file.write` succeeded in the task worktree but the next `cli.execute` ran from the project workspace and reported the file as missing
+  - when task worktree setup is unavailable, the CLI executor falls back to the project workspace root and logs a warning instead of breaking non-git or legacy callers
+  - focused coverage now proves the aligned task-worktree contract in:
+    - `internal/cli/executor_test.go`
+    - `internal/cli/executor_integration_test.go`
+    - `internal/tools/native/executor_test.go`
 - operator package-install churn diagnostics now normalize install specs instead of smearing whole shell commands:
   - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now extract package-install attempts from assistant `cli_execute` metadata using anchored `pip install` / `python -m pip install` matching
   - the report strips shell suffixes and ignores installer flags while retaining the actual package spec

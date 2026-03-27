@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,6 +28,18 @@ func (s projectReaderStub) GetByID(_ context.Context, _ uuid.UUID) (repo.Project
 		return repo.Project{}, s.err
 	}
 	return s.project, nil
+}
+
+type taskReaderStub struct {
+	task repo.ProjectTask
+	err  error
+}
+
+func (s taskReaderStub) GetByID(_ context.Context, _ uuid.UUID) (repo.ProjectTask, error) {
+	if s.err != nil {
+		return repo.ProjectTask{}, s.err
+	}
+	return s.task, nil
 }
 
 func TestBuildEnvironmentDropsBlockedOverrides(t *testing.T) {
@@ -208,6 +222,67 @@ func TestResolveWorkingDirectoryUsesProjectSlugWorkspace(t *testing.T) {
 	}
 
 	want := filepath.Join(resolvedDataDir, "workspaces", "site-redesign")
+	if got != want {
+		t.Fatalf("working directory = %q, want %q", got, want)
+	}
+}
+
+func TestResolveWorkingDirectoryUsesTaskWorktreeWhenTaskRepoConfigured(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	resolvedDataDir, err := filepath.EvalSymlinks(dataDir)
+	if err != nil {
+		t.Fatalf("resolve data dir symlink: %v", err)
+	}
+	orgID := uuid.New()
+	projectID := uuid.New()
+	taskID := uuid.New()
+
+	projectRoot := filepath.Join(resolvedDataDir, "workspaces", "site-redesign")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = projectRoot
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, strings.TrimSpace(string(out)))
+		}
+	}
+	run("init", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(projectRoot, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	run("add", "README.md")
+	run("commit", "-m", "seed")
+
+	exec := NewExecutor(ExecutorOptions{
+		DataDir: dataDir,
+		Projects: projectReaderStub{project: repo.Project{
+			ID:             projectID,
+			OrganizationID: orgID,
+			Slug:           "site-redesign",
+		}},
+		Tasks: taskReaderStub{task: repo.ProjectTask{
+			ID:             taskID,
+			OrganizationID: orgID,
+			ProjectID:      projectID,
+			TaskNumber:     12,
+		}},
+	})
+
+	got, err := exec.resolveWorkingDirectory(ctx, orgID, CLIExecuteInput{
+		TaskID:    taskID,
+		ProjectID: projectID,
+	})
+	if err != nil {
+		t.Fatalf("resolveWorkingDirectory: %v", err)
+	}
+
+	want := filepath.Join(resolvedDataDir, "task-worktrees", "site-redesign", "task-12")
 	if got != want {
 		t.Fatalf("working directory = %q, want %q", got, want)
 	}

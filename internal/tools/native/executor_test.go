@@ -3,7 +3,10 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -109,7 +112,7 @@ func TestWorkspaceForContextUsesProjectSlugWorkspaceWithoutOrgSlug(t *testing.T)
 	}
 }
 
-func TestWorkspaceForContextTaskScopeSharesProjectWorkspace(t *testing.T) {
+func TestWorkspaceForContextTaskScopeUsesTaskWorkspace(t *testing.T) {
 	dataDir := t.TempDir()
 	resolvedDataDir, err := filepath.EvalSymlinks(dataDir)
 	if err != nil {
@@ -120,6 +123,26 @@ func TestWorkspaceForContextTaskScopeSharesProjectWorkspace(t *testing.T) {
 	taskID := uuid.New()
 	projectSessionID := uuid.New()
 	taskSessionID := uuid.New()
+	projectRoot := filepath.Join(resolvedDataDir, "workspaces", "site-redesign")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatalf("mkdir project root: %v", err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = projectRoot
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, strings.TrimSpace(string(out)))
+		}
+	}
+	run("init", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(projectRoot, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	run("add", "README.md")
+	run("commit", "-m", "seed")
 
 	exec := NewExecutor(ExecutorOptions{DataDir: dataDir})
 	exec.organizations = &stubOrgRepo{
@@ -134,7 +157,7 @@ func TestWorkspaceForContextTaskScopeSharesProjectWorkspace(t *testing.T) {
 	}
 	exec.tasks = &stubTaskRepo{
 		byID: map[uuid.UUID]repo.ProjectTask{
-			taskID: {ID: taskID, OrganizationID: orgID, ProjectID: projectID},
+			taskID: {ID: taskID, OrganizationID: orgID, ProjectID: projectID, TaskNumber: 12},
 		},
 	}
 	exec.chatSessions = &stubChatSessionRepo{
@@ -166,11 +189,12 @@ func TestWorkspaceForContextTaskScopeSharesProjectWorkspace(t *testing.T) {
 	if projectWD.Root() != want {
 		t.Fatalf("project workspace root = %q, want %q", projectWD.Root(), want)
 	}
-	if taskWD.Root() != want {
-		t.Fatalf("task workspace root = %q, want %q", taskWD.Root(), want)
+	taskWant := filepath.Join(resolvedDataDir, "task-worktrees", "site-redesign", "task-"+strconv.Itoa(12))
+	if taskWD.Root() != taskWant {
+		t.Fatalf("task workspace root = %q, want %q", taskWD.Root(), taskWant)
 	}
-	if len(exec.workspaces) != 1 {
-		t.Fatalf("workspace cache entries = %d, want 1", len(exec.workspaces))
+	if len(exec.workspaces) != 2 {
+		t.Fatalf("workspace cache entries = %d, want 2", len(exec.workspaces))
 	}
 }
 

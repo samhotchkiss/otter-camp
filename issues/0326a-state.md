@@ -3009,3 +3009,55 @@ So this slice is:
 - tested
 - deployed
 - awaiting first fresh live repro
+
+## Update 00:34 MDT
+
+I confirmed and fixed a real cross-tool workspace mismatch in task lanes.
+
+What was happening:
+
+- on hot task session `13bf8058-133d-49e8-97be-6e1853fbd2f7`, native `file.write` wrote `scripts/validate-metrics-alerting.sh` into the task worktree
+- the next `cli.execute` calls for that same task ran from the project workspace root instead
+- so the model was not hallucinating when it said the file had disappeared:
+  - `file.write` returned success for a task-worktree path
+  - `wc -c scripts/validate-metrics-alerting.sh` then failed from the project workspace with `No such file or directory`
+
+Root cause:
+
+- task-scoped native file tools already resolved through `taskWorkspaceRoot(...)`
+- task-scoped `cli.execute` was still using `cli.Executor.resolveWorkingDirectory(...)`, which defaulted to the project workspace root
+- that meant shell and file tools were operating against different roots in the same `project_task` session
+
+What changed:
+
+- [`internal/tools/native/task_worktree.go`](../internal/tools/native/task_worktree.go)
+  - extracted shared `ResolveTaskWorkspaceRoot(...)` so both native file tools and CLI execution can use the same task-worktree resolver
+- [`internal/cli/executor.go`](../internal/cli/executor.go)
+  - added task lookup to the CLI executor
+  - task-scoped shell commands now resolve through that shared task-worktree helper when task metadata is available
+  - if task-worktree setup is unavailable, the CLI executor falls back to the project workspace root and logs a warning instead of breaking legacy/non-git callers
+- [`internal/cli/executor_test.go`](../internal/cli/executor_test.go)
+  - added a git-backed unit test proving task-scoped CLI working-directory resolution lands in `task-worktrees/.../task-<n>`
+- [`internal/cli/executor_integration_test.go`](../internal/cli/executor_integration_test.go)
+  - updated the EX303 integration fixture to create a real git-backed workspace
+  - the task-scoped `pwd` assertion now expects the task worktree root, not the project workspace root
+- [`internal/tools/native/executor_test.go`](../internal/tools/native/executor_test.go)
+  - updated the stale task-scope workspace unit test to match the real git-backed contract
+
+Verification:
+
+- `go test ./internal/cli -run 'Test(ResolveWorkingDirectoryUsesProjectSlugWorkspace|ResolveWorkingDirectoryUsesTaskWorktreeWhenTaskRepoConfigured)$' -count=1`
+- `go test -tags=integration ./internal/cli -run 'TestIntegrationTaskScopedCLIExecute(SharesTaskWorkspaceRoot|WritesVisibleToFileTools)EX303$' -count=1`
+- `go test ./internal/tools/native -run 'Test(TaskWorkspaceRootFallsBackToProjectRootWhenMainWorktreeOwns(TaskBranch|UnbornTaskBranch)|WorkspaceForContextTaskScopeUsesTaskWorkspace)$' -count=1`
+
+Why this matters:
+
+- this is a product bug, not just prompt churn
+- it directly explains one of the hot token-burning loops where the model kept rewriting or shell-rebuilding files that had already been written successfully
+- fixing it should remove a whole class of “write succeeded, shell says missing” rediscovery turns before any additional prompt guardrails have to fire
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart still pending at the time of this note
