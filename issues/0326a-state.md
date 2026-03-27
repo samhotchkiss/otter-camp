@@ -2095,3 +2095,48 @@ Live proof:
   - last turn stayed `d103c0f9-1666-4a9e-9ed1-e9a096cbed9c`
   - last invocation stayed `7f7f40db-cd35-4b94-9ae4-b2218859df8c`
   - so org async retries now also roll forward without creating a new turn or a new invocation while Anthropic is still in an all-connections-cooling-down state
+
+## Update 20:31 MDT
+
+I used the remaining provider cooldown window for a safe operator-surface slice instead of another speculative runtime cutoff.
+
+What changed:
+
+- [`cmd/ottercamp/main.go`](../cmd/ottercamp/main.go)
+  - `ottercamp db token-usage` now includes:
+    - completed turns grouped by `stop_reason`
+    - provider connection health with persisted `health_rate_limited_until`
+    - `provider_rate_limited` failures split into `pre_routing` vs `post_routing`
+    - pending `agent_turn` backlog grouped by session with:
+      - `current_turn_id`
+      - `is_paused`
+      - `stale_project_source`
+      - derived `backlog_state`
+- [`cmd/ottercamp/main_db_integration_test.go`](../cmd/ottercamp/main_db_integration_test.go)
+  - the DB integration slice now seeds:
+    - provider health rows
+    - pre-routing and post-routing `provider_rate_limited` failures
+    - a pending async `agent_turn` job
+    - a completed turn with `stop_reason`
+
+Focused verification:
+
+- `go test -tags=integration ./cmd/ottercamp -run 'TestDBTokenUsageJSONIncludesCacheReadsAndAttribution' -count=1`
+
+Live smoke:
+
+- `go run ./cmd/ottercamp db token-usage --output json --hours 1 --limit 5`
+- the returned JSON now includes:
+  - `completed_by_stop_reason`
+  - `provider_health`
+  - `rate_limit_routing_split`
+  - `pending_agent_turn_backlog`
+- live smoke at `20:30 MDT` showed:
+  - `provider_health` rows for all 4 configured connections
+  - `rate_limit_routing_split` present with current `pre_routing` failures
+  - `pending_agent_turn_backlog` present with 5 queued async sessions
+
+Why this matters:
+
+- it closes the remaining “shell script only” visibility gap for the most important live rerun diagnostics
+- when Anthropic quota opens again, the next canary window can be measured directly from product CLI output instead of ad hoc SQL plus the shell wrapper

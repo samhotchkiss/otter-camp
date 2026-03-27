@@ -2577,6 +2577,17 @@ type dbTokenUsageTurnRow struct {
 	LastSeen        time.Time `json:"last_seen"`
 }
 
+type dbTokenUsageStopReasonRow struct {
+	ScopeType            string    `json:"scope_type"`
+	Mode                 string    `json:"mode"`
+	StopReason           string    `json:"stop_reason"`
+	Turns                int64     `json:"turns"`
+	CompletedInvocations int64     `json:"completed_invocations"`
+	FailedInvocations    int64     `json:"failed_invocations"`
+	TotalTokens          int64     `json:"total_tokens"`
+	LastSeen             time.Time `json:"last_seen"`
+}
+
 type dbTokenUsageFailureRow struct {
 	ErrorCode                 string    `json:"error_code"`
 	Failures                  int64     `json:"failures"`
@@ -2584,15 +2595,52 @@ type dbTokenUsageFailureRow struct {
 	LastSeen                  time.Time `json:"last_seen"`
 }
 
+type dbTokenUsageProviderHealthRow struct {
+	DisplayName      string     `json:"display_name"`
+	ProviderSlug     string     `json:"provider_slug"`
+	HealthStatus     string     `json:"health_status"`
+	IsEnabled        bool       `json:"is_enabled"`
+	FailoverPriority int        `json:"failover_priority"`
+	MaxConcurrent    int        `json:"max_concurrent"`
+	RateLimitedUntil *time.Time `json:"rate_limited_until,omitempty"`
+}
+
+type dbTokenUsageRoutingSplitRow struct {
+	RoutingPhase      string `json:"routing_phase"`
+	FailedInvocations int64  `json:"failed_invocations"`
+	WithConnectionID  int64  `json:"with_connection_id"`
+	WithoutConnection int64  `json:"without_connection_id"`
+}
+
+type dbTokenUsageBacklogRow struct {
+	SessionID          uuid.UUID  `json:"session_id"`
+	ScopeType          string     `json:"scope_type"`
+	Mode               string     `json:"mode"`
+	SessionStatus      string     `json:"session_status"`
+	CurrentTurnID      *uuid.UUID `json:"current_turn_id,omitempty"`
+	IsPaused           bool       `json:"is_paused"`
+	StaleProjectSource bool       `json:"stale_project_source"`
+	BacklogState       string     `json:"backlog_state"`
+	PendingJobs        int64      `json:"pending_jobs"`
+	OldestRunAfter     time.Time  `json:"oldest_run_after"`
+	NewestRunAfter     time.Time  `json:"newest_run_after"`
+	OldestCreatedAt    time.Time  `json:"oldest_created_at"`
+	NewestCreatedAt    time.Time  `json:"newest_created_at"`
+}
+
 type dbTokenUsageReport struct {
-	WindowHours    int                      `json:"window_hours"`
-	Limit          int                      `json:"limit"`
-	OrganizationID *uuid.UUID               `json:"organization_id,omitempty"`
-	Overview       dbTokenUsageOverview     `json:"overview"`
-	ByPurpose      []dbTokenUsagePurposeRow `json:"by_purpose"`
-	TopSessions    []dbTokenUsageSessionRow `json:"top_sessions"`
-	TopTurns       []dbTokenUsageTurnRow    `json:"top_turns"`
-	Failures       []dbTokenUsageFailureRow `json:"failures"`
+	WindowHours           int                             `json:"window_hours"`
+	Limit                 int                             `json:"limit"`
+	OrganizationID        *uuid.UUID                      `json:"organization_id,omitempty"`
+	Overview              dbTokenUsageOverview            `json:"overview"`
+	ByPurpose             []dbTokenUsagePurposeRow        `json:"by_purpose"`
+	TopSessions           []dbTokenUsageSessionRow        `json:"top_sessions"`
+	TopTurns              []dbTokenUsageTurnRow           `json:"top_turns"`
+	CompletedByStopReason []dbTokenUsageStopReasonRow     `json:"completed_by_stop_reason"`
+	Failures              []dbTokenUsageFailureRow        `json:"failures"`
+	ProviderHealth        []dbTokenUsageProviderHealthRow `json:"provider_health"`
+	RateLimitRoutingSplit []dbTokenUsageRoutingSplitRow   `json:"rate_limit_routing_split"`
+	PendingBacklog        []dbTokenUsageBacklogRow        `json:"pending_agent_turn_backlog"`
 }
 
 func runDBTokenUsage(args []string) int {
@@ -2846,6 +2894,63 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 		return nil, err
 	}
 
+	stopRows, err := pool.Query(ctx, `
+		WITH turn_rollup AS (
+			SELECT
+				ct.id AS turn_id,
+				COALESCE(cs.scope_type, '∅') AS scope_type,
+				COALESCE(cs.mode, '∅') AS mode,
+				COALESCE(NULLIF(ct.stop_reason, ''), '∅') AS stop_reason,
+				COUNT(mi.id) FILTER (WHERE mi.status = 'completed') AS completed_invocations,
+				COUNT(mi.id) FILTER (WHERE mi.status = 'failed') AS failed_invocations,
+				COALESCE(SUM(COALESCE(mi.input_tokens, 0) + COALESCE(mi.output_tokens, 0) + COALESCE(mi.cache_read_tokens, 0)), 0) AS total_tokens,
+				MAX(COALESCE(mi.created_at, ct.completed_at, ct.started_at)) AS last_seen
+			FROM chat_turn ct
+			JOIN chat_session cs ON cs.id = ct.session_id
+			LEFT JOIN model_invocation mi ON mi.turn_id = ct.id
+			WHERE ct.status = 'completed'
+			  AND COALESCE(ct.completed_at, ct.started_at) >= $1
+			  AND ($2::uuid IS NULL OR cs.organization_id = $2)
+			GROUP BY ct.id, COALESCE(cs.scope_type, '∅'), COALESCE(cs.mode, '∅'), COALESCE(NULLIF(ct.stop_reason, ''), '∅')
+		)
+		SELECT
+			scope_type,
+			mode,
+			stop_reason,
+			COUNT(*) AS turns,
+			COALESCE(SUM(completed_invocations), 0) AS completed_invocations,
+			COALESCE(SUM(failed_invocations), 0) AS failed_invocations,
+			COALESCE(SUM(total_tokens), 0) AS total_tokens,
+			MAX(last_seen) AS last_seen
+		FROM turn_rollup
+		GROUP BY scope_type, mode, stop_reason
+		ORDER BY total_tokens DESC, turns DESC, stop_reason
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer stopRows.Close()
+	for stopRows.Next() {
+		var row dbTokenUsageStopReasonRow
+		if scanErr := stopRows.Scan(
+			&row.ScopeType,
+			&row.Mode,
+			&row.StopReason,
+			&row.Turns,
+			&row.CompletedInvocations,
+			&row.FailedInvocations,
+			&row.TotalTokens,
+			&row.LastSeen,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.CompletedByStopReason = append(report.CompletedByStopReason, row)
+	}
+	if err := stopRows.Err(); err != nil {
+		return nil, err
+	}
+
 	failureRows, err := pool.Query(ctx, `
 		SELECT
 			COALESCE(NULLIF(error_code, ''), '∅') AS error_code,
@@ -2880,6 +2985,204 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 		report.Failures = append(report.Failures, row)
 	}
 	if err := failureRows.Err(); err != nil {
+		return nil, err
+	}
+
+	providerRows, err := pool.Query(ctx, `
+		SELECT
+			pc.display_name,
+			mp.slug AS provider_slug,
+			pc.health_status,
+			pc.is_enabled,
+			pc.failover_priority,
+			pc.max_concurrent,
+			NULLIF(pc.metadata->>'health_rate_limited_until', '')::timestamptz AS rate_limited_until
+		FROM provider_connection pc
+		JOIN model_provider mp ON mp.id = pc.provider_id
+		WHERE ($1::uuid IS NULL OR pc.organization_id = $1)
+		ORDER BY mp.slug, pc.failover_priority, pc.display_name
+		LIMIT $2
+	`, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer providerRows.Close()
+	for providerRows.Next() {
+		var row dbTokenUsageProviderHealthRow
+		if scanErr := providerRows.Scan(
+			&row.DisplayName,
+			&row.ProviderSlug,
+			&row.HealthStatus,
+			&row.IsEnabled,
+			&row.FailoverPriority,
+			&row.MaxConcurrent,
+			&row.RateLimitedUntil,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.ProviderHealth = append(report.ProviderHealth, row)
+	}
+	if err := providerRows.Err(); err != nil {
+		return nil, err
+	}
+
+	routingRows, err := pool.Query(ctx, `
+		SELECT
+			CASE
+				WHEN mi.provider_connection_id IS NULL THEN 'pre_routing'
+				ELSE 'post_routing'
+			END AS routing_phase,
+			COUNT(*) AS failed_invocations,
+			COUNT(*) FILTER (WHERE mi.provider_connection_id IS NOT NULL) AS with_connection_id,
+			COUNT(*) FILTER (WHERE mi.provider_connection_id IS NULL) AS without_connection_id
+		FROM model_invocation mi
+		WHERE mi.created_at >= $1
+		  AND mi.status = 'failed'
+		  AND mi.error_code = 'provider_rate_limited'
+		  AND ($2::uuid IS NULL OR mi.organization_id = $2)
+		GROUP BY 1
+		ORDER BY failed_invocations DESC, routing_phase ASC
+	`, sinceAt, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer routingRows.Close()
+	for routingRows.Next() {
+		var row dbTokenUsageRoutingSplitRow
+		if scanErr := routingRows.Scan(
+			&row.RoutingPhase,
+			&row.FailedInvocations,
+			&row.WithConnectionID,
+			&row.WithoutConnection,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.RateLimitRoutingSplit = append(report.RateLimitRoutingSplit, row)
+	}
+	if err := routingRows.Err(); err != nil {
+		return nil, err
+	}
+
+	backlogRows, err := pool.Query(ctx, `
+		WITH pending_jobs AS (
+			SELECT
+				jq.id,
+				jq.created_at,
+				jq.run_after,
+				(jq.payload->>'session_id')::uuid AS session_id,
+				(jq.payload->>'message_id')::uuid AS message_id
+			FROM job_queue jq
+			WHERE jq.job_type = 'agent_turn'
+			  AND jq.status = 'pending'
+		),
+		rollup AS (
+			SELECT
+				pj.session_id,
+				COALESCE(cs.scope_type, '∅') AS scope_type,
+				COALESCE(cs.mode, '∅') AS mode,
+				COALESCE(cs.status, '∅') AS session_status,
+				cs.current_turn_id,
+				COALESCE(
+					p_direct.settings->'pause'->>'is_paused',
+					p_task.settings->'pause'->>'is_paused',
+					'false'
+				) = 'true' AS is_paused,
+				BOOL_OR(
+					cs.scope_type = 'project'
+					AND (
+						(
+							COALESCE(cm.metadata->>'source', '') = 'project_bootstrap'
+							AND COALESCE(cs.metadata->'project_bootstrap'->>'status', '') <> 'active'
+						)
+						OR (
+							COALESCE(cm.metadata->>'source', '') IN ('project_execution_continuation', 'project_continuation_resume')
+							AND NOT EXISTS (
+								SELECT 1
+								FROM project_task pt_open
+								WHERE pt_open.project_id = cs.scope_id
+								  AND pt_open.work_status NOT IN ('done', 'cancelled')
+							)
+						)
+					)
+				) AS stale_project_source,
+				COUNT(*) AS pending_jobs,
+				MIN(pj.run_after) AS oldest_run_after,
+				MAX(pj.run_after) AS newest_run_after,
+				MIN(pj.created_at) AS oldest_created_at,
+				MAX(pj.created_at) AS newest_created_at
+			FROM pending_jobs pj
+			LEFT JOIN chat_session cs ON cs.id = pj.session_id
+			LEFT JOIN chat_message cm ON cm.id = pj.message_id
+			LEFT JOIN project p_direct
+			  ON cs.scope_type = 'project'
+			 AND p_direct.id = cs.scope_id
+			LEFT JOIN project_task pt
+			  ON cs.scope_type = 'project_task'
+			 AND pt.id = cs.scope_id
+			LEFT JOIN project p_task
+			  ON p_task.id = pt.project_id
+			WHERE ($1::uuid IS NULL OR cs.organization_id = $1)
+			GROUP BY
+				pj.session_id,
+				COALESCE(cs.scope_type, '∅'),
+				COALESCE(cs.mode, '∅'),
+				COALESCE(cs.status, '∅'),
+				cs.current_turn_id,
+				COALESCE(
+					p_direct.settings->'pause'->>'is_paused',
+					p_task.settings->'pause'->>'is_paused',
+					'false'
+				) = 'true'
+		)
+		SELECT
+			session_id,
+			scope_type,
+			mode,
+			session_status,
+			current_turn_id,
+			is_paused,
+			stale_project_source,
+			CASE
+				WHEN is_paused THEN 'paused'
+				WHEN stale_project_source THEN 'stale_project_source'
+				WHEN current_turn_id IS NOT NULL THEN 'current_turn_set'
+				ELSE 'ready'
+			END AS backlog_state,
+			pending_jobs,
+			oldest_run_after,
+			newest_run_after,
+			oldest_created_at,
+			newest_created_at
+		FROM rollup
+		ORDER BY oldest_run_after ASC NULLS FIRST, oldest_created_at ASC
+		LIMIT $2
+	`, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer backlogRows.Close()
+	for backlogRows.Next() {
+		var row dbTokenUsageBacklogRow
+		if scanErr := backlogRows.Scan(
+			&row.SessionID,
+			&row.ScopeType,
+			&row.Mode,
+			&row.SessionStatus,
+			&row.CurrentTurnID,
+			&row.IsPaused,
+			&row.StaleProjectSource,
+			&row.BacklogState,
+			&row.PendingJobs,
+			&row.OldestRunAfter,
+			&row.NewestRunAfter,
+			&row.OldestCreatedAt,
+			&row.NewestCreatedAt,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.PendingBacklog = append(report.PendingBacklog, row)
+	}
+	if err := backlogRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -2964,6 +3267,23 @@ func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatte
 	_ = formatter.WriteTable([]string{"Turn", "Session", "Invocations", "Purposes", "Input", "Output", "Cache Read", "Total", "First Seen", "Last Seen"}, turnRows)
 
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Completed Turns By Stop Reason ==")
+	stopRows := make([][]string, 0, len(report.CompletedByStopReason))
+	for _, row := range report.CompletedByStopReason {
+		stopRows = append(stopRows, []string{
+			row.ScopeType,
+			row.Mode,
+			row.StopReason,
+			strconv.FormatInt(row.Turns, 10),
+			strconv.FormatInt(row.CompletedInvocations, 10),
+			strconv.FormatInt(row.FailedInvocations, 10),
+			strconv.FormatInt(row.TotalTokens, 10),
+			row.LastSeen.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Scope", "Mode", "Stop Reason", "Turns", "Completed", "Failed", "Total", "Last Seen"}, stopRows)
+
+	fmt.Fprintln(w)
 	fmt.Fprintln(w, "== Most Common Failures ==")
 	failureRows := make([][]string, 0, len(report.Failures))
 	for _, row := range report.Failures {
@@ -2975,6 +3295,63 @@ func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatte
 		})
 	}
 	_ = formatter.WriteTable([]string{"Error Code", "Failures", "Explicit Rate Limit", "Last Seen"}, failureRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Provider Connection Health ==")
+	providerRows := make([][]string, 0, len(report.ProviderHealth))
+	for _, row := range report.ProviderHealth {
+		rateLimitedUntil := "∅"
+		if row.RateLimitedUntil != nil {
+			rateLimitedUntil = row.RateLimitedUntil.UTC().Format(time.RFC3339)
+		}
+		providerRows = append(providerRows, []string{
+			row.DisplayName,
+			row.ProviderSlug,
+			row.HealthStatus,
+			strconv.FormatBool(row.IsEnabled),
+			strconv.Itoa(row.FailoverPriority),
+			strconv.Itoa(row.MaxConcurrent),
+			rateLimitedUntil,
+		})
+	}
+	_ = formatter.WriteTable([]string{"Display Name", "Provider", "Health", "Enabled", "Priority", "Max Concurrent", "Rate Limited Until"}, providerRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Rate-Limit Failure Routing Split ==")
+	routingRows := make([][]string, 0, len(report.RateLimitRoutingSplit))
+	for _, row := range report.RateLimitRoutingSplit {
+		routingRows = append(routingRows, []string{
+			row.RoutingPhase,
+			strconv.FormatInt(row.FailedInvocations, 10),
+			strconv.FormatInt(row.WithConnectionID, 10),
+			strconv.FormatInt(row.WithoutConnection, 10),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Routing Phase", "Failed", "With Connection", "Without Connection"}, routingRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Pending Agent Turn Backlog ==")
+	backlogRows := make([][]string, 0, len(report.PendingBacklog))
+	for _, row := range report.PendingBacklog {
+		currentTurnID := "∅"
+		if row.CurrentTurnID != nil {
+			currentTurnID = row.CurrentTurnID.String()
+		}
+		backlogRows = append(backlogRows, []string{
+			row.SessionID.String(),
+			row.ScopeType,
+			row.Mode,
+			row.SessionStatus,
+			currentTurnID,
+			strconv.FormatBool(row.IsPaused),
+			strconv.FormatBool(row.StaleProjectSource),
+			row.BacklogState,
+			strconv.FormatInt(row.PendingJobs, 10),
+			row.OldestRunAfter.UTC().Format(time.RFC3339),
+			row.NewestRunAfter.UTC().Format(time.RFC3339),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Session", "Scope", "Mode", "Status", "Current Turn", "Paused", "Stale Source", "Backlog State", "Pending Jobs", "Oldest Run After", "Newest Run After"}, backlogRows)
 }
 
 func runAuthCommand(args []string) int {

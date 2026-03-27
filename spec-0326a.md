@@ -544,6 +544,11 @@ Implemented so far in this spec:
     - `is_paused`
     - `stale_project_source`
     - derived `backlog_state`
+- `ottercamp db token-usage` now also exposes the most useful live-ops sections from that shell report directly in the product surface:
+  - completed turns grouped by `stop_reason`
+  - provider connection health including persisted `health_rate_limited_until`
+  - `provider_rate_limited` failures split into pre-routing vs post-routing
+  - pending `agent_turn` backlog grouped by session with `current_turn_id`, pause state, stale-source detection, and derived `backlog_state`
 - claim-time worker cleanup now retires project dispatches that were already permanently unclaimable under existing claim SQL:
   - inactive `project_bootstrap` dispatches
   - settled `project_execution_continuation` / `project_continuation_resume` dispatches with no unfinished tasks
@@ -585,7 +590,6 @@ Still pending from this spec:
 
 - stronger live proof that the new shell-based read-only discovery cutoff is catching fresh Anthropic task churn, not just the direct read-tool variant; the direct read-tool cutoff is live-proven on review lanes, and the tighter budget-path routing is implemented and tested but still waiting on fresh post-restart traffic
 - any additional recovery-specific fingerprints that remain after the current async task guardrails
-- richer operator diagnostics directly in product surfaces instead of shell-only reporting
 
 ## Deferred Follow-Up, Not In This Spec
 

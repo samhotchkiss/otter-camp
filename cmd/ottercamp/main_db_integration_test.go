@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,6 +83,10 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	ctx := context.Background()
 	orgRepo := repo.NewOrgRepo(pool)
 	providerRepo := repo.NewModelProviderRepo(pool)
+	connectionRepo := repo.NewProviderConnectionRepo(pool)
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	turnRepo := repo.NewChatTurnRepo(pool)
+	agentRepo := repo.NewAgentRepo(pool)
 
 	org, err := orgRepo.Create(ctx, repo.Organization{
 		Slug:        "cli-token-usage-org",
@@ -100,25 +105,96 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 		t.Fatalf("create provider: %v", err)
 	}
 
-	sessionID := uuid.New()
-	turnID := uuid.New()
 	createdAt := time.Now().UTC()
+	retryUntil := createdAt.Add(30 * time.Minute).Format(time.RFC3339Nano)
+	connection, err := connectionRepo.Create(ctx, repo.ProviderConnection{
+		OrganizationID:   org.ID,
+		ProviderID:       provider.ID,
+		DisplayName:      "Anthropic Primary",
+		APIKeyRef:        "anthropic/cli-token-usage",
+		FailoverPriority: 10,
+		MaxConcurrent:    8,
+		HealthStatus:     "rate_limited",
+		IsEnabled:        true,
+		Metadata:         json.RawMessage(`{"health_rate_limited_until":"` + retryUntil + `"}`),
+	})
+	if err != nil {
+		t.Fatalf("create provider connection: %v", err)
+	}
+	agent, err := agentRepo.Create(ctx, repo.Agent{
+		OrganizationID:       org.ID,
+		DisplayName:          "CLI Token Usage Agent",
+		AgentClass:           "staff",
+		LifecycleStatus:      "active",
+		SystemPrompt:         "test",
+		OperatorInstructions: "test",
+		AgentType:            "pm",
+		CreatedByType:        "system",
+		CreatedByID:          uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	session, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        uuid.New(),
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create chat session: %v", err)
+	}
+	stopReason := "validation_loop_blocked"
+	startedAt := createdAt.Add(-2 * time.Minute)
+	completedAt := createdAt.Add(-1 * time.Minute)
+	turn, err := turnRepo.Create(ctx, repo.ChatTurn{
+		SessionID:      session.ID,
+		TurnNumber:     1,
+		RespondingType: "agent",
+		RespondingID:   agent.ID,
+		Status:         "completed",
+		StartedAt:      &startedAt,
+		CompletedAt:    &completedAt,
+		StopReason:     &stopReason,
+	})
+	if err != nil {
+		t.Fatalf("create chat turn: %v", err)
+	}
 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO model_invocation (
 			organization_id, model_provider_id, invocation_purpose, status, model_name,
 			input_tokens, output_tokens, cache_read_tokens, session_id, turn_id, created_at
 		) VALUES ($1, $2, 'agent_turn', 'completed', 'claude-opus-4-6', $3, $4, $5, $6, $7, $8)
-	`, org.ID, provider.ID, 100, 25, 50, sessionID, turnID, createdAt); err != nil {
+	`, org.ID, provider.ID, 100, 25, 50, session.ID, turn.ID, createdAt); err != nil {
 		t.Fatalf("insert completed invocation: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO model_invocation (
 			organization_id, model_provider_id, invocation_purpose, status, model_name,
 			input_tokens, output_tokens, cache_read_tokens, session_id, turn_id, created_at, error_code, error_message
-		) VALUES ($1, $2, 'summarization', 'failed', 'claude-haiku-4-5-20251001', $3, $4, $5, $6, $7, $8, 'rate_limit', '429 rate limit')
-	`, org.ID, provider.ID, 10, 5, 15, sessionID, turnID, createdAt.Add(time.Minute)); err != nil {
-		t.Fatalf("insert failed invocation: %v", err)
+		) VALUES ($1, $2, 'summarization', 'failed', 'claude-haiku-4-5-20251001', $3, $4, $5, $6, $7, $8, 'provider_rate_limited', '429 rate limit')
+	`, org.ID, provider.ID, 10, 5, 15, session.ID, turn.ID, createdAt.Add(time.Minute)); err != nil {
+		t.Fatalf("insert pre-routing failed invocation: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO model_invocation (
+			organization_id, model_provider_id, provider_connection_id, invocation_purpose, status, model_name,
+			input_tokens, output_tokens, cache_read_tokens, session_id, turn_id, created_at, error_code, error_message
+		) VALUES ($1, $2, $3, 'agent_turn', 'failed', 'claude-opus-4-6', $4, $5, $6, $7, $8, $9, 'provider_rate_limited', '429 rate limit')
+	`, org.ID, provider.ID, connection.ID, 7, 3, 5, session.ID, turn.ID, createdAt.Add(2*time.Minute)); err != nil {
+		t.Fatalf("insert post-routing failed invocation: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO job_queue (
+			job_type, priority, payload, status, attempts, max_attempts, run_after, created_at, updated_at
+		) VALUES ('agent_turn', 50, $1::jsonb, 'pending', 0, 5, $2, $3, $3)
+	`, `{"session_id":"`+session.ID.String()+`"}`, createdAt.Add(5*time.Minute), createdAt); err != nil {
+		t.Fatalf("insert pending job: %v", err)
 	}
 
 	code, stdout, stderr := captureCommandOutput(t, func() int {
@@ -127,19 +203,31 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("db token-usage exit=%d stderr=%q", code, stderr)
 	}
-	if !strings.Contains(stdout, `"total_tokens": 205`) {
+	if !strings.Contains(stdout, `"total_tokens": 220`) {
 		t.Fatalf("db token-usage output missing total tokens: %q", stdout)
 	}
-	if !strings.Contains(stdout, `"cache_read_tokens": 65`) {
+	if !strings.Contains(stdout, `"cache_read_tokens": 70`) {
 		t.Fatalf("db token-usage output missing cache read tokens: %q", stdout)
 	}
-	if !strings.Contains(stdout, `"rate_limited_failures": 1`) {
+	if !strings.Contains(stdout, `"rate_limited_failures": 2`) {
 		t.Fatalf("db token-usage output missing rate-limited failures: %q", stdout)
 	}
-	if !strings.Contains(stdout, sessionID.String()) {
+	if !strings.Contains(stdout, session.ID.String()) {
 		t.Fatalf("db token-usage output missing session id: %q", stdout)
 	}
-	if !strings.Contains(stdout, turnID.String()) {
+	if !strings.Contains(stdout, turn.ID.String()) {
 		t.Fatalf("db token-usage output missing turn id: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"completed_by_stop_reason"`) || !strings.Contains(stdout, stopReason) {
+		t.Fatalf("db token-usage output missing completed-by-stop-reason section: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"provider_health"`) || !strings.Contains(stdout, connection.DisplayName) {
+		t.Fatalf("db token-usage output missing provider health section: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"rate_limit_routing_split"`) || !strings.Contains(stdout, `pre_routing`) || !strings.Contains(stdout, `post_routing`) {
+		t.Fatalf("db token-usage output missing routing split section: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"pending_agent_turn_backlog"`) || !strings.Contains(stdout, `"backlog_state": "ready"`) {
+		t.Fatalf("db token-usage output missing pending backlog section: %q", stdout)
 	}
 }
