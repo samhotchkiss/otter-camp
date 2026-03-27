@@ -4,10 +4,11 @@ set -euo pipefail
 window_hours=24
 limit_rows=15
 org_id=""
+session_id=""
 
 usage() {
   cat <<'EOF'
-Usage: scripts/token-usage-report.sh [--hours N] [--limit N] [--org UUID]
+Usage: scripts/token-usage-report.sh [--hours N] [--limit N] [--org UUID] [--session UUID]
 
 Reports recent model-invocation usage directly from PostgreSQL, including
 cache-read tokens in all totals.
@@ -33,6 +34,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --org)
       org_id="${2:?missing value for --org}"
+      shift 2
+      ;;
+    --session)
+      session_id="${2:?missing value for --session}"
       shift 2
       ;;
     -h|--help)
@@ -64,7 +69,8 @@ psql \
   -v ON_ERROR_STOP=1 \
   -v window_hours="${window_hours}" \
   -v limit_rows="${limit_rows}" \
-  -v org_id="${org_id}" <<'SQL'
+  -v org_id="${org_id}" \
+  -v session_id="${session_id}" <<'SQL'
 \pset border 2
 \pset linestyle unicode
 \pset null '∅'
@@ -75,7 +81,8 @@ psql \
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 ),
 scoped AS (
   SELECT mi.*
@@ -83,6 +90,7 @@ scoped AS (
   CROSS JOIN params p
   WHERE mi.created_at >= p.since_at
     AND (p.org_id IS NULL OR mi.organization_id = p.org_id)
+    AND (p.session_id IS NULL OR mi.session_id = p.session_id)
 )
 SELECT
   COUNT(*) AS invocations,
@@ -109,7 +117,8 @@ FROM scoped;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 )
 SELECT
   mi.invocation_purpose,
@@ -126,6 +135,7 @@ LEFT JOIN provider_connection pc ON pc.id = mi.provider_connection_id
 CROSS JOIN params p
 WHERE mi.created_at >= p.since_at
   AND (p.org_id IS NULL OR mi.organization_id = p.org_id)
+  AND (p.session_id IS NULL OR mi.session_id = p.session_id)
 GROUP BY mi.invocation_purpose, mi.model_name, COALESCE(pc.display_name, '∅')
 ORDER BY total_tokens DESC, invocations DESC
 LIMIT :'limit_rows'::int;
@@ -135,7 +145,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 )
 SELECT
   COALESCE(cs.scope_type, '∅') AS scope_type,
@@ -153,6 +164,7 @@ CROSS JOIN params p
 WHERE mi.created_at >= p.since_at
   AND mi.invocation_purpose = 'listening_eval'
   AND (p.org_id IS NULL OR mi.organization_id = p.org_id)
+  AND (p.session_id IS NULL OR mi.session_id = p.session_id)
 GROUP BY COALESCE(cs.scope_type, '∅'), COALESCE(cs.mode, '∅'), mi.model_name
 ORDER BY total_tokens DESC, invocations DESC
 LIMIT :'limit_rows'::int;
@@ -162,7 +174,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 )
 SELECT
   mi.session_id,
@@ -182,6 +195,7 @@ CROSS JOIN params p
 WHERE mi.created_at >= p.since_at
   AND mi.session_id IS NOT NULL
   AND (p.org_id IS NULL OR mi.organization_id = p.org_id)
+  AND (p.session_id IS NULL OR mi.session_id = p.session_id)
 GROUP BY mi.session_id, COALESCE(cs.scope_type, '∅'), COALESCE(cs.mode, '∅')
 ORDER BY total_tokens DESC, invocations DESC
 LIMIT :'limit_rows'::int;
@@ -191,7 +205,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 )
 SELECT
   mi.turn_id,
@@ -209,6 +224,7 @@ CROSS JOIN params p
 WHERE mi.created_at >= p.since_at
   AND mi.turn_id IS NOT NULL
   AND (p.org_id IS NULL OR mi.organization_id = p.org_id)
+  AND (p.session_id IS NULL OR mi.session_id = p.session_id)
 GROUP BY mi.turn_id, mi.session_id
 ORDER BY total_tokens DESC, invocations DESC
 LIMIT :'limit_rows'::int;
@@ -218,7 +234,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 ),
 rate_limited AS (
   SELECT
@@ -237,6 +254,7 @@ rate_limited AS (
       OR lower(COALESCE(mi.error_message, '')) LIKE '%429%'
     )
     AND (p.org_id IS NULL OR mi.organization_id = p.org_id)
+    AND (p.session_id IS NULL OR mi.session_id = p.session_id)
   GROUP BY mi.turn_id, mi.session_id
 )
 SELECT
@@ -254,7 +272,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 ),
 tool_results AS (
   SELECT
@@ -279,6 +298,7 @@ tool_results AS (
     AND cm.status = 'final'
     AND cm.content_format = 'text'
     AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+    AND (p.session_id IS NULL OR cm.session_id = p.session_id)
 ),
 successful_writes AS (
   SELECT
@@ -316,7 +336,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 ),
 assistant_calls AS (
   SELECT
@@ -333,6 +354,7 @@ assistant_calls AS (
     AND cm.role = 'assistant'
     AND cm.status = 'final'
     AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+    AND (p.session_id IS NULL OR cm.session_id = p.session_id)
 ),
 package_attempts AS (
   SELECT
@@ -369,7 +391,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 ),
 tool_results AS (
   SELECT
@@ -394,6 +417,7 @@ tool_results AS (
     AND cm.status = 'final'
     AND cm.content_format = 'text'
     AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+    AND (p.session_id IS NULL OR cm.session_id = p.session_id)
 ),
 successful_writes AS (
   SELECT
@@ -443,6 +467,7 @@ assistant_calls AS (
     AND cm.role = 'assistant'
     AND cm.status = 'final'
     AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+    AND (p.session_id IS NULL OR cm.session_id = p.session_id)
 ),
 cli_readbacks AS (
   SELECT
@@ -509,7 +534,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 ),
 assistant_calls AS (
   SELECT
@@ -527,6 +553,7 @@ assistant_calls AS (
     AND cm.role = 'assistant'
     AND cm.status = 'final'
     AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+    AND (p.session_id IS NULL OR cm.session_id = p.session_id)
 ),
 turn_rollup AS (
   SELECT
@@ -585,7 +612,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 ),
 turn_rollup AS (
   SELECT
@@ -604,6 +632,7 @@ turn_rollup AS (
   WHERE ct.status = 'completed'
     AND COALESCE(ct.completed_at, ct.started_at) >= p.since_at
     AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+    AND (p.session_id IS NULL OR ct.session_id = p.session_id)
   GROUP BY ct.id, cs.scope_type, cs.mode, COALESCE(NULLIF(ct.stop_reason, ''), '∅')
 )
 SELECT
@@ -625,7 +654,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() AS current_time,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 )
 SELECT
   cs.id AS session_id,
@@ -638,6 +668,7 @@ FROM chat_session cs
 CROSS JOIN params p
 WHERE cs.metadata ? 'summarization_backoff'
   AND (p.org_id IS NULL OR cs.organization_id = p.org_id)
+  AND (p.session_id IS NULL OR cs.id = p.session_id)
   AND (cs.metadata->'summarization_backoff'->>'next_allowed_at')::timestamptz > p.current_time
 ORDER BY next_allowed_at ASC, failure_count DESC
 LIMIT :'limit_rows'::int;
@@ -647,7 +678,8 @@ LIMIT :'limit_rows'::int;
 WITH params AS (
   SELECT
     now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
-    NULLIF(:'org_id', '')::uuid AS org_id
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
 )
 SELECT
   COALESCE(NULLIF(error_code, ''), '∅') AS error_code,
@@ -662,6 +694,7 @@ CROSS JOIN params p
 WHERE mi.created_at >= p.since_at
   AND mi.status = 'failed'
   AND (p.org_id IS NULL OR mi.organization_id = p.org_id)
+  AND (p.session_id IS NULL OR mi.session_id = p.session_id)
 GROUP BY COALESCE(NULLIF(error_code, ''), '∅')
 ORDER BY failures DESC, error_code
 LIMIT :'limit_rows'::int;

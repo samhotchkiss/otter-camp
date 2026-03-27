@@ -534,6 +534,7 @@ Implemented so far in this spec:
   - `listening_eval` grouped by session scope/mode
   - sessions with active summarization backoff metadata
   - fractional `--hours` windows for short live checks such as `--hours 0.25`
+  - optional `--session <uuid>` filtering so the same report can isolate a single canary session end-to-end
 - tool-result parsing and operator diagnostics now treat native validation failures stored in `output.error` as real tool errors instead of silently classifying them as successes
 - async `project_task` work lanes now have a session-level cutoff for cross-turn read-only discovery churn:
   - after `5` consecutive `max_tool_calls` turns

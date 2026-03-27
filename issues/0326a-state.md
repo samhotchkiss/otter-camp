@@ -1642,3 +1642,39 @@ What is still not proven:
 
 - this newest written-file reread cutoff is not deployed yet
 - so there is not yet live evidence showing one of the known `file.write -> reread -> reread -> reread` task turns ending early on the new `duplicate_written_file_readback_churn` path
+
+## Update 18:03 MDT
+
+I added one more operator-side improvement to make the next canary restart easier to evaluate.
+
+What changed:
+
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - now accepts `--session <uuid>`
+  - all report sections honor that filter, including:
+    - top turns
+    - churn families
+    - stop reasons
+    - failures
+    - summarization backoff rows
+
+Why this was worth doing:
+
+- the next validation step is not “look at the whole last 24 hours again”
+- it is “watch one canary session on the newest build and see which burn families are left”
+- the session filter now lets us answer that directly with one command instead of ad hoc SQL
+
+Smoke proof:
+
+- `bash -n scripts/token-usage-report.sh`
+- `scripts/token-usage-report.sh --hours 6 --limit 5 --session 05797f29-cf07-48fa-852d-7c081bbab17d`
+
+That session-scoped run correctly narrowed the report to the one hot async task lane and showed:
+
+- `51` invocations
+- `1.834M` total tokens
+- top turns `b1d57839-...`, `88ff2e07-...`, `446b9276-...`
+- the exact churn sections for that one session only, including:
+  - duplicate successful writes
+  - written-file readback churn
+  - shell file build / readback churn
