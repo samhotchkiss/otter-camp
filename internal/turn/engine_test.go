@@ -24142,6 +24142,133 @@ func TestHandleRecoveryCLIExecuteWithoutCommandStopsAfterRepeatedResumeFailure(t
 	}
 }
 
+func TestHandleRecoveryCLIExecuteWithoutCommandPersistsCheckpointOnFirstCorrection(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	targetPath := "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{"existing":"value"}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: targetPath,
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     12,
+				Title:          "Create and validate pipeline configuration files",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		recoveryTurn:     true,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := ToolCall{ID: "cli-1", Name: "cli.execute", Arguments: map[string]any{}}
+
+	handled, abort, err := fixture.engine.handleRecoveryCLIExecuteWithoutCommand(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleRecoveryCLIExecuteWithoutCommand: %v", err)
+	}
+	if !handled || abort {
+		t.Fatalf("handled=%v abort=%v, want true/false", handled, abort)
+	}
+	if !fixture.messages.containsContentSubstring("[Recovery correction: cli.execute was emitted without `command`") {
+		t.Fatal("expected recovery correction message")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata)
+	if !ok {
+		t.Fatal("expected recovery checkpoint metadata")
+	}
+	if checkpoint.TargetPath != targetPath {
+		t.Fatalf("checkpoint.TargetPath = %q, want %q", checkpoint.TargetPath, targetPath)
+	}
+	if !strings.Contains(checkpoint.FailureReason, "was emitted without `command`") {
+		t.Fatalf("checkpoint.FailureReason = %q, want missing-command correction reason", checkpoint.FailureReason)
+	}
+}
+
+func TestMaybeClearRecoveryFileWriteCheckpointClearsOnCLIExecuteWrite(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	targetPath := "Work/OC-12-CREATE-AND-VALIDATE-PIPELINE-CONFIGURATION-FILES.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := taskcheckpoint.MergeRecoveryFileWriteCheckpoint(json.RawMessage(`{"existing":"value"}`), taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath:    targetPath,
+		FailureReason: buildRecoveryCLIExecuteCorrectionFailureReason(targetPath),
+	})
+	if err != nil {
+		t.Fatalf("MergeRecoveryFileWriteCheckpoint: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				TaskNumber:     12,
+				Title:          "Create and validate pipeline configuration files",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	fixture.engine.tasks = taskRepo
+
+	rt := &turnRuntime{session: fixture.session}
+	cleared, err := fixture.engine.maybeClearRecoveryFileWriteCheckpoint(context.Background(), rt, ToolResult{
+		Name: "cli.execute",
+		Output: map[string]any{
+			"path": targetPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf("maybeClearRecoveryFileWriteCheckpoint: %v", err)
+	}
+	if !cleared {
+		t.Fatal("expected recovery checkpoint to clear")
+	}
+
+	updated, err := taskRepo.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if _, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updated.Metadata); ok {
+		t.Fatalf("expected recovery checkpoint to be cleared, metadata=%s", string(updated.Metadata))
+	}
+}
+
 func TestHandleToolValidationResultsBlocksTaskOnThirdIdenticalFailureEvenInSameTurn(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()

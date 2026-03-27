@@ -1984,6 +1984,9 @@ func TestTurnEngineIntegrationRecoversMalformedCLIExecuteRawArgsForFileOutputEX3
 	if guard, ok := parseTaskValidationGuard(updatedTask.Metadata); ok {
 		t.Fatalf("unexpected validation guard persisted: %+v", guard)
 	}
+	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(updatedTask.Metadata); ok {
+		t.Fatalf("unexpected recovery checkpoint persisted after successful cli.execute write: %+v", checkpoint)
+	}
 
 	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
 	if err != nil {

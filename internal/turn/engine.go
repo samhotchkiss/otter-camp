@@ -13227,8 +13227,14 @@ func (e *TurnEngine) handleRecoveryCLIExecuteWithoutCommand(ctx context.Context,
 		return true, true, nil
 	}
 	rt.recoveryCLIFixes++
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryCLIExecuteRetryMessage()); err != nil {
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryCLIExecuteRetryMessage())
+	if err != nil {
 		return true, false, err
+	}
+	if targetPath, _, ok := e.recoveryFileOutputContext(ctx, rt); ok && strings.TrimSpace(targetPath) != "" {
+		if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", buildRecoveryCLIExecuteCorrectionFailureReason(targetPath), message.ID); checkpointErr != nil {
+			return true, false, checkpointErr
+		}
 	}
 	return true, false, nil
 }
@@ -13279,6 +13285,14 @@ func isRecoveryCLIExecuteWithoutCommand(call ToolCall) bool {
 
 func buildRecoveryCLIExecuteRetryMessage() string {
 	return "[Recovery correction: cli.execute was emitted without `command`. Retry only with a non-empty `cli.execute.command` string. For file output, use one full shell command such as:\ncat > docs/target.md <<'EOF'\n...full file contents...\nEOF\nReplace `docs/target.md` with the exact workspace-relative task path. If you cannot provide the full command yet, draft the content first or use `file.write` with populated `path` and `content`.]"
+}
+
+func buildRecoveryCLIExecuteCorrectionFailureReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	return fmt.Sprintf("cli.execute for %s was emitted without `command`; the next retry must provide a concrete cli.execute.command string or a populated file.write call", path)
 }
 
 func buildRecoveryCLIExecuteRejectedMessage() string {
@@ -13522,8 +13536,12 @@ func (e *TurnEngine) handleRecoveryFileWriteWithoutContent(ctx context.Context, 
 	}
 
 	rt.recoveryFileFixes++
-	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRetryMessage(targetPath)); err != nil {
+	message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildRecoveryFileWriteRetryMessage(targetPath))
+	if err != nil {
 		return true, false, err
+	}
+	if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", buildRecoveryFileWriteCorrectionFailureReason(targetPath), message.ID); checkpointErr != nil {
+		return true, false, checkpointErr
 	}
 	return true, false, nil
 }
@@ -14120,6 +14138,14 @@ func buildRecoveryFileWriteRetryMessage(targetPath string) string {
 		path = "the requested workspace file"
 	}
 	return fmt.Sprintf("[Recovery correction: file.write for `%s` was emitted without `content`. Before retrying file mutation tools, draft the full file body in the assistant response or resend `file.write` with both `path` and `content` populated. The first non-whitespace character of your next assistant message must be the first character of the deliverable itself, not a sentence like 'I will write' or 'Now I'll draft'. If you already have the draft text, carry that exact text into the next write instead of emitting another empty-content call.]", path)
+}
+
+func buildRecoveryFileWriteCorrectionFailureReason(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "the requested workspace file"
+	}
+	return fmt.Sprintf("file.write for %s was emitted without `content`; the next retry must provide the full file body instead of another empty file.write call", path)
 }
 
 func buildRepeatedRecoveryReadOnlyDiscoveryFailureReason(targetPath string) string {
@@ -19250,7 +19276,12 @@ func (e *TurnEngine) maybeClearRecoveryFileWriteCheckpoint(ctx context.Context, 
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
 		return false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(result.Name), "file.write") || strings.TrimSpace(result.Error) != "" {
+	if strings.TrimSpace(result.Error) != "" {
+		return false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(result.Name)) {
+	case "file.write", "file_write", "file.edit", "file_edit", "cli.execute", "cli_execute":
+	default:
 		return false, nil
 	}
 	writtenPath := strings.TrimSpace(stringValue(result.Output["path"]))
@@ -19745,6 +19776,14 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 				targetPath = normalizeWorkspaceRelativePath(strings.TrimSpace(recoveryCheckpoint.TargetPath))
 				failureReason = buildRepeatedRecoveryTargetDriftFailureReason(recoveryCheckpoint, repeatedRecoveryFailure)
 				systemMessage = buildRepeatedRecoveryTargetDriftTurnStopSystemMessage(targetPath, repeatedRecoveryFailure)
+			} else if hasRecoveryCheckpoint && strings.TrimSpace(targetPath) != "" {
+				existingFailureReason := strings.TrimSpace(recoveryCheckpoint.FailureReason)
+				switch {
+				case taskcheckpoint.RecoveryFileWriteFailureIsMissingCommand(existingFailureReason):
+					failureReason = e.strengthenRecoveryMissingCommandFailureReason(ctx, rt, targetPath, buildRecoveryCLIExecuteFileOutputFailureReason(targetPath))
+				case taskcheckpoint.RecoveryFileWriteFailureIsMissingContent(existingFailureReason):
+					failureReason = e.strengthenRecoveryMissingContentFailureReason(ctx, rt, targetPath, buildRecoveryFileWriteMissingContentFailureReason(targetPath))
+				}
 			}
 			message, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, systemMessage)
 			if err != nil {
