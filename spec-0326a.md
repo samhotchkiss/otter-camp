@@ -809,6 +809,13 @@ Still pending from this spec:
     - turn engine: async task preflight defers before prompt assembly on hinted transient recovery windows
     - turn engine: unhinted transient probe errors still fall through to normal execution instead of becoming over-eager preflight stops
   - while widening the gateway package test pass for this slice, an existing `mapProviderError(...)` nil-clock bug surfaced on direct unit construction; that path now safely falls back to `time.Now` when `g.now` is unset
+- completed-turn auto-continuation no longer immediately rearms a fresh async task turn after the previous turn already exhausted its internal transient-provider retry budget:
+  - if the completed turn carries:
+    - `[Turn failed: temporary model provider retries exhausted after ...]`
+    - or `[Turn failed: temporary infrastructure retries exhausted after ...]`
+  - the completed-turn handler now schedules the next fresh retry after `maxTransientInfraBackoff` instead of using the normal near-immediate auto-continuation delay
+  - this preserves eventual retry behavior while preventing the counter-reset loop that was minting a new turn within milliseconds after the prior one had already burned through its full in-turn retry budget
+  - focused turn-engine coverage now proves the default auto-continuation path still works and the exhausted-provider variant is delayed instead
 
 ## Deferred Follow-Up, Not In This Spec
 

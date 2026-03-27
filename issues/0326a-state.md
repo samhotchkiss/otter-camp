@@ -3100,6 +3100,42 @@ Current live-proof status:
 - runtime is now restarted on the new binary and health is green
 - fresh live proof of the exact preflight-only path is still pending on the next window where all eligible connections are transiently recovering at once; immediately after deploy, Anthropic still had one `healthy` primary connection, so the router never had to return the new all-unavailable recovery-window error in production yet
 
+## Update 03:43 MDT
+
+The next live seam was not another task guard. It was a turn-lifecycle bug: after a task turn already emitted
+
+- `[Turn failed: temporary model provider retries exhausted after 5 attempts.]`
+
+the completed-turn handler was still auto-continuing the same session almost immediately, effectively resetting the retry budget and burning a brand-new turn on the same provider outage.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `HandleTurnCompletedEvent(...)` now inspects the completed turn’s system messages
+  - if the turn already ended with:
+    - transient model provider retries exhausted
+    - or transient infrastructure retries exhausted
+  - the handler now schedules the next fresh retry after `maxTransientInfraBackoff` instead of using the normal fast auto-continuation delay
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving the exhausted-provider case now defers by `maxTransientInfraBackoff`
+  - preserved the normal immediate auto-continuation test so the default work-lane behavior stays covered
+
+Verification:
+
+- `go test ./internal/turn -run 'Test(HandleTurnCompletedEventEnqueuesAutoContinuation|HandleTurnCompletedEventDefersAutoContinuationAfterTransientProviderRetryExhausted|HandleTurnJobAsyncProjectTaskTransientAvailabilityPreflightDefersBeforePromptAssembly|HandleTurnJobAsyncProjectTaskTransientProviderEnqueuesRetryWithoutSameTurnRetry)$' -count=1`
+
+Why this matters:
+
+- the live sessions `ef68ce67-04f9-4295-9151-6c417fd22f4a` and `db21265f-c37d-40e4-9ed5-13def09970f8` showed the same bad shape:
+  - a turn exhausted its in-turn provider retries
+  - then the completed-turn event immediately minted another fresh turn on the same user message
+- that is pure provider churn, not productive reasoning
+
+Deploy status:
+
+- code and tests are complete
+- runtime restart is the next step now that the worker is on a quiet edge again
+
 ## Update 02:52 MDT
 
 I found a real provider-routing bug while checking why `claude-swh-me` still looked dead even after its transient-failure burst should have aged out.

@@ -1308,10 +1308,13 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 		return err
 	}
 	latestUser := latestUserMessage(messages)
+	if latestUser == nil {
+		return nil
+	}
 
 	taskStatus := strings.ToLower(strings.TrimSpace(taskRecord.WorkStatus))
 	blockedRecoveryLane := false
-	if taskStatus == "blocked" && latestUser != nil {
+	if taskStatus == "blocked" {
 		blockedRecoveryLane = isRecoveryResumeMessage(*latestUser) || taskContinuationResumeMessageRootsHistory(*latestUser)
 	}
 	if taskStatus != "in_progress" && taskStatus != "review" && !blockedRecoveryLane {
@@ -1346,11 +1349,27 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	if effectiveTaskStatus == "review" && nodeType != "review" {
 		return nil
 	}
-	if effectiveTaskStatus == "review" {
-		if reviewTurnCompletedWithDecision(messages, payload.TurnID) {
+	if retryDelay, ok := exhaustedTransientRetryAutoContinuationDelay(messages, payload.TurnID); ok {
+		nextPayload := AgentTurnPayload{
+			SessionID: session.ID,
+			MessageID: latestUser.ID,
+		}
+		if latestCompleted.RespondingID != uuid.Nil {
+			agentID := latestCompleted.RespondingID
+			nextPayload.AgentID = &agentID
+		}
+		runAfter := e.now().Add(retryDelay).UTC()
+		enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+		if err != nil {
+			return err
+		}
+		if !enqueued {
 			return nil
 		}
-		if latestUser == nil {
+		return nil
+	}
+	if effectiveTaskStatus == "review" {
+		if reviewTurnCompletedWithDecision(messages, payload.TurnID) {
 			return nil
 		}
 		assistant := latestAssistantFinalForTurn(messages, payload.TurnID)
@@ -1366,9 +1385,6 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 		return nil
 	}
 	if shouldSuppressAutoContinuationForRecoveryHalt(messages, payload.TurnID, taskRecord.Metadata) {
-		return nil
-	}
-	if latestUser == nil {
 		return nil
 	}
 	assistant := latestAssistantFinalForTurn(messages, payload.TurnID)
@@ -23447,6 +23463,26 @@ func shouldSuppressAutoContinuationForRecoveryHalt(messages []repo.ChatMessage, 
 		}
 	}
 	return false
+}
+
+func exhaustedTransientRetryAutoContinuationDelay(messages []repo.ChatMessage, turnID uuid.UUID) (time.Duration, bool) {
+	if turnID == uuid.Nil {
+		return 0, false
+	}
+	for _, message := range messages {
+		if message.TurnID == nil || *message.TurnID != turnID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "system") {
+			continue
+		}
+		content := strings.ToLower(strings.TrimSpace(message.Content))
+		if strings.HasPrefix(content, "[turn failed: temporary model provider retries exhausted after") ||
+			strings.HasPrefix(content, "[turn failed: temporary infrastructure retries exhausted after") {
+			return maxTransientInfraBackoff, true
+		}
+	}
+	return 0, false
 }
 
 func (e *TurnEngine) ensureRecoveryTurnDurableTaskState(ctx context.Context, rt *turnRuntime) error {

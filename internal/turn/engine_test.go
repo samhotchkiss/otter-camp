@@ -2440,6 +2440,75 @@ func TestHandleTurnCompletedEventEnqueuesAutoContinuation(t *testing.T) {
 	}
 }
 
+func TestHandleTurnCompletedEventDefersAutoContinuationAfterTransientProviderRetryExhausted(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+
+	taskID := uuid.New()
+	nodeID := uuid.New()
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				OrganizationID:    fixture.session.OrganizationID,
+				ProjectID:         uuid.New(),
+				WorkStatus:        "in_progress",
+				CurrentFlowNodeID: &nodeID,
+			},
+		},
+	}
+	fixture.engine.flowNodes = &fakeFlowNodeRepo{
+		items: map[uuid.UUID]repo.FlowNode{
+			nodeID: {ID: nodeID, NodeType: "work"},
+		},
+	}
+
+	agentID := fixture.chat.participants[0].ParticipantID
+	turnID := createCompletedTurnWithAssistantMessage(t, fixture, agentID, "")
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Turn failed: temporary model provider retries exhausted after 5 attempts.]",
+	})
+
+	if err := fixture.engine.HandleTurnCompletedEvent(context.Background(), eventbus.DomainEvent{
+		OrganizationID: fixture.session.OrganizationID,
+		EventType:      "chat.turn.completed",
+		Payload:        mustRawJSON(t, map[string]any{"session_id": fixture.session.ID, "turn_id": turnID}),
+	}); err != nil {
+		t.Fatalf("HandleTurnCompletedEvent: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn jobs = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil {
+		t.Fatal("delayed retry payload missing")
+	}
+	if jobs[0].payload.SessionID != fixture.session.ID {
+		t.Fatalf("payload.session_id = %s, want %s", jobs[0].payload.SessionID, fixture.session.ID)
+	}
+	if jobs[0].payload.MessageID != fixture.userMessageID {
+		t.Fatalf("payload.message_id = %s, want %s", jobs[0].payload.MessageID, fixture.userMessageID)
+	}
+	if jobs[0].payload.AgentID == nil || *jobs[0].payload.AgentID != agentID {
+		t.Fatalf("payload.agent_id = %v, want %s", jobs[0].payload.AgentID, agentID)
+	}
+	if jobs[0].runAfter == nil {
+		t.Fatal("delayed retry run_after missing")
+	}
+	wantRunAfter := base.Add(maxTransientInfraBackoff)
+	if !jobs[0].runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", *jobs[0].runAfter, wantRunAfter)
+	}
+}
+
 func TestAppendReviewActionStateRootsHistoryForReviewTask(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
