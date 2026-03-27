@@ -13574,11 +13574,10 @@ func recoveryTaskTargetPathScore(taskRecord repo.ProjectTask, targetPath, draft 
 func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, checkpoint taskcheckpoint.RecoveryFileWriteCheckpoint) taskcheckpoint.RecoveryFileWriteCheckpoint {
 	checkpoint = taskcheckpoint.NormalizeRecoveryFileWriteCheckpoint(checkpoint)
 	targetPath := strings.TrimSpace(checkpoint.TargetPath)
-	preferred := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord))
+	explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord))
 	if targetPath != "" &&
 		recoveryLowSignalPackageMarkerPath(targetPath) &&
-		(preferred == "" || !sameWorkspaceRelativePath(preferred, targetPath)) &&
-		(explicitDeliverablePath(taskRecord) == "" || !sameWorkspaceRelativePath(explicitDeliverablePath(taskRecord), targetPath)) {
+		(explicit == "" || !sameWorkspaceRelativePath(explicit, targetPath)) {
 		checkpoint.TargetPath = ""
 		targetPath = ""
 	}
@@ -13586,28 +13585,24 @@ func normalizeRecoveryCheckpointTargetForTask(taskRecord repo.ProjectTask, check
 		checkpoint.TargetPath = ""
 		targetPath = ""
 	}
-	if preferred != "" {
-		if sameWorkspaceRelativePath(preferred, targetPath) {
+	if explicit != "" {
+		if sameWorkspaceRelativePath(explicit, targetPath) {
 			return checkpoint
 		}
-		checkpoint.TargetPath = preferred
+		checkpoint.TargetPath = explicit
 		return checkpoint
 	}
-	if targetPath == "" || !strings.HasPrefix(strings.ToLower(targetPath), "planning/") {
+	if targetPath != "" && !strings.HasPrefix(strings.ToLower(targetPath), "planning/") {
 		return checkpoint
 	}
-	plan, ok := taskplan.Parse(taskRecord.Metadata)
-	if !ok || !strings.EqualFold(strings.TrimSpace(plan.Mode), taskplan.ModeExecutionFirst) {
+	preferred := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord))
+	if preferred == "" {
 		return checkpoint
 	}
-	if !taskNeedsExecutableReportTarget(taskRecord) {
+	if sameWorkspaceRelativePath(preferred, targetPath) {
 		return checkpoint
 	}
-	inferred, ok := inferredExecutionReportTargetPath(taskRecord)
-	if !ok || sameWorkspaceRelativePath(inferred, targetPath) {
-		return checkpoint
-	}
-	checkpoint.TargetPath = inferred
+	checkpoint.TargetPath = preferred
 	return checkpoint
 }
 
@@ -15542,6 +15537,13 @@ func parseRecentDeliverableTargetFromToolResult(content string) string {
 func (e *TurnEngine) sessionTaskDeliverablePath(ctx context.Context, sessionID uuid.UUID, taskRecord repo.ProjectTask) string {
 	if explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord)); explicit != "" {
 		return explicit
+	}
+	if checkpoint, ok := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata); ok {
+		normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
+		if targetPath := normalizeWorkspaceRelativePath(strings.TrimSpace(normalized.TargetPath)); targetPath != "" &&
+			looksLikeExplicitDeliverablePath(targetPath, normalized.TargetPath) {
+			return targetPath
+		}
 	}
 	if sessionID != uuid.Nil {
 		if targetPath := normalizeWorkspaceRelativePath(e.latestRecoveryTargetPathForSession(ctx, sessionID)); targetPath != "" &&

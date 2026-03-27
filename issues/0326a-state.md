@@ -3119,6 +3119,59 @@ Status:
 - code + focused tests are green
 - runtime restart and live proof were still pending when I wrote this note
 
+## Update 02:10 MDT
+
+The first fresh `02:00 MDT` retry window exposed a second-order bug in the same area.
+
+What the live turns showed:
+
+- fresh task-10 retry session [`8b8f849f-e367-4366-8e25-6f5770fcdf62`](../issues/0326a-state.md) still emitted:
+  - `Start with the preferred deliverable target Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md`
+- even though a prior task-10 work session had already emitted native `deliverable_path_required` results naming:
+  - `results/review-path-validation-summary.md`
+- the same pattern also showed up on task `13`, where historical concrete deliverable evidence existed but the task row still carried no recovery target
+
+Root cause:
+
+- the prior slice fixed session-local target selection
+- but `normalizeRecoveryCheckpointTargetForTask(...)` still let `preferredTaskDeliverablePath(...)` overwrite a concrete checkpoint target with the generic inferred `Work/OC-...md` fallback
+- so even when a work lane persisted `deliverable_path_required -> results/...`, normalization collapsed it back to `Work/...`
+
+What I changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `normalizeRecoveryCheckpointTargetForTask(...)` now preserves concrete non-planning checkpoint targets when there is no explicit task deliverable path
+  - explicit deliverable paths still override checkpoints
+  - planning-path checkpoints still collapse to the canonical preferred target
+  - `sessionTaskDeliverablePath(...)` now consults the normalized checkpoint target before session-local history and generic inference
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving:
+    - concrete checkpoint targets survive normalization without an explicit deliverable path
+    - session deliverable selection prefers the preserved checkpoint target over inferred `Work/...`
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerified|NormalizeRecoveryCheckpointTargetForTask.*|LatestRecoveryTargetPathForSessionFallsBackTo(ReviewPromptTarget|RecentToolResultDeliverablePath)|SessionTaskDeliverablePathPrefersCheckpointTargetOverInferredReportPath|RecoverySynthesizedFileWriteTargetPathPrefersSessionDeliverableTargetOverInferredReportPath|HandleTaskFileWriteWrongPath.*|HandleTurnCompletedEventBlocksRepeatedReviewFileReadNotFoundTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedRetriesWithoutReviewDecision)$' -count=1`
+- rebuilt and restarted tmux `codex-e2e-20260324`
+- health is green on the new binary
+
+Operational repair applied:
+
+- because the old normalization bug had already poisoned two active task rows, I repaired their checkpoint targets directly in the DB so future fresh continuations do not inherit stale targets:
+  - task `10` `Workstream B: Review Path Validation`
+    - checkpoint target repaired from `Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md`
+    - to `results/review-path-validation-summary.md`
+  - task `13` `Validate pipeline metrics and alerting hooks`
+    - checkpoint target repaired from empty
+    - to `scripts/validate-metrics-alerting.sh`
+
+Current live-proof status:
+
+- the code fix is deployed
+- the task rows are repaired
+- but the current pending retry for task `10` is still tied to the already-minted stale review prompt, so that specific pending turn will not prove the new target choice until a fresh continuation prompt is generated after the next retry cycle
+
 ## Update 01:02 MDT
 
 I tightened one narrower review seam instead of adding another generic cap.

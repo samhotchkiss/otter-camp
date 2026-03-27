@@ -4913,6 +4913,26 @@ func TestNormalizeRecoveryCheckpointTargetForTaskReplacesPackageMarkerWithExplic
 	}
 }
 
+func TestNormalizeRecoveryCheckpointTargetForTaskPreservesConcreteCheckpointTargetWithoutExplicitDeliverable(t *testing.T) {
+	taskRecord := repo.ProjectTask{
+		TaskNumber: 10,
+		Title:      "Workstream B: Review Path Validation",
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": "execution_first",
+			},
+		}),
+	}
+	checkpoint := taskcheckpoint.RecoveryFileWriteCheckpoint{
+		TargetPath: "results/review-path-validation-summary.md",
+	}
+
+	normalized := normalizeRecoveryCheckpointTargetForTask(taskRecord, checkpoint)
+	if normalized.TargetPath != "results/review-path-validation-summary.md" {
+		t.Fatalf("normalized target_path = %q, want preserved concrete checkpoint target", normalized.TargetPath)
+	}
+}
+
 func TestPreferredTaskDeliverablePathInfersTestExecutionLogTarget(t *testing.T) {
 	description := "Execute test scenario 2 (edge cases): test capacity limits, concurrent assignments, boundary conditions. Log all test cases and verify system behavior under stress."
 	taskRecord := repo.ProjectTask{
@@ -25025,6 +25045,28 @@ func TestLatestRecoveryTargetPathForSessionFallsBackToRecentToolResultDeliverabl
 
 	if got := fixture.engine.latestRecoveryTargetPathForSession(context.Background(), fixture.session.ID); got != "results/review-path-validation-summary.md" {
 		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "results/review-path-validation-summary.md")
+	}
+}
+
+func TestSessionTaskDeliverablePathPrefersCheckpointTargetOverInferredReportPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskRecord := repo.ProjectTask{
+		TaskNumber: 10,
+		Title:      "Workstream B: Review Path Validation",
+		Metadata: mustRawJSON(t, map[string]any{
+			"planning": map[string]any{
+				"mode": "execution_first",
+			},
+			"recovery_file_write_checkpoint": map[string]any{
+				"target_path": "results/review-path-validation-summary.md",
+			},
+		}),
+	}
+
+	if got := fixture.engine.sessionTaskDeliverablePath(context.Background(), fixture.session.ID, taskRecord); got != "results/review-path-validation-summary.md" {
+		t.Fatalf("sessionTaskDeliverablePath(...) = %q, want %q", got, "results/review-path-validation-summary.md")
 	}
 }
 

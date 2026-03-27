@@ -757,6 +757,12 @@ Still pending from this spec:
     - session target fallback from recent `deliverable_path` tool results
     - recovery synthesized target selection preferring the session target over the inferred report path
     - task-lane `file.write` rewrite preferring the session target over the inferred report path
+- recovery checkpoint normalization no longer lets the generic inferred `Work/OC-...md` fallback overwrite a concrete checkpoint target that came from live tool feedback:
+  - explicit task deliverable paths still win
+  - planning-path checkpoints still collapse to the canonical preferred target
+  - but concrete non-planning checkpoint targets like `results/...` or `scripts/...` now survive normalization
+  - session deliverable selection now consults that normalized checkpoint target before falling back to session-local history or generic inference
+  - this closes the second-order bug where `deliverable_path_required` was already being persisted but then immediately normalized back to `Work/...`
 - live proof that the new task-16 recovery-draft matcher variant fires before dispatch on a fresh retry that actually reuses the bad narration:
   - focused unit coverage is green
   - the runtime is already deployed on this matcher
