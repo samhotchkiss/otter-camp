@@ -8499,6 +8499,300 @@ func TestHandleCompletedProjectExecutionContinuationTurnAutoQueuesRunnableDraft(
 	}
 }
 
+func TestHandleCompletedProjectExecutionContinuationTurnAutoQueuesAfterReadOnlyToolResults(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:              completedTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      10,
+				Title:           "Validate review path continuation",
+				WorkStatus:      "done",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      11,
+				Title:           "Workstream C: Wave Gating Validation",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	taskTransitions := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = taskTransitions
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	toolResults := []repo.ChatMessage{
+		{
+			ID:             uuid.New(),
+			SessionID:      fixture.session.ID,
+			TurnID:         &turnID,
+			Role:           "tool_result",
+			Status:         "final",
+			SequenceNumber: 11,
+			Content:        `{"tool_name":"project.list","output":{"projects":[{"id":"` + projectID.String() + `"}]}}`,
+		},
+		{
+			ID:             uuid.New(),
+			SessionID:      fixture.session.ID,
+			TurnID:         &turnID,
+			Role:           "tool_result",
+			Status:         "final",
+			SequenceNumber: 12,
+			Content:        `{"tool_name":"task.list","output":{"tasks":[{"id":"` + draftTaskID.String() + `","task_number":11,"work_status":"draft"}]}}`,
+		},
+		{
+			ID:             uuid.New(),
+			SessionID:      fixture.session.ID,
+			TurnID:         &turnID,
+			Role:           "tool_result",
+			Status:         "final",
+			SequenceNumber: 13,
+			Content:        `{"tool_name":"file.read","output":{"path":"planning/validation-plan.md","byte_size":512}}`,
+		},
+		{
+			ID:             uuid.New(),
+			SessionID:      fixture.session.ID,
+			TurnID:         &turnID,
+			Role:           "tool_result",
+			Status:         "final",
+			SequenceNumber: 14,
+			Content:        `{"tool_name":"flow.list_templates","output":{"templates":[]}}`,
+		},
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I found the remaining draft task and reviewed the planning artifacts. The next draft task is still ready to proceed.",
+		SequenceNumber: 15,
+	}
+	messages := []repo.ChatMessage{*latestUser}
+	for _, msg := range toolResults {
+		messages = append(messages, msg)
+	}
+	messages = append(messages, *assistant)
+	completedTurn := &repo.ChatTurn{ID: turnID, SessionID: fixture.session.ID}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected read-only continuation to auto-queue runnable draft task")
+	}
+
+	updatedDraft, err := taskRepo.GetByID(context.Background(), draftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID draft task: %v", err)
+	}
+	if updatedDraft.WorkStatus != "queued" {
+		t.Fatalf("draft task work_status = %q, want queued", updatedDraft.WorkStatus)
+	}
+	if !fixture.messages.containsContentSubstring("after a non-mutating continuation left runnable draft work untouched") {
+		t.Fatal("expected non-mutating continuation system message")
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnHandlesProjectContinuationResumeSource(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	draftTaskID := uuid.New()
+	uuidPtr := func(id uuid.UUID) *uuid.UUID { return &id }
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			draftTaskID: {
+				ID:              draftTaskID,
+				ProjectID:       projectID,
+				TaskNumber:      11,
+				Title:           "Workstream C: Wave Gating Validation",
+				WorkStatus:      "draft",
+				AssignedAgentID: uuidPtr(uuid.New()),
+				FlowTemplateID:  uuidPtr(uuid.New()),
+			},
+		},
+	}
+	taskTransitions := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = taskTransitions
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Content:        "Continue the active project execution now from the continuation summary above.",
+		Metadata:       mustJSONRaw(map[string]any{"source": "project_continuation_resume", "synthetic_user_message": true}),
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		SequenceNumber: 11,
+		Content:        `{"tool_name":"task.list","output":{"tasks":[{"id":"` + draftTaskID.String() + `","task_number":11,"work_status":"draft"}]}}`,
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I can see the remaining draft task and should move the project forward.",
+		SequenceNumber: 12,
+	}
+	messages := []repo.ChatMessage{*latestUser, *toolResult, *assistant}
+	completedTurn := &repo.ChatTurn{ID: turnID, SessionID: fixture.session.ID}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected project_continuation_resume source to use project continuation repair path")
+	}
+
+	updatedDraft, err := taskRepo.GetByID(context.Background(), draftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID draft task: %v", err)
+	}
+	if updatedDraft.WorkStatus != "queued" {
+		t.Fatalf("draft task work_status = %q, want queued", updatedDraft.WorkStatus)
+	}
+}
+
+func TestHandleCompletedProjectExecutionContinuationTurnIgnoresMutatingToolResults(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	completedTaskID := uuid.New()
+	draftTaskID := uuid.New()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.pool = testdb.New(t)
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			completedTaskID: {
+				ID:         completedTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 16,
+				Title:      "Close review path validation",
+				WorkStatus: "done",
+			},
+			draftTaskID: {
+				ID:         draftTaskID,
+				ProjectID:  projectID,
+				TaskNumber: 19,
+				Title:      "Queue follow-on validation task",
+				WorkStatus: "draft",
+			},
+		},
+	}
+	taskTransitions := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = taskTransitions
+
+	userMessageID := uuid.New()
+	turnID := uuid.New()
+	latestUser := &repo.ChatMessage{
+		ID:             userMessageID,
+		SessionID:      fixture.session.ID,
+		Role:           "user",
+		Status:         "pending",
+		SequenceNumber: 10,
+		Metadata: mustJSONRaw(map[string]any{
+			"source":            projectExecutionContinuationSource,
+			"auto_continue":     true,
+			"completed_task_id": completedTaskID.String(),
+		}),
+	}
+	toolResult := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "tool_result",
+		Status:         "final",
+		SequenceNumber: 11,
+		Content:        `{"tool_name":"task.update","output":{"task_id":"` + draftTaskID.String() + `","work_status":"queued"}}`,
+	}
+	assistant := &repo.ChatMessage{
+		ID:             uuid.New(),
+		SessionID:      fixture.session.ID,
+		TurnID:         &turnID,
+		Role:           "assistant",
+		Status:         "final",
+		Content:        "I have already advanced the task state directly.",
+		SequenceNumber: 12,
+	}
+	messages := []repo.ChatMessage{*latestUser, *toolResult, *assistant}
+	completedTurn := &repo.ChatTurn{ID: turnID, SessionID: fixture.session.ID}
+
+	handled, err := fixture.engine.handleCompletedProjectExecutionContinuationTurn(context.Background(), fixture.session, completedTurn, latestUser, assistant, messages)
+	if err != nil {
+		t.Fatalf("handleCompletedProjectExecutionContinuationTurn: %v", err)
+	}
+	if handled {
+		t.Fatal("expected mutating continuation results not to trigger draft auto-queue repair")
+	}
+
+	updatedDraft, err := taskRepo.GetByID(context.Background(), draftTaskID)
+	if err != nil {
+		t.Fatalf("GetByID draft task: %v", err)
+	}
+	if updatedDraft.WorkStatus != "draft" {
+		t.Fatalf("draft task work_status = %q, want draft", updatedDraft.WorkStatus)
+	}
+	if fixture.messages.containsContentSubstring("auto-queued task 19") {
+		t.Fatal("unexpected auto-queue system message after mutating tool result")
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnConsumesBoundedSizeQueueFailure(t *testing.T) {
 	t.Parallel()
 

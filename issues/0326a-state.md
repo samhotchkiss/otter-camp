@@ -3126,6 +3126,63 @@ Live proof:
   - large generic queued-turn retry counts are still visible
   - but they no longer cause an immediate exhausted-provider stop on the next transient miss
 
+## Update 04:41 MDT
+
+I cut the next control-lane seam in the live async project session churn: project continuations were treating successful read-only discovery turns as “real progress,” which let them burn a full turn on browse/read tools and then auto-continue instead of taking the already-available draft-task action.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `handleCompletedProjectExecutionContinuationTurn(...)` no longer treats any successful tool result as sufficient progress
+  - it now distinguishes:
+    - successful mutating tool results: leave the continuation alone
+    - successful read-only discovery results: still eligible for the existing draft-task auto-queue repair
+  - added `turnHasSuccessfulMutatingToolResult(...)`
+  - widened read-only discovery classification to include the actual project-continuation browse tools showing up live:
+    - `project.list`
+    - `task.list`
+    - `flow.list_templates`
+    - `agent.list`
+    - `memory.query`
+    - `memory.list`
+  - widened the same repair path to accept both continuation message roots:
+    - `project_execution_continuation`
+    - `project_continuation_resume`
+  - that matters because the live hot `db212...` turns were resume turns appended after `[Max tool calls reached - continuing in a new turn.]`, not the post-task-completion continuation source
+  - read-only `cli.execute` inspection still stays read-only; mutating shell commands still count as progress
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving a read-only continuation with successful browse/read results still auto-queues the next runnable draft task
+  - added focused coverage proving the `project_continuation_resume` source uses the same repair path
+  - added coverage proving a continuation that already made a mutating tool call does not trigger the auto-queue repair path
+
+Why this slice exists:
+
+- live project session `db21265f-c37d-40e4-9ed5-13def09970f8` showed the exact bad turn shape
+- turn `dd039a2d-5235-42f3-999b-88210b38851a` at `04:20 MDT` spent its full budget on:
+  - `project.list`
+  - `task.list`
+  - `task.list`
+  - `file.read`
+  - `file.read`
+  - `flow.list_templates`
+  - `task.get`
+  - `task.get`
+- then ended with:
+  - `[Max tool calls reached. Turn ended.]`
+  - `[Max tool calls reached - continuing in a new turn.]`
+- that turn had no successful mutating tool result at all, but the old continuation repair path still ignored it because the read-only tools were technically “successful”
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurn(AutoQueuesRunnableDraft|AutoQueuesAfterReadOnlyToolResults|IgnoresMutatingToolResults|ConsumesBoundedSizeQueueFailure|RetriesGenericReplyWithFreshMessage)$' -count=1`
+- `go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurn(AutoQueuesRunnableDraft|AutoQueuesAfterReadOnlyToolResults|IgnoresMutatingToolResults|ConsumesBoundedSizeQueueFailure|RetriesGenericReplyWithFreshMessage|RetriesDependencyErrorCoachingReplyWithFreshMessage|RetriesAllScopeTaskCreateCoachingReplyWithFreshMessage)$' -count=1`
+
+Expected live effect:
+
+- async project continuations that only browse/read and summarize should now fall back to the existing direct project action repair instead of getting a free pass just because the read tools succeeded
+- the specific `db212...` family should shift from repeated read-only `max_tool_calls` turns toward direct auto-queuing of the next runnable draft task whenever one still exists
+
 ## Update 04:05 MDT
 
 I fixed the worker-side transient-provider recovery gap that was still rearming idle async sessions immediately after a failed provider-transient turn.

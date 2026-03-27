@@ -3634,11 +3634,10 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 	if e == nil || session == nil || completedTurn == nil || latestUser == nil || assistant == nil || e.tasks == nil || e.taskTransitions == nil {
 		return false, nil
 	}
-	metadata := messageMetadataMap(latestUser.Metadata)
-	if !strings.EqualFold(strings.TrimSpace(stringValue(metadata["source"])), projectExecutionContinuationSource) {
+	if !projectContinuationResumeMessageRootsHistory(*latestUser) {
 		return false, nil
 	}
-	if turnHasSuccessfulToolResult(messages, completedTurn.ID) {
+	if turnHasSuccessfulMutatingToolResult(messages, completedTurn.ID) {
 		return false, nil
 	}
 	assistantContent := strings.TrimSpace(assistant.Content)
@@ -3675,7 +3674,7 @@ func (e *TurnEngine) handleCompletedProjectExecutionContinuationTurn(
 		ctx,
 		completedTurn.ID,
 		session.ID,
-		fmt.Sprintf("[Project continuation auto-queued %s after a narrative-only continuation left runnable draft work untouched.]", projectBootstrapTaskLabel(queuedTask)),
+		fmt.Sprintf("[Project continuation auto-queued %s after a non-mutating continuation left runnable draft work untouched.]", projectBootstrapTaskLabel(queuedTask)),
 	)
 	return true, nil
 }
@@ -3875,6 +3874,45 @@ func turnHasSuccessfulToolResult(messages []repo.ChatMessage, turnID uuid.UUID) 
 		if strings.TrimSpace(errText) == "" {
 			return true
 		}
+	}
+	return false
+}
+
+func turnHasSuccessfulMutatingToolResult(messages []repo.ChatMessage, turnID uuid.UUID) bool {
+	if turnID == uuid.Nil {
+		return false
+	}
+	turnMessages := messagesForTurn(messages, turnID)
+	toolCalls := parseTurnAssistantToolCalls(turnMessages)
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, _, errText, ok := parseToolResultMessage(message.Content)
+		if !ok || strings.TrimSpace(errText) != "" {
+			continue
+		}
+		if successfulToolResultIsReadOnly(strings.ToLower(strings.TrimSpace(toolName)), message, toolCalls) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func successfulToolResultIsReadOnly(toolName string, message repo.ChatMessage, toolCalls map[string]storedAssistantToolCall) bool {
+	if isReadOnlyDiscoveryTool(toolName) {
+		return true
+	}
+	if strings.EqualFold(toolName, "cli.execute") {
+		if message.ToolCallID == nil {
+			return false
+		}
+		call, ok := toolCalls[strings.TrimSpace(*message.ToolCallID)]
+		if !ok {
+			return false
+		}
+		return isReadOnlyDiscoveryCLIExecuteCall(call.Arguments)
 	}
 	return false
 }
@@ -10116,7 +10154,7 @@ func summarizeReadOnlyDiscoveryTurn(messages []repo.ChatMessage, turnID uuid.UUI
 
 func isReadOnlyDiscoveryTool(toolName string) bool {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "file.list", "file.read", "file.search", "git.log", "git.diff", "git.status", "task.get", "project.get", "flow.get_template", "flow.get_execution":
+	case "file.list", "file.read", "file.search", "git.log", "git.diff", "git.status", "task.get", "task.list", "project.get", "project.list", "flow.get_template", "flow.get_execution", "flow.list_templates", "agent.list", "memory.query", "memory.list":
 		return true
 	default:
 		return false
