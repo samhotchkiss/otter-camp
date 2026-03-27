@@ -3154,6 +3154,37 @@ Live status:
 - deployed and healthy on the new binary
 - fresh live proof is still pending the next real transiently interrupted review turn on this runtime
 
+## Update 06:11 MDT
+
+I removed another deterministic retry from orchestration-parent review lanes by repairing the exact `task.list` argument shape the live model had been getting wrong.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async `project_task` review lanes for orchestration-only parent tasks now auto-inject `parent_task_id=current_task` for `task.list` when the raw model call is still clearly trying to scope to the current parent
+  - the current bounded injection covers the live shape we already observed:
+    - raw `project_id=current_task`
+    - optional `status=all`
+  - explicit broad-project/task requests are still left alone and remain blocked by the existing review guard
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving:
+    - the narrow `parent_task_id` injection happens for the live task-9 shape
+    - explicit broad-project requests do not get auto-corrected
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedList|MaybeInjectOrchestrationParentReviewTaskListParentID|MaybeInjectOrchestrationParentReviewTaskListParentIDIgnoresExplicitBroadProjectScope)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- rebuilt/restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Live status right after deploy:
+
+- task-9 review session [`729dd9e7-36c4-46a1-988b-8e35e5b96b88`](../issues/0326a-state.md)
+  - first fresh post-deploy retries at `2026-03-27 06:06:46 MDT` were still interrupted by transient provider failure immediately after rereading the orchestration summary
+  - so this slice is deployed and healthy, but the new auto-injected child-task lookup has not yet been observed on a completed live review turn
+
 ## Update 05:40 MDT
 
 The orchestration-parent review prompt fix is now live-proven, and the next concrete leak is narrower.

@@ -8382,6 +8382,82 @@ func TestShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedLis
 	}
 }
 
+func TestMaybeInjectOrchestrationParentReviewTaskListParentID(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				ProjectID:   projectID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	rawArguments := map[string]any{
+		"project_id": taskID.String(),
+		"status":     "all",
+	}
+	arguments := map[string]any{
+		"project_id": projectID.String(),
+		"status":     "all",
+	}
+	fixture.engine.maybeInjectOrchestrationParentReviewTaskListParentID(context.Background(), rt, "task.list", rawArguments, arguments)
+	if got := stringValue(arguments["parent_task_id"]); got != taskID.String() {
+		t.Fatalf("parent_task_id = %q, want %s", got, taskID)
+	}
+}
+
+func TestMaybeInjectOrchestrationParentReviewTaskListParentIDIgnoresExplicitBroadProjectScope(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				ProjectID:   projectID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	rawArguments := map[string]any{
+		"project_id": projectID.String(),
+	}
+	arguments := map[string]any{
+		"project_id": projectID.String(),
+	}
+	fixture.engine.maybeInjectOrchestrationParentReviewTaskListParentID(context.Background(), rt, "task.list", rawArguments, arguments)
+	if got := stringValue(arguments["parent_task_id"]); got != "" {
+		t.Fatalf("parent_task_id = %q, want empty", got)
+	}
+}
+
 func TestShouldBlockOrchestrationParentReviewCurrentTaskGetTool(t *testing.T) {
 	t.Parallel()
 

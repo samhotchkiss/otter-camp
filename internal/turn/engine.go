@@ -10780,6 +10780,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 				tier = strings.ToLower(t)
 			}
 		}
+		rawArguments := cloneMap(call.Arguments)
 		arguments := cloneMap(call.Arguments)
 		arguments["organization_id"] = rt.session.OrganizationID.String()
 		if !toolPreservesExplicitTargetSessionID(name) {
@@ -10790,6 +10791,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			arguments["agent_id"] = rt.agent.ID.String()
 		}
 		maybeInjectTaskExecutionSubtaskCreateExecutionID(rt, name, arguments)
+		e.maybeInjectOrchestrationParentReviewTaskListParentID(ctx, rt, name, rawArguments, arguments)
 		if binding.projectID != nil {
 			arguments["project_id"] = binding.projectID.String()
 		}
@@ -21357,6 +21359,38 @@ func maybeInjectTaskExecutionSubtaskCreateExecutionID(rt *turnRuntime, toolName 
 		return
 	}
 	arguments["flow_node_execution_id"] = executionID.String()
+}
+
+func (e *TurnEngine) maybeInjectOrchestrationParentReviewTaskListParentID(ctx context.Context, rt *turnRuntime, toolName string, rawArguments, arguments map[string]any) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil || arguments == nil {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(toolName), "task.list") {
+		return
+	}
+	if strings.TrimSpace(stringValue(arguments["parent_task_id"])) != "" {
+		return
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") || !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return
+	}
+	if rawProjectID, ok := parseUUIDAny(rawArguments["project_id"]); ok && rawProjectID != uuid.Nil && rawProjectID != taskRecord.ID {
+		return
+	}
+	if rawTaskID, ok := parseUUIDAny(rawArguments["task_id"]); ok && rawTaskID != uuid.Nil {
+		return
+	}
+	arguments["parent_task_id"] = taskRecord.ID.String()
 }
 
 func shouldBlockTaskExecutionSubtaskCreateTool(rt *turnRuntime, toolName string) bool {

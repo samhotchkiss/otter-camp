@@ -977,3 +977,14 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - focused turn-engine coverage now proves transient retries enqueue the synthesized reject prompt after `file.read -> not_found` on the preferred deliverable
     - runtime was rebuilt/restarted successfully at `2026-03-27 06:06 MDT`
     - fresh live proof is pending the next real transiently interrupted review turn on the new binary
+  - orchestration-parent review lanes now auto-correct the last remaining deterministic `task.list` argument-shape mistake:
+    - in async `project_task` review lanes for orchestration-only parent tasks, `task.list` now auto-injects `parent_task_id=current_task` when the model omits it and the raw call shape is still clearly trying to scope to the current parent
+    - this is intentionally narrow:
+      - `task.list` only
+      - orchestration-only parent review only
+      - no injection when the raw call explicitly targets some other project or task scope
+    - focused turn-engine coverage now proves:
+      - the narrow injection happens for the live `project_id=current_task` / `status=all` shape
+      - explicit broad-project requests still remain blocked
+    - runtime was rebuilt/restarted successfully at `2026-03-27 06:11 MDT`
+    - fresh live proof is still pending because the first post-deploy task-9 retries on the new binary failed provider-side immediately after rereading the parent summary, before they reached `task.list`
