@@ -3062,6 +3062,59 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 02:15 MDT
+
+I found the next narrow deliverable-targeting bug in fresh live traffic and patched it.
+
+What happened live:
+
+- the repaired task-10 review retry prompt is now correct in the database:
+  - session `8b8f849f-e367-4366-8e25-6f5770fcdf62`
+  - message `17` now starts with:
+    - `Start with the preferred deliverable target \`results/review-path-validation-summary.md\``
+- that lane did not yet prove the new target in-model because the first post-repair retry still died in provider backoff:
+  - turn `7a01899f-1772-45e1-82ca-4134e80293f6`
+  - failed at `02:00:23 MDT`
+  - no fresh assistant/tool step after the repaired prompt
+- the hottest actual completed task turn in the last hour was task-13 session `eb57c99d-f1ab-4778-ad05-3bb55b78e575`
+  - on that turn, the model attempted to write helper path `gen_script.py`
+  - runtime silently redirected the write into `scripts/validate-metrics-alerting.sh`
+  - the resulting file contained Python generator code inside the bash deliverable
+  - the lane then had to spend extra rounds reading the file back, explaining the bad redirect, replacing the whole body with `file.edit`, rereading it again, and only then running the real validation script
+
+What I changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - narrowed `shouldRewriteTaskFileWritePath(...)`
+  - the runtime still rewrites obvious same-kind aliases onto the intended deliverable
+  - but it now skips the rewrite when both the attempted path and the target path have concrete file extensions and those extensions differ
+  - practical effect:
+    - `.md -> .md` canonical document rewrites still work
+    - helper-file shapes like `.py -> .sh` no longer silently retarget into the deliverable
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added `TestHandleTaskFileWriteWrongPathSkipsExtensionMismatchRewrite`
+  - this reproduces the exact live task-13 family:
+    - attempted `gen_script.py`
+    - deliverable `scripts/validate-metrics-alerting.sh`
+    - rewrite must now be skipped
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(HandleTaskFileWriteWrongPath(SkipsExtensionMismatchRewrite|SkipsCrossArtifactFamilyRewrite|SkipsScriptToConfigRewrite|PrefersSessionDeliverableTargetOverInferredReportPath)|RecoverySynthesizedFileWriteTargetPathPrefersSessionDeliverableTargetOverInferredReportPath|NormalizeRecoveryCheckpointTargetForTask.*|SessionTaskDeliverablePathPrefersCheckpointTargetOverInferredReportPath)$' -count=1`
+
+Why this is the right cut:
+
+- the earlier family-level rewrite narrowing already prevented strong cross-artifact redirects like `scripts/ -> config/`
+- this patch removes the next damaging silent retarget case without backing out the helpful canonical alias behavior
+- it should reduce “write helper, repair deliverable, reread, explain, rerun” waste without making normal deliverable writes harder
+
+Current proof state:
+
+- code and tests are complete
+- runtime restart was the next step after this note
+- live proof is still pending the next fresh task lane that would otherwise try a helper-file write with a mismatched extension
+
 ## Update 01:36 MDT
 
 I traced the next recovery seam to an engine/native target mismatch on task `10`.

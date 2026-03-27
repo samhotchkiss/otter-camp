@@ -25231,6 +25231,63 @@ func TestHandleTaskFileWriteWrongPathSkipsScriptToConfigRewrite(t *testing.T) {
 	}
 }
 
+func TestHandleTaskFileWriteWrongPathSkipsExtensionMismatchRewrite(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	description := "Validate pipeline metrics and alerting hooks. Deliverable: scripts/validate-metrics-alerting.sh"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			Description: &description,
+			WorkStatus:  "in_progress",
+			Metadata: mustRawJSON(t, map[string]any{
+				"planning": map[string]any{
+					"mode": string(taskplan.ModeExecutionFirst),
+				},
+			}),
+		},
+	}
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "gen_script.py",
+			"content": "print('generate script')\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "gen_script.py" {
+		t.Fatalf("path = %q, want unchanged helper path when extension mismatches target", got)
+	}
+	if _, exists := call.Arguments["create_dirs"]; exists {
+		t.Fatalf("create_dirs = %v, want absent when rewrite is skipped", call.Arguments["create_dirs"])
+	}
+}
+
 func TestHandleRecoveryRejectedFileWriteContentCanonicalizesWrongPathBeforeDraftReplacement(t *testing.T) {
 	t.Parallel()
 

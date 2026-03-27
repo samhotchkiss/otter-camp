@@ -757,6 +757,10 @@ Still pending from this spec:
     - session target fallback from recent `deliverable_path` tool results
     - recovery synthesized target selection preferring the session target over the inferred report path
     - task-lane `file.write` rewrite preferring the session target over the inferred report path
+  - that rewrite path is now narrowed further so it does not silently retarget obvious helper-file writes across file-type boundaries:
+    - if both the attempted path and the intended deliverable path have concrete extensions and those extensions differ, the runtime now leaves the requested path alone instead of rewriting it
+    - this specifically covers the live task-13 failure shape where `gen_script.py` was being redirected into `scripts/validate-metrics-alerting.sh`, forcing the lane to repair a Python body that had been written into a bash deliverable
+    - focused coverage now proves the exact `.py -> .sh` helper-file path is skipped while the intended same-kind canonical rewrites above still hold
 - recovery checkpoint normalization no longer lets the generic inferred `Work/OC-...md` fallback overwrite a concrete checkpoint target that came from live tool feedback:
   - explicit task deliverable paths still win
   - planning-path checkpoints still collapse to the canonical preferred target

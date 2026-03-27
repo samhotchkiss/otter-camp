@@ -12250,6 +12250,11 @@ func shouldRewriteTaskFileWritePath(attemptedPath, targetPath string) bool {
 	if attemptedFamily != "" && targetFamily != "" && attemptedFamily != targetFamily {
 		return false
 	}
+	attemptedExt := strings.ToLower(strings.TrimSpace(path.Ext(strings.TrimSpace(attemptedPath))))
+	targetExt := strings.ToLower(strings.TrimSpace(path.Ext(strings.TrimSpace(targetPath))))
+	if attemptedExt != "" && targetExt != "" && attemptedExt != targetExt {
+		return false
+	}
 	return true
 }
 
