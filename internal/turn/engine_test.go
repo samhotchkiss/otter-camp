@@ -9332,6 +9332,84 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskLis
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksSessionListForActiveTasks(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 22 (Ship docs) id=" + activeTaskID.String() + " title=\"Ship docs\" work_status=in_progress assigned_agent_id=worker-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "session.list", map[string]any{})
+	if !blocked {
+		t.Fatal("expected project-lane session.list to be blocked once the continuation prompt already names active tasks")
+	}
+	if !strings.Contains(reason, "session or inbox state") {
+		t.Fatalf("reason = %q, want session-context guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksGitLogForActiveTasks(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 22 (Ship docs) id=" + activeTaskID.String() + " title=\"Ship docs\" work_status=in_progress assigned_agent_id=worker-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "git.log", map[string]any{})
+	if !blocked {
+		t.Fatal("expected project-lane git.log to be blocked once the continuation prompt already names active tasks")
+	}
+	if !strings.Contains(reason, "repo history or status") {
+		t.Fatalf("reason = %q, want git-history guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksRootFileListForActiveTasks(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 22 (Ship docs) id=" + activeTaskID.String() + " title=\"Ship docs\" work_status=in_progress assigned_agent_id=worker-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "file.list", map[string]any{})
+	if !blocked {
+		t.Fatal("expected project-lane root file.list to be blocked once the continuation prompt already names active tasks")
+	}
+	if !strings.Contains(reason, "workspace artifact roots") && !strings.Contains(reason, "named actionable draft tasks") {
+		t.Fatalf("reason = %q, want workspace-browse guidance", reason)
+	}
+}
+
 func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet(t *testing.T) {
 	t.Parallel()
 
@@ -9356,6 +9434,34 @@ func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet
 		t.Fatal("expected project-lane task.get on a task already named in the continuation prompt to be blocked")
 	}
 	if !strings.Contains(reason, draftTaskID.String()) {
+		t.Fatalf("reason = %q, want named task id", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedActiveTaskGet(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	activeTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:    "Active project id: " + projectID.String(),
+			ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 22 (Ship docs) id=" + activeTaskID.String() + " title=\"Ship docs\" work_status=in_progress assigned_agent_id=worker-1",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "task.get", map[string]any{
+		"task_id": activeTaskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected project-lane task.get on an active task already named in the continuation prompt to be blocked")
+	}
+	if !strings.Contains(reason, activeTaskID.String()) {
 		t.Fatalf("reason = %q, want named task id", reason)
 	}
 }
@@ -15132,6 +15238,9 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Already-active non-terminal tasks in the tree:") {
 		t.Fatalf("prompt = %q, want active-task snapshot", prompt)
 	}
+	if !strings.Contains(prompt, "Do not begin with session.list, task.list, task.get, file.list on the workspace root, git.log, or git.status") {
+		t.Fatalf("prompt = %q, want active-task anti-rediscovery guidance", prompt)
+	}
 	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
 		t.Fatalf("prompt = %q, want draft-task snapshot", prompt)
 	}
@@ -15269,6 +15378,9 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Active project id: 123") {
 		t.Fatalf("prompt = %q, want project id guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with session.list, task.list, task.get, file.list on the workspace root, git.log, or git.status") {
+		t.Fatalf("prompt = %q, want active-task anti-rediscovery guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
 		t.Fatalf("prompt = %q, want draft-task snapshot", prompt)

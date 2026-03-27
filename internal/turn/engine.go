@@ -6704,6 +6704,7 @@ func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExec
 	}
 	if activeLine := strings.TrimSpace(snapshot.ActiveTaskLine); activeLine != "" {
 		lines = append(lines, activeLine)
+		lines = append(lines, "Do not begin with session.list, task.list, task.get, file.list on the workspace root, git.log, or git.status just to rediscover what the named active tasks are already doing.")
 	}
 	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
 		lines = append(lines, draftLine)
@@ -24026,12 +24027,18 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 		return false, ""
 	}
 	initialMessage := strings.TrimSpace(rt.initialMessageText)
-	if !strings.Contains(initialMessage, "Actionable draft tasks already in the tree:") {
+	hasActiveTaskSnapshot := strings.Contains(initialMessage, "Already-active non-terminal tasks in the tree:")
+	hasDraftTaskSnapshot := strings.Contains(initialMessage, "Actionable draft tasks already in the tree:")
+	if !hasActiveTaskSnapshot && !hasDraftTaskSnapshot {
 		return false, ""
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "project.get", "project.list":
 		return true, buildProjectContinuationSnapshotRediscoveryGuardError(toolName, uuid.Nil)
+	case "session.list", "session.history", "inbox.list":
+		return true, buildProjectContinuationSnapshotSessionRediscoveryGuardError(toolName)
+	case "git.log", "git.status":
+		return true, buildProjectContinuationSnapshotGitRediscoveryGuardError(toolName)
 	case "task.list":
 		if strings.TrimSpace(stringValue(arguments["parent_task_id"])) != "" {
 			return false, ""
@@ -24041,6 +24048,9 @@ func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, tool
 		return true, buildProjectContinuationSnapshotFlowExecutionGuardError()
 	case "file.list":
 		path := normalizeWorkspaceRelativePath(stringValue(arguments["path"]))
+		if path == "" || path == "." {
+			return true, buildProjectContinuationSnapshotArtifactBrowseGuardError(path)
+		}
 		if !shouldBlockProjectContinuationSnapshotArtifactBrowse(path, arguments) {
 			return false, ""
 		}
@@ -24088,7 +24098,7 @@ func buildProjectContinuationSnapshotRediscoveryGuardError(toolName string, task
 	case "project.get", "project.list":
 		return fmt.Sprintf("project continuation already has the active project id plus named active and draft tasks in the continuation prompt. Do not reread broad project state with %s; act on the named tasks directly.", toolName)
 	case "task.list":
-		return "project continuation already has named actionable draft tasks in the continuation prompt. Do not re-list the broader project task tree; act on one of the named tasks directly or inspect only a named parent's direct children with parent_task_id if that narrower evidence is truly required."
+		return "project continuation already has named active or draft tasks in the continuation prompt. Do not re-list the broader project task tree; act on one of the named tasks directly or inspect only a named parent's direct children with parent_task_id if that narrower evidence is truly required."
 	case "task.get":
 		if taskID != uuid.Nil {
 			return fmt.Sprintf("project continuation already named task id=%s in the continuation prompt. Do not reread that task record first; act on the named task directly or inspect only genuinely new narrower evidence.", taskID.String())
@@ -24097,6 +24107,14 @@ func buildProjectContinuationSnapshotRediscoveryGuardError(toolName string, task
 	default:
 		return "project continuation already has the necessary project snapshot in the continuation prompt. Do not reread the broader project task tree first."
 	}
+}
+
+func buildProjectContinuationSnapshotSessionRediscoveryGuardError(toolName string) string {
+	return fmt.Sprintf("project continuation already has the active project session context plus named active tasks in the continuation prompt. Do not reread broader session or inbox state with %s; act on the named tasks directly or report the concrete blocker.", toolName)
+}
+
+func buildProjectContinuationSnapshotGitRediscoveryGuardError(toolName string) string {
+	return fmt.Sprintf("project continuation already has named active tasks in the continuation prompt. Do not reread repo history or status with %s just to rediscover current work; act on the named tasks directly or inspect only an exact deliverable path required for the next project action.", toolName)
 }
 
 func shouldBlockProjectContinuationSnapshotArtifactBrowse(path string, arguments map[string]any) bool {
@@ -24116,13 +24134,13 @@ func shouldBlockProjectContinuationSnapshotArtifactBrowse(path string, arguments
 func buildProjectContinuationSnapshotArtifactBrowseGuardError(path string) string {
 	normalized := normalizeWorkspaceRelativePath(path)
 	if normalized == "" {
-		return "project continuation already has named actionable draft tasks in the continuation prompt. Do not browse broad workspace artifact roots first; act on one of the named tasks directly or inspect only the exact deliverable path required for that task."
+		return "project continuation already has named active or draft tasks in the continuation prompt. Do not browse broad workspace artifact roots first; act on one of the named tasks directly or inspect only the exact deliverable path required for that task."
 	}
-	return fmt.Sprintf("project continuation already has named actionable draft tasks in the continuation prompt. Do not browse broad workspace artifact root `%s` first; act on one of the named tasks directly or inspect only the exact deliverable path required for that task.", normalized)
+	return fmt.Sprintf("project continuation already has named active or draft tasks in the continuation prompt. Do not browse broad workspace artifact root `%s` first; act on one of the named tasks directly or inspect only the exact deliverable path required for that task.", normalized)
 }
 
 func buildProjectContinuationSnapshotFlowExecutionGuardError() string {
-	return "project continuation already has named actionable draft tasks in the continuation prompt and no concrete flow_node_execution_id was named as the blocker. Do not probe flow.get_execution from the project lane first; act on the named task directly or advance the correct task execution lane."
+	return "project continuation already has named active or draft tasks in the continuation prompt and no concrete flow_node_execution_id was named as the blocker. Do not probe flow.get_execution from the project lane first; act on the named task directly or advance the correct task execution lane."
 }
 
 func buildProjectContinuationFlowExecutionLookupGuardError(taskRecord repo.ProjectTask, flowNodeExecutionID uuid.UUID) string {
