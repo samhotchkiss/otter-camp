@@ -3324,6 +3324,66 @@ That is the proof we needed for this slice:
 - session-level direct-child-empty evidence is now surviving across retry turns
 - the runtime no longer falls back to another “inspect child tasks” loop once that empty-child evidence is already known
 
+## Update 06:41 MDT
+
+The next live retries showed the remaining behavior much more clearly.
+
+What happened live:
+
+- task-9 session `729dd9e7-36c4-46a1-988b-8e35e5b96b88`
+- the reject-only review prompt was now being generated correctly
+- but the model still opened the next turn with `file.read Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md` instead of calling `flow.review_decision reject`
+
+What I changed next:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - added an orchestration-parent review reject-only guard:
+    - when the current review prompt already states that zero direct child tasks are established
+    - and that the model should call `flow.review_decision` immediately with `decision=reject`
+    - the runtime now blocks rereading the parent summary target with `file.read`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for that reject-only reread block
+
+Live proof:
+
+- retry `19` at `06:35:24 MDT`
+- retry `20` at `06:35:49 MDT`
+- both turns attempted:
+  - `file.read Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md`
+- both turns now received the new guard error instead:
+  - `task review already established that task 9 (Workstream A: Pipeline Scaffold Setup) has zero direct child-task evidence and should reject. Do not reread \`Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md\`; call flow.review_decision with decision=reject immediately using the existing evidence.`
+
+That proved the runtime guard, but it also exposed one more escape path:
+
+- after the blocked reread, the model tried broader discovery again (`file.list Work pattern=OC-9*`) before the provider failed
+
+What I changed immediately after:
+
+- widened the same reject-only guard in [`internal/turn/engine.go`](../internal/turn/engine.go) to cover broader discovery tools in this exact orchestration-parent reject mode:
+  - `file.list`
+  - `file.search`
+  - `task.list`
+  - `task.get`
+  - `project.get`
+  - `project.list`
+  - `git.diff`
+  - `git.log`
+  - `git.status`
+- updated focused coverage in [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ShouldBlockOrchestrationParentReviewRejectDiscoveryTool|ShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedList|ShouldBlockOrchestrationParentReviewCurrentTaskGetTool|ReviewApprovalRetryPromptRejectsOrchestrationParentWithoutDirectChildrenAcrossRetryTurns)$' -count=1`
+- rebuilt/restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Current status:
+
+- the reject-only `file.read` block is live-proven
+- the broadened reject-only discovery block is deployed and test-green
+- first live proof for the widened non-`file.read` block is still pending the next reject-prompt retry on the new binary
+
 ## Update 05:40 MDT
 
 The orchestration-parent review prompt fix is now live-proven, and the next concrete leak is narrower.

@@ -1033,3 +1033,14 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
         - the parent summary is already established as substantive
         - `task.list` already returned zero direct child tasks
         - call `flow.review_decision` immediately with `decision=reject`
+  - next live seam and fix:
+    - on the first retries after that prompt landed, the model still ignored the reject-only guidance and reopened the parent summary with `file.read`
+    - runtime now blocks that reread directly when the current orchestration-parent review prompt already says:
+      - zero direct child tasks are established
+      - call `flow.review_decision` immediately with `decision=reject`
+    - live proof now exists:
+      - task-9 retries at `2026-03-27 06:35:27 MDT` and `06:35:56 MDT`
+      - `file.read Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md` returned the new reject-only guard error instead of rereading the summary
+    - newest follow-on hardening extends that same reject-only guard to broader discovery tools like `file.list`, `file.search`, `task.list`, `task.get`, and `project.get`
+    - focused turn-engine coverage is green
+    - live proof for the broadened non-`file.read` discovery block is still pending the next reject-prompt retry on the new binary

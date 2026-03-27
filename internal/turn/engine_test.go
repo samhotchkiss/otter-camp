@@ -8497,6 +8497,62 @@ func TestShouldBlockOrchestrationParentReviewCurrentTaskGetTool(t *testing.T) {
 	}
 }
 
+func TestShouldBlockOrchestrationParentReviewRejectDiscoveryTool(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself. Deliverable: Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md"
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	rejectPrompt := fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session) +
+		"\nYour prior review evidence already established that the parent orchestration summary `Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md` is present and substantive." +
+		" It also established that task.list returned zero direct child tasks beneath this orchestration parent." +
+		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + uuid.NewString() + ", and concise findings that the orchestration parent has no direct child-task evidence to validate against its summary." +
+		" Use the empty direct child-task lookup as the rejection evidence." +
+		" Do not reread the parent summary, do not re-list the broader project task tree, and do not search planning companion files."
+
+	rt := &turnRuntime{
+		session:            fixture.session,
+		initialMessageText: rejectPrompt,
+	}
+	if blocked, reason := fixture.engine.shouldBlockOrchestrationParentReviewRejectDiscoveryTool(context.Background(), rt, "file.read", map[string]any{
+		"path": "Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md",
+	}); !blocked {
+		t.Fatal("expected orchestration-parent review lane to block rereading the already-settled parent summary")
+	} else if !strings.Contains(reason, "decision=reject") {
+		t.Fatalf("reason = %q, want reject guidance", reason)
+	}
+
+	if blocked, reason := fixture.engine.shouldBlockOrchestrationParentReviewRejectDiscoveryTool(context.Background(), rt, "file.list", map[string]any{
+		"path": "Work",
+	}); !blocked {
+		t.Fatal("expected orchestration-parent review lane to block extra file discovery once reject evidence is sufficient")
+	} else if !strings.Contains(reason, "file.list") {
+		t.Fatalf("reason = %q, want file.list guidance", reason)
+	}
+
+	if blocked, reason := fixture.engine.shouldBlockOrchestrationParentReviewRejectDiscoveryTool(context.Background(), rt, "file.read", map[string]any{
+		"path": "Work/other.md",
+	}); blocked {
+		t.Fatalf("expected different target reads to remain unblocked, got %q", reason)
+	}
+}
+
 func TestShouldBlockTaskExecutionTaskCreateToolBlocksNonOrchestrationTask(t *testing.T) {
 	t.Parallel()
 
