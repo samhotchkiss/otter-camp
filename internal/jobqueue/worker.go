@@ -823,6 +823,51 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (terminal message attempts): %w", err)
 	}
 
+	// Condition 5b: a consumed recovery-resume message that already produced a
+	// successful file.write in a completed turn should not be re-dispatched.
+	// Those stale retries just reopen recovery after the target file was
+	// already written.
+	ct5b, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    last_error = 'purged stale recovery resume after successful file.write',
+		    updated_at = now()
+		WHERE jq.status = 'pending'
+		  AND jq.job_type = 'agent_turn'
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_message cm
+		    WHERE cm.id = (jq.payload->>'message_id')::uuid
+		      AND COALESCE(cm.metadata->>'source', '') = 'task_recovery_resume'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM chat_turn live
+		    WHERE live.session_id = (jq.payload->>'session_id')::uuid
+		      AND live.trigger_message_id = (jq.payload->>'message_id')::uuid
+		      AND live.retry_count = COALESCE((jq.payload->>'retry_count')::int, 0)
+		      AND live.status IN ('pending', 'in_progress')
+		  )
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_turn ct
+		    JOIN chat_message tool_result
+		      ON tool_result.session_id = ct.session_id
+		     AND tool_result.turn_id = ct.id
+		     AND tool_result.role = 'tool_result'
+		    WHERE ct.session_id = (jq.payload->>'session_id')::uuid
+		      AND ct.trigger_message_id = (jq.payload->>'message_id')::uuid
+		      AND ct.status = 'completed'
+		      AND COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
+		      AND COALESCE(tool_result.content::jsonb->>'error', '') = ''
+		      AND COALESCE(tool_result.content::jsonb->'output'->>'error', '') = ''
+		      AND COALESCE((tool_result.content::jsonb->'output'->>'byte_size')::int, 0) > 0
+		  )
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("purge stale agent_turn jobs (successful recovery resumes): %w", err)
+	}
+
 	// Condition 6: if the exact session/message/retry attempt already has a
 	// live pending/in-progress turn recorded, keep exactly one backing
 	// dispatch job for that live attempt and dead-letter only true duplicates.
@@ -946,7 +991,7 @@ func (w *Worker) PurgeStaleAgentTurnJobs(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("purge stale agent_turn jobs (legacy task dispatches): %w", err)
 	}
 
-	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected() + ct6.RowsAffected() + ct7.RowsAffected() + ct8.RowsAffected()
+	total := ct1.RowsAffected() + ct2.RowsAffected() + ct3.RowsAffected() + ct4.RowsAffected() + ct5.RowsAffected() + ct5b.RowsAffected() + ct6.RowsAffected() + ct7.RowsAffected() + ct8.RowsAffected()
 	return total, nil
 }
 
@@ -1435,6 +1480,15 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		if err := rows.Scan(&sessionID, &executionID, &messageID, &messageSource, &messageConsumed, &retryCount, &latestTurnError, &latestTurnCompletedAt); err != nil {
 			return repaired, fmt.Errorf("scan active execution session without turn: %w", err)
 		}
+		if messageConsumed && strings.EqualFold(strings.TrimSpace(messageSource), "task_recovery_resume") {
+			successfulRecoveryWrite, recoveryErr := w.recoveryResumeMessageCompletedWithSuccessfulFileWrite(ctx, sessionID, messageID)
+			if recoveryErr != nil {
+				return repaired, fmt.Errorf("check completed recovery resume for session %s: %w", sessionID, recoveryErr)
+			}
+			if successfulRecoveryWrite {
+				continue
+			}
+		}
 		if messageID == uuid.Nil || (strings.EqualFold(strings.TrimSpace(messageSource), "supervisor") && messageConsumed) {
 			synthMessageID, synthErr := w.ensureTaskExecutionKickoffMessage(ctx, sessionID, executionID)
 			if synthErr != nil {
@@ -1522,6 +1576,33 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 		return repaired, fmt.Errorf("iterate active execution sessions without turns: %w", err)
 	}
 	return repaired, nil
+}
+
+func (w *Worker) recoveryResumeMessageCompletedWithSuccessfulFileWrite(ctx context.Context, sessionID, messageID uuid.UUID) (bool, error) {
+	if w == nil || w.pool == nil || sessionID == uuid.Nil || messageID == uuid.Nil {
+		return false, nil
+	}
+	var successful bool
+	if err := w.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM chat_turn ct
+			JOIN chat_message tool_result
+			  ON tool_result.session_id = ct.session_id
+			 AND tool_result.turn_id = ct.id
+			 AND tool_result.role = 'tool_result'
+			WHERE ct.session_id = $1
+			  AND ct.trigger_message_id = $2
+			  AND ct.status = 'completed'
+			  AND COALESCE(tool_result.content::jsonb->>'tool_name', '') = 'file.write'
+			  AND COALESCE(tool_result.content::jsonb->>'error', '') = ''
+			  AND COALESCE(tool_result.content::jsonb->'output'->>'error', '') = ''
+			  AND COALESCE((tool_result.content::jsonb->'output'->>'byte_size')::int, 0) > 0
+		)
+	`, sessionID, messageID).Scan(&successful); err != nil {
+		return false, err
+	}
+	return successful, nil
 }
 
 func (w *Worker) RequeueActiveProjectSessionsWithoutTurns(ctx context.Context) (int64, error) {
