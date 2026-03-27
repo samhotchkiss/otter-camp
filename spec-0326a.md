@@ -1094,3 +1094,10 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - focused turn-engine coverage is green for:
       - recovery-target-focus narrowed continuation prompt
       - skip behavior once the target was already written
+  - newest review retry persistence slice:
+    - review retries that already proved the primary deliverable is substantive and later failed to verify required test artifacts now carry that rejection evidence across subsequent retry turns
+    - this closes the gap where a later retry could reread the primary deliverable again and lose the earlier `tests/` verification failure context
+    - the missing-tests helper now also recognizes `file.search` recovery-focus failures as test-verification evidence, not just `file.read` / `file.list`
+    - focused turn-engine coverage is green for:
+      - same-turn recovery-focus missing-tests rejection
+      - persisted missing-tests rejection across retry turns

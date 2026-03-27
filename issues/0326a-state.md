@@ -3098,6 +3098,44 @@ Deploy status:
 - tests green
 - runtime restart pending at the time of this note
 
+## Update 07:42 MDT
+
+I cut the next review-specific persistence gap exposed by task-14.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - review retry prompting now persists missing-tests rejection evidence across retry turns
+  - if a prior review turn already established:
+    - the primary deliverable is substantive
+    - the task explicitly requires tests
+    - related test artifacts could not be verified from the workspace
+  - then a later retry that only rereads the primary deliverable now goes straight to `flow.review_decision reject` guidance instead of re-opening the same target again
+  - the helper also now treats `file.search` recovery-focus failures as test-verification evidence alongside `file.read` / `file.list`
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for:
+    - same-turn missing-tests rejection via recovery-focus evidence
+    - persisted missing-tests rejection across retry turns
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run "Test(ReviewApprovalRetryPrompt(RejectsWhenRequiredTestsCannotBeVerified|RejectsWhenRequiredTestsCannotBeVerifiedViaRecoveryFocus|RejectsWhenRequiredTestsCannotBeVerifiedAcrossRetryTurns|RejectsOrchestrationParentWithUnfinishedDirectChildren|RejectsOrchestrationParentWithUnfinishedDirectChildrenAcrossRetryTurns)|TaskExecutionRetryPromptFor(RecoveryTargetFocus|RecoveryTargetFocusSkipsWhenTargetAlreadyWritten|MissingPreferredDeliverable|MissingPreferredDeliverableSkipsWhenTargetAlreadyReadable)|ShouldBlockOrchestrationParentReviewRejectDiscoveryToolForUnfinishedChildren)$" -count=1`
+
+Why this slice exists:
+
+- task-14 session `7dfae433-450d-4e18-8170-b642dd526229` showed the exact persistence gap:
+  - one turn read `config/pipeline-config-invalid.yaml` successfully
+  - follow-on review steps then failed under recovery focus while trying to verify test artifacts
+  - the next retry reverted to the base review prompt and reread the deliverable instead of rejecting with the already-established missing-tests evidence
+- the safe fix is to preserve that review evidence across retries, not to let the lane rediscover the same target file again
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart pending at the time of this note
+
 ## Update 07:34 MDT
 
 I used the live one-hour report again and cut the next highest-signal async task seam.

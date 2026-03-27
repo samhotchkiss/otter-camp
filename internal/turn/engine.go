@@ -1938,6 +1938,9 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 		if retryPrompt, ok := reviewRetryPromptForMissingRequiredTests(messages, latestCompleted, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
 			return retryPrompt, true, nil
 		}
+		if retryPrompt, ok := reviewRetryPromptForPersistedMissingRequiredTests(messages, latestUser, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+			return retryPrompt, true, nil
+		}
 		return "", false, nil
 	}
 	clean, err := e.reviewApprovalWorkspaceClean(ctx, taskRecord)
@@ -1996,10 +1999,10 @@ func reviewRetryPromptForMissingRequiredTests(messages []repo.ChatMessage, lates
 			if normalizedToolName == "file.read" && errorCode == "" && intValue(output["byte_size"]) > 0 {
 				primaryDeliverableReadable = true
 			}
-			if (normalizedToolName == "file.read" || normalizedToolName == "file.list") && errorCode == "not_found" {
+			if (normalizedToolName == "file.read" || normalizedToolName == "file.list" || normalizedToolName == "file.search") && errorCode == "not_found" {
 				missingRequiredTests = true
 			}
-			if errorCode == "recovery_target_focus_required" && textMentionsTests(anyString(output["path"])) {
+			if (errorCode == "recovery_target_focus_required" || errorCode == "explicit_deliverable_focus_required") && textMentionsTests(anyString(output["path"])) {
 				recoveryFocusedOnTests = true
 				mentionedTests = true
 			}
@@ -2021,6 +2024,80 @@ func reviewRetryPromptForMissingRequiredTests(messages []repo.ChatMessage, lates
 	retryPrompt := basePrompt +
 		"\nYour last review attempt already established that the preferred deliverable is present and substantive." +
 		" This task explicitly requires tests or test verification, and the follow-on review attempt could not verify those test artifacts from the current workspace state." +
+		" Stop searching for more files now." +
+		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the required test coverage or related test artifacts could not be verified from the delivered workspace." +
+		" Use the missing or inaccessible test artifacts as evidence." +
+		" Do not reply with explanation text, a review plan, or placeholder arguments."
+	return retryPrompt, true
+}
+
+func reviewRetryPromptForPersistedMissingRequiredTests(messages []repo.ChatMessage, latestUser *repo.ChatMessage, taskRecord repo.ProjectTask, executionID uuid.UUID, basePrompt string) (string, bool) {
+	if latestUser == nil || executionID == uuid.Nil {
+		return "", false
+	}
+	if !taskReviewRequiresTests(taskRecord) {
+		return "", false
+	}
+
+	mentionedTests := false
+	primaryDeliverableReadable := false
+	missingRequiredTests := false
+	recoveryFocusedOnTests := false
+	for _, message := range messages {
+		role := strings.ToLower(strings.TrimSpace(message.Role))
+		switch role {
+		case "assistant":
+			if textMentionsTests(message.Content) {
+				mentionedTests = true
+			}
+		case "tool_result":
+			toolName, output, errText, ok := parseToolResultMessage(message.Content)
+			if !ok {
+				continue
+			}
+			errorCode := normalizeValidationFailureCode(errText)
+			if errorCode == "" {
+				errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+			}
+			normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+			path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+			if normalizedToolName == "file.read" && errorCode == "" && intValue(output["byte_size"]) > 0 {
+				primaryDeliverableReadable = true
+			}
+			if textMentionsTests(path) {
+				mentionedTests = true
+				if errorCode == "" {
+					missingRequiredTests = false
+					recoveryFocusedOnTests = false
+					continue
+				}
+				if normalizedToolName == "file.read" || normalizedToolName == "file.list" || normalizedToolName == "file.search" {
+					if errorCode == "not_found" {
+						missingRequiredTests = true
+					}
+					if errorCode == "recovery_target_focus_required" || errorCode == "explicit_deliverable_focus_required" {
+						recoveryFocusedOnTests = true
+					}
+				}
+			}
+		case "system":
+			if strings.Contains(message.Content, reviewRepeatedFileReadNotFoundTurnStopSubstring) {
+				missingRequiredTests = true
+			}
+			if strings.Contains(message.Content, "Repeated identical file.list validation failure in this turn (2/3): recovery_target_focus_required") {
+				recoveryFocusedOnTests = true
+			}
+			if strings.Contains(message.Content, "Review retry required after repeated same-turn read-only discovery churn") {
+				recoveryFocusedOnTests = true
+			}
+		}
+	}
+	if !(mentionedTests && primaryDeliverableReadable && (missingRequiredTests || recoveryFocusedOnTests)) {
+		return "", false
+	}
+	retryPrompt := basePrompt +
+		"\nYour prior review evidence already established that the preferred deliverable is present and substantive." +
+		" This task explicitly requires tests or test verification, and recent review attempts could not verify those test artifacts from the current workspace state." +
 		" Stop searching for more files now." +
 		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the required test coverage or related test artifacts could not be verified from the delivered workspace." +
 		" Use the missing or inaccessible test artifacts as evidence." +
