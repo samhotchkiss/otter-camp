@@ -5345,6 +5345,19 @@ func TestJobWorkerClaimPendingAgentTurnsPrioritizesFreshOrgWorkOverProjectContin
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
+	systemActor := uuid.Nil
+	if _, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID: org.ID,
+		ProjectID:      project.ID,
+		Title:          "Unfinished continuation task",
+		WorkStatus:     "draft",
+		BlocksScope:    "task",
+		CreatedByType:  "system",
+		CreatedByID:    &systemActor,
+		Metadata:       json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("create unfinished project task: %v", err)
+	}
 	projectSession, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
 		OrganizationID: org.ID,
 		ScopeType:      "project",
@@ -7538,6 +7551,143 @@ func TestJobWorkerClaimPendingAgentTurnsPrefersExecutionKickoffOverNewerSupervis
 	}
 	if newerStatus == "claimed" {
 		t.Fatalf("supervisor recovery job status = %q, want not claimed", newerStatus)
+	}
+}
+
+func TestJobWorkerClaimPendingAgentTurnsPrefersOldestDueTaskSessionAcrossSessions(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-prefers-oldest-due-task-session-across-sessions",
+		DisplayName: "Claim Prefers Oldest Due Task Session Across Sessions",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-prefers-oldest-due-task-session-across-sessions-" + uuid.NewString()[:8],
+		DisplayName:    "Claim Prefers Oldest Due Task Session Across Sessions",
+		DeliveryMode:   "gated",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Fair Queue Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "Claim the oldest ready task work first.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	createTaskSession := func(title string) (repo.ProjectTask, repo.ChatSession, repo.ChatMessage, uuid.UUID) {
+		t.Helper()
+		task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+			OrganizationID:  org.ID,
+			ProjectID:       project.ID,
+			Title:           title,
+			WorkStatus:      "draft",
+			AssignedAgentID: &agent.ID,
+			CreatedByType:   "system",
+			CreatedByID:     &agent.ID,
+			Metadata:        json.RawMessage(`{}`),
+		})
+		if err != nil {
+			t.Fatalf("create project task: %v", err)
+		}
+		session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+			OrganizationID: org.ID,
+			ScopeType:      "project_task",
+			ScopeID:        task.ID,
+			Mode:           "async",
+			Status:         "active",
+			CreatedByType:  "system",
+			CreatedByID:    uuid.New(),
+		})
+		if err != nil {
+			t.Fatalf("create task session: %v", err)
+		}
+		message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+			SessionID: session.ID,
+			Role:      "user",
+			Content:   "Start work on the task deliverable.",
+			Status:    "pending",
+			Metadata:  json.RawMessage(`{"source":"task_queue_processor"}`),
+		})
+		if err != nil {
+			t.Fatalf("create task message: %v", err)
+		}
+		var jobID uuid.UUID
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+			VALUES ('agent_turn', 'pending', $1::jsonb, $2, 70, $3, $4)
+			RETURNING id
+		`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, session.ID, message.ID),
+			time.Now().UTC(),
+			fmt.Sprintf("agent_turn:%s:%s", session.ID, message.ID),
+			fmt.Sprintf("agent_turn:%s:%s:%d", session.ID, message.ID, 0),
+		).Scan(&jobID); err != nil {
+			t.Fatalf("insert agent_turn job: %v", err)
+		}
+		return task, session, message, jobID
+	}
+
+	_, olderSession, _, olderJobID := createTaskSession("Older ready task work")
+	time.Sleep(10 * time.Millisecond)
+	_, newerSession, _, newerJobID := createTaskSession("Newer ready task work")
+
+	olderRunAfter := time.Now().UTC().Add(-10 * time.Minute)
+	newerRunAfter := time.Now().UTC().Add(-1 * time.Minute)
+	if _, err := pool.Exec(ctx, `UPDATE job_queue SET run_after = $2 WHERE id = $1`, olderJobID, olderRunAfter); err != nil {
+		t.Fatalf("update older job run_after: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE job_queue SET run_after = $2 WHERE id = $1`, newerJobID, newerRunAfter); err != nil {
+		t.Fatalf("update newer job run_after: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 1)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed jobs = %d, want 1", len(claimed))
+	}
+	if claimed[0].ID != olderJobID {
+		t.Fatalf("claimed job = %s, want older due job %s (newer=%s)", claimed[0].ID, olderJobID, newerJobID)
+	}
+
+	var olderStatus, newerStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, olderJobID).Scan(&olderStatus); err != nil {
+		t.Fatalf("query older job: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM job_queue WHERE id = $1`, newerJobID).Scan(&newerStatus); err != nil {
+		t.Fatalf("query newer job: %v", err)
+	}
+	if olderStatus != "claimed" {
+		t.Fatalf("older job status = %q, want claimed", olderStatus)
+	}
+	if newerStatus != "pending" {
+		t.Fatalf("newer job status = %q, want pending", newerStatus)
+	}
+
+	if olderSession.ID == newerSession.ID {
+		t.Fatalf("expected distinct task sessions, got %s", olderSession.ID)
 	}
 }
 

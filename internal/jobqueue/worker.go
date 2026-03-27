@@ -4743,9 +4743,23 @@ func (w *Worker) claimPendingByFilter(ctx context.Context, limit int, filter str
 			      )
 			ORDER BY priority DESC,
 			         agent_turn_claim_bias ASC,
-			         CASE WHEN job_type = 'agent_turn' THEN run_after END DESC,
+			         CASE
+			             WHEN job_type = 'agent_turn' AND project_async_continuation = 1
+			             THEN run_after
+			         END DESC,
+			         CASE
+			             WHEN job_type = 'agent_turn' AND project_async_continuation = 0
+			             THEN run_after
+			         END ASC,
 			         CASE WHEN job_type <> 'agent_turn' THEN run_after END ASC,
-			         CASE WHEN job_type = 'agent_turn' THEN created_at END DESC,
+			         CASE
+			             WHEN job_type = 'agent_turn' AND project_async_continuation = 1
+			             THEN created_at
+			         END DESC,
+			         CASE
+			             WHEN job_type = 'agent_turn' AND project_async_continuation = 0
+			             THEN created_at
+			         END ASC,
 			         CASE WHEN job_type <> 'agent_turn' THEN created_at END ASC
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
