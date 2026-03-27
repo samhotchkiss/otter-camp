@@ -8260,6 +8260,45 @@ func TestShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedLis
 	}
 }
 
+func TestShouldBlockOrchestrationParentReviewCurrentTaskGetTool(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	childTaskID := uuid.New()
+	description := "Parent/orchestration task for pipeline scaffold work. Validates direct child tasks. Does not do execution work itself."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = taskID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  9,
+				Title:       "Workstream A: Pipeline Scaffold Setup",
+				Description: &description,
+				WorkStatus:  "review",
+			},
+		},
+	}
+
+	rt := &turnRuntime{session: fixture.session}
+	if blocked, reason := fixture.engine.shouldBlockOrchestrationParentReviewCurrentTaskGetTool(context.Background(), rt, "task.get", map[string]any{
+		"task_id": taskID.String(),
+	}); !blocked {
+		t.Fatal("expected orchestration-parent review lane to block task.get on the current parent task")
+	} else if !strings.Contains(reason, "parent_task_id="+taskID.String()) {
+		t.Fatalf("reason = %q, want parent_task_id guidance", reason)
+	}
+
+	if blocked, reason := fixture.engine.shouldBlockOrchestrationParentReviewCurrentTaskGetTool(context.Background(), rt, "task.get", map[string]any{
+		"task_id": childTaskID.String(),
+	}); blocked {
+		t.Fatalf("expected orchestration-parent review lane to allow task.get on a different task, got %q", reason)
+	}
+}
+
 func TestShouldBlockTaskExecutionTaskCreateToolBlocksNonOrchestrationTask(t *testing.T) {
 	t.Parallel()
 
@@ -29586,6 +29625,9 @@ func TestBuildTaskReviewActionPromptSpecializesOrchestrationOnlyParentReview(t *
 	}
 	if !strings.Contains(prompt, "do not inspect planning/prd-spec, planning/discovery-plan, or other companion planning files") {
 		t.Fatalf("prompt = %q, want companion-planning suppression", prompt)
+	}
+	if !strings.Contains(prompt, "Do not call `task.get` on this parent task again during review.") {
+		t.Fatalf("prompt = %q, want no-task.get review guidance", prompt)
 	}
 	if !strings.Contains(prompt, "task.list` with `parent_task_id="+taskID.String()+"`") {
 		t.Fatalf("prompt = %q, want parent_task_id review guidance", prompt)

@@ -3110,8 +3110,43 @@ Deploy status at this note:
 - live schema proof:
   - `tool_definition.name='task.list'` now exposes both `parent_task_id` and `include_meta_drafts`
 - remaining live proof gap:
-  - the first fresh post-deploy task-9 retry in session `729dd9e7-36c4-46a1-988b-8e35e5b96b88` started at `05:36:50 MDT`
-  - Anthropic failed before any tool call, so the new bounded `task.list(parent_task_id=...)` runtime path is deployed but not yet observed on a completed live review turn
+  - the first fresh post-deploy task-9 retry at `05:36:50 MDT` still died before any tool call because Anthropic failed immediately
+
+## Update 05:47 MDT
+
+The orchestration-parent review `task.list` guard is now live-proven on the new runtime.
+
+Fresh live proof:
+
+- session `729dd9e7-36c4-46a1-988b-8e35e5b96b88`
+- retry turn starting at `2026-03-27 05:45:57 MDT`
+- assistant behavior:
+  - read `Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md`
+  - then attempted `task_list` again with the wrong broad shape instead of the new bounded child-task form
+- runtime response at `2026-03-27 05:46:12 MDT`:
+  - `task execution should not re-list the broader project task tree from task 9 (Workstream A: Pipeline Scaffold Setup) while it is in review. If you need task evidence, call task.list with parent_task_id=a5cc62da-5ae4-4c0f-b299-d25fd6f743fb to inspect that parent's direct child tasks only.`
+
+What this proves:
+
+- the deployed review-lane guard is actually intercepting the old bad branch in production
+- task-9 review no longer gets to browse the broad project task tree once the parent summary is already in hand
+
+Follow-on hardening now layered on top:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - orchestration-parent review lanes now also block `task.get` on the current parent task itself
+  - the orchestration-parent review prompt now explicitly says not to call `task.get` on the parent again during review
+- focused verification:
+  - `go test ./internal/turn -run 'Test(ShouldBlockOrchestrationParentReview(CurrentTaskGetTool|TaskListToolRequiresParentScopedList)|BuildTaskReviewActionPromptSpecializesOrchestrationOnlyParentReview)$' -count=1`
+
+Current proof state:
+
+- live-proven:
+  - orchestration-parent review prompt specialization
+  - `task.list(parent_task_id=...)` schema exposure
+  - orchestration-parent review guard against broad `task.list`
+- still pending fresh live proof:
+  - the new `task.get(current parent)` guard specifically
 
 ## Update 05:15 MDT
 

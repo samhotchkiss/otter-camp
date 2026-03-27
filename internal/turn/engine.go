@@ -10766,6 +10766,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := e.shouldBlockOrchestrationParentReviewCurrentTaskGetTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if blocked, reason := e.shouldBlockOrchestrationParentReviewTaskListTool(ctx, rt, name, arguments); blocked {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -19401,6 +19409,14 @@ func classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawEr
 		}
 		return "old_string_not_found", reason, true
 	}
+	if normalizedToolName == "task.get" &&
+		strings.Contains(normalizedReason, "task review should not reread the current orchestration-only parent task record") {
+		reason := strings.TrimSpace(rawReason)
+		if reason == "" {
+			reason = "current_parent_task_reread_blocked"
+		}
+		return "current_parent_task_reread_blocked", reason, true
+	}
 	if (normalizedToolName == "task.list" || normalizedToolName == "memory.query") &&
 		containsAny(normalizedReason,
 			"task execution should not re-list the broader project task tree",
@@ -20209,6 +20225,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 			if targetPath != "" {
 				lines = append(lines, fmt.Sprintf("If `%s` is present and readable, do not inspect planning/prd-spec, planning/discovery-plan, or other companion planning files for this parent task. Base the review on `%s` plus direct child-task evidence only.", targetPath, targetPath))
 			}
+			lines = append(lines, fmt.Sprintf("Do not call `task.get` on this parent task again during review. The current prompt and parent summary already carry that context. If you need task evidence, inspect direct child tasks instead."))
 			lines = append(lines, fmt.Sprintf("If you need task evidence, use `task.list` with `parent_task_id=%s` to inspect this parent's direct child tasks only. Do not call `task.list` with `project_id` or re-list the broader project task tree for this review.", taskRecord.ID))
 			lines = append(lines, "If more evidence is needed, inspect the direct child tasks beneath this parent or their concrete outputs. Missing planning companion files alone are not rejection evidence for this orchestration parent.")
 		} else if contracts := reviewPromptArtifactContracts(taskRecord); len(contracts) == 0 {
@@ -21533,6 +21550,33 @@ func (e *TurnEngine) shouldBlockOrchestrationParentReviewTaskListTool(ctx contex
 	return true, buildOrchestrationParentReviewTaskListGuardError(taskRecord)
 }
 
+func (e *TurnEngine) shouldBlockOrchestrationParentReviewCurrentTaskGetTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(toolName), "task.get") {
+		return false, ""
+	}
+	currentTaskID := resolveTaskID(rt.session)
+	if currentTaskID == nil || *currentTaskID == uuid.Nil {
+		return false, ""
+	}
+	requestedTaskID, ok := parseUUIDAny(arguments["task_id"])
+	if !ok || requestedTaskID != *currentTaskID {
+		return false, ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *currentTaskID)
+	if err != nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") || !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return false, ""
+	}
+	return true, buildOrchestrationParentReviewCurrentTaskGetGuardError(taskRecord)
+}
+
 func (e *TurnEngine) shouldBlockTaskExecutionTaskCreateTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
 		return false, ""
@@ -22043,6 +22087,14 @@ func buildOrchestrationParentReviewTaskListGuardError(taskRecord repo.ProjectTas
 		label = "the current orchestration-only review task"
 	}
 	return fmt.Sprintf("task execution should not re-list the broader project task tree from %s while it is in review. If you need task evidence, call task.list with parent_task_id=%s to inspect that parent's direct child tasks only.", label, taskRecord.ID)
+}
+
+func buildOrchestrationParentReviewCurrentTaskGetGuardError(taskRecord repo.ProjectTask) string {
+	label := projectBootstrapTaskLabel(taskRecord)
+	if strings.TrimSpace(label) == "" {
+		label = "the current orchestration-only review task"
+	}
+	return fmt.Sprintf("task review should not reread the current orchestration-only parent task record for %s. The prompt and parent deliverable already carry that context. If you need task evidence, call task.list with parent_task_id=%s to inspect that parent's direct child tasks only.", label, taskRecord.ID)
 }
 
 func buildTaskExecutionTaskCreateGuardError(taskRecord repo.ProjectTask, parentRequired bool, currentTaskID uuid.UUID) string {

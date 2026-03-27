@@ -941,6 +941,14 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
   - live tool schema now includes:
     - `task.list.parent_task_id`
     - `task.list.include_meta_drafts`
-  - the remaining live proof gap is provider-limited:
-    - fresh task-9 retry session `729dd9e7-36c4-46a1-988b-8e35e5b96b88` woke on the new runtime at `05:36:50 MDT`
-    - Anthropic failed before any tool call, so the new bounded `task.list(parent_task_id=...)` path is deployed but not yet seen in a completed live turn
+  - fresh live proof now exists:
+    - task-9 review session `729dd9e7-36c4-46a1-988b-8e35e5b96b88`
+    - retry turn starting at `2026-03-27 05:45:57 MDT`
+    - assistant read `Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md`
+    - then attempted the wrong broad `task.list` shape
+    - runtime returned:
+      - `task execution should not re-list the broader project task tree from task 9 (Workstream A: Pipeline Scaffold Setup) while it is in review. If you need task evidence, call task.list with parent_task_id=a5cc62da-5ae4-4c0f-b299-d25fd6f743fb ...`
+  - follow-on hardening also landed on top of this slice:
+    - orchestration-parent review lanes now block `task.get` on the current parent task itself
+    - prompt text explicitly says not to reread the parent task record during review once the parent summary is in hand
+    - focused turn-engine coverage is green for that addition
