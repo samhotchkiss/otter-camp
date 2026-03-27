@@ -12064,6 +12064,10 @@ func classifyTaskFileArtifactFamily(value string) string {
 	switch first {
 	case "src", "app", "lib", "cmd", "internal", "pkg":
 		return "code"
+	case "script", "scripts":
+		return "script"
+	case "config", "configs":
+		return "config"
 	case "test", "tests", "spec", "specs", "__tests__":
 		return "test"
 	case "results", "result", "evidence", "artifacts":

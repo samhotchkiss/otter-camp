@@ -608,6 +608,9 @@ Implemented so far in this spec:
 - review lanes at the retry ceiling no longer auto-continue on `max_tool_calls`:
   - when an async `project_task` review turn is already at `maxGenericRecoveryReplyRetries`, `shouldContinueMaxToolCalls(...)` now returns false
   - that prevents the runtime from creating a fresh `task_continuation_resume` moments before the review-completion handler blocks the lane for repeated non-decision output
+- task-lane file-write canonicalization no longer crosses `scripts/` and `config/` families:
+  - `handleTaskFileWriteWrongPath(...)` now classifies `scripts/` and `config/` as distinct artifact families
+  - that prevents execution-first task rewrites from silently redirecting a script write like `scripts/pipeline_config.py` into a config target such as `config/pipeline-config-invalid.yaml`
 
 Still pending from this spec:
 

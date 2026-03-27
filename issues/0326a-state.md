@@ -2455,3 +2455,43 @@ Result:
 
 - the extra post-block review continuation leak is closed
 - remaining review churn is now the older discovery/retry families, not a same-turn `max_tool_calls` handoff escaping after the review lane is already at its retry ceiling
+
+## Update 22:24 MDT
+
+While sampling the hottest surviving work turns after the review-handoff fix, I found a different execution-lane bug that explains some of the remaining `cli.execute` churn.
+
+Live signal:
+
+- hot task session `429c2e7b-921c-40be-81a6-373678bc9958` (task `14`, "Validate config loading and environment overrides") produced a large work turn with:
+  - `16` completed model invocations
+  - `14` `cli.execute` tool runs
+  - assistant narration that explicitly said:
+    - the attempted `file.write` to `scripts/pipeline_config.py` had been redirected to `config/pipeline-config-invalid.yaml`
+    - the model then switched to `cli.execute` to write files as a workaround
+
+Root cause:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `handleTaskFileWriteWrongPath(...)` uses `classifyTaskFileArtifactFamily(...)` before rewriting a `file.write` to the preferred task deliverable
+  - both `scripts/` and `config/` previously collapsed to the empty family, so the rewrite layer treated them as compatible and silently redirected across them
+
+What changed:
+
+- `classifyTaskFileArtifactFamily(...)` now returns distinct families for:
+  - `scripts/` -> `script`
+  - `config/` -> `config`
+- added focused regression:
+  - `TestHandleTaskFileWriteWrongPathSkipsScriptToConfigRewrite`
+
+Focused verification:
+
+- `go test ./internal/turn -run 'Test(HandleTaskFileWriteWrongPathSkipsScriptToConfigRewrite|HandleTaskFileWriteWrongPathSkipsCrossArtifactFamilyRewrite|HandleTaskFileWriteWrongPathRewritesToRecoveryTarget|MaxToolCallsAsyncReviewAtRetryLimitDoesNotContinue)$' -count=1`
+
+Deployment status:
+
+- runtime rebuilt and tmux `codex-e2e-20260324` restarted cleanly
+- `./bin/ottercamp health --output json` returned `status=ok`
+- short live smoke after restart:
+  - querying assistant messages for `redirected to` / `cli_execute with python3` over the last ten minutes only surfaced the older pre-fix task-14 message at `22:14:05 MDT`
+  - no fresh post-restart assistant message has repeated the `scripts/...` -> `config/pipeline-config-invalid.yaml` redirect complaint yet
+- next step is stronger live proof on a fresh execution-first config/script task turn
