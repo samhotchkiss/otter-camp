@@ -121,7 +121,7 @@ const (
 	recoveryArtifactDir                       = ".ottercamp/recovery"
 	recoveryResumeExcerptChars                = 3000
 	maxContinuationSummaryChars               = 4000
-	projectBootstrapStaffingDiscoveryBudget   = 4
+	projectBootstrapStaffingDiscoveryBudget   = 2
 	projectBootstrapMetadataKey               = "project_bootstrap"
 	projectBootstrapStatusActive              = "active"
 	projectBootstrapStatusCompleted           = "completed"
@@ -10513,7 +10513,7 @@ func buildProjectBootstrapResumeActionPrompt(state projectBootstrapState, snapsh
 		lines = append(lines, "Do not claim bootstrap is complete just because the governance gate or checklist tasks are done. Those system-managed setup tasks do not count as staffed project work.")
 		lines = append(lines, "Your next action must create real project assignments, non-bootstrap tasks, and runnable flow templates, or report a concrete blocker preventing that.")
 		if state.BootstrapSetupDoneCount > 0 || state.BootstrapSetupTaskCount > 0 {
-			lines = append(lines, "Bootstrap is currently at the staffing/materialization step. Your next tool activity should materially staff the project: do one bounded staffing lookup per needed role category, then create and assign the PM, workers, and reviewers in the same turn before attempting task decomposition.")
+			lines = append(lines, "Bootstrap is currently at the staffing/materialization step. Do not begin with project.list, project.get, task.list, file.list, file.read, or scaffold rereads. Your next tool activity should materially staff the project: do at most one bounded staffing lookup per needed role family, then create and assign the PM, workers, and reviewers in the same turn before attempting task decomposition.")
 			lines = append(lines, "Do not answer with blank output, an acknowledgement, or another bootstrap summary. If the current staffing candidates are insufficient, say the one concrete blocker preventing staff creation.")
 		}
 	}
@@ -11622,6 +11622,7 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 	toolCalls := make([]ToolCall, 0, len(calls))
 	blockedCalls := make([]ToolResult, 0)
 	blockedBootstrapRecoveryReread := false
+	staffingDiscoveryCalls := 0
 	for i, call := range calls {
 		id := strings.TrimSpace(call.ID)
 		if id == "" {
@@ -11699,13 +11700,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
-		if shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, name) {
+		if shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, name, staffingDiscoveryCalls) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
 				Name:       name,
 				Error:      buildProjectBootstrapExcessStaffingDiscoveryGuardError(),
 			})
 			continue
+		}
+		if isProjectBootstrapStaffingDiscoveryTool(name) {
+			staffingDiscoveryCalls++
 		}
 		if shouldBlockProjectBootstrapRecoveryRereadTool(rt, name, arguments) {
 			blockedBootstrapRecoveryReread = true
@@ -16280,6 +16284,9 @@ func (e *TurnEngine) handleProjectBootstrapUnhandledFailure(ctx context.Context,
 	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
 		return false, nil
 	}
+	if isRecoverableProjectBootstrapRaceFailure(cause) {
+		return false, nil
+	}
 
 	progress, err := e.loadProjectBootstrapProgress(ctx, rt.session.ScopeID)
 	if err != nil {
@@ -16354,6 +16361,13 @@ func (e *TurnEngine) handleProjectBootstrapUnhandledFailure(ctx context.Context,
 		return true, err
 	}
 	return true, nil
+}
+
+func isRecoverableProjectBootstrapRaceFailure(err error) bool {
+	var invalidTaskTransition tasksvc.ErrInvalidStatusTransition
+	return errors.Is(err, chat.ErrInvalidStatusTransition) ||
+		errors.As(err, &invalidTaskTransition) ||
+		errors.Is(err, repo.ErrConflict)
 }
 
 func (e *TurnEngine) handleDeferredBootstrapProviderFailure(ctx context.Context, rt *turnRuntime, progress projectBootstrapProgress, failureClass, failureReason string, cause error, now time.Time) (bool, error) {
@@ -22538,26 +22552,55 @@ func shouldBlockProjectBootstrapRestaffingTool(rt *turnRuntime, toolName string)
 	return false
 }
 
-func shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt *turnRuntime, toolName string) bool {
+func isProjectBootstrapStaffingDiscoveryTool(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "staffing.browse_profiles", "staffing.get_profile":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt *turnRuntime, toolName string, staffingDiscoveryCalls int) bool {
 	if rt == nil || rt.session == nil {
 		return false
 	}
 	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "staffing.browse_profiles", "staffing.get_profile":
-	default:
+	if !isProjectBootstrapStaffingDiscoveryTool(toolName) {
 		return false
 	}
 	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
 	if !projectBootstrapStateActive(state) || state.AssignmentCount > 0 {
 		return false
 	}
-	if rt.toolCallsUsed < projectBootstrapStaffingDiscoveryBudget {
+	if staffingDiscoveryCalls < projectBootstrapStaffingDiscoveryBudget {
 		return false
 	}
 	return true
+}
+
+func projectBootstrapChecklistOnlyRestartState(state projectBootstrapState, initialMessage string) bool {
+	if state.AssignmentCount != 0 ||
+		state.PlannedTaskCount != 0 ||
+		state.PlannedFlowTemplateCount != 0 ||
+		(state.BootstrapSetupDoneCount == 0 && state.BootstrapSetupTaskCount == 0) {
+		return false
+	}
+	switch strings.TrimSpace(state.CurrentPhase) {
+	case projectBootstrapCheckpointProjectCreated,
+		projectBootstrapCheckpointStaffingPersisted:
+		return true
+	}
+	switch strings.TrimSpace(state.LastSuccessfulCheckpoint) {
+	case projectBootstrapCheckpointProjectCreated,
+		projectBootstrapCheckpointStaffingPersisted:
+		return true
+	}
+	return strings.Contains(initialMessage, "if the project currently contains only the bootstrap checklist tasks") ||
+		strings.Contains(initialMessage, "your next acceptable action is to create staffed project work") ||
+		projectBootstrapRestartScaffoldFailureReason(state.ValidationFailureReason)
 }
 
 func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName string, arguments map[string]any) bool {
@@ -22570,6 +22613,12 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 	state := projectBootstrapStateFromMetadata(rt.session.Metadata)
 	compactLateResume := projectBootstrapResumeUsesCompactRoster(state) && projectBootstrapResumeShouldStartWithPersist(state)
 	initialMessage := strings.ToLower(strings.TrimSpace(rt.initialMessageText))
+	if projectBootstrapChecklistOnlyRestartState(state, initialMessage) {
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "project.list", "project.get", "task.list", "flow.list_templates", "file.read", "file.search", "file.list":
+			return true
+		}
+	}
 	scaffoldOnlyRecovery := (state.AssignmentCount > 0 && state.PlannedTaskCount == 0 &&
 		(strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointTaskTreePersisted ||
 			strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointStaffingPersisted)) ||
@@ -22578,7 +22627,7 @@ func shouldBlockProjectBootstrapRecoveryRereadTool(rt *turnRuntime, toolName str
 		projectBootstrapRestartScaffoldFailureReason(state.ValidationFailureReason)
 	if scaffoldOnlyRecovery {
 		switch strings.ToLower(strings.TrimSpace(toolName)) {
-		case "project.list", "project.get", "task.list", "flow.list_templates", "file.read", "file.search":
+		case "project.list", "project.get", "task.list", "flow.list_templates", "file.read", "file.search", "file.list":
 			return true
 		}
 	}
@@ -23349,6 +23398,12 @@ func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName
 	if rt != nil {
 		initialMessage = strings.ToLower(strings.TrimSpace(rt.initialMessageText))
 	}
+	if projectBootstrapChecklistOnlyRestartState(state, initialMessage) {
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "project.list", "project.get", "task.list", "flow.list_templates", "file.read", "file.search", "file.list":
+			return "bootstrap checklist-only restart already has the active project id and canonical bootstrap scaffold. Do not reread project, task, or workspace state first. Your next tool activity must materially staff the project: do one bounded staffing lookup if needed, then create and assign the PM, workers, and reviewers before decomposing work."
+		}
+	}
 	scaffoldOnlyRecovery := (state.AssignmentCount > 0 && state.PlannedTaskCount == 0 &&
 		(strings.TrimSpace(state.CurrentPhase) == projectBootstrapCheckpointTaskTreePersisted ||
 			strings.TrimSpace(state.LastSuccessfulCheckpoint) == projectBootstrapCheckpointStaffingPersisted)) ||
@@ -23357,7 +23412,7 @@ func buildProjectBootstrapRecoveryRereadToolGuardError(rt *turnRuntime, toolName
 		projectBootstrapRestartScaffoldFailureReason(state.ValidationFailureReason)
 	if scaffoldOnlyRecovery {
 		switch strings.ToLower(strings.TrimSpace(toolName)) {
-		case "project.list", "project.get", "task.list", "flow.list_templates", "file.read", "file.search":
+		case "project.list", "project.get", "task.list", "flow.list_templates", "file.read", "file.search", "file.list":
 			return "bootstrap scaffold-only recovery already has the active project scope and persisted staffing roster. Do not reread project state first. Your next action must be direct task.create or subtask.create calls that materialize bounded non-bootstrap project work using the existing assignee roster from the bootstrap resume message."
 		}
 	}

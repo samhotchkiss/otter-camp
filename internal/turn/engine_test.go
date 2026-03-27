@@ -7870,21 +7870,19 @@ func TestShouldBlockProjectBootstrapExcessStaffingDiscoveryTool(t *testing.T) {
 		session: &chat.ChatSession{
 			ScopeType: "project",
 		},
-		toolCallsUsed: projectBootstrapStaffingDiscoveryBudget,
 	}
 	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{Status: projectBootstrapStatusActive})
 	if err != nil {
 		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
 	}
 	rt.session.Metadata = metadata
-	if !shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.browse_profiles") {
+	if !shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.browse_profiles", projectBootstrapStaffingDiscoveryBudget) {
 		t.Fatal("expected staffing browse to be blocked after discovery budget is exhausted")
 	}
-	if !shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.get_profile") {
+	if !shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.get_profile", projectBootstrapStaffingDiscoveryBudget) {
 		t.Fatal("expected staffing get_profile to be blocked after discovery budget is exhausted")
 	}
-	rt.toolCallsUsed = projectBootstrapStaffingDiscoveryBudget - 1
-	if shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.browse_profiles") {
+	if shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.browse_profiles", projectBootstrapStaffingDiscoveryBudget-1) {
 		t.Fatal("unexpected staffing browse block before discovery budget is exhausted")
 	}
 	metadata, err = projectBootstrapMetadataJSON(nil, projectBootstrapState{
@@ -7895,8 +7893,7 @@ func TestShouldBlockProjectBootstrapExcessStaffingDiscoveryTool(t *testing.T) {
 		t.Fatalf("projectBootstrapMetadataJSON assignments: %v", err)
 	}
 	rt.session.Metadata = metadata
-	rt.toolCallsUsed = projectBootstrapStaffingDiscoveryBudget
-	if shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.browse_profiles") {
+	if shouldBlockProjectBootstrapExcessStaffingDiscoveryTool(rt, "staffing.browse_profiles", projectBootstrapStaffingDiscoveryBudget) {
 		t.Fatal("unexpected staffing browse block once assignments already exist")
 	}
 }
@@ -7974,6 +7971,77 @@ func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksBroadRereads(t *test
 	}
 	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.get", nil) {
 		t.Fatal("task.get should remain available for targeted recovery inspection")
+	}
+}
+
+func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksChecklistOnlyRestartRediscovery(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		BootstrapSetupDoneCount:  1,
+		BootstrapSetupTaskCount:  8,
+		CurrentPhase:             projectBootstrapCheckpointStaffingPersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointProjectCreated,
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		initialMessageText: "Resume the active project bootstrap workflow from the persisted state below. If the project currently contains only the bootstrap checklist tasks, your next acceptable action is to create staffed project work.",
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "project.list", nil) {
+		t.Fatal("expected project.list to be blocked during checklist-only restart")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
+		t.Fatal("expected task.list to be blocked during checklist-only restart")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.list", map[string]any{"path": "."}) {
+		t.Fatal("expected file.list to be blocked during checklist-only restart")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.read", map[string]any{"path": "planning/bootstrap.md"}) {
+		t.Fatal("expected planning file.read to be blocked during checklist-only restart")
+	}
+	if shouldBlockProjectBootstrapRecoveryRereadTool(rt, "staffing.browse_profiles", nil) {
+		t.Fatal("staffing discovery should remain available during checklist-only restart")
+	}
+}
+
+func TestShouldBlockProjectBootstrapRecoveryRereadToolBlocksChecklistOnlyRestartWithoutResumeText(t *testing.T) {
+	now := time.Now().UTC()
+	metadata, err := projectBootstrapMetadataJSON(nil, projectBootstrapState{
+		Status:                   projectBootstrapStatusActive,
+		BootstrapSetupDoneCount:  1,
+		BootstrapSetupTaskCount:  8,
+		CurrentPhase:             projectBootstrapCheckpointStaffingPersisted,
+		LastSuccessfulCheckpoint: projectBootstrapCheckpointProjectCreated,
+		StartedAt:                &now,
+		UpdatedAt:                &now,
+	})
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Metadata:  metadata,
+		},
+	}
+
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "project.list", nil) {
+		t.Fatal("expected project.list to be blocked during checklist-only restart even without resume text")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "task.list", nil) {
+		t.Fatal("expected task.list to be blocked during checklist-only restart even without resume text")
+	}
+	if !shouldBlockProjectBootstrapRecoveryRereadTool(rt, "file.list", map[string]any{"path": "."}) {
+		t.Fatal("expected file.list to be blocked during checklist-only restart even without resume text")
 	}
 }
 
@@ -11424,6 +11492,66 @@ func TestHandleRecoverableProjectExecutionTurnFailureConvertsInvalidTransitionTo
 	}
 	if fixture.messages.containsContentSubstring("[Turn failed:") {
 		t.Fatal("unexpected generic turn failed system message for recoverable execution race")
+	}
+}
+
+func TestHandleProjectBootstrapUnhandledFailureSkipsRecoverableInvalidTransitionRace(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+
+	fixture.session.ScopeType = "project"
+	fixture.session.Mode = "async"
+	fixture.session.ScopeID = uuid.New()
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+
+	state := projectBootstrapState{
+		Status:           projectBootstrapStatusActive,
+		CurrentPhase:     projectBootstrapCheckpointStaffingPersisted,
+		InitialMessageID: fixture.userMessageID.String(),
+	}
+	metadata, err := projectBootstrapMetadataJSON(nil, state)
+	if err != nil {
+		t.Fatalf("projectBootstrapMetadataJSON: %v", err)
+	}
+	fixture.session.Metadata = metadata
+	fixture.chat.session.Metadata = metadata
+
+	userMessage, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	userMessage.Metadata = mustRawJSON(t, map[string]any{"source": projectBootstrapSource})
+	fixture.messages.upsert(userMessage)
+
+	turnID := uuid.New()
+	fixture.chat.turns[turnID] = &chat.ChatTurn{
+		ID:         turnID,
+		SessionID:  fixture.session.ID,
+		TurnNumber: 1,
+		Status:     "in_progress",
+	}
+	fixture.chat.turnOrder = append(fixture.chat.turnOrder, turnID)
+	fixture.chat.session.CurrentTurnID = &turnID
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		turn:             fixture.chat.turns[turnID],
+		initialMessageID: fixture.userMessageID,
+	}
+
+	handled, err := fixture.engine.handleProjectBootstrapUnhandledFailure(context.Background(), rt, chat.ErrInvalidStatusTransition)
+	if err != nil {
+		t.Fatalf("handleProjectBootstrapUnhandledFailure: %v", err)
+	}
+	if handled {
+		t.Fatal("handled = true, want false so the generic recoverable-project path can absorb the raced bootstrap turn")
+	}
+	if fixture.chat.failCalls != 0 {
+		t.Fatalf("failCalls = %d, want 0", fixture.chat.failCalls)
+	}
+	if fixture.messages.containsContentSubstring("Project bootstrap failed:") {
+		t.Fatal("unexpected bootstrap failure message for recoverable invalid-status race")
 	}
 }
 
