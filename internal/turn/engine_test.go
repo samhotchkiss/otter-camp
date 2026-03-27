@@ -9127,6 +9127,85 @@ func TestShouldNotBlockProjectExecutionPrematureDoneToolWithoutRemainingDrafts(t
 	}
 }
 
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	draftTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: "Actionable draft tasks already in the tree: task 22 (Produce final project close-out report) id=" + draftTaskID.String() + " title=\"Produce final project close-out report\" work_status=draft",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "task.list", map[string]any{})
+	if !blocked {
+		t.Fatal("expected broad project-lane task.list to be blocked once the continuation prompt already names actionable draft tasks")
+	}
+	if !strings.Contains(reason, "Do not re-list the broader project task tree") {
+		t.Fatalf("reason = %q, want broader task-tree guidance", reason)
+	}
+}
+
+func TestShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	draftTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: "Actionable draft tasks already in the tree: task 22 (Produce final project close-out report) id=" + draftTaskID.String() + " title=\"Produce final project close-out report\" work_status=draft",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "task.get", map[string]any{
+		"task_id": draftTaskID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected project-lane task.get on a task already named in the continuation prompt to be blocked")
+	}
+	if !strings.Contains(reason, draftTaskID.String()) {
+		t.Fatalf("reason = %q, want named task id", reason)
+	}
+}
+
+func TestShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	parentTaskID := uuid.New()
+	rt := &turnRuntime{
+		session: &chat.ChatSession{
+			ScopeType: "project",
+			Mode:      "async",
+			ScopeID:   projectID,
+		},
+		initialMessageText: buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+			ProjectLine:   "Active project id: " + projectID.String(),
+			DraftTaskLine: "Actionable draft tasks already in the tree: task 10 (Workstream B: Review Path Validation) id=" + parentTaskID.String() + " title=\"Workstream B: Review Path Validation\" work_status=draft",
+		}),
+	}
+
+	blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, "task.list", map[string]any{
+		"parent_task_id": parentTaskID.String(),
+	})
+	if blocked {
+		t.Fatalf("expected parent-scoped task.list to remain available, got %q", reason)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnAutoQueuesRunnableDraft(t *testing.T) {
 	t.Parallel()
 
@@ -14571,7 +14650,12 @@ func TestTaskExecutionRetryPromptForRecoveryTargetFocusSkipsWhenTargetAlreadyWri
 }
 
 func TestBuildProjectContinuationActionPrompt(t *testing.T) {
-	prompt := buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.")
+	prompt := buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.", projectExecutionContinuationSnapshot{
+		ProjectLine:    "Active project id: 123",
+		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=in_progress assigned_agent_id=worker-1",
+		DraftTaskLine:  "Actionable draft tasks already in the tree: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft",
+		FocusTaskLine:  "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft",
+	})
 
 	if !strings.Contains(prompt, "Continue the active project execution now from the continuation summary above.") {
 		t.Fatalf("prompt = %q, want project continuation lead-in", prompt)
@@ -14593,6 +14677,73 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "This project already exists. Do not call project.create again") {
 		t.Fatalf("prompt = %q, want anti-project-create guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Active project id: 123") {
+		t.Fatalf("prompt = %q, want project id guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Already-active non-terminal tasks in the tree:") {
+		t.Fatalf("prompt = %q, want active-task snapshot", prompt)
+	}
+	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
+		t.Fatalf("prompt = %q, want draft-task snapshot", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with broad project.get, task.list, or task.get rediscovery") {
+		t.Fatalf("prompt = %q, want anti-rediscovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Start from this existing actionable draft before broad rediscovery") {
+		t.Fatalf("prompt = %q, want focus-task guidance", prompt)
+	}
+}
+
+func TestProjectExecutionContinuationSnapshotSummarizesProjectState(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	assignedID := uuid.New()
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			uuid.New(): {
+				ID:              uuid.New(),
+				ProjectID:       projectID,
+				TaskNumber:      16,
+				Title:           "Validate API",
+				WorkStatus:      "in_progress",
+				AssignedAgentID: &assignedID,
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 19,
+				Title:      "Ship docs",
+				WorkStatus: "draft",
+			},
+			uuid.New(): {
+				ID:         uuid.New(),
+				ProjectID:  projectID,
+				TaskNumber: 20,
+				Title:      "Select and Decompose Next Bounded Task",
+				WorkStatus: "draft",
+			},
+		},
+	}
+
+	snapshot, err := fixture.engine.projectExecutionContinuationSnapshot(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("projectExecutionContinuationSnapshot: %v", err)
+	}
+	if !strings.Contains(snapshot.ProjectLine, projectID.String()) {
+		t.Fatalf("ProjectLine = %q, want project id", snapshot.ProjectLine)
+	}
+	if !strings.Contains(snapshot.ActiveTaskLine, "task 16 (Validate API)") {
+		t.Fatalf("ActiveTaskLine = %q, want active task", snapshot.ActiveTaskLine)
+	}
+	if !strings.Contains(snapshot.DraftTaskLine, "task 19 (Ship docs)") {
+		t.Fatalf("DraftTaskLine = %q, want actionable draft task", snapshot.DraftTaskLine)
+	}
+	if strings.Contains(snapshot.DraftTaskLine, "Select and Decompose Next Bounded Task") {
+		t.Fatalf("DraftTaskLine = %q, should skip meta draft shell", snapshot.DraftTaskLine)
+	}
+	if !strings.Contains(snapshot.FocusTaskLine, "task 19 (Ship docs)") {
+		t.Fatalf("FocusTaskLine = %q, want first actionable draft", snapshot.FocusTaskLine)
 	}
 }
 

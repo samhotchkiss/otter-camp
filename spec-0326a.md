@@ -1153,3 +1153,41 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - once normalized as unavailable, async project continuations fall back to the built-in project continuation summary instead of preserving an operator-facing request
     - this specifically targets the live project session churn where a continuation summary was telling the agent to run `claude-code task list --format json` and wait for output, which is nonsensical inside autonomous runtime execution
     - focused turn-engine coverage is green for operator-facing command-request normalization, alongside the preexisting continuation-summary unavailability cases
+  - newest project continuation resume snapshot slice:
+    - the generic async `project_continuation_resume` prompt now embeds a compact project-state snapshot directly into the rooted synthetic user message
+    - that snapshot includes:
+      - active project id
+      - already-active non-terminal tasks
+      - actionable draft tasks already present in the tree
+      - one existing actionable draft to start from before broad rediscovery
+    - the prompt now explicitly says not to begin with broad `project.get`, `task.list`, or `task.get` rediscovery when those draft tasks are already named
+    - this targets the dominant live seam in project session `db21265f-c37d-40e4-9ed5-13def09970f8`, where project turns were repeatedly spending `max_tool_calls` rediscovering the same draft/in-progress task tree
+    - focused turn-engine coverage is green for:
+      - prompt rendering with the embedded project snapshot
+      - snapshot generation skipping project-continuation meta drafts like `Select and Decompose Next Bounded Task`
+    - deploy status:
+      - built and restarted on the newest binary
+      - live proof now exists on hot session `db21265f-c37d-40e4-9ed5-13def09970f8`:
+        - fresh `project_continuation_resume` at `2026-03-27 08:55:43 MDT`
+        - prompt carried:
+          - `Active project id: f56c456f-870a-4647-be30-c9d256e0ea12`
+          - named active tasks `16`, `18`, `13`, `12`
+          - named actionable draft tasks `22`, `21`, `20`, `10`
+          - direct anti-rediscovery guidance plus a focus task
+  - newest project continuation named-task rediscovery guard slice:
+    - once that rooted project continuation prompt already names actionable draft task ids, the project lane now blocks:
+      - broad `task.list` without `parent_task_id`
+      - `project.get` / `project.list`
+      - `task.get` for task ids already named in the prompt
+    - the guard still allows `task.list(parent_task_id=...)` so the model can inspect a named parent's direct children when that narrower evidence is genuinely needed
+    - this directly targets the next live seam after the resume snapshot landed: the hot project session still reread named task records and then re-listed the whole tree anyway
+    - focused turn-engine coverage is green for:
+      - blocking broad `task.list`
+      - blocking `task.get` on a named task id
+      - preserving parent-scoped `task.list`
+    - live proof now exists:
+      - hot session `db21265f-c37d-40e4-9ed5-13def09970f8`
+      - fresh `project_continuation_resume` turn after deploy at `2026-03-27 09:00:16 MDT`
+      - runtime returned:
+        - `project continuation already has named actionable draft tasks in the continuation prompt. Do not re-list the broader project task tree...`
+      - this is the first direct project-lane same-turn rediscovery block in production for that family

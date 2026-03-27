@@ -164,6 +164,8 @@ const (
 	taskContinuationResumeMessageSource       = "task_continuation_resume"
 )
 
+var projectContinuationPromptTaskIDPattern = regexp.MustCompile(`id=([0-9a-fA-F-]{36})`)
+
 const reviewRepeatedFileReadNotFoundTurnStopSubstring = "[Repeated identical file.read validation failure in this turn (2/3): not_found."
 
 var errTurnBranchAttachedToMainWorktree = errors.New("branch attached to main worktree")
@@ -9365,11 +9367,15 @@ func (e *TurnEngine) appendContinuationSummaryAndAction(ctx context.Context, rt 
 			return appendErr
 		}
 		if shouldAppend {
+			snapshot, snapshotErr := e.projectExecutionContinuationSnapshot(ctx, rt.session.ScopeID)
+			if snapshotErr != nil {
+				return snapshotErr
+			}
 			if _, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
 				SessionID: rt.session.ID,
 				TurnID:    &rt.turn.ID,
 				Role:      "user",
-				Content:   buildProjectContinuationActionPrompt(summary),
+				Content:   buildProjectContinuationActionPrompt(summary, snapshot),
 				Metadata:  syntheticContinuationActionMessageMetadata(rt.session, "project_continuation_resume"),
 			}); err != nil {
 				return err
@@ -11687,6 +11693,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 				ToolCallID: id,
 				Name:       name,
 				Error:      buildProjectExecutionSubtaskCreateGuardError(),
+			})
+			continue
+		}
+		if blocked, reason := shouldBlockProjectContinuationSnapshotRediscoveryTool(rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
 			})
 			continue
 		}
@@ -15619,7 +15633,75 @@ func buildTaskContinuationActionPrompt(summary string) string {
 	return strings.Join(lines, " ")
 }
 
-func buildProjectContinuationActionPrompt(summary string) string {
+type projectExecutionContinuationSnapshot struct {
+	ProjectLine    string
+	ActiveTaskLine string
+	DraftTaskLine  string
+	FocusTaskLine  string
+}
+
+func (e *TurnEngine) projectExecutionContinuationSnapshot(ctx context.Context, projectID uuid.UUID) (projectExecutionContinuationSnapshot, error) {
+	snapshot := projectExecutionContinuationSnapshot{}
+	if projectID == uuid.Nil {
+		return snapshot, nil
+	}
+	snapshot.ProjectLine = "Active project id: " + projectID.String()
+	if e == nil || e.tasks == nil {
+		return snapshot, nil
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, projectID)
+	if err != nil {
+		return snapshot, err
+	}
+	activeTasks := make([]string, 0, 4)
+	draftTasks := make([]string, 0, 4)
+	focusTask := ""
+	for _, task := range projectTasks {
+		status := strings.ToLower(strings.TrimSpace(task.WorkStatus))
+		if status == "" || status == "done" || status == "cancelled" {
+			continue
+		}
+		taskRef := projectExecutionContinuationTaskRef(task)
+		if isActionableProjectDraftTask(task) {
+			if len(draftTasks) < 4 {
+				draftTasks = append(draftTasks, taskRef)
+			}
+			if focusTask == "" {
+				focusTask = taskRef
+			}
+			continue
+		}
+		if len(activeTasks) < 4 {
+			activeTasks = append(activeTasks, taskRef)
+		}
+	}
+	if len(activeTasks) > 0 {
+		snapshot.ActiveTaskLine = "Already-active non-terminal tasks in the tree: " + strings.Join(activeTasks, "; ")
+	}
+	if len(draftTasks) > 0 {
+		snapshot.DraftTaskLine = "Actionable draft tasks already in the tree: " + strings.Join(draftTasks, "; ")
+	}
+	if focusTask != "" {
+		snapshot.FocusTaskLine = "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: " + focusTask
+	}
+	return snapshot, nil
+}
+
+func projectExecutionContinuationTaskRef(task repo.ProjectTask) string {
+	parts := []string{projectBootstrapTaskLabel(task), "id=" + task.ID.String()}
+	if title := strings.TrimSpace(task.Title); title != "" && task.TaskNumber > 0 {
+		parts = append(parts, "title="+strconv.Quote(title))
+	}
+	if status := strings.TrimSpace(task.WorkStatus); status != "" {
+		parts = append(parts, "work_status="+status)
+	}
+	if task.AssignedAgentID != nil && *task.AssignedAgentID != uuid.Nil {
+		parts = append(parts, "assigned_agent_id="+task.AssignedAgentID.String())
+	}
+	return strings.Join(parts, " ")
+}
+
+func buildProjectContinuationActionPrompt(summary string, snapshot projectExecutionContinuationSnapshot) string {
 	lines := []string{
 		"Continue the active project execution now from the continuation summary above.",
 		"Your next response must take direct project action instead of generic chat.",
@@ -15631,6 +15713,19 @@ func buildProjectContinuationActionPrompt(summary string) string {
 		"Use the existing task tree, workspace state, planning artifacts, and recent tool results to continue execution directly.",
 		"Prefer direct task.create, task.update, bootstrap.setup.persist, flow, assignment, or file actions over more narration whenever the next step is already clear.",
 		"If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.",
+	}
+	if projectLine := strings.TrimSpace(snapshot.ProjectLine); projectLine != "" {
+		lines = append(lines, projectLine)
+	}
+	if activeLine := strings.TrimSpace(snapshot.ActiveTaskLine); activeLine != "" {
+		lines = append(lines, activeLine)
+	}
+	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
+		lines = append(lines, draftLine)
+		lines = append(lines, "Do not begin with broad project.get, task.list, or task.get rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
+	}
+	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
+		lines = append(lines, focusLine)
 	}
 	if continuationSummaryLooksLikeDraft(summary) {
 		lines = append(lines,
@@ -23314,6 +23409,79 @@ func buildTaskExecutionTaskCreateGuardError(taskRecord repo.ProjectTask, parentR
 
 func buildProjectExecutionSubtaskCreateGuardError() string {
 	return "flow_node_execution_id_required: project continuation should not call subtask.create from the project lane. Queue or advance the appropriate task execution lane instead; subtask.create belongs inside a running task execution with an active flow_node_execution_id."
+}
+
+func shouldBlockProjectContinuationSnapshotRediscoveryTool(rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false, ""
+	}
+	initialMessage := strings.TrimSpace(rt.initialMessageText)
+	if !strings.Contains(initialMessage, "Actionable draft tasks already in the tree:") {
+		return false, ""
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "project.get", "project.list":
+		return true, buildProjectContinuationSnapshotRediscoveryGuardError(toolName, uuid.Nil)
+	case "task.list":
+		if strings.TrimSpace(stringValue(arguments["parent_task_id"])) != "" {
+			return false, ""
+		}
+		return true, buildProjectContinuationSnapshotRediscoveryGuardError(toolName, uuid.Nil)
+	case "task.get":
+		taskIDText := strings.TrimSpace(stringValue(arguments["task_id"]))
+		if taskIDText == "" {
+			return false, ""
+		}
+		taskID, err := uuid.Parse(taskIDText)
+		if err != nil || taskID == uuid.Nil {
+			return false, ""
+		}
+		namedTaskIDs := projectContinuationPromptNamedTaskIDs(initialMessage)
+		if _, ok := namedTaskIDs[taskID]; !ok {
+			return false, ""
+		}
+		return true, buildProjectContinuationSnapshotRediscoveryGuardError(toolName, taskID)
+	default:
+		return false, ""
+	}
+}
+
+func projectContinuationPromptNamedTaskIDs(initialMessage string) map[uuid.UUID]struct{} {
+	matches := projectContinuationPromptTaskIDPattern.FindAllStringSubmatch(initialMessage, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	ids := make(map[uuid.UUID]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) != 2 {
+			continue
+		}
+		taskID, err := uuid.Parse(strings.TrimSpace(match[1]))
+		if err != nil || taskID == uuid.Nil {
+			continue
+		}
+		ids[taskID] = struct{}{}
+	}
+	return ids
+}
+
+func buildProjectContinuationSnapshotRediscoveryGuardError(toolName string, taskID uuid.UUID) string {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "project.get", "project.list":
+		return fmt.Sprintf("project continuation already has the active project id plus named active and draft tasks in the continuation prompt. Do not reread broad project state with %s; act on the named tasks directly.", toolName)
+	case "task.list":
+		return "project continuation already has named actionable draft tasks in the continuation prompt. Do not re-list the broader project task tree; act on one of the named tasks directly or inspect only a named parent's direct children with parent_task_id if that narrower evidence is truly required."
+	case "task.get":
+		if taskID != uuid.Nil {
+			return fmt.Sprintf("project continuation already named task id=%s in the continuation prompt. Do not reread that task record first; act on the named task directly or inspect only genuinely new narrower evidence.", taskID.String())
+		}
+		return "project continuation already named the relevant task in the continuation prompt. Do not reread that task record first; act on the named task directly or inspect only genuinely new narrower evidence."
+	default:
+		return "project continuation already has the necessary project snapshot in the continuation prompt. Do not reread the broader project task tree first."
+	}
 }
 
 func buildTaskExecutionSubtaskCreateGuardError() string {

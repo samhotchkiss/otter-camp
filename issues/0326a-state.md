@@ -3062,6 +3062,96 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 08:53 MDT
+
+I tightened the generic async project-continuation resume path itself instead of waiting for another bespoke guardrail.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `project_continuation_resume` prompts now embed a compact project-state snapshot directly into the rooted synthetic user message
+  - the new snapshot includes:
+    - `Active project id: ...`
+    - `Already-active non-terminal tasks in the tree: ...`
+    - `Actionable draft tasks already in the tree: ...`
+    - `Start from this existing actionable draft before broad rediscovery ...`
+  - the prompt now explicitly says not to begin with broad `project.get`, `task.list`, or `task.get` rediscovery when those actionable draft tasks are already named
+  - snapshot generation reuses the existing `isActionableProjectDraftTask(...)` filter, so shell/meta drafts like `Select and Decompose Next Bounded Task` are excluded instead of being treated as real remaining work
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for:
+    - prompt rendering with embedded project snapshot lines
+    - snapshot generation that skips continuation-shell meta drafts while still surfacing real active/draft work
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(BuildProjectContinuationActionPrompt|ProjectExecutionContinuationSnapshotSummarizesProjectState)$' -count=1`
+- `go test ./internal/turn -run 'Test(ListeningEvalSkippedForSyntheticProjectContinuationMessage|HandleCompletedProjectExecutionContinuationTurnHandlesProjectContinuationResumeSource|MaybeContinueProjectExecutionAfterTaskCompletionSupersedesStaleProjectContinuationTurn|BuildProjectContinuationActionPrompt|ProjectExecutionContinuationSnapshotSummarizesProjectState|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- runtime restarted on tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Why this slice exists:
+
+- the hottest remaining project sink was not malformed summaries anymore
+- it was the normal `project_continuation_resume` path staying too generic, which let the project lane reopen the same draft/in-progress task tree with repeated `task.list` / `task.get` discovery until `max_tool_calls`
+- embedding a compact snapshot into the rooted continuation message is the lowest-risk way to tighten that lane without inventing more runtime state or another special-case blocker
+
+Live proof status:
+
+- deploy is complete and health is green
+- live proof now exists on hot session `db21265f-c37d-40e4-9ed5-13def09970f8`
+- fresh `project_continuation_resume` at `2026-03-27 08:55:43 MDT` carried:
+  - `Active project id: f56c456f-870a-4647-be30-c9d256e0ea12`
+  - named active tasks `16`, `18`, `13`, `12`
+  - named actionable draft tasks `22`, `21`, `20`, `10`
+  - direct anti-rediscovery guidance plus a focus task (`22`)
+
+## Update 09:00 MDT
+
+The embedded snapshot alone was not enough; the hot project lane still reread named task records and then re-listed the tree. I cut that next seam directly at tool preflight.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async `project` turns now block a narrow rediscovery family once the rooted `project_continuation_resume` prompt already names actionable draft task ids
+  - blocked now:
+    - broad `task.list` without `parent_task_id`
+    - `project.get` / `project.list`
+    - `task.get` when the requested `task_id` already appears in the continuation prompt snapshot
+  - still allowed:
+    - `task.list(parent_task_id=...)` for genuinely narrower child inspection
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for:
+    - blocking broad `task.list`
+    - blocking `task.get` on a prompt-named task id
+    - preserving parent-scoped `task.list`
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet|ShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList|BuildProjectContinuationActionPrompt|ProjectExecutionContinuationSnapshotSummarizesProjectState)$' -count=1`
+- `go test ./internal/turn -run 'Test(ListeningEvalSkippedForSyntheticProjectContinuationMessage|HandleCompletedProjectExecutionContinuationTurnHandlesProjectContinuationResumeSource|MaybeContinueProjectExecutionAfterTaskCompletionSupersedesStaleProjectContinuationTurn|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet|ShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList|BuildProjectContinuationActionPrompt|ProjectExecutionContinuationSnapshotSummarizesProjectState|IsActionableProjectDraftTaskSkipsProjectContinuationMetaDrafts)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- runtime restarted on tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Live proof:
+
+- hot session `db21265f-c37d-40e4-9ed5-13def09970f8`
+- fresh post-deploy continuation at `2026-03-27 08:59:42 MDT`
+- first assistant reply still tried to inspect the already-named key tasks, then attempted broad `task.list`
+- runtime blocked that exact reread family at `2026-03-27 09:00:16 MDT` with:
+  - `project continuation already has named actionable draft tasks in the continuation prompt. Do not re-list the broader project task tree...`
+
+Why this matters:
+
+- this is the first direct same-turn project-lane rediscovery block for the hot `project_continuation_resume` family
+- it converts the new prompt snapshot from “advice only” into actual runtime enforcement for the broadest reread path
+- the next live seam in that project lane is narrower now:
+  - same-turn rereads of named active tasks via `task.get`
+  - other non-essential project-lane discovery like `agent.list`
+
 ## Update 08:24 MDT
 
 I tightened the orchestration-parent same-turn review guard to keep using the session deliverable target even when the prompt text itself is too generic.
