@@ -368,7 +368,7 @@ func TestAnthropicToolsSanitizesNames(t *testing.T) {
 	}
 }
 
-func TestHTTPClientForProviderCallExtendsTimeoutToContextDeadline(t *testing.T) {
+func TestHTTPClientForProviderCallKeepsSharedTimeoutForRemoteProviderEvenWhenContextDeadlineLonger(t *testing.T) {
 	gw := &LiveModelGateway{
 		httpClient: &http.Client{Timeout: 5 * time.Minute},
 	}
@@ -376,14 +376,8 @@ func TestHTTPClientForProviderCallExtendsTimeoutToContextDeadline(t *testing.T) 
 	defer cancel()
 
 	client := gw.httpClientForProviderCall(ctx, "https://api.openai.com/v1/chat/completions", "openai")
-	if client == gw.httpClient {
-		t.Fatal("expected cloned client when context deadline exceeds shared client timeout")
-	}
-	if client.Timeout < (30*time.Minute) {
-		t.Fatalf("client timeout = %s, want at least context deadline", client.Timeout)
-	}
-	if gw.httpClient.Timeout != 5*time.Minute {
-		t.Fatalf("shared client timeout = %s, want unchanged 5m", gw.httpClient.Timeout)
+	if client != gw.httpClient {
+		t.Fatal("expected shared client for remote provider even when context deadline is longer")
 	}
 }
 

@@ -834,14 +834,7 @@ func (g *LiveModelGateway) httpClientForProviderCall(ctx context.Context, endpoi
 		return http.DefaultClient
 	}
 	requestTimeout := time.Duration(0)
-	deadline, ok := ctx.Deadline()
-	if ok {
-		remaining := time.Until(deadline)
-		if remaining > 0 {
-			requestTimeout = remaining + providerCallTimeoutSlack
-		}
-	}
-	if localTimeout, ok := localProviderCallTimeout(endpointURL, providerType); ok && localTimeout > requestTimeout {
+	if localTimeout, ok := localProviderCallTimeout(endpointURL, providerType); ok {
 		requestTimeout = localTimeout
 	}
 	if requestTimeout <= 0 || g.httpClient.Timeout == 0 || g.httpClient.Timeout >= requestTimeout {

@@ -1069,3 +1069,8 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - a specific message telling the model not to call `flow.get_execution` with `task.current_flow_node_id`
     - focused native-tools coverage is green for this exact mistaken-id shape
     - this targets live `project` continuation churn seen in session `db21265f-c37d-40e4-9ed5-13def09970f8`, where the assistant was spending turns on opaque `flow.get_execution -> not_found` results against task flow-node ids
+  - newest provider hang-control slice:
+    - remote provider calls no longer inherit the full async turn deadline as their HTTP client timeout
+    - the gateway now keeps the shared remote timeout in place for Anthropic/OpenAI calls, while still extending only local provider calls like Ollama
+    - this targets the live seam where a single remote `agent_turn` invocation could remain `in_flight` for most of the async turn watchdog window even though the base remote client timeout is only `5m`
+    - focused gateway coverage is green for the new remote-timeout behavior

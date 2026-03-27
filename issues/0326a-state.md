@@ -3092,6 +3092,41 @@ Expected effect:
 - turn the project-lane error from opaque failure into actionable correction
 - reduce repeated `flow.get_execution` browse churn without widening or mutating any task-lane authority
 
+## Update 07:09 MDT
+
+I cut the next runtime seam behind the recent “wait window” behavior: remote model calls were still allowed to hang for the full async turn watchdog window.
+
+What changed:
+
+- [`internal/gateway/client.go`](../internal/gateway/client.go)
+  - remote provider calls now keep the shared HTTP client timeout instead of extending to the async turn deadline
+  - only local provider calls still get the longer per-call timeout extension
+- [`internal/gateway/client_test.go`](../internal/gateway/client_test.go)
+  - updated gateway coverage so remote providers explicitly keep the shared timeout even when the request context deadline is much longer
+
+Verification:
+
+- `gofmt -w internal/gateway/client.go internal/gateway/client_test.go`
+- `go test ./internal/gateway -count=1`
+
+Why this slice exists:
+
+- the live one-hour report still showed old remote `agent_turn` invocations sitting `in_flight` while tokens were available and the queue kept moving
+- example:
+  - turn `3af5ee5a-f290-4a4d-8f2a-52e49d9d4a03`
+  - invocation `9a6afe01-4cb9-4ac0-bb62-f23b259d23df`
+  - `Anthropic Primary`
+  - created at `2026-03-27 06:44:54 MDT`
+  - still `in_flight` more than 13 minutes later
+- root cause:
+  - the gateway was cloning the HTTP client timeout upward to match the async turn context deadline
+  - that effectively let a single remote stream hang toward the `30m` async watchdog instead of respecting the normal `5m` remote timeout
+
+Expected effect:
+
+- reduce the “available tokens but still waiting” symptom caused by hung remote calls
+- free provider slots and turn ownership sooner when Anthropic goes transient instead of simply stalling
+
 ## Update 05:55 MDT
 
 I landed the tiny compatibility slice that the first live task-9 proof exposed.
