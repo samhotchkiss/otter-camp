@@ -9206,6 +9206,74 @@ func TestShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScoped
 	}
 }
 
+func TestShouldBlockProjectContinuationFlowExecutionLookupToolForTaskCurrentFlowNodeID(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	taskID := uuid.New()
+	flowNodeID := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				ProjectID:         projectID,
+				TaskNumber:        16,
+				Title:             "Create test fixtures",
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &flowNodeID,
+			},
+		},
+	}
+	rt := &turnRuntime{session: fixture.session}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFlowExecutionLookupTool(context.Background(), rt, "flow.get_execution", map[string]any{
+		"flow_node_execution_id": flowNodeID.String(),
+	})
+	if !blocked {
+		t.Fatal("expected flow.get_execution to be blocked when project continuation reuses task.current_flow_node_id")
+	}
+	if !strings.Contains(reason, flowNodeID.String()) {
+		t.Fatalf("reason = %q, want current flow node id", reason)
+	}
+	if !strings.Contains(reason, "task.current_flow_node_id") {
+		t.Fatalf("reason = %q, want current_flow_node_id guidance", reason)
+	}
+}
+
+func TestShouldNotBlockProjectContinuationFlowExecutionLookupToolForUnknownExecutionID(t *testing.T) {
+	t.Parallel()
+
+	projectID := uuid.New()
+	taskID := uuid.New()
+	flowNodeID := uuid.New()
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = projectID
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:                taskID,
+				ProjectID:         projectID,
+				TaskNumber:        16,
+				Title:             "Create test fixtures",
+				WorkStatus:        "review",
+				CurrentFlowNodeID: &flowNodeID,
+			},
+		},
+	}
+	rt := &turnRuntime{session: fixture.session}
+
+	blocked, reason := fixture.engine.shouldBlockProjectContinuationFlowExecutionLookupTool(context.Background(), rt, "flow.get_execution", map[string]any{
+		"flow_node_execution_id": uuid.New().String(),
+	})
+	if blocked {
+		t.Fatalf("expected unknown execution id to pass through, got %q", reason)
+	}
+}
+
 func TestHandleCompletedProjectExecutionContinuationTurnAutoQueuesRunnableDraft(t *testing.T) {
 	t.Parallel()
 
@@ -14729,7 +14797,7 @@ func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
 		t.Fatalf("prompt = %q, want draft-task snapshot", prompt)
 	}
-	if !strings.Contains(prompt, "Do not begin with broad project.get, task.list, or task.get rediscovery") {
+	if !strings.Contains(prompt, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery") {
 		t.Fatalf("prompt = %q, want anti-rediscovery guidance", prompt)
 	}
 	if !strings.Contains(prompt, "Start from this existing actionable draft before broad rediscovery") {
@@ -14830,7 +14898,12 @@ func TestWaitingBoundFlowExecutionRuntimeSubstateDefaultsToWaitingForTurn(t *tes
 func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	task := repo.ProjectTask{TaskNumber: 11, Title: "Document what persisted correctly"}
 
-	prompt := buildProjectExecutionContinuationPrompt(task, 4)
+	prompt := buildProjectExecutionContinuationPrompt(task, 4, projectExecutionContinuationSnapshot{
+		ProjectLine:    "Active project id: 123",
+		ActiveTaskLine: "Already-active non-terminal tasks in the tree: task 16 (Validate API) id=aaa title=\"Validate API\" work_status=in_progress assigned_agent_id=worker-1",
+		DraftTaskLine:  "Actionable draft tasks already in the tree: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft",
+		FocusTaskLine:  "Start from this existing actionable draft before broad rediscovery if it is still the next bounded step: task 19 (Ship docs) id=bbb title=\"Ship docs\" work_status=draft",
+	})
 
 	if !strings.Contains(prompt, "Continue the active project execution now.") {
 		t.Fatalf("prompt = %q, want continuation lead-in", prompt)
@@ -14855,6 +14928,18 @@ func TestBuildProjectExecutionContinuationPrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "This project already exists. Do not call project.create again") {
 		t.Fatalf("prompt = %q, want anti-project-create guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Active project id: 123") {
+		t.Fatalf("prompt = %q, want project id guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Actionable draft tasks already in the tree:") {
+		t.Fatalf("prompt = %q, want draft-task snapshot", prompt)
+	}
+	if !strings.Contains(prompt, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery") {
+		t.Fatalf("prompt = %q, want anti-rediscovery guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Start from this existing actionable draft before broad rediscovery") {
+		t.Fatalf("prompt = %q, want focus-task guidance", prompt)
 	}
 }
 

@@ -3312,13 +3312,17 @@ func (e *TurnEngine) maybeContinueProjectExecutionAfterTaskCompletion(ctx contex
 	if err != nil && !errors.Is(err, repo.ErrNotFound) {
 		return err
 	}
+	snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
+	if err != nil {
+		return err
+	}
 
 	message, err := e.appendProjectExecutionContinuationMessage(
 		ctx,
 		session.ID,
 		agentID,
 		completedTask.ID,
-		buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks),
+		buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot),
 	)
 	if err != nil {
 		return err
@@ -4499,8 +4503,12 @@ func (e *TurnEngine) retryGenericProjectExecutionContinuation(
 	if err != nil {
 		return false, err
 	}
+	snapshot, err := e.projectExecutionContinuationSnapshot(ctx, session.ScopeID)
+	if err != nil {
+		return false, err
+	}
 	agentID := latestCompleted.RespondingID
-	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks) +
+	retryPrompt := buildProjectExecutionContinuationPrompt(completedTask, remainingDraftTasks, snapshot) +
 		" Your last continuation turn returned a generic non-action reply instead of advancing the project." +
 		" Do not ask which function to call, do not offer to format JSON or tool calls, and do not ask the user for more parameters." +
 		" Your next assistant action must either emit the concrete tool calls that advance the project or report one concrete blocker sentence."
@@ -6448,7 +6456,24 @@ func buildProjectBootstrapContinuationPrompt(autoTurnCount int) string {
 	)
 }
 
-func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, remainingDraftTasks int) string {
+func appendProjectExecutionSnapshotGuidance(lines []string, snapshot projectExecutionContinuationSnapshot) []string {
+	if projectLine := strings.TrimSpace(snapshot.ProjectLine); projectLine != "" {
+		lines = append(lines, projectLine)
+	}
+	if activeLine := strings.TrimSpace(snapshot.ActiveTaskLine); activeLine != "" {
+		lines = append(lines, activeLine)
+	}
+	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
+		lines = append(lines, draftLine)
+		lines = append(lines, "Do not begin with broad project.get, task.list, task.get, or flow.get_execution rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
+	}
+	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
+		lines = append(lines, focusLine)
+	}
+	return lines
+}
+
+func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, remainingDraftTasks int, snapshot projectExecutionContinuationSnapshot) string {
 	lines := []string{
 		"Continue the active project execution now.",
 		"Recently completed work may have unlocked the next wave of bounded tasks.",
@@ -6469,6 +6494,7 @@ func buildProjectExecutionContinuationPrompt(completedTask repo.ProjectTask, rem
 		"Do not use task.update to mark untouched draft tasks done; queue or otherwise advance the next runnable task instead.",
 		"If the remaining work is blocked on a concrete prerequisite, report that blocker in one sentence instead of narrating intent.",
 	)
+	lines = appendProjectExecutionSnapshotGuidance(lines, snapshot)
 	return strings.Join(lines, " ")
 }
 
@@ -11709,6 +11735,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := e.shouldBlockProjectContinuationFlowExecutionLookupTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if shouldBlockTaskExecutionSubtaskCreateTool(rt, name) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -15719,19 +15753,7 @@ func buildProjectContinuationActionPrompt(summary string, snapshot projectExecut
 		"Prefer direct task.create, task.update, bootstrap.setup.persist, flow, assignment, or file actions over more narration whenever the next step is already clear.",
 		"If you truly cannot continue, report the concrete blocker in one sentence instead of switching into generic conversation.",
 	}
-	if projectLine := strings.TrimSpace(snapshot.ProjectLine); projectLine != "" {
-		lines = append(lines, projectLine)
-	}
-	if activeLine := strings.TrimSpace(snapshot.ActiveTaskLine); activeLine != "" {
-		lines = append(lines, activeLine)
-	}
-	if draftLine := strings.TrimSpace(snapshot.DraftTaskLine); draftLine != "" {
-		lines = append(lines, draftLine)
-		lines = append(lines, "Do not begin with broad project.get, task.list, or task.get rediscovery when the actionable draft tasks above already identify the remaining bounded work.")
-	}
-	if focusLine := strings.TrimSpace(snapshot.FocusTaskLine); focusLine != "" {
-		lines = append(lines, focusLine)
-	}
+	lines = appendProjectExecutionSnapshotGuidance(lines, snapshot)
 	if continuationSummaryLooksLikeDraft(summary) {
 		lines = append(lines,
 			"The continuation summary above already contains draft project deliverable content. Treat it as the working draft for this turn.",
@@ -23487,6 +23509,47 @@ func buildProjectContinuationSnapshotRediscoveryGuardError(toolName string, task
 	default:
 		return "project continuation already has the necessary project snapshot in the continuation prompt. Do not reread the broader project task tree first."
 	}
+}
+
+func buildProjectContinuationFlowExecutionLookupGuardError(taskRecord repo.ProjectTask, flowNodeExecutionID uuid.UUID) string {
+	label := projectBootstrapTaskLabel(taskRecord)
+	if strings.TrimSpace(label) == "" {
+		label = "the named project task"
+	}
+	return fmt.Sprintf("project continuation called flow.get_execution with %s, which matches task.current_flow_node_id for %s rather than a real flow_node_execution_id. Do not probe flow.get_execution from the project lane with task.current_flow_node_id; act on %s directly or use an actual flow_node_execution_id from a concrete blocker.", flowNodeExecutionID.String(), label, label)
+}
+
+func (e *TurnEngine) shouldBlockProjectContinuationFlowExecutionLookupTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(toolName), "flow.get_execution") {
+		return false, ""
+	}
+	requestedID, ok := parseUUIDAny(arguments["flow_node_execution_id"])
+	if !ok || requestedID == uuid.Nil {
+		return false, ""
+	}
+	projectID := resolveProjectID(ctx, rt.session, e.tasks)
+	if projectID == nil || *projectID == uuid.Nil {
+		return false, ""
+	}
+	projectTasks, err := e.tasks.ListByProject(ctx, *projectID)
+	if err != nil {
+		return false, ""
+	}
+	for _, task := range projectTasks {
+		if task.CurrentFlowNodeID == nil || *task.CurrentFlowNodeID == uuid.Nil {
+			continue
+		}
+		if *task.CurrentFlowNodeID != requestedID {
+			continue
+		}
+		return true, buildProjectContinuationFlowExecutionLookupGuardError(task, requestedID)
+	}
+	return false, ""
 }
 
 func buildTaskExecutionSubtaskCreateGuardError() string {

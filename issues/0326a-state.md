@@ -3062,6 +3062,51 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 09:20 MDT
+
+I cut the next project-continuation seam instead of waiting on another replay.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - completed-task `project_execution_continuation` prompts now use the same embedded project snapshot as rooted `project_continuation_resume`
+  - that snapshot includes:
+    - active project id
+    - already-active non-terminal tasks
+    - actionable draft tasks already in the tree
+    - one direct focus task
+  - async project lanes now preflight-block `flow.get_execution` when the provided `flow_node_execution_id` exactly matches a task's `current_flow_node_id`
+  - the new guard is intentionally narrow:
+    - async `project` scope only
+    - exact current-node-id match only
+    - unknown execution ids still pass through
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - updated completed-task continuation prompt assertions for the shared snapshot guidance
+  - added focused coverage for the new `flow.get_execution(task.current_flow_node_id)` project-lane block
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(BuildProjectExecutionContinuationPrompt|BuildProjectContinuationActionPrompt|ProjectExecutionContinuationSnapshotSummarizesProjectState|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksBroadTaskList|ShouldBlockProjectContinuationSnapshotRediscoveryToolBlocksNamedTaskGet|ShouldNotBlockProjectContinuationSnapshotRediscoveryToolForParentScopedTaskList|ShouldBlockProjectContinuationFlowExecutionLookupToolForTaskCurrentFlowNodeID|ShouldNotBlockProjectContinuationFlowExecutionLookupToolForUnknownExecutionID|HandleCompletedProjectExecutionContinuationTurnHandlesProjectContinuationResumeSource|HandleCompletedProjectExecutionContinuationTurnAutoQueuesRunnableDraft)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+
+Why this slice exists:
+
+- rooted `project_continuation_resume` already had the project snapshot and named-task rediscovery guard
+- completed-task wakeups were still using the older generic continuation prompt, so the `project_execution_continuation` path remained softer and kept reopening broad rediscovery
+- the live project session also showed repeated `flow.get_execution` calls using task node ids instead of real execution ids, which is deterministic waste, not useful probing
+
+Expected effect:
+
+- fewer broad rereads on the completed-task continuation path
+- no more paying for the known `flow_node_execution_id_required` misuse when project continuations pass `task.current_flow_node_id`
+
+Deploy status:
+
+- code complete
+- tests green
+- runtime restart still pending at the time of this note
+
 ## Update 08:53 MDT
 
 I tightened the generic async project-continuation resume path itself instead of waiting for another bespoke guardrail.

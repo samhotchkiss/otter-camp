@@ -1207,3 +1207,24 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - after deploy:
         - `2026-03-27 09:03:09 MDT`, `09:03:32 MDT`, and `09:03:50 MDT` all fell back to:
           - `Project execution is already underway. Reuse the existing project task tree...`
+  - newest completed-task continuation snapshot slice:
+    - the auto-queued `project_execution_continuation` prompt now uses the same compact project snapshot as rooted `project_continuation_resume`
+    - that means completed-task follow-ons now carry:
+      - active project id
+      - already-active non-terminal tasks
+      - actionable draft tasks already present in the tree
+      - one direct focus task
+    - this closes the remaining prompt gap where rooted continuations had the anti-rediscovery snapshot, but completed-task wakeups still opened with the older generic `Inspect the current task tree...` wording
+    - focused turn-engine coverage is green for:
+      - completed-task continuation prompt rendering with the embedded snapshot
+      - existing rooted project continuation snapshot behavior remaining intact
+  - newest project-lane flow execution lookup hardening slice:
+    - async `project` sessions now preflight-block `flow.get_execution` when the provided `flow_node_execution_id` actually matches a task's `current_flow_node_id`
+    - the guard is narrow:
+      - it applies only in async project lanes
+      - it fires only when the requested id exactly matches a current task node id already present in the project task tree
+      - unknown ids still pass through untouched
+    - this directly targets the live project churn where the model kept calling `flow.get_execution(task.current_flow_node_id)` for tasks `16` / `13`, paying for deterministic `flow_node_execution_id_required` failures
+    - focused turn-engine coverage is green for:
+      - blocking the node-id misuse case
+      - preserving pass-through for unknown execution ids
