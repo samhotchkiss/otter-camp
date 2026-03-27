@@ -7455,7 +7455,11 @@ func (e *TurnEngine) handleTransientModelTurnFailure(
 	if retryCount < 0 {
 		retryCount = 0
 	}
-	if retryCount >= maxTransientModelRetries {
+	priorTransientFailures, err := e.consecutiveTransientModelFailuresForMessage(ctx, runtime.session.ID, messageID, runtime.turn.ID)
+	if err != nil {
+		return false, fmt.Errorf("count prior transient model failures: %w", err)
+	}
+	if priorTransientFailures >= maxTransientModelRetries {
 		_ = e.chat.FailTurn(ctx, runtime.turn.ID, summarizeFailure(cause))
 		_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, fmt.Sprintf("[Turn failed: temporary model provider retries exhausted after %d attempts.]", maxTransientModelRetries))
 		return true, nil
@@ -7471,7 +7475,7 @@ func (e *TurnEngine) handleTransientModelTurnFailure(
 		nextPayload.AgentID = &agentID
 	}
 
-	retryDelay := transientModelRetryDelay(retryCount, transientModelRetryAfterHint(cause))
+	retryDelay := transientModelRetryDelay(priorTransientFailures, transientModelRetryAfterHint(cause))
 	runAfter := e.now().Add(retryDelay).UTC()
 	enqueued, err := e.enqueueAgentTurnIfActive(ctx, runtime.session, nextPayload, &runAfter)
 	if err != nil {
@@ -7485,6 +7489,41 @@ func (e *TurnEngine) handleTransientModelTurnFailure(
 	}
 	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, message)
 	return true, nil
+}
+
+func (e *TurnEngine) consecutiveTransientModelFailuresForMessage(ctx context.Context, sessionID, messageID, excludeTurnID uuid.UUID) (int, error) {
+	if e == nil || e.turns == nil || sessionID == uuid.Nil || messageID == uuid.Nil {
+		return 0, nil
+	}
+	turns, err := e.turns.ListBySession(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for i := len(turns) - 1; i >= 0; i-- {
+		turn := turns[i]
+		if turn.ID == excludeTurnID {
+			continue
+		}
+		if turn.TriggerMessageID == nil || *turn.TriggerMessageID != messageID {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(turn.Status), "failed") {
+			break
+		}
+		if !looksLikeTransientModelFailureText(turnErrorMessageValue(turn.ErrorMessage)) {
+			break
+		}
+		count++
+	}
+	return count, nil
+}
+
+func turnErrorMessageValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (e *TurnEngine) handleTaskContinuationDepthTurnFailure(
@@ -24877,6 +24916,33 @@ func isTransientModelError(err error) bool {
 		return true
 	}
 	if strings.Contains(text, "received from peer") && (strings.Contains(text, "internal_error") || strings.Contains(text, "internal error")) {
+		return true
+	}
+	return false
+}
+
+func looksLikeTransientModelFailureText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "model provider rate limited") {
+		return false
+	}
+	if strings.Contains(lower, "transient model failure") {
+		return true
+	}
+	if strings.Contains(lower, "all provider connections are temporarily unavailable") {
+		return true
+	}
+	if strings.Contains(lower, "timeout") || strings.Contains(lower, "temporar") {
+		return true
+	}
+	if strings.Contains(lower, "stream error") && (strings.Contains(lower, "received from peer") || strings.Contains(lower, "internal_error") || strings.Contains(lower, "internal error")) {
+		return true
+	}
+	if strings.Contains(lower, "received from peer") && (strings.Contains(lower, "internal_error") || strings.Contains(lower, "internal error")) {
 		return true
 	}
 	return false

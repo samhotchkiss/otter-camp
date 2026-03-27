@@ -824,6 +824,15 @@ Still pending from this spec:
     - generic transient provider failures get delayed active-execution requeues
     - hinted transient provider recovery windows are preserved for active project-session requeues
   - runtime is rebuilt/restarted on this slice and healthy; fresh live proof is still pending because there were no matching transient-idle async sessions to recover in the short post-deploy window
+- transient-provider retry budgeting is now decoupled from the generic queued-turn `RetryCount`:
+  - async turn retries had already stopped burning repeated same-turn transient failures, but the delayed retry handler still used the raw payload `RetryCount` to decide whether the next transient miss had already exhausted provider retries
+  - worker repair legitimately increments that generic retry counter while rolling provider-backoff windows forward, so live async sessions were arriving at the turn engine as `Retry attempt 7`, `21`, etc. even when they had not actually spent that many consecutive transient model failures
+  - `handleTransientModelTurnFailure(...)` now derives the transient retry budget from the number of consecutive prior failed turns for the same trigger message whose terminal `chat_turn.error_message` still looks provider-transient
+  - the generic queued-turn `RetryCount` is still preserved for diagnostics and scheduling metadata, but it no longer causes an immediate exhausted-provider stop by itself
+  - focused turn-engine coverage now proves both:
+    - a real chain of prior transient failures still cleanly trips the retry cap
+    - a high generic retry count without prior transient model failures still gets a delayed transient retry instead of a false exhausted-provider stop
+  - runtime is rebuilt/restarted on this slice and live proof already shows high-generic-retry async sessions (`retry_count = 7`, `21`) still enqueueing delayed transient retries instead of jumping straight to exhausted-provider failure
 
 ## Deferred Follow-Up, Not In This Spec
 

@@ -3062,6 +3062,70 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 04:16 MDT
+
+I closed the next provider-churn seam: transient-provider retry budgeting was still using the generic queued-turn `RetryCount`, which let worker-repaired async sessions arrive at the turn engine looking artificially “exhausted.”
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `handleTransientModelTurnFailure(...)` no longer uses raw payload `RetryCount` to decide whether transient-provider retries are exhausted
+  - it now counts consecutive prior failed turns for the same `trigger_message_id` whose terminal `chat_turn.error_message` still looks provider-transient
+  - that transient-only counter drives both:
+    - exhausted-provider stop decisions
+    - the transient retry delay ladder
+  - the generic queued-turn retry counter is still preserved on the replacement `agent_turn` payload for visibility, but it no longer trips the transient-provider cap by itself
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - widened the retry-cap coverage so it proves a real chain of prior transient failures still blocks cleanly
+  - added coverage proving a high generic retry count without prior transient failed turns still gets a delayed retry instead of a false exhausted-provider stop
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'TestHandleTurnJobAsyncProjectTaskTransientProvider(RetryCapStopsRequeue|IgnoresHighGenericRetryCountWithoutPriorTransientFailures|EnqueuesRetryWithoutSameTurnRetry)$' -count=1`
+- `go test ./internal/turn -run 'Test(HandleTurnCompletedEventEnqueuesAutoContinuation|HandleTurnCompletedEventDefersAutoContinuationAfterTransientProviderRetryExhausted|HandleTurnJobAsyncProjectTaskTransientAvailabilityPreflightDefersBeforePromptAssembly|HandleTurnJobAsyncProjectTaskTransientProviderEnqueuesRetryWithoutSameTurnRetry|HandleTurnJobAsyncProjectTaskTransientProviderRetryCapStopsRequeue|HandleTurnJobAsyncProjectTaskTransientProviderIgnoresHighGenericRetryCountWithoutPriorTransientFailures|HandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersPastRetryCapWithoutTurn)$' -count=1`
+
+Why this matters:
+
+- the worker-side patch already stopped immediate idle-session requeue churn
+- but live backlog inspection still showed pending async jobs like:
+  - retry `7`
+  - retry `21`
+- those large numbers were legitimate generic recovery counters, not evidence that the same session had already burned that many consecutive transient model failures
+- before this change, the next transient miss could be misclassified as “retries exhausted” on the first fresh turn after repair
+
+Expected live effect:
+
+- async sessions coming out of worker-preserved provider backoff should now get the intended delayed transient retry behavior even when their generic queued-turn retry counter is already large
+- the next real transient-provider lane should no longer jump straight from “worker delayed me for a while” to “provider retries exhausted” unless it actually has consecutive prior transient failed turns on the same trigger message
+
+Deploy status:
+
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json` is `ok`
+
+Live proof:
+
+- the decoupling is now live-proven on two high-generic-retry async task sessions:
+  - session `20bd72b0-375e-4a02-82d5-c2c98929c2aa`
+    - failed turn `707d69a9-3218-4d74-80fe-bc8e58bfa0eb`
+    - turn `retry_count = 21`
+    - created `2026-03-27 04:16:07 MDT`
+    - still produced a delayed pending retry job `c1730360-8a47-4066-9199-2376f3eab708`
+    - pending payload `retry_count = 22`
+    - `run_after = 2026-03-27 04:21:07 MDT`
+  - session `aae5aae5-0298-44df-9932-fccf8db6a416`
+    - failed turn `c462f0e0-007c-47d0-9733-6231c9354c00`
+    - turn `retry_count = 7`
+    - created `2026-03-27 04:15:22 MDT`
+    - still produced a delayed pending retry job `176a9b91-fc69-4099-aa80-ea0066824874`
+    - pending payload `retry_count = 8`
+    - `run_after = 2026-03-27 04:20:23 MDT`
+- that is the exact proof target for this slice:
+  - large generic queued-turn retry counts are still visible
+  - but they no longer cause an immediate exhausted-provider stop on the next transient miss
+
 ## Update 04:05 MDT
 
 I fixed the worker-side transient-provider recovery gap that was still rearming idle async sessions immediately after a failed provider-transient turn.

@@ -2352,10 +2352,28 @@ func TestHandleTurnJobAsyncProjectTaskTransientProviderRetryCapStopsRequeue(t *t
 		return ModelResponse{}, ErrModelTransient
 	}
 
+	for i := 0; i < maxTransientModelRetries; i++ {
+		errorMessage := "transient model failure"
+		completedAt := time.Unix(int64(1700001000+i), 0).UTC()
+		if _, err := fixture.engine.turns.Create(context.Background(), repo.ChatTurn{
+			SessionID:        fixture.session.ID,
+			TurnNumber:       i + 1,
+			RespondingType:   "agent",
+			RespondingID:     assignedID,
+			Status:           "failed",
+			TriggerMessageID: &fixture.userMessageID,
+			RetryCount:       i,
+			ErrorMessage:     &errorMessage,
+			CompletedAt:      &completedAt,
+		}); err != nil {
+			t.Fatalf("create prior failed transient turn %d: %v", i, err)
+		}
+	}
+
 	payload, err := json.Marshal(AgentTurnPayload{
 		SessionID:  fixture.session.ID,
 		MessageID:  fixture.userMessageID,
-		RetryCount: maxTransientModelRetries,
+		RetryCount: maxTransientModelRetries + 7,
 	})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -2375,6 +2393,59 @@ func TestHandleTurnJobAsyncProjectTaskTransientProviderRetryCapStopsRequeue(t *t
 	}
 	if !fixture.messages.containsContent("[Turn failed: temporary model provider retries exhausted after 5 attempts.]") {
 		t.Fatal("missing transient provider retries exhausted status message")
+	}
+}
+
+func TestHandleTurnJobAsyncProjectTaskTransientProviderIgnoresHighGenericRetryCountWithoutPriorTransientFailures(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.engine.modelRetryBudget = 3
+	projectID := uuid.New()
+	taskID := uuid.New()
+	assignedID := fixture.chat.participants[0].ParticipantID
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.engine.tasks = &fakeTaskRepo{items: map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:              taskID,
+			OrganizationID:  fixture.session.OrganizationID,
+			ProjectID:       projectID,
+			AssignedAgentID: &assignedID,
+			WorkStatus:      "in_progress",
+		},
+	}}
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{}, ErrModelTransient
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID:  fixture.session.ID,
+		MessageID:  fixture.userMessageID,
+		RetryCount: maxTransientModelRetries + 7,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleTurnJob: %v", err)
+	}
+
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.RetryCount != maxTransientModelRetries+8 {
+		t.Fatalf("retry payload = %#v, want retry_count %d", jobs[0].payload, maxTransientModelRetries+8)
+	}
+	if !jobs[0].runAfter.Equal(jobs[0].runAfter.UTC()) {
+		t.Fatalf("run_after = %s, want utc timestamp", jobs[0].runAfter)
+	}
+	if fixture.messages.containsContent("[Turn failed: temporary model provider retries exhausted after 5 attempts.]") {
+		t.Fatal("unexpected transient provider retries exhausted status message")
 	}
 }
 
