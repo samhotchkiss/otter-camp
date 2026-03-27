@@ -1931,3 +1931,44 @@ Why this matters:
 - on the new build, those due async retries are being rescheduled without spending prompt assembly plus synthetic failed invocation rows
 
 So the cooldown optimization is no longer just unit-tested; it is now behaving live on real pending async sessions.
+
+## Update 18:58 MDT
+
+I tightened the same cooldown path one step further so async sessions can defer before creating a throwaway `chat_turn`, not just before prompt assembly.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `handleUserMessage(...)` now probes provider availability before `CreateForMessageAttempt(...)`
+  - if the selected async `project` / `project_task` profile is already in a router-level cooldown window, the engine:
+    - enqueues the delayed retry immediately
+    - appends a session-scoped system message
+    - returns without creating a `chat_turn`
+  - the runtime now tracks whether availability was already probed on this dispatch attempt so the normal `runTurn(...)` path does not probe twice when the pre-turn probe hits a non-rate-limit error and falls back to ordinary execution
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - the focused preflight regression now proves:
+    - rate-limited async dispatch defers with `0` turn records created
+    - non-rate-limit probe failures still continue to a normal turn, but only after a single availability probe on that attempt
+
+Focused verification:
+
+- `go test ./internal/turn -run 'Test(HandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersBeforePromptAssembly|HandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnNonRateLimitError|HandleTurnJobRateLimitedEnqueuesRetryUsingProviderHint|HandleTurnJobRateLimitedDoesNotRetryInsideSingleTurn)$' -count=1`
+
+Deployment status:
+
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+Current proof gap:
+
+- the first fresh due cooldown retries on the new worker are not until the next `19:15-19:24 MDT` window
+- the sessions I checked immediately after deploy (`40bc5db0-...`, `db21265f-...`) had already burned their `18:54 MDT` failed turns before this narrower patch was live
+- so this slice is:
+  - code-complete
+  - tested
+  - deployed
+  - but still waiting on the next due cooldown retry to prove:
+    - delayed retry still rolls forward
+    - no new `model_invocation` row is created
+    - and now also no new `chat_turn` row is created

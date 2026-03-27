@@ -519,38 +519,39 @@ type TurnEngine struct {
 }
 
 type turnRuntime struct {
-	session                *chat.ChatSession
-	agent                  repo.Agent
-	turn                   *chat.ChatTurn
-	initialMessageID       uuid.UUID
-	initialMessageText     string
-	currentJobID           *uuid.UUID
-	runID                  *uuid.UUID
-	runStepID              *uuid.UUID
-	runAttemptID           *uuid.UUID
-	startedAt              time.Time
-	toolCallsUsed          int
-	activeTier2RunID       *uuid.UUID
-	activeTier2RunMu       sync.RWMutex
-	modelRetryUsed         int
-	invocationAttempt      int
-	toolSet                []tools.ToolDescriptor
-	stopReason             string
-	projectIdentity        *projectIdentity
-	historyStartID         *uuid.UUID
-	disableMemory          bool
-	freshKickoff           bool
-	recoveryTurn           bool
-	recoveryCLIFixes       int
-	recoveryFileFixes      int
-	recoveryReadOnlyRounds int
-	taskFileFixes          int
-	recoveryFileWrites     map[string]recoveryPopulatedFileWriteState
-	recoveryWriteDone      bool
-	recoveryBlockReason    string
-	recoveryQueuedTurn     bool
-	recoveryTargetPath     string
-	placeholderTargetSeen  bool
+	session                 *chat.ChatSession
+	agent                   repo.Agent
+	turn                    *chat.ChatTurn
+	initialMessageID        uuid.UUID
+	initialMessageText      string
+	currentJobID            *uuid.UUID
+	runID                   *uuid.UUID
+	runStepID               *uuid.UUID
+	runAttemptID            *uuid.UUID
+	startedAt               time.Time
+	toolCallsUsed           int
+	activeTier2RunID        *uuid.UUID
+	activeTier2RunMu        sync.RWMutex
+	modelRetryUsed          int
+	invocationAttempt       int
+	toolSet                 []tools.ToolDescriptor
+	stopReason              string
+	projectIdentity         *projectIdentity
+	historyStartID          *uuid.UUID
+	disableMemory           bool
+	freshKickoff            bool
+	availabilityPreflighted bool
+	recoveryTurn            bool
+	recoveryCLIFixes        int
+	recoveryFileFixes       int
+	recoveryReadOnlyRounds  int
+	taskFileFixes           int
+	recoveryFileWrites      map[string]recoveryPopulatedFileWriteState
+	recoveryWriteDone       bool
+	recoveryBlockReason     string
+	recoveryQueuedTurn      bool
+	recoveryTargetPath      string
+	placeholderTargetSeen   bool
 }
 
 type projectIdentity struct {
@@ -6098,6 +6099,12 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	if err != nil {
 		return err
 	}
+	handled, availabilityPreflighted, handleErr := e.handlePreTurnRateLimitedAvailability(ctx, session, agent, messageID, effectiveRoutedAgentID, retryCount)
+	if handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
 
 	turnRecord, _, err := e.turns.CreateForMessageAttempt(ctx, sessionID, agentID, messageID, retryCount)
 	if err != nil {
@@ -6159,17 +6166,18 @@ func (e *TurnEngine) handleUserMessage(ctx context.Context, sessionID, messageID
 	}
 
 	runtime := &turnRuntime{
-		session:            session,
-		agent:              agent,
-		turn:               turn,
-		initialMessageID:   messageID,
-		initialMessageText: strings.TrimSpace(message.Content),
-		currentJobID:       cloneUUIDPointer(currentJobID),
-		runID:              runID,
-		runStepID:          runStepID,
-		runAttemptID:       runAttemptID,
-		startedAt:          e.turnStartTime(turn),
-		recoveryTurn:       isRecoveryResumeMessage(message),
+		session:                 session,
+		agent:                   agent,
+		turn:                    turn,
+		initialMessageID:        messageID,
+		initialMessageText:      strings.TrimSpace(message.Content),
+		currentJobID:            cloneUUIDPointer(currentJobID),
+		runID:                   runID,
+		runStepID:               runStepID,
+		runAttemptID:            runAttemptID,
+		startedAt:               e.turnStartTime(turn),
+		availabilityPreflighted: availabilityPreflighted,
+		recoveryTurn:            isRecoveryResumeMessage(message),
 	}
 	if runtime.recoveryTurn {
 		runtime.recoveryTargetPath = e.latestRecoveryTargetPathForSession(ctx, session.ID)
@@ -7024,25 +7032,7 @@ func (e *TurnEngine) handleRateLimitedTurnFailure(
 		return true, nil
 	}
 
-	nextPayload := AgentTurnPayload{
-		SessionID:              runtime.session.ID,
-		MessageID:              messageID,
-		RetryCount:             retryCount + 1,
-		RateLimitJitterApplied: true,
-	}
-	if routedAgentID != nil && *routedAgentID != uuid.Nil {
-		agentID := *routedAgentID
-		nextPayload.AgentID = &agentID
-	}
-
-	retryDelay := jitteredRateLimitRetryDelay(
-		rateLimitRetryDelay(retryCount, rateLimitRetryAfterHint(cause)),
-		runtime.session.ID,
-		messageID,
-		retryCount,
-	)
-	runAfter := e.now().Add(retryDelay).UTC()
-	enqueued, err := e.enqueueAgentTurnIfActive(ctx, runtime.session, nextPayload, &runAfter)
+	retryDelay, enqueued, err := e.enqueueRateLimitedTurnRetry(ctx, runtime.session, messageID, routedAgentID, retryCount, cause)
 	if err != nil {
 		return false, fmt.Errorf("enqueue rate-limited turn retry: %w", err)
 	}
@@ -7054,6 +7044,43 @@ func (e *TurnEngine) handleRateLimitedTurnFailure(
 	}
 	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, message)
 	return true, nil
+}
+
+func (e *TurnEngine) handlePreTurnRateLimitedAvailability(
+	ctx context.Context,
+	session *chat.ChatSession,
+	agent repo.Agent,
+	messageID uuid.UUID,
+	routedAgentID *uuid.UUID,
+	retryCount int,
+) (bool, bool, error) {
+	if session == nil || retryCount >= maxRateLimitRetries {
+		return false, false, nil
+	}
+	taskComplexity := e.isComplexAgentTurnTask(ctx, session)
+	profile, err := e.resolveModelProfile(ctx, session, agent, "agent_turn", 0, taskComplexity)
+	if err != nil {
+		return false, false, fmt.Errorf("resolveModelProfile: %w", err)
+	}
+	err = e.probeMainModelAvailability(ctx, session, agent.ID, profile, nil, nil, nil)
+	if err == nil {
+		return false, true, nil
+	}
+	if !errors.Is(err, ErrRateLimited) {
+		return false, true, nil
+	}
+	retryDelay, enqueued, enqueueErr := e.enqueueRateLimitedTurnRetry(ctx, session, messageID, routedAgentID, retryCount, err)
+	if enqueueErr != nil {
+		return true, true, fmt.Errorf("enqueue rate-limited turn retry: %w", enqueueErr)
+	}
+	message := fmt.Sprintf("[Rate limited, retrying in %s...]", formatRetryDelay(retryDelay))
+	if !enqueued {
+		message = "[Project paused - retry deferred until resume.]"
+	}
+	if _, appendErr := e.appendSessionSystemMessage(ctx, session.ID, message); appendErr != nil {
+		return true, true, appendErr
+	}
+	return true, true, nil
 }
 
 func (e *TurnEngine) handleTransientInfrastructureTurnFailure(
@@ -21312,7 +21339,23 @@ func (e *TurnEngine) callMainModel(
 }
 
 func (e *TurnEngine) preflightMainModelAvailability(ctx context.Context, rt *turnRuntime, profile repo.ModelProfile) error {
-	if !shouldPreflightMainModelAvailability(rt) {
+	if rt == nil || rt.session == nil {
+		return nil
+	}
+	if rt.availabilityPreflighted {
+		return nil
+	}
+	return e.probeMainModelAvailability(ctx, rt.session, rt.agent.ID, profile, cloneUUIDPointer(rt.runID), cloneUUIDPointer(rt.runStepID), cloneUUIDPointer(rt.runAttemptID))
+}
+
+func (e *TurnEngine) probeMainModelAvailability(
+	ctx context.Context,
+	session *chat.ChatSession,
+	agentID uuid.UUID,
+	profile repo.ModelProfile,
+	runID, runStepID, runAttemptID *uuid.UUID,
+) error {
+	if !shouldPreflightMainModelAvailabilityForSession(session) {
 		return nil
 	}
 	probe, ok := e.models.(ModelAvailabilityProbe)
@@ -21320,13 +21363,12 @@ func (e *TurnEngine) preflightMainModelAvailability(ctx context.Context, rt *tur
 		return nil
 	}
 	err := probe.ProbeAvailability(ctx, ModelRequest{
-		OrganizationID: rt.session.OrganizationID,
-		SessionID:      rt.session.ID,
-		TurnID:         rt.turn.ID,
-		AgentID:        rt.agent.ID,
-		RunID:          cloneUUIDPointer(rt.runID),
-		RunStepID:      cloneUUIDPointer(rt.runStepID),
-		RunAttemptID:   cloneUUIDPointer(rt.runAttemptID),
+		OrganizationID: session.OrganizationID,
+		SessionID:      session.ID,
+		AgentID:        agentID,
+		RunID:          runID,
+		RunStepID:      runStepID,
+		RunAttemptID:   runAttemptID,
 		Purpose:        "agent_turn",
 		Profile:        profile,
 	})
@@ -21335,25 +21377,53 @@ func (e *TurnEngine) preflightMainModelAvailability(ctx context.Context, rt *tur
 	}
 	e.logger.Debug(
 		"model availability probe failed; continuing with normal turn execution",
-		"session_id", rt.session.ID,
-		"turn_id", rt.turn.ID,
-		"scope_type", strings.TrimSpace(rt.session.ScopeType),
-		"mode", strings.TrimSpace(rt.session.Mode),
+		"session_id", session.ID,
+		"scope_type", strings.TrimSpace(session.ScopeType),
+		"mode", strings.TrimSpace(session.Mode),
 		"error", err,
 	)
 	return nil
 }
 
-func shouldPreflightMainModelAvailability(rt *turnRuntime) bool {
-	if rt == nil || rt.session == nil || !strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+func shouldPreflightMainModelAvailabilityForSession(session *chat.ChatSession) bool {
+	if session == nil || !strings.EqualFold(strings.TrimSpace(session.Mode), "async") {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(rt.session.ScopeType)) {
+	switch strings.ToLower(strings.TrimSpace(session.ScopeType)) {
 	case "project", "project_task":
 		return true
 	default:
 		return false
 	}
+}
+
+func (e *TurnEngine) enqueueRateLimitedTurnRetry(
+	ctx context.Context,
+	session *chat.ChatSession,
+	messageID uuid.UUID,
+	routedAgentID *uuid.UUID,
+	retryCount int,
+	cause error,
+) (time.Duration, bool, error) {
+	nextPayload := AgentTurnPayload{
+		SessionID:              session.ID,
+		MessageID:              messageID,
+		RetryCount:             retryCount + 1,
+		RateLimitJitterApplied: true,
+	}
+	if routedAgentID != nil && *routedAgentID != uuid.Nil {
+		agentID := *routedAgentID
+		nextPayload.AgentID = &agentID
+	}
+	retryDelay := jitteredRateLimitRetryDelay(
+		rateLimitRetryDelay(retryCount, rateLimitRetryAfterHint(cause)),
+		session.ID,
+		messageID,
+		retryCount,
+	)
+	runAfter := e.now().Add(retryDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	return retryDelay, enqueued, err
 }
 
 func (e *TurnEngine) updateRunTokenRollup(ctx context.Context, invocation repo.ModelInvocation, usage *ModelUsage) {
@@ -22196,6 +22266,24 @@ func (e *TurnEngine) appendSystemMessage(ctx context.Context, turnID, sessionID 
 	}
 	if err := e.chat.UpdateMessageStatus(ctx, msg.ID, "final", ""); err != nil {
 		return nil, fmt.Errorf("appendSystemMessage streaming->final: %w", err)
+	}
+	return msg, nil
+}
+
+func (e *TurnEngine) appendSessionSystemMessage(ctx context.Context, sessionID uuid.UUID, content string) (*chat.ChatMessage, error) {
+	msg, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: sessionID,
+		Role:      "system",
+		Content:   strings.TrimSpace(content),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := e.chat.UpdateMessageStatus(ctx, msg.ID, "streaming", ""); err != nil {
+		return nil, fmt.Errorf("appendSessionSystemMessage pending->streaming: %w", err)
+	}
+	if err := e.chat.UpdateMessageStatus(ctx, msg.ID, "final", ""); err != nil {
+		return nil, fmt.Errorf("appendSessionSystemMessage streaming->final: %w", err)
 	}
 	return msg, nil
 }

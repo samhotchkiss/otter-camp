@@ -551,6 +551,10 @@ Implemented so far in this spec:
   - the engine asks the live gateway whether the routed profile is already in an all-connections-cooling-down window
   - on a real router-level cooldown, the turn now goes straight to the existing delayed `ErrRateLimited` retry path without assembling prompt context, appending an assistant placeholder, or creating a no-op `agent_turn` invocation row
   - non-rate-limit probe failures fall back to the normal model path so this slice only changes the known cooldown case
+- async `project` and `project_task` dispatch now also preflight model availability before turn creation:
+  - when the routed provider is already cooling down, `handleUserMessage(...)` now reschedules the retry and appends a session-scoped system message without calling `CreateForMessageAttempt(...)`
+  - that removes the last known throwaway `chat_turn` churn on cooldown retries
+  - the dispatch attempt tracks whether availability was already probed so normal fallback execution does not pay a second probe on non-rate-limit errors
 - worker recovery now skips requeueing `project_task` async sessions that are already blocked by a persisted validation-loop guard:
   - active flow-node executions with `work_status='blocked'` plus `agent_turn_validation_guard.blocked=true` no longer get revived by `RequeueActiveExecutionSessionsWithoutTurns(...)`
   - that removes hot queue churn where the worker would enqueue another `agent_turn` only for the turn engine to immediately suppress it as `validation_loop_blocked`

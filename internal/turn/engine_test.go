@@ -1627,6 +1627,9 @@ func TestHandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersBeforePromptAsse
 	if got := len(fixture.invocations.creates); got != 0 {
 		t.Fatalf("invocation creates = %d, want 0", got)
 	}
+	if got := len(fixture.chat.turnOrder); got != 0 {
+		t.Fatalf("turn count = %d, want 0", got)
+	}
 	jobs := fixture.enqueuer.agentTurnJobs()
 	if len(jobs) != 1 {
 		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
@@ -1665,6 +1668,9 @@ func TestHandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnNonRateLimitEr
 	}
 	if got := len(fixture.invocations.creates); got != 1 {
 		t.Fatalf("invocation creates = %d, want 1", got)
+	}
+	if got := len(fixture.chat.turnOrder); got != 1 {
+		t.Fatalf("turn count = %d, want 1", got)
 	}
 }
 
