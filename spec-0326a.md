@@ -662,9 +662,14 @@ Still pending from this spec:
   - so the remaining proof gap is narrower: we still need a fresh live example where the same-turn cutoff fires on a non-review work lane before the older cross-turn machinery
 - any additional recovery-specific fingerprints that remain after the current async task guardrails
 - full live proof that the bootstrap reread loop now transitions into the recoverable bootstrap-validation path on a fresh post-deploy continuation:
-  - the code and focused tests are in place
-  - the live canary session was still draining a pre-deploy generic bootstrap continuation when this slice landed, and that stale continuation failed on restart before the new recovery message could be generated
-  - the next proof target is a fresh continuation created entirely by the new build
+  - now landed on session `db21265f-c37d-40e4-9ed5-13def09970f8`
+  - fresh turn `596` emitted the new recovery continuation:
+    - `Recovery target: kickoff validation failed: late bootstrap resume reread broad persisted project state...`
+  - the follow-on turn `597` started with `bootstrap.setup.persist` instead of rereading project state
+  - that same turn then persisted:
+    - `select-first-wave`
+    - `record-frank-sign-off`
+  - so the old self-rearming reread loop is now broken in production on a fresh post-deploy continuation
 - live proof that the new task-16 recovery-draft matcher variant fires before dispatch on a fresh retry that actually reuses the bad narration:
   - focused unit coverage is green
   - the runtime is already deployed on this matcher
