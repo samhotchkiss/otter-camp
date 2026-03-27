@@ -24994,6 +24994,87 @@ func TestHandleTaskFileWriteWrongPathRewritesToRecoveryTarget(t *testing.T) {
 	}
 }
 
+func TestLatestRecoveryTargetPathForSessionFallsBackToReviewPromptTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "user",
+		Status:    "final",
+		Content: "Review only.\n" +
+			"Start with the preferred deliverable target `src/pipeline_logger.py`. Inspect that target directly before broad workspace discovery, and do not begin by listing the repository root unless `src/pipeline_logger.py` is missing.\n" +
+			"Do not inspect planning artifacts or list the full repository tree while `src/pipeline_logger.py` is present and readable.",
+	})
+
+	if got := fixture.engine.latestRecoveryTargetPathForSession(context.Background(), fixture.session.ID); got != "src/pipeline_logger.py" {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "src/pipeline_logger.py")
+	}
+}
+
+func TestLatestRecoveryTargetPathForSessionFallsBackToRecentToolResultDeliverablePath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.write","output":{"deliverable_path":"results/review-path-validation-summary.md","path":"Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md"}}`,
+	})
+
+	if got := fixture.engine.latestRecoveryTargetPathForSession(context.Background(), fixture.session.ID); got != "results/review-path-validation-summary.md" {
+		t.Fatalf("latestRecoveryTargetPathForSession(...) = %q, want %q", got, "results/review-path-validation-summary.md")
+	}
+}
+
+func TestRecoverySynthesizedFileWriteTargetPathPrefersSessionDeliverableTargetOverInferredReportPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	description := "Parent/orchestration task for review path validation. Validates that child tasks exercise real approve/reject/retry/recovery review flows. Does not do execution work itself."
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			TaskNumber:  10,
+			Title:       "Workstream B: Review Path Validation",
+			Description: &description,
+			WorkStatus:  "blocked",
+			Metadata: mustRawJSON(t, map[string]any{
+				"planning": map[string]any{
+					"mode": taskplan.ModeExecutionFirst,
+				},
+			}),
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.write","output":{"deliverable_path":"results/review-path-validation-summary.md","error":"deliverable_path_required","path":"Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md"}}`,
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        uuid.New(),
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+		recoveryTurn: true,
+	}
+
+	if got := fixture.engine.recoverySynthesizedFileWriteTargetPath(context.Background(), rt); got != "results/review-path-validation-summary.md" {
+		t.Fatalf("recoverySynthesizedFileWriteTargetPath(...) = %q, want %q", got, "results/review-path-validation-summary.md")
+	}
+}
+
 func TestHandleTaskFileWriteWrongPathSkipsCrossArtifactFamilyRewrite(t *testing.T) {
 	t.Parallel()
 
@@ -25204,6 +25285,71 @@ Verify that well-formed speaker records are accepted and stored correctly.
 	}
 	if got := stringValue(call.Arguments["content"]); got != targetDraft {
 		t.Fatalf("content = %q, want persisted target draft", got)
+	}
+	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
+		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])
+	}
+}
+
+func TestHandleTaskFileWriteWrongPathPrefersSessionDeliverableTargetOverInferredReportPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	turnID := uuid.New()
+	description := "Parent/orchestration task for review path validation. Validates that child tasks exercise real approve/reject/retry/recovery review flows. Does not do execution work itself."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+
+	taskRepo := fixture.engine.tasks.(*fakeTaskRepo)
+	taskRepo.items = map[uuid.UUID]repo.ProjectTask{
+		taskID: {
+			ID:          taskID,
+			TaskNumber:  10,
+			Title:       "Workstream B: Review Path Validation",
+			Description: &description,
+			WorkStatus:  "in_progress",
+			Metadata: mustRawJSON(t, map[string]any{
+				"planning": map[string]any{
+					"mode": string(taskplan.ModeExecutionFirst),
+				},
+			}),
+		},
+	}
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content:   `{"tool_name":"file.write","output":{"deliverable_path":"results/review-path-validation-summary.md","error":"deliverable_path_required","path":"Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md"}}`,
+	})
+
+	rt := &turnRuntime{
+		session: fixture.session,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	call := &ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"path":    "Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md",
+			"content": "# OC-10\n\nUse the concrete review-path validation summary.\n",
+		},
+	}
+
+	handled, abort, err := fixture.engine.handleTaskFileWriteWrongPath(context.Background(), rt, call)
+	if err != nil {
+		t.Fatalf("handleTaskFileWriteWrongPath: %v", err)
+	}
+	if handled || abort {
+		t.Fatalf("handled=%v abort=%v, want false false", handled, abort)
+	}
+	if got := stringValue(call.Arguments["path"]); got != "results/review-path-validation-summary.md" {
+		t.Fatalf("path = %q, want %q", got, "results/review-path-validation-summary.md")
 	}
 	if got, ok := call.Arguments["create_dirs"].(bool); !ok || !got {
 		t.Fatalf("create_dirs = %v, want true", call.Arguments["create_dirs"])

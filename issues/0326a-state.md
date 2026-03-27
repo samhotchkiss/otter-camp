@@ -3062,6 +3062,63 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 01:36 MDT
+
+I traced the next recovery seam to an engine/native target mismatch on task `10`.
+
+What was wrong:
+
+- native task/file guards had already established the concrete deliverable target
+  - `results/review-path-validation-summary.md`
+- but several engine runtime paths were still preferring the generic inferred execution-first report target
+  - `Work/OC-10-WORKSTREAM-B-REVIEW-PATH-VALIDATION.md`
+- that meant the same async task lane could:
+  - have native `deliverable_path_required` errors pointing at `results/...`
+  - while engine recovery and file-write rewrite logic kept steering back toward `Work/...`
+
+Why that happened:
+
+- engine-side `latestRecoveryTargetPathForSession(...)` only looked for `[Recovery resume state]` system messages with `Target file: ...`
+- native-side `latestRecoveryTargetPathForSession(...)` was broader and already accepted:
+  - review prompt lines with `Start with the preferred deliverable target ...`
+  - recent `tool_result` payloads carrying `deliverable_path`
+- separately, several engine runtime paths consulted `preferredTaskDeliverablePath(taskRecord)` first, which can still infer a generic `Work/OC-...md` report path for execution-first tasks
+
+What I changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - broadened `latestRecoveryTargetPathForSession(...)` to also recognize:
+    - review prompt preferred-target lines
+    - recent `tool_result.output.deliverable_path`
+    - recent `file.read` / `file.write` tool-result paths
+  - added `sessionTaskDeliverablePath(...)` so runtime task-lane logic prefers:
+    - explicit task deliverable path
+    - then session-discovered concrete target
+    - then generic inferred fallback
+  - switched these runtime paths to that session-aware target:
+    - task `file.write` wrong-path rewrite
+    - recovery synthesized `file.write` target selection
+    - recovery file-output context
+    - review prompt preferred target
+    - task off-target evidence guard
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused regressions proving:
+    - review prompt target fallback
+    - `deliverable_path` tool-result fallback
+    - recovery synthesized target selection prefers session target over inferred `Work/...`
+    - task-lane `file.write` rewrite prefers session target over inferred `Work/...`
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(LatestRecoveryTargetPathForSessionFallsBackTo(ReviewPromptTarget|RecentToolResultDeliverablePath)|RecoverySynthesizedFileWriteTargetPathPrefersSessionDeliverableTargetOverInferredReportPath|HandleTaskFileWriteWrongPathPrefersSessionDeliverableTargetOverInferredReportPath)$' -count=1`
+- `go test ./internal/turn -run 'Test(ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerified|HandleTaskFileWriteWrongPath.*|RecoverySynthesizedFileWriteTargetPath.*|LatestRecoveryTargetPathForSessionFallsBackTo(ReviewPromptTarget|RecentToolResultDeliverablePath)|HandleTurnCompletedEventBlocksRepeatedReviewFileReadNotFoundTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedRetriesWithoutReviewDecision)$' -count=1`
+
+Status:
+
+- code + focused tests are green
+- runtime restart and live proof were still pending when I wrote this note
+
 ## Update 01:02 MDT
 
 I tightened one narrower review seam instead of adding another generic cap.

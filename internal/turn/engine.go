@@ -12180,7 +12180,7 @@ func (e *TurnEngine) handleTaskFileWriteWrongPath(ctx context.Context, rt *turnR
 		}
 		return false, false, err
 	}
-	targetPath := normalizeTurnWorkspacePath(preferredTaskDeliverablePath(taskRecord))
+	targetPath := normalizeTurnWorkspacePath(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord))
 	if targetPath == "" {
 		if checkpoint, ok := e.recoveryFileWriteCheckpointCandidate(ctx, rt, ""); ok {
 			targetPath = normalizeTurnWorkspacePath(checkpoint.TargetPath)
@@ -12834,7 +12834,7 @@ func (e *TurnEngine) recoverySynthesizedFileWriteTargetPath(ctx context.Context,
 				return targetPath
 			}
 		}
-		if preferred := normalizeTurnWorkspacePath(preferredTaskDeliverablePath(taskRecord)); preferred != "" {
+		if preferred := normalizeTurnWorkspacePath(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord)); preferred != "" {
 			return preferred
 		}
 	}
@@ -14594,7 +14594,7 @@ func truncateRecoveryResumeExcerpt(text string, limit int) (string, bool) {
 
 func (e *TurnEngine) recoveryFileOutputContext(ctx context.Context, rt *turnRuntime) (string, string, bool) {
 	if taskRecord, ok := e.recoveryCheckpointTaskRecord(ctx, rt); ok {
-		if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord)); targetPath != "" {
+		if targetPath := strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord)); targetPath != "" {
 			if draft, found := e.readRecoveryWorkspaceText(ctx, rt, targetPath); found {
 				return targetPath, draft, true
 			}
@@ -15465,6 +15465,23 @@ func (e *TurnEngine) latestRecoveryTargetPathForSession(ctx context.Context, ses
 			return target
 		}
 	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		role := strings.ToLower(strings.TrimSpace(messages[i].Role))
+		if role != "user" && role != "system" {
+			continue
+		}
+		if target := parsePromptDeliverableTarget(messages[i].Content); target != "" {
+			return target
+		}
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if !strings.EqualFold(strings.TrimSpace(messages[i].Role), "tool_result") {
+			continue
+		}
+		if target := parseRecentDeliverableTargetFromToolResult(messages[i].Content); target != "" {
+			return target
+		}
+	}
 	return ""
 }
 
@@ -15479,6 +15496,60 @@ func parseRecoveryResumeTargetPath(content string) string {
 		return normalizeWorkspaceRelativePath(target)
 	}
 	return ""
+}
+
+func parsePromptDeliverableTarget(content string) string {
+	const marker = "Start with the preferred deliverable target `"
+
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		idx := strings.Index(trimmed, marker)
+		if idx < 0 {
+			continue
+		}
+		remainder := trimmed[idx+len(marker):]
+		end := strings.Index(remainder, "`")
+		if end < 0 {
+			return ""
+		}
+		rawTarget := remainder[:end]
+		target := normalizeWorkspaceRelativePath(rawTarget)
+		if !looksLikeExplicitDeliverablePath(target, rawTarget) {
+			return ""
+		}
+		return target
+	}
+	return ""
+}
+
+func parseRecentDeliverableTargetFromToolResult(content string) string {
+	toolName, output, _, ok := parseToolResultMessage(content)
+	if !ok {
+		return ""
+	}
+	if target := normalizeWorkspaceRelativePath(anyString(output["deliverable_path"])); target != "" && looksLikeExplicitDeliverablePath(target, anyString(output["deliverable_path"])) {
+		return target
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "file.read", "file.write":
+		if target := normalizeWorkspaceRelativePath(anyString(output["path"])); target != "" && looksLikeExplicitDeliverablePath(target, anyString(output["path"])) {
+			return target
+		}
+	}
+	return ""
+}
+
+func (e *TurnEngine) sessionTaskDeliverablePath(ctx context.Context, sessionID uuid.UUID, taskRecord repo.ProjectTask) string {
+	if explicit := strings.TrimSpace(explicitDeliverablePath(taskRecord)); explicit != "" {
+		return explicit
+	}
+	if sessionID != uuid.Nil {
+		if targetPath := normalizeWorkspaceRelativePath(e.latestRecoveryTargetPathForSession(ctx, sessionID)); targetPath != "" &&
+			looksLikeExplicitDeliverablePath(targetPath, targetPath) {
+			return targetPath
+		}
+	}
+	return strings.TrimSpace(preferredTaskDeliverablePath(taskRecord))
 }
 
 func (e *TurnEngine) latestTaskHistoricalSubstantiveDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
@@ -19980,6 +20051,11 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 }
 
 func (e *TurnEngine) reviewPromptDeliverableTarget(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask) string {
+	if session != nil {
+		if targetPath := strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, session.ID, taskRecord)); targetPath != "" {
+			return targetPath
+		}
+	}
 	if targetPath := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord)); targetPath != "" {
 		return targetPath
 	}
@@ -21423,7 +21499,7 @@ func (e *TurnEngine) shouldBlockTaskExecutionOffTargetEvidenceTool(ctx context.C
 	if err != nil {
 		return false, ""
 	}
-	targetPath := strings.TrimSpace(preferredTaskDeliverablePath(taskRecord))
+	targetPath := strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, rt.session.ID, taskRecord))
 	if targetPath == "" {
 		return false, ""
 	}

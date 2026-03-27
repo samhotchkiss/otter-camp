@@ -741,6 +741,22 @@ Still pending from this spec:
     - `select-first-wave`
     - `record-frank-sign-off`
   - so the old self-rearming reread loop is now broken in production on a fresh post-deploy continuation
+- engine-side deliverable targeting for async task lanes now honors session-discovered concrete targets before falling back to generic inferred `Work/OC-...md` report paths:
+  - `latestRecoveryTargetPathForSession(...)` now recognizes the same session signals native tools already use:
+    - review prompt lines like `Start with the preferred deliverable target ...`
+    - recent `tool_result` payloads carrying `deliverable_path`
+  - runtime paths that choose or rewrite deliverable targets now consult that session-derived target first:
+    - task-lane `file.write` wrong-path rewrites
+    - recovery synthesized `file.write` target selection
+    - recovery file-output context loading
+    - review prompt preferred-target selection
+    - task off-target evidence guards
+  - this specifically fixes the task-10 style mismatch where the engine kept preferring inferred `Work/OC-10-...md` while native enforcement had already established `results/review-path-validation-summary.md`
+  - focused turn-engine coverage now proves:
+    - session target fallback from review prompt guidance
+    - session target fallback from recent `deliverable_path` tool results
+    - recovery synthesized target selection preferring the session target over the inferred report path
+    - task-lane `file.write` rewrite preferring the session target over the inferred report path
 - live proof that the new task-16 recovery-draft matcher variant fires before dispatch on a fresh retry that actually reuses the bad narration:
   - focused unit coverage is green
   - the runtime is already deployed on this matcher
