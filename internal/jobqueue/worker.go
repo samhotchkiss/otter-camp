@@ -3090,6 +3090,19 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 						FROM model_invocation mi
 						WHERE mi.turn_id = ct.id
 						  AND mi.status = 'in_flight'
+						  AND mi.created_at >= CASE
+							WHEN cs.scope_type = 'project_task' THEN $6::timestamptz
+							WHEN cs.scope_type = 'project'
+							 AND (
+							       POSITION('qwen' IN lower(COALESCE(mi.model_name, ''))) > 0
+							    OR POSITION('mistral' IN lower(COALESCE(mi.model_name, ''))) > 0
+							    OR POSITION('llama' IN lower(COALESCE(mi.model_name, ''))) > 0
+							    OR POSITION('gemma' IN lower(COALESCE(mi.model_name, ''))) > 0
+							    OR POSITION('deepseek' IN lower(COALESCE(mi.model_name, ''))) > 0
+							 )
+							THEN $8::timestamptz
+							ELSE $7::timestamptz
+						  END
 					)
 				  )
 			)
@@ -3115,7 +3128,7 @@ func (w *Worker) RecoverStaleClaims(ctx context.Context) (int64, error) {
 				AND claimed_at < $5
 			)
 		  )
-	`, staleBefore, agentTurnJobType, bootstrapStaleBefore, w.workerID, foreignAgentTurnStaleBefore)
+	`, staleBefore, agentTurnJobType, bootstrapStaleBefore, w.workerID, foreignAgentTurnStaleBefore, w.clock.Now().UTC().Add(-staleContinuationThresholdForScope("project_task")), w.clock.Now().UTC().Add(-staleContinuationThreshold), w.clock.Now().UTC().Add(-slowProjectAsyncModelThreshold))
 	if err != nil {
 		return 0, fmt.Errorf("recover stale claims: %w", err)
 	}

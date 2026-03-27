@@ -850,3 +850,18 @@ Still pending from this spec:
 ## Deferred Follow-Up, Not In This Spec
 
 The idea of a manager-specialist or planner-specialist runtime is worth exploring, but it should not be part of this first correction pass. First we need to make the current task abstraction behave like a true bounded-execution container. Only after that should we consider adding a more explicit two-layer execution model.
+
+## Latest Checkpoint
+
+- project-continuation read-only repair widened again:
+  - `session.list` and `inbox.list` are now treated as read-only discovery tools in the same continuation auto-queue path
+  - this closes the remaining observed browse-only project continuation gaps from live `max_tool_calls` turns like `e8556561-...` and `eae611d8-...`
+- operator reporting now surfaces oldest live async agent turns directly:
+  - `ottercamp db token-usage`
+  - `scripts/token-usage-report.sh`
+  - both now include `Oldest In-Flight Agent Turns` with invocation/session/turn/model/connection/age
+- worker stale-claim recovery is now narrower and safer:
+  - it still preserves recent live `agent_turn` streams
+  - but it no longer protects clearly stale live invocations forever
+  - the exemption now only applies while the attached `in_flight` invocation is younger than the same scope/model-specific stale window already used elsewhere
+  - once the invocation ages past that window, the dead claimed job can be released and the normal stale-invocation cleanup path can finish recovery on the same stale-scan pass

@@ -2578,6 +2578,18 @@ type dbTokenUsageTurnRow struct {
 	LastSeen        time.Time `json:"last_seen"`
 }
 
+type dbTokenUsageInFlightTurnRow struct {
+	InvocationID       uuid.UUID `json:"invocation_id"`
+	TurnID             uuid.UUID `json:"turn_id"`
+	SessionID          uuid.UUID `json:"session_id"`
+	ScopeType          string    `json:"scope_type"`
+	Mode               string    `json:"mode"`
+	ModelName          string    `json:"model_name"`
+	ProviderConnection string    `json:"provider_connection"`
+	StartedAt          time.Time `json:"started_at"`
+	AgeSeconds         int64     `json:"age_seconds"`
+}
+
 type dbTokenUsagePackageInstallRow struct {
 	TurnID          uuid.UUID `json:"turn_id"`
 	SessionID       uuid.UUID `json:"session_id"`
@@ -2674,6 +2686,7 @@ type dbTokenUsageReport struct {
 	ByPurpose                   []dbTokenUsagePurposeRow             `json:"by_purpose"`
 	TopSessions                 []dbTokenUsageSessionRow             `json:"top_sessions"`
 	TopTurns                    []dbTokenUsageTurnRow                `json:"top_turns"`
+	InFlightAgentTurns          []dbTokenUsageInFlightTurnRow        `json:"in_flight_agent_turns"`
 	RepeatedPackageInstalls     []dbTokenUsagePackageInstallRow      `json:"repeated_package_installs"`
 	ShellFileBuildReadbackChurn []dbTokenUsageShellChurnRow          `json:"shell_file_build_readback_churn"`
 	CLIWorkingDirectoryRoots    []dbTokenUsageCLIRootRow             `json:"task_cli_working_directory_roots"`
@@ -2933,6 +2946,54 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 		report.TopTurns = append(report.TopTurns, row)
 	}
 	if err := turnRows.Err(); err != nil {
+		return nil, err
+	}
+
+	inFlightRows, err := pool.Query(ctx, `
+		SELECT
+			mi.id,
+			mi.turn_id,
+			mi.session_id,
+			COALESCE(cs.scope_type, '∅') AS scope_type,
+			COALESCE(cs.mode, '∅') AS mode,
+			COALESCE(mi.model_name, '∅') AS model_name,
+			COALESCE(pc.display_name, '∅') AS provider_connection,
+			mi.created_at AS started_at,
+			GREATEST(0, EXTRACT(EPOCH FROM (now() - mi.created_at))::bigint) AS age_seconds
+		FROM model_invocation mi
+		LEFT JOIN chat_session cs ON cs.id = mi.session_id
+		LEFT JOIN provider_connection pc ON pc.id = mi.provider_connection_id
+		WHERE mi.created_at >= $1
+		  AND mi.invocation_purpose = 'agent_turn'
+		  AND mi.status = 'in_flight'
+		  AND mi.turn_id IS NOT NULL
+		  AND mi.session_id IS NOT NULL
+		  AND ($2::uuid IS NULL OR mi.organization_id = $2)
+		ORDER BY mi.created_at ASC, mi.id ASC
+		LIMIT $3
+	`, sinceAt, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer inFlightRows.Close()
+	for inFlightRows.Next() {
+		var row dbTokenUsageInFlightTurnRow
+		if scanErr := inFlightRows.Scan(
+			&row.InvocationID,
+			&row.TurnID,
+			&row.SessionID,
+			&row.ScopeType,
+			&row.Mode,
+			&row.ModelName,
+			&row.ProviderConnection,
+			&row.StartedAt,
+			&row.AgeSeconds,
+		); scanErr != nil {
+			return nil, scanErr
+		}
+		report.InFlightAgentTurns = append(report.InFlightAgentTurns, row)
+	}
+	if err := inFlightRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -3628,6 +3689,24 @@ func printDBTokenUsageReportTable(w io.Writer, formatter clitools.OutputFormatte
 		})
 	}
 	_ = formatter.WriteTable([]string{"Turn", "Session", "Invocations", "Purposes", "Input", "Output", "Cache Read", "Total", "First Seen", "Last Seen"}, turnRows)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "== Oldest In-Flight Agent Turns ==")
+	inFlightRows := make([][]string, 0, len(report.InFlightAgentTurns))
+	for _, row := range report.InFlightAgentTurns {
+		inFlightRows = append(inFlightRows, []string{
+			row.InvocationID.String(),
+			row.TurnID.String(),
+			row.SessionID.String(),
+			row.ScopeType,
+			row.Mode,
+			row.ModelName,
+			row.ProviderConnection,
+			row.StartedAt.UTC().Format(time.RFC3339),
+			strconv.FormatInt(row.AgeSeconds, 10),
+		})
+	}
+	_ = formatter.WriteTable([]string{"Invocation", "Turn", "Session", "Scope", "Mode", "Model", "Connection", "Started At", "Age Seconds"}, inFlightRows)
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "== Repeated Package Install Attempts By Turn ==")

@@ -230,6 +230,38 @@ ORDER BY total_tokens DESC, invocations DESC
 LIMIT :'limit_rows'::int;
 
 \echo
+\echo '== Oldest In-Flight Agent Turns =='
+WITH params AS (
+  SELECT
+    now() - (:'window_hours'::numeric * interval '1 hour') AS since_at,
+    NULLIF(:'org_id', '')::uuid AS org_id,
+    NULLIF(:'session_id', '')::uuid AS session_id
+)
+SELECT
+  mi.id AS invocation_id,
+  mi.turn_id,
+  mi.session_id,
+  COALESCE(cs.scope_type, '∅') AS scope_type,
+  COALESCE(cs.mode, '∅') AS mode,
+  COALESCE(mi.model_name, '∅') AS model_name,
+  COALESCE(pc.display_name, '∅') AS provider_connection,
+  mi.created_at AS started_at,
+  GREATEST(0, EXTRACT(EPOCH FROM (now() - mi.created_at))::bigint) AS age_seconds
+FROM model_invocation mi
+LEFT JOIN chat_session cs ON cs.id = mi.session_id
+LEFT JOIN provider_connection pc ON pc.id = mi.provider_connection_id
+CROSS JOIN params p
+WHERE mi.created_at >= p.since_at
+  AND mi.invocation_purpose = 'agent_turn'
+  AND mi.status = 'in_flight'
+  AND mi.turn_id IS NOT NULL
+  AND mi.session_id IS NOT NULL
+  AND (p.org_id IS NULL OR mi.organization_id = p.org_id)
+  AND (p.session_id IS NULL OR mi.session_id = p.session_id)
+ORDER BY mi.created_at ASC, mi.id ASC
+LIMIT :'limit_rows'::int;
+
+\echo
 \echo '== Hot Rate-Limit Turns =='
 WITH params AS (
   SELECT

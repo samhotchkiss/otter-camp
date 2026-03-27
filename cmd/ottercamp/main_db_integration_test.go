@@ -200,6 +200,15 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	`, org.ID, provider.ID, 100, 25, 50, session.ID, turn.ID, createdAt); err != nil {
 		t.Fatalf("insert completed invocation: %v", err)
 	}
+	inFlightInvocationID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO model_invocation (
+			id, organization_id, model_provider_id, provider_connection_id, invocation_purpose, status, model_name,
+			is_streaming, input_tokens, output_tokens, cache_read_tokens, session_id, turn_id, created_at
+		) VALUES ($1, $2, $3, $4, 'agent_turn', 'in_flight', 'claude-opus-4-6', true, $5, $6, $7, $8, $9, $10)
+	`, inFlightInvocationID, org.ID, provider.ID, connection.ID, 11, 0, 0, session.ID, turn.ID, createdAt.Add(30*time.Second)); err != nil {
+		t.Fatalf("insert in-flight invocation: %v", err)
+	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO model_invocation (
 			organization_id, model_provider_id, invocation_purpose, status, model_name,
@@ -289,7 +298,7 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("db token-usage exit=%d stderr=%q", code, stderr)
 	}
-	if !strings.Contains(stdout, `"total_tokens": 220`) {
+	if !strings.Contains(stdout, `"total_tokens": 231`) {
 		t.Fatalf("db token-usage output missing total tokens: %q", stdout)
 	}
 	if !strings.Contains(stdout, `"cache_read_tokens": 70`) {
@@ -303,6 +312,9 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	}
 	if !strings.Contains(stdout, turn.ID.String()) {
 		t.Fatalf("db token-usage output missing turn id: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"in_flight_agent_turns"`) || !strings.Contains(stdout, inFlightInvocationID.String()) {
+		t.Fatalf("db token-usage output missing in-flight agent turn section: %q", stdout)
 	}
 	if !strings.Contains(stdout, `"completed_by_stop_reason"`) || !strings.Contains(stdout, stopReason) {
 		t.Fatalf("db token-usage output missing completed-by-stop-reason section: %q", stdout)
@@ -388,5 +400,16 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	}
 	if got, _ := blockRow["block_excerpt"].(string); !strings.Contains(got, "recovery_target_focus_required") {
 		t.Fatalf("block_excerpt = %q, want recovery_target_focus_required", got)
+	}
+	inFlightAgentTurns, ok := payload["in_flight_agent_turns"].([]any)
+	if !ok || len(inFlightAgentTurns) != 1 {
+		t.Fatalf("unexpected in_flight_agent_turns payload: %#v", payload["in_flight_agent_turns"])
+	}
+	inFlightRow, ok := inFlightAgentTurns[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected in_flight_agent_turns row: %#v", inFlightAgentTurns[0])
+	}
+	if got, _ := inFlightRow["invocation_id"].(string); got != inFlightInvocationID.String() {
+		t.Fatalf("invocation_id = %q, want %q", got, inFlightInvocationID.String())
 	}
 }

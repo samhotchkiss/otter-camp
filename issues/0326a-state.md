@@ -3062,6 +3062,51 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 04:55 MDT
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - project continuation read-only discovery classification now also includes:
+    - `session.list`
+    - `inbox.list`
+  - this widens the same post-turn auto-queue repair for browse-only `project_execution_continuation` / `project_continuation_resume` turns
+- [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - `RecoverStaleClaims(...)` no longer exempts every claimed `agent_turn` that merely has any `in_flight` invocation
+  - the exemption now only holds while that invocation is still within the existing scope/model stale window:
+    - `project_task`: `defaultStaleThreshold`
+    - normal async `project`: `staleContinuationThreshold`
+    - slow local-model async `project`: `slowProjectAsyncModelThreshold`
+  - this lets dead claimed jobs with clearly stale live invocations fall through to the existing stale-invocation cleanup path instead of pinning a worker slot forever
+- [`cmd/ottercamp/main.go`](../cmd/ottercamp/main.go)
+  - `ottercamp db token-usage` now includes `in_flight_agent_turns`
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - now prints `Oldest In-Flight Agent Turns`
+
+Verification:
+
+- `go test ./internal/turn -run 'TestHandleCompletedProjectExecutionContinuationTurn(AutoQueuesRunnableDraft|AutoQueuesAfterReadOnlyToolResults|HandlesProjectContinuationResumeSource|IgnoresMutatingToolResults|ConsumesBoundedSizeQueueFailure|RetriesGenericReplyWithFreshMessage|RetriesDependencyErrorCoachingReplyWithFreshMessage|RetriesAllScopeTaskCreateCoachingReplyWithFreshMessage)$' -count=1`
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRecoverStaleClaims(KeepsClaimedAgentTurnWithLiveInvocation|ReleasesClaimedAgentTurnWithStaleLiveInvocation)$' -count=1`
+- `go test -tags=integration ./cmd/ottercamp -run 'TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
+- `bash -n scripts/token-usage-report.sh`
+
+Live proof:
+
+- the new `Oldest In-Flight Agent Turns` report initially surfaced three live stuck async turns, including:
+  - invocation `9b2e868d-c451-47b4-9b8d-33a2677cbaa7`
+  - turn `e156b347-a86b-4cb1-ae47-e5f87e25c14e`
+  - session `db21265f-c37d-40e4-9ed5-13def09970f8`
+- before I restarted anything, the existing stale-invocation cleanup fired and the report dropped back to zero in-flight rows
+- direct DB proof:
+  - turn `e156b347-a86b-4cb1-ae47-e5f87e25c14e` is now `failed`
+  - `error_message = worker cleanup failed stale in_flight model invocation without live in-progress turn`
+  - completed at `04:52:19 MDT`
+
+Deploy status:
+
+- `session.list` / `inbox.list` continuation repair, the new in-flight operator report, and the narrowed stale-claim exemption are code-complete and test-green
+- runtime restart had not happened yet at the moment of this note, because I was waiting for the live in-flight turn to settle first
+
 ## Update 04:16 MDT
 
 I closed the next provider-churn seam: transient-provider retry budgeting was still using the generic queued-turn `RetryCount`, which let worker-repaired async sessions arrive at the turn engine looking artificially “exhausted.”
