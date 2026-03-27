@@ -8388,7 +8388,7 @@ func TestShouldBlockTaskExecutionBroadContextTool(t *testing.T) {
 		},
 	}
 
-	for _, toolName := range []string{"memory.query", "memory.list", "project.get", "project.list", "task.list", "flow.list_templates", "agent.list"} {
+	for _, toolName := range []string{"memory.query", "memory.list", "project.get", "project.list", "task.list", "flow.list_templates", "agent.list", "session.list", "session.history", "inbox.list"} {
 		if !shouldBlockTaskExecutionBroadContextTool(rt, toolName) {
 			t.Fatalf("expected %s to be blocked for task-scoped async execution", toolName)
 		}
@@ -20916,6 +20916,90 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalTaskGi
 	}
 }
 
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterBlockedTaskGitCommitWhenDeliverableAlreadyMutated(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write validation artifact",
+				WorkStatus:     "in_progress",
+				Metadata:       json.RawMessage(`{"existing":"value"}`),
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{
+		{
+			ID:        "write-1",
+			Name:      "file.write",
+			Arguments: map[string]any{"path": "Work/report.md", "content": "done"},
+		},
+		{
+			ID:        "commit-1",
+			Name:      "git.commit",
+			Arguments: map[string]any{"message": "checkpoint work"},
+		},
+	}
+	results := []ToolResult{
+		{
+			ToolCallID: "write-1",
+			Name:       "file.write",
+			Output: map[string]any{
+				"path":      "Work/report.md",
+				"byte_size": 4,
+				"created":   true,
+			},
+		},
+		{
+			ToolCallID: "commit-1",
+			Name:       "git.commit",
+			Output: map[string]any{
+				"error": "task_git_commit_blocked",
+			},
+		},
+	}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("git.commit is runtime-owned for task sessions") {
+		t.Fatal("expected immediate git.commit-after-mutation stop message")
+	}
+}
+
 func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalTaskListBroadContextFailureInSameTurn(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
@@ -20998,6 +21082,91 @@ func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalTaskLi
 	}
 	if !fixture.messages.containsContentSubstring("broader project task tree") {
 		t.Fatal("expected repeated task.list broad-context early-stop validation message")
+	}
+}
+
+func TestHandleToolValidationResultsStopsAsyncTaskTurnAfterSecondIdenticalSessionListBroadContextFailureInSameTurn(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	projectID := uuid.New()
+	turnID := uuid.New()
+	attemptFingerprint := toolargs.AttemptFingerprint("session.list", map[string]any{"scope_type": "project"})
+	reason := "task execution should not browse other task or project sessions from a task-scoped async session. Continue from the active task brief, current workspace, and recent task-session tool results only."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+
+	metadata, err := mergeTaskValidationGuardMetadata(json.RawMessage(`{"existing":"value"}`), taskValidationGuardState{
+		InitialMessageID:   fixture.userMessageID.String(),
+		Fingerprint:        "session.list:task_execution_broad_context_blocked",
+		AttemptFingerprint: attemptFingerprint,
+		ToolName:           "session.list",
+		FailureClass:       "tool_validation",
+		FailureCode:        "task_execution_broad_context_blocked",
+		FailureReason:      reason,
+		Count:              1,
+		BlockThreshold:     validationLoopBlockThreshold,
+		Blocked:            false,
+		FirstSeenAt:        time.Now().UTC().Format(time.RFC3339Nano),
+		LastSeenAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		LastTurnID:         turnID.String(),
+	})
+	if err != nil {
+		t.Fatalf("mergeTaskValidationGuardMetadata: %v", err)
+	}
+
+	taskRepo := &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:             taskID,
+				OrganizationID: fixture.session.OrganizationID,
+				ProjectID:      projectID,
+				Title:          "Write validation artifact",
+				WorkStatus:     "in_progress",
+				Metadata:       metadata,
+			},
+		},
+	}
+	blocker := &fakeTaskTransitionService{repo: taskRepo}
+	fixture.engine.tasks = taskRepo
+	fixture.engine.taskTransitions = blocker
+
+	rt := &turnRuntime{
+		session:          fixture.session,
+		initialMessageID: fixture.userMessageID,
+		turn: &chat.ChatTurn{
+			ID:        turnID,
+			SessionID: fixture.session.ID,
+			Status:    "in_progress",
+		},
+	}
+	calls := []ToolCall{{
+		ID:        "session-list-1",
+		Name:      "session.list",
+		Arguments: map[string]any{"scope_type": "project"},
+	}}
+	results := []ToolResult{{
+		ToolCallID: "session-list-1",
+		Name:       "session.list",
+		Error:      reason,
+	}}
+
+	handled, err := fixture.engine.handleToolValidationResults(context.Background(), rt, calls, results)
+	if err != nil {
+		t.Fatalf("handleToolValidationResults: %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if rt.stopReason != stopReasonValidationBlocked {
+		t.Fatalf("rt.stopReason = %q, want %q", rt.stopReason, stopReasonValidationBlocked)
+	}
+	if len(blocker.calls) != 0 {
+		t.Fatalf("blocked transition calls = %d, want 0", len(blocker.calls))
+	}
+	if !fixture.messages.containsContentSubstring("task or project sessions") {
+		t.Fatal("expected repeated session.list broad-context early-stop validation message")
 	}
 }
 

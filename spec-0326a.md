@@ -1276,3 +1276,27 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - both had stale `project_task` turns stuck since `06:39 MDT` / `06:57 MDT`
       - both were failed and cleared at `2026-03-27 09:39:56 MDT`
       - one session immediately advanced beyond backlog, and the other retained a fresh pending retry without a pinned `current_turn_id`
+  - newest task-lane broad-context and commit-handoff slice:
+    - async `project_task` work lanes now treat `session.list`, `session.history`, and `inbox.list` as the same broad-context escape family as `task.list`, `project.get`, and memory browsing
+    - those tools are now:
+      - preclassified as read-only discovery churn
+      - classified as deterministic `task_execution_broad_context_blocked` failures when the runtime guard fires
+      - eligible for the existing same-turn repeated-validation cutoff
+    - async `project_task` turns now also stop immediately when:
+      - a concrete file mutation already succeeded in the turn
+      - the lane then calls `git.commit`
+      - the tool returns `task_git_commit_blocked`
+    - this is intentionally narrower than the older repeated `git.commit` cutoff:
+      - the first blocked commit now ends the turn if the deliverable was already written
+      - the older repeated-failure cutoff still covers turns that keep probing `git.commit` without a prior successful mutation
+    - this targets two concrete hot-turn families from the live canary:
+      - session `7e3dbaf0-4c80-45b5-8f5b-b25886b076b7`, turn `3773d867-1ab4-4698-bd8f-8e74307906b3`
+        - after broad workspace / sibling-task rereads, the lane browsed `session.list`, then `session.history`, then wrote `Work/OC-11-C3-WAVE-GATING-SUMMARY.md`, then still spent the final call on `git.commit`
+      - session `9801673b-004f-4ae9-9039-31ca70b6b7dc`, turn `54719927-107d-495b-bb3a-b59a1a106ba0`
+        - after mutating three `expected_output.json` fixtures, the lane hit `task_git_commit_blocked` and still tried to move on to `flow.advance` instead of ending the turn
+    - focused turn-engine coverage is green for:
+      - blocking the new task-lane broad-context tools
+      - same-turn repeated `session.list` broad-context stops
+      - immediate post-mutation `git.commit` handoff stops
+    - runtime was rebuilt/restarted successfully on the new binary and health remained green
+    - live proof of the exact new stop messages is still pending a fresh post-deploy hit, but the motivating live turns are from the same hour and are the direct target of this slice

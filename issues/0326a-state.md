@@ -3062,6 +3062,59 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 09:55 MDT
+
+I finalized the current task-lane spillover slice and deployed it.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async `project_task` broad-context guards now also cover:
+    - `session.list`
+    - `session.history`
+    - `inbox.list`
+  - those tools are now normalized as read-only discovery churn and classified as deterministic `task_execution_broad_context_blocked` failures when the guard fires
+  - async `project_task` turns now stop immediately when:
+    - a concrete file mutation already succeeded in the same turn
+    - the lane then calls `git.commit`
+    - the tool returns `task_git_commit_blocked`
+  - that post-mutation stop persists a recovery checkpoint when the blocked commit named a concrete deliverable target, then ends the turn with a runtime-owned commit-handoff system message
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - widened the broad-context guard test to cover:
+    - `session.list`
+    - `session.history`
+    - `inbox.list`
+  - added focused coverage for:
+    - same-turn repeated `session.list` broad-context failure stopping early
+    - immediate turn stop on blocked `git.commit` after a successful file mutation
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ShouldBlockTaskExecutionBroadContextTool|HandleToolValidationResultsStopsAsyncTaskTurnAfter(SecondIdentical(TaskListBroadContextFailure|SessionListBroadContextFailure)InSameTurn|BlockedTaskGitCommitWhenDeliverableAlreadyMutated|SecondIdenticalTaskGitCommitBlockedInSameTurn))$' -count=1`
+- rebuilt `./bin/ottercamp`
+- restarted tmux `codex-e2e-20260324` serve/worker on the rebuilt binary
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+Why this slice exists:
+
+- live task-work turn `3773d867-1ab4-4698-bd8f-8e74307906b3` in session `7e3dbaf0-4c80-45b5-8f5b-b25886b076b7` showed a task lane:
+  - rereading broad task/workspace state
+  - then browsing `session.list`
+  - then browsing `session.history`
+  - then writing `Work/OC-11-C3-WAVE-GATING-SUMMARY.md`
+  - then still spending the final call on `git.commit`
+- live task-work turn `54719927-107d-495b-bb3a-b59a1a106ba0` in session `9801673b-004f-4ae9-9039-31ca70b6b7dc` showed a task lane:
+  - mutating three `pipeline/fixtures/*/expected_output.json` files
+  - hitting `task_git_commit_blocked`
+  - then immediately narrating a follow-on `flow.advance` instead of ending the turn
+
+Current proof status:
+
+- deployed and healthy
+- the motivating hot turns are confirmed in production data
+- a fresh post-deploy hit of the exact new stop messages has not happened yet in the short verification window, so that last proof step is still pending traffic rather than code
+
 ## Update 09:45 MDT
 
 I fixed and live-proved a worker ownership leak that was keeping async `project_task` sessions stuck in backlog with both:

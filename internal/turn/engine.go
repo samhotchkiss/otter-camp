@@ -19239,6 +19239,7 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 		return false, err
 	}
 	failures = append(failures, churnFailures...)
+	fileMutationThisTurn := turnHasSuccessfulFileMutation(results)
 	current, ok := parseTaskValidationGuard(taskRecord.Metadata)
 	recoveryCheckpoint, hasRecoveryCheckpoint := taskcheckpoint.ParseRecoveryFileWriteCheckpoint(taskRecord.Metadata)
 	if len(failures) == 0 {
@@ -19266,9 +19267,11 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 	blockedNow := false
 	repeatedRecoveryFocusStop := false
 	repeatedTurnStop := false
+	immediateTaskGitCommitStop := false
 	var blockedFailure *toolValidationFailure
 	var repeatedRecoveryFailure *toolValidationFailure
 	var repeatedFailure *toolValidationFailure
+	var immediateTaskGitCommitFailure *toolValidationFailure
 	for _, failure := range failures {
 		previous := next
 		candidate, candidateBlocked := nextTaskValidationGuardState(next, rt.initialMessageID, rt.turn.ID, failure, e.now())
@@ -19295,6 +19298,12 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 			repeatedTurnStop = true
 			failureCopy := failure
 			repeatedFailure = &failureCopy
+			break
+		}
+		if shouldStopTurnAfterBlockedTaskGitCommitAfterMutation(rt, failure, fileMutationThisTurn) {
+			immediateTaskGitCommitStop = true
+			failureCopy := failure
+			immediateTaskGitCommitFailure = &failureCopy
 			break
 		}
 	}
@@ -19355,6 +19364,20 @@ func (e *TurnEngine) handleToolValidationResults(ctx context.Context, rt *turnRu
 				}
 			}
 			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildValidationLoopTurnStopSystemMessage(next)); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		if immediateTaskGitCommitStop {
+			rt.stopReason = stopReasonValidationBlocked
+			if immediateTaskGitCommitFailure != nil {
+				if targetPath := strings.TrimSpace(immediateTaskGitCommitFailure.DeliverablePath); targetPath != "" {
+					if checkpointErr := e.persistRecoveryFileWriteCheckpoint(ctx, rt, targetPath, "", immediateTaskGitCommitFailure.FailureReason, rt.initialMessageID); checkpointErr != nil {
+						return false, checkpointErr
+					}
+				}
+			}
+			if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskGitCommitAfterMutationTurnStopSystemMessage()); err != nil {
 				return false, err
 			}
 			return true, nil
@@ -20041,6 +20064,12 @@ func normalizeReadOnlyDiscoveryToolCall(name string, arguments map[string]any) (
 		return "file.list", true, true
 	case "file.search", "file_search":
 		return "file.search", true, true
+	case "session.list", "session_list":
+		return "session.list", true, true
+	case "session.history", "session_history":
+		return "session.history", true, true
+	case "inbox.list", "inbox_list":
+		return "inbox.list", true, true
 	case "git.log", "git_log":
 		return "git.log", true, true
 	case "git.diff", "git_diff":
@@ -20377,6 +20406,22 @@ func turnHasSuccessfulFileMutation(results []ToolResult) bool {
 	return false
 }
 
+func shouldStopTurnAfterBlockedTaskGitCommitAfterMutation(rt *turnRuntime, failure toolValidationFailure, fileMutationThisTurn bool) bool {
+	if rt == nil || rt.session == nil || !fileMutationThisTurn {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(failure.ToolName), "git.commit") &&
+		strings.EqualFold(strings.TrimSpace(failure.FailureCode), "task_git_commit_blocked")
+}
+
+func buildTaskGitCommitAfterMutationTurnStopSystemMessage() string {
+	return "[Task deliverable was already mutated this turn. git.commit is runtime-owned for task sessions, so ending the turn now instead of spending more tool calls on commit handoff.]"
+}
+
 func shouldSuppressFocusReadValidationFailure(failure toolValidationFailure) bool {
 	if !strings.EqualFold(strings.TrimSpace(failure.ToolName), "file.read") {
 		return false
@@ -20503,6 +20548,20 @@ func classifyDeterministicToolResultFailure(toolName, normalizedErrorCode, rawEr
 		containsAny(normalizedReason,
 			"task execution should not re-list the broader project task tree",
 			"task execution should not browse org or project memory",
+		) {
+		reason := strings.TrimSpace(rawReason)
+		if reason == "" {
+			reason = strings.TrimSpace(rawErrorCode)
+		}
+		if reason == "" {
+			reason = "task_execution_broad_context_blocked"
+		}
+		return "task_execution_broad_context_blocked", reason, true
+	}
+	if (normalizedToolName == "session.list" || normalizedToolName == "session.history" || normalizedToolName == "inbox.list") &&
+		containsAny(normalizedReason,
+			"task execution should not browse other task or project sessions",
+			"task execution should not browse inbox or other session mail",
 		) {
 		reason := strings.TrimSpace(rawReason)
 		if reason == "" {
@@ -22631,7 +22690,14 @@ func shouldBlockTaskExecutionBroadContextTool(rt *turnRuntime, toolName string) 
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "memory.query", "memory.list", "project.get", "project.list", "task.list", "flow.list_templates", "agent.list":
+	case "memory.query", "memory.list",
+		"project.get", "project.list",
+		"task.list",
+		"flow.list_templates",
+		"agent.list",
+		"session.list", "session_list",
+		"session.history", "session_history",
+		"inbox.list", "inbox_list":
 		return true
 	default:
 		return false
@@ -23334,6 +23400,10 @@ func buildTaskExecutionBroadContextToolGuardError(toolName string) string {
 		return "task execution already has a task-scoped async session. Do not reread broad project state; continue from the active task brief, current workspace, and recent task-session tool results."
 	case "task.list":
 		return "task execution should not re-list the broader project task tree from a task-scoped async session. Continue the assigned task directly."
+	case "session.list", "session_list", "session.history", "session_history":
+		return "task execution should not browse other task or project sessions from a task-scoped async session. Continue from the active task brief, current workspace, and recent task-session tool results only."
+	case "inbox.list", "inbox_list":
+		return "task execution should not browse inbox or other session mail from a task-scoped async session. Continue from the active task brief, current workspace, and recent task-session tool results only."
 	case "flow.list_templates":
 		return "task execution should not browse the template catalog from a task-scoped async session. Use the active task flow already attached to this session."
 	case "agent.list":
