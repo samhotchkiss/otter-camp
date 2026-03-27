@@ -1256,3 +1256,23 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - focused turn-engine coverage is green for:
       - the earlier `<function_calls>` pseudo-tool-plan normalization
       - the new generic inspection-plan normalization
+  - newest async `project_task` stale-turn ownership recovery slice:
+    - worker recovery now treats a stale `project_task` turn as recoverable when:
+      - the session still points `current_turn_id` at an `in_progress` triggered turn
+      - there is already a pending `agent_turn` dispatch for that exact same session/message/retry attempt
+      - the pending dispatch was refreshed after the turn started
+      - there is no live run, no in-flight model invocation, and no recent completed invocation still owning the turn
+    - this closes a worker ownership leak where a same-attempt pending retry could coexist with a stale `in_progress` turn forever:
+      - claim logic would refuse the pending retry because the exact attempt already had an `in_progress` turn
+      - stale-turn recovery would refuse to clear the turn because the queued retry was not a higher retry count
+      - the session then sat in backlog with both `current_turn_id` and a due pending `agent_turn`
+    - focused worker integration coverage is green for:
+      - preserving the older higher-retry pending-job recovery path
+      - recovering the new same-attempt pending-job ownership leak
+      - preserving the existing non-heartbeating claimed-attempt recovery
+    - live proof now exists after redeploy:
+      - session `84be41b7-cfa0-4b58-b82f-2985e5d3e3ff`
+      - session `f3b793d7-f98c-4e72-8d3c-34b0b30b8b1f`
+      - both had stale `project_task` turns stuck since `06:39 MDT` / `06:57 MDT`
+      - both were failed and cleared at `2026-03-27 09:39:56 MDT`
+      - one session immediately advanced beyond backlog, and the other retained a fresh pending retry without a pinned `current_turn_id`

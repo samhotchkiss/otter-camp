@@ -2540,6 +2540,40 @@ func (w *Worker) RecoverStaleInProgressTriggeredTurns(ctx context.Context) (int6
 		          )
 		        )
 		     OR (
+		          EXISTS (
+		            SELECT 1
+		            FROM job_queue jq
+		            WHERE jq.job_type = 'agent_turn'
+		              AND jq.status = 'pending'
+		              AND (jq.payload->>'session_id')::uuid = cs.id
+		              AND (jq.payload->>'message_id')::uuid = COALESCE(live_turn.trigger_message_id, ct.trigger_message_id)
+		              AND COALESCE((jq.payload->>'retry_count')::int, 0) = COALESCE(live_turn.retry_count, ct.retry_count, 0)
+		              AND jq.updated_at > COALESCE(live_turn.started_at, ct.started_at)
+		          )
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM model_invocation mi
+		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND mi.status = 'in_flight'
+		          )
+		          AND NOT EXISTS (
+		            SELECT 1
+		            FROM model_invocation mi
+		            WHERE mi.turn_id = COALESCE(live_turn.id, ct.id)
+		              AND mi.status = 'completed'
+		              AND COALESCE(mi.completed_at, mi.created_at) >= $2
+		          )
+		          AND (
+		            cs.scope_type <> 'project_task'
+		            OR NOT EXISTS (
+		              SELECT 1
+		              FROM run r
+		              WHERE r.turn_id = COALESCE(live_turn.id, ct.id)
+		                AND r.status IN ('created', 'in_progress')
+		            )
+		          )
+		        )
+		     OR (
 		          cs.scope_type = 'project_task'
 		          AND EXISTS (
 		            SELECT 1

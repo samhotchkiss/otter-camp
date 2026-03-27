@@ -3062,6 +3062,59 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 09:45 MDT
+
+I fixed and live-proved a worker ownership leak that was keeping async `project_task` sessions stuck in backlog with both:
+
+- `current_turn_id` still pointing at an old `in_progress` turn
+- a due pending `agent_turn` job already queued for the same session
+
+What changed:
+
+- [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - `RecoverStaleInProgressTriggeredTurns(...)` now also recovers stale async triggered turns when:
+    - the exact same session/message/retry attempt already has a pending `agent_turn`
+    - that pending dispatch was refreshed after the turn started
+    - there is no live run, no in-flight invocation, and no recent completed invocation still owning the turn
+  - before this, worker recovery only treated a queued retry as stale-turn evidence when the queued retry had a higher retry count
+  - that missed the real live shape where recovery had already requeued the same attempt, leaving:
+    - one stale `in_progress` turn pinning `current_turn_id`
+    - one unclaimable due pending retry for the exact same attempt
+- [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+  - added `TestJobWorkerRecoverStaleInProgressTriggeredTurnsKeepsExistingPendingRetryJobForSameAttempt`
+  - kept the adjacent higher-retry and claimed-attempt recovery coverage green
+
+Verification:
+
+- `gofmt -w internal/jobqueue/worker.go internal/jobqueue/worker_integration_test.go`
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorkerRecoverStaleInProgressTriggeredTurns(KeepsExistingPendingRetryJob|KeepsExistingPendingRetryJobForSameAttempt|FailsNonHeartbeatingClaimedAttemptWithoutRun)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- rebuilt and restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Live proof:
+
+- before deploy, both sessions below were stuck with:
+  - `chat_session.current_turn_id` still set
+  - `chat_turn.status='in_progress'`
+  - a due pending `agent_turn`
+- sessions:
+  - `84be41b7-cfa0-4b58-b82f-2985e5d3e3ff`
+  - `f3b793d7-f98c-4e72-8d3c-34b0b30b8b1f`
+- after restart on the patched worker:
+  - stale turns `ca2a18df-bbea-492b-8581-23937d8ce2d2` and `de717f9f-0d7f-4bac-a2c2-30b57ef6488d` were both marked `failed`
+  - both carry:
+    - `recovered stale in-progress message turn without live job or execution; scheduling a fresh retry`
+  - both completed at `2026-03-27 09:39:56 MDT`
+  - one session advanced immediately and no longer shows a pinned backlog row
+  - the other now has a fresh pending retry without a pinned `current_turn_id`
+
+Why this matters:
+
+- this was not model churn; it was a worker ownership deadlock
+- it inflated the `pending_agent_turn_backlog` report with sessions that were already logically retryable
+- the fix lets the existing pending retry actually become claimable again instead of sitting behind a dead `current_turn_id`
+
 ## Update 09:31 MDT
 
 I immediately followed the previous slice with one more guard based on the exact persisted tool calls from the hot project lane.
