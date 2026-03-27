@@ -3127,6 +3127,41 @@ Expected effect:
 - reduce the “available tokens but still waiting” symptom caused by hung remote calls
 - free provider slots and turn ownership sooner when Anthropic goes transient instead of simply stalling
 
+## Update 07:18 MDT
+
+I cut the next hot async task-lane seam after the report made it concrete: repeated `file.read -> not_found` turns were often just rereading the current missing deliverable target.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - when a non-review async `project_task` turn stops with `validation_loop_blocked` and the completed turn already proved the current task deliverable target is missing, the next synthetic continuation prompt is now narrowed
+  - the retry prompt explicitly says:
+    - the target file is missing
+    - do not call `file.read` on it again yet
+    - create it directly with `file.write` or emit one short blocker sentence
+  - target resolution reuses the existing session/task deliverable path logic, so this stays grounded in explicit deliverable paths, recovery checkpoints, or session-learned targets
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for the missing-deliverable retry prompt helper
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(TaskExecutionRetryPromptForMissingPreferredDeliverable|TaskExecutionRetryPromptForMissingPreferredDeliverableSkipsWhenTargetAlreadyReadable)$' -count=1`
+
+Why this slice exists:
+
+- the fresh blocker report showed recent async task lanes like:
+  - task `17` session `2ef376de-6767-4528-9369-185c647d77b5`
+  - task `19` session `02a6f625-ba6a-4150-b917-71b9f04c6ced`
+  - task `11` session `b8eb751c-5e14-443e-9121-2fd877b7be4d`
+- these turns were ending on repeated `file.read -> not_found` while trying to inspect deliverable-style paths before any file had been written
+- the old auto-continuation path simply re-enqueued the same kickoff/continuation message, which left too much room to rediscover the same missing target again
+
+Expected effect:
+
+- reduce repeated missing-file discovery churn in execution lanes
+- push the next turn toward the first concrete write instead of another read-first loop
+
 ## Update 05:55 MDT
 
 I landed the tiny compatibility slice that the first live task-9 proof exposed.

@@ -1412,6 +1412,11 @@ func (e *TurnEngine) HandleTurnCompletedEvent(ctx context.Context, event eventbu
 	if indicatesTaskCompletion(assistant.Content) {
 		return nil
 	}
+	if handled, handleErr := e.enqueueTaskValidationBlockedContinuationPrompt(ctx, session, taskRecord, latestCompleted, latestUser, messages); handleErr != nil {
+		return handleErr
+	} else if handled {
+		return nil
+	}
 
 	if consecutive := consecutiveAutoTurnsSinceLatestUser(turns, messages, latestUser.SequenceNumber); consecutive >= maxConsecutiveAutoTurns {
 		e.logger.Warn("auto continuation cap reached",
@@ -1518,6 +1523,120 @@ func (e *TurnEngine) handleCompletedTaskResumeWithoutUsableAssistant(
 		SessionID:  session.ID,
 		MessageID:  nextMessageID,
 		RetryCount: latestCompleted.RetryCount + 1,
+	}
+	if latestCompleted.RespondingID != uuid.Nil {
+		agentID := latestCompleted.RespondingID
+		nextPayload.AgentID = &agentID
+	}
+	runAfter := e.now().Add(defaultAutoContinueDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	if err != nil {
+		return true, err
+	}
+	return enqueued, nil
+}
+
+func buildTaskExecutionMissingDeliverableRetryPrompt(targetPath string) string {
+	targetPath = normalizeWorkspaceRelativePath(targetPath)
+	lines := []string{
+		"Continue the active task now from the narrowed continuation below.",
+		fmt.Sprintf("Your last task turn already established that the current deliverable target `%s` is missing from the workspace.", targetPath),
+		fmt.Sprintf("Do not call file.read on `%s` again until you have created it.", targetPath),
+		"Do not inspect sibling path variants, broad planning artifacts, or the repository root before taking a concrete mutation step.",
+		fmt.Sprintf("Create the next concrete deliverable file body for `%s` directly with file.write, or give one short blocker sentence explaining why it cannot be created from the current task context.", targetPath),
+		"Do not reply with a plan, explanation, or narration about what you will write.",
+	}
+	return strings.Join(lines, " ")
+}
+
+func taskExecutionRetryPromptForMissingPreferredDeliverable(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, latestUser *repo.ChatMessage, targetPath string) (string, bool) {
+	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || latestUser == nil {
+		return "", false
+	}
+	if strings.TrimSpace(targetPath) == "" {
+		return "", false
+	}
+	if !taskExecutionKickoffMessage(*latestUser) && !taskContinuationResumeMessageRootsHistory(*latestUser) {
+		return "", false
+	}
+
+	normalizedTarget := normalizeWorkspaceRelativePath(targetPath)
+	turnMessages := messagesForTurn(messages, latestCompleted.ID)
+	if len(turnMessages) == 0 {
+		return "", false
+	}
+
+	sawTargetReadNotFound := false
+	for _, message := range turnMessages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "tool_result") {
+			continue
+		}
+		toolName, output, errText, ok := parseToolResultMessage(message.Content)
+		if !ok {
+			continue
+		}
+		errorCode := normalizeValidationFailureCode(errText)
+		if errorCode == "" {
+			errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+		}
+		path := normalizeWorkspaceRelativePath(anyString(output["path"]))
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "file.read":
+			if errorCode == "not_found" && sameWorkspaceRelativePath(path, normalizedTarget) {
+				sawTargetReadNotFound = true
+				continue
+			}
+			if errorCode == "" && sameWorkspaceRelativePath(path, normalizedTarget) && intValue(output["byte_size"]) > 0 {
+				return "", false
+			}
+		case "file.write":
+			if errorCode == "" && sameWorkspaceRelativePath(path, normalizedTarget) && intValue(output["byte_size"]) > 0 {
+				return "", false
+			}
+		}
+	}
+	if !sawTargetReadNotFound {
+		return "", false
+	}
+	return buildTaskExecutionMissingDeliverableRetryPrompt(normalizedTarget), true
+}
+
+func (e *TurnEngine) enqueueTaskValidationBlockedContinuationPrompt(
+	ctx context.Context,
+	session *chat.ChatSession,
+	taskRecord repo.ProjectTask,
+	latestCompleted *repo.ChatTurn,
+	latestUser *repo.ChatMessage,
+	messages []repo.ChatMessage,
+) (bool, error) {
+	if e == nil || e.chat == nil || session == nil || latestCompleted == nil || latestUser == nil {
+		return false, nil
+	}
+	if latestCompleted.StopReason == nil || !strings.EqualFold(strings.TrimSpace(*latestCompleted.StopReason), stopReasonValidationBlocked) {
+		return false, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") {
+		return false, nil
+	}
+	targetPath := strings.TrimSpace(e.sessionTaskDeliverablePath(ctx, session.ID, taskRecord))
+	retryPrompt, ok := taskExecutionRetryPromptForMissingPreferredDeliverable(messages, latestCompleted, latestUser, targetPath)
+	if !ok {
+		return false, nil
+	}
+	retryAttempt := e.taskContinuationResumeAttempt(ctx, latestUser.ID) + 1
+	actionMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: session.ID,
+		TurnID:    &latestCompleted.ID,
+		Role:      "user",
+		Content:   retryPrompt,
+		Metadata:  taskContinuationResumeMessageMetadata(session, retryAttempt),
+	})
+	if err != nil {
+		return true, err
+	}
+	nextPayload := AgentTurnPayload{
+		SessionID: session.ID,
+		MessageID: actionMessage.ID,
 	}
 	if latestCompleted.RespondingID != uuid.Nil {
 		agentID := latestCompleted.RespondingID

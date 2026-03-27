@@ -1074,3 +1074,7 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - the gateway now keeps the shared remote timeout in place for Anthropic/OpenAI calls, while still extending only local provider calls like Ollama
     - this targets the live seam where a single remote `agent_turn` invocation could remain `in_flight` for most of the async turn watchdog window even though the base remote client timeout is only `5m`
     - focused gateway coverage is green for the new remote-timeout behavior
+  - newest work-lane continuation slice:
+    - when an async `project_task` work turn already proved the current deliverable target is missing with `file.read -> not_found`, the next synthetic continuation now carries a narrowed prompt that says to create that file directly instead of rereading it
+    - this reuses the session/task deliverable target that OtterCamp already knows from explicit deliverable paths, recovery checkpoints, or session-learned targets
+    - focused turn-engine coverage is green for the missing-target retry prompt helper

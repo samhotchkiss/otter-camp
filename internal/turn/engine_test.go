@@ -13962,6 +13962,71 @@ func TestBuildTaskContinuationActionPromptTreatsDocumentSummaryAsDraft(t *testin
 	}
 }
 
+func TestTaskExecutionRetryPromptForMissingPreferredDeliverable(t *testing.T) {
+	t.Parallel()
+
+	turnID := uuid.New()
+	latestCompleted := &repo.ChatTurn{ID: turnID}
+	latestUser := &repo.ChatMessage{
+		Role:    "user",
+		Content: "Start work on task: create fixture files",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                 "task_queue_processor",
+			"flow_node_execution_id": uuid.NewString(),
+		}),
+	}
+	targetPath := "pipeline/fixtures/ingestion/input.json"
+	messages := []repo.ChatMessage{
+		{
+			Role:    "tool_result",
+			TurnID:  &turnID,
+			Content: `{"tool_name":"file.read","output":{"error":"not_found","path":"pipeline/fixtures/ingestion/input.json"}}`,
+		},
+		{
+			Role:    "tool_result",
+			TurnID:  &turnID,
+			Content: `{"tool_name":"file.read","output":{"path":"planning/discovery-plan/oc-17-validation-plan.md","byte_size":512,"content":"# Plan"}}`,
+		},
+	}
+
+	prompt, ok := taskExecutionRetryPromptForMissingPreferredDeliverable(messages, latestCompleted, latestUser, targetPath)
+	if !ok {
+		t.Fatal("expected missing-deliverable retry prompt")
+	}
+	if !strings.Contains(prompt, "`pipeline/fixtures/ingestion/input.json` is missing") {
+		t.Fatalf("prompt = %q, want missing-target guidance", prompt)
+	}
+	if !strings.Contains(prompt, "Create the next concrete deliverable file body") {
+		t.Fatalf("prompt = %q, want direct write guidance", prompt)
+	}
+}
+
+func TestTaskExecutionRetryPromptForMissingPreferredDeliverableSkipsWhenTargetAlreadyReadable(t *testing.T) {
+	t.Parallel()
+
+	turnID := uuid.New()
+	latestCompleted := &repo.ChatTurn{ID: turnID}
+	latestUser := &repo.ChatMessage{
+		Role:    "user",
+		Content: "Start work on task: create fixture files",
+		Metadata: mustRawJSON(t, map[string]any{
+			"source":                 "task_queue_processor",
+			"flow_node_execution_id": uuid.NewString(),
+		}),
+	}
+	messages := []repo.ChatMessage{
+		{
+			Role:    "tool_result",
+			TurnID:  &turnID,
+			Content: `{"tool_name":"file.read","output":{"path":"pipeline/fixtures/ingestion/input.json","byte_size":256,"content":"{}"}}`,
+		},
+	}
+
+	if prompt, ok := taskExecutionRetryPromptForMissingPreferredDeliverable(messages, latestCompleted, latestUser, "pipeline/fixtures/ingestion/input.json"); ok {
+		t.Fatalf("unexpected prompt = %q", prompt)
+	}
+}
+
 func TestBuildProjectContinuationActionPrompt(t *testing.T) {
 	prompt := buildProjectContinuationActionPrompt("Project execution should continue directly from the current task tree.")
 
