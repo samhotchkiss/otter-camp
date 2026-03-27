@@ -10766,6 +10766,14 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			})
 			continue
 		}
+		if blocked, reason := e.shouldBlockOrchestrationParentReviewTaskListTool(ctx, rt, name, arguments); blocked {
+			blockedCalls = append(blockedCalls, ToolResult{
+				ToolCallID: id,
+				Name:       name,
+				Error:      reason,
+			})
+			continue
+		}
 		if e.shouldBlockTaskExecutionBroadContextTool(ctx, rt, name) {
 			blockedCalls = append(blockedCalls, ToolResult{
 				ToolCallID: id,
@@ -20201,6 +20209,7 @@ func (e *TurnEngine) buildTaskReviewActionPrompt(ctx context.Context, session *c
 			if targetPath != "" {
 				lines = append(lines, fmt.Sprintf("If `%s` is present and readable, do not inspect planning/prd-spec, planning/discovery-plan, or other companion planning files for this parent task. Base the review on `%s` plus direct child-task evidence only.", targetPath, targetPath))
 			}
+			lines = append(lines, fmt.Sprintf("If you need task evidence, use `task.list` with `parent_task_id=%s` to inspect this parent's direct child tasks only. Do not call `task.list` with `project_id` or re-list the broader project task tree for this review.", taskRecord.ID))
 			lines = append(lines, "If more evidence is needed, inspect the direct child tasks beneath this parent or their concrete outputs. Missing planning companion files alone are not rejection evidence for this orchestration parent.")
 		} else if contracts := reviewPromptArtifactContracts(taskRecord); len(contracts) == 0 {
 			lines = append(lines, "Do not invent companion planning-artifact requirements from neighboring tasks, generic playbook assumptions, or filenames alone. If the current task metadata does not carry an explicit artifact contract, review the actual deliverable files against this task's title and description only.")
@@ -21498,6 +21507,32 @@ func shouldBlockTaskExecutionBroadContextTool(rt *turnRuntime, toolName string) 
 	}
 }
 
+func (e *TurnEngine) shouldBlockOrchestrationParentReviewTaskListTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
+	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") ||
+		!strings.EqualFold(strings.TrimSpace(rt.session.Mode), "async") ||
+		!strings.EqualFold(strings.TrimSpace(toolName), "task.list") {
+		return false, ""
+	}
+	taskID := resolveTaskID(rt.session)
+	if taskID == nil || *taskID == uuid.Nil {
+		return false, ""
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, *taskID)
+	if err != nil {
+		return false, ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(taskRecord.WorkStatus), "review") || !taskLooksLikeOrchestrationOnlyParent(taskRecord) {
+		return false, ""
+	}
+	if parentTaskID, ok := parseUUIDAny(arguments["parent_task_id"]); ok && parentTaskID == taskRecord.ID {
+		return false, ""
+	}
+	return true, buildOrchestrationParentReviewTaskListGuardError(taskRecord)
+}
+
 func (e *TurnEngine) shouldBlockTaskExecutionTaskCreateTool(ctx context.Context, rt *turnRuntime, toolName string, arguments map[string]any) (bool, string) {
 	if e == nil || e.tasks == nil || rt == nil || rt.session == nil {
 		return false, ""
@@ -22000,6 +22035,14 @@ func buildTaskExecutionBroadContextToolGuardError(toolName string) string {
 	default:
 		return "task execution should not reread broad org or project context from a task-scoped async session. Continue the assigned task directly."
 	}
+}
+
+func buildOrchestrationParentReviewTaskListGuardError(taskRecord repo.ProjectTask) string {
+	label := projectBootstrapTaskLabel(taskRecord)
+	if strings.TrimSpace(label) == "" {
+		label = "the current orchestration-only review task"
+	}
+	return fmt.Sprintf("task execution should not re-list the broader project task tree from %s while it is in review. If you need task evidence, call task.list with parent_task_id=%s to inspect that parent's direct child tasks only.", label, taskRecord.ID)
 }
 
 func buildTaskExecutionTaskCreateGuardError(taskRecord repo.ProjectTask, parentRequired bool, currentTaskID uuid.UUID) string {

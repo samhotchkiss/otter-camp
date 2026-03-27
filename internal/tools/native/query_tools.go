@@ -11,6 +11,7 @@ import (
 	"github.com/samhotchkiss/otter-camp/internal/memory"
 	"github.com/samhotchkiss/otter-camp/internal/planningasset"
 	"github.com/samhotchkiss/otter-camp/internal/repo"
+	"github.com/samhotchkiss/otter-camp/internal/taskdecomp"
 	"github.com/samhotchkiss/otter-camp/internal/taskplan"
 )
 
@@ -164,6 +165,7 @@ func (e *NativeToolExecutor) handleTaskList(ctx context.Context, input map[strin
 	limit := clamp(readInt(input, "limit", 50), 1, 200)
 	cursor := decodeCursor(readCursor(input))
 	statusFilter, _ := readString(input, "status")
+	parentTaskID, hasParentTaskID := readUUID(input, "parent_task_id")
 
 	taskRows := make([]repo.ProjectTask, 0)
 	if projectID, ok := readUUID(input, "project_id"); ok {
@@ -195,6 +197,9 @@ func (e *NativeToolExecutor) handleTaskList(ctx context.Context, input map[strin
 	filtered := make([]repo.ProjectTask, 0, len(taskRows))
 	for _, task := range taskRows {
 		if statusFilter != "" && !strings.EqualFold(task.WorkStatus, statusFilter) {
+			continue
+		}
+		if hasParentTaskID && parentTaskID != uuid.Nil && taskdecomp.ParseParentTaskID(task.Metadata) != parentTaskID {
 			continue
 		}
 		if shouldHideFromDefaultProjectTaskList(scope, input, task) {

@@ -919,3 +919,28 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
     - `agent.list`
   - resulting system message:
     - `[Project continuation auto-queued task 11 (Workstream C: Wave Gating Validation) after a non-mutating continuation left runnable draft work untouched.]`
+- orchestration-parent review lanes now have a bounded child-task lookup path:
+  - `task.list` now supports `parent_task_id`
+  - executor-side filtering uses `metadata.decomposition_parent_task_id`
+  - orchestration-parent review prompts now explicitly tell the model to use `task.list(parent_task_id=current_task)` for child evidence instead of `task.list(project_id=...)`
+  - async orchestration-parent review lanes now block the broad project-wide `task.list` variant and return a direct correction that points to `parent_task_id=<current task id>`
+  - this is intentionally narrow:
+    - review-only
+    - orchestration-parent tasks only
+    - does not change the existing non-review orchestration validation allowance for limited project context
+- verification for this slice:
+  - `go test ./internal/turn -run 'Test(ShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedList|ShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationContextReads|BuildTaskReviewActionPromptSpecializesOrchestrationOnlyParentReview)$' -count=1`
+  - `go test -tags=integration ./internal/tools/native -run 'TestIntegration(TaskListFiltersByParentTaskID|TaskListHidesProjectContinuationMetaDraftsByDefault|TaskListDefaultsToCurrentProjectSessionScope)$' -count=1`
+  - `go test -tags=integration ./internal/repo -run 'TestKeyToolSchemasExposeRequiredParameters$' -count=1`
+- deploy state for this slice:
+  - code complete
+  - focused tests green
+  - migration added: `0130_task_list_parent_task_schema.sql`
+  - runtime rebuilt/restarted successfully at `2026-03-27 05:35 MDT`
+  - `./bin/ottercamp health --output json` is green on the new binary
+  - live tool schema now includes:
+    - `task.list.parent_task_id`
+    - `task.list.include_meta_drafts`
+  - the remaining live proof gap is provider-limited:
+    - fresh task-9 retry session `729dd9e7-36c4-46a1-988b-8e35e5b96b88` woke on the new runtime at `05:36:50 MDT`
+    - Anthropic failed before any tool call, so the new bounded `task.list(parent_task_id=...)` path is deployed but not yet seen in a completed live turn

@@ -4839,6 +4839,113 @@ func TestIntegrationTaskListHidesProjectContinuationMetaDraftsByDefault(t *testi
 	}
 }
 
+func TestIntegrationTaskListFiltersByParentTaskID(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	orgID := testutil.MakeOrg(t, pool)
+	project := testutil.MakeProject(t, pool, orgID)
+	actor := testutil.MakeAgent(t, pool, orgID)
+	taskRepo := repo.NewProjectTaskRepo(pool)
+
+	parentTask, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Pipeline scaffold orchestration parent",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	childOne, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Pipeline config setup",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTask.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create child one: %v", err)
+	}
+	childTwo, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Pipeline stage scaffold",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(fmt.Sprintf(`{"decomposition_parent_task_id":"%s"}`, parentTask.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create child two: %v", err)
+	}
+	unrelated, err := taskRepo.Create(ctx, repo.ProjectTask{
+		OrganizationID: orgID,
+		ProjectID:      project.ID,
+		Title:          "Unrelated task",
+		WorkStatus:     "draft",
+		CreatedByType:  "system",
+	})
+	if err != nil {
+		t.Fatalf("create unrelated task: %v", err)
+	}
+
+	sessionRepo := repo.NewChatSessionRepo(pool)
+	taskSession, err := sessionRepo.Create(ctx, repo.ChatSession{
+		OrganizationID: orgID,
+		ScopeType:      "project_task",
+		ScopeID:        parentTask.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		Metadata:       json.RawMessage(`{"source":"native-task-list-parent-filter-test"}`),
+	})
+	if err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+
+	executor := NewExecutor(ExecutorOptions{Pool: pool, WorkspaceRoot: t.TempDir()})
+	out, err := executor.Execute(integrationExecCtxWithSession(orgID, actor.ID, taskSession.ID), "task.list", map[string]any{
+		"parent_task_id": parentTask.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("task.list parent_task_id: %v", err)
+	}
+
+	tasksPayload, ok := out["tasks"].([]map[string]any)
+	if !ok {
+		raw, ok := out["tasks"].([]any)
+		if !ok {
+			t.Fatalf("task.list tasks payload = %T, want []map[string]any", out["tasks"])
+		}
+		tasksPayload = make([]map[string]any, 0, len(raw))
+		for _, item := range raw {
+			record, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("task.list task item = %T, want map[string]any", item)
+			}
+			tasksPayload = append(tasksPayload, record)
+		}
+	}
+	seen := map[uuid.UUID]bool{}
+	for _, record := range tasksPayload {
+		seen[mustUUIDValue(t, record["id"])] = true
+	}
+
+	if !seen[childOne.ID] || !seen[childTwo.ID] {
+		t.Fatalf("task.list parent_task_id missing expected child tasks: %#v", seen)
+	}
+	if seen[parentTask.ID] {
+		t.Fatalf("task.list parent_task_id returned parent task %s", parentTask.ID)
+	}
+	if seen[unrelated.ID] {
+		t.Fatalf("task.list parent_task_id returned unrelated task %s", unrelated.ID)
+	}
+	if taskdecomp.ParseParentTaskID(childOne.Metadata) != parentTask.ID || taskdecomp.ParseParentTaskID(childTwo.Metadata) != parentTask.ID {
+		t.Fatal("expected child task metadata to preserve decomposition parent linkage")
+	}
+}
+
 func TestIntegrationTaskCreateRejectsNonBootstrapWorkWhileBootstrapGateIsOpen(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

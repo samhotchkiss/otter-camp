@@ -3062,6 +3062,57 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 05:40 MDT
+
+The orchestration-parent review prompt fix is now live-proven, and the next concrete leak is narrower.
+
+Live proof:
+
+- the prompt created at `2026-03-27 05:22:17 MDT` for task `9` was from the old binary; the serve pane restart happened at `2026-03-27 05:22:22 MDT`
+- the first fresh post-restart task-9 review prompt, message `0b6d59ee-e3dd-4f91-a279-08902f79cbb3` in session `e067dff5-f31e-41c6-b584-d1f90dc1e91c`, includes the new orchestration-parent override:
+  - stay on the parent orchestration summary
+  - do not inspect `planning/prd-spec` or other companion planning files
+  - use `task.list` with `parent_task_id=<current task>` for child-task evidence only
+
+What still drifted:
+
+- after reading `Work/OC-9-WORKSTREAM-A-PIPELINE-SCAFFOLD-SETUP.md`, that same fresh review lane still chose:
+  - `task.get` on the current parent task
+  - then broad `task.list` against the whole project
+  - then `file.list Work` and `git.log`
+- the planning-artifact leak is fixed; the remaining leak is broad child-evidence discovery
+
+Code now landed for that narrower seam:
+
+- [`internal/tools/native/query_tools.go`](../internal/tools/native/query_tools.go)
+  - `task.list` now accepts `parent_task_id`
+  - filtering uses `metadata.decomposition_parent_task_id`
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - orchestration-parent review prompts now explicitly instruct:
+    - use `task.list(parent_task_id=current_task)` for direct child-task evidence
+    - do not use `task.list(project_id=...)`
+  - async orchestration-parent review lanes now block the broad `task.list` variant and return a direct correction pointing at `parent_task_id=<current task id>`
+- [`migrations/0130_task_list_parent_task_schema.sql`](../migrations/0130_task_list_parent_task_schema.sql)
+  - exposes `parent_task_id` and `include_meta_drafts` on the live `task.list` schema
+
+Verification:
+
+- `go test ./internal/turn -run 'Test(ShouldBlockOrchestrationParentReviewTaskListToolRequiresParentScopedList|ShouldBlockTaskExecutionBroadContextToolAllowsOrchestrationValidationContextReads|BuildTaskReviewActionPromptSpecializesOrchestrationOnlyParentReview)$' -count=1`
+- `go test -tags=integration ./internal/tools/native -run 'TestIntegration(TaskListFiltersByParentTaskID|TaskListHidesProjectContinuationMetaDraftsByDefault|TaskListDefaultsToCurrentProjectSessionScope)$' -count=1`
+- `go test -tags=integration ./internal/repo -run 'TestKeyToolSchemasExposeRequiredParameters$' -count=1`
+
+Deploy status at this note:
+
+- code complete
+- focused tests green
+- runtime rebuilt/restarted successfully at `2026-03-27 05:35 MDT`
+- `./bin/ottercamp health --output json` returned `status=ok`
+- live schema proof:
+  - `tool_definition.name='task.list'` now exposes both `parent_task_id` and `include_meta_drafts`
+- remaining live proof gap:
+  - the first fresh post-deploy task-9 retry in session `729dd9e7-36c4-46a1-988b-8e35e5b96b88` started at `05:36:50 MDT`
+  - Anthropic failed before any tool call, so the new bounded `task.list(parent_task_id=...)` runtime path is deployed but not yet observed on a completed live review turn
+
 ## Update 05:15 MDT
 
 The next live investigation changed the diagnosis on the `task 11` churn.
