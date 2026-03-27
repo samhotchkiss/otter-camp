@@ -231,6 +231,10 @@ func (g *LiveModelGateway) ProbeAvailability(ctx context.Context, req turn.Model
 	if errors.As(err, &rateLimited) {
 		return turn.NewRateLimitedError(rateLimited.RetryAfter, err)
 	}
+	var unavailable ConnectionsUnavailableError
+	if errors.As(err, &unavailable) {
+		return turn.NewTransientModelError(unavailable.RetryAfter, err)
+	}
 	return err
 }
 
@@ -284,6 +288,13 @@ func (g *LiveModelGateway) complete(ctx context.Context, req turn.ModelRequest, 
 					return turn.ModelResponse{}, lastErr
 				}
 				return turn.ModelResponse{}, turn.NewRateLimitedError(rateLimited.RetryAfter, err)
+			}
+			var unavailable ConnectionsUnavailableError
+			if errors.As(err, &unavailable) {
+				if lastErr != nil {
+					return turn.ModelResponse{}, lastErr
+				}
+				return turn.ModelResponse{}, turn.NewTransientModelError(unavailable.RetryAfter, err)
 			}
 			if lastErr != nil {
 				return turn.ModelResponse{}, lastErr
@@ -552,6 +563,10 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 	if err == nil {
 		return nil, false
 	}
+	now := time.Now
+	if g != nil && g.now != nil {
+		now = g.now
+	}
 
 	var providerErr ProviderHTTPError
 	if errors.As(err, &providerErr) {
@@ -567,7 +582,7 @@ func (g *LiveModelGateway) mapProviderError(connectionID uuid.UUID, err error) (
 		case http.StatusTooManyRequests:
 			slog.Warn("provider rate limited", "connection_id", connectionID, "retry_after", providerErr.RetryAfter, "detail", providerErr.Err)
 			g.health.MarkRateLimitedFor(connectionID, providerErr.RetryAfter)
-			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateRateLimited), retryUntilFromDelay(g.now().UTC(), providerErr.RetryAfter))
+			g.persistConnectionHealth(context.Background(), connectionID, string(HealthStateRateLimited), retryUntilFromDelay(now().UTC(), providerErr.RetryAfter))
 			return turn.NewRateLimitedError(providerErr.RetryAfter, providerErr), true
 		default:
 			if providerErr.StatusCode >= http.StatusInternalServerError {

@@ -53,3 +53,46 @@ func (e RateLimitedError) RateLimitRetryAfter() time.Duration {
 	}
 	return e.RetryAfter
 }
+
+// TransientModelError preserves provider recovery timing while still matching
+// ErrModelTransient via errors.Is.
+type TransientModelError struct {
+	RetryAfter time.Duration
+	Cause      error
+}
+
+func NewTransientModelError(retryAfter time.Duration, cause error) error {
+	if retryAfter < 0 {
+		retryAfter = 0
+	}
+	return TransientModelError{
+		RetryAfter: retryAfter,
+		Cause:      cause,
+	}
+}
+
+func (e TransientModelError) Error() string {
+	base := ErrModelTransient.Error()
+	if e.RetryAfter > 0 {
+		base = fmt.Sprintf("%s (retry_after=%s)", base, e.RetryAfter.Round(time.Second))
+	}
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %v", base, e.Cause)
+	}
+	return base
+}
+
+func (e TransientModelError) Unwrap() []error {
+	errs := []error{ErrModelTransient}
+	if e.Cause != nil {
+		errs = append(errs, e.Cause)
+	}
+	return errs
+}
+
+func (e TransientModelError) TransientModelRetryAfter() time.Duration {
+	if e.RetryAfter < 0 {
+		return 0
+	}
+	return e.RetryAfter
+}

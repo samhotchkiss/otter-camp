@@ -3062,6 +3062,44 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 03:33 MDT
+
+I landed the next provider-churn hardening slice aimed at the remaining transient-failure bursts that were still creating fresh failed turns every few seconds.
+
+What changed:
+
+- [`internal/gateway/router.go`](../internal/gateway/router.go)
+  - the router now distinguishes:
+    - all eligible connections `rate_limited`
+    - all eligible connections `unavailable` but still inside their recovery window
+  - the second case now returns `ConnectionsUnavailableError{RetryAfter}` instead of collapsing to plain `ErrNoHealthyConnection`
+- [`internal/gateway/client.go`](../internal/gateway/client.go)
+  - `ProbeAvailability(...)` now maps that router error to `turn.NewTransientModelError(retry_after, ...)`
+  - normal request routing now maps the same condition to the same hinted transient error if it occurs outside preflight
+  - while widening gateway coverage, I also fixed an existing test-only nil-clock bug in `mapProviderError(...)`; direct unit construction now safely falls back to `time.Now` when `g.now` is unset
+- [`internal/turn/errors.go`](../internal/turn/errors.go)
+  - added `TransientModelError`, parallel to `RateLimitedError`, so retry timing survives `errors.Is(err, ErrModelTransient)`
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - async cooldown preflight now also defers on hinted transient recovery windows before prompt assembly / turn creation / invocation creation
+  - the delayed transient-provider retry path now honors the hinted `retry_after` window instead of always using the generic transient backoff ladder
+
+Verification:
+
+- `go test ./internal/gateway -count=1`
+- `go test ./internal/turn -run 'Test(HandleTurnJobAsyncProjectTaskTransientAvailabilityPreflightDefersBeforePromptAssembly|HandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnUnhintedTransientError|HandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnNonRateLimitError|HandleTurnJobAsyncProjectTaskTransientProviderEnqueuesRetryWithoutSameTurnRetry|HandleTurnJobAsyncProjectTaskTransientProviderRetryCapStopsRequeue|HandleTurnJobAsyncProjectTaskRateLimitedPreflightDefersPastRetryCapWithoutTurn)$' -count=1`
+
+What this should save:
+
+- async turns should no longer create a fresh failed `chat_turn` / `model_invocation` when the router can already prove every eligible connection is merely still in transient recovery
+- the follow-on retry should now wait for the actual connection recovery window instead of paying for a chain of `15s` transient retries that cannot succeed yet
+
+Current live-proof status:
+
+- code and tests are complete
+- docs are updated
+- runtime is now restarted on the new binary and health is green
+- fresh live proof of the exact preflight-only path is still pending on the next window where all eligible connections are transiently recovering at once; immediately after deploy, Anthropic still had one `healthy` primary connection, so the router never had to return the new all-unavailable recovery-window error in production yet
+
 ## Update 02:52 MDT
 
 I found a real provider-routing bug while checking why `claude-swh-me` still looked dead even after its transient-failure burst should have aged out.

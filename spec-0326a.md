@@ -797,6 +797,18 @@ Still pending from this spec:
   - the shell report in [`scripts/token-usage-report.sh`](./scripts/token-usage-report.sh) now surfaces the same two columns for quick live ops inspection
   - `recovery_ready_at` is only shown for recovery states (`rate_limited` and `unavailable`), not for already-healthy connections
   - focused CLI integration coverage remains green after the added fields
+- async turn preflight now treats “all eligible provider connections are still transiently recovering” as a first-class deferred state instead of falling through to a fresh failed turn:
+  - the router now returns `ConnectionsUnavailableError{RetryAfter}` when every eligible connection is currently `unavailable` but still within its recovery window
+  - the live gateway maps that router result to `turn.NewTransientModelError(retry_after, ...)` in both:
+    - `ProbeAvailability(...)`
+    - normal request routing when no connection can yet be selected
+  - async `organization`, `project`, and `project_task` sessions already using cooldown preflight now defer on this hinted transient error before prompt assembly, turn creation, and invocation creation
+  - the existing delayed transient-provider retry path now also honors the hinted `retry_after` window instead of always using the coarse `15s/30s/60s/...` backoff
+  - focused coverage now proves:
+    - router: all-recovering unavailable pools surface a concrete retry window
+    - turn engine: async task preflight defers before prompt assembly on hinted transient recovery windows
+    - turn engine: unhinted transient probe errors still fall through to normal execution instead of becoming over-eager preflight stops
+  - while widening the gateway package test pass for this slice, an existing `mapProviderError(...)` nil-clock bug surfaced on direct unit construction; that path now safely falls back to `time.Now` when `g.now` is unset
 
 ## Deferred Follow-Up, Not In This Spec
 

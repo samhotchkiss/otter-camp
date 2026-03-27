@@ -239,6 +239,57 @@ func TestRouterSelectConnectionTreatsExpiredPersistedUnavailableAsDegraded(t *te
 	}
 }
 
+func TestRouterSelectConnectionReturnsUnavailableRecoveryWindowWhenAllConnectionsRecovering(t *testing.T) {
+	orgID := uuid.New()
+	providerID := uuid.New()
+	firstID := uuid.New()
+	secondID := uuid.New()
+	now := time.Now().UTC()
+
+	router := NewRouter(
+		&stubProfileLookup{
+			profiles: map[string]repo.ModelProfile{
+				"standard": {
+					LogicalProfileID: "standard",
+					ProviderID:       providerID,
+				},
+			},
+		},
+		&stubConnectionLookup{
+			items: map[uuid.UUID][]repo.ProviderConnection{
+				providerID: {
+					{
+						ID:               firstID,
+						ProviderID:       providerID,
+						IsEnabled:        true,
+						FailoverPriority: 1,
+						HealthStatus:     string(HealthStateUnavailable),
+						UpdatedAt:        now,
+					},
+					{
+						ID:               secondID,
+						ProviderID:       providerID,
+						IsEnabled:        true,
+						FailoverPriority: 2,
+						HealthStatus:     string(HealthStateUnavailable),
+						UpdatedAt:        now.Add(-15 * time.Second),
+					},
+				},
+			},
+		},
+		NewHealthChecker(),
+	)
+
+	_, err := router.SelectConnection(context.Background(), orgID, "standard", "agent_turn", PrioritySyncInteractive)
+	var unavailable ConnectionsUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("SelectConnection error = %v, want ConnectionsUnavailableError", err)
+	}
+	if unavailable.RetryAfter < 40*time.Second || unavailable.RetryAfter > 50*time.Second {
+		t.Fatalf("retry_after = %s, want about 45s", unavailable.RetryAfter)
+	}
+}
+
 func TestRouterSelectConnectionReturnsRateLimitedBackoffWhenAllConnectionsCoolingDown(t *testing.T) {
 	orgID := uuid.New()
 	providerID := uuid.New()

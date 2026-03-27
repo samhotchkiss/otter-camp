@@ -57,6 +57,7 @@ func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileI
 
 	visited := map[string]struct{}{currentProfileID: {}}
 	var earliestRateLimitRetryAfter time.Duration
+	var earliestUnavailableRetryAfter time.Duration
 	for hop := 0; hop < maxFallbackHops; hop++ {
 		profile, err := r.profiles.GetCurrentByLogicalID(ctx, orgID, currentProfileID)
 		if err != nil {
@@ -64,12 +65,15 @@ func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileI
 				if earliestRateLimitRetryAfter > 0 {
 					return nil, ConnectionsRateLimitedError{RetryAfter: earliestRateLimitRetryAfter}
 				}
+				if earliestUnavailableRetryAfter > 0 {
+					return nil, ConnectionsUnavailableError{RetryAfter: earliestUnavailableRetryAfter}
+				}
 				return nil, ErrNoHealthyConnection
 			}
 			return nil, err
 		}
 
-		selected, retryAfter, err := r.selectProviderConnection(ctx, orgID, profile.ProviderID)
+		selected, retryAfter, unavailableRetryAfter, err := r.selectProviderConnection(ctx, orgID, profile.ProviderID)
 		if err != nil {
 			return nil, err
 		}
@@ -79,10 +83,16 @@ func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileI
 		if retryAfter > 0 && (earliestRateLimitRetryAfter <= 0 || retryAfter < earliestRateLimitRetryAfter) {
 			earliestRateLimitRetryAfter = retryAfter
 		}
+		if unavailableRetryAfter > 0 && (earliestUnavailableRetryAfter <= 0 || unavailableRetryAfter < earliestUnavailableRetryAfter) {
+			earliestUnavailableRetryAfter = unavailableRetryAfter
+		}
 
 		if profile.FallbackProfileID == nil || strings.TrimSpace(*profile.FallbackProfileID) == "" {
 			if earliestRateLimitRetryAfter > 0 {
 				return nil, ConnectionsRateLimitedError{RetryAfter: earliestRateLimitRetryAfter}
+			}
+			if earliestUnavailableRetryAfter > 0 {
+				return nil, ConnectionsUnavailableError{RetryAfter: earliestUnavailableRetryAfter}
 			}
 			return nil, ErrNoHealthyConnection
 		}
@@ -90,6 +100,9 @@ func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileI
 		if _, seen := visited[nextProfileID]; seen {
 			if earliestRateLimitRetryAfter > 0 {
 				return nil, ConnectionsRateLimitedError{RetryAfter: earliestRateLimitRetryAfter}
+			}
+			if earliestUnavailableRetryAfter > 0 {
+				return nil, ConnectionsUnavailableError{RetryAfter: earliestUnavailableRetryAfter}
 			}
 			return nil, ErrNoHealthyConnection
 		}
@@ -99,6 +112,9 @@ func (r *Router) SelectConnection(ctx context.Context, orgID uuid.UUID, profileI
 
 	if earliestRateLimitRetryAfter > 0 {
 		return nil, ConnectionsRateLimitedError{RetryAfter: earliestRateLimitRetryAfter}
+	}
+	if earliestUnavailableRetryAfter > 0 {
+		return nil, ConnectionsUnavailableError{RetryAfter: earliestUnavailableRetryAfter}
 	}
 	return nil, ErrNoHealthyConnection
 }
@@ -119,10 +135,10 @@ func routedProfileID(profileID, invocationPurpose string) string {
 	}
 }
 
-func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID uuid.UUID) (*repo.ProviderConnection, time.Duration, error) {
+func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID uuid.UUID) (*repo.ProviderConnection, time.Duration, time.Duration, error) {
 	connections, err := r.connections.ListByProvider(ctx, orgID, providerID)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	now := time.Now().UTC()
@@ -131,6 +147,7 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 	var bestUpdatedAt time.Time
 	var bestPriority int
 	var earliestRateLimitedReadyAt time.Time
+	var earliestUnavailableReadyAt time.Time
 	for index, connection := range connections {
 		if !connection.IsEnabled {
 			continue
@@ -143,6 +160,11 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 			}
 		}
 		if state == HealthStateUnavailable {
+			if readyAt, ok := ConnectionRecoveryReadyAt(connection); ok && readyAt.After(now) {
+				if earliestUnavailableReadyAt.IsZero() || readyAt.Before(earliestUnavailableReadyAt) {
+					earliestUnavailableReadyAt = readyAt
+				}
+			}
 			continue
 		}
 		if state == HealthStateRateLimited {
@@ -164,12 +186,15 @@ func (r *Router) selectProviderConnection(ctx context.Context, orgID, providerID
 
 	if bestIndex == -1 {
 		if !earliestRateLimitedReadyAt.IsZero() && earliestRateLimitedReadyAt.After(now) {
-			return nil, earliestRateLimitedReadyAt.Sub(now), nil
+			return nil, earliestRateLimitedReadyAt.Sub(now), 0, nil
 		}
-		return nil, 0, nil
+		if !earliestUnavailableReadyAt.IsZero() && earliestUnavailableReadyAt.After(now) {
+			return nil, 0, earliestUnavailableReadyAt.Sub(now), nil
+		}
+		return nil, 0, 0, nil
 	}
 	selected := connections[bestIndex]
-	return &selected, 0, nil
+	return &selected, 0, 0, nil
 }
 
 func persistedHealthState(connection repo.ProviderConnection) HealthState {

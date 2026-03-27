@@ -1856,6 +1856,110 @@ func TestHandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnNonRateLimitEr
 	}
 }
 
+func TestHandleTurnJobAsyncProjectTaskTransientAvailabilityPreflightDefersBeforePromptAssembly(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	projectID := uuid.New()
+	taskID := uuid.New()
+	base := time.Unix(1700000000, 0).UTC()
+	fixture.engine.now = func() time.Time { return base }
+	fixture.engine.modelRetryBudget = 1
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	if fixture.flowAdvancer.tasks.items == nil {
+		fixture.flowAdvancer.tasks.items = map[uuid.UUID]repo.ProjectTask{}
+	}
+	agentID := fixture.chat.participants[0].ParticipantID
+	fixture.flowAdvancer.tasks.items[taskID] = repo.ProjectTask{
+		ID:              taskID,
+		ProjectID:       projectID,
+		WorkStatus:      "in_progress",
+		AssignedAgentID: &agentID,
+	}
+	fixture.assembler.onAssemble = func(input prompt.AssemblyInput, call int) {
+		t.Fatalf("unexpected prompt assembly call %d for turn %s", call, input.TurnID)
+	}
+	retryAfter := 47 * time.Second
+	fixture.model.probeFn = func(context.Context, ModelRequest) error {
+		return NewTransientModelError(retryAfter, errors.New("all provider connections are temporarily unavailable"))
+	}
+
+	payload, err := json.Marshal(AgentTurnPayload{
+		SessionID: fixture.session.ID,
+		MessageID: fixture.userMessageID,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := fixture.engine.HandleTurnJob(context.Background(), jobqueue.Job{
+		JobType: AgentTurnJobType,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.probeCalls != 1 {
+		t.Fatalf("probe calls = %d, want 1", fixture.model.probeCalls)
+	}
+	if fixture.model.streamCalls != 0 {
+		t.Fatalf("stream calls = %d, want 0", fixture.model.streamCalls)
+	}
+	if got := len(fixture.invocations.creates); got != 0 {
+		t.Fatalf("invocation creates = %d, want 0", got)
+	}
+	if got := len(fixture.chat.turnOrder); got != 0 {
+		t.Fatalf("turn count = %d, want 0", got)
+	}
+	jobs := fixture.enqueuer.agentTurnJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("agent_turn retries = %d, want 1", len(jobs))
+	}
+	if jobs[0].payload == nil || jobs[0].payload.RetryCount != 1 {
+		t.Fatalf("retry payload = %+v, want retry_count=1", jobs[0].payload)
+	}
+	if jobs[0].runAfter == nil {
+		t.Fatal("retry run_after missing")
+	}
+	wantRunAfter := base.Add(retryAfter)
+	if !jobs[0].runAfter.Equal(wantRunAfter) {
+		t.Fatalf("run_after = %s, want %s", *jobs[0].runAfter, wantRunAfter)
+	}
+	if !fixture.messages.containsContent("[Provider temporarily unavailable, retrying in 47s...]") {
+		t.Fatal("missing transient provider retry status message")
+	}
+}
+
+func TestHandleTurnJobAsyncProjectTaskAvailabilityProbeFallsBackOnUnhintedTransientError(t *testing.T) {
+	fixture := newUnitFixture(t, "async")
+	fixture.session.ScopeType = "project"
+	fixture.session.ScopeID = uuid.New()
+	fixture.model.probeFn = func(context.Context, ModelRequest) error {
+		return ErrModelTransient
+	}
+	fixture.model.streamFn = func(context.Context, ModelRequest, func(string) error) (ModelResponse, error) {
+		return ModelResponse{Content: "done"}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(context.Background(), fixture.session.ID, fixture.userMessageID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if fixture.model.probeCalls != 1 {
+		t.Fatalf("probe calls = %d, want 1", fixture.model.probeCalls)
+	}
+	if fixture.assembler.calls != 1 {
+		t.Fatalf("assemble calls = %d, want 1", fixture.assembler.calls)
+	}
+	if fixture.model.streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", fixture.model.streamCalls)
+	}
+	if got := len(fixture.invocations.creates); got != 1 {
+		t.Fatalf("invocation creates = %d, want 1", got)
+	}
+	if got := len(fixture.chat.turnOrder); got != 1 {
+		t.Fatalf("turn count = %d, want 1", got)
+	}
+}
+
 func TestHandleTurnJobRateLimitedUsesBackoffWhenNoRetryHint(t *testing.T) {
 	fixture := newUnitFixture(t, "sync")
 	base := time.Unix(1700000000, 0).UTC()

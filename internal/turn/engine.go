@@ -7267,24 +7267,41 @@ func (e *TurnEngine) handlePreTurnRateLimitedAvailability(
 	if err == nil {
 		return false, true, nil
 	}
-	if !errors.Is(err, ErrRateLimited) {
-		return false, true, nil
+	if errors.Is(err, ErrRateLimited) {
+		retryDelay, enqueued, enqueueErr := e.enqueueRateLimitedTurnRetry(ctx, session, messageID, routedAgentID, retryCount, err)
+		if enqueueErr != nil {
+			return true, true, fmt.Errorf("enqueue rate-limited turn retry: %w", enqueueErr)
+		}
+		if retireErr := e.retireDeferredPendingCurrentTurn(ctx, session, messageID, retryCount, "rate-limit preflight deferred pending turn before start; scheduling retry"); retireErr != nil {
+			return true, true, retireErr
+		}
+		message := fmt.Sprintf("[Rate limited, retrying in %s...]", formatRetryDelay(retryDelay))
+		if !enqueued {
+			message = "[Project paused - retry deferred until resume.]"
+		}
+		if _, appendErr := e.appendSessionSystemMessage(ctx, session.ID, message); appendErr != nil {
+			return true, true, appendErr
+		}
+		return true, true, nil
 	}
-	retryDelay, enqueued, enqueueErr := e.enqueueRateLimitedTurnRetry(ctx, session, messageID, routedAgentID, retryCount, err)
-	if enqueueErr != nil {
-		return true, true, fmt.Errorf("enqueue rate-limited turn retry: %w", enqueueErr)
+	if transientModelRetryAfterHint(err) > 0 {
+		retryDelay, enqueued, enqueueErr := e.enqueueTransientModelTurnRetry(ctx, session, messageID, routedAgentID, retryCount, err)
+		if enqueueErr != nil {
+			return true, true, fmt.Errorf("enqueue transient provider retry: %w", enqueueErr)
+		}
+		if retireErr := e.retireDeferredPendingCurrentTurn(ctx, session, messageID, retryCount, "transient provider preflight deferred pending turn before start; scheduling retry"); retireErr != nil {
+			return true, true, retireErr
+		}
+		message := fmt.Sprintf("[Provider temporarily unavailable, retrying in %s...]", formatRetryDelay(retryDelay))
+		if !enqueued {
+			message = "[Project paused - retry deferred until resume.]"
+		}
+		if _, appendErr := e.appendSessionSystemMessage(ctx, session.ID, message); appendErr != nil {
+			return true, true, appendErr
+		}
+		return true, true, nil
 	}
-	if retireErr := e.retireDeferredPendingCurrentTurn(ctx, session, messageID, retryCount, "rate-limit preflight deferred pending turn before start; scheduling retry"); retireErr != nil {
-		return true, true, retireErr
-	}
-	message := fmt.Sprintf("[Rate limited, retrying in %s...]", formatRetryDelay(retryDelay))
-	if !enqueued {
-		message = "[Project paused - retry deferred until resume.]"
-	}
-	if _, appendErr := e.appendSessionSystemMessage(ctx, session.ID, message); appendErr != nil {
-		return true, true, appendErr
-	}
-	return true, true, nil
+	return false, true, nil
 }
 
 func (e *TurnEngine) retireDeferredPendingCurrentTurn(
@@ -7438,7 +7455,7 @@ func (e *TurnEngine) handleTransientModelTurnFailure(
 		nextPayload.AgentID = &agentID
 	}
 
-	retryDelay := transientInfrastructureRetryDelay(retryCount)
+	retryDelay := transientModelRetryDelay(retryCount, transientModelRetryAfterHint(cause))
 	runAfter := e.now().Add(retryDelay).UTC()
 	enqueued, err := e.enqueueAgentTurnIfActive(ctx, runtime.session, nextPayload, &runAfter)
 	if err != nil {
@@ -22278,7 +22295,7 @@ func (e *TurnEngine) probeMainModelAvailability(
 		Purpose:        "agent_turn",
 		Profile:        profile,
 	})
-	if err == nil || errors.Is(err, ErrRateLimited) {
+	if err == nil || errors.Is(err, ErrRateLimited) || transientModelRetryAfterHint(err) > 0 {
 		return err
 	}
 	e.logger.Debug(
@@ -22327,6 +22344,29 @@ func (e *TurnEngine) enqueueRateLimitedTurnRetry(
 		messageID,
 		retryCount,
 	)
+	runAfter := e.now().Add(retryDelay).UTC()
+	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
+	return retryDelay, enqueued, err
+}
+
+func (e *TurnEngine) enqueueTransientModelTurnRetry(
+	ctx context.Context,
+	session *chat.ChatSession,
+	messageID uuid.UUID,
+	routedAgentID *uuid.UUID,
+	retryCount int,
+	cause error,
+) (time.Duration, bool, error) {
+	nextPayload := AgentTurnPayload{
+		SessionID:  session.ID,
+		MessageID:  messageID,
+		RetryCount: retryCount + 1,
+	}
+	if routedAgentID != nil && *routedAgentID != uuid.Nil {
+		agentID := *routedAgentID
+		nextPayload.AgentID = &agentID
+	}
+	retryDelay := transientModelRetryDelay(retryCount, transientModelRetryAfterHint(cause))
 	runAfter := e.now().Add(retryDelay).UTC()
 	enqueued, err := e.enqueueAgentTurnIfActive(ctx, session, nextPayload, &runAfter)
 	return retryDelay, enqueued, err
@@ -24022,6 +24062,24 @@ func rateLimitRetryAfterHint(err error) time.Duration {
 	return 0
 }
 
+type transientModelRetryAfterProvider interface {
+	TransientModelRetryAfter() time.Duration
+}
+
+func transientModelRetryAfterHint(err error) time.Duration {
+	if err == nil {
+		return 0
+	}
+	var provider transientModelRetryAfterProvider
+	if errors.As(err, &provider) {
+		hint := provider.TransientModelRetryAfter()
+		if hint > 0 {
+			return hint
+		}
+	}
+	return 0
+}
+
 func rateLimitRetryDelay(retryCount int, retryAfterHint time.Duration) time.Duration {
 	if retryAfterHint > 0 {
 		if retryAfterHint > maxRateLimitBackoff {
@@ -24044,6 +24102,16 @@ func rateLimitRetryDelay(retryCount int, retryAfterHint time.Duration) time.Dura
 		return maxRateLimitBackoff
 	}
 	return delay
+}
+
+func transientModelRetryDelay(retryCount int, retryAfterHint time.Duration) time.Duration {
+	if retryAfterHint > 0 {
+		if retryAfterHint > maxTransientInfraBackoff {
+			return maxTransientInfraBackoff
+		}
+		return retryAfterHint
+	}
+	return transientInfrastructureRetryDelay(retryCount)
 }
 
 func jitteredRateLimitRetryDelay(delay time.Duration, sessionID, messageID uuid.UUID, retryCount int) time.Duration {

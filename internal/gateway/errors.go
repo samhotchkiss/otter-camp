@@ -23,6 +23,17 @@ func (e ConnectionsRateLimitedError) Error() string {
 	return "all provider connections are rate limited"
 }
 
+type ConnectionsUnavailableError struct {
+	RetryAfter time.Duration
+}
+
+func (e ConnectionsUnavailableError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("all provider connections are temporarily unavailable (retry_after=%s)", e.RetryAfter)
+	}
+	return "all provider connections are temporarily unavailable"
+}
+
 type ProviderHTTPError struct {
 	StatusCode int
 	RetryAfter time.Duration
