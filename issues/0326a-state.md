@@ -2925,3 +2925,39 @@ So this slice is now:
 - tested
 - deployed
 - live-proven in production on a fresh continuation turn
+
+## Update 23:51 MDT
+
+I cleaned up the last operator-report path-hint artifact that was still making shell churn harder to read.
+
+What changed:
+
+- [`scripts/token-usage-report.sh`](../scripts/token-usage-report.sh)
+  - shell file-build/readback path extraction now strips markdown-style backticks after capture
+- [`cmd/ottercamp/main.go`](../cmd/ottercamp/main.go)
+  - the CLI JSON report now applies the same cleanup without embedding a literal backtick inside the Go raw SQL string
+- [`cmd/ottercamp/main_db_integration_test.go`](../cmd/ottercamp/main_db_integration_test.go)
+  - tightened the JSON assertion so `shell_file_build_readback_churn[0].path_hints` must equal exactly `scripts/demo.sh`
+
+Verification:
+
+- `gofmt -w cmd/ottercamp/main.go cmd/ottercamp/main_db_integration_test.go`
+- `bash -n scripts/token-usage-report.sh`
+- `go test -tags=integration ./cmd/ottercamp -run 'TestDBTokenUsageJSONIncludesCacheReadsAndAttribution$' -count=1`
+
+Live proof:
+
+- shell report:
+  - `scripts/token-usage-report.sh --hours 1 --limit 8`
+  - `Shell File Build / Readback Churn By Turn` now shows clean rows such as:
+    - `scripts/validate-ingestion.sh`
+    - `scripts/pipeline_error_sim.py | scripts/validate-error-handling.sh`
+- CLI JSON report:
+  - `go run ./cmd/ottercamp db token-usage --hours 1 --limit 8 --output json`
+  - `shell_file_build_readback_churn[*].path_hints` now emits those same clean values, with the last stray backtick suffix gone
+
+Why this matters:
+
+- the runtime cutoffs were already using these churn families
+- but the operator surfaces still had one remaining formatting artifact
+- now the shell report and the CLI JSON agree on the exact normalized target paths, which makes the next live canary comparison easier to trust

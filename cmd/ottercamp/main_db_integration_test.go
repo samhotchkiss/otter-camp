@@ -295,4 +295,15 @@ func TestDBTokenUsageJSONIncludesCacheReadsAndAttribution(t *testing.T) {
 	if got, _ := row["attempted_specs"].(string); got != "pyyaml" {
 		t.Fatalf("attempted_specs = %q, want %q", got, "pyyaml")
 	}
+	shellChurnRows, ok := payload["shell_file_build_readback_churn"].([]any)
+	if !ok || len(shellChurnRows) != 1 {
+		t.Fatalf("unexpected shell_file_build_readback_churn payload: %#v", payload["shell_file_build_readback_churn"])
+	}
+	shellRow, ok := shellChurnRows[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected shell_file_build_readback_churn row: %#v", shellChurnRows[0])
+	}
+	if got, _ := shellRow["path_hints"].(string); got != "scripts/demo.sh" {
+		t.Fatalf("path_hints = %q, want %q", got, "scripts/demo.sh")
+	}
 }

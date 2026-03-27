@@ -643,6 +643,10 @@ Implemented so far in this spec:
   - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now extract package-install attempts from assistant `cli_execute` metadata using anchored `pip install` / `python -m pip install` matching
   - the report strips shell suffixes and ignores installer flags while retaining the actual package spec
   - live smoke now shows repeated install churn as `pyyaml` instead of polluted strings such as `pip install pyyaml | pip3 install pyyaml | python3 -c "import pytest`
+- shell file-build/readback diagnostics now normalize extracted target paths consistently across the shell report and the CLI JSON report:
+  - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now strip markdown/backtick noise from extracted `scripts/`, `config/`, and `results/` path hints without embedding raw backticks in the Go SQL string
+  - focused integration coverage now asserts exact `path_hints == "scripts/demo.sh"`
+  - live smoke now shows rows like `scripts/validate-ingestion.sh` instead of suffix-polluted variants such as ``scripts/validate-ingestion.sh` ``
 - late bootstrap recovery reread loops are now classified as recoverable bootstrap validation failures:
   - when a `project` async bootstrap turn ends behind the native reread guard, the completed-turn handler now maps that outcome to a concrete recoverable runtime failure instead of treating it as “no validation failure”
   - recoverable bootstrap continuation prompts now have a dedicated persist-first branch for that failure:

@@ -3030,9 +3030,15 @@ func loadDBTokenUsageReport(ctx context.Context, pool *pgxpool.Pool, windowHours
 				cm.session_id,
 				cm.created_at,
 				lower(COALESCE(call->'arguments'->>'command', '')) AS command,
-				substring(
-					lower(COALESCE(call->'arguments'->>'command', ''))
-					from '(scripts/[^[:space:];|&]+|config/[^[:space:];|&]+|results/[^[:space:];|&]+)'
+				replace(
+					lower(
+						substring(
+							lower(COALESCE(call->'arguments'->>'command', ''))
+							from '(scripts/[^[:space:]''\";|&),]+|config/[^[:space:]''\";|&),]+|results/[^[:space:]''\";|&),]+)'
+						)
+					),
+					chr(96),
+					''
 				) AS path_hint
 			FROM chat_message cm
 			JOIN chat_session cs ON cs.id = cm.session_id
