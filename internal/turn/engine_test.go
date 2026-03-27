@@ -28478,6 +28478,110 @@ func TestBuildTaskReviewActionPromptFallsBackToRecentSessionDeliverableTarget(t 
 	}
 }
 
+func TestReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerified(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnitFixture(t, "async")
+	taskID := uuid.New()
+	executionID := uuid.New()
+	description := "Verify pipeline config loads from file correctly, environment variable overrides apply properly, and invalid configs are rejected with clear errors. Write tests."
+
+	fixture.session.ScopeType = "project_task"
+	fixture.session.ScopeID = taskID
+	fixture.session.Mode = "async"
+	fixture.session.Metadata = mustMarshalJSON(t, map[string]any{"flow_node_execution_id": executionID.String()})
+	fixture.chat.session.ScopeType = fixture.session.ScopeType
+	fixture.chat.session.ScopeID = fixture.session.ScopeID
+	fixture.chat.session.Mode = fixture.session.Mode
+	fixture.chat.session.Metadata = fixture.session.Metadata
+	fixture.engine.tasks = &fakeTaskRepo{
+		items: map[uuid.UUID]repo.ProjectTask{
+			taskID: {
+				ID:          taskID,
+				TaskNumber:  14,
+				Title:       "Validate config loading and environment overrides",
+				Description: &description,
+				WorkStatus:  "review",
+				Metadata: mustRawJSON(t, map[string]any{
+					"preferred_deliverable_path": "config/pipeline-config.yaml",
+				}),
+			},
+		},
+	}
+
+	latestUser, err := fixture.messages.GetByID(context.Background(), fixture.userMessageID)
+	if err != nil {
+		t.Fatalf("GetByID user message: %v", err)
+	}
+	latestUser.Content = fixture.engine.buildTaskReviewActionPrompt(context.Background(), fixture.session)
+	latestUser.Metadata = mustMarshalJSON(t, map[string]any{
+		"source":                 "task_review_action",
+		"synthetic_user_message": true,
+		"flow_node_execution_id": executionID.String(),
+	})
+	fixture.messages.upsert(latestUser)
+
+	turnID := uuid.New()
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "assistant",
+		Status:    "final",
+		Content:   "The config file is present and substantive. The task explicitly requires tests, so I need to verify the delivered test files now.",
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"path":      "config/pipeline-config.yaml",
+				"byte_size": 739,
+				"content":   "pipeline:\n  name: speaker-pipeline\n",
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "tool_result",
+		Status:    "final",
+		Content: string(mustMarshalJSON(t, map[string]any{
+			"tool_name": "file.read",
+			"output": map[string]any{
+				"error": "not_found",
+			},
+		})),
+	})
+	fixture.messages.create(repo.ChatMessage{
+		SessionID: fixture.session.ID,
+		TurnID:    &turnID,
+		Role:      "system",
+		Status:    "final",
+		Content:   "[Repeated identical file.read validation failure in this turn (2/3): not_found. Ending the turn early so the next continuation can take a narrower step.]",
+	})
+
+	taskRecord, err := fixture.engine.tasks.GetByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	retryPrompt, ok, err := fixture.engine.reviewApprovalRetryPrompt(context.Background(), fixture.session, taskRecord, &latestUser, &repo.ChatTurn{ID: turnID})
+	if err != nil {
+		t.Fatalf("reviewApprovalRetryPrompt: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected reject-oriented retry prompt")
+	}
+	if !strings.Contains(retryPrompt, "decision=reject") {
+		t.Fatalf("retryPrompt = %q, want reject guidance", retryPrompt)
+	}
+	if !strings.Contains(retryPrompt, "required test coverage or related test artifacts could not be verified") {
+		t.Fatalf("retryPrompt = %q, want missing test verification guidance", retryPrompt)
+	}
+}
+
 func TestFlowNodeExecutionIDFromSessionMetadata(t *testing.T) {
 	t.Parallel()
 

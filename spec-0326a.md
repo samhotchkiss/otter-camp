@@ -686,6 +686,19 @@ Implemented so far in this spec:
     - the new repeated `file.read -> not_found` review cap
     - the preexisting repeated empty-output review cap
     - the generic repeated-retries review block path
+- review retry prompts now convert one concrete missing-tests family directly into rejection instead of more inspection:
+  - when a review task explicitly requires tests
+  - and the latest review turn already proved the primary deliverable is readable
+  - but the same turn then failed to verify test artifacts via:
+    - `file.read -> not_found`
+    - `file.list -> not_found`
+    - `recovery_target_focus_required` while probing test paths
+    - or the existing repeated-read/discovery blocker messages for that same family
+  - the next `task_review_action` retry prompt now says to stop searching and call `flow.review_decision reject` immediately using the missing or inaccessible test artifacts as evidence
+  - this is intentionally prompt-only:
+    - it does not broaden runtime blocking
+    - it does not change non-test reviews
+    - it only activates after the primary deliverable was already shown to be substantive
 - operator package-install churn diagnostics now normalize install specs instead of smearing whole shell commands:
   - both `scripts/token-usage-report.sh` and `ottercamp db token-usage` now extract package-install attempts from assistant `cli_execute` metadata using anchored `pip install` / `python -m pip install` matching
   - the report strips shell suffixes and ignores installer flags while retaining the actual package spec

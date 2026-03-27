@@ -3062,6 +3062,71 @@ Deploy status:
 - tests green
 - runtime restart still pending at the time of this note
 
+## Update 01:02 MDT
+
+I tightened one narrower review seam instead of adding another generic cap.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `reviewApprovalRetryPrompt(...)` no longer probes task worktree cleanliness unless the retry is actually on the dirty-workspace approval path
+  - that keeps the ordinary review-retry path from doing unnecessary repo/worktree setup before deciding whether a better retry prompt is available
+  - review retry prompts now detect a specific missing-tests family:
+    - the task title/description explicitly requires tests
+    - the latest completed review turn already proved the preferred deliverable is readable and substantive
+    - the same turn then failed to verify tests via:
+      - `file.read -> not_found`
+      - `file.list -> not_found`
+      - `recovery_target_focus_required` while probing test paths
+      - or the existing repeated side-artifact blocker messages for that family
+  - when that pattern is present, the next review retry prompt now says:
+    - stop searching
+    - call `flow.review_decision reject`
+    - use the missing or inaccessible required test artifacts as evidence
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage for the new prompt branch:
+    - `TestReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerified`
+  - reran the adjacent repeated-review blocker slice to ensure the new prompt logic does not regress the current caps
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(ReviewApprovalRetryPromptRejectsWhenRequiredTestsCannotBeVerified|HandleTurnCompletedEventBlocksRepeatedReviewFileReadNotFoundTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedEmptyReviewTurnsAcrossSession|HandleTurnCompletedEventBlocksRepeatedRetriesWithoutReviewDecision)$' -count=1`
+
+Why this slice exists:
+
+- the next hot review session after the earlier `file.read -> not_found` cap was `306cc2b2-de58-46ad-b3ae-bca729d1c131`
+- that task explicitly required tests
+- the review model could read the primary config deliverable successfully
+- but then drifted through missing/inaccessible test paths and recovery-focus blockers instead of turning that evidence into `flow.review_decision reject`
+- this change keeps the review lane evidence-based, but shortens that specific retry path:
+  - the model does not need more file discovery once it already knows the required tests are missing or unverifiable
+
+Deploy status:
+
+- code complete
+- focused tests green
+- runtime rebuilt/restarted on the latest binary
+- `./bin/ottercamp health --output json` returned `status=ok`
+
+Live proof:
+
+- fresh review session `d77dafe1-5ab5-47e7-98a4-0197ea5bdb9d` for task `14` (`Validate config loading and environment overrides`) received the new retry prompt at message `956c40e9-7e4d-424c-9f29-9c332fe134f0`
+- that prompt includes the new reject-with-evidence wording verbatim:
+  - the preferred deliverable is already present and substantive
+  - the task explicitly requires tests
+  - the required test coverage or related test artifacts could not be verified
+  - stop searching and call `flow.review_decision reject`
+- the follow-on review turn in that exact session was superseded by session turnover before it could settle
+- but the task-14 lane then advanced immediately into fresh session `4e2277bb-09aa-4267-a12e-cdd92fe6587c`, where the runtime-visible commit history already includes:
+  - `flow(review:review#43): reject`
+  - commit `17223cd142debf7e9489d714d08c731b95237e61`
+
+What this means:
+
+- the new branch is not just unit-tested; it is live and issuing the intended review retry guidance on the real hot task-14 lane
+- the live sequence also shows that task `14` moved through a real review rejection immediately after that retry generation instead of remaining stuck in the older test-artifact search loop
+
 ## Update 00:33 MDT
 
 I closed the remaining uncertainty on the task-worktree fix and turned it into an operator-visible report.

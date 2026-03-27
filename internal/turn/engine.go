@@ -1601,7 +1601,7 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 				"\nYour last review turn returned empty assistant output." +
 				" Do not reply with blank text, acknowledgement, or a review plan." +
 				" Your next assistant action must either emit the concrete flow.review_decision tool call for this review step or provide one short blocker sentence explaining why bounded review could not complete."
-			if resolvedPrompt, ok, promptErr := e.reviewApprovalRetryPrompt(ctx, session, taskRecord, latestUser); promptErr != nil {
+			if resolvedPrompt, ok, promptErr := e.reviewApprovalRetryPrompt(ctx, session, taskRecord, latestUser, latestCompleted); promptErr != nil {
 				return true, promptErr
 			} else if ok {
 				retryPrompt = resolvedPrompt
@@ -1659,7 +1659,7 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 		} else if taskReviewActionMessage(*latestUser) {
 			retryMetadata = e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, session, "task_review_action", latestUser.Metadata)
 		}
-		if resolvedPrompt, ok, promptErr := e.reviewApprovalRetryPrompt(ctx, session, taskRecord, latestUser); promptErr != nil {
+		if resolvedPrompt, ok, promptErr := e.reviewApprovalRetryPrompt(ctx, session, taskRecord, latestUser, latestCompleted); promptErr != nil {
 			return true, promptErr
 		} else if ok {
 			retryContent = resolvedPrompt
@@ -1696,7 +1696,7 @@ func (e *TurnEngine) handleCompletedReviewTurnWithoutDecision(
 	return enqueued, nil
 }
 
-func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask, latestUser *repo.ChatMessage) (string, bool, error) {
+func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *chat.ChatSession, taskRecord repo.ProjectTask, latestUser *repo.ChatMessage, latestCompleted *repo.ChatTurn) (string, bool, error) {
 	if e == nil || e.messages == nil || latestUser == nil {
 		return "", false, nil
 	}
@@ -1704,16 +1704,19 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 	if executionID == uuid.Nil {
 		return "", false, nil
 	}
-	clean, err := e.reviewApprovalWorkspaceClean(ctx, taskRecord)
-	if err != nil {
-		return "", false, err
-	}
 	messages, err := e.messages.ListBySession(ctx, session.ID)
 	if err != nil {
 		return "", false, err
 	}
 	if !latestReviewApprovalAttemptBlockedOnDirtyWorkspace(messages, executionID) {
+		if retryPrompt, ok := reviewRetryPromptForMissingRequiredTests(messages, latestCompleted, taskRecord, executionID, e.buildTaskReviewActionPrompt(ctx, session)); ok {
+			return retryPrompt, true, nil
+		}
 		return "", false, nil
+	}
+	clean, err := e.reviewApprovalWorkspaceClean(ctx, taskRecord)
+	if err != nil {
+		return "", false, err
 	}
 	basePrompt := e.buildTaskReviewActionPrompt(ctx, session)
 	if !clean {
@@ -1730,6 +1733,92 @@ func (e *TurnEngine) reviewApprovalRetryPrompt(ctx context.Context, session *cha
 		" Reissue flow.review_decision immediately with decision=approve and flow_node_execution_id " + executionID.String() + "." +
 		" Do not reply with explanation text, a review plan, or placeholder arguments."
 	return retryPrompt, true, nil
+}
+
+func reviewRetryPromptForMissingRequiredTests(messages []repo.ChatMessage, latestCompleted *repo.ChatTurn, taskRecord repo.ProjectTask, executionID uuid.UUID, basePrompt string) (string, bool) {
+	if latestCompleted == nil || latestCompleted.ID == uuid.Nil || executionID == uuid.Nil {
+		return "", false
+	}
+	if !taskReviewRequiresTests(taskRecord) {
+		return "", false
+	}
+	turnMessages := messagesForTurn(messages, latestCompleted.ID)
+	if len(turnMessages) == 0 {
+		return "", false
+	}
+	mentionedTests := false
+	primaryDeliverableReadable := false
+	missingRequiredTests := false
+	recoveryFocusedOnTests := false
+	for _, message := range turnMessages {
+		role := strings.ToLower(strings.TrimSpace(message.Role))
+		switch role {
+		case "assistant":
+			if textMentionsTests(message.Content) {
+				mentionedTests = true
+			}
+		case "tool_result":
+			toolName, output, errText, ok := parseToolResultMessage(message.Content)
+			if !ok {
+				continue
+			}
+			errorCode := normalizeValidationFailureCode(errText)
+			if errorCode == "" {
+				errorCode = normalizeValidationFailureCode(anyString(output["error"]))
+			}
+			normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+			if normalizedToolName == "file.read" && errorCode == "" && intValue(output["byte_size"]) > 0 {
+				primaryDeliverableReadable = true
+			}
+			if (normalizedToolName == "file.read" || normalizedToolName == "file.list") && errorCode == "not_found" {
+				missingRequiredTests = true
+			}
+			if errorCode == "recovery_target_focus_required" && textMentionsTests(anyString(output["path"])) {
+				recoveryFocusedOnTests = true
+				mentionedTests = true
+			}
+		case "system":
+			if strings.Contains(message.Content, reviewRepeatedFileReadNotFoundTurnStopSubstring) {
+				missingRequiredTests = true
+			}
+			if strings.Contains(message.Content, "Repeated identical file.list validation failure in this turn (2/3): recovery_target_focus_required") {
+				recoveryFocusedOnTests = true
+			}
+			if strings.Contains(message.Content, "Review retry required after repeated same-turn read-only discovery churn") {
+				recoveryFocusedOnTests = true
+			}
+		}
+	}
+	if !(mentionedTests && primaryDeliverableReadable && (missingRequiredTests || recoveryFocusedOnTests)) {
+		return "", false
+	}
+	retryPrompt := basePrompt +
+		"\nYour last review attempt already established that the preferred deliverable is present and substantive." +
+		" This task explicitly requires tests or test verification, and the follow-on review attempt could not verify those test artifacts from the current workspace state." +
+		" Stop searching for more files now." +
+		" Call flow.review_decision immediately with decision=reject, flow_node_execution_id " + executionID.String() + ", and concise findings that the required test coverage or related test artifacts could not be verified from the delivered workspace." +
+		" Use the missing or inaccessible test artifacts as evidence." +
+		" Do not reply with explanation text, a review plan, or placeholder arguments."
+	return retryPrompt, true
+}
+
+func taskReviewRequiresTests(taskRecord repo.ProjectTask) bool {
+	description := ""
+	if taskRecord.Description != nil {
+		description = strings.TrimSpace(*taskRecord.Description)
+	}
+	return textMentionsTests(strings.TrimSpace(taskRecord.Title)) || textMentionsTests(description)
+}
+
+func textMentionsTests(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	return containsAny(lower,
+		"write tests",
+		"test coverage",
+		"tests",
+		"test file",
+		"pytest",
+	)
 }
 
 func (e *TurnEngine) blockReviewTurnWithoutDecision(
@@ -12895,7 +12984,7 @@ func (e *TurnEngine) maybeRewriteDirtyWorkspaceReviewApprovalToolCalls(ctx conte
 	if err != nil {
 		return toolCalls, false, nil
 	}
-	retryPrompt, ok, err := e.reviewApprovalRetryPrompt(ctx, rt.session, taskRecord, &latestUser)
+	retryPrompt, ok, err := e.reviewApprovalRetryPrompt(ctx, rt.session, taskRecord, &latestUser, rt.turn)
 	if err != nil || !ok || !strings.Contains(retryPrompt, "workspace is still dirty") {
 		return toolCalls, false, err
 	}
