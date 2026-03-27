@@ -3120,6 +3120,40 @@ Live state right after deploy:
   - then Anthropic failed transiently before the assistant could emit the new `flow.review_decision reject`
 - so this slice is deployed and healthy, but its live behavioral proof is still pending a non-interrupted post-`not_found` review turn
 
+## Update 06:06 MDT
+
+I tightened the transient-provider retry path so review evidence is not discarded when Anthropic fails after the turn already learned something deterministic.
+
+What changed:
+
+- [`internal/turn/engine.go`](../internal/turn/engine.go)
+  - `handleTransientModelTurnFailure(...)` now asks for a stronger retry message before requeueing the next async `project_task` turn
+  - for review / recovery-resume turns, it reuses `reviewApprovalRetryPrompt(...)`
+  - when the failed turn already established a deterministic reject case, the next queued retry uses a synthesized review prompt instead of the stale original prompt
+  - the current bounded case is the one we just hardened:
+    - missing preferred deliverable target
+- [`internal/turn/engine_test.go`](../internal/turn/engine_test.go)
+  - added focused coverage proving a transiently failed review turn with `file.read -> not_found` queues a new reject-oriented user message rather than the original review prompt
+
+Verification:
+
+- `gofmt -w internal/turn/engine.go internal/turn/engine_test.go`
+- `go test ./internal/turn -run 'Test(HandleTurnJobAsyncProjectTaskTransientProviderEnqueuesRetryWithoutSameTurnRetry|HandleTransientModelTurnFailureUsesReviewRetryPromptFromFailedTurn|ReviewApprovalRetryPromptRejectsMissingPreferredDeliverable|BuildTaskReviewActionPromptIncludesPreferredDeliverableTarget)$' -count=1`
+- `go build -o ./bin/ottercamp ./cmd/ottercamp`
+- rebuilt/restarted tmux `codex-e2e-20260324`
+- `./bin/ottercamp health --output json`
+
+Why this matters:
+
+- the dominant live failure family is still `provider_transient_failure`
+- before this slice, a transient provider failure after a decisive review `tool_result` meant the next retry started from the original broad review prompt again
+- after this slice, the next retry can carry forward the already-earned reject evidence and avoid re-reading the same missing target
+
+Live status:
+
+- deployed and healthy on the new binary
+- fresh live proof is still pending the next real transiently interrupted review turn on this runtime
+
 ## Update 05:40 MDT
 
 The orchestration-parent review prompt fix is now live-proven, and the next concrete leak is narrower.

@@ -7559,9 +7559,14 @@ func (e *TurnEngine) handleTransientModelTurnFailure(
 		return true, nil
 	}
 
+	nextMessageID, replacementCreated, err := e.transientTurnRetryMessageID(ctx, runtime.session, runtime.turn, messageID)
+	if err != nil {
+		return false, fmt.Errorf("build transient retry message: %w", err)
+	}
+
 	nextPayload := AgentTurnPayload{
 		SessionID:  runtime.session.ID,
-		MessageID:  messageID,
+		MessageID:  nextMessageID,
 		RetryCount: retryCount + 1,
 	}
 	if routedAgentID != nil && *routedAgentID != uuid.Nil {
@@ -7582,7 +7587,62 @@ func (e *TurnEngine) handleTransientModelTurnFailure(
 		message = "[Project paused - retry deferred until resume.]"
 	}
 	_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, message)
+	if replacementCreated {
+		_, _ = e.appendSystemMessage(ctx, runtime.turn.ID, runtime.session.ID, "[Transient retry narrowed the next review prompt using evidence gathered before the provider failure.]")
+	}
 	return true, nil
+}
+
+func (e *TurnEngine) transientTurnRetryMessageID(
+	ctx context.Context,
+	session *chat.ChatSession,
+	failedTurn *repo.ChatTurn,
+	messageID uuid.UUID,
+) (uuid.UUID, bool, error) {
+	if e == nil || e.messages == nil || e.chat == nil || e.tasks == nil || session == nil || failedTurn == nil || messageID == uuid.Nil {
+		return messageID, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.ScopeType), "project_task") {
+		return messageID, false, nil
+	}
+	latestUser, err := e.messages.GetByID(ctx, messageID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return messageID, false, nil
+		}
+		return messageID, false, err
+	}
+	if !taskReviewActionMessage(latestUser) && !isRecoveryResumeMessage(latestUser) {
+		return messageID, false, nil
+	}
+	taskRecord, err := e.tasks.GetByID(ctx, session.ScopeID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return messageID, false, nil
+		}
+		return messageID, false, err
+	}
+	retryContent, ok, err := e.reviewApprovalRetryPrompt(ctx, session, taskRecord, &latestUser, failedTurn)
+	if err != nil {
+		return messageID, false, err
+	}
+	if !ok || strings.TrimSpace(retryContent) == "" || strings.TrimSpace(retryContent) == strings.TrimSpace(latestUser.Content) {
+		return messageID, false, nil
+	}
+	retryMessage, err := e.chat.AppendMessage(ctx, chat.AppendMessageInput{
+		SessionID: session.ID,
+		TurnID:    &failedTurn.ID,
+		Role:      "user",
+		Content:   retryContent,
+		Metadata:  e.syntheticContinuationActionMessageMetadataWithCarryForward(ctx, session, "task_review_action", latestUser.Metadata),
+	})
+	if err != nil {
+		return messageID, false, err
+	}
+	if retryMessage == nil || retryMessage.ID == uuid.Nil {
+		return messageID, false, nil
+	}
+	return retryMessage.ID, true, nil
 }
 
 func (e *TurnEngine) consecutiveTransientModelFailuresForMessage(ctx context.Context, sessionID, messageID, excludeTurnID uuid.UUID) (int, error) {

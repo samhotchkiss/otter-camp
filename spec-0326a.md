@@ -967,3 +967,13 @@ The idea of a manager-specialist or planner-specialist runtime is worth explorin
       - it read the preferred target
       - received `file.read -> not_found`
       - then hit a transient provider failure before the assistant could emit `flow.review_decision reject`
+  - transient provider retries now preserve review evidence instead of restarting from the stale original prompt:
+    - async `project_task` review turns now reuse `reviewApprovalRetryPrompt(...)` inside the transient model retry path
+    - if a transiently failed review turn already established a deterministic reject case like a missing preferred deliverable, the queued retry now points at a synthesized reject-oriented review prompt instead of the original review prompt
+    - this is intentionally narrow:
+      - async `project_task` only
+      - review/recovery-resume messages only
+      - only when the existing review retry logic already has a stronger prompt to carry forward
+    - focused turn-engine coverage now proves transient retries enqueue the synthesized reject prompt after `file.read -> not_found` on the preferred deliverable
+    - runtime was rebuilt/restarted successfully at `2026-03-27 06:06 MDT`
+    - fresh live proof is pending the next real transiently interrupted review turn on the new binary
