@@ -2328,6 +2328,103 @@ func TestTurnEngineIntegrationNonRecoveryEmptyCLIExecuteStopsEarlyAfterCorrectio
 	}
 }
 
+func TestTurnEngineIntegrationNonRecoveryFileEditWithoutNewStringStopsEarlyAfterCorrectionEX324(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := context.Background()
+
+	project := mustCreateProject(t, ctx, fixture.pool, fixture.org.ID, fixture.user.ID)
+	mustAssignProjectPM(t, ctx, fixture.pool, project.ID, fixture.agent.ID, fixture.user.ID)
+	taskRecord := mustCreateTask(t, ctx, fixture.pool, fixture.org.ID, project.ID, fixture.user.ID, fixture.agent.ID)
+	taskSession, userMessage := mustCreateTaskSession(t, ctx, fixture, taskRecord, "replace the template content")
+
+	fixture.engine.toolResolver = &fakeToolResolver{tools: []tools.ToolDescriptor{{Name: "file.edit", Tier: "tier2"}}}
+
+	modelCalls := 0
+	fixture.model.streamFn = func(_ context.Context, _ ModelRequest, _ func(token string) error) (ModelResponse, error) {
+		modelCalls++
+		return ModelResponse{
+			Content: "I'll use file_edit.",
+			ToolCalls: []ModelToolCall{{
+				ID:   fmt.Sprintf("bad-edit-%d", modelCalls),
+				Name: "file_edit",
+				Tier: "tier2",
+				Arguments: map[string]any{
+					"_raw": `{"path":"templates/layout-07-split-screen.html","old_string":"placeholder"}`,
+				},
+			}},
+		}, nil
+	}
+
+	dispatched := 0
+	fixture.dispatcher.tier2Fn = func(_ context.Context, call ToolCall, onRunStarted func(runID uuid.UUID)) (ToolResult, error) {
+		runID := uuid.New()
+		onRunStarted(runID)
+		dispatched++
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Output:     map[string]any{"error": "unexpected_dispatch"},
+			RunID:      &runID,
+		}, nil
+	}
+
+	if err := fixture.engine.HandleUserMessage(ctx, taskSession.ID, userMessage.ID); err != nil {
+		t.Fatalf("HandleUserMessage: %v", err)
+	}
+
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2 before same-turn stop", modelCalls)
+	}
+	if dispatched != 0 {
+		t.Fatalf("tier2 dispatches = %d, want 0 for bounded malformed file.edit retry", dispatched)
+	}
+
+	updatedTask, err := repo.NewProjectTaskRepo(fixture.pool).GetByID(ctx, taskRecord.ID)
+	if err != nil {
+		t.Fatalf("GetByID task: %v", err)
+	}
+	if updatedTask.WorkStatus == "blocked" {
+		t.Fatalf("task work_status = %q, want not blocked", updatedTask.WorkStatus)
+	}
+	guard, ok := parseTaskValidationGuard(updatedTask.Metadata)
+	if !ok {
+		t.Fatal("expected validation guard metadata")
+	}
+	if guard.Blocked {
+		t.Fatal("expected unblocked validation guard")
+	}
+	if guard.Count != validationLoopTurnStopThreshold {
+		t.Fatalf("guard count = %d, want %d", guard.Count, validationLoopTurnStopThreshold)
+	}
+	if guard.ToolName != "file.edit" {
+		t.Fatalf("guard tool_name = %q, want file.edit", guard.ToolName)
+	}
+	if guard.FailureCode != "new_string_required" {
+		t.Fatalf("guard failure_code = %q, want new_string_required", guard.FailureCode)
+	}
+
+	messages, err := repo.NewChatMessageRepo(fixture.pool).ListBySession(ctx, taskSession.ID)
+	if err != nil {
+		t.Fatalf("ListBySession messages: %v", err)
+	}
+	var correctionMessages int
+	var turnStopMessages int
+	for _, item := range messages {
+		if item.Role == "system" && strings.Contains(item.Content, "file.edit for `templates/layout-07-split-screen.html` was emitted without `new_string`") {
+			correctionMessages++
+		}
+		if item.Role == "system" && strings.Contains(item.Content, "Repeated identical file.edit validation failure in this turn") {
+			turnStopMessages++
+		}
+	}
+	if correctionMessages != 1 {
+		t.Fatalf("task correction messages = %d, want 1", correctionMessages)
+	}
+	if turnStopMessages != 1 {
+		t.Fatalf("same-turn stop system messages = %d, want 1", turnStopMessages)
+	}
+}
+
 func TestTurnEngineIntegrationRecoveryTurnGuidesDraftThenWritesDocumentEX312(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()

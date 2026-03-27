@@ -12337,6 +12337,16 @@ func (e *TurnEngine) dispatchTools(ctx context.Context, rt *turnRuntime, calls [
 			}
 			return false, nil
 		}
+		handled, stop, err = e.handleTaskMalformedFileEditWithoutNewString(ctx, rt, &call)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			if stop {
+				return true, nil
+			}
+			return false, nil
+		}
 		handled, stop, err = e.handleTaskRejectedFileWriteContent(ctx, rt, &call)
 		if err != nil {
 			return false, err
@@ -13542,7 +13552,7 @@ func (e *TurnEngine) handleRecoveryMalformedFileEditWithoutPath(ctx context.Cont
 	if rt == nil || call == nil || !rt.recoveryTurn || rt.turn == nil || rt.session == nil {
 		return false, false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.edit") {
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.edit") && !strings.EqualFold(strings.TrimSpace(call.Name), "file_edit") {
 		return false, false, nil
 	}
 
@@ -13688,6 +13698,14 @@ func buildTaskFileWriteRetryMessage(targetPath string) string {
 
 func buildTaskCLIExecuteWithoutCommandRetryMessage() string {
 	return "[Task execution correction: cli.execute was emitted without `command`. Before retrying shell mutation tools, provide one concrete non-empty `cli.execute.command` string or use `file.write` with both `path` and `content` populated. Do not rely on a stale prior target path when the current assistant step has not emitted a substantive draft for that file.]"
+}
+
+func buildTaskFileEditWithoutNewStringRetryMessage(targetPath string) string {
+	path := strings.TrimSpace(targetPath)
+	if path == "" {
+		path = "<target file>"
+	}
+	return fmt.Sprintf("[Task execution correction: file.edit for `%s` was emitted without `new_string`. For whole-file replacement, resend the full file body with `file.write` using both `path` and `content`, or provide both `old_string` and `new_string` in `file.edit`.]", path)
 }
 
 func normalizeTurnWorkspacePath(value string) string {
@@ -13862,7 +13880,7 @@ func (e *TurnEngine) handleTaskMalformedFileEditWithoutPath(ctx context.Context,
 	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
 		return false, false, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.edit") {
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.edit") && !strings.EqualFold(strings.TrimSpace(call.Name), "file_edit") {
 		return false, false, nil
 	}
 
@@ -13892,6 +13910,64 @@ func (e *TurnEngine) handleTaskMalformedFileEditWithoutPath(ctx context.Context,
 		"path", targetPath,
 	)
 	return false, false, nil
+}
+
+func (e *TurnEngine) handleTaskMalformedFileEditWithoutNewString(ctx context.Context, rt *turnRuntime, call *ToolCall) (bool, bool, error) {
+	if rt == nil || call == nil || rt.turn == nil || rt.session == nil || rt.recoveryTurn {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(rt.session.ScopeType), "project_task") {
+		return false, false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(call.Name), "file.edit") && !strings.EqualFold(strings.TrimSpace(call.Name), "file_edit") {
+		return false, false, nil
+	}
+
+	normalized := toolargs.Normalize("file.edit", call.Arguments)
+	targetPath := strings.TrimSpace(stringValue(normalized["path"]))
+	oldString := strings.TrimSpace(stringValue(normalized["old_string"]))
+	newString := strings.TrimSpace(stringValue(normalized["new_string"]))
+	if targetPath == "" || oldString == "" || newString != "" {
+		return false, false, nil
+	}
+
+	if draft, ok := e.taskContinuationHighConfidenceDraftContent(ctx, rt, targetPath); ok && strings.TrimSpace(draft) != "" {
+		call.Name = "file.write"
+		call.Arguments = mergeRewrittenFileWriteArguments(call.Arguments, map[string]any{
+			"path":        targetPath,
+			"content":     draft,
+			"create_dirs": true,
+		})
+		e.logger.Info("task continuation: rewrote file.edit missing new_string to file.write",
+			"session_id", rt.session.ID,
+			"turn_id", rt.turn.ID,
+			"path", targetPath,
+		)
+		return false, false, nil
+	}
+
+	blocked, err := e.handleToolValidationResults(ctx, rt, []ToolCall{*call}, []ToolResult{{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Error:      "new_string_required",
+		Output: map[string]any{
+			"deliverable_path": targetPath,
+		},
+	}})
+	if err != nil {
+		return true, false, err
+	}
+	if blocked {
+		return true, true, nil
+	}
+	if rt.taskFileFixes >= taskFileWriteRepairBudget {
+		return false, false, nil
+	}
+	rt.taskFileFixes++
+	if _, err := e.appendSystemMessage(ctx, rt.turn.ID, rt.session.ID, buildTaskFileEditWithoutNewStringRetryMessage(targetPath)); err != nil {
+		return true, false, err
+	}
+	return true, false, nil
 }
 
 func (e *TurnEngine) taskContinuationDraftContent(ctx context.Context, rt *turnRuntime, targetPath string) (string, bool) {
@@ -20786,6 +20862,9 @@ func classifyToolValidationFailure(call ToolCall, result ToolResult) (toolValida
 	normalizedErrorCode := normalizeValidationFailureCode(rawErrorCode)
 
 	if hasRawToolArguments(call) {
+		if rawErrorCode == "" {
+			return toolValidationFailure{}, false
+		}
 		reason := "malformed _raw arguments"
 		if code := rawErrorCode; code != "" {
 			reason = fmt.Sprintf("malformed _raw arguments (%s)", code)

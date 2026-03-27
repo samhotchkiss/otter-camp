@@ -16,6 +16,9 @@ var (
 	fileWriteEncodingPattern   = regexp.MustCompile(`(?s)"encoding"\s*:\s*"((?:\\.|[^"\\])*)"`)
 	fileWriteCreateDirsPattern = regexp.MustCompile(`(?s)"create_dirs"\s*:\s*(true|false)`)
 	fileWriteLooseKeys         = []string{"path", "content", "contents", "body", "text", "encoding", "create_dirs"}
+	fileEditOldStringPattern   = regexp.MustCompile(`(?s)"old_string"\s*:\s*"((?:\\.|[^"\\])*)"`)
+	fileEditNewStringPattern   = regexp.MustCompile(`(?s)"new_string"\s*:\s*"((?:\\.|[^"\\])*)"`)
+	fileEditLooseKeys          = []string{"path", "old_string", "new_string", "replacement"}
 )
 
 // Normalize returns a shallow copy of input with tool-specific argument recovery applied.
@@ -24,6 +27,8 @@ func Normalize(toolName string, input map[string]any) map[string]any {
 	switch canonicalToolName(toolName) {
 	case "file.write":
 		return normalizeFileWriteInput(cloned)
+	case "file.edit":
+		return normalizeFileEditInput(cloned)
 	case "cli.execute":
 		return normalizeCLIExecuteInput(cloned)
 	default:
@@ -83,6 +88,43 @@ func normalizeFileWriteInput(input map[string]any) map[string]any {
 	if _, exists := input["create_dirs"]; !exists {
 		if recovered, ok := recoverJSONBoolField(raw, fileWriteCreateDirsPattern); ok {
 			input["create_dirs"] = recovered
+		}
+	}
+	delete(input, "_raw")
+	return input
+}
+
+func normalizeFileEditInput(input map[string]any) map[string]any {
+	raw, ok := rawArgumentString(input)
+	if !ok {
+		return input
+	}
+
+	if decoded, ok := decodeJSONObject(raw); ok {
+		mergeRecoveredFileEditFields(input, decoded)
+		delete(input, "_raw")
+		return input
+	}
+
+	if shouldRecoverString(input, "path") {
+		if recovered, ok := recoverJSONStringField(raw, fileWritePathPattern); ok {
+			input["path"] = recovered
+		}
+	}
+	if shouldRecoverString(input, "old_string") {
+		if recovered, ok := recoverLenientJSONLikeStringFieldWithKeys(raw, "old_string", fileEditLooseKeys); ok {
+			input["old_string"] = recovered
+		} else if recovered, ok := recoverJSONStringField(raw, fileEditOldStringPattern); ok {
+			input["old_string"] = recovered
+		}
+	}
+	if shouldRecoverString(input, "new_string") {
+		if recovered, ok := recoverLenientJSONLikeStringFieldWithKeys(raw, "new_string", fileEditLooseKeys); ok {
+			input["new_string"] = recovered
+		} else if recovered, ok := recoverLenientJSONLikeStringFieldWithKeys(raw, "replacement", fileEditLooseKeys); ok {
+			input["new_string"] = recovered
+		} else if recovered, ok := recoverJSONStringField(raw, fileEditNewStringPattern); ok {
+			input["new_string"] = recovered
 		}
 	}
 	delete(input, "_raw")
@@ -259,6 +301,27 @@ func mergeRecoveredFields(target, recovered map[string]any) {
 	if shouldRecoverString(target, "content") {
 		if recoveredValue, ok := lookupRecoveredField(recovered, "content", "contents", "body", "text"); ok {
 			target["content"] = recoveredValue
+		}
+	}
+}
+
+func mergeRecoveredFileEditFields(target, recovered map[string]any) {
+	if target == nil || recovered == nil {
+		return
+	}
+	if shouldRecoverString(target, "path") {
+		if recoveredValue, ok := lookupRecoveredField(recovered, "path"); ok {
+			target["path"] = recoveredValue
+		}
+	}
+	if shouldRecoverString(target, "old_string") {
+		if recoveredValue, ok := lookupRecoveredField(recovered, "old_string"); ok {
+			target["old_string"] = recoveredValue
+		}
+	}
+	if shouldRecoverString(target, "new_string") {
+		if recoveredValue, ok := lookupRecoveredField(recovered, "new_string", "replacement"); ok {
+			target["new_string"] = recoveredValue
 		}
 	}
 }

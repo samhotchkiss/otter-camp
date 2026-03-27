@@ -59,6 +59,22 @@ func TestNormalizeFileWriteRecoversMalformedContentWithEmbeddedQuotes(t *testing
 	}
 }
 
+func TestNormalizeFileEditRecoversMalformedRawArguments(t *testing.T) {
+	normalized := Normalize("file.edit", map[string]any{
+		"_raw": `{"path":"templates/layout-07-split-screen.html","old_string":"placeholder"`,
+	})
+
+	if got := normalized["path"]; got != "templates/layout-07-split-screen.html" {
+		t.Fatalf("path = %v, want templates/layout-07-split-screen.html", got)
+	}
+	if got := normalized["old_string"]; got != "placeholder" {
+		t.Fatalf("old_string = %v, want placeholder", got)
+	}
+	if _, exists := normalized["_raw"]; exists {
+		t.Fatal("expected _raw to be removed after normalization")
+	}
+}
+
 func TestNormalizeFileWriteRecoversContentAliasFromDecodedJSON(t *testing.T) {
 	normalized := Normalize("file.write", map[string]any{
 		"_raw": `{"path":"docs/manifest.md","body":"# Manifest\n","create_dirs":true}`,

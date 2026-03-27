@@ -18142,6 +18142,29 @@ func TestClassifyToolValidationFailureRecognizesNonSubstantiveContent(t *testing
 	}
 }
 
+func TestClassifyToolValidationFailureIgnoresSuccessfulRecoveredRawArguments(t *testing.T) {
+	t.Parallel()
+
+	failure, ok := classifyToolValidationFailure(ToolCall{
+		ID:   "write-1",
+		Name: "file.write",
+		Arguments: map[string]any{
+			"_raw": `{"path":"templates/layout-07-split-screen.html","content":"<html><body>ok</body></html>"}`,
+		},
+	}, ToolResult{
+		ToolCallID: "write-1",
+		Name:       "file.write",
+		Output: map[string]any{
+			"path":      "templates/layout-07-split-screen.html",
+			"byte_size": 28,
+			"created":   false,
+		},
+	})
+	if ok {
+		t.Fatalf("unexpected validation failure: %+v", failure)
+	}
+}
+
 func TestHandleUserMessageFailsWhenValidationLoopBlockLacksTaskTransitions(t *testing.T) {
 	fixture := newUnitFixture(t, "async")
 	taskID := uuid.New()
