@@ -1182,6 +1182,10 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			JOIN flow_node_execution e
 			  ON e.session_id = cs.id
 			 AND e.status = 'active'
+			JOIN project_task pt
+			  ON pt.id = cs.scope_id
+			JOIN project p
+			  ON p.id = pt.project_id
 			JOIN flow_node fn
 			  ON fn.id = e.flow_node_id
 			JOIN chat_message cm
@@ -1189,6 +1193,7 @@ func (w *Worker) RequeueActiveExecutionSessionsWithoutTurns(ctx context.Context)
 			WHERE cs.scope_type = 'project_task'
 			  AND cs.mode = 'async'
 			  AND cs.status = 'active'
+			  AND COALESCE(p.settings->'pause'->>'is_paused', 'false') <> 'true'
 			  AND cs.current_turn_id IS NULL
 			  AND cm.role = 'user'
 			  AND COALESCE(cm.metadata->'agent_turn_dispatch'->>'cancelled_at', '') = ''
@@ -3780,8 +3785,42 @@ func (w *Worker) claimPendingAgentTurns(ctx context.Context, limit int) ([]Job, 
 		    WHERE cs.id = (jq.payload->>'session_id')::uuid
 		      AND cs.status IN ('closed', 'archived')
 		  )
-	`, agentTurnJobType); err != nil {
+		`, agentTurnJobType); err != nil {
 		return nil, fmt.Errorf("dead-letter closed-session agent_turn jobs before claim: %w", err)
+	}
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE job_queue jq
+		SET status = 'dead_letter',
+		    claimed_by = NULL,
+		    claimed_at = NULL,
+		    last_error = 'purged paused project dispatch during claim',
+		    updated_at = now()
+		WHERE jq.status = 'pending'
+		  AND jq.job_type = $1
+		  AND jq.run_after <= now()
+		  AND EXISTS (
+		    SELECT 1
+		    FROM chat_session cs
+		    LEFT JOIN project_task pt
+		      ON cs.scope_type = 'project_task'
+		     AND pt.id = cs.scope_id
+		    LEFT JOIN project p_direct
+		      ON cs.scope_type = 'project'
+		     AND p_direct.id = cs.scope_id
+		    LEFT JOIN project p_task
+		      ON cs.scope_type = 'project_task'
+		     AND p_task.id = pt.project_id
+		    WHERE cs.id = (jq.payload->>'session_id')::uuid
+		      AND cs.mode = 'async'
+		      AND cs.status = 'active'
+		      AND COALESCE(
+		            p_direct.settings->'pause'->>'is_paused',
+		            p_task.settings->'pause'->>'is_paused',
+		            'false'
+		          ) = 'true'
+		  )
+	`, agentTurnJobType); err != nil {
+		return nil, fmt.Errorf("dead-letter paused project agent_turn jobs before claim: %w", err)
 	}
 	if _, err := w.pool.Exec(ctx, `
 		UPDATE job_queue jq

@@ -2004,3 +2004,35 @@ Live proof:
   - the only remaining rows in the raw orphan query belonged to paused projects (`rerun-45`, `rerun-41`), so they are correctly excluded from claim as parked backlog rather than runnable work
 
 This does not restore Anthropic capacity by itself, but it removes another source of misleading queue pressure and ensures active task executions are not blocked behind dead ancient dispatches once provider capacity returns.
+
+## Update 19:36 MDT
+
+I tightened the paused-project queue path so paused work stops polluting the due `agent_turn` backlog.
+
+What changed:
+
+- [`internal/jobqueue/worker.go`](../internal/jobqueue/worker.go)
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)` now suppresses async `project_task` recovery dispatches when the parent project is paused
+  - `claimPendingAgentTurns(...)` now dead-letters already-due paused `agent_turn` rows for both async `project` and async `project_task` sessions with:
+    - `last_error = 'purged paused project dispatch during claim'`
+- [`internal/jobqueue/worker_integration_test.go`](../internal/jobqueue/worker_integration_test.go)
+  - added `TestJobWorkerClaimPendingAgentTurnsDeadLettersPausedProjectDispatches`
+  - added `TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsPausedProjectUntilResume`
+
+Focused verification:
+
+- `go test -tags=integration ./internal/jobqueue -run 'TestJobWorker(ClaimPendingAgentTurnsDeadLettersPausedProjectDispatches|RequeueActiveExecutionSessionsWithoutTurnsSkipsPausedProjectUntilResume|RequeuePendingTurnsWithoutJobs(RequeuesAfterProjectResume|SkipsPausedAndArchivedProjects)|ClaimPendingAgentTurns(RequeuesStaleOrphanTaskExecutionDispatch|DeadLettersInactiveProjectBootstrapDispatch|DeadLettersSettledProjectContinuationDispatch))$' -count=1`
+
+Live proof:
+
+- rebuilt `./bin/ottercamp`, respawned tmux `codex-e2e-20260324`, and `./bin/ottercamp health --output json` returned `status=ok`
+- due paused async `agent_turn` backlog dropped from `12` to `0` on the restarted worker
+- aggregate paused-project queue state now includes:
+  - `dead_letter | purged paused project dispatch during claim | 20`
+  - no remaining `pending` rows for paused async project / task sessions with `run_after <= now()`
+
+Why this matters:
+
+- previously, claim SQL already refused paused work, but `RequeueActiveExecutionSessionsWithoutTurns(...)` could still recreate paused task-session recovery jobs
+- that meant paused projects accumulated misleading due backlog without ever becoming runnable
+- this slice closes that loop while keeping resume behavior intact: when a project is unpaused, the existing requeue passes can mint a fresh current-state dispatch instead of reviving the stale paused row

@@ -5316,6 +5316,175 @@ func TestJobWorkerClaimPendingAgentTurnsSkipsOlderProjectBootstrapWhenNewerSameS
 	}
 }
 
+func TestJobWorkerClaimPendingAgentTurnsDeadLettersPausedProjectDispatches(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "claim-dead-letter-paused-project-dispatches",
+		DisplayName: "Claim Dead Letter Paused Project Dispatches",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Paused Project Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover paused work after resume.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "claim-dead-letter-paused-project-dispatches-" + uuid.NewString()[:8],
+		DisplayName:    "Paused Project Dispatches",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+		Settings:       json.RawMessage(`{"pause":{"is_paused":true,"reason":"operator pause"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	projectSession, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project",
+		ScopeID:        project.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create project session: %v", err)
+	}
+	projectMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: projectSession.ID,
+		Role:      "user",
+		Content:   "Continue the paused project later.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"project_continuation_resume","auto_continue":true}`),
+	})
+	if err != nil {
+		t.Fatalf("create project message: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "claim-dead-letter-paused-project-dispatches-template",
+		DisplayName:    "Paused Project Dispatch Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+
+	taskRecord, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Paused task dispatch",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	taskSession, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        taskRecord.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+	taskMessage, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: taskSession.ID,
+		Role:      "user",
+		Content:   "Resume the paused task later.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(`{"source":"task_recovery_resume"}`),
+	})
+	if err != nil {
+		t.Fatalf("create task message: %v", err)
+	}
+
+	var projectJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now() - interval '1 minute', 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":1}`, projectSession.ID, projectMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s", projectSession.ID, projectMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", projectSession.ID, projectMessage.ID, 1),
+	).Scan(&projectJobID); err != nil {
+		t.Fatalf("insert paused project job: %v", err)
+	}
+
+	var taskJobID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO job_queue (job_type, status, payload, run_after, priority, group_key, dedupe_key)
+		VALUES ('agent_turn', 'pending', $1::jsonb, now() - interval '1 minute', 70, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf(`{"session_id":"%s","message_id":"%s","retry_count":0}`, taskSession.ID, taskMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s", taskSession.ID, taskMessage.ID),
+		fmt.Sprintf("agent_turn:%s:%s:%d", taskSession.ID, taskMessage.ID, 0),
+	).Scan(&taskJobID); err != nil {
+		t.Fatalf("insert paused task job: %v", err)
+	}
+
+	claimed, err := worker.claimPendingAgentTurns(ctx, 10)
+	if err != nil {
+		t.Fatalf("claimPendingAgentTurns: %v", err)
+	}
+	if len(claimed) != 0 {
+		t.Fatalf("claimed jobs = %d, want 0", len(claimed))
+	}
+
+	for _, tc := range []struct {
+		name  string
+		jobID uuid.UUID
+	}{
+		{name: "project", jobID: projectJobID},
+		{name: "task", jobID: taskJobID},
+	} {
+		var status, lastError string
+		if err := pool.QueryRow(ctx, `
+			SELECT status, COALESCE(last_error, '')
+			FROM job_queue
+			WHERE id = $1
+		`, tc.jobID).Scan(&status, &lastError); err != nil {
+			t.Fatalf("query %s job: %v", tc.name, err)
+		}
+		if status != "dead_letter" {
+			t.Fatalf("%s job status = %q, want dead_letter", tc.name, status)
+		}
+		if lastError != "purged paused project dispatch during claim" {
+			t.Fatalf("%s job last_error = %q, want paused project dispatch purge", tc.name, lastError)
+		}
+	}
+}
+
 func TestJobWorkerClaimPendingAgentTurnsDeadLettersInactiveProjectBootstrapDispatch(t *testing.T) {
 	pool := testdb.New(t)
 	worker := New(pool, nil, Config{
@@ -8247,6 +8416,187 @@ func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurns(t *testing.T) {
 	}
 	if requeuedSource != "project_bootstrap" {
 		t.Fatalf("requeued message source = %q, want project_bootstrap", requeuedSource)
+	}
+}
+
+func TestJobWorkerRequeueActiveExecutionSessionsWithoutTurnsSkipsPausedProjectUntilResume(t *testing.T) {
+	pool := testdb.New(t)
+	worker := New(pool, nil, Config{
+		PollInterval:         time.Hour,
+		StaleScanInterval:    time.Hour,
+		CleanupEnqueuePeriod: time.Hour,
+	})
+
+	ctx := context.Background()
+	org, err := repo.NewOrgRepo(pool).Create(ctx, repo.Organization{
+		Slug:        "requeue-active-execution-skip-paused-project",
+		DisplayName: "Requeue Active Execution Skip Paused Project",
+	})
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	agent, err := repo.NewAgentRepo(pool).Create(ctx, repo.Agent{
+		OrganizationID:  org.ID,
+		DisplayName:     "Paused Recovery Agent",
+		AgentClass:      "staff",
+		LifecycleStatus: "active",
+		SystemPrompt:    "You recover task sessions after resume.",
+		AgentType:       "general",
+		CreatedByType:   "system",
+		CreatedByID:     uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	project, err := repo.NewProjectRepo(pool).Create(ctx, repo.Project{
+		OrganizationID: org.ID,
+		Slug:           "requeue-active-execution-skip-paused-project-" + uuid.NewString()[:8],
+		DisplayName:    "Paused Active Execution Project",
+		DeliveryMode:   "gated",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+		Settings:       json.RawMessage(`{"pause":{"is_paused":true,"reason":"operator pause"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	template, err := repo.NewFlowTemplateRepo(pool).Create(ctx, repo.FlowTemplate{
+		OrganizationID: &org.ID,
+		ProjectID:      &project.ID,
+		Slug:           "requeue-active-execution-skip-paused-project-template",
+		DisplayName:    "Paused Active Execution Template",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.Nil,
+	})
+	if err != nil {
+		t.Fatalf("create flow template: %v", err)
+	}
+	flowNode, err := repo.NewFlowNodeRepo(pool).Create(ctx, repo.FlowNode{
+		FlowTemplateID: template.ID,
+		DisplayName:    "Execute",
+		NodeType:       "work",
+		Position:       1,
+		MaxVisits:      1,
+		Metadata:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create flow node: %v", err)
+	}
+	task, err := repo.NewProjectTaskRepo(pool).Create(ctx, repo.ProjectTask{
+		OrganizationID:  org.ID,
+		ProjectID:       project.ID,
+		Title:           "Paused execution session",
+		WorkStatus:      "in_progress",
+		BlocksScope:     "task",
+		FlowTemplateID:  &template.ID,
+		CreatedByType:   "system",
+		CreatedByID:     &agent.ID,
+		AssignedAgentID: &agent.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project task: %v", err)
+	}
+	session, err := repo.NewChatSessionRepo(pool).Create(ctx, repo.ChatSession{
+		OrganizationID: org.ID,
+		ScopeType:      "project_task",
+		ScopeID:        task.ID,
+		Mode:           "async",
+		Status:         "active",
+		CreatedByType:  "system",
+		CreatedByID:    uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	execution, err := repo.NewFlowNodeExecutionRepo(pool).Create(ctx, repo.FlowNodeExecution{
+		TaskID:      task.ID,
+		FlowNodeID:  flowNode.ID,
+		VisitNumber: 1,
+		Status:      "active",
+		SessionID:   &session.ID,
+	})
+	if err != nil {
+		t.Fatalf("create active execution: %v", err)
+	}
+	message, err := repo.NewChatMessageRepo(pool).Create(ctx, repo.ChatMessage{
+		SessionID: session.ID,
+		Role:      "user",
+		Content:   "Resume the paused task execution.",
+		Status:    "pending",
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"source":"task_recovery_resume","flow_node_execution_id":"%s"}`, execution.ID)),
+	})
+	if err != nil {
+		t.Fatalf("create task recovery message: %v", err)
+	}
+
+	requeued, err := worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns while paused: %v", err)
+	}
+	if requeued != 0 {
+		t.Fatalf("requeued sessions while paused = %d, want 0", requeued)
+	}
+
+	var pausedJobCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+	`, session.ID).Scan(&pausedJobCount); err != nil {
+		t.Fatalf("count paused jobs: %v", err)
+	}
+	if pausedJobCount != 0 {
+		t.Fatalf("paused job count = %d, want 0", pausedJobCount)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE project
+		SET settings = '{}'::jsonb
+		WHERE id = $1
+	`, project.ID); err != nil {
+		t.Fatalf("resume project: %v", err)
+	}
+
+	requeued, err = worker.RequeueActiveExecutionSessionsWithoutTurns(ctx)
+	if err != nil {
+		t.Fatalf("RequeueActiveExecutionSessionsWithoutTurns after resume: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("requeued sessions after resume = %d, want 1", requeued)
+	}
+
+	var (
+		status         string
+		requeuedMsgID  uuid.UUID
+		requeuedSessID uuid.UUID
+		retryCount     int
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status,
+		       (payload->>'message_id')::uuid,
+		       (payload->>'session_id')::uuid,
+		       COALESCE((payload->>'retry_count')::int, 0)
+		FROM job_queue
+		WHERE job_type = 'agent_turn'
+		  AND (payload->>'session_id')::uuid = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, session.ID).Scan(&status, &requeuedMsgID, &requeuedSessID, &retryCount); err != nil {
+		t.Fatalf("query requeued job: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("requeued job status = %q, want pending", status)
+	}
+	if requeuedSessID != session.ID {
+		t.Fatalf("requeued session_id = %s, want %s", requeuedSessID, session.ID)
+	}
+	if requeuedMsgID != message.ID {
+		t.Fatalf("requeued message_id = %s, want %s", requeuedMsgID, message.ID)
+	}
+	if retryCount != 0 {
+		t.Fatalf("requeued retry_count = %d, want 0", retryCount)
 	}
 }
 

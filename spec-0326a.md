@@ -565,6 +565,10 @@ Implemented so far in this spec:
 - worker recovery now skips requeueing `project_task` async sessions that are already blocked by a persisted validation-loop guard:
   - active flow-node executions with `work_status='blocked'` plus `agent_turn_validation_guard.blocked=true` no longer get revived by `RequeueActiveExecutionSessionsWithoutTurns(...)`
   - that removes hot queue churn where the worker would enqueue another `agent_turn` only for the turn engine to immediately suppress it as `validation_loop_blocked`
+- paused projects no longer leak async `project_task` recovery dispatches back into the runnable queue:
+  - `RequeueActiveExecutionSessionsWithoutTurns(...)` now suppresses paused parent projects
+  - claim-time cleanup now retires already-due paused `agent_turn` rows for both async `project` and async `project_task` sessions
+  - resume behavior is preserved because the existing requeue passes recreate fresh dispatches once the project pause flag is cleared
 - tool-result parsing and operator diagnostics now treat native validation failures stored in `output.error` as real tool errors instead of silently classifying them as successes
 - async `project_task` work lanes now have a session-level cutoff for cross-turn read-only discovery churn:
   - after `5` consecutive `max_tool_calls` turns
